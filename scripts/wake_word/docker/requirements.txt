@@ -1,0 +1,39 @@
+# Extra Python deps installed into the trainer image. The Dockerfile installs
+# these directly (RUN pip install ...) — this file is the human-readable
+# reference / single source of truth for the versions.
+#
+# NOTE: torch/torchaudio are NOT listed here. On the default pytorch/pytorch
+# CUDA base they are already present (and reinstalling can pull a CPU-only wheel
+# that fights the bundled CUDA build). They are installed ONLY on a non-torch
+# base via the Dockerfile's TORCH_INDEX build-arg (the CPU/arm path).
+
+# piper-sample-generator runtime deps (its requirements.txt is unpinned):
+audiomentations          # acoustic augmentation of generated clips
+espeak-phonemizer        # needs the system espeak-ng binary (apt-installed)
+webrtcvad                # VAD trimming; needs build-essential on some platforms
+numpy
+soundfile                # WAV read/write + real-clip resampling
+scipy                    # resample_poly for 16 kHz conversion
+
+# openWakeWord training + export:
+huggingface_hub>=0.23    # snapshot_download of the ~7 GB feature dataset
+onnx
+onnxruntime
+pyyaml                   # render/parse the training config
+tqdm
+scikit-learn             # openWakeWord training utilities
+
+# FULL openWakeWord *training* dep set (train.py + data.py imports). The upstream
+# notebook pins 2022-era versions that DON'T install on py3.11/torch2.4; these
+# are the verified-working modern pins (see Dockerfile for the per-package
+# rationale). NOTE: NO tensorflow / onnx_tf — train.py only needs them for the
+# OPTIONAL tflite export, which the image patches out (we want .onnx only).
+torchinfo==1.8.0             # train.py model summary
+torchmetrics==1.9.0         # train.py Recall/Accuracy
+pronouncing==0.3.0          # data.py adversarial-text generation
+mutagen==1.48.1             # data.py audio metadata
+speechbrain==1.1.0          # data.py read_audio + reverberate
+torch-audiomentations==0.12.0  # data.py GPU augmentation
+acoustics==0.2.6            # data.py colored-noise generation
+datasets==3.6.0            # entrypoint RIR download (PIN: 4.x/5.x need torchcodec)
+scipy<1.15                 # PIN: acoustics 0.2.6 imports scipy.special.sph_harm (removed in 1.15)

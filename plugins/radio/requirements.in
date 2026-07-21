@@ -1,0 +1,13 @@
+# Direct, pinned requirements for the radio plugin (design §2.2).
+# The manifest's [requirements].python list mirrors these EXACTLY;
+# regenerate the hashed lockfile with:
+#
+#   pip-compile --generate-hashes --output-file=requirements.lock requirements.in
+#
+# numpy is pinned to the exact version shazamio 0.7.0 requires
+# (shazamio declares numpy==2.4.4).
+shazamio==0.7.0
+numpy==2.4.4
+scipy==1.15.2
+librosa==0.11.0
+httpx==0.28.1

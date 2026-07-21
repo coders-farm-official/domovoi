@@ -1,0 +1,32 @@
+[
+  {
+    "id": 9201,
+    "session_id": "f7c3f7c0-1234-5678-9abc-def012345678",
+    "at": "2026-05-08T15:01:42.221Z",
+    "room_id": "kitchen",
+    "user_text": "play creep by radiohead",
+    "assistant_text": "Playing Creep by Radiohead.",
+    "matched_handler": "music",
+    "matched_path": "fast"
+  },
+  {
+    "id": 9200,
+    "session_id": "f7c3f7c0-1234-5678-9abc-def012345678",
+    "at": "2026-05-08T15:01:33.011Z",
+    "room_id": "kitchen",
+    "user_text": "what time is it",
+    "assistant_text": "It's 3:01 PM.",
+    "matched_handler": "clock",
+    "matched_path": "fast"
+  },
+  {
+    "id": 9199,
+    "session_id": null,
+    "at": "2026-05-08T15:01:18.002Z",
+    "room_id": "kitchen",
+    "user_text": "tell me a joke",
+    "assistant_text": "Why don't scientists trust atoms? Because they make up everything.",
+    "matched_handler": null,
+    "matched_path": "qa"
+  }
+]

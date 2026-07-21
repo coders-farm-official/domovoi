@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Color — status</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-sm); font-size: 12px; font-weight: 500; }
+  .dot { width: 8px; height: 8px; border-radius: 9999px; flex: none; }
+  .row { display: flex; align-items: center; gap: 16px; }
+  .row .lab { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); width: 70px; }
+</style>
+</head>
+<body>
+  <div class="row"><div class="lab">ok</div><span class="pill" style="background:var(--ok-soft); color:var(--ok)"><span class="dot" style="background:var(--ok)"></span>online</span></div>
+  <div class="row"><div class="lab">warn</div><span class="pill" style="background:var(--warn-soft); color:var(--warn)"><span class="dot" style="background:var(--warn)"></span>warning</span></div>
+  <div class="row"><div class="lab">err</div><span class="pill" style="background:var(--err-soft); color:var(--err)"><span class="dot" style="background:var(--err)"></span>failed</span></div>
+  <div class="row"><div class="lab">idle</div><span class="pill" style="background:var(--idle-soft); color:var(--fg-muted)"><span class="dot" style="background:var(--idle)"></span>offline</span></div>
+  <div class="row"><div class="lab">running</div><span class="pill" style="background:var(--brand-soft); color:var(--brand-press)"><span class="dot" style="background:var(--brand); position:relative"><span style="position:absolute;inset:-4px;border-radius:9999px;background:var(--brand-halo);animation:domovoi-pulse 1.6s ease-in-out infinite"></span></span>running</span></div>
+  <div class="row"><div class="lab">pending</div><span class="pill" style="background:var(--idle-soft); color:var(--fg-muted)"><span class="dot" style="background:var(--idle)"></span>pending</span></div>
+</body>
+</html>

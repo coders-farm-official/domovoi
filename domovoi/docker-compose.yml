@@ -1,0 +1,239 @@
+services:
+  # Host port 6432 (NOT the Postgres-default 5432) so Domovoi can coexist
+  # with any other Postgres already bound to 5432 on the same machine.
+  # Container-internal port stays 5432; only the published side moves.
+  postgres:
+    image: postgres:16
+    container_name: domovoi-postgres
+    environment:
+      POSTGRES_DB: domovoi
+      POSTGRES_USER: domovoi
+      POSTGRES_PASSWORD: domovoi
+    ports:
+      - "6432:5432"
+    volumes:
+      - domovoi-pgdata:/var/lib/postgresql/data
+      # Fires only on initdb (fresh volume) — creates domovoi_test
+      # alongside the prod DB so pytest never touches real data. Existing
+      # pgdata volumes skip this; bootstrap manually per README.
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U domovoi -d domovoi"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  flyway:
+    image: flyway/flyway:10
+    container_name: domovoi-flyway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      -url=jdbc:postgresql://postgres:5432/domovoi
+      -user=domovoi
+      -password=domovoi
+      -connectRetries=20
+      migrate
+    volumes:
+      - ./db/migrations:/flyway/sql
+
+  # Migrates the SAME schema into domovoi_test so pytest sees the
+  # same tables prod does. Run on demand:
+  #   docker compose run --rm flyway-test
+  # ...whenever a new V###__*.sql migration lands. Doesn't run as part
+  # of `docker compose up` — the container exits after migrating.
+  flyway-test:
+    image: flyway/flyway:10
+    container_name: domovoi-flyway-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      -url=jdbc:postgresql://postgres:5432/domovoi_test
+      -user=domovoi
+      -password=domovoi
+      -connectRetries=20
+      migrate
+    volumes:
+      - ./db/migrations:/flyway/sql
+
+  # SearxNG — privacy-respecting metasearch proxy used by
+  # DoubleCheckHandler for claim verification. Locked to localhost
+  # (127.0.0.1:6888) so the LAN can't hit it; only the Domovoi server
+  # itself can reach it. Host port 6888 keeps clear of other services
+  # that commonly claim 8888. JSON API is enabled via the mounted
+  # settings.yml; the default web UI also works at
+  # http://localhost:6888 if you want to inspect what it returns.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: domovoi-searxng
+    ports:
+      - "127.0.0.1:6888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      # Required by SearxNG; arbitrary string, not load-bearing for
+      # local-only use. Override in .env for production deployments.
+      SEARXNG_BASE_URL: http://localhost:6888/
+      SEARXNG_SECRET: domovoi-local-not-load-bearing
+    restart: unless-stopped
+
+  # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────
+  # Self-hosted Letta agent server backing wake-word-triggered open-mic
+  # conversation (settings.chat_mode_enabled, OFF by default). Command mode
+  # never touches this — only conversational turns hit Letta.
+  #
+  # OPT-IN: do NOT start this with the default `docker compose up`. Bring it
+  # up explicitly, and only when chat mode is enabled:
+  #   docker compose up -d letta
+  # It is deliberately NOT in any depends_on of the core — a
+  # deployment that never flips chat_mode_enabled never needs this running.
+  #
+  # SELF-MANAGED DATABASE: the letta/letta:latest image BUNDLES its own
+  # Postgres+pgvector and self-manages its own schema inside the named
+  # `letta-pgdata` volume. Do NOT point this at the core's Postgres
+  # (the `postgres` service above) — Letta auto-creates/migrates its own
+  # tables, which would collide with this repo's Flyway migration-only
+  # invariant (V001 is frozen). Keeping its DB bundled keeps the two schemas
+  # cleanly separated.
+  #
+  # Points at the NATIVE WINDOWS Ollama on the host via host.docker.internal
+  # (the OpenAI-compatible /v1 endpoint — note the required /v1 suffix).
+  # Requires `docker pull` of qwen2.5:14b + nomic-embed-text on the host
+  # Ollama first — see domovoi/README.md "Conversational chat mode".
+  letta:
+    image: letta/letta:latest
+    container_name: domovoi-letta
+    # Compose profile so a bare `docker compose up` (postgres + flyway) NEVER
+    # starts Letta — it only comes up with `docker compose --profile chat up -d
+    # letta` (or by explicit name). A structural guarantee, not just operator
+    # discipline. Chat mode is opt-in (settings.chat_mode_enabled).
+    profiles: ["chat"]
+    # Host port 6283 (container-internal 8283) — keeps clear of any other
+    # Letta already bound to 8283 on the same machine. Must match
+    # settings.letta_base_url.
+    ports:
+      - "6283:8283"
+    volumes:
+      - domovoi-letta-pgdata:/var/lib/postgresql/data
+    environment:
+      # Host-native Ollama (LLM + embeddings) reached from inside the
+      # container. Windows/Mac use host.docker.internal; on Linux this
+      # would instead be --network host + localhost:11434/v1.
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434/v1"
+      # Password-protect the server; this value becomes the SDK token
+      # (settings.letta_token). If LETTA_SERVER_PASSWORD is unset Letta
+      # autogenerates one, which the client wouldn't know — so pin it.
+      SECURE: "true"
+      LETTA_SERVER_PASSWORD: "domovoi-local"
+    restart: unless-stopped
+
+  # ─── Office Suite engines (Documents / Spreadsheets) — STATIC, OPT-IN ──
+  # OnlyOffice CE + Collabora CODE back the web dashboard's Documents and
+  # Spreadsheets pages. Unlike MPD (lazy per-room), these are long-lived
+  # and NOT room-scoped, so they're static compose services. They're
+  # flag-gated in practice by settings.onlyoffice_enabled /
+  # collabora_enabled (the web backend won't surface a disabled engine),
+  # and further gated here behind the `office` compose profile so a bare
+  # `docker compose up` (postgres + flyway) never pulls these heavy images.
+  # Bring them up explicitly once the flags + JWT secrets + LAN URLs are set:
+  #   docker compose --profile office up -d onlyoffice collabora
+  #
+  # LAN-ROUTABLE URLS, NEVER localhost: the browser loads editor assets
+  # from these containers AND the containers reach back to the web backend
+  # (office_callback_base) to fetch/save files. Set onlyoffice_base_url /
+  # collabora_base_url / office_callback_base to a real host name or IP.
+  #
+  # JWT secrets come from the environment (.env — never committed). Both
+  # engines refuse to load with a blank secret in current versions.
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: domovoi-onlyoffice
+    profiles: ["office"]
+    # Host port 6381 (container-internal 80) — keeps clear of 8081, a
+    # common default for other dashboards. Must match
+    # settings.onlyoffice_base_url.
+    ports:
+      - "6381:80"
+    environment:
+      # JWT protects the editor config + the internal command exchange.
+      # Must match settings.onlyoffice_jwt_secret used by the web backend
+      # to sign the DocEditor config. JWT_HEADER + IN/OUT box names are the
+      # defaults DocsAPI expects; pin them so the handshake is explicit.
+      JWT_ENABLED: "true"
+      # Empty default (not :?) so `docker compose` still interpolates for
+      # UNRELATED commands (flyway/postgres) — the whole file is parsed for
+      # ANY compose command, and a :? guard here broke `flyway`. A blank
+      # secret is caught where it matters: office bring-up sets it in .env,
+      # and the web backend refuses to mint a JWT with a blank secret.
+      JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-}"
+      JWT_HEADER: "Authorization"
+      JWT_IN_BODY: "true"
+      JWT_OUT_BODY: "true"
+    volumes:
+      - domovoi-onlyoffice-data:/var/www/onlyoffice/Data
+      - domovoi-onlyoffice-logs:/var/log/onlyoffice
+    restart: unless-stopped
+
+  collabora:
+    image: collabora/code:latest
+    container_name: domovoi-collabora
+    profiles: ["office"]
+    # Host port 6980 (container-internal 9980) — keeps clear of any other
+    # Collabora bound to 9980. Must match settings.collabora_base_url.
+    ports:
+      - "6980:9980"
+    environment:
+      # Collabora validates the WOPI access_token against this secret. The
+      # web backend signs the token (settings.collabora_jwt_secret) and
+      # verifies it on the WOPI CheckFileInfo/GetFile/PutFile endpoints.
+      # Passed through extra_params as the WOPI proof; see the WOPI wiring
+      # in web/backend/api/documents.py.
+      COLLABORA_JWT_SECRET: "${COLLABORA_JWT_SECRET:-}"
+      # `aliasgroup1` whitelists the WOPI host (the web backend) that
+      # Collabora is allowed to fetch/save documents from. MUST match the
+      # host in office_callback_base — a LAN name/IP, never localhost.
+      # Override via .env for your host.
+      aliasgroup1: "${COLLABORA_ALIASGROUP:-http://my-domovoi\\.local:6369}"
+      # Plain HTTP on the LAN with NO reverse proxy in front — the browser
+      # hits Collabora directly. So BOTH ssl.enable and ssl.termination are
+      # false; termination=true would make Collabora advertise https:// URLs
+      # (for an HTTPS-terminating proxy we don't have), which a plain-HTTP
+      # LAN browser can't load. Set termination=true only if you later put
+      # an HTTPS reverse proxy in front.
+      extra_params: "--o:ssl.enable=false --o:ssl.termination=false"
+      DONT_GEN_SSL_CERT: "true"
+    cap_add:
+      - MKNOD
+    restart: unless-stopped
+
+  # ─── MPD is NOT declared here on purpose ──────────────────────────────
+  # MPD daemons are spawned by the core on first satellite connect
+  # (`domovoi/mpd_provisioner.py`). Each room gets its own container
+  # named `domovoi-mpd-<room>` with its own data volume, allocated
+  # ports (6650/8050 for the first room, then +1 for each subsequent room),
+  # and a row in the `mpd_rooms` table so assignments survive restart.
+  #
+  # The image those containers run is built lazily by the core at
+  # startup from `Dockerfile.mpd` (tagged `domovoi-mpd:latest`). To
+  # force a rebuild after editing `mpd.conf` or `Dockerfile.mpd`, run:
+  #   docker rmi domovoi-mpd:latest
+  # and restart the core — it'll rebuild on the next boot.
+
+volumes:
+  # Explicit `name:` on every volume so the on-disk Docker volume is
+  # unambiguously domovoi-* regardless of the compose project name.
+  domovoi-pgdata:
+    name: domovoi-pgdata
+  # Letta's bundled Postgres+pgvector data lives here. Separate from
+  # `domovoi-pgdata` (the core's DB) on purpose — see the letta service
+  # comment above. Self-managed by the letta image; never Flyway-touched.
+  domovoi-letta-pgdata:
+    name: domovoi-letta-pgdata
+  # OnlyOffice server data (cache, fonts, forgotten-file spool). Persisted
+  # so a container restart doesn't re-warm from scratch. Never Flyway-touched.
+  domovoi-onlyoffice-data:
+    name: domovoi-onlyoffice-data
+  domovoi-onlyoffice-logs:
+    name: domovoi-onlyoffice-logs

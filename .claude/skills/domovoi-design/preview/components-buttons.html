@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Components — buttons</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row .lab { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); width: 70px; }
+  button { font-family: inherit; font-size: 13px; font-weight: 500; height: 30px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid transparent; cursor: pointer; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); display: inline-flex; align-items: center; gap: 6px; line-height: 1; }
+  .primary { background: var(--brand); color: var(--brand-fg); }
+  .primary:hover { background: var(--brand-hover); }
+  .secondary { background: var(--card); color: var(--fg); border-color: var(--border); box-shadow: var(--inner-highlight); }
+  .secondary:hover { background: var(--raised); }
+  .ghost { background: transparent; color: var(--fg-muted); }
+  .ghost:hover { background: var(--brand-soft); color: var(--fg); }
+  .danger { background: var(--err-soft); color: var(--err); }
+  .danger:hover { background: var(--err); color: white; }
+  .icon { padding: 0; width: 30px; justify-content: center; }
+</style>
+</head>
+<body>
+  <div class="row"><div class="lab">primary</div><button class="primary">Add satellite</button><button class="primary">Sync now</button></div>
+  <div class="row"><div class="lab">secondary</div><button class="secondary">Cancel</button><button class="secondary">Re-scan library</button></div>
+  <div class="row"><div class="lab">ghost</div><button class="ghost">Skip</button><button class="ghost icon" aria-label="more">⋯</button></div>
+  <div class="row"><div class="lab">danger</div><button class="danger">Delete track</button></div>
+</body>
+</html>

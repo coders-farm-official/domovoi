@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "note": "Curated, hand-maintained recommended-model list for the Models page. Powers fit badges and the browse-and-install cards. VRAM figures are CONSERVATIVE estimates for the default quant with a modest (~4k) context — real usage varies with context length and KV cache. Ollama has no official library-search API, so anything not listed here is installable via the pull-by-name box.",
+  "ollama": [
+    {
+      "name": "llama3.2:1b",
+      "role": "qa",
+      "params": "1B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 1.6,
+      "desc": "Tiny, very fast Q&A model — great on constrained VRAM or as a snappy fallthrough."
+    },
+    {
+      "name": "llama3.2:3b",
+      "role": "qa",
+      "params": "3B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 3.0,
+      "desc": "Default Q&A model. Fast, cheap, good enough for the 'tell me a joke' conversational fallthrough."
+    },
+    {
+      "name": "qwen2.5:3b",
+      "role": "qa",
+      "params": "3B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 2.9,
+      "desc": "Compact Qwen — strong instruction following for its size; a solid Q&A alternative to llama3.2:3b."
+    },
+    {
+      "name": "phi3:3.8b",
+      "role": "qa",
+      "params": "3.8B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 3.2,
+      "desc": "Microsoft Phi-3 mini — punchy reasoning at a small footprint."
+    },
+    {
+      "name": "llama3.1:8b",
+      "role": "qa",
+      "params": "8B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 6.0,
+      "desc": "Larger general Q&A model — noticeably better answers, still comfortable on a single 4070 Ti Super."
+    },
+    {
+      "name": "qwen2.5:7b",
+      "role": "both",
+      "params": "7B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 5.5,
+      "desc": "Mid-size Qwen — good schema adherence for tool routing AND capable Q&A. A balanced single-model pick."
+    },
+    {
+      "name": "mistral:7b",
+      "role": "qa",
+      "params": "7B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 5.4,
+      "desc": "Well-rounded 7B general model — fast and widely compatible."
+    },
+    {
+      "name": "gemma2:9b",
+      "role": "qa",
+      "params": "9B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 7.2,
+      "desc": "Google Gemma 2 — strong quality per parameter; a step up from the 7B tier."
+    },
+    {
+      "name": "qwen2.5:14b",
+      "role": "tool",
+      "params": "14B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 9.5,
+      "desc": "Default tool-routing model. Strong function-calling / schema adherence — what matters for reliable command dispatch."
+    },
+    {
+      "name": "qwen2.5-coder:7b",
+      "role": "tool",
+      "params": "7B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 5.5,
+      "desc": "Code/structured-output tuned Qwen — a lighter tool-router when 14b is too heavy for the free VRAM."
+    },
+    {
+      "name": "qwen2.5:32b",
+      "role": "tool",
+      "params": "32B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 20.0,
+      "desc": "Large Qwen — top-tier routing + reasoning, but needs serious VRAM (or a multi-GPU split)."
+    },
+    {
+      "name": "nomic-embed-text:latest",
+      "role": "embedding",
+      "params": "137M",
+      "quant": "F16",
+      "est_vram_gb": 0.5,
+      "desc": "Embedding model required by Letta chat mode's archival/recall memory. Tiny; pull it before enabling chat."
+    }
+  ],
+  "whisper": [
+    {
+      "name": "tiny",
+      "role": "stt",
+      "params": "39M",
+      "compute": "float16",
+      "est_vram_gb": 1.0,
+      "accuracy": "lowest — fine for quiet, close-mic English commands",
+      "desc": "Fastest, smallest Whisper. Real-time on almost anything."
+    },
+    {
+      "name": "base",
+      "role": "stt",
+      "params": "74M",
+      "compute": "float16",
+      "est_vram_gb": 1.2,
+      "accuracy": "low — better than tiny, still light",
+      "desc": "A small step up from tiny at negligible extra cost."
+    },
+    {
+      "name": "small",
+      "role": "stt",
+      "params": "244M",
+      "compute": "float16",
+      "est_vram_gb": 2.0,
+      "accuracy": "moderate — good general-purpose choice on modest GPUs",
+      "desc": "The value pick when large-v3 is overkill."
+    },
+    {
+      "name": "medium",
+      "role": "stt",
+      "params": "769M",
+      "compute": "float16",
+      "est_vram_gb": 5.0,
+      "accuracy": "high",
+      "desc": "Strong accuracy; a middle ground between small and large."
+    },
+    {
+      "name": "large-v3",
+      "role": "stt",
+      "params": "1550M",
+      "compute": "float16",
+      "est_vram_gb": 10.0,
+      "accuracy": "highest — the current default",
+      "desc": "Best transcription quality. The Domovoi server's default STT model."
+    },
+    {
+      "name": "large-v3",
+      "role": "stt",
+      "params": "1550M",
+      "compute": "int8",
+      "est_vram_gb": 5.0,
+      "accuracy": "highest — quantized, minimal quality loss",
+      "desc": "large-v3 at int8: roughly half the VRAM, near-identical accuracy. Set whisper_compute_type=int8."
+    },
+    {
+      "name": "distil-large-v3",
+      "role": "stt",
+      "params": "756M",
+      "compute": "float16",
+      "est_vram_gb": 6.0,
+      "accuracy": "high — near large-v3, much faster",
+      "desc": "Distilled large-v3: most of the accuracy at a fraction of the compute."
+    },
+    {
+      "name": "large-v3-turbo",
+      "role": "stt",
+      "params": "809M",
+      "compute": "float16",
+      "est_vram_gb": 6.0,
+      "accuracy": "high — optimized for speed",
+      "desc": "Turbo variant of large-v3 — much faster decode with a small accuracy trade."
+    }
+  ]
+}

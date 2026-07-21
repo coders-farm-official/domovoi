@@ -1,0 +1,30 @@
+[
+  {
+    "room_id": "kitchen",
+    "state": "play",
+    "song": {
+      "file": "Akon/Sunny Day.mp3",
+      "title": "Sunny Day",
+      "artist": "Akon",
+      "album": null,
+      "duration_sec": 313
+    },
+    "elapsed_sec": 47.2,
+    "stream_url": "http://my-domovoi.local:8051",
+    "favorited": false,
+    "source": null,
+    "source_url": null,
+    "source_ref": null
+  },
+  {
+    "room_id": "garage",
+    "state": "stop",
+    "song": null,
+    "elapsed_sec": null,
+    "stream_url": "http://my-domovoi.local:8052",
+    "favorited": false,
+    "source": null,
+    "source_url": null,
+    "source_ref": null
+  }
+]

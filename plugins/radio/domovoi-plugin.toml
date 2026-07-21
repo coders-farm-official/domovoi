@@ -1,0 +1,101 @@
+[plugin]
+slug = "radio"
+name = "Radio"
+version = "1.0.0"
+publisher = "Coders Farm"
+license = "MIT"
+description = "Internet radio + FM via RTL-SDR: station search, favorites, live tuning, passive song detection with automatic library acquisition."
+homepage = "https://github.com/coders-farm-official/domovoi"
+domovoi_api = ">=1.0,<2.0"
+
+[entry_points]
+core = "domovoi_plugin_radio.core"
+web = "domovoi_plugin_radio.web"
+
+[capabilities]
+provides = ["now-playing-source:radio", "now-playing-matcher"]
+consumes = ["media-acquisition-queue"]     # a core service — always satisfied
+consumes_optional = []                     # detection→download degrades if no fulfiller enabled
+
+[requirements]
+python = ["shazamio==0.7.0", "numpy==2.4.4", "scipy==1.15.2", "librosa==0.11.0", "httpx==0.28.1"]
+lockfile = "requirements.lock"    # pip-compile --generate-hashes output (full transitive tree)
+system = [
+  { tool = "ffmpeg", required = true,  help = "Stream sampling and SDR audio bridging." },
+  { tool = "rtl_fm", required = false, help = "FM tuning needs an RTL-SDR dongle (Zadig/WinUSB on Windows)." },
+]
+
+[[handlers]]
+name = "radio"
+band = 280
+requires_network = "degraded"
+chat_exposed = true
+label = "Radio"
+tone = "media"
+icon = "web/static/icon.svg"
+corpus = ["play 97.5 fm", "tune to the news station"]
+
+[[workers]]
+name = "radio_sampler"
+kind = "poll"
+[[workers]]
+name = "radio_icy_poller"
+kind = "poll"
+[[workers]]
+name = "radio_detections_reaper"
+kind = "poll"
+[[workers]]
+name = "fcc_import"
+kind = "startup"
+[[workers]]
+name = "simulcast_backfill"
+kind = "startup"
+[[workers]]
+name = "track_fingerprinter"
+kind = "poll"
+
+[config]
+env_prefix = "RADIO_"
+
+[permissions]
+network = true
+subprocess = true
+hardware = true
+warnings = [
+  "Samples short clips of whatever station is tuned and can send them to an online song-identification service (Shazam).",
+  "Can automatically request downloads of detected songs.",
+  "Queries external station directories (radio-browser.info, FCC) over the network.",
+  "Runs ffmpeg (and rtl_fm when SDR hardware is enabled) on your machine. SDR hardware is optional.",
+]
+
+[web]
+scripts = ["web/static/stations.jsx"]
+[[web.pages]]
+route = "stations"
+page = "StationsPage"
+nav_label = "Stations"
+nav_icon = "web/static/icon.svg"
+nav_order = 50
+badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
+[[web.player_sources]]
+kind = "radio"
+stream_url_template = "/api/plugins/radio/stations/{id}/stream"
+
+[[realtime]]
+notify_channel = "plugin_radio_stations_changed"
+realtime_channel = "radio.stations"
+snapshot = "snapshot_stations"
+[[realtime]]
+notify_channel = "plugin_radio_now_playing_changed"
+realtime_channel = "radio.stations"          # many-to-one
+snapshot = "snapshot_stations"
+[[realtime]]
+notify_channel = "plugin_radio_detections_changed"
+realtime_channel = "radio.detections"
+snapshot = "snapshot_detections"
+
+[android]
+capabilities = ["stations"]
+
+[assets]
+migrations_dir = "migrations"

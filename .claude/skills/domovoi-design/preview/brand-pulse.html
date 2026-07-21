@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brand — live pulse</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 22px 24px; display: flex; align-items: center; gap: 38px; }
+  .demo { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .dot-wrap { position: relative; width: 12px; height: 12px; }
+  .core { position: absolute; inset: 0; margin: auto; width: 8px; height: 8px; border-radius: 9999px; }
+  .halo { position: absolute; inset: 0; border-radius: 9999px; animation: domovoi-pulse 1.6s ease-in-out infinite; }
+  .lab { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); }
+  .desc { font-size: 12px; color: var(--fg); max-width: 280px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="demo">
+    <div class="dot-wrap"><div class="halo" style="background:var(--brand-halo)"></div><div class="core" style="background:var(--brand)"></div></div>
+    <div class="lab">brand · download running</div>
+  </div>
+  <div class="demo">
+    <div class="dot-wrap"><div class="halo" style="background:oklch(0.72 0.17 145 / 0.30)"></div><div class="core" style="background:var(--ok)"></div></div>
+    <div class="lab">ok · satellite online</div>
+  </div>
+  <div class="desc">
+    A 6-px core with a halo that fades from 60% to 0 over <strong>1.6s</strong>, scaled 1× → 2.4×, eased in-out. Used wherever something is happening <em>right now</em>.
+  </div>
+</body>
+</html>

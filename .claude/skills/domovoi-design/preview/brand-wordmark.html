@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brand — wordmark</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+  .frame { padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--card); display: flex; align-items: center; gap: 12px; color: var(--fg); }
+  .frame.dark { background: oklch(0.155 0.005 80); border-color: oklch(0.30 0.006 80); color: oklch(0.965 0.005 80); }
+  .frame .mark { display: inline-flex; align-items: center; gap: 8px; }
+  .frame .glyph { color: var(--brand); }
+  .frame .word  { font-family: var(--ff-sans); font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
+  .frame .ver   { font-family: var(--ff-mono); font-size: 11px; opacity: 0.45; margin-left: 2px; }
+  .lab { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); margin-left: auto; }
+  .frame.dark .lab { color: oklch(0.72 0.008 80); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <span class="mark">
+      <svg class="glyph" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
+        <path d="M5 13 C5 9.4 7.5 7.5 12 7.5 C16.5 7.5 19 9.4 19 13 L19 16.2 C19 18 17.4 19.4 15.6 19.4 L8.4 19.4 C6.6 19.4 5 18 5 16.2 Z"/>
+        <path d="M5.6 9.5 L4.4 5.6 L8.5 7.6"/>
+        <path d="M18.4 9.5 L19.6 5.6 L15.5 7.6"/>
+        <circle cx="9.6"  cy="13.4" r="0.55" fill="currentColor" stroke="none"/>
+        <circle cx="14.4" cy="13.4" r="0.55" fill="currentColor" stroke="none"/>
+        <path d="M11.3 15.4 L12 16.1 L12.7 15.4"/>
+        <path d="M12 16.1 L12 17"/>
+        <path d="M7.6 15.4 L9.4 15.7 M7.6 16.4 L9.4 16.3"/>
+        <path d="M16.4 15.4 L14.6 15.7 M16.4 16.4 L14.6 16.3"/>
+      </svg>
+      <span class="word">domovoi</span>
+      <span class="ver">/ web 0.1</span>
+    </span>
+    <span class="lab">wordmark · light surface</span>
+  </div>
+
+  <div class="frame dark">
+    <span class="mark">
+      <svg class="glyph" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
+        <path d="M5 13 C5 9.4 7.5 7.5 12 7.5 C16.5 7.5 19 9.4 19 13 L19 16.2 C19 18 17.4 19.4 15.6 19.4 L8.4 19.4 C6.6 19.4 5 18 5 16.2 Z"/>
+        <path d="M5.6 9.5 L4.4 5.6 L8.5 7.6"/>
+        <path d="M18.4 9.5 L19.6 5.6 L15.5 7.6"/>
+        <circle cx="9.6"  cy="13.4" r="0.55" fill="currentColor" stroke="none"/>
+        <circle cx="14.4" cy="13.4" r="0.55" fill="currentColor" stroke="none"/>
+        <path d="M11.3 15.4 L12 16.1 L12.7 15.4"/>
+        <path d="M12 16.1 L12 17"/>
+        <path d="M7.6 15.4 L9.4 15.7 M7.6 16.4 L9.4 16.3"/>
+        <path d="M16.4 15.4 L14.6 15.7 M16.4 16.4 L14.6 16.3"/>
+      </svg>
+      <span class="word">domovoi</span>
+      <span class="ver">/ web 0.1</span>
+    </span>
+    <span class="lab">wordmark · dark surface</span>
+  </div>
+</body>
+</html>

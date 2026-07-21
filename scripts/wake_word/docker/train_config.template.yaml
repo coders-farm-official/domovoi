@@ -1,0 +1,55 @@
+# openWakeWord training config — rendered per run by docker/entrypoint.py.
+# The __PLACEHOLDERS__ below are string-replaced at run time (see render_config);
+# leave them exactly as-is. Key names validated against dscripka/openWakeWord's
+# openwakeword/train.py schema.
+#
+# openWakeWord's trainer is a moving target (see DOCKER_TRAINER.md "version
+# drift"): if a stage fails on an unknown/renamed key, diff this against the
+# train.py of the OWW_REF commit you pinned and update these keys together with
+# the entrypoint's render map.
+
+# --- model + output ---
+model_name: __SLUG__
+target_phrase:
+  - "__PHRASE__"
+output_dir: __OUTPUT_DIR__
+model_type: dnn
+layer_size: 32
+
+# --- synthetic positive/negative generation (piper-sample-generator, driven
+#     internally by train.py --generate_clips) ---
+piper_sample_generator_path: /opt/piper-sample-generator
+n_samples: __N_SAMPLES__
+n_samples_val: __N_SAMPLES_VAL__
+tts_batch_size: __TTS_BATCH__
+custom_negative_phrases: []
+
+# --- augmentation (varies acoustics; resamples to the 16 kHz training set) ---
+augmentation_rounds: 1
+augmentation_batch_size: 16
+background_paths:
+  - __BACKGROUND_DIR__
+background_paths_duplication_rate:
+  - 1
+rir_paths:
+  - __RIR_DIR__
+
+# --- precomputed negative / FP-validation features (from the ~7 GB cache vol) ---
+false_positive_validation_data_path: __FP_VAL_NPY__
+feature_data_files:
+  ACAV100M_sample: __NEG_FEATURES_NPY__
+
+# --- training hyperparameters ---
+# `steps` is rendered from the WAKE_STEPS env knob (entrypoint), small while
+# iterating, ~50000 for production quality.
+steps: __STEPS__
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
+
+# batch_n_per_class is a DICT (NOT an int): one key per feature_data_files key
+# plus the auto-injected `positive` and `adversarial_negative` classes. The sum
+# is the effective batch size. Values mirror upstream custom_model.yml.
+batch_n_per_class:
+  ACAV100M_sample: 1024
+  adversarial_negative: 50
+  positive: 50

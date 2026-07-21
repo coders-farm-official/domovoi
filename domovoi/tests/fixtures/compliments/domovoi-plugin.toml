@@ -1,0 +1,27 @@
+[plugin]
+slug = "compliments"
+name = "Compliments"
+version = "1.0.0"
+publisher = "Coders Farm"
+license = "MIT"
+description = "Pays the user a compliment on request. The minimal worked-example plugin."
+domovoi_api = ">=1.0,<2.0"
+
+[entry_points]
+core = "domovoi_plugin_compliments.core"
+
+[[handlers]]
+name = "compliments"
+band = 400
+requires_network = "no"
+chat_exposed = false
+label = "Compliments"
+tone = "info"
+corpus = ["say something nice", "say something nice about my hair"]
+
+[[workers]]
+name = "compliment_ticker"
+kind = "poll"
+
+[permissions]
+warnings = ["Keeps a log of every compliment it pays."]

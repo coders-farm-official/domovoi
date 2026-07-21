@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spacing scale</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; }
+  .row { display: grid; grid-template-columns: 60px 60px 1fr; align-items: center; gap: 14px; padding: 5px 0; }
+  .name { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); }
+  .px   { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-faint); text-align: right; }
+  .bar  { height: 14px; border-radius: 3px; background: var(--brand); }
+</style>
+</head>
+<body>
+  <div class="row"><div class="name">--s-1</div><div class="px">4px</div><div class="bar" style="width:4px"></div></div>
+  <div class="row"><div class="name">--s-2</div><div class="px">8px</div><div class="bar" style="width:8px"></div></div>
+  <div class="row"><div class="name">--s-3</div><div class="px">12px</div><div class="bar" style="width:12px"></div></div>
+  <div class="row"><div class="name">--s-4</div><div class="px">16px</div><div class="bar" style="width:16px"></div></div>
+  <div class="row"><div class="name">--s-5</div><div class="px">20px</div><div class="bar" style="width:20px"></div></div>
+  <div class="row"><div class="name">--s-6</div><div class="px">24px</div><div class="bar" style="width:24px"></div></div>
+  <div class="row"><div class="name">--s-8</div><div class="px">32px</div><div class="bar" style="width:32px"></div></div>
+  <div class="row"><div class="name">--s-10</div><div class="px">48px</div><div class="bar" style="width:48px"></div></div>
+  <div class="row"><div class="name">--s-12</div><div class="px">64px</div><div class="bar" style="width:64px"></div></div>
+</body>
+</html>

@@ -1,0 +1,76 @@
+[
+  {
+    "type": "music.now_playing.changed",
+    "data": {
+      "kitchen": {
+        "state": "play",
+        "song": {
+          "file": "Akon/Sunny Day.mp3",
+          "title": "Sunny Day",
+          "artist": "Akon",
+          "album": null,
+          "duration_sec": 313
+        },
+        "elapsed_sec": 47.2,
+        "stream_url": "http://my-domovoi.local:8051"
+      },
+      "garage": {
+        "state": "stop",
+        "song": null,
+        "elapsed_sec": null,
+        "stream_url": "http://my-domovoi.local:8052"
+      }
+    }
+  },
+  {
+    "type": "acquisitions.changed",
+    "data": [
+      {
+        "id": 17,
+        "kind": "query",
+        "text": "Radiohead Creep",
+        "requested_by": "web",
+        "status": "pending",
+        "claimed_by": null,
+        "attempts": 0,
+        "error": null,
+        "requested_at": "2026-05-08T15:00:00Z",
+        "completed_at": null
+      }
+    ]
+  },
+  {
+    "type": "satellites.presence.changed",
+    "data": [
+      "kitchen"
+    ]
+  },
+  {
+    "type": "satellites.wifi.changed",
+    "data": {
+      "kitchen": {
+        "rx_mbits": 39.0,
+        "tx_mbits": 72.2,
+        "ssid": "Kamber Wifi 2.0"
+      }
+    }
+  },
+  {
+    "type": "people.last_seen.changed",
+    "data": {
+      "1": "2026-05-08T15:01:42.221Z",
+      "3": "2026-05-08T14:30:00.000Z"
+    }
+  },
+  {
+    "type": "calendar.events.changed",
+    "data": [
+      {
+        "id": 12,
+        "title": "Dinner with Mom",
+        "starts_at": "2026-05-09T18:00:00Z",
+        "ends_at": "2026-05-09T20:00:00Z"
+      }
+    ]
+  }
+]

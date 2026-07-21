@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Color — surfaces (dark)</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; }
+  .stack { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .col { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .chip { height: 64px; border: 1px solid var(--border); border-radius: var(--r-sm); }
+  .lab { font-size: 11px; color: var(--fg-muted); font-family: var(--ff-mono); }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <div class="col"><div class="chip" style="background:var(--canvas)"></div><div class="lab">canvas</div></div>
+    <div class="col"><div class="chip" style="background:var(--sunken)"></div><div class="lab">sunken</div></div>
+    <div class="col"><div class="chip" style="background:var(--card)"></div><div class="lab">card</div></div>
+    <div class="col"><div class="chip" style="background:var(--raised)"></div><div class="lab">raised</div></div>
+    <div class="col"><div class="chip" style="background:var(--overlay); box-shadow: var(--shadow-md)"></div><div class="lab">overlay</div></div>
+    <div class="col"><div class="chip" style="background:var(--border)"></div><div class="lab">border</div></div>
+  </div>
+</body>
+</html>

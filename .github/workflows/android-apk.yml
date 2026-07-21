@@ -1,0 +1,48 @@
+# Build an installable debug APK for the Android app and publish it as a
+# workflow artifact. Runs on any push/PR that touches android/, and can be
+# fired by hand from the Actions tab (workflow_dispatch) when you just want
+# an APK of the current branch.
+#
+# The APK is debug-signed with the runner's throwaway debug keystore — fine
+# for sideloading, but a phone that already has a build installed with a
+# DIFFERENT debug key (e.g. from Android Studio) needs an uninstall first.
+name: android-apk
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: domovoi-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

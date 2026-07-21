@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Components — table row</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  thead th { font-size: 11px; font-weight: 500; color: var(--fg-muted); text-align: left; text-transform: lowercase; padding: 10px 14px; background: var(--sunken); border-bottom: 1px solid var(--border); }
+  tbody td { padding: 0 14px; height: 40px; border-bottom: 1px solid var(--border-soft); color: var(--fg); vertical-align: middle; }
+  tbody tr:hover td { background: var(--brand-soft); }
+  .mono { font-family: var(--ff-mono); font-size: 12px; color: var(--fg-muted); }
+  .room { display: inline-flex; align-items: center; gap: 6px; }
+  .d { width: 6px; height: 6px; border-radius: 9999px; background: var(--ok); position: relative; }
+  .d::after { content: ''; position: absolute; inset: -3px; border-radius: 9999px; background: oklch(0.72 0.17 145 / 0.30); animation: domovoi-pulse 1.6s ease-in-out infinite; }
+  .d.off { background: var(--idle); }
+  .d.off::after { display: none; }
+  .num { text-align: right; }
+</style>
+</head>
+<body>
+  <table>
+    <thead><tr><th>room</th><th>status</th><th class="num">rx</th><th class="num">tx</th><th>last seen</th></tr></thead>
+    <tbody>
+      <tr><td><span class="room"><span class="d"></span>kitchen</span></td><td>online</td><td class="num mono">39.0</td><td class="num mono">72.2</td><td class="mono">just now</td></tr>
+      <tr><td><span class="room"><span class="d"></span>office</span></td><td>online</td><td class="num mono">112.4</td><td class="num mono">88.1</td><td class="mono">just now</td></tr>
+      <tr><td><span class="room"><span class="d off"></span>garage</span></td><td style="color:var(--fg-muted)">offline</td><td class="num mono" style="color:var(--fg-faint)">—</td><td class="num mono" style="color:var(--fg-faint)">—</td><td class="mono">3h ago</td></tr>
+    </tbody>
+  </table>
+</body>
+</html>

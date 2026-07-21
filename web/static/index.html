@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Domovoi Web</title>
+  <link rel="stylesheet" href="colors_and_type.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#e8a33d">
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Vendored locally under /vendor for a zero-external-request dashboard.
+       Versions: react/react-dom 18.3.1 (development builds, unchanged),
+       @babel/standalone 7.29.0, lucide 1.22.0 (was @latest). -->
+  <script src="/vendor/react/react.development.js"></script>
+  <script src="/vendor/react/react-dom.development.js"></script>
+  <script src="/vendor/babel/babel.min.js"></script>
+  <script src="/vendor/lucide/lucide.min.js"></script>
+
+  <script type="text/babel" data-presets="react" src="auth.js"></script>
+  <script type="text/babel" data-presets="react" src="data.js"></script>
+  <script type="text/babel" data-presets="react" src="components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="player.jsx"></script>
+  <script type="text/babel" data-presets="react" src="music_player_panel.jsx"></script>
+  <script type="text/babel" data-presets="react" src="music.jsx"></script>
+  <script type="text/babel" data-presets="react" src="podcasts.jsx"></script>
+  <script type="text/babel" data-presets="react" src="audiobooks.jsx"></script>
+  <script type="text/babel" data-presets="react" src="people.jsx"></script>
+  <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
+  <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
+  <script type="text/babel" data-presets="react" src="plugins.jsx"></script>
+  <script type="text/babel" data-presets="react" src="settings.jsx"></script>
+  <!-- Files is a multi-library browser; files.jsx also carries the shared
+       office suite (reused for the Documents library's editing) and MUST load
+       before drawings.jsx, which registers window.DrawingSuite that the page
+       borrows for .excalidraw editing. models.jsx defines ModelsPanel, now a
+       Settings tab. -->
+  <script type="text/babel" data-presets="react" src="files.jsx"></script>
+  <script type="text/babel" data-presets="react" src="drawings.jsx"></script>
+  <script type="text/babel" data-presets="react" src="models.jsx"></script>
+  <script type="text/babel" data-presets="react" src="news.jsx"></script>
+  <script type="text/babel" data-presets="react" src="manual.jsx"></script>
+
+  <script type="text/babel" data-presets="react">
+    /* ── Plugin bootstrap + app shell (design §5.2) ─────────────────────
+     * Core pages register on window.DomovoiCore.pages (below). Plugin
+     * pages arrive at runtime: we fetch /api/plugins/manifest, load each
+     * declared script's TEXT, wrap it in an IIFE (so a duplicate
+     * `const Foo` inside a plugin can't SyntaxError the shared Babel
+     * scope — worst case it breaks that plugin's own IIFE), transform
+     * with Babel, and execute. Pages register themselves on
+     * window.DomovoiPlugins.<slug>.pages.<PageName>; routes, nav items,
+     * badges and player-source kinds are all data-driven off the
+     * manifest. Only THEN does the app render.
+     */
+    window.DomovoiCore = window.DomovoiCore || {};
+    window.DomovoiCore.pages = {
+      music: () => window.MusicPage,
+      podcasts: () => window.PodcastsPage,
+      audiobooks: () => window.AudiobooksPage,
+      news: () => window.NewsPage,
+      people: () => window.PeoplePage,
+      satellites: () => window.SatellitesPage,
+      calendar: () => window.CalendarPage,
+      files: () => window.FilesPage,
+      plugins: () => window.PluginsPage,
+      settings: () => window.SettingsPage,
+      manual: () => window.UserManualPage,
+    };
+
+    // Browser-side plugin error pipeline. Two sources feed it — script
+    // load/transform failures (below) and page render throws (the
+    // PluginErrorBoundary further down) — and the Plugins management page
+    // subscribes and renders them per plugin alongside the server-side
+    // errors. These are the errors the backend can NEVER see: a plugin's
+    // JSX can import fine on the server yet throw in the user's browser.
+    window.DomovoiPluginErrors = window.DomovoiPluginErrors || {
+      _bySlug: {},
+      _listeners: new Set(),
+      record(slug, phase, message) {
+        if (!slug) return;
+        const list = this._bySlug[slug] || (this._bySlug[slug] = []);
+        const msg = String(message);
+        const last = list[list.length - 1];
+        // Collapse repeats (a render error re-fires on every retry).
+        if (last && last.phase === phase && last.message === msg) {
+          last.count += 1;
+        } else {
+          list.push({ phase, message: msg, count: 1 });
+          if (list.length > 20) list.shift();
+        }
+        this._listeners.forEach((fn) => { try { fn(); } catch (_) {} });
+      },
+      for(slug) { return this._bySlug[slug] || []; },
+      clear(slug) {
+        delete this._bySlug[slug];
+        this._listeners.forEach((fn) => { try { fn(); } catch (_) {} });
+      },
+      subscribe(fn) { this._listeners.add(fn); return () => this._listeners.delete(fn); },
+    };
+
+    const loadPluginScripts = async (manifest) => {
+      window.DomovoiPlugins = window.DomovoiPlugins || {};
+      const errors = {};
+      for (const plugin of manifest.plugins || []) {
+        for (const url of plugin.scripts || []) {
+          try {
+            const r = await fetch(url.startsWith('http') ? url : `${API_BASE}${url}`);
+            if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+            const src = await r.text();
+            const wrapped = `(function(){\n${src}\n})();`;
+            const out = Babel.transform(wrapped, { presets: ['react'] });
+            new Function(out.code)();           // isolated function scope
+          } catch (e) {
+            console.warn(`plugin ${plugin.slug}: script ${url} failed:`, e);
+            errors[plugin.slug] = String(e.message || e);
+            window.DomovoiPluginErrors.record(plugin.slug, 'load', e.message || e);
+          }
+        }
+      }
+      return errors;
+    };
+
+    const bootstrap = async () => {
+      let manifest = { plugins: [], core_nav: {} };
+      try {
+        manifest = await apiGet('/api/plugins/manifest');
+      } catch (e) {
+        console.warn('plugin manifest unavailable — core pages only:', e);
+      }
+      const scriptErrors = await loadPluginScripts(manifest);
+      window.DomovoiPluginManifest = manifest;
+      window.DomovoiPluginScriptErrors = scriptErrors;
+      window.DomovoiPlayerSources = window.DomovoiPlayerSources || {};
+      // Seed the browser player's source registry (player.jsx reads it
+      // to resolve queue-item kinds → stream URLs; unknown kinds are
+      // hidden with a console warn, never a crash).
+      (manifest.plugins || []).forEach((p) => {
+        (p.player_sources || []).forEach((src) => {
+          window.DomovoiPlayerSources[src.kind] = {
+            plugin: p.slug,
+            stream_url_template: src.stream_url_template,
+          };
+        });
+      });
+      renderApp();
+    };
+
+    const pluginPage = (slug, pageName) => {
+      const reg = (window.DomovoiPlugins || {})[slug];
+      return reg && reg.pages && reg.pages[pageName];
+    };
+
+    // Catches a page that throws during render so one bad plugin page can't
+    // white-screen the whole dashboard. When the failing page belongs to a
+    // plugin, the error is pushed into the browser-side pipeline so it shows
+    // up on the Plugins page. Resets on navigation (routeKey) so a transient
+    // failure on one route doesn't wedge the others.
+    class PluginErrorBoundary extends React.Component {
+      constructor(props) { super(props); this.state = { error: null }; }
+      static getDerivedStateFromError(error) { return { error }; }
+      componentDidCatch(error, info) {
+        const msg = (error && error.message) || String(error);
+        if (this.props.slug) {
+          window.DomovoiPluginErrors.record(this.props.slug, 'render', msg);
+        } else {
+          console.error('page render error:', error, info);
+        }
+      }
+      componentDidUpdate(prev) {
+        if (prev.routeKey !== this.props.routeKey && this.state.error) {
+          this.setState({ error: null });
+        }
+      }
+      render() {
+        if (this.state.error) {
+          const who = this.props.slug ? `The “${this.props.slug}” plugin page` : 'This page';
+          return (
+            <div style={{ margin: 24, padding: 20, border: '1px solid var(--border)',
+                          borderRadius: 'var(--r-md)', background: 'var(--overlay)', maxWidth: 640 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>{who} hit an error and was stopped.</div>
+              <div className="mono" style={{ fontSize: 12, color: 'var(--err)', whiteSpace: 'pre-wrap' }}>
+                {(this.state.error && this.state.error.message) || String(this.state.error)}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 8 }}>
+                The rest of the dashboard still works.
+                {this.props.slug && <> See the <a href="#plugins">Plugins</a> page for this plugin's errors.</>}
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    const App = () => {
+      const initialTheme = document.documentElement.getAttribute('data-theme')
+        || localStorage.getItem('domovoi-theme') || 'light';
+      const initialRoute = (window.location.hash || '#music').slice(1);
+      const [theme, setThemeState] = React.useState(initialTheme);
+      const [route, setRouteState] = React.useState(initialRoute);
+
+      const setTheme = (t) => {
+        document.documentElement.setAttribute('data-theme', t);
+        localStorage.setItem('domovoi-theme', t);
+        setThemeState(t);
+      };
+      const setRoute = (r) => {
+        window.location.hash = r;
+        setRouteState(r);
+      };
+
+      React.useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        const handler = () => setRouteState((window.location.hash || '#music').slice(1));
+        window.addEventListener('hashchange', handler);
+        return () => window.removeEventListener('hashchange', handler);
+      }, []);
+
+      // A plugins.changed push means the manifest is stale (new pages,
+      // dropped pages). Loaded plugin code can't be re-imported into a
+      // running page — show the reload toast instead (§3.2 step 15).
+      const [pluginsStale, setPluginsStale] = React.useState(false);
+      useStateEvents(['plugins.changed'], () => setPluginsStale(true));
+
+      // Re-render Lucide icons whenever route changes — Babel-in-browser
+      // creates fresh <i data-lucide> elements that lucide.createIcons
+      // needs to convert to inline SVG.
+      React.useEffect(() => {
+        const t = setTimeout(() => window.lucide && window.lucide.createIcons({
+          attrs: { 'stroke-width': 1.5 }
+        }), 0);
+        return () => clearTimeout(t);
+      });
+
+      const counts = useSidebarCounts();
+      const manifest = window.DomovoiPluginManifest || { plugins: [] };
+
+      // Route map: core routes + manifest-declared plugin pages.
+      let Page = null;
+      let pageSlug = null;   // set only when the resolved page belongs to a plugin
+      const coreGetter = window.DomovoiCore.pages[route];
+      if (coreGetter) Page = coreGetter();
+      if (!Page) {
+        for (const p of manifest.plugins || []) {
+          for (const pg of p.pages || []) {
+            if (pg.route === route) {
+              const P = pluginPage(p.slug, pg.page);
+              if (P) { Page = P; pageSlug = p.slug; }
+            }
+          }
+        }
+      }
+      if (!Page) Page = window.DomovoiCore.pages.music();
+
+      return (
+        <PlaybackProvider>
+          <div className="app" data-screen-label={`Domovoi · ${route}`}>
+            <Sidebar route={route} setRoute={setRoute} counts={counts} manifest={manifest}/>
+            <Topbar route={route} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
+            <main className="main">
+              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page/></PluginErrorBoundary>
+            </main>
+            <AuthModalHost/>
+            {pluginsStale && (
+              <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 80,
+                            background: 'var(--overlay)', border: '1px solid var(--border)',
+                            borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md)',
+                            padding: '10px 14px', fontSize: 13, display: 'flex',
+                            alignItems: 'center', gap: 10 }}>
+                plugins changed — reload to get the new pages
+                <Button variant="primary" onClick={() => window.location.reload()}>reload</Button>
+              </div>
+            )}
+          </div>
+        </PlaybackProvider>
+      );
+    };
+
+    const renderApp = () =>
+      ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+    bootstrap();
+  </script>
+</body>
+</html>

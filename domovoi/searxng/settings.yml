@@ -1,0 +1,36 @@
+# SearxNG configuration for local-only domovoi use.
+#
+# Two non-default things matter here:
+#   * `formats` includes `json` — the core's DoubleCheckHandler
+#     hits the JSON API rather than scraping HTML.
+#   * `bind_address` is 0.0.0.0 inside the container, but the
+#     docker-compose port mapping pins the host side to 127.0.0.1 so
+#     the LAN can't reach it. Don't set bind_address to 127.0.0.1
+#     here — the container would only listen on its own loopback,
+#     unreachable from the host's port mapping.
+#
+# Everything else is SearxNG defaults; change in-place if you want to
+# tune which engines run.
+
+use_default_settings: true
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: false
+  secret_key: "domovoi-local-not-load-bearing"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  default_lang: "en"
+  safe_search: 0
+  autocomplete: ""
+
+ui:
+  default_locale: ""
+  query_in_title: true
+  infinite_scroll: false

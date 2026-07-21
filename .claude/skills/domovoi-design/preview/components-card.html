@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Components — card</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--inner-highlight);
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 40px 1fr auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .art { width: 40px; height: 40px; border-radius: var(--r-sm); border: 1px solid var(--border); background: linear-gradient(135deg, oklch(0.85 0.04 75), oklch(0.72 0.10 60)); }
+  .who { display: flex; flex-direction: column; gap: 2px; }
+  .who .t { font-size: 14px; font-weight: 500; color: var(--fg); letter-spacing: -0.005em; }
+  .who .s { font-size: 12px; color: var(--fg-muted); }
+  .meta { display: flex; align-items: center; gap: 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--brand-soft); color: var(--brand-press); font-weight: 500; }
+  .dot { width: 6px; height: 6px; border-radius: 9999px; background: var(--brand); position: relative; }
+  .dot::after { content: ''; position: absolute; inset: -4px; border-radius: 9999px; background: var(--brand-halo); animation: domovoi-pulse 1.6s ease-in-out infinite; }
+  .time { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-faint); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="art"></div>
+    <div class="who">
+      <div class="t">Sunny Day · Akon</div>
+      <div class="s">kitchen · 0:47 / 5:13</div>
+    </div>
+    <div class="meta">
+      <span class="pill"><span class="dot"></span>live</span>
+      <span class="time">2m ago</span>
+    </div>
+  </div>
+</body>
+</html>

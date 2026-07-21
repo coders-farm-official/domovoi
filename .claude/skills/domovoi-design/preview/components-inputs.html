@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Components — inputs</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field .label { font-size: 11px; font-weight: 500; color: var(--fg-muted); }
+  input, select { font: inherit; font-size: 13px; height: 30px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg); box-shadow: var(--inner-highlight); }
+  input::placeholder { color: var(--fg-subtle); }
+  input:focus, select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+  .search { position: relative; }
+  .search input { padding-left: 28px; width: 100%; box-sizing: border-box; }
+  .search .ic { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--fg-subtle); font-family: var(--ff-mono); font-size: 12px; }
+  .kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-family: var(--ff-mono); font-size: 10px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--sunken); }
+</style>
+</head>
+<body>
+  <div class="field"><div class="label">name</div><input value="Kamron" /></div>
+  <div class="field"><div class="label">room</div><select><option>kitchen</option><option>garage</option><option>office</option></select></div>
+  <div class="field" style="grid-column:1/-1"><div class="label">search library</div>
+    <div class="search">
+      <span class="ic">⌕</span>
+      <input placeholder="search by title, artist, album…" />
+      <span class="kbd">⌘K</span>
+    </div>
+  </div>
+</body>
+</html>

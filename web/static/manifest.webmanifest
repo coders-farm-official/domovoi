@@ -1,0 +1,25 @@
+{
+  "name": "Domovoi Music",
+  "short_name": "Domovoi",
+  "description": "Local-first browser music player for the Domovoi voice assistant.",
+  "start_url": "/#music",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f5f2",
+  "theme_color": "#e8a33d",
+  "icons": [
+    {
+      "src": "assets/domovoi.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/domovoi.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

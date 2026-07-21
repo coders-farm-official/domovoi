@@ -1,0 +1,248 @@
+/* ============================================================
+   Domovoi design system — colors_and_type.css
+   Standalone token file (light + dark) for prototypes outside
+   the repo. The canonical production copy is
+   web/static/colors_and_type.css — same token values, vendored
+   fonts instead of the CDN imports below, plus a --bg alias.
+   ============================================================ */
+
+@import url('https://rsms.me/inter/inter.css');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* Brand-uploaded face. Cash Currency is a decorative display face — it does
+   NOT match Inter (body) or JetBrains Mono (mono), so it has been wired up
+   as a separate --ff-display slot rather than swapped in. Use it for one-off
+   marquee numerals (e.g. big stat values) where a more characterful glyph
+   set is wanted. */
+@font-face {
+  font-family: 'Cash Currency';
+  src: url('fonts/Cash_Currency.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---- BASE TOKENS — light (default) -------------------------- */
+:root {
+  /* Brand — amber accent (single, used sparingly) */
+  --brand: oklch(0.78 0.16 75);
+  --brand-hover: oklch(0.74 0.16 75);
+  --brand-press: oklch(0.70 0.16 75);
+  --brand-fg: oklch(0.22 0.05 75);          /* text on amber buttons */
+  --brand-soft: oklch(0.78 0.16 75 / 0.12); /* hover / selection wash */
+  --brand-halo: oklch(0.78 0.16 75 / 0.22); /* live-pulse outer glow */
+  --brand-ring: oklch(0.78 0.16 75 / 0.40); /* focus ring */
+
+  /* Canvas → surface stack (warm-tinted neutrals) */
+  --canvas:        oklch(0.985 0.005 80);   /* page background */
+  --surface:       oklch(0.985 0.005 80);
+  --card:          oklch(1.000 0 0);        /* cards, raised over canvas */
+  --raised:        oklch(0.998 0.003 80);   /* hovered card */
+  --overlay:       oklch(1.000 0 0);        /* popovers, command-k */
+  --sunken:        oklch(0.965 0.005 80);   /* table header, code blocks */
+  --highlight:     oklch(1.000 0 0);        /* inner top-edge highlight */
+
+  /* Text */
+  --fg:            oklch(0.20 0.01 80);     /* primary text */
+  --fg-muted:      oklch(0.45 0.01 80);     /* labels, meta */
+  --fg-subtle:     oklch(0.62 0.008 80);    /* placeholder, hint */
+  --fg-faint:      oklch(0.78 0.005 80);    /* timestamps in tables */
+  --fg-on-brand:   oklch(0.22 0.05 75);
+
+  /* Borders */
+  --border:        oklch(0.92 0.005 80);    /* default hairline */
+  --border-strong: oklch(0.85 0.005 80);    /* table lines, dividers */
+  --border-soft:   oklch(0.95 0.005 80);    /* very faint internal */
+
+  /* Status (separate from brand amber) */
+  --ok:            oklch(0.72 0.17 145);    /* online — green */
+  --ok-soft:       oklch(0.72 0.17 145 / 0.12);
+  --warn:          oklch(0.80 0.16 60);     /* warning — orange-amber */
+  --warn-soft:     oklch(0.80 0.16 60 / 0.12);
+  --err:           oklch(0.62 0.21 25);     /* error — red */
+  --err-soft:      oklch(0.62 0.21 25 / 0.12);
+  --idle:          oklch(0.70 0.005 80);    /* idle / offline — gray */
+  --idle-soft:     oklch(0.70 0.005 80 / 0.14);
+
+  /* Shadows — warm-tinted */
+  --shadow-xs: 0 1px 2px oklch(0.20 0.01 80 / 0.06);
+  --shadow-sm: 0 2px 6px oklch(0.20 0.01 80 / 0.08), 0 1px 2px oklch(0.20 0.01 80 / 0.04);
+  --shadow-md: 0 8px 24px oklch(0.20 0.01 80 / 0.10), 0 2px 6px oklch(0.20 0.01 80 / 0.06);
+  --inner-highlight: inset 0 1px 0 var(--highlight);
+
+  /* Radius scale */
+  --r-xs: 4px;
+  --r-sm: 6px;     /* default — buttons, chips, inputs */
+  --r-md: 10px;    /* cards */
+  --r-lg: 14px;    /* floating panels, ⌘K */
+  --r-full: 9999px;
+
+  /* Spacing scale (4-px base, fixed steps) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 48px;
+  --s-12: 64px;
+
+  /* Layout */
+  --sidebar-w: 232px;
+  --topbar-h: 52px;
+  --row-h: 40px;
+  --row-h-compact: 36px;
+
+  /* Type families */
+  --ff-sans: 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ff-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --ff-display: 'Cash Currency', 'Inter var', 'Inter', sans-serif; /* uploaded brand face */
+
+  /* Type scale */
+  --t-xs:   11px;
+  --t-sm:   13px;   /* body — default */
+  --t-md:   15px;
+  --t-lg:   18px;
+  --t-xl:   24px;
+  --t-2xl:  32px;
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur:      180ms;
+  --dur-slow: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ---- DARK THEME ---------------------------------------------- */
+:root[data-theme='dark'] {
+  --canvas:        oklch(0.155 0.005 80);
+  --surface:       oklch(0.155 0.005 80);
+  --card:          oklch(0.195 0.006 80);
+  --raised:        oklch(0.225 0.006 80);
+  --overlay:       oklch(0.225 0.006 80);
+  --sunken:        oklch(0.135 0.005 80);
+  --highlight:     oklch(1 0 0 / 0.04);
+
+  --fg:            oklch(0.965 0.005 80);
+  --fg-muted:      oklch(0.72 0.008 80);
+  --fg-subtle:     oklch(0.55 0.008 80);
+  --fg-faint:      oklch(0.42 0.008 80);
+
+  --border:        oklch(0.30 0.006 80);
+  --border-strong: oklch(0.40 0.006 80);
+  --border-soft:   oklch(0.25 0.006 80);
+
+  --brand:         oklch(0.80 0.16 75);
+  --brand-hover:   oklch(0.84 0.16 75);
+  --brand-press:   oklch(0.74 0.16 75);
+  --brand-fg:      oklch(0.18 0.04 75);
+  --brand-soft:    oklch(0.80 0.16 75 / 0.14);
+  --brand-halo:    oklch(0.80 0.16 75 / 0.30);
+  --brand-ring:    oklch(0.80 0.16 75 / 0.50);
+
+  --ok:            oklch(0.78 0.18 145);
+  --ok-soft:       oklch(0.78 0.18 145 / 0.16);
+  --warn:          oklch(0.82 0.16 60);
+  --warn-soft:     oklch(0.82 0.16 60 / 0.16);
+  --err:           oklch(0.70 0.20 25);
+  --err-soft:      oklch(0.70 0.20 25 / 0.16);
+  --idle:          oklch(0.55 0.006 80);
+  --idle-soft:     oklch(0.55 0.006 80 / 0.18);
+
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.30);
+  --shadow-sm: 0 2px 6px oklch(0 0 0 / 0.36), 0 1px 2px oklch(0 0 0 / 0.20);
+  --shadow-md: 0 8px 24px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.30);
+}
+
+/* ---- BASE / SEMANTIC --------------------------------------- */
+html, body {
+  background: var(--canvas);
+  color: var(--fg);
+  font-family: var(--ff-sans);
+  font-size: var(--t-sm);
+  font-feature-settings: 'cv11', 'ss03', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  line-height: 1.45;
+}
+
+/* Semantic type roles */
+.h1, h1 {
+  font-size: var(--t-2xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--fg);
+}
+.h2, h2 {
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin: 0;
+  color: var(--fg);
+}
+.h3, h3 {
+  font-size: var(--t-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--fg);
+}
+.eyebrow {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.label {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--fg-muted);
+  letter-spacing: 0;
+}
+.body, p {
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--fg);
+  margin: 0;
+}
+.meta {
+  font-size: var(--t-xs);
+  color: var(--fg-muted);
+}
+.mono, code, kbd {
+  font-family: var(--ff-mono);
+  font-size: 12px;
+  font-feature-settings: 'tnum';
+  color: var(--fg);
+}
+.num-tab { font-variant-numeric: tabular-nums; }
+
+/* Focus ring (used everywhere — buttons, inputs, links) */
+:where(button, [role='button'], input, textarea, select, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---- LIVE PULSE keyframes (used by StatusDot live=true) ----- */
+@keyframes domovoi-pulse {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  80%  { transform: scale(2.4); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.live-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--brand-halo);
+  animation: domovoi-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}

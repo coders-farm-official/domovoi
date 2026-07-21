@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Type — mono & numerals</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; }
+  .row { display: flex; align-items: baseline; gap: 16px; padding: 6px 0; }
+  .row .name { color: var(--fg-muted); font-size: 11px; width: 64px; font-family: var(--ff-mono); }
+  .row .meta { color: var(--fg-faint); font-size: 11px; font-family: var(--ff-mono); margin-left: auto; }
+  table { font-variant-numeric: tabular-nums; font-size: 13px; border-collapse: collapse; }
+  td { padding: 2px 14px 2px 0; }
+  td.r { text-align: right; color: var(--fg-muted); }
+</style>
+</head>
+<body>
+  <div class="row"><div class="name">mono</div><code>C:/Users/Kamron/Music/Radiohead/Creep.mp3</code><div class="meta">JetBrains Mono</div></div>
+  <div class="row"><div class="name">code</div><code>POST /api/music/queue</code><div class="meta">12 / 500</div></div>
+  <div class="row"><div class="name">tnum</div>
+    <table>
+      <tr><td>kitchen</td><td class="r">39.0</td><td class="r">/ 72.2</td><td class="r" style="color:var(--fg-faint)">Mbit</td></tr>
+      <tr><td>office</td><td class="r">112.4</td><td class="r">/ 88.1</td><td class="r" style="color:var(--fg-faint)">Mbit</td></tr>
+      <tr><td>garage</td><td class="r">0.0</td><td class="r">/ 0.0</td><td class="r" style="color:var(--fg-faint)">Mbit</td></tr>
+    </table>
+    <div class="meta">tabular numerals</div>
+  </div>
+</body>
+</html>

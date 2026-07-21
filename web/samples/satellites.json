@@ -1,0 +1,44 @@
+[
+  {
+    "room_id": "kitchen",
+    "status": "online",
+    "last_connected_at": "2026-05-08T13:00:00Z",
+    "wifi": {
+      "rx_mbits": 39.0,
+      "tx_mbits": 72.2,
+      "ssid": "Kamber Wifi 2.0"
+    },
+    "now_playing": {
+      "room_id": "kitchen",
+      "state": "play",
+      "song": {
+        "file": "Akon/Sunny Day.mp3",
+        "title": "Sunny Day",
+        "artist": "Akon",
+        "album": null,
+        "duration_sec": 313
+      },
+      "elapsed_sec": 47.2,
+      "stream_url": "http://my-domovoi.local:8051"
+    },
+    "active_session_id": null,
+    "mpd_ports": {"control": 6651, "http": 8001},
+    "version": null
+  },
+  {
+    "room_id": "garage",
+    "status": "offline",
+    "last_connected_at": "2026-05-08T11:14:51Z",
+    "wifi": null,
+    "now_playing": {
+      "room_id": "garage",
+      "state": "stop",
+      "song": null,
+      "elapsed_sec": null,
+      "stream_url": "http://my-domovoi.local:8052"
+    },
+    "active_session_id": null,
+    "mpd_ports": {"control": 6652, "http": 8002},
+    "version": null
+  }
+]

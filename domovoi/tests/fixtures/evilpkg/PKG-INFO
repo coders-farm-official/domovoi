@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: evilpkg
+Version: 0.0.0
+Summary: Security test fixture; never install for real.

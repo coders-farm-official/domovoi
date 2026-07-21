@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Components — chips</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row .lab { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); width: 70px; }
+  .room { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; background: var(--sunken); border: 1px solid var(--border); border-radius: var(--r-full); font-size: 12px; color: var(--fg); }
+  .room .d { width: 6px; height: 6px; border-radius: 9999px; background: var(--idle); }
+  .room.live .d { background: var(--ok); position: relative; }
+  .room.live .d::after { content: ''; position: absolute; inset: -3px; border-radius: 9999px; background: oklch(0.72 0.17 145 / 0.30); animation: domovoi-pulse 1.6s ease-in-out infinite; }
+  .tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; background: var(--brand-soft); color: var(--brand-press); border-radius: var(--r-sm); font-size: 11px; font-weight: 500; }
+  .tag.gray { background: var(--idle-soft); color: var(--fg-muted); }
+  .ava { width: 24px; height: 24px; border-radius: 9999px; background: linear-gradient(135deg, oklch(0.86 0.05 75), oklch(0.72 0.12 60)); display: inline-flex; align-items: center; justify-content: center; color: var(--brand-fg); font-size: 11px; font-weight: 600; border: 1px solid oklch(0 0 0 / 0.06); }
+</style>
+</head>
+<body>
+  <div class="row"><div class="lab">rooms</div><span class="room live"><span class="d"></span>kitchen</span><span class="room live"><span class="d"></span>office</span><span class="room"><span class="d"></span>garage</span></div>
+  <div class="row"><div class="lab">tags</div><span class="tag">voice</span><span class="tag gray">manual</span><span class="tag gray">enriched</span></div>
+  <div class="row"><div class="lab">people</div><span class="ava">K</span><span class="ava" style="background:linear-gradient(135deg, oklch(0.86 0.05 200), oklch(0.62 0.14 220))">S</span><span class="ava" style="background:linear-gradient(135deg, oklch(0.86 0.05 145), oklch(0.62 0.14 160))">A</span></div>
+</body>
+</html>

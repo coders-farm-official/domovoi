@@ -1,0 +1,24 @@
+[
+  {
+    "id": 12,
+    "title": "Dinner with Mom",
+    "starts_at": "2026-05-09T18:00:00Z",
+    "ends_at": "2026-05-09T20:00:00Z",
+    "location": "Mom's house",
+    "description": null,
+    "source": "local",
+    "external_id": null,
+    "last_synced_at": null
+  },
+  {
+    "id": 13,
+    "title": "Standup",
+    "starts_at": "2026-05-12T13:30:00Z",
+    "ends_at": "2026-05-12T14:00:00Z",
+    "location": null,
+    "description": "Recurring",
+    "source": "google",
+    "external_id": "abc123_recurring_555",
+    "last_synced_at": "2026-05-08T08:00:00Z"
+  }
+]

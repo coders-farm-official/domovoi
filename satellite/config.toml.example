@@ -1,0 +1,398 @@
+# Pi satellite client config. Copy to ~/.domovoi/config.toml and edit.
+# Changes take effect on restart.
+#
+# Many of these can also be edited from the web dashboard — open the
+# Satellites page, click this satellite, and use the Settings tab. Saving
+# there rewrites this file (preserving your comments, keeping a .bak) and
+# restarts the satellite to apply. That needs the self-restart sudoers
+# entry from PROVISIONING.md §8.1.
+
+[device]
+# Which mic board this satellite runs on. The profile sets per-board
+# DEFAULTS for the audio/mic-gain/noise-gate/barge-in/LED/music sections
+# below — any value you set explicitly in those sections still overrides
+# the profile. A typo'd profile name fails loudly at startup.
+#
+#   respeaker_2mic_hat  — ReSpeaker 2-Mics Pi HAT (I2S codec on card 0,
+#                         3x APA102 LEDs over SPI). The original board and
+#                         the default; every knob below shows its values.
+#
+#   xvf3800_usb         — ReSpeaker XVF3800 USB 4-Mic Array. On-chip AEC,
+#                         60 dB AGC, beamforming, noise suppression. Capture
+#                         is S16_LE 2-channel; the client slices ch1 (the ASR
+#                         beam) for STT. 12x WS2812 ring driven via the
+#                         xvf_host CLI. Selecting it auto-disables the ALSA
+#                         mic-gain tune and software noise-gate auto-calibrate
+#                         (the chip does both) and leaves barge-in on normal
+#                         VAD (on-chip AEC cancels speaker echo).
+#                         REQUIRES: the speaker plugged into the ARRAY's own
+#                         3.5mm/JST jack (so AEC has its echo reference), and
+#                         [audio] input_device/output_device + [music]
+#                         alsa_device pinned to the array (see PROVISIONING).
+profile = "respeaker_2mic_hat"
+
+[satellite]
+# Logical room name. Becomes the {room_id} in the WebSocket path and is
+# what the Domovoi server records in intents_log. Pick something stable —
+# the drop-in/intercom feature addresses rooms by this id.
+room_id = "kitchen"
+
+# WebSocket URL of the Domovoi server. ws:// (no TLS) is fine on a trusted
+# LAN; revisit when adding remote / phone-as-satellite clients.
+domovoi_url = "ws://domovoi.local:6370"
+
+[wake]
+# openWakeWord built-ins: hey_jarvis | alexa | hey_mycroft | hey_rhasspy | timer | weather
+# Once a custom "Hey Domovoi" model is trained (see scripts/wake_word/README.md),
+# uncomment `wake_word_model_path` to use it. The `wake_word` value must match
+# the model file's stem (e.g. "hey_domovoi" for hey_domovoi.onnx).
+#
+# Easier path (Feature #5): a custom wake word can be recorded + trained +
+# pushed entirely from the dashboard's Settings > Wake Words tab — record the
+# positive clips ON this satellite (through its own mic board), train on
+# the server, then "push to room". The push writes the model slug to the sidecar
+# ~/.domovoi/wake, which OVERRIDES the `wake_word` below at runtime (and loads
+# the matching ~/.domovoi/wake_models/<slug>.onnx), surviving restarts. Delete
+# that sidecar file to revert to the `wake_word` here.
+wake_word = "hey_jarvis"
+# wake_word_model_path = "~/.domovoi/hey_domovoi.onnx"
+
+# Detection threshold (0–1). Lower = more sensitive, more false positives.
+threshold = 0.5
+
+[greeting]
+# Instant spoken acknowledgment the moment the wake word fires — a random
+# pre-rendered clip from a bank of generic + occasional funny lines (rendered
+# in your TTS voice by domovoi/canned_sounds.py into sounds/greetings/
+# and rsynced here). It plays through the array WHILE the mic captures your
+# command: the XVF3800's on-chip AEC removes the greeting from the mic, so you
+# can talk over it or wait — either way the greeting finishes and your command
+# is captured cleanly.
+#
+# Requires AEC. On a HAT (no AEC) the greeting would bleed into the capture
+# and garble the transcript, so set enabled = false on a HAT satellite.
+enabled = true
+# Probability (0–1) a wake greeting is a funny one rather than a plain one.
+funny_chance = 0.2
+
+[chat]
+# Conversational chat mode (Feature #8) has NO satellite-side config knob —
+# it's entirely server-gated. Say "let's have a chat" (or "let's talk") and,
+# if the server has chat_mode_enabled = true (off by default; it backs
+# the conversation with a self-hosted Letta agent on the local Ollama), it
+# sends this room a `chat_start` frame and the satellite opens the mic for a
+# back-and-forth: each turn is captured + answered WITHOUT a wake word, so you
+# can just keep talking. End it with "that's all", "stop", or "never mind".
+#
+# REQUIRES AEC (a full-duplex board, i.e. profile = "xvf3800_usb"). On a HAT
+# (no on-chip AEC) the open mic would capture Domovoi's own spoken reply and
+# the conversation would talk to itself, so the satellite REFUSES a chat_start
+# on a half-duplex board (it logs a warning and tells the server to end the
+# mode). Nothing to set here — this block is documentation only.
+
+[sounds]
+# On connect (and whenever the server signals a change), pull the
+# rendered sound clips — greetings and the canned network-issues message —
+# from the server into ~/.domovoi/sounds/, instead of relying on a
+# manual rsync. The synced cache is preferred over the clips bundled in the
+# satellite/ tree; on any failure (server unreachable, etc.) the Pi
+# falls back to whatever it already has, so it always greets. Set false to
+# pin the bundled clips and disable syncing.
+sync_enabled = true
+
+[voice]
+# Which registered voice this satellite speaks in. The Domovoi server keeps a
+# voice registry (Piper local models + optional Edge cloud voices, managed
+# from the web dashboard's Voices page) and synthesizes THIS room's responses
+# and greetings in the named voice. Say "what voices are there", "let me hear
+# <name>", or "switch to <name>" to sample and change it by voice — a switch
+# writes ~/.domovoi/voice, which overrides this value and survives restarts.
+# Leave commented out / blank to use the server's default voice.
+#name = "Ryan"
+
+[audio]
+# sounddevice IDs. Run `python -m satellite.client --list-devices` to find them.
+# Leave commented out to use the system default. On the ReSpeaker HAT both are
+# usually card 0; a single explicit value makes troubleshooting easier later.
+#
+# On the XVF3800 (profile = "xvf3800_usb") you MUST pin both to the USB array:
+# leaving output_device on the system default routes TTS away from the array,
+# so its on-chip AEC has no echo reference and barge-in misfires. The client
+# logs a warning at startup if the xvf profile is active with output_device unset.
+#
+# These accept either a numeric index OR a device-name substring. A name is
+# reboot-proof — card/index numbers can shuffle (e.g. if a HAT overlay is
+# still loaded), but the name always resolves to the array. Recommended:
+# input_device = "reSpeaker XVF3800"
+# output_device = "reSpeaker XVF3800"
+# input_device = 0
+# output_device = 0
+
+# Hardware output-volume mixer. Voice commands ("set the volume to 50",
+# "turn it up") drive this single ALSA control — the one gain both Domovoi's
+# voice AND music pass through — so one command controls everything. The
+# satellite applies it with amixer and reports the level back to the
+# server. Defaults come from the device profile:
+#   xvf3800_usb        → card "Array", control "PCM"  (works out of the box)
+#   respeaker_2mic_hat → control unset (no hardware volume) — set it to your
+#                        codec's playback control to enable it, e.g.
+#                        output_mixer_control = "Speaker"  (WM8960, V1) or
+#                        output_mixer_control = "PCM"      (TLV320, V2.0)
+# `output_mixer_card` is an amixer -c value (index or name; a name is
+# reboot-proof). Find controls with `amixer -c <card> scontrols`.
+# output_mixer_card = "Array"
+# output_mixer_control = "PCM"
+
+[listen]
+# WebRTC VAD aggressiveness while capturing user speech (0–3, higher = stricter).
+vad_aggressiveness = 2
+
+# Seconds of continuous silence that ends an utterance.
+silence_timeout = 1.2
+
+# Hard cap on a single utterance (seconds). Server also enforces 60s.
+max_record_seconds = 30
+
+# When the bot asks a question and expects a reply ("Did I get that right?"
+# after a self-intro), the satellite skips the wake-word gate and captures
+# directly. If the user doesn't start speaking within this window, give up
+# and drop back to wake-word listen rather than holding the mic open for
+# the full max_record_seconds.
+followup_pre_speech_timeout = 8.0
+
+[barge_in]
+# Disable if speaker echo on this Pi causes false triggers.
+enabled = true
+
+# VAD aggressiveness during TTS playback. Keep higher than `listen` to resist echo.
+# Profile default: respeaker_2mic_hat = 3, xvf3800_usb = 2 (on-chip AEC already
+# cancels speaker echo, so the during-TTS VAD doesn't need to be cranked up).
+# vad_aggressiveness_during_tts = 3
+
+# Milliseconds of net-voiced audio required to trigger. The counter *decays*
+# on non-voiced frames (it doesn't reset), so natural speech with micro-pauses
+# still accumulates reliably. Raise to 500+ if echo triggers barge-in on speakers;
+# lower to 150 for snappier interruption with headphones.
+min_speech_ms = 250
+
+# When true, only the wake word interrupts playback — VAD/noise-gate barge is
+# bypassed entirely. Immune to speaker echo and arbitrary background speech, at
+# the cost of having to say "hey jarvis stop" instead of just speaking over the
+# response. Recommended on Pis where the speaker leaks heavily into the mic.
+# Profile default false on both boards (the XVF's on-chip AEC makes plain VAD
+# barge-in reliable, so the wake-word gate isn't needed there).
+# require_wake_word = false
+
+[noise_gate]
+# dBFS threshold; frames quieter than this are ignored even if VAD says speech.
+# Reference points:
+#   Close-mic speech       -25 to -40 dBFS
+#   Conversational speech  -35 to -50 dBFS
+#   Distant TV / next room -50 to -70 dBFS
+# Lower value = more permissive (accepts quieter audio). When auto_calibrate
+# is true (default), this value is just the boot-time fallback if the
+# initial ambient sample fails — the running threshold is derived from
+# real ambient measurements.
+# Profile default: respeaker_2mic_hat = -45.0, xvf3800_usb = -60.0 (the chip's
+# noise suppression + AGC already deliver clean leveled audio, so a permissive
+# fixed floor keeps endpointing's VAD running without the gate rejecting speech).
+# dbfs = -45.0
+
+# Auto-calibration: derive the threshold from actual ambient audio
+# instead of trusting the static value above. Set false to disable
+# entirely (e.g., for a noisy room you want to manually tune).
+#
+# How it works:
+#   * Boot:           sample `calibration_sample_sec` of ambient audio
+#                     while the wake-word model loads, set the threshold
+#                     to p95(ambient dBFS) + `calibration_margin_db`.
+#   * Steady state:   keep a 30 s rolling buffer of ambient frames
+#                     during wake-word listen; every
+#                     `recalibrate_interval_sec` re-derive the
+#                     threshold via EWMA so seasonal HVAC / new
+#                     appliances / time-of-day shifts get picked up
+#                     gradually.
+#   * Noisy capture:  if a captured utterance's median dBFS exceeds
+#                     `noisy_capture_dbfs` (absolute, not relative to
+#                     the gate), the audio is clipping-adjacent —
+#                     Whisper can't usefully transcribe it. Skip the
+#                     transcription, ask the user to retry via stock
+#                     TTS, and snap the threshold against the loud
+#                     capture so the next attempt has a more honest
+#                     gate. Conversational speech sits at -25 to -35
+#                     dBFS so the default of -10 only fires for genuine
+#                     saturation.
+# Profile default: respeaker_2mic_hat = true, xvf3800_usb = false (re-deriving
+# a software threshold from the chip's already-processed output fights its AGC).
+# auto_calibrate = true
+calibration_sample_sec = 5.0
+calibration_margin_db = 5.0
+recalibrate_interval_sec = 600
+noisy_capture_dbfs = -10.0
+
+[mic_gain]
+# Boot-time hardware mic-gain auto-tune (ALSA PGA Capture Volume).
+# Runs once at startup BEFORE the noise-gate auto-tune so that
+# downstream calibration sees properly-leveled ambient. Without it,
+# rooms with the PGA set wrong (e.g. fresh image with default 80/119
+# in an echoey garage) end up with ambient at -10 dBFS, the noise
+# gate refuses to trust the sample, and every capture runs to
+# max_record_seconds because VAD never sees silence.
+#
+# Set enabled = false to skip entirely (e.g. on a non-ReSpeaker rig
+# or when you've manually tuned the mixer with `amixer set ... ; alsactl store`).
+# Profile default: respeaker_2mic_hat = true, xvf3800_usb = false (the XVF3800
+# does its own 60 dB AGC on-chip — there's no ALSA PGA control to walk, so the
+# tune would just no-op).
+# enabled = true
+
+# ALSA card index. `aplay -l` shows the cards on your Pi.
+# card = 0
+
+# ALSA control name. Leave commented to auto-detect: tries
+# "PGA Capture Volume" (WM8960 / ReSpeaker 2-Mics V2), then
+# "Capture Volume", then "Mic Capture Volume". Set explicitly if
+# your card uses something exotic.
+# control_name = "PGA Capture Volume"
+
+# Target ambient median dBFS. The tune walks PGA up or down until
+# the room's quiet-time median lands inside target ± tolerance.
+# -55 dBFS is a healthy floor — leaves 20+ dB of headroom for normal
+# speech (-25 to -35 dBFS) before clipping. Lower (more negative) =
+# quieter mic; higher = hotter mic.
+target_dbfs = -55.0
+tolerance_db = 5.0
+
+# WM8960 PGA range is 0–119 (~0.5 dB per step). Most other capture
+# controls are bounded similarly; check `amixer get '<control>'` to
+# see your card's max.
+pga_min = 0
+pga_max = 119
+
+# Per-iteration sample window. 4 iterations × 2.5s = ~10s worst-case
+# boot delay added on first run; usually 1–2 iterations suffice.
+sample_sec = 2.5
+
+[playback]
+# Pre-buffer this many seconds of TTS audio in the receiver before
+# pushing it to the playback thread. Insulates against bursty
+# WS delivery — without it, PortAudio's small default buffer underruns
+# the moment the queue dips empty, producing mid-word chop audible as
+# "It's Wednes...day...May..." instead of smooth speech. 0.5s is
+# enough cushion for typical LAN delivery jitter without adding
+# noticeable startup latency. Set to 0.0 to disable (immediate
+# playback, useful for diagnosis).
+tts_prebuffer_sec = 0.5
+
+# Make-up gain applied to Domovoi's voice (TTS) playback. TTS engines
+# normalize to a moderate level well below full scale, so on a line-level
+# output (e.g. the XVF3800's 3.5mm jack) the voice can sound quiet even with
+# the hardware mixer maxed — while music, which is mastered hot, is already
+# loud. This multiplies the streamed TTS PCM AND the locally-played greeting
+# + canned clips (via mpg123 --scale), since those are rendered by the same
+# quiet TTS engines — so they all match. Music via mpg123 is untouched.
+# Hard-clipped so peaks can't distort. 1.0 = no change. Try 2.0–4.0 if
+# Domovoi is too quiet; ~5x is roughly the clip ceiling for typical TTS.
+# gain = 1.0
+
+[music]
+# ALSA device for music streaming. The satellite spawns mpg123 to consume
+# MPD's HTTP stream from the server. plughw:0,0 is the HAT after the
+# HDMI-card-removal in PROVISIONING step 4a; the "plug" prefix lets ALSA
+# resample if the codec doesn't natively support 44.1 kHz.
+# Requires `mpg123` installed on the Pi: sudo apt install mpg123
+# Profile default: respeaker_2mic_hat = "plughw:0,0", xvf3800_usb = "default".
+# On the XVF3800 the USB card index varies per Pi — pin it explicitly to the
+# array here (e.g. "plughw:CARD=<name>,DEV=0" from `aplay -l`) so music routes
+# through the array's speaker (and the chip's AEC) rather than the wrong card.
+# alsa_device = "plughw:0,0"
+# Music prepare/resume handshake — how long mpg123 buffers MPD's always-on
+# silence stream before we tell the server we're ready for song frames.
+# The server pre-queues new tracks in MPD paused; without this prime,
+# mpg123 would join a real-time MP3 stream mid-song with almost no ALSA
+# buffer headroom, and the first second stutters as the buffer catches up.
+# 1.0s comfortably exceeds mpg123 startup + the `--devbuffer 1.0` fill;
+# set to 0 to disable the handshake (the server's fallback timer still
+# resumes MPD eventually).
+prime_sec = 1.0
+
+[leds]
+# State indicators. The LED backend is chosen by the [device] profile, and the
+# two backends use DIFFERENT visual schemes:
+#   respeaker_2mic_hat → 3x APA102 over SPI (solid colors, software-animated):
+#     idle off · listening blue · thinking amber · speaking green · error red
+#   xvf3800_usb        → 12x WS2812 ring via the xvf_host CLI (chip-animated):
+#     idle off · listening green DoA dot over a dim blue ring (points at your
+#     voice) · thinking slow yellow pulse · speaking slow blue pulse ·
+#     music rotating rainbow · error solid red
+#   (On the XVF the DoA dot only tracks during listening; thinking/speaking use a
+#    whole-ring pulse because the chip's DoA needs live mic input, which AEC
+#    suppresses while the bot talks.)
+#
+# APA102 (HAT) requires SPI enabled (`sudo raspi-config nonint do_spi 0` then
+# reboot) and the `spidev` package (in satellite/requirements.txt). WS2812
+# (XVF3800) requires the xvf_host binary reachable (see PROVISIONING), usually
+# via a passwordless sudoers entry. If the backend's hardware/tooling is
+# missing the satellite still runs — the LEDs just stay dark and a warning is
+# logged at startup.
+#
+# Set enabled = false to skip the LED subsystem entirely (e.g. a USB-mic-only
+# test rig).
+enabled = true
+
+# Profile default: respeaker_2mic_hat = 3, xvf3800_usb = 12.
+# num_leds = 3
+
+# LED brightness. APA102 is a 5-bit global scale (0–31, 16 ≈ 50%); the WS2812
+# ring is 0–255 (affects only the breath/rainbow pulse modes — the DoA dot and
+# solid colors carry their own brightness). Profile default:
+# respeaker_2mic_hat = 16, xvf3800_usb = 200. Lower it if the pulse is too
+# bright, or raise toward 255 for max.
+# brightness = 16
+
+# Path to the xvf_host control binary (xvf3800_usb only). A bare name resolves
+# via PATH; give an absolute path if you installed it elsewhere.
+# xvf_host_path = "xvf_host"
+
+[wifi]
+# Autonomous self-heal for the AP-side rate-control wedge that caused
+# the 2026-05-06 TTS chop incident.
+# Symptom: rx bitrate stuck at 1 Mbit/s for hours/days while tx is
+# fine; speech responses chop mid-word because 350 kbps of PCM TTS
+# can't fit through 1 Mbit/s. Recovery: `wpa_cli reassociate`.
+# This block tunes a watchdog that polls `iw dev wlan0 link` and
+# reassociates when the rate dips into pathological territory.
+#
+# Requires a one-line sudoers entry on the Pi (see PROVISIONING.md
+# step 6.7) so the satellite process can run wpa_cli with no password
+# prompt — least-privilege, locked to that one command + interface.
+enabled = true
+
+# Seconds between rate samples. Rate-stuck mode persists for hours
+# once it sets in, so 60 s detection latency is plenty. Faster
+# polling wastes CPU and journal noise for no benefit.
+poll_interval_sec = 60
+
+# Megabits/sec. Below this, reassociate. 5 Mbit/s is well above what
+# TTS needs (~0.5 Mbit/s) but well below normal operation
+# (20-70 Mbit/s on healthy 802.11n), so anything in the single digits
+# is unambiguously trouble. Lower to avoid false positives;
+# raise (e.g. to 10) to catch borderline cases earlier.
+min_healthy_mbits = 5.0
+
+# Don't reassociate again within this window. Defends against tight
+# loops when the AP / channel is genuinely broken — a single nudge
+# gives the rate-control state machine a chance to climb back up;
+# if it doesn't, hammering reassociate every 60 s won't help.
+cooldown_sec = 300
+
+# When the server WS has been disconnected this long, the
+# satellite arms its `network_degraded` flag — the next wake word
+# fires the canned MP3 ("Sorry, I'm having trouble reaching the
+# network...") instead of the usual streaming flow. Also armed when
+# a reassociate fails to recover the rate. Cleared on WS reconnect.
+degraded_after_disconnect_sec = 30
+
+[log]
+# DEBUG | INFO | WARNING | ERROR
+level = "INFO"

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brand — accent</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .swatch { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--card); }
+  .chip { width: 36px; height: 36px; border-radius: var(--r-sm); border: 1px solid oklch(0 0 0 / 0.06); }
+  .name { font-size: 13px; font-weight: 500; color: var(--fg); }
+  .val  { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); }
+</style>
+</head>
+<body>
+  <div class="swatch"><div class="chip" style="background:var(--brand)"></div><div><div class="name">brand</div><div class="val">oklch(0.78 0.16 75)</div></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--brand-hover)"></div><div><div class="name">brand-hover</div><div class="val">oklch(0.74 0.16 75)</div></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--brand-press)"></div><div><div class="name">brand-press</div><div class="val">oklch(0.70 0.16 75)</div></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--brand-soft)"></div><div><div class="name">brand-soft</div><div class="val">12% — hover wash</div></div></div>
+</body>
+</html>

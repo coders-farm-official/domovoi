@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Color — text</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; }
+  .row { display: flex; align-items: baseline; gap: 14px; padding: 7px 0; }
+  .row .name { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); width: 80px; }
+  .row .ex { font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="row"><div class="name">fg</div><div class="ex" style="color:var(--fg)">primary content — Now playing</div></div>
+  <div class="row"><div class="name">fg-muted</div><div class="ex" style="color:var(--fg-muted)">labels and metadata — Last heard</div></div>
+  <div class="row"><div class="name">fg-subtle</div><div class="ex" style="color:var(--fg-subtle)">placeholder text — search…</div></div>
+  <div class="row"><div class="name">fg-faint</div><div class="ex" style="color:var(--fg-faint)">timestamps — 2026-05-08 13:00</div></div>
+  <div class="row"><div class="name">brand</div><div class="ex" style="color:var(--brand)">link / accent — open in mpd</div></div>
+</body>
+</html>

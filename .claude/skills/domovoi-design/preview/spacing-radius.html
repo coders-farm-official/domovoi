@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Radius scale</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 20px 24px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .col { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .box { width: 64px; height: 64px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--inner-highlight); }
+  .name { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-muted); }
+  .px { font-family: var(--ff-mono); font-size: 10px; color: var(--fg-faint); }
+</style>
+</head>
+<body>
+  <div class="col"><div class="box" style="border-radius:4px"></div><div class="name">--r-xs</div><div class="px">4px</div></div>
+  <div class="col"><div class="box" style="border-radius:6px"></div><div class="name">--r-sm</div><div class="px">6px · default</div></div>
+  <div class="col"><div class="box" style="border-radius:10px"></div><div class="name">--r-md</div><div class="px">10px · cards</div></div>
+  <div class="col"><div class="box" style="border-radius:14px"></div><div class="name">--r-lg</div><div class="px">14px · panels</div></div>
+  <div class="col"><div class="box" style="border-radius:9999px"></div><div class="name">--r-full</div><div class="px">circles</div></div>
+</body>
+</html>

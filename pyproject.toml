@@ -1,0 +1,147 @@
+[project]
+name = "domovoi"
+version = "1.0.0"
+description = "Domovoi — a local-first home voice assistant"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # Lightweight clients — kept in core so the real-clients extra only
+    # carries the heavy ML/audio deps.
+    "ollama>=0.3",
+    "python-mpd2>=3.1",
+    # Multipart form parsing for the web dashboard's file uploads (Voices
+    # page uploads Piper .onnx models). Required by FastAPI's UploadFile.
+    "python-multipart>=0.0.9",
+    # CalculatorHandler uses simpleeval for arithmetic — sandboxed AST
+    # evaluation, never builtin eval/exec. Tiny pure-Python dep, kept
+    # in core so the handler doesn't gate on an optional extra.
+    "simpleeval>=0.9",
+    # Office Suite (web/backend/api/documents.py) signs/verifies the
+    # editor handshake tokens: OnlyOffice editor-config JWT and the
+    # Collabora WOPI access_token. Pure-Python, tiny; in core so the web
+    # backend imports cleanly whether or not an office engine is enabled.
+    "pyjwt>=2.8",
+    # Host hardware readout for the Models page (/v1/admin/hardware): CPU
+    # load, RAM, and model-storage disk free. GPUs come from nvidia-smi
+    # (no dep). Small, pure-wheel on Windows; in core so the hardware
+    # endpoint imports cleanly. Degrades gracefully if somehow absent.
+    "psutil>=5.9",
+    # domovoi/clients/tts.py uses requests for the edge-TTS reachability
+    # probe; small and pure-Python, so it lives in core rather than an
+    # extra (the TTS fallback chain must import without real-clients).
+    "requests>=2.31",
+    # Admin-password hashing (argon2id) for the admin_auth table. Ships in
+    # core from 1.0.0 even though the auth endpoints land after the DB
+    # baseline — the dependency and the schema arrive together so no
+    # intermediate install is ever missing it.
+    "argon2-cffi>=23.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/coders-farm-official/domovoi"
+
+[project.scripts]
+# The plugin dev CLI (design §3.8): domovoi plugin new/dev/pack.
+domovoi = "domovoi.plugins_runtime.cli:main"
+
+[project.optional-dependencies]
+# Real Whisper/TTS clients. Skipped when USE_STUBS=true (tests, CI).
+# Install with: pip install -e ".[real-clients]"  (or ".[dev,real-clients]").
+real-clients = [
+    "faster-whisper>=1.0",
+    "edge-tts>=6.1",
+    "miniaudio>=1.61",
+    "piper-tts>=1.2",
+    # Encode rendered TTS clips (WAV from the engine router) to MP3 so the
+    # Pi can play them via mpg123. Per-voice greeting/canned clip renderer
+    # (canned_sounds.py). Small pure-wheel dep with Windows wheels.
+    "lameenc>=1.7",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
+    # Local-music indexer reads ID3/Vorbis/MP4 tags. Pure-Python; small
+    # dep. Tested against MP3/M4A/FLAC/OGG/Opus.
+    "mutagen>=1.47",
+    # Library enricher (workers/library_enricher.py). pyacoustid wraps
+    # Chromaprint via the `fpcalc` binary (must be on PATH — see
+    # domovoi/README.md "Library enrichment setup"). shazamio is
+    # the fallback for tracks AcoustID's catalog doesn't cover.
+    "pyacoustid>=1.3",
+    "shazamio>=0.7",
+    # Podcast RSS parsing for the feed poller (workers/podcast_feed_poller.py).
+    # Pure-Python, no build step. Only the (network) feed-poll path imports it
+    # — downloaded-episode playback works without it, matching the handler's
+    # `degraded` contract.
+    "feedparser>=6.0",
+]
+# VoiceProfileHandler runtime deps. Split into a separate extra because
+# Resemblyzer's `webrtcvad>=2.0.10` pin has no Windows binary wheels and
+# pip would try to build it from source (needs MSVC). We don't use the
+# part of Resemblyzer that calls webrtcvad — `embed_utterance(wav_array)`
+# skips preprocessing entirely — so the workaround is:
+#
+#   pip install -e ".[real-clients,voice-profile]"
+#   pip install --no-deps resemblyzer
+#
+# librosa + torch are Resemblyzer's other deps; both ship Windows wheels
+# for cp312, so they install through the extra without trouble.
+voice-profile = [
+    "librosa>=0.10",
+    "torch>=2.0",
+]
+# Local-library fingerprinting. The fingerprint client uses a
+# scipy-STFT-based landmark hash modeled on the Shazam algorithm —
+# computes a spectrogram, picks peaks, hashes pairs of peaks within a
+# target window. Outputs land in our own ``library_track_fingerprints``
+# table (binary BYTEA + a HASH index), so we don't need a
+# separate fingerprint DB or a third-party dejavu/audfprint backend.
+# `librosa` for the WAV/MP3 reader (already pulled in by voice-profile
+# but listed here too so users who only want fingerprinting can opt in
+# without taking the full voice-profile stack). `numpy` and `scipy`
+# come along because everything else in the algorithm needs them.
+fingerprint = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "librosa>=0.10",
+]
+# Conversational chat mode (#8). The Letta SDK client used by
+# domovoi/clients/letta.py to drive the self-hosted Letta agent.
+# Split into its own extra because chat mode is opt-in and server-gated
+# (settings.chat_mode_enabled, OFF by default) — a deployment that never
+# enables chat mode doesn't need this dep at all. Tests don't need it
+# either: USE_STUBS / chat_mode_enabled=False route to LettaStubClient,
+# which has no third-party import. Install only for chat mode with:
+#   pip install -e ".[chat]"  (or ".[dev,real-clients,chat]")
+chat = [
+    # Lower bound = a known-good baseline; pin the exact version validated
+    # during the live Letta+Ollama spike. <1 guards the 0.x SDK's API drift.
+    "letta-client>=0.1,<1",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    # The suite imports these directly (library enricher + identify-chain
+    # tests exercise the real modules with stubbed I/O), so a plain
+    # `pip install -e ".[dev]"` must be enough to run pytest.
+    "numpy>=1.26",
+    "pyacoustid>=1.3",
+    "shazamio>=0.7",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["domovoi*", "web*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["domovoi/tests", "plugins/radio/tests"]

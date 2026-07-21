@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# Domovoi runtime
+*.env.local
+
+# Local agent worktrees (never commit)
+.claude/worktrees/

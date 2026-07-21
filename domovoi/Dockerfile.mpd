@@ -1,0 +1,18 @@
+# MPD with full encoder support. The previous image (vimagick/mpd:latest)
+# was MPD 0.21.23 with zero compiled encoders — `httpd` audio output silently
+# failed to bind, breaking music streaming to Pi satellites. Debian bookworm's
+# mpd package ships 0.23.x with lame/vorbis/opus/wave/flac all available.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        mpd \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/mpd/playlists \
+    && chown -R mpd:audio /var/lib/mpd
+
+EXPOSE 6600 8001
+
+# --no-daemon keeps mpd in the foreground for Docker.
+CMD ["mpd", "--no-daemon", "/etc/mpd.conf"]

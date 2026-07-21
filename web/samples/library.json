@@ -1,0 +1,44 @@
+[
+  {
+    "id": 142,
+    "file_path": "C:/Users/Kamron/Music/Radiohead/Creep.mp3",
+    "title": "Creep",
+    "artist": "Radiohead",
+    "album": "Pablo Honey",
+    "duration_sec": 238,
+    "source": "upload",
+    "source_id": "XFkzRNyygfk",
+    "musicbrainz_recording_id": "f7c3f7c0-1234-5678-9abc-def012345678",
+    "added_at": "2026-04-30T22:14:08.512Z",
+    "added_via": "voice",
+    "enriched_at": "2026-05-07T01:00:13.221Z"
+  },
+  {
+    "id": 141,
+    "file_path": "C:/Users/Kamron/Music/Akon/Sunny Day.mp3",
+    "title": "Sunny Day",
+    "artist": "Akon",
+    "album": null,
+    "duration_sec": 313,
+    "source": "upload",
+    "source_id": "abc123def45",
+    "musicbrainz_recording_id": null,
+    "added_at": "2026-05-04T13:00:00Z",
+    "added_via": "voice",
+    "enriched_at": "2026-05-07T01:00:00Z"
+  },
+  {
+    "id": 99,
+    "file_path": "C:/Users/Kamron/Music/Misc/lofi-beat-12.mp3",
+    "title": "lofi-beat-12",
+    "artist": null,
+    "album": null,
+    "duration_sec": 184,
+    "source": null,
+    "source_id": null,
+    "musicbrainz_recording_id": null,
+    "added_at": "2026-04-15T18:32:11Z",
+    "added_via": "manual",
+    "enriched_at": null
+  }
+]

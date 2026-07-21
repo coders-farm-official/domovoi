@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brand — domovoi glyph</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { padding: 22px 24px; display: grid; grid-template-columns: auto auto auto 1fr; gap: 28px; align-items: center; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--fg-muted); }
+  .cell svg { color: var(--fg); }
+  .cell .lab { font-family: var(--ff-mono); font-size: 10px; }
+  .copy { font-size: 13px; color: var(--fg); display: inline-flex; align-items: center; gap: 6px; }
+  .copy small { color: var(--fg-muted); font-size: 11px; }
+</style>
+</head>
+<body>
+  <div class="cell">
+    <object type="image/svg+xml" data="../../../../web/static/assets/domovoi.svg" width="48" height="48"></object>
+    <div class="lab">domovoi · 48</div>
+  </div>
+  <div class="cell">
+    <object type="image/svg+xml" data="../../../../web/static/assets/domovoi.svg" width="24" height="24"></object>
+    <div class="lab">brand · 24</div>
+  </div>
+  <div class="cell">
+    <object type="image/svg+xml" data="../../../../web/static/assets/domovoi.svg" width="14" height="14"></object>
+    <div class="lab">inline · 14</div>
+  </div>
+  <div class="cell" style="align-items:flex-start">
+    <div class="copy">
+      Heard from <strong>the domovoi</strong>
+      <object type="image/svg+xml" data="../../../../web/static/assets/domovoi.svg" width="14" height="14"></object>
+      just now.
+    </div>
+    <div class="lab">in-copy use</div>
+  </div>
+</body>
+</html>
