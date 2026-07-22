@@ -126,6 +126,9 @@ TABLES_TO_TRUNCATE = [
     "admin_sessions",
     # Satellite WS pairing rows (V002) — test state, never reference data.
     "satellite_pairings",
+    # Satellite inventory rows (V003) — adoption/type metadata written by
+    # tests, never reference data.
+    "satellites",
 ]
 
 

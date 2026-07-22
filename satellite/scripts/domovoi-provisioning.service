@@ -1,0 +1,31 @@
+# Domovoi satellite USB-adoption mode. Runs BEFORE the satellite client;
+# a no-op (exit 0) on every provisioned boot, so it costs nothing once the
+# device is set up. On an UNPROVISIONED boot it owns the box: exposes the
+# DOMOVOI-SET gadget volume and waits for the server's adopt flow (see
+# satellite/provisioning_mode.py).
+#
+# Root on purpose: configfs gadget composition, mkfs.vfat, nmcli,
+# timedatectl, and the post-provision reboot all need it.
+#
+# Install (the media-prep pipeline does this; manual form):
+#   sudo sed -e "s|@USER@|$USER|g" -e "s|@HOME@|$HOME|g" \
+#     ~/domovoi/satellite/scripts/domovoi-provisioning.service \
+#     | sudo tee /etc/systemd/system/domovoi-provisioning.service >/dev/null
+#   sudo systemctl daemon-reload && sudo systemctl enable domovoi-provisioning
+
+[Unit]
+Description=Domovoi satellite USB adoption mode
+Before=domovoi-satellite.service
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=@HOME@
+ExecStart=@HOME@/satellite-venv/bin/python -m satellite.provisioning_mode
+WorkingDirectory=@HOME@/domovoi
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

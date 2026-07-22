@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     # require pairing for EVERY room (a tokenless hello for an unpaired room
     # is then refused too) — a hardening posture for an all-paired fleet.
     satellite_pairing_strict: bool = False
+    # USB satellite adoption: the web backend scans removable volumes for
+    # unprovisioned satellites presenting a DOMOVOI-SET gadget drive and
+    # surfaces them as pending on the Satellites page. Kill switch below;
+    # the advertise URL overrides the ws://<lan-ip>:6370 the adopt flow
+    # derives for the device (set it when the server has several NICs and
+    # the autodetected address is the wrong one).
+    satellite_adoption_enabled: bool = True
+    satellite_adoption_advertise_url: str = ""
     # On startup, pre-populate the voices registry with the curated catalog
     # (domovoi/voice_catalog.py) of Edge cloud + Piper local voices, so
     # they're available to list/sample/switch without manual registration.

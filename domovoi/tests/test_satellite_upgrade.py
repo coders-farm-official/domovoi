@@ -206,6 +206,8 @@ class _FakeAppState:
     def __init__(self) -> None:
         self.satellite_full_duplex: dict[str, bool] = {}
         self.satellite_synced_sha: dict[str, str | None] = {}
+        self.satellite_sat_type: dict[str, str] = {}
+        self.satellite_mic_enabled: dict[str, bool] = {}
 
 
 class _FakeApp:

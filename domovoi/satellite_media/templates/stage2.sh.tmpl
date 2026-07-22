@@ -1,0 +1,92 @@
+#!/bin/bash
+# Domovoi satellite — STAGE 2 bootstrap (root, runs AFTER Wi-Fi joins, via
+# domovoi-bootstrap.service). The USB adoption already wrote
+# ~/.domovoi/config.toml + pairing_token; this stage finishes what needed
+# the network or the server: fresh code/asset sync from the LAN server
+# (the payload snapshot may be days old — the server is authoritative),
+# online retries of anything stage 1 warned about, plugin root work, and
+# finally enabling the satellite unit.
+#
+# Idempotent + re-entrant (systemd Restart=on-failure): markers under
+# /var/lib/domovoi/bootstrap-steps/, done-flag at
+# /var/lib/domovoi/bootstrap-done.
+#
+# Placeholders: @SAT_USER@
+
+set -u
+SAT_USER="@SAT_USER@"
+HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
+STEPS=/var/lib/domovoi/bootstrap-steps
+DONE=/var/lib/domovoi/bootstrap-done
+LOG=/var/log/domovoi-bootstrap.log
+VENVPY="$HOME_DIR/satellite-venv/bin/python"
+
+[ -f "$DONE" ] && exit 0
+[ -f "$HOME_DIR/.domovoi/config.toml" ] || exit 0   # not adopted yet
+mkdir -p "$STEPS"
+exec >>"$LOG" 2>&1
+echo "== domovoi stage-2 $(date -Is) =="
+
+as_user() { runuser -u "$SAT_USER" -- "$@"; }
+
+# 1. Reach the server (config.toml carries domovoi_url).
+SERVER_HTTP="$(as_user "$VENVPY" - <<'EOF'
+import tomllib, pathlib
+cfg = tomllib.load(open(pathlib.Path.home() / ".domovoi/config.toml", "rb"))
+url = cfg["satellite"]["domovoi_url"]
+print(url.replace("ws://", "http://").replace("wss://", "https://").rstrip("/"))
+EOF
+)"
+for i in $(seq 1 30); do
+  curl -fsS -m 5 "$SERVER_HTTP/v1/health" >/dev/null 2>&1 && break
+  sleep 5
+done
+
+# 2. Online retries of stage-1 warnings (best-effort).
+if [ ! -f "$STEPS/online-deps" ]; then
+  as_user "$HOME_DIR/satellite-venv/bin/pip" install \
+      -r "$HOME_DIR/domovoi/satellite/requirements.txt" || true
+  as_user "$HOME_DIR/satellite-venv/bin/pip" install --no-deps openwakeword || true
+  touch "$STEPS/online-deps"
+fi
+
+# 3. Fresh code + plugin payloads from the LAN server (authoritative over
+#    the payload snapshot). Uses the satellite's own sync modules.
+if [ ! -f "$STEPS/server-sync" ]; then
+  as_user "$VENVPY" - <<'EOF' || echo "WARN: server sync failed (client will sync on upgrade)"
+import pathlib, tomllib
+cfg = tomllib.load(open(pathlib.Path.home() / ".domovoi/config.toml", "rb"))
+from satellite.sound_sync import http_base_from_ws
+from satellite import code_sync, plugin_sync
+base = http_base_from_ws(cfg["satellite"]["domovoi_url"])
+root = pathlib.Path.home() / "domovoi" / "satellite"
+allow = frozenset({".py", ".toml", ".txt", ".md", ".service", ".sh", ".json"})
+code_sync.sync_code(base, root, allow, {})
+res = plugin_sync.sync_plugin_payloads(base)
+if res["root_work"]:
+    plugin_sync.request_root_apply(res["meta"], res["root_work"])
+EOF
+  touch "$STEPS/server-sync"
+fi
+
+# 4. Enable + start the satellite; mark done on the first clean start.
+systemctl enable --now domovoi-satellite.service
+sleep 8
+if systemctl is-active --quiet domovoi-satellite.service; then
+  touch "$DONE"
+  # Reflect 'active' in the boot partition's device-info for humans.
+  for BOOT in /boot/firmware /boot; do
+    [ -f "$BOOT/domovoi/device-info.json" ] || continue
+    "$VENVPY" - "$BOOT/domovoi/device-info.json" <<'EOF' || true
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p)); doc.update(status="active", step=None, error=None)
+json.dump(doc, open(p, "w"), indent=2)
+EOF
+    break
+  done
+  echo "stage 2 complete"
+else
+  echo "satellite unit not active yet — will retry on next boot"
+  exit 1
+fi

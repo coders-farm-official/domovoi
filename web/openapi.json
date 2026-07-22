@@ -2623,6 +2623,258 @@
         }
       }
     },
+    "/api/satellites/media/status": {
+      "get": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Status",
+        "description": "Everything the card needs to render: boards, cache state, docker\navailability, and what each enabled plugin would ship.",
+        "operationId": "media_status_api_satellites_media_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Media Status Api Satellites Media Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/targets": {
+      "get": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Targets",
+        "description": "Removable drives that look like a flashed Pi boot partition.",
+        "operationId": "media_targets_api_satellites_media_targets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Media Targets Api Satellites Media Targets Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/prepare": {
+      "post": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Prepare",
+        "description": "Start (or attach to) a build. One live build per target.",
+        "operationId": "media_prepare_api_satellites_media_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Media Prepare Api Satellites Media Prepare Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/jobs": {
+      "get": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Jobs",
+        "operationId": "media_jobs_api_satellites_media_jobs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Media Jobs Api Satellites Media Jobs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Cancel",
+        "description": "Best-effort cancel: marks the row; the build task checks nothing\nmid-phase (phases are short except cold cache fetches), so this mostly\nmatters for a wedged fetch \u2014 the UI reflects the cancelled state and a\nnew build can start for the target.",
+        "operationId": "media_cancel_api_satellites_media_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Media Cancel Api Satellites Media Jobs  Job Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/jobs/{job_id}/download": {
+      "get": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Download",
+        "operationId": "media_download_api_satellites_media_jobs__job_id__download_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/cache/refresh": {
+      "post": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Cache Refresh",
+        "description": "Synchronous-ish cache refresh (wheels are the slow part; the call\ncan take minutes on a cold cache \u2014 the card shows a spinner).",
+        "operationId": "media_cache_refresh_api_satellites_media_cache_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Media Cache Refresh Api Satellites Media Cache Refresh Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites": {
       "get": {
         "tags": [
@@ -2648,7 +2900,176 @@
         }
       }
     },
+    "/api/satellites/pending": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "List Pending",
+        "description": "Unprovisioned satellites currently presenting a USB adoption volume\non the Domovoi server. Empty when the feature is off. MACs are matched\nagainst the inventory so a re-plugged device shows what it already is.",
+        "operationId": "list_pending_api_satellites_pending_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PendingSatellite"
+                  },
+                  "type": "array",
+                  "title": "Response List Pending Api Satellites Pending Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/pending/{pending_id}/adopt": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Adopt Pending",
+        "description": "Adopt a pending satellite: validate the room name, preseed pairing on\nthe core (raw token returned once), and write the provision file onto\nthe device's volume. 410 when the device vanished mid-flow; 409 on a\nroom-name collision (or a `force` for a different physical device).",
+        "operationId": "adopt_pending_api_satellites_pending__pending_id__adopt_post",
+        "parameters": [
+          {
+            "name": "pending_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pending Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}": {
+      "delete": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Delete Satellite",
+        "description": "Remove a never-connected (`waiting`) satellite \u2014 inventory row +\npreseeded pairing. Proxies to the core, which 409s for provisioned\nrooms.",
+        "operationId": "delete_satellite_api_satellites__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Update Satellite",
+        "description": "Update a satellite's display room label (grouping tag). Daily-tier\ncosmetic metadata, like volume.",
+        "operationId": "update_satellite_api_satellites__room_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomLabelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Satellite Api Satellites  Room Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "tags": [
           "satellites"
@@ -3296,6 +3717,57 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/display": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Set Display",
+        "description": "Drive a video satellite's screen from the drawer's Display block:\npanel on/off or a kiosk-browser restart. Daily-tier device control,\nlike volume/restart. Proxies to the Domovoi server, which sends the\n``set_display`` frame to the live session. 404 when the room isn't\nconnected, 409 when it isn't a video satellite, 503 when nothing is.",
+        "operationId": "set_display_api_satellites__room_id__display_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplayRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -8127,6 +8599,87 @@
         "title": "AddByUrlRequest",
         "description": "Queue a media acquisition for an EXACT external URL. Used by the\nRecently-played drawer's \"+ add\" button when a play has a stored\nURL (unlike the now-playing heart, which re-searches by title).\n``dedup_key`` is an optional provider-namespaced identity so repeat\nclicks don't queue duplicates. Gated by the core's outbound-fetch\ntier (\u00a77.3)."
       },
+      "AdoptRequest": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "title": "Room Id"
+          },
+          "room_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Label"
+          },
+          "wifi_ssid": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Wifi Ssid"
+          },
+          "wifi_psk": {
+            "type": "string",
+            "maxLength": 63,
+            "minLength": 8,
+            "title": "Wifi Psk"
+          },
+          "wifi_country": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Z]{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wifi Country"
+          },
+          "wifi_hidden": {
+            "type": "boolean",
+            "title": "Wifi Hidden",
+            "default": false
+          },
+          "device_profile": {
+            "type": "string",
+            "title": "Device Profile",
+            "default": "respeaker_2mic_hat"
+          },
+          "initial_volume": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Volume"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "wifi_ssid",
+          "wifi_psk"
+        ],
+        "title": "AdoptRequest",
+        "description": "Adopt a pending satellite: name it, hand it Wi-Fi, pick its mic\nprofile. The PSK transits to the device on the gadget volume exactly\nonce and is never logged (docs/SECURITY_PRIVACY.md)."
+      },
       "AnnounceRequest": {
         "properties": {
           "message": {
@@ -8945,6 +9498,25 @@
           "denylisted_at"
         ],
         "title": "DenylistEntry"
+      },
+      "DisplayRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off",
+              "restart_kiosk"
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "DisplayRequest",
+        "description": "Drive a video satellite's screen from the drawer's Display block."
       },
       "DocumentRow": {
         "properties": {
@@ -9977,6 +10549,17 @@
             "title": "Favorited",
             "default": false
           },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
           "source": {
             "anyOf": [
               {
@@ -10118,6 +10701,126 @@
           "new_password"
         ],
         "title": "PasswordChangeRequest"
+      },
+      "PendingSatellite": {
+        "properties": {
+          "pending_id": {
+            "type": "string",
+            "title": "Pending Id"
+          },
+          "mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mac"
+          },
+          "board": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "sat_type": {
+            "type": "string",
+            "title": "Sat Type",
+            "default": "voice"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "awaiting_provision"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "client_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Version"
+          },
+          "profiles_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Profiles Supported",
+            "default": []
+          },
+          "already_adopted_as": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Already Adopted As"
+          },
+          "parse_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parse Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pending_id"
+        ],
+        "title": "PendingSatellite",
+        "description": "An unprovisioned satellite presenting a USB adoption volume on the\nserver. ``pending_id`` is the device's per-session nonce (drive letters\nnever leave the backend). A ``parse_error`` entry is a volume that looks\nlike a setup drive but carries an unreadable device-info \u2014 surfaced so\nthe user sees WHY nothing is adoptable."
       },
       "Person": {
         "properties": {
@@ -10479,6 +11182,32 @@
         "type": "object",
         "title": "PreferencesPatch"
       },
+      "PrepareRequest": {
+        "properties": {
+          "board": {
+            "type": "string",
+            "title": "Board",
+            "default": "pi02w"
+          },
+          "mic_profile": {
+            "type": "string",
+            "title": "Mic Profile",
+            "default": "respeaker_2mic_hat_v2"
+          },
+          "target": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Target"
+          },
+          "offline": {
+            "type": "boolean",
+            "title": "Offline",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "PrepareRequest"
+      },
       "PullBody": {
         "properties": {
           "model": {
@@ -10610,6 +11339,25 @@
         ],
         "title": "RoomBody"
       },
+      "RoomLabelRequest": {
+        "properties": {
+          "room_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Label"
+          }
+        },
+        "type": "object",
+        "title": "RoomLabelRequest",
+        "description": "Set (or clear, with null) a satellite's display room label."
+      },
       "Satellite": {
         "properties": {
           "room_id": {
@@ -10620,7 +11368,8 @@
             "type": "string",
             "enum": [
               "online",
-              "offline"
+              "offline",
+              "waiting"
             ],
             "title": "Status"
           },
@@ -10731,6 +11480,60 @@
             "default": {
               "paired": false
             }
+          },
+          "sat_type": {
+            "type": "string",
+            "title": "Sat Type",
+            "default": "voice"
+          },
+          "mic_enabled": {
+            "type": "boolean",
+            "title": "Mic Enabled",
+            "default": true
+          },
+          "room_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Label"
+          },
+          "hardware": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware"
+          },
+          "adopted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adopted At"
+          },
+          "display": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SatelliteDisplay"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -10739,6 +11542,57 @@
           "status"
         ],
         "title": "Satellite"
+      },
+      "SatelliteDisplay": {
+        "properties": {
+          "on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          },
+          "kiosk_alive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kiosk Alive"
+          },
+          "brightness": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brightness"
+          },
+          "idle_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Mode"
+          }
+        },
+        "type": "object",
+        "title": "SatelliteDisplay",
+        "description": "Screen/kiosk state a video satellite reports via display_status:\npanel power, kiosk-browser liveness, backlight percent (null when the\nhardware exposes none \u2014 HDMI monitors typically don't), and the\nconfigured idle behavior. Null field-wise until the device reports."
       },
       "SatellitePairing": {
         "properties": {

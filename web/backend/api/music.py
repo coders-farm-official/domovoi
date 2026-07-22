@@ -1208,6 +1208,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
 
     song_model: NowPlayingSong | None = None
     favorited = False
+    track_id: int | None = None
     source: str | None = None
     source_url: str | None = None
     source_ref: str | None = None
@@ -1224,7 +1225,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
             album=song_dict.get("Album") or song_dict.get("album"),
             duration_sec=duration_sec,
         )
-        favorited = await _lookup_favorited(song_model)
+        favorited, track_id = await _lookup_library_row(song_model)
         source, source_url, source_ref = _lookup_source_stamp(room_id, song_model)
 
     return NowPlaying(
@@ -1234,6 +1235,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         elapsed_sec=elapsed,
         stream_url=stream_url,
         favorited=favorited,
+        track_id=track_id,
         source=source,
         source_url=source_url,
         source_ref=source_ref,
@@ -1276,12 +1278,13 @@ def _lookup_source_stamp(
     )
 
 
-async def _lookup_favorited(song: NowPlayingSong) -> bool:
-    """Resolve the favorited state of a now-playing song. Local files
-    mirror the matching logic in ``favorite_now_playing`` so the heart
-    icon reflects the same row the favorite button would write.
-    External streams are provider territory (their plugin pages own
-    richer favorite state), so they render un-filled here."""
+async def _lookup_library_row(song: NowPlayingSong) -> tuple[bool, int | None]:
+    """Resolve the (favorited, track_id) of a now-playing song's matching
+    ``library_tracks`` row. Local files mirror the matching logic in
+    ``favorite_now_playing`` so the heart icon reflects the same row the
+    favorite button would write; ``track_id`` additionally lets clients
+    (the kiosk display page especially) build the ``/cover`` art URL.
+    External streams are provider territory — (False, None)."""
     file_ = song.file or ""
     if not file_.startswith("http"):
         expected_path = _library_match_path(file_)
@@ -1289,7 +1292,7 @@ async def _lookup_favorited(song: NowPlayingSong) -> bool:
             row = await s.execute(
                 text(
                     """
-                    SELECT favorited
+                    SELECT favorited, id
                     FROM library_tracks
                     WHERE file_path = :exact
                     LIMIT 1
@@ -1298,8 +1301,10 @@ async def _lookup_favorited(song: NowPlayingSong) -> bool:
                 {"exact": expected_path},
             )
             match = row.first()
-        return bool(match[0]) if match is not None else False
-    return False
+        if match is not None:
+            return bool(match[0]), int(match[1])
+        return False, None
+    return False, None
 
 
 from domovoi.handlers.shared.library_match import (

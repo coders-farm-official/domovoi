@@ -39,6 +39,7 @@ from web.backend.api import podcasts as podcasts_api
 # Radio is a PLUGIN feature: its web router mounts dynamically at
 # /api/plugins/radio via the plugin host — no static import.
 from web.backend.api import plugins as plugins_api
+from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
@@ -247,6 +248,9 @@ app.include_router(acquisitions_api.router)
 app.include_router(music_api.router)
 app.include_router(people_api.router)
 app.include_router(denylist_api.router)
+# Media-prep BEFORE satellites: its /api/satellites/media/* paths must
+# never be captured by the satellites router's /{room_id} parameters.
+app.include_router(satellite_media_api.router)
 app.include_router(satellites_api.router)
 app.include_router(calendar_api.router)
 app.include_router(config_api.router)

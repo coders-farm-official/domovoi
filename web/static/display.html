@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Domovoi display</title>
+  <link rel="stylesheet" href="colors_and_type.css">
+  <!-- Deliberately NOT the dashboard shell: no manifest, no service
+       worker, no styles.css/components/lucide — this page is the video
+       satellite's fullscreen now-playing kiosk and must stay light enough
+       for RK3566-class boards (see satellite/VIDEO_SATELLITE.md). It
+       reuses only the token file + auth/data layers so it renders and
+       reconnects exactly like a dashboard card. -->
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; background: var(--canvas); }
+    body { cursor: none; user-select: none; overscroll-behavior: none; }
+    #root { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="/vendor/react/react.development.js"></script>
+  <script src="/vendor/react/react-dom.development.js"></script>
+  <script src="/vendor/babel/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react" src="auth.js"></script>
+  <script type="text/babel" data-presets="react" src="data.js"></script>
+  <script type="text/babel" data-presets="react" src="display.jsx"></script>
+</body>
+</html>

@@ -73,7 +73,20 @@ const SatCard = ({ s, onOpen, tick }) => {
                       color: online ? 'var(--fg)' : 'var(--fg-muted)' }}>
           {s.room_id}
         </div>
-        <Pill tone={online ? 'live' : 'idle'} live={online}>{online ? 'online' : 'offline'}</Pill>
+        {s.sat_type === 'video' && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                         fontSize: 11, color: 'var(--fg-muted)', background: 'var(--sunken)',
+                         border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+                         padding: '2px 7px' }}>
+            <Icon name="monitor" size={12}/> video
+          </span>
+        )}
+        {s.sat_type === 'video' && online && s.display && s.display.kiosk_alive === false && (
+          <Pill tone="warn">kiosk dead</Pill>
+        )}
+        <Pill tone={online ? 'live' : 'idle'} live={online}>
+          {online ? 'online' : s.status === 'waiting' ? 'waiting' : 'offline'}
+        </Pill>
       </div>
 
       <div style={{ padding: '0 16px 12px', minHeight: 56 }}>
@@ -259,7 +272,61 @@ const VolumeControl = ({ s, fire }) => {
 };
 
 /* ---- Drawer body tabs ------------------------------------- */
-const OverviewBody = ({ s, sats, fire }) => {
+/* ---- Video-satellite display controls (type-gated drawer block) ----
+ * Rendered only for sat_type === 'video'. Screen on/off + kiosk restart
+ * proxy through /api/satellites/{room}/display → the core's set_display
+ * frame; state pills come from the display_status the device reports.
+ * Brightness is read-only in v1 (the frame has no brightness action). */
+const VideoControls = ({ s, fire }) => {
+  const d = s.display || {};
+  const online = s.status === 'online';
+  const sendDisplay = async (action) => {
+    try {
+      await apiPost(`/api/satellites/${s.room_id}/display`, { action });
+      fire(action === 'restart_kiosk'
+        ? `restarting kiosk on ${s.room_id}…`
+        : `screen ${action} sent to ${s.room_id}`);
+    } catch (e) {
+      fire(`display action failed: ${e.message}`);
+    }
+  };
+  const restartKiosk = () => {
+    if (!window.confirm(
+      `Restart the kiosk browser on ${s.room_id}?\n\n` +
+      `The screen goes blank for a few seconds while it relaunches.`
+    )) return;
+    sendDisplay('restart_kiosk');
+  };
+  return (
+    <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+        display
+        {online && d.kiosk_alive === true && <Pill tone="live" live>kiosk running</Pill>}
+        {online && d.kiosk_alive === false && <Pill tone="warn">kiosk dead</Pill>}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Button icon={d.on === false ? 'monitor' : 'monitor-off'} disabled={!online}
+                onClick={() => sendDisplay(d.on === false ? 'on' : 'off')}>
+          {d.on === false ? 'Screen on' : 'Screen off'}
+        </Button>
+        <Button icon="rotate-cw" disabled={!online} onClick={restartKiosk}>
+          Restart kiosk
+        </Button>
+        {d.brightness != null && (
+          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+            backlight {d.brightness}%
+          </span>
+        )}
+      </div>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+        idle screen: {d.idle_mode || 'clock'} — change it (and the power mechanism) in the Settings tab
+      </div>
+    </div>
+  );
+};
+
+const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
+  const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
   const [peer, setPeer] = React.useState('');
   const wTone = wifiTone(s.wifi?.rx_mbits);
@@ -412,13 +479,35 @@ const OverviewBody = ({ s, sats, fire }) => {
 
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>now playing</div>
-        {playing ? (
-          <div style={{ fontSize: 13 }}>
-            <strong style={{ fontWeight: 500 }}>{np.song.title || np.song.file?.split('/').pop() || 'unknown'}</strong>
-            {np.song.artist && <span style={{ color: 'var(--fg-muted)' }}> · {np.song.artist}</span>}
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginLeft: 8 }}>
-              {fmtDur(np.elapsed_sec)}{songDur ? ` / ${fmtDur(songDur)}` : ''}
-            </span>
+        {playing || (np?.state === 'pause' && np.song) ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <strong style={{ fontWeight: 500 }}>{np.song.title || np.song.file?.split('/').pop() || 'unknown'}</strong>
+              {np.song.artist && <span style={{ color: 'var(--fg-muted)' }}> · {np.song.artist}</span>}
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginLeft: 8 }}>
+                {fmtDur(np.elapsed_sec)}{songDur ? ` / ${fmtDur(songDur)}` : ''}
+              </span>
+            </div>
+            {s.sat_type === 'video' && (
+              <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                <IconButton name={np.state === 'play' ? 'pause' : 'play'}
+                            title={np.state === 'play' ? 'pause' : 'resume'}
+                            onClick={async () => {
+                              try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
+                              catch (e) { fire(`transport failed: ${e.message}`); }
+                            }}/>
+                <IconButton name="skip-forward" title="skip"
+                            onClick={async () => {
+                              try { await apiPost(`/api/music/skip/${s.room_id}`); }
+                              catch (e) { fire(`skip failed: ${e.message}`); }
+                            }}/>
+                <IconButton name="square" title="stop"
+                            onClick={async () => {
+                              try { await apiPost(`/api/music/stop/${s.room_id}`); }
+                              catch (e) { fire(`stop failed: ${e.message}`); }
+                            }}/>
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>nothing playing</div>
@@ -428,6 +517,17 @@ const OverviewBody = ({ s, sats, fire }) => {
       <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8, fontSize: 12, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label">room id</div>
         <div className="mono" style={{ userSelect: 'all' }}>{s.room_id}</div>
+        <div className="label">type</div>
+        <div className="mono">
+          {s.sat_type}
+          {!s.mic_enabled && <span style={{ color: 'var(--fg-faint)' }}> · voice input off</span>}
+        </div>
+        {s.hardware && (
+          <>
+            <div className="label">hardware</div>
+            <div className="mono" style={{ color: 'var(--fg-muted)' }}>{s.hardware}</div>
+          </>
+        )}
         <div className="label">voice</div>
         <div className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
         <div className="label">version</div>
@@ -452,13 +552,32 @@ const OverviewBody = ({ s, sats, fire }) => {
             <span style={{ color: 'var(--fg-faint)' }}>unpaired</span>
           )}
         </div>
+        <div className="label">room</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="mono" style={{ color: s.room_label ? 'var(--fg)' : 'var(--fg-faint)' }}>
+            {s.room_label || 'ungrouped'}
+          </span>
+          <IconButton name="pencil" title="edit room label" onClick={async () => {
+            const v = window.prompt('Room label (empty to clear):', s.room_label || '');
+            if (v === null) return;
+            try {
+              await apiPatch(`/api/satellites/${s.room_id}`, { room_label: v.trim() || null });
+              fire(v.trim() ? `labeled ${s.room_id} as "${v.trim()}"` : `cleared ${s.room_id}'s room label`);
+              refresh && refresh();
+            } catch (e) {
+              fire(`label update failed: ${e.message}`);
+            }
+          }}/>
+        </div>
         <div className="label">mpd ports</div>
-        <div className="mono">control :{s.mpd_ports.control} · http :{s.mpd_ports.http}</div>
+        <div className="mono">{s.mpd_ports ? <>control :{s.mpd_ports.control} · http :{s.mpd_ports.http}</> : <span style={{ color: 'var(--fg-faint)' }}>not provisioned yet</span>}</div>
         <div className="label">stream</div>
-        <div className="mono" style={{ color: 'var(--fg-muted)' }}>{np?.stream_url || `(http :${s.mpd_ports.http})`}</div>
+        <div className="mono" style={{ color: 'var(--fg-muted)' }}>{np?.stream_url || (s.mpd_ports ? `(http :${s.mpd_ports.http})` : '—')}</div>
       </div>
 
       <VolumeControl s={s} fire={fire}/>
+
+      {s.sat_type === 'video' && <VideoControls s={s} fire={fire}/>}
 
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>announce to {s.room_id}</div>
@@ -482,6 +601,10 @@ const OverviewBody = ({ s, sats, fire }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Pill tone="live" live>in call with {s.in_call_with}</Pill>
             <Button icon="x" onClick={hangUp}>Hang up</Button>
+          </div>
+        ) : !s.mic_enabled ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            no microphone on this device — voice input is off
           </div>
         ) : !s.full_duplex ? (
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
@@ -523,6 +646,24 @@ const OverviewBody = ({ s, sats, fire }) => {
           <Button icon="shield-off" disabled={!(s.pairing && s.pairing.paired)} onClick={resetPairing}>
             Reset pairing
           </Button>
+          {waiting && (
+            <Button icon="trash-2" onClick={async () => {
+              if (!window.confirm(
+                `Remove ${s.room_id}?\n\nThis deletes the adopted-but-never-connected room and its ` +
+                `preseeded pairing. Do this if the device was unplugged mid-setup or adopted by mistake.`
+              )) return;
+              try {
+                await apiDelete(`/api/satellites/${s.room_id}`);
+                fire(`removed ${s.room_id}`);
+                onClose && onClose();
+                refresh && refresh();
+              } catch (e) {
+                fire(`remove failed: ${e.message}`);
+              }
+            }}>
+              Remove
+            </Button>
+          )}
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
           restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
@@ -822,7 +963,7 @@ const RoomSettingsBody = ({ room, fire }) => {
 };
 
 /* ---- Drawer ----------------------------------------------- */
-const SatDrawer = ({ s, sats, onClose, fire }) => {
+const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
   React.useEffect(() => { setTab('overview'); }, [s?.room_id]);
   React.useEffect(() => {
@@ -861,7 +1002,7 @@ const SatDrawer = ({ s, sats, onClose, fire }) => {
         </div>
         <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
         <div style={{ flex: 1, overflow: 'auto' }}>
-          {tab === 'overview'      && <OverviewBody s={s} sats={sats} fire={fire}/>}
+          {tab === 'overview'      && <OverviewBody s={s} sats={sats} fire={fire} onClose={onClose} refresh={refresh}/>}
           {tab === 'sessions'      && <RoomSessionsBody room={s.room_id}/>}
           {tab === 'conversations' && <RoomConversationsBody room={s.room_id}/>}
           {tab === 'recently'      && <RoomRecentlyPlayedBody room={s.room_id} fire={fire}/>}
@@ -940,14 +1081,198 @@ const Broadcast = ({ onlineCount, fire }) => {
 };
 
 /* ---- Page ------------------------------------------------- */
+/* ---- USB adoption: pending devices + adopt modal -------------------
+ * An unprovisioned satellite plugged into the server's USB port shows up
+ * here (satellites.pending.changed). Adopt = name it + hand it Wi-Fi; the
+ * backend preseeds pairing and writes the provision file to the device.
+ * The PSK lives only in modal state and is cleared on close. */
+
+const adoptInputStyle = {
+  width: '100%', font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
+  borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+  background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
+  boxSizing: 'border-box',
+};
+
+const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
+  const [roomId, setRoomId] = React.useState(force && pending.already_adopted_as ? pending.already_adopted_as : '');
+  const [roomLabel, setRoomLabel] = React.useState('');
+  const [ssid, setSsid] = React.useState('');
+  const [psk, setPsk] = React.useState('');
+  const [showPsk, setShowPsk] = React.useState(false);
+  const [country, setCountry] = React.useState('');
+  const profiles = pending.profiles_supported && pending.profiles_supported.length
+    ? pending.profiles_supported
+    : ['respeaker_2mic_hat', 'xvf3800_usb', 'radxa_zero3w_video'];
+  const [profile, setProfile] = React.useState(
+    pending.sat_type === 'video' && profiles.includes('radxa_zero3w_video')
+      ? 'radxa_zero3w_video' : profiles[0]
+  );
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  const idOk = /^[a-z][a-z0-9_]{0,31}$/.test(roomId);
+  const collision = !force && sats.some(s => s.room_id === roomId);
+  const canSubmit = idOk && !collision && ssid.trim() && psk.length >= 8 &&
+    (!country || /^[A-Z]{2}$/.test(country)) && !busy;
+
+  const close = () => { setPsk(''); onClose(); };
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiPost(`/api/satellites/pending/${pending.pending_id}/adopt`, {
+        room_id: roomId,
+        room_label: roomLabel.trim() || null,
+        wifi_ssid: ssid.trim(),
+        wifi_psk: psk,
+        wifi_country: country || null,
+        device_profile: profile,
+        force: !!force,
+      });
+      fire(`provisioned ${roomId} — safe to unplug once the drive disappears`);
+      setPsk('');
+      onAdopted(pending.pending_id, roomId);
+    } catch (e) {
+      if (e.status === 409) setErr(e.message.includes('re-announced') ? 'device re-announced itself — close and retry' : `room "${roomId}" already exists`);
+      else if (e.status === 410) setErr('device was unplugged');
+      else setErr(`adopt failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const row = (label, node) => (
+    <div style={{ marginBottom: 12 }}>
+      <div className="label" style={{ marginBottom: 4 }}>{label}</div>
+      {node}
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  background: 'oklch(0.1 0 0 / 0.5)' }}
+         onClick={close}>
+      <div onClick={e => e.stopPropagation()}
+           style={{ width: 420, maxWidth: 'calc(100vw - 32px)', maxHeight: '90vh', overflowY: 'auto',
+                    background: 'var(--card)', border: '1px solid var(--border)',
+                    borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-md), var(--inner-highlight)',
+                    padding: 20 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+          {force ? 're-provision satellite' : 'adopt satellite'}
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 16 }}>
+          {pending.model || pending.board || 'unknown board'}
+          {pending.mac && ` · ${pending.mac.slice(-8)}`}
+          {' · '}{pending.sat_type}
+        </div>
+
+        {row('satellite name', (
+          <>
+            <input value={roomId} onChange={e => setRoomId(e.target.value)} style={adoptInputStyle}
+                   placeholder="kitchen, livingroom_tv, …" autoFocus disabled={force && !!pending.already_adopted_as}/>
+            {roomId && !idOk && <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>lowercase letters, digits, _ — must start with a letter</div>}
+            {collision && <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>that name is taken</div>}
+          </>
+        ))}
+        {row('room label (optional — groups satellites in one room)', (
+          <input value={roomLabel} onChange={e => setRoomLabel(e.target.value)} style={adoptInputStyle}
+                 placeholder="Living Room"/>
+        ))}
+        {row('wi-fi network', (
+          <input value={ssid} onChange={e => setSsid(e.target.value)} style={adoptInputStyle}
+                 placeholder="SSID"/>
+        ))}
+        {row('wi-fi password', (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={psk} onChange={e => setPsk(e.target.value)} style={{ ...adoptInputStyle, flex: 1 }}
+                   type={showPsk ? 'text' : 'password'} placeholder="8+ characters"/>
+            <IconButton name={showPsk ? 'eye-off' : 'eye'} title={showPsk ? 'hide' : 'show'}
+                        onClick={() => setShowPsk(v => !v)}/>
+          </div>
+        ))}
+        {row('wi-fi country (optional, 2-letter)', (
+          <input value={country} onChange={e => setCountry(e.target.value.toUpperCase())}
+                 style={{ ...adoptInputStyle, width: 90 }} placeholder="US" maxLength={2}/>
+        ))}
+        {row('mic board profile', (
+          <select value={profile} onChange={e => setProfile(e.target.value)}
+                  style={{ ...adoptInputStyle, height: 34 }}>
+            {profiles.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        ))}
+
+        {err && <div className="mono" style={{ fontSize: 12, color: 'var(--err)', marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+          <Button onClick={close}>Cancel</Button>
+          <Button variant="primary" icon="plug" disabled={!canSubmit} onClick={submit}>
+            {busy ? 'provisioning…' : force ? 'Re-provision' : 'Adopt'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PendingSatCard = ({ p, adopted, onAdopt }) => {
+  const failed = p.status === 'wifi_failed';
+  const readopt = !!p.already_adopted_as;
+  return (
+    <div style={{ background: 'var(--card)', border: '1px solid var(--brand)',
+                  borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)',
+                  padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <Icon name="usb" size={18}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>
+          {p.parse_error ? 'unreadable setup drive' : (p.model || p.board || 'new satellite')}
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
+          {p.parse_error
+            ? p.parse_error
+            : [
+                p.mac && p.mac.slice(-8),
+                p.sat_type,
+                readopt && `already adopted as ${p.already_adopted_as}`,
+              ].filter(Boolean).join(' · ')}
+        </div>
+        {failed && p.error && (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>{p.error}</div>
+        )}
+      </div>
+      {adopted ? (
+        <Pill tone="live" live>provisioned — waiting for device</Pill>
+      ) : p.parse_error ? (
+        <Pill tone="warn">unreadable</Pill>
+      ) : failed ? (
+        <Button variant="primary" icon="wifi" onClick={() => onAdopt(p, true)}>Re-enter Wi-Fi</Button>
+      ) : readopt ? (
+        <Button icon="rotate-cw" onClick={() => {
+          if (window.confirm(`Re-provision this device as "${p.already_adopted_as}"? Its pairing token is rotated — the previous device for that room stops matching.`)) onAdopt(p, true);
+        }}>Re-provision</Button>
+      ) : (
+        <Button variant="primary" icon="plug" onClick={() => onAdopt(p, false)}>Adopt</Button>
+      )}
+    </div>
+  );
+};
+
 const SatellitesPage = () => {
   const [openRoom, setOpenRoom] = React.useState(null);
   const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
 
-  const { items: sats, loading } = useApiList('/api/satellites', {
-    eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'music.now_playing.changed'],
+  const { items: sats, loading, refresh } = useApiList('/api/satellites', {
+    eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed'],
   });
+  const { items: pending } = useApiList('/api/satellites/pending', {
+    eventTypes: ['satellites.pending.changed'],
+  });
+  const [adoptTarget, setAdoptTarget] = React.useState(null);   // {pending, force}
+  const [adoptedIds, setAdoptedIds] = React.useState({});       // pending_id → room
 
   React.useEffect(() => {
     const i = setInterval(() => setTick(t => t + 1), 1000);
@@ -960,27 +1285,74 @@ const SatellitesPage = () => {
   const open = sats.find(s => s.room_id === openRoom) || null;
   const onlineCount = sats.filter(s => s.status === 'online').length;
   const offlineCount = sats.filter(s => s.status === 'offline').length;
+  const waitingCount = sats.filter(s => s.status === 'waiting').length;
+
+  // Group cards under room-label headings once any label exists;
+  // unlabeled satellites stay in a flat grid below.
+  const labels = [...new Set(sats.map(s => s.room_label).filter(Boolean))].sort();
+  const unlabeled = sats.filter(s => !s.room_label);
+  const grid = (list) => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+      {list.map(s => <SatCard key={s.room_id} s={s} onOpen={(s) => setOpenRoom(s.room_id)} tick={tick}/>)}
+    </div>
+  );
 
   return (
     <div className="page">
       <PageHeader
         title="Satellites"
-        sub={`${onlineCount} online · ${offlineCount} offline · ${sats.length} provisioned`}
+        sub={`${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`}
       />
+
+      {pending.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+          <div className="label">plugged in — ready to adopt</div>
+          {pending.map(p => (
+            <PendingSatCard key={p.pending_id} p={p}
+                            adopted={!!adoptedIds[p.pending_id]}
+                            onAdopt={(pnd, force) => setAdoptTarget({ pending: pnd, force })}/>
+          ))}
+        </div>
+      )}
 
       {loading && sats.length === 0 ? (
         <Card><div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading satellites…</div></Card>
       ) : sats.length === 0 ? (
-        <Card><Empty glyph="sleeping" title="no satellites provisioned yet" sub="connect a Pi to bring a room online"/></Card>
+        <Card><Empty glyph="sleeping" title="no satellites provisioned yet" sub="plug a satellite into this machine's USB port to adopt it — or provision one manually"/></Card>
+      ) : labels.length === 0 ? (
+        grid(sats)
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-          {sats.map(s => <SatCard key={s.room_id} s={s} onOpen={(s) => setOpenRoom(s.room_id)} tick={tick}/>)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {labels.map(label => (
+            <div key={label}>
+              <div className="label" style={{ marginBottom: 8 }}>{label}</div>
+              {grid(sats.filter(s => s.room_label === label))}
+            </div>
+          ))}
+          {unlabeled.length > 0 && (
+            <div>
+              {labels.length > 0 && <div className="label" style={{ marginBottom: 8 }}>ungrouped</div>}
+              {grid(unlabeled)}
+            </div>
+          )}
         </div>
       )}
 
       <Broadcast onlineCount={onlineCount} fire={fire}/>
 
-      <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire}/>
+      <PrepareMediaCard fire={fire}/>
+
+      <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
+      {adoptTarget && (
+        <AdoptModal pending={adoptTarget.pending} sats={sats} force={adoptTarget.force}
+                    onClose={() => setAdoptTarget(null)}
+                    onAdopted={(pendingId, room) => {
+                      setAdoptedIds(a => ({ ...a, [pendingId]: room }));
+                      setAdoptTarget(null);
+                      refresh();
+                    }}
+                    fire={fire}/>
+      )}
       {toastNode}
     </div>
   );

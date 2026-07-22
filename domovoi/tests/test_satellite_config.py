@@ -24,6 +24,8 @@ _EXPECTED_KEYS = {
     "greeting.enabled", "greeting.funny_chance",
     "playback.gain", "playback.tts_prebuffer_sec",
     "sounds.sync_enabled", "log.level",
+    "mic.enabled",
+    "display.idle_mode", "display.power_method",
     "audio.input_device", "audio.output_device",
     "audio.output_mixer_card", "audio.output_mixer_control",
     "music.alsa_device",

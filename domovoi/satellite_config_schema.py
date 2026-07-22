@@ -139,6 +139,32 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.0, max=2.0, unit="sec",
     ),
 
+    # ─── Voice input / Display (video satellites) ──────────────────────
+    FieldSpec(
+        "mic.enabled", "Voice input", "Voice input",
+        "Run the wake-word/VAD/capture stack. Off on mic-less video builds "
+        "— the satellite still speaks, announces, and plays music. Turning "
+        "this ON requires a supported microphone (and [audio] input device "
+        "pinned to it) or the satellite fails at startup.",
+        "bool",
+    ),
+    FieldSpec(
+        "display.idle_mode", "Idle screen", "Display",
+        "What a video satellite's screen shows when nothing is playing: a "
+        "dimmed clock, a blank (black) screen, or the last cover art. "
+        "Ignored on voice satellites.",
+        "choice", choices=["clock", "blank", "art"],
+    ),
+    FieldSpec(
+        "display.power_method", "Screen power mechanism", "Display",
+        "How the display on/off toggle drives the panel: wlopm (Wayland/"
+        "cage), xset (X11 DPMS), backlight (sysfs, DSI panels), auto tries "
+        "each in that order, none disables the toggle. Ignored on voice "
+        "satellites.",
+        "choice", section="advanced",
+        choices=["auto", "wlopm", "xset", "backlight", "none"],
+    ),
+
     # ─── Sounds / logging ──────────────────────────────────────────────
     FieldSpec(
         "sounds.sync_enabled", "Sync sound clips", "Sounds",

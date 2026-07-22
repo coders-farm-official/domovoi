@@ -118,6 +118,11 @@ class NowPlaying(BaseModel):
     # match a known row, or for external streams (provider plugins own
     # richer favorite state on their own pages).
     favorited: bool = False
+    # The matching library_tracks id when the playing file resolves to a
+    # library row (same match as ``favorited``), else null. Lets clients
+    # — the kiosk display page especially — build the
+    # ``/api/music/library/{track_id}/cover`` art URL. Streams have none.
+    track_id: int | None = None
     # Generic now-playing SOURCE STAMP (design §4.7). A provider plugin
     # stamps a room when it starts playback; the dashboard renders a
     # provider-agnostic "open source ↗" pill from ``source_url`` when
@@ -279,6 +284,18 @@ class MpdPorts(BaseModel):
     http: int
 
 
+class SatelliteDisplay(BaseModel):
+    """Screen/kiosk state a video satellite reports via display_status:
+    panel power, kiosk-browser liveness, backlight percent (null when the
+    hardware exposes none — HDMI monitors typically don't), and the
+    configured idle behavior. Null field-wise until the device reports."""
+
+    on: bool | None = None
+    kiosk_alive: bool | None = None
+    brightness: int | None = None
+    idle_mode: str | None = None
+
+
 class SatellitePairing(BaseModel):
     """WS pairing status for a room (V002). ``paired`` is whether a
     ``satellite_pairings`` row exists (the room has claimed its token,
@@ -293,7 +310,9 @@ class SatellitePairing(BaseModel):
 
 class Satellite(BaseModel):
     room_id: str
-    status: Literal["online", "offline"]
+    # "waiting" = adopted (satellites row exists) but never connected — no
+    # mpd_rooms row yet, so mpd_ports/now_playing are null.
+    status: Literal["online", "offline", "waiting"]
     last_connected_at: datetime | None = None
     wifi: WifiStatus | None = None
     now_playing: NowPlaying | None = None
@@ -319,6 +338,27 @@ class Satellite(BaseModel):
     # and, if so, when. Read from the shared Postgres directly (the web
     # process reads the same DB), so it's fresh even for an offline room.
     pairing: SatellitePairing = SatellitePairing()
+    # Satellite kind — "voice" (default) or "video" (screen-bearing kiosk
+    # build). Kept a plain str (registered_values open enum, not a Literal)
+    # so future types don't break deserialization. Resolved DB-row-first
+    # (explicit adoption/hello writes) with the live snapshot as fallback.
+    sat_type: str = "voice"
+    # Whether the satellite's voice-input stack is running (hello frame);
+    # false on mic-less builds — gates mic-dependent UI (drop-in, wake
+    # recording). Defaults true for offline rooms (unknown until connect).
+    mic_enabled: bool = True
+    # Optional physical-room grouping label ("Living Room") from the
+    # satellites inventory table; null = ungrouped. Server-side metadata
+    # only — never sent to the device.
+    room_label: str | None = None
+    # Hardware description from adoption ("Raspberry Pi Zero 2 W Rev 1.0");
+    # null for satellites that predate the inventory table.
+    hardware: str | None = None
+    # When the USB-adoption flow claimed this device; null = self-registered.
+    adopted_at: datetime | None = None
+    # Screen/kiosk state (video satellites, from the live snapshot) — null
+    # for voice satellites and for offline rooms.
+    display: SatelliteDisplay | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────
@@ -381,6 +421,57 @@ class AnnounceRequest(BaseModel):
 class VolumeRequest(BaseModel):
     """Set a satellite's master output volume (0-100) from the overview tab."""
     level: int = Field(..., ge=0, le=100)
+
+
+class DisplayRequest(BaseModel):
+    """Drive a video satellite's screen from the drawer's Display block."""
+    action: Literal["on", "off", "restart_kiosk"]
+
+
+class PendingSatellite(BaseModel):
+    """An unprovisioned satellite presenting a USB adoption volume on the
+    server. ``pending_id`` is the device's per-session nonce (drive letters
+    never leave the backend). A ``parse_error`` entry is a volume that looks
+    like a setup drive but carries an unreadable device-info — surfaced so
+    the user sees WHY nothing is adoptable."""
+
+    pending_id: str
+    mac: str | None = None
+    board: str | None = None
+    model: str | None = None
+    sat_type: str = "voice"
+    status: str = "awaiting_provision"   # awaiting_provision | wifi_failed | bootstrapping
+    step: str | None = None
+    error: str | None = None
+    client_version: str | None = None
+    profiles_supported: list[str] = []
+    # Set when this device's MAC matches an existing satellites row — the
+    # UI then offers re-provision instead of a fresh adopt.
+    already_adopted_as: str | None = None
+    parse_error: str | None = None
+
+
+class AdoptRequest(BaseModel):
+    """Adopt a pending satellite: name it, hand it Wi-Fi, pick its mic
+    profile. The PSK transits to the device on the gadget volume exactly
+    once and is never logged (docs/SECURITY_PRIVACY.md)."""
+
+    room_id: str = Field(..., pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    room_label: str | None = Field(default=None, max_length=80)
+    wifi_ssid: str = Field(..., min_length=1, max_length=32)
+    wifi_psk: str = Field(..., min_length=8, max_length=63)   # WPA2-PSK bounds
+    wifi_country: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+    wifi_hidden: bool = False
+    device_profile: str = "respeaker_2mic_hat"
+    initial_volume: int | None = Field(default=None, ge=0, le=100)
+    # Re-provision an already-adopted device (wifi_failed retry / moving
+    # it). Only honored when the device's MAC matches the existing row.
+    force: bool = False
+
+
+class RoomLabelRequest(BaseModel):
+    """Set (or clear, with null) a satellite's display room label."""
+    room_label: str | None = Field(default=None, max_length=80)
 
 
 class DropInStartRequest(BaseModel):

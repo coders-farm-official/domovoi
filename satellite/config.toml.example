@@ -29,17 +29,61 @@
 #                         3.5mm/JST jack (so AEC has its echo reference), and
 #                         [audio] input_device/output_device + [music]
 #                         alsa_device pinned to the array (see PROVISIONING).
+#
+#   radxa_zero3w_video  — Radxa Zero 3W video-kiosk build (screen + speaker,
+#                         no mic or LEDs by default). Voice input defaults
+#                         OFF ([mic] enabled below) and LED init is skipped;
+#                         audio goes out HDMI or a USB DAC (pin [music]
+#                         alsa_device / [audio] output_* for a DAC). See
+#                         VIDEO_SATELLITE.md.
 profile = "respeaker_2mic_hat"
 
 [satellite]
 # Logical room name. Becomes the {room_id} in the WebSocket path and is
 # what the Domovoi server records in intents_log. Pick something stable —
-# the drop-in/intercom feature addresses rooms by this id.
+# the drop-in/intercom feature addresses rooms by this id. Each satellite
+# needs its own unique id, even two in the same physical room (group them
+# with a room label on the dashboard's Satellites page instead).
 room_id = "kitchen"
 
 # WebSocket URL of the Domovoi server. ws:// (no TLS) is fine on a trusted
 # LAN; revisit when adding remote / phone-as-satellite clients.
 domovoi_url = "ws://domovoi.local:6370"
+
+# Satellite kind: "voice" (the default — a speaker/mic puck) or "video"
+# (a screen-bearing kiosk build that renders the now-playing display; see
+# VIDEO_SATELLITE.md). Drives which controls the dashboard offers for
+# this satellite. A typo here fails loudly at startup.
+sat_type = "voice"
+
+[mic]
+# Whether the voice-input stack (wake word / VAD / capture) runs at all.
+# Defaults from the device profile: true on the mic boards, false on the
+# mic-less radxa_zero3w_video profile. TTS playback, announcements, and
+# music keep working with this off — flip it on when a supported mic is
+# attached (and pin [audio] input_device for it).
+# enabled = true
+
+[display]
+# Video satellites only (sat_type = "video") — ignored on voice builds.
+# See VIDEO_SATELLITE.md for the kiosk setup this drives.
+#
+# What the screen shows when nothing is playing: "clock" (dimmed clock +
+# room name), "blank" (black), or "art" (last cover, dimmed).
+# idle_mode = "clock"
+#
+# How the dashboard's screen on/off toggle drives the panel: "wlopm"
+# (Wayland/cage), "xset" (X11 DPMS), "backlight" (sysfs — DSI panels),
+# "auto" (try each in that order), or "none" (toggle does nothing).
+# power_method = "auto"
+#
+# Override the kiosk browser's URL. Default: derived from domovoi_url —
+# http://<server-host>:6369/display.html?room=<room_id>.
+# kiosk_url = ""
+#
+# How often (seconds) the client checks the kiosk browser service is
+# alive and reports flips to the dashboard.
+# kiosk_watch_interval_sec = 30
 
 [wake]
 # openWakeWord built-ins: hey_jarvis | alexa | hey_mycroft | hey_rhasspy | timer | weather

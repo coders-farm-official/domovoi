@@ -19,6 +19,8 @@ the Domovoi server's ``app.state.active_sessions`` to do TTS fanout.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -26,6 +28,9 @@ from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation
 
+from satellite import provisioning_protocol as proto
+
+from web.backend import satellite_adoption
 from web.backend.api.music import _now_playing_for
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -37,13 +42,18 @@ from web.backend.domovoi_client import (
     post_admin,
 )
 from web.backend.schemas import (
+    AdoptRequest,
     AnnounceRequest,
     ConfigUpdateRequest,
     ConversationTurn,
+    DisplayRequest,
     DropInStartRequest,
     MpdPorts,
+    PendingSatellite,
     RecentlyPlayed,
+    RoomLabelRequest,
     Satellite,
+    SatelliteDisplay,
     SatellitePairing,
     Session,
     Timer,
@@ -51,6 +61,8 @@ from web.backend.schemas import (
     VolumeRequest,
     WifiStatus,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/satellites", tags=["satellites"])
 
@@ -63,7 +75,171 @@ async def list_satellites() -> list[Satellite]:
     rooms = await _list_rooms()
     snapshot = get_cached_snapshot() or {}
     pairings = await _list_pairings()
-    return [await _satellite_for(r, snapshot, pairings) for r in rooms]
+    meta = await _list_satellite_meta()
+    return [await _satellite_for(r, snapshot, pairings, meta) for r in rooms]
+
+
+# ─── USB adoption (declared BEFORE /{room_id} so "pending" is never
+#     captured as a room id) ────────────────────────────────────────────────
+
+
+@router.get("/pending", response_model=list[PendingSatellite])
+async def list_pending() -> list[PendingSatellite]:
+    """Unprovisioned satellites currently presenting a USB adoption volume
+    on the Domovoi server. Empty when the feature is off. MACs are matched
+    against the inventory so a re-plugged device shows what it already is."""
+    pending = await satellite_adoption.snapshot_pending()
+    meta = await _list_satellite_meta()
+    by_mac = {
+        row["mac"]: rid
+        for rid, row in meta.items()
+        if row.get("mac")
+    }
+    out: list[PendingSatellite] = []
+    for p in pending:
+        model = PendingSatellite(**p)
+        if model.mac and model.mac in by_mac:
+            model.already_adopted_as = by_mac[model.mac]
+        out.append(model)
+    return out
+
+
+@router.post(
+    "/pending/{pending_id}/adopt",
+    # Writes Wi-Fi credentials to a device and mints its pairing token —
+    # security-tier, Bearer-only (the core preseed applies the same gate;
+    # credentials are forwarded).
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def adopt_pending(pending_id: str, body: AdoptRequest, request: Request):
+    """Adopt a pending satellite: validate the room name, preseed pairing on
+    the core (raw token returned once), and write the provision file onto
+    the device's volume. 410 when the device vanished mid-flow; 409 on a
+    room-name collision (or a `force` for a different physical device)."""
+    mount = satellite_adoption.mount_for(pending_id)
+    if mount is None:
+        # The scan cache may simply be older than the plug-in — rescan once.
+        satellite_adoption.invalidate_cache()
+        await satellite_adoption.snapshot_pending()
+        mount = satellite_adoption.mount_for(pending_id)
+    if mount is None:
+        raise HTTPException(
+            status_code=410, detail="device no longer present (unplugged?)"
+        )
+
+    # Re-read + validate the device info NOW — the nonce must still match
+    # (a reboot mid-adopt re-nonces and this pending_id goes stale).
+    try:
+        import json as _json
+
+        info = proto.validate_device_info(
+            _json.loads((mount / proto.DEVICE_INFO_NAME).read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError, proto.ProvisionInvalid):
+        raise HTTPException(
+            status_code=410, detail="device no longer present (unplugged?)"
+        )
+    if info["nonce"] != pending_id:
+        raise HTTPException(
+            status_code=409, detail="device re-announced itself — refresh and retry"
+        )
+
+    # Room-name collisions: any existing mpd_rooms / pairing / inventory row
+    # blocks a fresh adopt. `force` is allowed ONLY when the existing
+    # inventory row belongs to THIS physical device (MAC match) — the
+    # wifi_failed retry / re-provision path.
+    meta = await _list_satellite_meta()
+    rooms = {r["room_id"] for r in await _list_rooms()}
+    pairings = await _list_pairings()
+    exists = body.room_id in rooms or body.room_id in pairings or body.room_id in meta
+    if exists:
+        row_mac = (meta.get(body.room_id) or {}).get("mac")
+        same_device = bool(info["mac"] and row_mac and info["mac"] == row_mac)
+        if not (body.force and same_device):
+            raise HTTPException(
+                status_code=409,
+                detail=f"room {body.room_id!r} already exists",
+            )
+
+    status, payload = await post_admin(
+        f"/v1/admin/satellites/{body.room_id}/pairing/preseed",
+        {
+            "sat_type": info["sat_type"],
+            "room_label": body.room_label,
+            "hardware": info.get("model"),
+            "board": info.get("board"),
+            "mac": info.get("mac"),
+            "force": body.force,
+        },
+        headers=auth_forward_headers(request),
+    )
+    if status != 200 or not isinstance(payload, dict) or "token" not in payload:
+        return bridge_response(status, payload)
+
+    doc = proto.build_provision(
+        nonce=pending_id,
+        room_id=body.room_id,
+        domovoi_url=satellite_adoption.advertised_domovoi_url(),
+        sat_type=info["sat_type"],
+        device_profile=body.device_profile,
+        pairing_token=payload["token"],
+        wifi_ssid=body.wifi_ssid,
+        wifi_psk=body.wifi_psk,
+        wifi_country=body.wifi_country,
+        wifi_hidden=body.wifi_hidden,
+        tz=_server_tz(),
+        initial_volume=body.initial_volume,
+    )
+    try:
+        await asyncio.to_thread(satellite_adoption.write_provision, mount, doc)
+    except OSError:
+        # The drive vanished between validation and write — roll back the
+        # preseed so no orphaned waiting room lingers.
+        await delete_admin(
+            f"/v1/admin/satellites/{body.room_id}",
+            headers=auth_forward_headers(request),
+        )
+        raise HTTPException(
+            status_code=410, detail="device no longer present (unplugged?)"
+        )
+    # Nothing sensitive is logged: room + pending id only.
+    log.info("adoption: provisioned room=%s pending=%s", body.room_id, pending_id)
+    satellite_adoption.invalidate_cache()
+    return {"room_id": body.room_id, "status": "provisioned"}
+
+
+def _server_tz() -> str | None:
+    """The server's IANA zone name for the device's timedatectl, when the
+    optional tzlocal package can supply one. Best-effort — null skips."""
+    try:
+        from tzlocal import get_localzone_name
+
+        return get_localzone_name()
+    except Exception:
+        return None
+
+
+@router.delete("/{room_id}", dependencies=[Depends(require_admin_mutation)])
+async def delete_satellite(room_id: str, request: Request):
+    """Remove a never-connected (`waiting`) satellite — inventory row +
+    preseeded pairing. Proxies to the core, which 409s for provisioned
+    rooms."""
+    status, payload = await delete_admin(
+        f"/v1/admin/satellites/{room_id}",
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.patch("/{room_id}", response_model=dict)
+async def update_satellite(room_id: str, body: RoomLabelRequest):
+    """Update a satellite's display room label (grouping tag). Daily-tier
+    cosmetic metadata, like volume."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellites/{room_id}/label",
+        {"room_label": body.room_label},
+    )
+    return bridge_response(status, payload)
 
 
 @router.get("/{room_id}", response_model=Satellite)
@@ -74,7 +250,8 @@ async def get_satellite(room_id: str) -> Satellite:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not provisioned")
     snapshot = get_cached_snapshot() or {}
     pairings = await _list_pairings()
-    return await _satellite_for(match, snapshot, pairings)
+    meta = await _list_satellite_meta()
+    return await _satellite_for(match, snapshot, pairings, meta)
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -383,6 +560,20 @@ async def restart(room_id: str):
     return bridge_response(status, payload)
 
 
+@router.post("/{room_id}/display")
+async def set_display(room_id: str, body: DisplayRequest):
+    """Drive a video satellite's screen from the drawer's Display block:
+    panel on/off or a kiosk-browser restart. Daily-tier device control,
+    like volume/restart. Proxies to the Domovoi server, which sends the
+    ``set_display`` frame to the live session. 404 when the room isn't
+    connected, 409 when it isn't a video satellite, 503 when nothing is."""
+    status, payload = await post_admin(
+        "/v1/admin/satellite/display",
+        {"room_id": room_id, "action": body.action},
+    )
+    return bridge_response(status, payload)
+
+
 @router.post(
     "/{room_id}/upgrade",
     # §7.3 gated list: satellite code push is admin-tier, Bearer-only.
@@ -447,24 +638,37 @@ async def reset_pairing(room_id: str, request: Request):
 
 
 async def _list_rooms() -> list[dict[str, Any]]:
+    """Every known satellite: provisioned rooms (mpd_rooms) plus adopted-
+    but-never-connected ones (satellites rows only → null ports, rendered
+    as `waiting`). Falls back to mpd_rooms alone when V003 isn't applied."""
+    query_full = """
+        SELECT COALESCE(m.room_id, s.room_id) AS room_id,
+               m.control_port, m.http_port, m.last_connected_at
+        FROM mpd_rooms m
+        FULL OUTER JOIN satellites s ON s.room_id = m.room_id
+        ORDER BY 1
+        """
+    query_legacy = """
+        SELECT room_id, control_port, http_port, last_connected_at
+        FROM mpd_rooms
+        ORDER BY room_id
+        """
     async with session_scope() as s:
-        rows = await s.execute(
-            text(
-                """
-                SELECT room_id, control_port, http_port, last_connected_at
-                FROM mpd_rooms
-                ORDER BY room_id
-                """
-            )
-        )
+        try:
+            rows = await s.execute(text(query_full))
+            data = rows.all()
+        except Exception:
+            await s.rollback()
+            rows = await s.execute(text(query_legacy))
+            data = rows.all()
     return [
         {
             "room_id": r[0],
-            "control_port": int(r[1]),
-            "http_port": int(r[2]),
+            "control_port": int(r[1]) if r[1] is not None else None,
+            "http_port": int(r[2]) if r[2] is not None else None,
             "last_connected_at": r[3],
         }
-        for r in rows.all()
+        for r in data
     ]
 
 
@@ -483,18 +687,55 @@ async def _list_pairings() -> dict[str, dict[str, Any]]:
     }
 
 
+async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
+    """All satellite inventory rows (V003), keyed by room_id — sat_type /
+    room label / hardware metadata, fresh even for an offline room. Returns
+    {} when the V003 migration hasn't been applied yet so the satellites
+    list keeps working (types then just render as the 'voice' default)."""
+    try:
+        async with session_scope() as s:
+            rows = await s.execute(
+                text(
+                    "SELECT room_id, sat_type, room_label, hardware, board, "
+                    "mac, adopted_at FROM satellites"
+                )
+            )
+        return {
+            r[0]: {
+                "sat_type": r[1],
+                "room_label": r[2],
+                "hardware": r[3],
+                "board": r[4],
+                "mac": r[5],
+                "adopted_at": r[6],
+            }
+            for r in rows.all()
+        }
+    except Exception as e:
+        log.debug("satellites inventory read failed (V003 not applied?): %s", e)
+        return {}
+
+
 async def _satellite_for(
     room: dict[str, Any],
     snapshot: dict[str, Any],
     pairings: dict[str, dict[str, Any]] | None = None,
+    meta: dict[str, dict[str, Any]] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
     wifi_dict = (snapshot.get("wifi_status") or {}).get(room_id) if snapshot else None
 
     online = room_id in active_rooms
-    now_playing_model = await _now_playing_for(
-        (room_id, room["control_port"], room["http_port"])
+    # Null ports = adopted but never connected ("waiting"): no MPD instance
+    # exists yet, so there's nothing to read now-playing from.
+    waiting = room["control_port"] is None or room["http_port"] is None
+    now_playing_model = (
+        None
+        if waiting
+        else await _now_playing_for(
+            (room_id, room["control_port"], room["http_port"])
+        )
     )
 
     wifi: WifiStatus | None = None
@@ -531,20 +772,55 @@ async def _satellite_for(
         last_seen_at=pair_row["last_seen_at"] if pair_row else None,
     )
 
+    # Satellite type: the inventory row (V003) wins — it's written only by
+    # EXPLICIT sources (adoption preseed / an explicit hello) — with the live
+    # snapshot as fallback for rooms that predate the table, then the
+    # historical default. mic state is live-only (unknown offline → True).
+    meta_row = (meta or {}).get(room_id) or {}
+    sat_type = (
+        meta_row.get("sat_type")
+        or (snapshot.get("satellite_sat_type") or {}).get(room_id)
+        or "voice"
+    )
+    mic_enabled = bool(
+        (snapshot.get("satellite_mic_enabled") or {}).get(room_id, True)
+    )
+    display_dict = (snapshot.get("satellite_display") or {}).get(room_id)
+    display = (
+        SatelliteDisplay(
+            on=display_dict.get("on"),
+            kiosk_alive=display_dict.get("kiosk_alive"),
+            brightness=_as_int(display_dict.get("brightness")),
+            idle_mode=display_dict.get("idle_mode"),
+        )
+        if isinstance(display_dict, dict)
+        else None
+    )
+
     return Satellite(
         room_id=room_id,
-        status="online" if online else "offline",
+        status="online" if online else ("waiting" if waiting else "offline"),
         last_connected_at=room["last_connected_at"],
         wifi=wifi,
         now_playing=now_playing_model,
         active_session_id=None,  # TODO: lift from the snapshot proxy
-        mpd_ports=MpdPorts(control=room["control_port"], http=room["http_port"]),
+        mpd_ports=(
+            None
+            if waiting
+            else MpdPorts(control=room["control_port"], http=room["http_port"])
+        ),
         version=version,
         full_duplex=full_duplex,
         in_call_with=in_call_with,
         voice=voice,
         volume=volume,
         pairing=pairing,
+        sat_type=sat_type,
+        mic_enabled=mic_enabled,
+        room_label=meta_row.get("room_label"),
+        hardware=meta_row.get("hardware"),
+        adopted_at=meta_row.get("adopted_at"),
+        display=display,
     )
 
 

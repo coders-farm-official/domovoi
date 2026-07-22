@@ -1,0 +1,174 @@
+#!/bin/bash
+# Domovoi satellite — STAGE 1 first-boot bootstrap (runs as root, OFFLINE,
+# via the kernel-cmdline systemd.run hook the media-prep overlay installed;
+# the same mechanism Raspberry Pi Imager uses for its firstrun.sh).
+#
+# Everything needed is in the payload on this boot partition — no network.
+# Every step drops a marker under /var/lib/domovoi/bootstrap-steps/ so a
+# power-cut boot re-runs idempotently. Progress/errors surface in
+# device-info.json on this partition (readable over the adoption gadget
+# and by pulling the card).
+#
+# Rendered by domovoi/satellite_media/overlay.py — placeholders:
+#   @SAT_USER@      the account to create/use
+#   @MIC_PROFILE@   respeaker_2mic_hat_v1|_v2 | xvf3800_usb | none
+#   @SAT_TYPE@      voice | video
+
+set -u
+BOOT="$(cd "$(dirname "$0")" && pwd)"
+STEPS=/var/lib/domovoi/bootstrap-steps
+PAYDIR=/opt/domovoi-payload
+SAT_USER="@SAT_USER@"
+MIC_PROFILE="@MIC_PROFILE@"
+SAT_TYPE="@SAT_TYPE@"
+LOG=/var/log/domovoi-firstrun.log
+
+mkdir -p "$STEPS"
+exec >>"$LOG" 2>&1
+echo "== domovoi stage-1 $(date -Is) =="
+
+info() {
+  # Update device-info.json (status/step/error) on the boot partition.
+  python3 - "$BOOT/domovoi/device-info.json" "$1" "$2" "${3:-}" <<'EOF' || true
+import json, sys
+p, status, step, error = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] or None
+try:
+    doc = json.load(open(p))
+except Exception:
+    doc = {"domovoi_setup": 1, "nonce": "firstboot", "profiles_supported": []}
+doc.update(status=status, step=step, error=error)
+json.dump(doc, open(p, "w"), indent=2)
+EOF
+}
+
+fail() { echo "FAIL: $1"; info bootstrapping "$2" "$1"; exit 1; }
+done_step() { touch "$STEPS/$1"; }
+skip() { [ -f "$STEPS/$1" ]; }
+
+info bootstrapping stage1-start
+
+# 0. Payload integrity (power-loss-during-copy guard).
+if ! skip verify; then
+  info bootstrapping verify-payload
+  (cd "$BOOT/domovoi" && sha256sum -c payload.sha256) \
+    || fail "payload checksum mismatch — re-run prepare media" verify-payload
+  done_step verify
+fi
+
+# 1. Extract.
+if ! skip extract; then
+  info bootstrapping extract
+  mkdir -p "$PAYDIR"
+  tar -xzf "$BOOT/domovoi/payload.tar.gz" -C "$PAYDIR" --strip-components=1 \
+    || fail "payload extract failed" extract
+  done_step extract
+fi
+
+# 2. User (locked password; SSH stays whatever the stock image chose).
+if ! skip user; then
+  info bootstrapping create-user
+  id "$SAT_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$SAT_USER"
+  usermod -aG audio,video,plugdev,gpio,spi,i2c "$SAT_USER" 2>/dev/null || true
+  done_step user
+fi
+HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
+
+# 3. Debs (offline cache; ordering handled by a double pass).
+if ! skip debs; then
+  info bootstrapping install-debs
+  if ls "$PAYDIR"/debs/*.deb >/dev/null 2>&1; then
+    dpkg -i --force-confold "$PAYDIR"/debs/*.deb || \
+    dpkg -i --force-confold "$PAYDIR"/debs/*.deb || \
+      echo "WARN: some debs failed — stage 2 retries via apt online"
+  else
+    echo "WARN: no deb cache in payload — stage 2 installs via apt online"
+  fi
+  done_step debs
+fi
+
+# 4. Python venv, pip bootstrapped FROM THE SHIPPED WHEELS (no ensurepip,
+#    no network): create --without-pip, then install pip from the cache.
+if ! skip venv; then
+  info bootstrapping python-venv
+  PYV_OK=1
+  python3 -m venv --without-pip "$HOME_DIR/satellite-venv" || PYV_OK=0
+  if [ "$PYV_OK" = 1 ] && ls "$PAYDIR"/wheels/pip-*.whl >/dev/null 2>&1; then
+    PIP_WHEEL="$(ls "$PAYDIR"/wheels/pip-*.whl | head -1)"
+    "$HOME_DIR/satellite-venv/bin/python" "$PIP_WHEEL/pip" install \
+        --no-index --find-links "$PAYDIR/wheels" pip setuptools wheel \
+      || PYV_OK=0
+    if [ "$PYV_OK" = 1 ]; then
+      "$HOME_DIR/satellite-venv/bin/pip" install --no-index \
+          --find-links "$PAYDIR/wheels" -r "$PAYDIR/satellite/requirements.txt" \
+        || echo "WARN: offline requirements install incomplete — stage 2 retries online"
+      "$HOME_DIR/satellite-venv/bin/pip" install --no-index --no-deps \
+          --find-links "$PAYDIR/wheels" openwakeword \
+        || echo "WARN: openwakeword offline install failed — stage 2 retries"
+    fi
+  fi
+  [ "$PYV_OK" = 1 ] || fail "python venv bootstrap failed" python-venv
+  done_step venv
+fi
+
+# 5. Code + assets into place.
+if ! skip code; then
+  info bootstrapping copy-code
+  mkdir -p "$HOME_DIR/domovoi"
+  cp -r "$PAYDIR/satellite" "$HOME_DIR/domovoi/"
+  cp "$PAYDIR/pyproject.toml" "$HOME_DIR/domovoi/" 2>/dev/null || true
+  mkdir -p "$HOME_DIR/.domovoi"
+  [ -d "$PAYDIR/oww_models" ] && cp -r "$PAYDIR/oww_models" "$HOME_DIR/.domovoi/" || true
+  [ -d "$PAYDIR/sounds" ] && cp -r "$PAYDIR/sounds" "$HOME_DIR/.domovoi/" || true
+  [ -d "$PAYDIR/wake_models" ] && cp -r "$PAYDIR/wake_models" "$HOME_DIR/.domovoi/" || true
+  [ -d "$PAYDIR/plugins" ] && cp -r "$PAYDIR/plugins" "$HOME_DIR/.domovoi/plugin_payloads" || true
+  [ -d "$PAYDIR/debs" ] && cp -r "$PAYDIR/debs" "$HOME_DIR/.domovoi/deb_cache" || true
+  [ "$SAT_TYPE" = "video" ] && echo video >"$HOME_DIR/.domovoi/image_sat_type" || true
+  chown -R "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi" "$HOME_DIR/.domovoi" "$HOME_DIR/satellite-venv"
+  done_step code
+fi
+
+# 6. Mic-board overlay (prebuilt dtbo from the payload when present).
+if ! skip micboard; then
+  info bootstrapping mic-board
+  case "$MIC_PROFILE" in
+    respeaker_2mic_hat_v1|respeaker_2mic_hat_v2)
+      if ls "$PAYDIR"/dtbo/*.dtbo >/dev/null 2>&1; then
+        cp "$PAYDIR"/dtbo/*.dtbo "$BOOT/overlays/" 2>/dev/null \
+          || cp "$PAYDIR"/dtbo/*.dtbo /boot/firmware/overlays/ 2>/dev/null || true
+        grep -q "^dtoverlay=respeaker" "$BOOT/config.txt" 2>/dev/null || \
+          printf '\ndtoverlay=%s\ndtparam=spi=on\n' \
+            "$(basename "$(ls "$PAYDIR"/dtbo/*.dtbo | head -1)" .dtbo)" >>"$BOOT/config.txt"
+      else
+        echo "WARN: no prebuilt dtbo in payload — follow PROVISIONING §4 on-device"
+      fi
+      ;;
+    xvf3800_usb|none) : ;;   # USB / mic-less: nothing to overlay
+  esac
+  done_step micboard
+fi
+
+# 7. Units + sudoers + root helper.
+if ! skip units; then
+  info bootstrapping systemd-units
+  install -m 0755 "$PAYDIR/system/domovoi-apply-payload" /usr/local/sbin/domovoi-apply-payload
+  install -m 0755 "$PAYDIR/bootstrap/stage2.sh" \
+    "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
+  chown "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
+  for U in domovoi-satellite domovoi-provisioning domovoi-bootstrap; do
+    sed -e "s|@USER@|$SAT_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
+      "$PAYDIR/system/$U.service" >"/etc/systemd/system/$U.service"
+  done
+  sed -e "s|@USER@|$SAT_USER|g" "$PAYDIR/system/sudoers" \
+    >/etc/sudoers.d/domovoi-satellite
+  chmod 0440 /etc/sudoers.d/domovoi-satellite
+  systemctl daemon-reload
+  # Satellite unit stays DISABLED until stage 2 finishes; provisioning +
+  # bootstrap arm now.
+  systemctl enable domovoi-provisioning domovoi-bootstrap
+  done_step units
+fi
+
+# 8. USB gadget prerequisites are in config.txt/cmdline.txt already (the
+#    overlay wrote them at prepare time). Done — hand off to boot 2.
+info awaiting_provision stage1-done
+echo "stage 1 complete; rebooting into adoption mode"

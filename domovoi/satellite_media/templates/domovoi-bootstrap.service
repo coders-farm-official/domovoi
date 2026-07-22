@@ -1,0 +1,21 @@
+# Domovoi satellite — stage-2 bootstrap oneshot (post-Wi-Fi finish work).
+# Rendered by stage 1 with @USER@/@HOME@; self-disables via the
+# bootstrap-done condition once the satellite unit is up.
+
+[Unit]
+Description=Domovoi satellite bootstrap (stage 2)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=@HOME@/.domovoi/config.toml
+ConditionPathExists=!/var/lib/domovoi/bootstrap-done
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash @HOME@/domovoi/satellite/scripts/stage2.sh
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

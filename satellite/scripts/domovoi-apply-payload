@@ -1,0 +1,120 @@
+#!/bin/sh
+# Domovoi satellite: apply plugin payloads' ROOT-side work — installed to
+# /usr/local/sbin/domovoi-apply-payload (root:root 0755) by the media-prep
+# bootstrap, invoked by satellite/plugin_sync.py via the sudoers entry:
+#
+#   <user> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
+#
+# Reads ~/.domovoi/pending_payload.json (written by plugin_sync just before
+# the sudo call): per-slug apt packages + post-install script. Installs the
+# packages (offline deb cache first when present, apt online otherwise) and
+# runs each script AS ROOT with DOMOVOI_PLUGIN_SLUG/DOMOVOI_PLUGIN_DIR env,
+# logging everything to ~/.domovoi/payload_apply.log. On success it records
+# the applied state so plugin_sync stops flagging the slug.
+#
+# The security posture (plugins with satellite_root run arbitrary root code
+# on satellites) is documented in docs/SECURITY_PRIVACY.md and gated at
+# install-confirm time by the plugin's manifest permission + warnings.
+
+set -u
+
+# The invoking user's home (sudo preserves neither $HOME reliably nor cwd).
+INVOKER="${SUDO_USER:-root}"
+HOME_DIR="$(getent passwd "$INVOKER" | cut -d: -f6)"
+DOMOVOI_DIR="$HOME_DIR/.domovoi"
+PENDING="$DOMOVOI_DIR/pending_payload.json"
+LOGFILE="$DOMOVOI_DIR/payload_apply.log"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOGFILE"; }
+
+[ -f "$PENDING" ] || { echo "no pending payload" >&2; exit 0; }
+
+PY=python3
+command -v "$PY" >/dev/null 2>&1 || { echo "python3 missing" >&2; exit 1; }
+
+log "apply-payload start (invoker=$INVOKER)"
+
+# Let python do the JSON walking; shell does the privileged calls.
+"$PY" - "$PENDING" <<'EOF' >"$DOMOVOI_DIR/pending_payload.steps" || exit 1
+import json, sys
+doc = json.load(open(sys.argv[1]))
+root = doc.get("payloads_root", "")
+for slug, m in sorted((doc.get("slugs") or {}).items()):
+    for pkg in m.get("apt_packages") or []:
+        print(f"APT\t{slug}\t{pkg}")
+    if m.get("post_install"):
+        print(f"RUN\t{slug}\t{root}/{slug}/{m['post_install']}")
+EOF
+
+FAIL=0
+APT_PKGS=""
+while IFS="$(printf '\t')" read -r kind slug arg; do
+  case "$kind" in
+    APT) APT_PKGS="$APT_PKGS $arg" ;;
+  esac
+done <"$DOMOVOI_DIR/pending_payload.steps"
+
+if [ -n "$APT_PKGS" ]; then
+  log "apt install:$APT_PKGS"
+  # Offline deb cache (media-prep payload) first; apt handles the rest.
+  DEB_CACHE="$DOMOVOI_DIR/deb_cache"
+  if [ -d "$DEB_CACHE" ] && ls "$DEB_CACHE"/*.deb >/dev/null 2>&1; then
+    dpkg -i --force-confold "$DEB_CACHE"/*.deb >>"$LOGFILE" 2>&1 || true
+  fi
+  # shellcheck disable=SC2086
+  DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_PKGS >>"$LOGFILE" 2>&1 \
+    || { log "apt install failed"; FAIL=1; }
+fi
+
+while IFS="$(printf '\t')" read -r kind slug arg; do
+  case "$kind" in
+    RUN)
+      if [ -f "$arg" ]; then
+        log "post_install $slug: $arg"
+        chmod +x "$arg" 2>/dev/null || true
+        DOMOVOI_PLUGIN_SLUG="$slug" \
+        DOMOVOI_PLUGIN_DIR="$(dirname "$arg")" \
+          "$arg" >>"$LOGFILE" 2>&1 || { log "post_install $slug FAILED"; FAIL=1; }
+      else
+        log "post_install $slug: missing $arg"; FAIL=1
+      fi
+      ;;
+  esac
+done <"$DOMOVOI_DIR/pending_payload.steps"
+
+if [ "$FAIL" -eq 0 ]; then
+  # Record applied state (per-slug apt set + post-install sha) so
+  # plugin_sync stops flagging these slugs.
+  "$PY" - "$PENDING" <<'EOF' >>"$LOGFILE" 2>&1 || true
+import hashlib, json, sys
+from pathlib import Path
+doc = json.load(open(sys.argv[1]))
+root = Path(doc.get("payloads_root", ""))
+state_file = Path(doc.get("state_file", ""))
+state = {}
+try:
+    state = json.loads(state_file.read_text())
+except Exception:
+    pass
+for slug, m in (doc.get("slugs") or {}).items():
+    sha = None
+    if m.get("post_install"):
+        p = root / slug / m["post_install"]
+        if p.is_file():
+            sha = hashlib.sha256(p.read_bytes()).hexdigest()
+    state[slug] = {
+        "version": m.get("version"),
+        "apt_packages": sorted(m.get("apt_packages") or []),
+        "post_install_sha": sha,
+    }
+state_file.write_text(json.dumps(state, indent=2))
+print("state recorded")
+EOF
+  rm -f "$PENDING" "$DOMOVOI_DIR/pending_payload.steps"
+  log "apply-payload done"
+  exit 0
+fi
+
+log "apply-payload finished with failures (pending kept for retry)"
+rm -f "$DOMOVOI_DIR/pending_payload.steps"
+exit 1

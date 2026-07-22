@@ -22,6 +22,12 @@ branches through `client.py`, each board is described once here as a
                           fixed rate. 12× WS2812 LEDs are driven via the
                           ``xvf_host`` CLI, not SPI.
 
+    radxa_zero3w_video  — Radxa Zero 3W video-kiosk build (screen +
+                          speaker, no mic or LEDs by default). Voice is
+                          off out of the box (``voice_capable=False`` →
+                          ``[mic] enabled`` defaults false) and LED init
+                          is skipped; audio goes out HDMI or a USB DAC.
+
 A profile carries two kinds of data:
 
   * **Hardware switches** the code branches on (``capture_dtype``,
@@ -108,6 +114,18 @@ class DeviceProfile:
     output_mixer_card: str
     output_mixer_control: str | None
 
+    # ── Satellite-kind capabilities (defaulted so existing profiles are
+    #    untouched) ─────────────────────────────────────────────────────
+    # False when the board's default build has no microphone at all (the
+    # video-kiosk Radxa profile): ``[mic] enabled`` then defaults off and
+    # the client skips the wake-word/VAD/capture stack until the owner adds
+    # a supported mic and flips the config key.
+    voice_capable: bool = True
+    # False when the board's default build has no LEDs wired (the
+    # video-kiosk profile has a screen, not a ring) so LED init is skipped
+    # without a config edit. An explicit ``[leds] enabled`` still wins.
+    leds_enabled_default: bool = True
+
 
 # The HAT profile reproduces the client's historical hard-coded defaults
 # exactly — selecting it (or omitting [device] entirely) is a no-op change
@@ -175,9 +193,47 @@ _XVF3800_USB = DeviceProfile(
 )
 
 
+# The video-kiosk build: a Radxa Zero 3W driving a screen (HDMI/DSI) and a
+# speaker (HDMI audio or a USB DAC). No mic board in the default build — the
+# voice stack stays off until the owner adds a supported mic (e.g. an
+# XVF3800 on the USB port, switching profile) or flips [mic] enabled with
+# their own capture device pinned.
+_RADXA_ZERO3W_VIDEO = DeviceProfile(
+    name="radxa_zero3w_video",
+    description="Radxa Zero 3W video kiosk (screen + speaker; mic optional)",
+    capture_dtype="int16",
+    capture_channels=1,
+    capture_select_channel=None,
+    led_backend="apa102",         # inert — leds_enabled_default=False below
+    playback_sample_rate=None,
+    led_xvf_host_path="xvf_host",
+    supports_full_duplex=False,   # no AEC path on the bare board
+    mic_gain_enabled=False,       # no ALSA-PGA to tune without a mic board
+    mic_gain_card=0,
+    noise_gate_auto_calibrate=False,
+    noise_gate_dbfs=-45.0,
+    barge_require_wake_word=False,
+    vad_during_tts=3,
+    # RK3566 HDMI/audio card naming varies by kernel; "default" routes via
+    # the ALSA default device. VIDEO_SATELLITE.md documents pinning a
+    # specific hw:X,Y or a USB DAC for speaker-quality output.
+    music_alsa_device="default",
+    leds_num=0,
+    leds_brightness=0,
+    # HDMI sinks expose no hardware mixer — set_volume is a no-op until a
+    # USB-DAC owner opts in via [audio] output_mixer_card/control (the same
+    # opt-in the 2-Mic HAT already uses).
+    output_mixer_card="0",
+    output_mixer_control=None,
+    voice_capable=False,
+    leds_enabled_default=False,
+)
+
+
 PROFILES: dict[str, DeviceProfile] = {
     _RESPEAKER_2MIC_HAT.name: _RESPEAKER_2MIC_HAT,
     _XVF3800_USB.name: _XVF3800_USB,
+    _RADXA_ZERO3W_VIDEO.name: _RADXA_ZERO3W_VIDEO,
 }
 
 DEFAULT_PROFILE = _RESPEAKER_2MIC_HAT.name

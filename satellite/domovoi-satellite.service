@@ -1,0 +1,29 @@
+# Domovoi voice satellite — the systemd unit, now IN the repo (it rides the
+# satellite-code sync channel like every other satellite file) instead of
+# living as a heredoc in PROVISIONING.md. @USER@/@HOME@ are placeholders:
+# render with scripts/install-service.sh, or by hand:
+#
+#   sudo sed -e "s|@USER@|$USER|g" -e "s|@HOME@|$HOME|g" \
+#     ~/domovoi/satellite/domovoi-satellite.service \
+#     | sudo tee /etc/systemd/system/domovoi-satellite.service >/dev/null
+#   sudo systemctl daemon-reload && sudo systemctl enable --now domovoi-satellite
+#
+# Self-restart needs the sudoers entry from PROVISIONING.md §8.1.
+
+[Unit]
+Description=Domovoi voice satellite
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@HOME@/domovoi
+ExecStart=@HOME@/satellite-venv/bin/python -m satellite.client
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

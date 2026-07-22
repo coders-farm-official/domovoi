@@ -17,6 +17,10 @@ Channels emitted (core; enabled plugins add their own via manifest
   online (read from the admin snapshot when reachable; absent
   otherwise)
 * ``satellites.wifi`` — per-room WiFi telemetry from the admin snapshot
+* ``satellites.display`` — per-room screen/kiosk state video satellites
+  report (display toggles, kiosk-browser death/recovery)
+* ``satellites.pending`` — unprovisioned satellites presenting a USB
+  adoption volume on the server (plug/unplug/status flips)
 * ``people.last_seen`` — fires when a person's ``last_seen_at`` advances
 * ``calendar.events`` — current 30-day window of events; emits any time
   the window changes
@@ -62,6 +66,8 @@ from fastapi import WebSocket
 from sqlalchemy import text
 
 from domovoi.config import settings as core_settings
+
+from web.backend import satellite_adoption
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     fetch_admin_snapshot,
@@ -123,6 +129,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # rather than on the poll cadence. The Models page subscribes via the
     # resulting `model_jobs.changed` event.
     "model_jobs_changed": "model_jobs",
+    # Satellite media-prep builds (V004). Fires from the prepare/progress/
+    # finish writes in web/backend/api/satellite_media.py so the card's
+    # progress bar tracks the build live. Subscribers see the resulting
+    # `satellites.media.changed` event.
+    "satellite_media_jobs_changed": "satellites.media",
     # News. Fires on any topic/feed/item/briefing mutation (web CRUD,
     # the daily fetcher, a favorite toggle, a manual poll). The News page
     # subscribes via the resulting `news.changed` event and refetches the
@@ -329,6 +340,11 @@ class StatePollLoop:
                         key=lambda c: (c["initiator"] or "", c["target"] or ""),
                     ),
                 ),
+                # Video-satellite screen/kiosk state ({room: {on, kiosk_alive,
+                # brightness, idle_mode}}). Fires on display toggles and
+                # kiosk-death/recovery; the satellites page (and the kiosk
+                # display page itself) refetch on it.
+                ("satellites.display", snapshot.get("satellite_display") or {}),
             ):
                 async with self._diff_lock:
                     old_value = self._previous.get(key)
@@ -567,6 +583,45 @@ async def _snapshot_podcast_positions() -> dict[str, Any]:
     return {"count": int(row[0]), "latest": _isoformat(row[1])}
 
 
+async def _snapshot_media_jobs() -> list[dict[str, Any]]:
+    """Active + just-finished satellite media-prep builds — the same shape
+    ``GET /api/satellites/media/jobs`` returns (minus the server-local
+    artifact path). The 30 s finished-window mirrors _snapshot_model_jobs."""
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(
+                """
+                SELECT id, board, mic_profile, target_kind, target_ref,
+                       status, phase, pct, status_text, error,
+                       requested_at, completed_at,
+                       (artifact_path IS NOT NULL) AS has_artifact
+                FROM satellite_media_jobs
+                WHERE status IN ('pending', 'running')
+                   OR completed_at > now() - interval '30 seconds'
+                ORDER BY requested_at DESC
+                """
+            )
+        )
+        return [
+            {
+                "id": int(r[0]),
+                "board": r[1],
+                "mic_profile": r[2],
+                "target_kind": r[3],
+                "target_ref": r[4],
+                "status": r[5],
+                "phase": r[6],
+                "pct": int(r[7]) if r[7] is not None else None,
+                "status_text": r[8],
+                "error": r[9],
+                "requested_at": r[10].isoformat() if r[10] else None,
+                "completed_at": r[11].isoformat() if r[11] else None,
+                "has_artifact": bool(r[12]),
+            }
+            for r in rows.all()
+        ]
+
+
 async def _snapshot_model_jobs() -> list[dict[str, Any]]:
     """Active + just-finished Ollama pull jobs — the same
     shape ``GET /api/models/jobs`` returns. Diff-on-value fires as a pull's
@@ -691,6 +746,13 @@ StatePollLoop._CHANNEL_HELPERS = {
     "podcast_positions": _snapshot_podcast_positions,
     "model_jobs":        _snapshot_model_jobs,
     "news":              _snapshot_news,
+    # USB satellite adoption: pending gadget volumes on the server's USB
+    # ports (web/backend/satellite_adoption.py — TTL-cached scan, [] when
+    # the feature is off). Plug/unplug/status flips push
+    # `satellites.pending.changed` so the adopt card appears within a tick.
+    "satellites.pending": satellite_adoption.snapshot_pending,
+    # Satellite media-prep build jobs (progress bar on the prepare card).
+    "satellites.media": _snapshot_media_jobs,
 }
 
 # The core realtime channels, frozen BEFORE any plugin mutates the helper

@@ -48,6 +48,29 @@ Per room:
 
 Buy one full kit first, get it working end-to-end, then provision the rest.
 
+### Video satellites (screen builds)
+
+A **video satellite** adds a screen: it plays music like any satellite and
+renders a fullscreen now-playing page (cover art, progress, touch
+transport) in a kiosk browser, with its controls in a type-gated block on
+the dashboard's Satellites drawer. Reference hardware is the **Radxa Zero
+3W** (RK3566, ≥2 GB RAM recommended) with an HDMI screen or DSI touch
+panel; voice is optional per device (`[mic] enabled`) — the default video
+build has no mic and adds one later by plugging in a supported board.
+Setup: [satellite/VIDEO_SATELLITE.md](../satellite/VIDEO_SATELLITE.md).
+
+## The golden path — prepare media from the dashboard
+
+Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
+(64-bit)** with any tool (no pre-configure needed), re-insert the card
+into the Domovoi server, and use **Satellites → prepare satellite media**.
+The dashboard writes a first-boot overlay + a fully-offline payload (all
+Python wheels, packages, the satellite code from this machine, and any
+plugin payloads) onto the card's boot partition. Then: boot the device,
+plug it into the server's USB port, and adopt it from the Satellites page
+(name + Wi-Fi — done). Everything below remains the manual path — still
+the reference for custom setups and debugging.
+
 ## Step 1 — Flash the SD card
 
 Use Raspberry Pi Imager with **Raspberry Pi OS Lite (64-bit)** (hidden

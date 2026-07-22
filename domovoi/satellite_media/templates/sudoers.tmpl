@@ -1,0 +1,8 @@
+# Domovoi satellite sudoers set (rendered by stage 1; 0440 in
+# /etc/sudoers.d/domovoi-satellite). One line per allowlisted command —
+# the exact argv forms the client invokes; see PROVISIONING.md §6.7/§8.1
+# and docs/SECURITY_PRIVACY.md for the posture.
+@USER@ ALL=(root) NOPASSWD: /usr/sbin/wpa_cli -i wlan0 reassociate
+@USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
+@USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload

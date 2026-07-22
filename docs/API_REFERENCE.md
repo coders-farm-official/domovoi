@@ -140,13 +140,17 @@ posture; the specifically dangerous ones carry the Bearer gate.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version}`. |
+| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version}`. |
 | `POST /v1/admin/announce` | Open | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
 | `POST /v1/admin/dropin/start` | Open | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. |
 | `POST /v1/admin/dropin/end` | Open | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
 | `POST /v1/admin/satellite/restart` | Open | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/set-volume` | Open | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
+| `POST /v1/admin/satellite/display` | Open | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite; `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/upgrade` | **Admin (Bearer)** | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha}`. |
+| `POST /v1/admin/satellites/{room_id}/pairing/preseed` | **Admin (Bearer)** | `{sat_type?, room_label?, hardware?, board?, mac?, force?}` | USB adoption: mint the room's pairing token (sha256 stored; RAW token returned once, never logged) + upsert the inventory row. `409` already paired unless `force` (rotates). |
+| `DELETE /v1/admin/satellites/{room_id}` | **Admin (Bearer)** | — | Remove a never-connected satellite (inventory + preseeded pairing). `409` when the room is provisioned (has an MPD instance). |
+| `POST /v1/admin/satellites/{room_id}/label` | Open | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
 | `POST /v1/admin/satellite/{room_id}/config` | Open | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
 
@@ -314,7 +318,21 @@ actions proxy to the core admin endpoints.
 | `POST /api/satellites/{room_id}/dropin/start` | Open | `{target_room}` | Proxy → core drop-in start. |
 | `POST /api/satellites/{room_id}/dropin/end` | Open | — | Proxy → core drop-in end. |
 | `GET /api/satellites/{room_id}/dropin/phone-info` | Open | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). |
+| `GET /v1/satellite-plugins/manifest` (core) | Open | — | `{files: {"<slug>/<rel>": sha256}, meta: {slug: {...}}}` — enabled plugins' `[satellite]` payloads; satellites mirror it like the code channel. |
+| `GET /v1/satellite-plugins/{path}` (core) | Open | — | One payload file by its `<slug>/<rel>` channel path. |
+| `GET /api/satellites/media/status` | Open | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
+| `GET /api/satellites/media/targets` | Open | — | Removable drives that look like a flashed Pi boot partition. |
+| `POST /api/satellites/media/prepare` | **Admin (Bearer)** | `{board, mic_profile, target: {kind: drive\|zip, token?}, offline?}` | Start (or attach to) a media build; progress rides the `satellites.media` realtime channel. |
+| `GET /api/satellites/media/jobs` | Open | `?limit` | Recent build jobs (no server paths; `has_artifact` flags downloadables). |
+| `POST /api/satellites/media/jobs/{id}/cancel` | **Admin (Bearer)** | — | Mark a build cancelled (best-effort). |
+| `GET /api/satellites/media/jobs/{id}/download` | Open | — | The overlay zip for a `kind=zip` build. |
+| `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). |
+| `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off). |
+| `POST /api/satellites/pending/{pending_id}/adopt` | **Admin (Bearer)** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
+| `DELETE /api/satellites/{room_id}` | **Admin (Bearer)** | — | Proxy → core delete (remove a `waiting` room). |
+| `PATCH /api/satellites/{room_id}` | Open | `{room_label}` | Proxy → core room-label update. |
 | `POST /api/satellites/{room_id}/volume` | Open | `{level}` | Proxy → core set-volume. |
+| `POST /api/satellites/{room_id}/display` | Open | `{action}` (`on` \| `off` \| `restart_kiosk`) | Proxy → core satellite display (video satellites only; `409` otherwise). |
 | `POST /api/satellites/{room_id}/restart` | Open | — | Proxy → core satellite restart. |
 | `POST /api/satellites/{room_id}/upgrade` | **Admin (Bearer)** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). |
 | `GET /api/satellites/{room_id}/config` | Open | — | Proxy → core per-satellite editable config. |

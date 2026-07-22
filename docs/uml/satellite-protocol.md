@@ -25,7 +25,7 @@ sequenceDiagram
     Pi->>S: (WS connect /v1/stream/kitchen)
     Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container before ready
     S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000}
-    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token}
+    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?}
     Note over S: pairing check (V002): claim the room on first token<br/>(trust-on-first-use), else require a matching token.<br/>Mismatch / missing-on-a-paired-room → error + close.
     Pi->>S: config_status {config}          — cached per room
     Pi->>S: volume_status {level}           — cached per room
@@ -49,7 +49,7 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token` | First frame after connect. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. |
+| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | First frame after connect. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. |
 | `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. |
 | `utterance_end` | `greeting_played` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
@@ -58,6 +58,7 @@ sequenceDiagram
 | `volume_status` | `level` (0–100) | Current hardware output volume, on connect and after each `set_volume`. Lets relative "turn it up" work against the real level. |
 | `voice_status` | `voice` | Which registered voice this room speaks in, on connect and after `set_voice`. |
 | `config_status` | `config` (flat `section.key` map) | The Pi's effective editable config, on connect — feeds the dashboard's per-satellite Settings tab. Cleared on disconnect. |
+| `display_status` | `on`, `kiosk_alive`, `brightness` (0–100 \| null), `idle_mode` | **Video satellites only.** Screen power state, kiosk-browser liveness, backlight percent (null when the hardware exposes none), and the configured idle behavior. Sent after connect, after each applied `set_display`, and when the kiosk watcher observes a liveness flip. Cached per room; cleared on disconnect. |
 | `music_ready` | — | The Pi's player subprocess has primed against MPD's always-on silence stream; the server resumes MPD so song frames land in a primed buffer (kills the first-second stutter). Older satellites that never send it still get music via a fallback timer. |
 | `dropin_end` | — | Pi-side end of an active drop-in call (hardware button / client hang-up). The *spoken* "hang up" instead routes as a normal utterance. |
 | `chat_end` | — | Pi-side exit of conversational chat mode (e.g. a non-AEC board refusing `chat_start`). Clears the mode server-side. |
@@ -81,6 +82,7 @@ sequenceDiagram
 | `set_wake_word` | `slug` | Push a trained model: the Pi writes the slug to its wake sidecar (`~/.domovoi/wake`), syncs the model from `/v1/wake-models`, and self-restarts. The slug is simultaneously the model file stem, the effective wake word, and the openWakeWord prediction key. |
 | `wake_models_changed` | — | Served wake models changed; the Pi re-syncs its `~/.domovoi/wake_models` cache. |
 | `set_config` | `changes` (flat `section.key` map) | Push dashboard-edited config: the Pi merges into `config.toml` (preserving comments), validates, writes a `.bak`, and self-restarts. |
+| `set_display` | `action: "on" \| "off" \| "restart_kiosk"` | **Video satellites only** (the admin endpoint refuses other rooms with `409`). Switch the panel's power via the configured `[display] power_method` (wlopm → xset → backlight under `auto`), or bounce `domovoi-kiosk.service`. The Pi applies and re-reports via `display_status`. |
 | `restart` | — | Ask the satellite to restart its own systemd service (`domovoi-satellite.service`), draining TTS playback first. |
 | `upgrade` | `expected_sha`, `manifest_path`, `files_base`, `reconnect_timeout_sec` | Self-serve code sync: tarball the current tree (rollback backup), mirror the manifest (per-file sha256 verification), record `expected_sha`, restart. If the Pi doesn't reconnect within the timeout, its on-Pi watchdog rolls back to the tarball. |
 | `dropin_start` | `peer_room`, `peer_label`, `audio_sample_rate:16000`, `full_duplex` | Enter open-mic mode: stream every mic frame (unframed) for relay and play inbound binary PCM straight through at **16 kHz** (not the last TTS rate). The wake loop keeps running so "hang up" works. |

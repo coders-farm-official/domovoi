@@ -1,0 +1,39 @@
+# Domovoi video-satellite kiosk browser (cage + Chromium on the display
+# page). A SEPARATE unit from domovoi-satellite.service on purpose: config
+# pushes restart the satellite client without ever killing the browser, and
+# the dashboard's "restart kiosk" bounces only this.
+#
+# Install (see VIDEO_SATELLITE.md; @USER@/@HOME@ are placeholders the
+# installer seds to the real account):
+#   sudo sed -e "s|@USER@|$USER|g" -e "s|@HOME@|$HOME|g" \
+#     ~/domovoi/satellite/domovoi-kiosk.service \
+#     | sudo tee /etc/systemd/system/domovoi-kiosk.service >/dev/null
+#   sudo systemctl daemon-reload && sudo systemctl enable --now domovoi-kiosk
+#
+# The dashboard's restart-kiosk button needs one NOPASSWD sudoers line for
+# the satellite user (mirrors the client self-restart entry):
+#   @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
+
+[Unit]
+Description=Domovoi video satellite kiosk (cage + Chromium)
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+# cage needs a seat/TTY; libseat's seatd or (default) logind handles the
+# handoff when the unit owns a VT.
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+PAMName=login
+Environment=DOMOVOI_VENV_PY=@HOME@/satellite-venv/bin/python
+WorkingDirectory=@HOME@/domovoi
+ExecStart=@HOME@/domovoi/satellite/scripts/kiosk_launch.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

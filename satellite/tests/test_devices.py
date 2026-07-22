@@ -47,6 +47,25 @@ def test_default_profile_is_hat():
     assert devices.resolve(devices.DEFAULT_PROFILE).name == "respeaker_2mic_hat"
 
 
+def test_video_kiosk_profile():
+    """The Radxa video-kiosk profile: no mic, no LEDs, no mixer by default."""
+    radxa = devices.resolve("radxa_zero3w_video")
+    assert radxa.voice_capable is False
+    assert radxa.leds_enabled_default is False
+    assert radxa.supports_full_duplex is False
+    assert radxa.mic_gain_enabled is False
+    assert radxa.output_mixer_control is None
+    assert radxa.leds_num == 0
+
+
+def test_existing_profiles_keep_voice_defaults():
+    """The new capability fields default so mic boards are untouched."""
+    for name in ("respeaker_2mic_hat", "xvf3800_usb"):
+        p = devices.resolve(name)
+        assert p.voice_capable is True
+        assert p.leds_enabled_default is True
+
+
 def test_resolve_unknown_raises_with_valid_options():
     with pytest.raises(ValueError) as e:
         devices.resolve("respeaker_3mic_hat")  # typo

@@ -561,6 +561,38 @@ A static root (`install_dir` / `data_dir` / `absolute`) that does not exist at
 install time produces a **warning**, never a hard failure — `config`-based roots
 resolve at runtime and are not checked at install.
 
+### `[satellite]` — payloads installed on the satellites
+
+Optional. What this plugin wants present ON every satellite (not the
+server): synced files, apt packages, pinned pip requirements, a root
+post-install script. Payloads reach devices two ways with one declaration:
+live satellites mirror them over `GET /v1/satellite-plugins/*` during a
+dashboard **Upgrade satellite** (conservative prune on disable), and
+prepared SD media bakes them in offline.
+
+```toml
+[satellite]
+apt_packages = ["libfoo2"]                # root: apt-get install on the satellite
+pip_requirements = ["somepkg==1.2.3"]     # exact pins, like [requirements].python
+pip_lockfile = "satellite-requirements.lock"   # hashed; REQUIRED with pips
+files_dir = "satellite_payload"           # dir synced verbatim to
+                                          # ~/.domovoi/plugin_payloads/<slug>/
+post_install = "satellite_payload/post_install.sh"  # runs AS ROOT on the satellite
+max_payload_mb = 64                       # hard size cap on files_dir
+```
+
+**The honesty contract:** `apt_packages` or `post_install` require
+`permissions.satellite_root = true` **and** at least one
+`permissions.warnings` entry — a plugin running root code on every
+satellite must say so, and the installer surfaces it at confirm time.
+`files_dir` alone (plain file sync) needs no permission. Directory
+validation: `files_dir` exists, no symlinks, under the cap;
+`post_install` exists inside the plugin root and starts with a shebang.
+Scripts run with `DOMOVOI_PLUGIN_SLUG` / `DOMOVOI_PLUGIN_DIR` env via the
+sudoers-allowlisted `domovoi-apply-payload` helper; output lands in the
+device's `~/.domovoi/payload_apply.log`. Security posture:
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+
 ### `[android]`
 
 `capabilities = ["stations"]` — free-form strings the Android app gates

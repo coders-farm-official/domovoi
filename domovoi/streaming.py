@@ -8,7 +8,8 @@ Server declares the actual TTS sample rate per response in the
 clients should resample if their playback device can't accept it directly.
 
 Client → Server
-  text  hello              {"type":"hello","room_id":...,"wake_word":...,"synced_sha":...,"supports_full_duplex":bool}
+  text  hello              {"type":"hello","room_id":...,"wake_word":...,"synced_sha":...,"supports_full_duplex":bool,
+                            "sat_type":"voice"|"video","mic_enabled":bool}
                            — `supports_full_duplex` (optional) reports whether
                            the board has on-chip AEC (XVF3800 true, 2-Mic HAT
                            false). The server caches it per room and refuses a
@@ -19,6 +20,16 @@ Client → Server
                            sync (None if it has never synced). The server
                            caches it per room so the dashboard can flag
                            satellites behind the core's SHA.
+                           `sat_type` (optional, default "voice") declares the
+                           satellite kind — "video" for screen-bearing kiosk
+                           builds. Cached per room AND persisted to the
+                           `satellites` table when EXPLICITLY present (an old
+                           client omitting it never resets a stored type).
+                           `mic_enabled` (optional, default true) reports
+                           whether the voice-input stack (wake word/VAD/
+                           capture) is running; false on mic-less builds. The
+                           server refuses wake-recording/drop-in/chat for
+                           mic-disabled rooms. Both cleared on disconnect.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip"}
                            — trigger "wake_clip" (Feature 5) marks a positive
                            wake-word TRAINING clip: the Pi is in dashboard-
@@ -76,6 +87,17 @@ Client → Server
                            client-detected hang-up). The spoken "hang up"
                            path instead routes a normal utterance to
                            DropInHandler, which ends the call server-side.
+  text  display_status     {"type":"display_status","on":bool,"kiosk_alive":bool,
+                            "brightness":int|null,"idle_mode":"clock"|"blank"|"art"}
+                           — video satellites only: reports screen power
+                           state, whether the kiosk browser process is
+                           alive, backlight brightness percent when the
+                           hardware exposes one (else null), and the
+                           configured idle behavior. Sent after connect,
+                           after each applied set_display, and whenever the
+                           kiosk-alive watcher observes a change. Cached
+                           per room for the dashboard; cleared on
+                           disconnect.
   text  ping               {"type":"ping"}
   bytes                    raw PCM. Normally meaningful only between
                            utterance_start/utterance_end. DURING A DROP-IN
@@ -123,6 +145,13 @@ Server → Client
                            changes into config.toml (preserving comments),
                            validates the result parses + writes a .bak, then
                            self-restarts to apply (see `restart` below).
+  text  set_display        {"type":"set_display","action":"on"|"off"|"restart_kiosk"}
+                           — video satellites only: switch the screen on/off
+                           (wlopm / xset dpms / backlight sysfs, per the
+                           [display] power_method config) or restart the
+                           kiosk browser service. The Pi applies the action
+                           and re-reports via display_status. Only ever sent
+                           to sessions whose hello declared sat_type=video.
   text  restart            {"type":"restart"} — the core asks this
                            satellite to restart its own systemd service
                            (e.g. a config change that only takes effect on
@@ -220,7 +249,11 @@ from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import get_whisper_client
 from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
-from domovoi.db.repositories import SatellitePairingRepository, SessionRepository
+from domovoi.db.repositories import (
+    SatellitePairingRepository,
+    SatellitesRepository,
+    SessionRepository,
+)
 from domovoi.db.session import session_scope
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
@@ -243,6 +276,20 @@ def _is_missing_pairing_table(exc: Exception) -> bool:
         return "satellite_pairings" in str(orig)
     text = str(exc).lower()
     return "satellite_pairings" in text and "does not exist" in text
+
+
+# Same one-time-hint latch for the V003 satellites inventory table.
+_satellites_table_warned = False
+
+
+def _is_missing_satellites_table(exc: Exception) -> bool:
+    """True when ``exc`` is 'relation satellites does not exist' (V003 not
+    applied yet) — one actionable hint, not a per-hello warning flood."""
+    orig = getattr(exc, "orig", None)
+    if type(orig).__name__ == "UndefinedTableError":
+        return "satellites" in str(orig)
+    text = str(exc).lower()
+    return "satellites" in text and "does not exist" in text
 
 
 PROTOCOL_VERSION = "0.1"
@@ -696,6 +743,14 @@ class StreamSession:
                 # And the reported code version — re-reported in the hello
                 # frame on reconnect.
                 self.ws.app.state.satellite_synced_sha.pop(self.room_id, None)
+                # And the reported satellite type / mic state — re-reported in
+                # the hello frame on reconnect (the persistent copy lives in
+                # the `satellites` table for offline display).
+                self.ws.app.state.satellite_sat_type.pop(self.room_id, None)
+                self.ws.app.state.satellite_mic_enabled.pop(self.room_id, None)
+                # And the screen/kiosk state — re-reported via display_status
+                # on reconnect (video satellites only).
+                self.ws.app.state.satellite_display.pop(self.room_id, None)
 
     async def _on_audio(self, data: bytes) -> None:
         # ── Drop-in relay (Feature 4) ───────────────────────────────
@@ -832,6 +887,30 @@ class StreamSession:
                 )
             return not settings.satellite_pairing_strict
 
+    async def _persist_sat_type(self, sat_type: str) -> None:
+        """Best-effort upsert of an EXPLICIT hello ``sat_type`` into the
+        `satellites` inventory table (V003) so the dashboard renders the
+        right type for offline satellites. Never raises — a DB hiccup or a
+        not-yet-applied migration must not break the connect."""
+        try:
+            async with session_scope() as s:
+                await SatellitesRepository(s).upsert_type(self.room_id, sat_type)
+        except Exception as e:
+            if _is_missing_satellites_table(e):
+                global _satellites_table_warned
+                if not _satellites_table_warned:
+                    _satellites_table_warned = True
+                    log.warning(
+                        "satellites: the satellites table is missing — run DB "
+                        "migrations (docker compose run --rm flyway) to persist "
+                        "satellite types. Continuing without persistence."
+                    )
+            else:
+                log.warning(
+                    "satellites: sat_type persist failed for room=%s: %s",
+                    self.room_id, e,
+                )
+
     async def _on_control(self, ctrl: dict[str, Any]) -> None:
         t = ctrl.get("type")
         if t == "hello":
@@ -860,6 +939,28 @@ class StreamSession:
             self.ws.app.state.satellite_synced_sha[self.room_id] = ctrl.get(
                 "synced_sha"
             )
+            # Cache the satellite type and whether voice input is running.
+            # Both are OPTIONAL hello fields (absent on older clients) and
+            # default to the historical behavior: a voice satellite with a
+            # live mic. Cleared on disconnect.
+            raw_sat_type = ctrl.get("sat_type")
+            if raw_sat_type is not None and raw_sat_type not in ("voice", "video"):
+                log.warning(
+                    "hello: room=%s reported unknown sat_type %r — treating as "
+                    "'voice'", self.room_id, raw_sat_type,
+                )
+                raw_sat_type = None
+            self.ws.app.state.satellite_sat_type[self.room_id] = (
+                raw_sat_type or "voice"
+            )
+            self.ws.app.state.satellite_mic_enabled[self.room_id] = bool(
+                ctrl.get("mic_enabled", True)
+            )
+            # Persist the type for offline dashboard display — but ONLY when
+            # the frame carried it explicitly, so an old client that omits
+            # the field never resets an adoption-preseeded row to 'voice'.
+            if raw_sat_type is not None:
+                await self._persist_sat_type(raw_sat_type)
             return
         if t == "ping":
             await self._safe_send_text({"type": "pong"})
@@ -958,6 +1059,29 @@ class StreamSession:
             cfg = ctrl.get("config")
             if isinstance(cfg, dict):
                 self.ws.app.state.satellite_config[self.room_id] = cfg
+            return
+        if t == "display_status":
+            # Video satellite reporting its screen/kiosk state (on connect,
+            # after each applied set_display, and on kiosk-alive changes).
+            # Cached by room for the dashboard's Display controls; cleared
+            # on disconnect. Best-effort — a malformed frame is ignored.
+            try:
+                brightness = ctrl.get("brightness")
+                self.ws.app.state.satellite_display[self.room_id] = {
+                    "on": bool(ctrl.get("on", True)),
+                    "kiosk_alive": bool(ctrl.get("kiosk_alive", False)),
+                    "brightness": (
+                        max(0, min(100, int(brightness)))
+                        if brightness is not None
+                        else None
+                    ),
+                    "idle_mode": str(ctrl.get("idle_mode") or "clock"),
+                }
+            except (TypeError, ValueError) as e:
+                log.debug(
+                    "ignoring malformed display_status from %s: %s",
+                    self.room_id, e,
+                )
             return
         if t == "noisy_capture":
             # Pi-side noise-gate auto-tune detected an unusually loud
@@ -2259,6 +2383,24 @@ class StreamSession:
         clamped = max(0, min(100, int(level)))
         await self.ws.send_text(json.dumps({"type": "set_volume", "level": clamped}))
         self.ws.app.state.satellite_volume[self.room_id] = clamped
+
+    async def set_display(self, action: str) -> None:
+        """Drive a video satellite's screen: "on" / "off" switch the panel's
+        power, "restart_kiosk" bounces the kiosk browser service. The Pi
+        applies and re-reports via ``display_status``; for on/off we also
+        optimistically update the cached state so the dashboard toggle
+        reflects immediately. Raises on a dead socket so the admin endpoint
+        can report it. The admin endpoint refuses non-video rooms before
+        this is ever reached."""
+        await self.ws.send_text(
+            json.dumps({"type": "set_display", "action": action})
+        )
+        if action in ("on", "off"):
+            cached = dict(
+                self.ws.app.state.satellite_display.get(self.room_id) or {}
+            )
+            cached["on"] = action == "on"
+            self.ws.app.state.satellite_display[self.room_id] = cached
 
     async def request_upgrade(
         self, *, expected_sha: str, reconnect_timeout: int

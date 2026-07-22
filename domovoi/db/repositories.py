@@ -1799,5 +1799,130 @@ class SatellitePairingRepository:
         return row is not None
 
 
+_SATELLITE_COLS = (
+    "room_id, sat_type, room_label, hardware, board, mac, "
+    "adopted_via, adopted_at, created_at, updated_at"
+)
+
+
+class SatellitesRepository:
+    """CRUD for `satellites` — the inventory/metadata rows (V003).
+
+    A row means "this satellite is known": preseeded by the USB-adoption flow
+    (before the device's first WS connect) or self-registered by a `hello`
+    frame carrying an explicit ``sat_type``. `room_id` is the satellite's
+    identity; `room_label` is optional display grouping for satellites that
+    share a physical room. sat_type / adopted_via are app-validated open
+    enums (registered_values domains)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def preseed_upsert(
+        self,
+        room_id: str,
+        *,
+        sat_type: str = "voice",
+        room_label: str | None = None,
+        hardware: str | None = None,
+        board: str | None = None,
+        mac: str | None = None,
+        adopted_via: str = "usb",
+    ) -> None:
+        """Full-row upsert from the adoption flow; stamps adopted_at=now()."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites "
+                "(room_id, sat_type, room_label, hardware, board, mac, "
+                " adopted_via, adopted_at) "
+                "VALUES (:r, :t, :l, :h, :b, :m, :v, now()) "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "sat_type = EXCLUDED.sat_type, room_label = EXCLUDED.room_label, "
+                "hardware = EXCLUDED.hardware, board = EXCLUDED.board, "
+                "mac = EXCLUDED.mac, adopted_via = EXCLUDED.adopted_via, "
+                "adopted_at = now(), updated_at = now()"
+            ),
+            {
+                "r": room_id,
+                "t": sat_type,
+                "l": room_label,
+                "h": hardware,
+                "b": board,
+                "m": mac,
+                "v": adopted_via,
+            },
+        )
+
+    async def upsert_type(self, room_id: str, sat_type: str) -> None:
+        """Self-registration from a `hello` frame that EXPLICITLY carried
+        sat_type. Only ever called for explicit frames — an old client that
+        omits the field must never funnel through here and reset an adopted
+        row back to 'voice'."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites (room_id, sat_type, adopted_via) "
+                "VALUES (:r, :t, 'hello') "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "sat_type = EXCLUDED.sat_type, updated_at = now()"
+            ),
+            {"r": room_id, "t": sat_type},
+        )
+
+    async def set_room_label(self, room_id: str, room_label: str | None) -> None:
+        """Set (or clear, with None) a satellite's display room label.
+        Upserts so pre-V003 satellites (mpd_rooms row only) can be labeled."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites (room_id, room_label, adopted_via) "
+                "VALUES (:r, :l, 'manual') "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "room_label = EXCLUDED.room_label, updated_at = now()"
+            ),
+            {"r": room_id, "l": room_label},
+        )
+
+    async def get(self, room_id: str) -> dict | None:
+        row = (
+            await self.s.execute(
+                text(f"SELECT {_SATELLITE_COLS} FROM satellites WHERE room_id = :r"),
+                {"r": room_id},
+            )
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
+    async def get_by_mac(self, mac: str) -> dict | None:
+        """The satellite previously seen with this wlan MAC (lowercased) —
+        correlates a re-plugged device with its existing adoption row."""
+        row = (
+            await self.s.execute(
+                text(
+                    f"SELECT {_SATELLITE_COLS} FROM satellites "
+                    "WHERE mac = :m ORDER BY room_id LIMIT 1"
+                ),
+                {"m": mac.lower()},
+            )
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
+    async def all(self) -> list[dict]:
+        rows = (
+            await self.s.execute(
+                text(f"SELECT {_SATELLITE_COLS} FROM satellites ORDER BY room_id")
+            )
+        ).mappings()
+        return [dict(r) for r in rows]
+
+    async def delete(self, room_id: str) -> bool:
+        """Remove an inventory row (adopt rollback / remove a never-connected
+        satellite). True when a row was actually removed."""
+        row = (
+            await self.s.execute(
+                text("DELETE FROM satellites WHERE room_id = :r RETURNING 1"),
+                {"r": room_id},
+            )
+        ).first()
+        return row is not None
+
+
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)

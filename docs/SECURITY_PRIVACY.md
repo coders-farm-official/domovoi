@@ -60,6 +60,11 @@ risk: a guest (or a compromised IoT gadget) on your Wi-Fi can do these
 things too. Keep your Wi-Fi password good; use a guest VLAN for devices you
 don't trust.
 
+The video satellite's kiosk page (`display.html` + the now-playing reads
+and transport actions it uses) rides this same tier by design — the device
+renders it unattended, with no interactive login. Per-device read tokens
+for kiosk clients sit in the hardening backlog alongside TLS.
+
 ### Outbound-fetch tier
 
 One endpoint makes the server fetch a **caller-chosen URL**
@@ -265,6 +270,23 @@ so the next connect re-pairs. That reset is **admin-gated** (Bearer-only,
 `require_admin_mutation`) — it's a security operation, since it lets the next
 device claim the room.
 
+**Pre-seeded pairing (USB adoption).** The plug-in-and-adopt flow removes
+the first-connect race entirely for adopted rooms: at adopt time the core
+generates the room's token and stores its sha256 (`POST
+/v1/admin/satellites/{room}/pairing/preseed`, admin-gated like the reset),
+and the raw token is written once into the device's provision file — so the
+device's very first `hello` matches as an already-paired room (case 2, not
+a trust-on-first-use claim). This also works under strict mode. Trade-offs
+to know: the Wi-Fi password and the raw token sit in cleartext on the FAT
+gadget volume for the seconds between adopt and the device applying them
+(consistent with the LAN-cleartext posture above — the device deletes the
+file before ever re-exposing the volume, and destroys the whole image after
+success); the raw token appears once in the preseed HTTP response on the
+LAN (same exposure as every admin call until TLS lands); and neither secret
+is ever logged on either side. A force re-adopt **rotates** the token, so
+the previous device for that room stops matching — deliberate, and the UI
+warns before doing it.
+
 **Known limitation — connect-time disruption.** The pairing check runs on the
 `hello` frame, but the socket is accepted and the room's in-memory session
 slot is claimed a moment earlier, on connect (this ordering is load-bearing:
@@ -278,6 +300,18 @@ availability nuisance, not a confidentiality break. Closing it fully means
 gating the session registration on the pairing check, which would change the
 connect handshake; it's a candidate follow-up if the nuisance ever matters on
 your network.
+
+**Plugin payloads run as root on satellites.** A plugin declaring
+`[satellite]` apt packages or a post-install script runs **arbitrary root
+code on every satellite** (via the sudoers-allowlisted
+`domovoi-apply-payload` helper). This is gated by the plugin's
+`permissions.satellite_root` + a mandatory warnings entry surfaced at
+install-confirm time, transfer is sha256-manifest-verified, and only
+admin-enabled plugins' payloads flow — but there is **no sandbox**, by
+design and named honestly. Corollary: the satellite's service account is
+root-equivalent on its own device (it already executes server-synced code
+and holds the apply-payload sudoers line) — treat "installed a plugin with
+satellite_root" as "trusted its publisher with your satellites".
 
 **This does not add encryption.** Pairing authenticates *which device is this
 room*; it does not encrypt the audio. Combined with the deferred TLS item

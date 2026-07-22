@@ -94,6 +94,17 @@ notify_channel = "plugin_radio_detections_changed"
 realtime_channel = "radio.detections"
 snapshot = "snapshot_detections"
 
+# [satellite] — the radio plugin ships nothing to satellites today (tuning
+# and detection are all server-side), but this is the worked example of the
+# payload hook. Files alone need no permission; apt_packages/post_install
+# run AS ROOT on every satellite and require permissions.satellite_root plus
+# a warnings entry (see docs/PLUGIN_DEVELOPMENT.md §3).
+# [satellite]
+# files_dir = "satellite_payload"            # → ~/.domovoi/plugin_payloads/radio/
+# apt_packages = ["rtl-sdr"]                 # root install on the satellite
+# post_install = "satellite_payload/post_install.sh"
+# max_payload_mb = 16
+
 [android]
 capabilities = ["stations"]
 

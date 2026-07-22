@@ -40,6 +40,8 @@ SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 MIGRATION_FILE_RE = re.compile(r"^V(\d{3})__[A-Za-z0-9_]+\.sql$")
 _PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+$")
+# Debian package-name charset (policy §5.6.1: lowercase alnum, +, -, .).
+_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 _SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)$")
 
 RESERVED_SLUGS = frozenset({"core", "domovoi", "admin", "test", "public"})
@@ -194,6 +196,23 @@ class MediaLibraryDecl:
 
 
 @dataclass(frozen=True)
+class SatelliteDecl:
+    """The optional ``[satellite]`` payload section: what this plugin wants
+    installed ON the satellites (synced over ``/v1/satellite-plugins`` and
+    baked into prepared media). ``post_install`` / ``apt_packages`` run as
+    ROOT on every satellite — they require the ``satellite_root`` permission
+    plus at least one ``permissions.warnings`` entry (the same honesty
+    contract as subprocess/hardware), surfaced at install-confirm time."""
+
+    apt_packages: tuple[str, ...] = ()
+    pip_requirements: tuple[str, ...] = ()
+    pip_lockfile: str | None = None
+    files_dir: str | None = None
+    post_install: str | None = None
+    max_payload_mb: int = 64
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     # [plugin]
     slug: str
@@ -231,6 +250,8 @@ class PluginManifest:
     realtime: tuple[RealtimeDecl, ...] = ()
     # [[media_libraries]]
     media_libraries: tuple[MediaLibraryDecl, ...] = ()
+    # [satellite]
+    satellite: SatelliteDecl | None = None
     # [android]
     android_capabilities: tuple[str, ...] = ()
     # [assets]
@@ -426,7 +447,13 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         raise ManifestError("[permissions] must be a table")
     warnings = _str_list(perms_raw, "warnings", "permissions")
     permissions: dict[str, bool] = {}
-    for key in ("network", "subprocess", "hardware", "filesystem_outside_data"):
+    for key in (
+        "network",
+        "subprocess",
+        "hardware",
+        "filesystem_outside_data",
+        "satellite_root",
+    ):
         val = perms_raw.get(key, False)
         if not isinstance(val, bool):
             raise ManifestError(f"permissions.{key} must be a boolean")
@@ -546,6 +573,63 @@ def parse_manifest(toml_text: str) -> PluginManifest:
             )
         )
 
+    satellite_raw = data.get("satellite")
+    satellite: SatelliteDecl | None = None
+    if satellite_raw is not None:
+        if not isinstance(satellite_raw, dict):
+            raise ManifestError("[satellite] must be a table")
+        apt_packages = _str_list(satellite_raw, "apt_packages", "satellite")
+        for pkg_name_ in apt_packages:
+            if not _APT_PKG_RE.match(pkg_name_):
+                raise ManifestError(
+                    f"satellite.apt_packages entry {pkg_name_!r} is not a valid "
+                    f"Debian package name"
+                )
+        sat_pips = _str_list(satellite_raw, "pip_requirements", "satellite")
+        for r in sat_pips:
+            if not _PINNED_REQ_RE.match(r):
+                raise ManifestError(
+                    f"satellite.pip_requirements entry {r!r} must be an exact "
+                    f"pin (name==version)"
+                )
+        sat_lock = _opt_str(satellite_raw, "pip_lockfile", "satellite")
+        if sat_pips and not sat_lock:
+            raise ManifestError(
+                "satellite.pip_requirements declared without satellite."
+                "pip_lockfile (hashed lockfile required, like [requirements])"
+            )
+        files_dir = _opt_str(satellite_raw, "files_dir", "satellite")
+        post_install = _opt_str(satellite_raw, "post_install", "satellite")
+        max_mb = satellite_raw.get("max_payload_mb", 64)
+        if not isinstance(max_mb, int) or isinstance(max_mb, bool) or max_mb < 1:
+            raise ManifestError("satellite.max_payload_mb must be a positive integer")
+        # Root-on-satellite honesty contract: installing system packages or
+        # running a post_install script is arbitrary root code on every
+        # satellite — the plugin must say so, loudly.
+        if (apt_packages or post_install) and not permissions.get("satellite_root"):
+            raise ManifestError(
+                "satellite.apt_packages / satellite.post_install require "
+                "permissions.satellite_root = true"
+            )
+        if permissions.get("satellite_root") and not warnings:
+            raise ManifestError(
+                "permissions.satellite_root requires at least one "
+                "permissions.warnings entry explaining what runs on satellites"
+            )
+        if not (apt_packages or sat_pips or files_dir or post_install):
+            raise ManifestError(
+                "[satellite] is present but declares nothing — remove the "
+                "table or declare a payload"
+            )
+        satellite = SatelliteDecl(
+            apt_packages=apt_packages,
+            pip_requirements=sat_pips,
+            pip_lockfile=sat_lock,
+            files_dir=files_dir,
+            post_install=post_install,
+            max_payload_mb=max_mb,
+        )
+
     android = data.get("android", {})
     if not isinstance(android, dict):
         raise ManifestError("[android] must be a table")
@@ -586,6 +670,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         player_sources=player_sources,
         realtime=tuple(realtime),
         media_libraries=tuple(media_libraries),
+        satellite=satellite,
         android_capabilities=android_caps,
         migrations_dir=migrations_dir,
         sounds_dir=sounds_dir,
@@ -690,7 +775,66 @@ def validate_plugin_dir(root: Path, manifest: PluginManifest) -> list[str]:
                         f"direct requirement {req!r} not found at that version "
                         f"in {lock.name}"
                     )
+
+    sat = manifest.satellite
+    if sat is not None:
+        if sat.files_dir:
+            fd = root / sat.files_dir
+            if not fd.is_dir() or not _inside(root, fd):
+                errors.append(
+                    f"satellite.files_dir {sat.files_dir!r} missing or outside "
+                    f"the plugin root"
+                )
+            else:
+                total = 0
+                for f in fd.rglob("*"):
+                    if f.is_symlink():
+                        errors.append(
+                            f"satellite.files_dir contains a symlink "
+                            f"({f.relative_to(root)}) — not allowed"
+                        )
+                        break
+                    if f.is_file():
+                        total += f.stat().st_size
+                if total > sat.max_payload_mb * 1024 * 1024:
+                    errors.append(
+                        f"satellite.files_dir is {total // (1024 * 1024)} MiB — "
+                        f"over the {sat.max_payload_mb} MiB payload cap"
+                    )
+        if sat.post_install:
+            ps = root / sat.post_install
+            if not ps.is_file() or not _inside(root, ps):
+                errors.append(
+                    f"satellite.post_install {sat.post_install!r} missing or "
+                    f"outside the plugin root"
+                )
+            else:
+                head = ps.read_text(encoding="utf-8", errors="replace")[:2]
+                if head != "#!":
+                    errors.append(
+                        f"satellite.post_install {sat.post_install!r} must "
+                        f"start with a shebang"
+                    )
+        if sat.pip_requirements:
+            slock = root / (sat.pip_lockfile or "")
+            if not sat.pip_lockfile or not slock.is_file():
+                errors.append(
+                    f"satellite.pip_lockfile {sat.pip_lockfile!r} is missing"
+                )
+            elif "--hash=" not in slock.read_text(encoding="utf-8", errors="replace"):
+                errors.append(
+                    f"satellite.pip_lockfile {sat.pip_lockfile!r} carries no "
+                    f"--hash= entries"
+                )
     return errors
+
+
+def _inside(root: Path, p: Path) -> bool:
+    try:
+        p.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 # ─── §3.2 step 5 — web-entry import hygiene (AST tripwire) ─────────────────

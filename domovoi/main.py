@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 import logging
 import re
+import secrets
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ from domovoi.admin_auth import (  # noqa: E402
     check_outbound_fetch,
     require_admin_mutation,
     require_admin_read,
+    token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
 from domovoi.canned_sounds import regenerate_if_needed as regenerate_canned_sounds  # noqa: E402
@@ -361,6 +363,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Per-room full-duplex (on-chip AEC) capability from the hello frame —
     # gates two-way drop-in / open-mic to AEC-capable boards.
     app.state.satellite_full_duplex = {}
+    # Per-room satellite type ("voice" | "video") from the hello frame; the
+    # durable copy lives in the `satellites` table for offline display.
+    app.state.satellite_sat_type = {}
+    # Per-room voice-input state from the hello frame — false on mic-less
+    # (e.g. video kiosk) builds; gates wake-recording/drop-in/chat.
+    app.state.satellite_mic_enabled = {}
+    # Per-room screen/kiosk state video satellites report via display_status
+    # ({on, kiosk_alive, brightness, idle_mode}) — drives the dashboard's
+    # Display controls. Cleared on disconnect.
+    app.state.satellite_display = {}
     # Per-room code version (the synced_sha the Pi reports in its hello frame
     # after a satellite-code sync) so the dashboard can show which satellites
     # are behind the core's current SHA. None means the Pi has never
@@ -751,6 +763,40 @@ async def satellite_code_file(path: str) -> FileResponse:
     return FileResponse(target, media_type="application/octet-stream")
 
 
+# ─── Satellite plugin-payload channel ──────────────────────────────────────
+# A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
+# /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a
+# plugin wants mirrored onto every satellite; see
+# domovoi/satellite_payload.py). Computed live per request so enabling/
+# disabling a plugin adds/removes its subtree with no restart; the device's
+# conservative prune then converges. Guarding is root-confinement +
+# no-symlinks + per-plugin size cap — deliberately NOT an extension
+# allowlist (payloads carry binaries like .dtbo overlays and ELF tools).
+
+
+@app.get("/v1/satellite-plugins/manifest")
+async def satellite_plugins_manifest() -> dict[str, Any]:
+    """``{"files": {"<slug>/<rel>": sha256}, "meta": {slug: {version,
+    apt_packages, pip_requirements, pip_lockfile, post_install}}}`` for
+    every enabled plugin declaring a [satellite] payload."""
+    from domovoi.satellite_payload import build_channel_manifest
+
+    return await build_channel_manifest()
+
+
+@app.get("/v1/satellite-plugins/{path:path}")
+async def satellite_plugins_file(path: str) -> FileResponse:
+    """Serve one payload file by its ``<slug>/<rel>`` channel path. Only
+    enabled plugins' current payload sets resolve (the exact enumeration
+    the manifest uses), so traversal/symlink escapes have no side door."""
+    from domovoi.satellite_payload import resolve_channel_file
+
+    target = await resolve_channel_file(path)
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target, media_type="application/octet-stream")
+
+
 # ─── Wake-models channel (custom wake words, Feature 5) ───────────────────
 # A third file channel, parallel to /v1/sounds and /v1/satellite-code, but for
 # trained openWakeWord models. A connected Pi, told (via set_wake_word /
@@ -858,6 +904,17 @@ async def admin_snapshot() -> dict[str, Any]:
         # Per-room AEC capability (from the hello frame) so the web UI can
         # offer drop-in only between full-duplex (XVF3800) satellites.
         "satellite_full_duplex": dict(app.state.satellite_full_duplex),
+        # Per-room satellite type ("voice" | "video") from the hello frame, so
+        # the web UI can gate type-specific controls for ONLINE satellites
+        # (offline ones resolve from the `satellites` table instead).
+        "satellite_sat_type": dict(app.state.satellite_sat_type),
+        # Per-room voice-input state (false = mic-less build) so the web UI
+        # can label mic-disabled satellites and hide mic-dependent actions.
+        "satellite_mic_enabled": dict(app.state.satellite_mic_enabled),
+        # Per-room screen/kiosk state ({on, kiosk_alive, brightness,
+        # idle_mode}) video satellites report via display_status — drives
+        # the dashboard's Display block and dead-kiosk warning.
+        "satellite_display": dict(app.state.satellite_display),
         # Per-room active TTS voice (what each Pi reported via voice_status),
         # so the web UI can show which voice a device is actually speaking in.
         # None for a room means it's on the registry default.
@@ -1070,6 +1127,57 @@ async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any
     return {"room_id": body.room_id, "level": body.level}
 
 
+class _AdminSatelliteDisplayBody(BaseModel):
+    room_id: str
+    action: Literal["on", "off", "restart_kiosk"]
+
+
+@app.post("/v1/admin/satellite/display")
+async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str, Any]:
+    """Drive a video satellite's screen: switch the panel on/off or restart
+    the kiosk browser service. 503 when nothing is connected, 404 when this
+    room isn't, 409 when the connected room isn't a video satellite (the
+    frame would be meaningless — voice builds run no kiosk)."""
+    import time
+
+    from domovoi.db.repositories import IntentLogRepository
+
+    sessions: dict[str, Any] = app.state.active_sessions
+    if not sessions:
+        raise HTTPException(status_code=503, detail="no satellites connected")
+    target = sessions.get(body.room_id)
+    if target is None:
+        raise HTTPException(
+            status_code=404, detail=f"room {body.room_id!r} not connected"
+        )
+    sat_type = app.state.satellite_sat_type.get(body.room_id, "voice")
+    if sat_type != "video":
+        raise HTTPException(
+            status_code=409,
+            detail=f"room {body.room_id!r} is not a video satellite",
+        )
+
+    started = time.monotonic()
+    try:
+        await target.set_display(body.action)
+    except Exception as e:
+        log.warning("admin display for room=%s failed: %s", body.room_id, e)
+        raise HTTPException(
+            status_code=502, detail=f"couldn't reach satellite: {e}"
+        ) from e
+
+    async with session_scope() as s:
+        await IntentLogRepository(s).log(
+            room_id=body.room_id,
+            transcript=f"[ui] display {body.action}",
+            matched_handler="satellite",
+            matched_path=None,
+            online=True,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+    return {"room_id": body.room_id, "action": body.action}
+
+
 # ─── Domovoi version / update endpoints ─────────────────────────────
 # Surface the running domovoi's git version and let the dashboard check
 # for / pull updates. The SHA is a label only — integrity of satellite-code
@@ -1239,6 +1347,13 @@ async def admin_wake_record_start(
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
+        )
+    # A mic-disabled satellite (mic-less video build) has no capture stack —
+    # it would just ignore the recording frames. Refuse up front.
+    if app.state.satellite_mic_enabled.get(body.room_id) is False:
+        raise HTTPException(
+            status_code=400,
+            detail=f"room {body.room_id!r} has voice input disabled (no microphone)",
         )
     # The open mic is single-tenant: a room mid drop-in can't also record (the
     # Pi's mic thread runs one sub-mode at a time), and the Pi would silently
@@ -1544,6 +1659,131 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
         "pairing: admin reset room=%s (row_existed=%s)", room_id, removed
     )
     return {"room_id": room_id, "reset": removed}
+
+
+# Room ids are used as WS paths, MPD container-name components, and config
+# values — keep them boring. Mirrored client-side by the AdoptModal.
+_ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
+class _PreseedPairingBody(BaseModel):
+    sat_type: str = "voice"
+    room_label: str | None = Field(default=None, max_length=80)
+    hardware: str | None = Field(default=None, max_length=200)
+    board: str | None = Field(default=None, max_length=80)
+    mac: str | None = Field(default=None, max_length=32)
+    force: bool = False
+
+
+@app.post(
+    "/v1/admin/satellites/{room_id}/pairing/preseed",
+    # Pre-seeding mints the room's WS-auth token — a SECURITY op like the
+    # reset above: admin-tier, Bearer-only, credentials forwarded by the web.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_preseed_satellite_pairing(
+    room_id: str, body: _PreseedPairingBody
+) -> dict[str, Any]:
+    """USB-adoption pre-seed: generate this room's pairing token, store its
+    sha256 (so the device's FIRST connect matches as an already-paired room
+    — no trust-on-first-use race, works under strict pairing), and upsert
+    the `satellites` inventory row (type/hardware/label metadata).
+
+    The RAW token is returned exactly once, for the adoption flow to write
+    into the device's provision file; it is never logged or stored. 409
+    when the room is already paired unless ``force`` (the re-provision
+    path — rotates the token, so the OLD device stops matching)."""
+    from domovoi.db.repositories import SatellitePairingRepository, SatellitesRepository
+
+    if not _ROOM_ID_RE.fullmatch(room_id):
+        raise HTTPException(
+            status_code=422,
+            detail="room_id must match ^[a-z][a-z0-9_]{0,31}$",
+        )
+    if body.sat_type not in ("voice", "video"):
+        raise HTTPException(
+            status_code=422, detail=f"unknown sat_type {body.sat_type!r}"
+        )
+    token = secrets.token_hex(32)
+    async with session_scope() as s:
+        pairings = SatellitePairingRepository(s)
+        existing = await pairings.get_pairing(room_id)
+        if existing is not None and not body.force:
+            raise HTTPException(
+                status_code=409,
+                detail=f"room {room_id!r} is already paired (use force to rotate)",
+            )
+        await pairings.pair(room_id, token_sha256(token))
+        await SatellitesRepository(s).preseed_upsert(
+            room_id,
+            sat_type=body.sat_type,
+            room_label=body.room_label,
+            hardware=body.hardware,
+            board=body.board,
+            mac=body.mac.lower() if body.mac else None,
+            adopted_via="usb",
+        )
+    log.info(
+        "pairing: preseeded room=%s sat_type=%s (rotated=%s)",
+        room_id, body.sat_type, existing is not None,
+    )
+    return {"room_id": room_id, "token": token, "rotated": existing is not None}
+
+
+@app.delete(
+    "/v1/admin/satellites/{room_id}",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_delete_satellite(room_id: str) -> dict[str, Any]:
+    """Remove a never-connected satellite: the inventory row AND its
+    preseeded pairing. The adopt flow's rollback (a mid-adopt unplug) and
+    the dashboard's Remove action for `waiting` rooms. 409 when the room
+    has an `mpd_rooms` row — a provisioned room isn't deletable this way
+    (its MPD container and history exist; that's a different, deliberate
+    operation)."""
+    from domovoi.db.repositories import SatellitePairingRepository, SatellitesRepository
+
+    async with session_scope() as s:
+        provisioned = (
+            await s.execute(
+                text("SELECT 1 FROM mpd_rooms WHERE room_id = :r"),
+                {"r": room_id},
+            )
+        ).first()
+        if provisioned is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"room {room_id!r} is provisioned (has an MPD instance) — "
+                    "not deletable via adoption rollback"
+                ),
+            )
+        removed_meta = await SatellitesRepository(s).delete(room_id)
+        removed_pairing = await SatellitePairingRepository(s).reset_pairing(room_id)
+    log.info(
+        "satellites: admin delete room=%s (meta=%s pairing=%s)",
+        room_id, removed_meta, removed_pairing,
+    )
+    return {"room_id": room_id, "deleted": removed_meta or removed_pairing}
+
+
+class _RoomLabelBody(BaseModel):
+    room_label: str | None = Field(default=None, max_length=80)
+
+
+@app.post("/v1/admin/satellites/{room_id}/label")
+async def admin_set_satellite_label(
+    room_id: str, body: _RoomLabelBody
+) -> dict[str, Any]:
+    """Set (or clear, with null) a satellite's display room label — the
+    grouping tag for several satellites sharing a physical room. Cosmetic
+    metadata, daily-tier like volume/restart."""
+    from domovoi.db.repositories import SatellitesRepository
+
+    label = body.room_label.strip() if body.room_label else None
+    async with session_scope() as s:
+        await SatellitesRepository(s).set_room_label(room_id, label or None)
+    return {"room_id": room_id, "room_label": label or None}
 
 
 async def _run_sounds_regenerate() -> None:

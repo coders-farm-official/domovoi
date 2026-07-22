@@ -1,5 +1,19 @@
 # Pi Satellite Provisioning Checklist
 
+> **Zero-touch path first (USB adoption).** If your SD card was prepared
+> with the Domovoi satellite payload (dashboard → Satellites → prepare
+> media, or an image that boots into provisioning mode), you don't need
+> most of this checklist: **boot the device, plug it into the Domovoi
+> server's USB port**, and an "adopt" card appears on the dashboard's
+> Satellites page. Name it, enter Wi-Fi, done — the device configures
+> itself, pre-paired, and reboots onto your network. The device presents
+> as a `DOMOVOI-SET` flash drive while waiting (see
+> `satellite/provisioning_mode.py`; requires `mtools`/`dosfstools` on the
+> image and the USB-gadget boot config the media-prep pipeline writes).
+> A wrong Wi-Fi password re-presents the drive with the error shown on
+> the dashboard — re-adopt with corrected credentials. Everything below
+> is the MANUAL fallback path, still fully supported.
+
 One-time setup per Pi Zero 2 W + ReSpeaker 2-Mics Pi HAT. Goal: a Pi that can capture audio from the HAT mics, play audio out the HAT's 3.5mm jack to powered speakers, and is ready to run the satellite client.
 
 Do this once for **Pi #1** and confirm everything works end-to-end before provisioning the rest.
@@ -378,33 +392,21 @@ mDNS (`*.local`) is fine for development but flaky long-term. Recommended:
 
 ## 8. Auto-start the satellite at boot (systemd)
 
-Drop a systemd unit so the Pi comes back after power cycles without an SSH session:
+The unit file lives IN the repo now (`satellite/domovoi-satellite.service`,
+with `@USER@`/`@HOME@` placeholders) so it rides the satellite-code sync
+channel like everything else. Install it with the helper:
 
 ```bash
-sudo tee /etc/systemd/system/domovoi-satellite.service > /dev/null <<EOF
-[Unit]
-Description=Domovoi voice satellite
-After=network-online.target sound.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$HOME/domovoi
-ExecStart=$HOME/satellite-venv/bin/python -m satellite.client
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now domovoi-satellite
+sudo -E sh ~/domovoi/satellite/scripts/install-service.sh
+# add --with-provisioning for the USB-adoption unit,
+# and --with-kiosk on a video satellite (see VIDEO_SATELLITE.md)
+sudo systemctl start domovoi-satellite
 journalctl -u domovoi-satellite -f   # tail logs
 ```
+
+(Equivalent by hand: `sed` the two placeholders and `tee` the result into
+`/etc/systemd/system/domovoi-satellite.service`, then `daemon-reload` +
+`enable --now`.)
 
 `Restart=on-failure` lets the Pi recover from a transient WiFi drop without intervention (the client also reconnects internally with exponential backoff, so you'll usually see the systemd restart only on hard failures).
 

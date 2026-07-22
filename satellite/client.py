@@ -47,6 +47,8 @@ from satellite import (
     code_sync,
     config_writer,
     devices,
+    display_power,
+    kiosk,
     sound_sync,
     wake_model_sync,
 )
@@ -283,6 +285,16 @@ _IW_SSID_RE = re.compile(r"^\s*SSID:\s*(.+?)\s*$", re.MULTILINE)
 class Config:
     room_id: str
     domovoi_url: str
+    # Satellite kind: "voice" (the historical default) or "video" (a
+    # screen-bearing kiosk build). Reported to the server in the hello
+    # frame; drives which per-type controls the dashboard offers.
+    sat_type: str
+    # Whether the voice-input stack (wake word / VAD / capture) runs at
+    # all. Defaults from the device profile's voice_capable — false on the
+    # mic-less video-kiosk profile — so a fresh video build boots silent
+    # and flipping one key enables voice when a mic is added. TTS playback,
+    # announce, and music are unaffected by this switch.
+    mic_enabled: bool
     wake_word: str
     wake_threshold: float
     wake_word_model_path: Path | None
@@ -318,6 +330,11 @@ class Config:
     leds_num: int
     leds_brightness: int
     leds_xvf_host_path: str
+    # Video-satellite display behavior ([display]); inert on voice builds.
+    display_idle_mode: str
+    display_power_method: str
+    display_kiosk_url: str | None
+    kiosk_watch_interval_sec: float
     output_mixer_card: str
     output_mixer_control: str | None
     greeting_enabled: bool
@@ -359,9 +376,34 @@ class Config:
         # name — a typo'd profile must fail loud, not silently run HAT
         # logic on the XVF (or vice versa).
         profile = devices.resolve(str(d.get("device", {}).get("profile", devices.DEFAULT_PROFILE)))
+        # Satellite kind — fail loud on a typo, like devices.resolve: a
+        # "vido" satellite silently running as voice would just look like a
+        # dashboard bug from symptoms.
+        sat_type = str(sat.get("sat_type", "voice"))
+        if sat_type not in ("voice", "video"):
+            raise ValueError(
+                f"unknown [satellite] sat_type {sat_type!r}. "
+                "Valid values: voice, video."
+            )
+        mic = d.get("mic", {})
+        display = d.get("display", {})
+        idle_mode = str(display.get("idle_mode", "clock"))
+        if idle_mode not in ("clock", "blank", "art"):
+            raise ValueError(
+                f"unknown [display] idle_mode {idle_mode!r}. "
+                "Valid values: clock, blank, art."
+            )
+        power_method = str(display.get("power_method", "auto"))
+        if power_method not in ("auto", "wlopm", "xset", "backlight", "none"):
+            raise ValueError(
+                f"unknown [display] power_method {power_method!r}. "
+                "Valid values: auto, wlopm, xset, backlight, none."
+            )
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
+            sat_type=sat_type,
+            mic_enabled=bool(mic.get("enabled", profile.voice_capable)),
             wake_word=str(wake.get("wake_word", "hey_jarvis")),
             wake_threshold=float(wake.get("threshold", 0.5)),
             wake_word_model_path=Path(wake_model).expanduser() if wake_model else None,
@@ -438,10 +480,22 @@ class Config:
             # music_ready frame is sent — server's fallback timer will
             # eventually resume MPD).
             music_prime_sec=float(music.get("prime_sec", 1.0)),
-            leds_enabled=bool(leds.get("enabled", True)),
+            leds_enabled=bool(leds.get("enabled", profile.leds_enabled_default)),
             leds_num=int(leds.get("num_leds", profile.leds_num)),
             leds_brightness=int(leds.get("brightness", profile.leds_brightness)),
             leds_xvf_host_path=str(leds.get("xvf_host_path", profile.led_xvf_host_path)),
+            # Video-satellite display behavior: what the kiosk page shows
+            # when nothing plays, how the panel's power is driven, and an
+            # optional URL override for the kiosk browser. Inert on voice
+            # builds (validated above so typos fail loud either way).
+            display_idle_mode=idle_mode,
+            display_power_method=power_method,
+            display_kiosk_url=(
+                str(display["kiosk_url"]) if display.get("kiosk_url") else None
+            ),
+            kiosk_watch_interval_sec=float(
+                display.get("kiosk_watch_interval_sec", 30.0)
+            ),
             # Hardware output-volume mixer (driven by the server's
             # volume commands). Card + control default per device profile;
             # override in [audio] for a non-standard board.
@@ -792,6 +846,15 @@ class Satellite:
         self._network_degraded = threading.Event()
         self._ws_disconnected_since: float | None = None
         self._wifi_thread: threading.Thread | None = None
+
+        # Video-satellite display state (sat_type == "video" only). The
+        # kiosk browser runs in its OWN systemd unit (domovoi-kiosk.service)
+        # — this client only tracks panel power (as last driven by
+        # set_display), watches kiosk liveness, and reports both via
+        # display_status frames.
+        self._display_on = True
+        self._kiosk_alive: bool | None = None
+        self._kiosk_thread: threading.Thread | None = None
 
     # ── Mic ingestion ─────────────────────────────────────────────────
 
@@ -1735,6 +1798,9 @@ class Satellite:
             "leds.enabled": c.leds_enabled,
             "leds.num_leds": c.leds_num,
             "leds.brightness": c.leds_brightness,
+            "mic.enabled": c.mic_enabled,
+            "display.idle_mode": c.display_idle_mode,
+            "display.power_method": c.display_power_method,
             "music.alsa_device": c.music_alsa_device,
             "mic_gain.enabled": c.mic_gain_enabled,
             "mic_gain.target_dbfs": c.mic_gain_target_dbfs,
@@ -1747,6 +1813,58 @@ class Satellite:
         per-satellite Settings tab can render real values. Sent on connect
         (and naturally again after a set_config restart reconnects)."""
         self._emit_text({"type": "config_status", "config": self._config_report()})
+
+    def _emit_display_status(self) -> None:
+        """Report the screen/kiosk state (video satellites only): panel power
+        as last driven by set_display, kiosk-service liveness, backlight
+        brightness percent when the hardware exposes one, and the configured
+        idle behavior. Sent on connect, after each applied set_display, and
+        whenever the kiosk watcher observes a liveness flip."""
+        alive = kiosk.kiosk_alive()
+        self._kiosk_alive = alive
+        self._emit_text({
+            "type": "display_status",
+            "on": self._display_on,
+            "kiosk_alive": alive,
+            "brightness": display_power.get_brightness(),
+            "idle_mode": self.cfg.display_idle_mode,
+        })
+
+    def _apply_set_display(self, action: str) -> None:
+        """Worker-thread body for a set_display frame: drive the panel or
+        bounce the kiosk service, then re-report. Best-effort throughout —
+        a board where no power mechanism works still reports honestly."""
+        if action in ("on", "off"):
+            method = display_power.set_power(
+                action == "on", method=self.cfg.display_power_method
+            )
+            if method is not None:
+                self._display_on = action == "on"
+        elif action == "restart_kiosk":
+            if not kiosk.restart_kiosk():
+                log.warning(
+                    "restart_kiosk failed — is the sudoers entry from "
+                    "VIDEO_SATELLITE.md installed?"
+                )
+        else:
+            log.warning("ignoring unknown set_display action %r", action)
+            return
+        self._emit_display_status()
+
+    def _kiosk_watcher_thread_run(self) -> None:
+        """Poll the kiosk browser service (video satellites only) and
+        re-report display_status when its liveness flips, so the dashboard's
+        dead-kiosk warning tracks reality without waiting for a reconnect."""
+        while not self.shutdown_event.wait(self.cfg.kiosk_watch_interval_sec):
+            try:
+                alive = kiosk.kiosk_alive()
+                if alive != self._kiosk_alive:
+                    log.info(
+                        "kiosk service %s", "recovered" if alive else "died"
+                    )
+                    self._emit_display_status()
+            except Exception as e:
+                log.debug("kiosk watcher tick failed: %s", e)
 
     def _apply_config_changes(self, changes: dict[str, Any]) -> None:
         """Merge web-edited config into ~/.domovoi/config.toml (preserving
@@ -2160,6 +2278,19 @@ class Satellite:
         # old) — the watchdog unlinks these before restoring so a rollback is
         # byte-exact (tarfile.extractall alone never deletes added files).
         added_files = sorted(set(result["manifest"]) - set(prev_manifest))
+
+        # (2c) Plugin satellite payloads — mirror enabled plugins' declared
+        # files and stage any root work (apt/post-install) via the sudoers
+        # helper. STRICTLY best-effort: a payload failure never blocks the
+        # code upgrade (plugins degrade; the satellite runs).
+        try:
+            from satellite import plugin_sync
+
+            psync = plugin_sync.sync_plugin_payloads(http_base)
+            if psync["root_work"]:
+                plugin_sync.request_root_apply(psync["meta"], psync["root_work"])
+        except Exception as e:  # noqa: BLE001 — degrade, never block the upgrade
+            log.warning("upgrade: plugin payload sync failed (continuing): %s", e)
 
         # (3) Persist the new version label + manifest for the next prune base.
         try:
@@ -3723,6 +3854,13 @@ class Satellite:
             ).start()
         elif t == "dropin_start":
             # Enter open-mic mode for a live two-way drop-in (Feature 4).
+            # Defensive: a mic-less build has no capture stack — the server
+            # gates this on full_duplex/mic already, but refuse loudly rather
+            # than enter a mode whose mic thread doesn't exist.
+            if not self.cfg.mic_enabled:
+                log.warning("ignoring dropin_start: voice input is disabled")
+                self._emit_text({"type": "dropin_end"})
+                return
             self._enter_dropin(payload)
         elif t == "dropin_end":
             # Exit open-mic mode; the server sends a music_start after
@@ -3732,6 +3870,10 @@ class Satellite:
             # Enter conversational chat mode (Feature #8): a Letta-backed
             # open-mic conversation. Sets the mic-thread state; the mic thread
             # runs `_chat_loop` on its next outer-loop tick.
+            if not self.cfg.mic_enabled:
+                log.warning("ignoring chat_start: voice input is disabled")
+                self._emit_text({"type": "chat_end"})
+                return
             self._enter_chat(payload)
         elif t == "chat_end":
             # Exit conversational chat mode — the server sent this after an exit
@@ -3742,6 +3884,11 @@ class Satellite:
             # Wake-word training (Feature #5): record N positive clips and
             # stream them to the server. Sets the mic-thread state; the
             # mic thread runs `_wake_recording_loop` on its next outer-loop tick.
+            if not self.cfg.mic_enabled:
+                log.warning(
+                    "ignoring start_wake_recording: voice input is disabled"
+                )
+                return
             self._enter_wake_recording(payload)
         elif t == "stop_wake_recording":
             # Stop recording early. The mic thread's loop checks this Event each
@@ -3764,6 +3911,18 @@ class Satellite:
             # the local copy matches the server. Best-effort; scheduled
             # on the event loop since we're in the async receiver here.
             asyncio.create_task(asyncio.to_thread(self._sync_wake_models))
+        elif t == "set_display":
+            # Video satellites: drive the panel power or bounce the kiosk
+            # browser service, then re-report display_status. Run on a worker
+            # thread — wlopm/xset/systemctl are subprocess calls that must
+            # not stall the asyncio receiver loop.
+            action = str(payload.get("action") or "")
+            threading.Thread(
+                target=self._apply_set_display,
+                args=(action,),
+                daemon=True,
+                name="set-display",
+            ).start()
         elif t == "pong":
             pass
         else:
@@ -3805,6 +3964,14 @@ class Satellite:
                     # mismatch. None only if the sidecar couldn't be read/written
                     # (degrades to a tokenless older-style hello).
                     "pairing_token": _effective_pairing_token(),
+                    # Satellite kind ("voice" | "video") — drives which
+                    # per-type controls the dashboard offers, and is
+                    # persisted server-side for offline display.
+                    "sat_type": self.cfg.sat_type,
+                    # Whether the voice-input stack is running (false on
+                    # mic-less builds) — the server refuses wake-recording /
+                    # drop-in / chat for mic-disabled rooms.
+                    "mic_enabled": self.cfg.mic_enabled,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if
@@ -3832,6 +3999,10 @@ class Satellite:
                 # Report current config so the dashboard's per-satellite
                 # Settings tab can show + edit real values.
                 self._emit_config_status()
+                # Video satellites: report the screen/kiosk state so the
+                # dashboard's Display block renders real values.
+                if self.cfg.sat_type == "video":
+                    self._emit_display_status()
                 # Pull any updated sound clips (greetings / canned) from the
                 # server into the local cache. Best-effort — falls back
                 # to cached/bundled clips on any failure. Scoped to our voice
@@ -3938,15 +4109,36 @@ class Satellite:
             )
 
         self._leds.start()
-        self._start_mic()
+        # Voice-off seam: a mic-less build ([mic] enabled=false, the video
+        # kiosk default) skips capture AND the mic thread — the wake model
+        # only ever loads inside _mic_thread_run, so this also skips the
+        # openWakeWord/ONNX load entirely. TTS playback, announce, music,
+        # volume, config, and upgrade all live on other threads and keep
+        # working unchanged.
+        if self.cfg.mic_enabled:
+            self._start_mic()
+        else:
+            log.info(
+                "voice input disabled ([mic] enabled=false) — wake word/VAD/"
+                "capture not started; TTS, announce, and music remain active"
+            )
         self._playback_thread = threading.Thread(
             target=self._playback_thread_run, daemon=True, name="playback"
         )
         self._playback_thread.start()
-        self._mic_thread = threading.Thread(
-            target=self._mic_thread_run, daemon=True, name="mic"
-        )
-        self._mic_thread.start()
+        if self.cfg.mic_enabled:
+            self._mic_thread = threading.Thread(
+                target=self._mic_thread_run, daemon=True, name="mic"
+            )
+            self._mic_thread.start()
+        # Video satellites: watch the kiosk browser service and report
+        # liveness flips so the dashboard can flag a dead kiosk.
+        if self.cfg.sat_type == "video":
+            self._kiosk_thread = threading.Thread(
+                target=self._kiosk_watcher_thread_run, daemon=True,
+                name="kiosk-watcher",
+            )
+            self._kiosk_thread.start()
         # WiFi self-heal watcher — polls rx bitrate + reassociates when
         # the link wedges. Daemon so a misbehaving iw/wpa_cli can't
         # block process shutdown. See `_wifi_watcher_thread_run`.
@@ -3988,6 +4180,8 @@ class Satellite:
                 self._playback_thread.join(timeout=2.0)
             if self._wifi_thread is not None:
                 self._wifi_thread.join(timeout=2.0)
+            if self._kiosk_thread is not None:
+                self._kiosk_thread.join(timeout=2.0)
             self._leds.stop()
 
 
@@ -4024,6 +4218,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_devices:
         _list_devices()
         return 0
+
+    # USB-adoption park: while provisioning mode owns the box (an
+    # unprovisioned device exposing its setup volume), the client exits 0
+    # so systemd's Restart=on-failure leaves it parked until the
+    # post-provision reboot. Checked BEFORE _ensure_config, which would
+    # otherwise write the example config and confuse the provisioned check.
+    try:
+        from satellite import provisioning_mode
+
+        if provisioning_mode.provisioning_active():
+            print(
+                "provisioning mode is active (USB adoption in progress) — "
+                "satellite client parked until it completes",
+                file=sys.stderr,
+            )
+            return 0
+    except ImportError:
+        pass
 
     if not _ensure_config(args.config):
         return 2

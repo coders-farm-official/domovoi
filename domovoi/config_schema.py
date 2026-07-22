@@ -350,6 +350,21 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "new/re-flashed Pis can't connect. Takes effect after a restart.",
         "bool", section="advanced", tier="restart",
     ),
+    FieldSpec(
+        "satellite_adoption_enabled", "USB satellite adoption", "Security",
+        "Scan the Domovoi server's USB ports for unprovisioned satellites "
+        "(the plug-in-and-adopt flow on the Satellites page). Turn off to "
+        "stop scanning removable drives entirely.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "satellite_adoption_advertise_url", "Adoption server URL", "Security",
+        "The core WebSocket URL written into adopted satellites' config "
+        "(e.g. ws://192.168.1.50:6370). Leave empty to autodetect the LAN "
+        "address — set it only when the server has several network "
+        "interfaces and autodetection picks the wrong one.",
+        "str", section="advanced", tier="hot",
+    ),
 ]
 
 
