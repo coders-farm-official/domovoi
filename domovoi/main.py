@@ -163,7 +163,7 @@ def _register_core_reapply_hooks() -> None:
 
     for field in ("tts_engine", "tts_speed"):
         reapply.on_reapply(field, reset_tts_client)
-    for field in ("ollama_model", "ollama_tool_model"):
+    for field in ("ollama_model", "ollama_tool_model", "ollama_vision_model"):
         reapply.on_reapply(field, reset_ollama_client)
     reapply.on_reapply("log_level", _reapply_log_level)
 
@@ -405,14 +405,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → document_lock_sweeper.
+    #   podcast_feed_poller → audiobook_indexer.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
     # PLUGIN and registers its own workers through the plugin runtime.
     from domovoi.plugins_runtime.workers import WORKERS
     from domovoi.workers.audiobook_indexer import AudiobookIndexer
-    from domovoi.workers.document_lock_sweeper import DocumentLockSweeper
     from domovoi.workers.memory_extractor import MemoryExtractor
     from domovoi.workers.news_fetcher import NewsFetcher
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
@@ -429,11 +428,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
-    # Office-suite stale-lock sweeper — pure DB; registered in the core
-    # runner now that worker lifecycles are centralized (the web
-    # backend's hand-wired copy is gone; document_sessions rows are
-    # still WRITTEN only by the web process).
-    WORKERS.add_worker(DocumentLockSweeper(), owner="core")
+    # (The former office-suite stale-lock sweeper is gone with the
+    # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
     # ── Boot-time startup hooks (§4.5) ──────────────────────────────────
     # Boot work runs as NAMED, ordered,

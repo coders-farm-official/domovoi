@@ -323,10 +323,14 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  * (design §5.2, echoed in /api/plugins/manifest) so plugin authors can
  * slot pages deliberately. `countKey` reads useSidebarCounts. */
 const CORE_NAV_ITEMS = [
+  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
   { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music' },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
-  { route: 'news',       icon: 'newspaper',   label: 'News',       order: 16 },
+  { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
+  // order 16 is deliberately free — the Image Generation plugin's Images
+  // page slots there (nav_order 16 in its manifest) when installed.
+  { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
   { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites' },
   { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },

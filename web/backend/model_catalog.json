@@ -97,6 +97,30 @@
       "quant": "F16",
       "est_vram_gb": 0.5,
       "desc": "Embedding model required by Letta chat mode's archival/recall memory. Tiny; pull it before enabling chat."
+    },
+    {
+      "name": "qwen2.5vl:7b",
+      "role": "vision",
+      "params": "7B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 6.0,
+      "desc": "Strong open vision-language model - the recommended default for image understanding in chat."
+    },
+    {
+      "name": "gemma3:12b",
+      "role": "vision",
+      "params": "12B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 8.9,
+      "desc": "Google's multimodal Gemma 3 - excellent general chat that also reads images; heavier than qwen2.5vl:7b."
+    },
+    {
+      "name": "llama3.2-vision:11b",
+      "role": "vision",
+      "params": "11B",
+      "quant": "Q4_K_M",
+      "est_vram_gb": 7.8,
+      "desc": "Meta's vision-tuned Llama - solid captioning/OCR; vision only (routes text-only chat poorly)."
     }
   ],
   "whisper": [

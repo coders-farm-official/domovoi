@@ -2,7 +2,7 @@ package com.domovoi.app.player
 
 import kotlinx.serialization.Serializable
 
-enum class PlayKind { Library, Radio, Podcast, Audiobook }
+enum class PlayKind { Library, Radio, Podcast, Audiobook, Device }
 
 @Serializable
 data class Chapter(val title: String, val startSec: Double)
@@ -53,6 +53,16 @@ data class PlayItem(
                 src = "/api/podcasts/episodes/$id/audio",
                 coverPath = artwork,
                 durationSec = durationSec, chapters = chapters,
+            )
+
+        // On-device media (offline/local mode): `src`/`coverPath` are
+        // content:// URIs from MediaStore, played directly — no server.
+        fun fromDeviceAudio(id: Long, title: String, artist: String?, album: String?, durationSec: Double?, uri: String, artUri: String?) =
+            PlayItem(
+                uid = "dev-$id", kind = PlayKind.Device, id = id,
+                title = title, artist = artist, album = album,
+                src = uri, coverPath = artUri,
+                durationSec = durationSec,
             )
 
         fun fromBook(id: Long, title: String, author: String?, durationSec: Double?, artwork: String?, chapters: List<Chapter>) =

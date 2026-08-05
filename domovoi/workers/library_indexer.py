@@ -110,7 +110,16 @@ def _read_tags(path: Path) -> dict[str, Any]:
 
     def _first(*keys: str) -> str | None:
         for k in keys:
-            if k in tags:
+            # Membership itself can raise: mutagen's VComment rejects
+            # keys with non-ASCII chars (e.g. the MP4 "©"-keys probed
+            # against a Vorbis tag dict) with a bare ValueError instead
+            # of returning False. Treat "invalid key for this format"
+            # the same as "key absent".
+            try:
+                present = k in tags
+            except (ValueError, KeyError):
+                continue
+            if present:
                 v = tags[k]
                 if isinstance(v, list):
                     v = v[0] if v else None

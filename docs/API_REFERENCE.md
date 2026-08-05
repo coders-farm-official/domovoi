@@ -450,34 +450,33 @@ web process proxies the core `POST /v1/admin/library/reindex` with the caller's
 credentials forwarded; `audiobooks` runs the in-process indexer; `podcasts` /
 `documents` / removable are no-ops.
 
-### 3.14 Documents (office suite)
+### 3.14 Documents (homegrown editors)
 
-All **Open** except that the file/WOPI routes require a per-open access
-token issued by `POST /api/documents/open` (short-lived capability tokens,
-not admin auth). Document locks are swept by a core background worker;
-rows are written only by this process. This surface is **unchanged** by the
-Files tab — the Files page calls it for the Documents library's editing.
+All **Open**. The former OnlyOffice/Collabora sidecars — and with them the
+open/close locks, JWT capability tokens, save callbacks, and WOPI routes —
+are retired. Editing is homegrown/in-page: a markdown doc editor
+(`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
+.xlsx/.csv round-trip via openpyxl), and Excalidraw for drawings. Every
+row's `category` tells the UI how to open it
+(`doc | sheet | drawing | newtab | download | text`); legacy office formats
+(.docx/.doc/.odt/.rtf/.xls/.ods) list and download but don't edit in-app.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/documents` | `?kind=all` | List documents (also served at `/api/documents/`). |
-| `POST /api/documents/create` | `CreateRequest` | Create a blank document. |
+| `GET /api/documents` | `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
+| `POST /api/documents/create` | `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
 | `POST /api/documents/upload` | multipart | Upload documents. |
 | `POST /api/documents/delete` | `DeleteRequest` | Delete documents. |
 | `POST /api/documents/download-zip` | `ZipRequest` | Zip + download a selection. |
-| `GET /api/documents/file/{rel_path}` | `?token=` (required) | Serve a file to an editor iframe. |
-| `GET /api/documents/text/{rel_path}` | — | Read a text file. |
-| `PUT /api/documents/text/{rel_path}` | `TextWriteRequest` | Write a text file. |
-| `GET /api/documents/raw/{rel_path}` | — | Raw file bytes. |
-| `POST /api/documents/open` | `OpenRequest` | Open a document in an editor engine; returns the editor URL + access token and takes the edit lock. |
-| `POST /api/documents/close` | `CloseRequest` | Release the lock. |
-| `POST /api/documents/callback/{engine}` | engine-specific | Editor save callback. |
-| `GET /api/documents/wopi/files/{file_id}` | `?access_token=` | WOPI CheckFileInfo. |
-| `GET /api/documents/wopi/files/{file_id}/contents` | `?access_token=` | WOPI GetFile. |
-| `POST /api/documents/wopi/files/{file_id}/contents` | `?access_token=` | WOPI PutFile (save). |
+| `GET /api/documents/text/{rel_path}` | — | Read a text/markdown file (415 for binary/too-large). |
+| `PUT /api/documents/text/{rel_path}` | `TextWriteRequest` | Write a text/markdown file. |
+| `GET /api/documents/sheet/{rel_path}` | — | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
+| `PUT /api/documents/sheet/{rel_path}` | `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `GET /api/documents/export/doc/{rel_path}` | `?fmt=docx` | Export markdown/text as .docx (python-docx). |
+| `GET /api/documents/export/sheet/{rel_path}` | `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
+| `GET /api/documents/raw/{rel_path}` | — | Raw file bytes (inline). |
 | `POST /api/documents/drawings/read` | `DrawingReadRequest` | Read a drawing document. |
 | `POST /api/documents/drawings/write` | `DrawingWriteRequest` | Save a drawing. |
-| `GET /api/documents/engines` | — | Which editor engines are configured/reachable. |
 
 ### 3.15 Podcasts and audiobooks
 
@@ -503,7 +502,71 @@ this process.
 | `GET /api/audiobooks/{book_id}/position` | `?device_id=&person_id=` | Resume position. |
 | `POST /api/audiobooks/{book_id}/position` | `PositionSave` | Save position. |
 
-### 3.16 Models (LLM management)
+### 3.16 Videos
+
+Videos are discovered live from the same media-library registry the Files
+tab uses — any video file (`.mp4` `.m4v` `.mov` `.webm` `.mkv`) inside any
+core / plugin / removable library appears, keyed by `(library_id, rel_path)`.
+Nothing is indexed into the DB except resume positions (`video_positions`,
+per device × person, like the podcasts store). File-content endpoints are
+**Admin-read** (the dashboard cookie is enough for `<video>`/`<img>` tags);
+the position store is Open like the podcast one. Position saves fire the
+`video_positions.changed` WS event.
+
+| Method & path | Request | Purpose |
+|---|---|---|
+| `GET /api/videos/list` | — | Every video across every present library (bounded walk; hidden dirs skipped). |
+| `GET /api/videos/stream` | `?library_id=&path=&download=` | Range/206 playback with the container's native MIME. `.mkv` serves as `x-matroska` — Chromium-family browsers and ExoPlayer play it; others fall back to `?download=1` (attachment). |
+| `GET /api/videos/poster` | `?library_id=&path=` | Cached ffmpeg-extracted poster frame (`video_posters_dir`); `204` when no frame could be extracted. |
+| `GET /api/videos/position` | `?library_id=&path=&device_id=&person_id=` | Resume position (`{position_sec, duration_sec}`). |
+| `POST /api/videos/position` | `PositionSave` | Upsert a resume row (also carries `duration_sec` + `title` for the recent strip). |
+| `DELETE /api/videos/position` | `PositionClear` | Drop one resume row ("remove from recently played"). |
+| `GET /api/videos/recent` | `?device_id=&person_id=&limit=` | Newest resume rows for a device, existence-checked against the current registry (rows for ejected drives / deleted files are skipped, not deleted). |
+
+### 3.17 Images (library-image serving)
+
+Two generic endpoints over the media-library registry, keyed by
+`(library_id, rel_path)` with the same containment as the Files surface
+(**Admin-read**; the dashboard cookie is enough for `<img>` tags). The
+Files tab's per-row **Open** action for images uses `/raw`; `/thumb`
+backs image tiles anywhere the dashboard needs one.
+
+Image *generation* is not a core feature — it ships as the separately
+installed **Image Generation plugin** (Coders Farm,
+`domovoi-plugin-imagegen`), which manages a local ComfyUI engine
+(in-dashboard install + supervised process), curated model downloads,
+and its own Images page/history under `/api/plugins/imagegen/…`. The
+plugin declares the `imagegen` capability, which gates the Android
+Images screen.
+
+| Method & path | Request | Purpose |
+|---|---|---|
+| `GET /api/images/thumb` | `?library_id=&path=&size=s\|m\|l\|xl` | Pillow-resized WebP thumbnail from the size-bucketed cache; `204` for undecodable files. |
+| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). |
+
+### 3.18 Chat
+
+Claude-desktop-style threaded text chat answered by the local Ollama
+(`clients/ollama.chat_stream`). Independent of the voice pipeline's chat
+mode (Letta, per-room sessions); `chat_threads.letta_agent_id` is the
+parked bridge for backing a thread with a stateful agent later. A message
+carrying image uploads is answered by `ollama_vision_model` (the Vision
+role slot on the Models page) instead of the Q&A model. Mutations fire the
+`chat.changed` WS event.
+
+| Method & path | Request | Purpose |
+|---|---|---|
+| `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
+| `POST /api/chat/threads` | `ThreadCreate` | New thread (first user message titles it). |
+| `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
+| `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
+| `GET /api/chat/threads/{id}/messages` | — | Full transcript. |
+| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). |
+| `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
+| `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
+| `GET /api/chat/models` | — | Installed Ollama models + configured default/vision models for the composer. |
+
+### 3.19 Models (LLM management)
 
 All **Open**. Talks to the local Ollama instance; hardware facts proxy to the
 core (which owns the CUDA context). Domovoi runs **two** models — the
@@ -521,7 +584,7 @@ conversational one and the tool-routing one — switchable independently.
 | `POST /api/models/pull` | `PullBody` | Start downloading a model (background job). |
 | `POST /api/models/pull/{job_id}/cancel` | — | Cancel a pull. |
 
-### 3.17 News
+### 3.20 News
 
 All **Open**. Fetching runs in a core background worker.
 
@@ -540,7 +603,7 @@ All **Open**. Fetching runs in a core background worker.
 | `GET /api/news/people/{person_id}/briefing` | — | The assembled spoken-style briefing. |
 | `POST /api/news/poll` | `?person_id=` | Fetch now. |
 
-### 3.18 Health
+### 3.21 Health
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|

@@ -123,12 +123,20 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # affordance stays fresh across devices viewing the same library.
     "podcasts_changed": "podcasts",
     "podcast_positions_changed": "podcast_positions",
+    # Videos. `video_positions_changed` fires on every resume-position
+    # save/clear (browser or Android) so the Videos tab's "recently
+    # played" strip stays fresh across clients viewing the same library.
+    "video_positions_changed": "video_positions",
     # Models page pull jobs. Fires from web/backend/api/models.py's
     # pull task on each throttled progress write (and create / finish /
     # cancel) so the install progress bar tracks the Ollama download live
     # rather than on the poll cadence. The Models page subscribes via the
     # resulting `model_jobs.changed` event.
     "model_jobs_changed": "model_jobs",
+    # Text chat. Fires on thread CRUD + each persisted message so a second
+    # open dashboard's thread list stays fresh (the sending client renders
+    # its own SSE stream and doesn't need the event).
+    "chat_changed": "chat",
     # Satellite media-prep builds (V004). Fires from the prepare/progress/
     # finish writes in web/backend/api/satellite_media.py so the card's
     # progress bar tracks the build live. Subscribers see the resulting
@@ -583,6 +591,32 @@ async def _snapshot_podcast_positions() -> dict[str, Any]:
     return {"count": int(row[0]), "latest": _isoformat(row[1])}
 
 
+async def _snapshot_video_positions() -> dict[str, Any]:
+    """Row count + newest ``updated_at`` for ``video_positions``. Moves on
+    every resume save/clear; the Videos tab refetches its recent strip on
+    the event (podcast_positions pattern)."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text("SELECT COUNT(*)::bigint, MAX(updated_at) FROM video_positions")
+            )
+        ).one()
+    return {"count": int(row[0]), "latest": _isoformat(row[1])}
+
+
+async def _snapshot_chat() -> dict[str, Any]:
+    """Thread count + newest thread ``updated_at``. Moves on every message
+    or thread mutation; the chat page refetches its thread list on the
+    event."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text("SELECT COUNT(*)::bigint, MAX(updated_at) FROM chat_threads")
+            )
+        ).one()
+    return {"threads": int(row[0]), "latest": _isoformat(row[1])}
+
+
 async def _snapshot_media_jobs() -> list[dict[str, Any]]:
     """Active + just-finished satellite media-prep builds — the same shape
     ``GET /api/satellites/media/jobs`` returns (minus the server-local
@@ -744,6 +778,8 @@ StatePollLoop._CHANNEL_HELPERS = {
     "wake_words":        _snapshot_wake_words,
     "podcasts":          _snapshot_podcasts,
     "podcast_positions": _snapshot_podcast_positions,
+    "video_positions":   _snapshot_video_positions,
+    "chat":              _snapshot_chat,
     "model_jobs":        _snapshot_model_jobs,
     "news":              _snapshot_news,
     # USB satellite adoption: pending gadget volumes on the server's USB

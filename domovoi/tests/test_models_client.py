@@ -165,7 +165,7 @@ def test_catalog_json_valid_and_shaped():
     assert isinstance(data.get("whisper"), list) and data["whisper"]
     for m in data["ollama"]:
         assert m.get("name")
-        assert m.get("role") in ("qa", "tool", "both", "embedding")
+        assert m.get("role") in ("qa", "tool", "both", "embedding", "vision")
         assert isinstance(m.get("est_vram_gb"), (int, float))
         assert m.get("desc")
     for m in data["whisper"]:

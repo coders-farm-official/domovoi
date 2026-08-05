@@ -129,84 +129,13 @@ services:
       LETTA_SERVER_PASSWORD: "domovoi-local"
     restart: unless-stopped
 
-  # ─── Office Suite engines (Documents / Spreadsheets) — STATIC, OPT-IN ──
-  # OnlyOffice CE + Collabora CODE back the web dashboard's Documents and
-  # Spreadsheets pages. Unlike MPD (lazy per-room), these are long-lived
-  # and NOT room-scoped, so they're static compose services. They're
-  # flag-gated in practice by settings.onlyoffice_enabled /
-  # collabora_enabled (the web backend won't surface a disabled engine),
-  # and further gated here behind the `office` compose profile so a bare
-  # `docker compose up` (postgres + flyway) never pulls these heavy images.
-  # Bring them up explicitly once the flags + JWT secrets + LAN URLs are set:
-  #   docker compose --profile office up -d onlyoffice collabora
-  #
-  # LAN-ROUTABLE URLS, NEVER localhost: the browser loads editor assets
-  # from these containers AND the containers reach back to the web backend
-  # (office_callback_base) to fetch/save files. Set onlyoffice_base_url /
-  # collabora_base_url / office_callback_base to a real host name or IP.
-  #
-  # JWT secrets come from the environment (.env — never committed). Both
-  # engines refuse to load with a blank secret in current versions.
-  onlyoffice:
-    image: onlyoffice/documentserver:latest
-    container_name: domovoi-onlyoffice
-    profiles: ["office"]
-    # Host port 6381 (container-internal 80) — keeps clear of 8081, a
-    # common default for other dashboards. Must match
-    # settings.onlyoffice_base_url.
-    ports:
-      - "6381:80"
-    environment:
-      # JWT protects the editor config + the internal command exchange.
-      # Must match settings.onlyoffice_jwt_secret used by the web backend
-      # to sign the DocEditor config. JWT_HEADER + IN/OUT box names are the
-      # defaults DocsAPI expects; pin them so the handshake is explicit.
-      JWT_ENABLED: "true"
-      # Empty default (not :?) so `docker compose` still interpolates for
-      # UNRELATED commands (flyway/postgres) — the whole file is parsed for
-      # ANY compose command, and a :? guard here broke `flyway`. A blank
-      # secret is caught where it matters: office bring-up sets it in .env,
-      # and the web backend refuses to mint a JWT with a blank secret.
-      JWT_SECRET: "${ONLYOFFICE_JWT_SECRET:-}"
-      JWT_HEADER: "Authorization"
-      JWT_IN_BODY: "true"
-      JWT_OUT_BODY: "true"
-    volumes:
-      - domovoi-onlyoffice-data:/var/www/onlyoffice/Data
-      - domovoi-onlyoffice-logs:/var/log/onlyoffice
-    restart: unless-stopped
-
-  collabora:
-    image: collabora/code:latest
-    container_name: domovoi-collabora
-    profiles: ["office"]
-    # Host port 6980 (container-internal 9980) — keeps clear of any other
-    # Collabora bound to 9980. Must match settings.collabora_base_url.
-    ports:
-      - "6980:9980"
-    environment:
-      # Collabora validates the WOPI access_token against this secret. The
-      # web backend signs the token (settings.collabora_jwt_secret) and
-      # verifies it on the WOPI CheckFileInfo/GetFile/PutFile endpoints.
-      # Passed through extra_params as the WOPI proof; see the WOPI wiring
-      # in web/backend/api/documents.py.
-      COLLABORA_JWT_SECRET: "${COLLABORA_JWT_SECRET:-}"
-      # `aliasgroup1` whitelists the WOPI host (the web backend) that
-      # Collabora is allowed to fetch/save documents from. MUST match the
-      # host in office_callback_base — a LAN name/IP, never localhost.
-      # Override via .env for your host.
-      aliasgroup1: "${COLLABORA_ALIASGROUP:-http://my-domovoi\\.local:6369}"
-      # Plain HTTP on the LAN with NO reverse proxy in front — the browser
-      # hits Collabora directly. So BOTH ssl.enable and ssl.termination are
-      # false; termination=true would make Collabora advertise https:// URLs
-      # (for an HTTPS-terminating proxy we don't have), which a plain-HTTP
-      # LAN browser can't load. Set termination=true only if you later put
-      # an HTTPS reverse proxy in front.
-      extra_params: "--o:ssl.enable=false --o:ssl.termination=false"
-      DONT_GEN_SSL_CERT: "true"
-    cap_add:
-      - MKNOD
-    restart: unless-stopped
+  # ─── Office engines: RETIRED ──────────────────────────────────────────
+  # The Documents suite is fully homegrown/in-page now (markdown editor,
+  # x-spreadsheet grid, Excalidraw) — the former OnlyOffice/Collabora
+  # sidecar services are gone. If you ran them, reclaim the containers +
+  # volumes with:
+  #   docker rm -f domovoi-onlyoffice domovoi-collabora
+  #   docker volume rm domovoi-onlyoffice-data domovoi-onlyoffice-logs
 
   # ─── MPD is NOT declared here on purpose ──────────────────────────────
   # MPD daemons are spawned by the core on first satellite connect
@@ -231,9 +160,3 @@ volumes:
   # comment above. Self-managed by the letta image; never Flyway-touched.
   domovoi-letta-pgdata:
     name: domovoi-letta-pgdata
-  # OnlyOffice server data (cache, fonts, forgotten-file spool). Persisted
-  # so a container restart doesn't re-warm from scratch. Never Flyway-touched.
-  domovoi-onlyoffice-data:
-    name: domovoi-onlyoffice-data
-  domovoi-onlyoffice-logs:
-    name: domovoi-onlyoffice-logs

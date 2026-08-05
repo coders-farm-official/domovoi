@@ -147,10 +147,11 @@ const HardwarePanel = ({ data, loading }) => {
 
 /* ---- active model rows ---------------------------------------- */
 
-const ROLE_LABEL = { qa: 'Q&A', tool: 'Tool routing', stt: 'Speech-to-text' };
+const ROLE_LABEL = { qa: 'Q&A', tool: 'Tool routing', vision: 'Vision', stt: 'Speech-to-text' };
 const ROLE_SUB = {
   qa: "conversational fallthrough — 'tell me a joke'",
   tool: 'routes voice commands to handlers',
+  vision: 'answers chat messages that carry images',
   stt: 'Whisper transcription',
 };
 
@@ -249,7 +250,7 @@ const PullJob = ({ j, onCancel }) => {
 
 /* ---- catalog cards ------------------------------------------- */
 
-const _ROLE_TAG = { qa: 'Q&A', tool: 'tool', both: 'Q&A · tool', embedding: 'embedding', stt: 'STT' };
+const _ROLE_TAG = { qa: 'Q&A', tool: 'tool', both: 'Q&A · tool', embedding: 'embedding', stt: 'STT', vision: 'vision' };
 
 const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
   const isInstalled = installedNames.has(m.name);
@@ -297,6 +298,9 @@ const SttRow = ({ m, hw, active, onSelect }) => {
     </div>
   );
 };
+
+/* (Image-generation model management lives on the Image Generation
+ * plugin's own Images page — install the plugin from the Plugins page.) */
 
 /* ---- folded summaries: TTS voices + wake words --------------- */
 

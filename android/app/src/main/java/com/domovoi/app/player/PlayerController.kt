@@ -8,6 +8,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -62,7 +63,10 @@ class PlayerController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     val exoPlayer: ExoPlayer by lazy {
-        val dataSource = OkHttpDataSource.Factory(api.http)
+        // DefaultDataSource routes http(s) through OkHttp and handles
+        // content:// / file:// natively — required for on-device media
+        // (PlayKind.Device) in offline/local mode.
+        val dataSource = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(api.http))
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
             .setHandleAudioBecomingNoisy(true)
@@ -146,16 +150,21 @@ class PlayerController(
         }
     }
 
+    /** Server-relative paths resolve against the API base; on-device items
+     *  carry full content:// (or other scheme) URIs that pass through. */
+    private fun resolveSrc(pathOrUri: String): String =
+        if (pathOrUri.startsWith("/")) api.absolute(pathOrUri) else pathOrUri
+
     private fun mediaItemFor(item: PlayItem): MediaItem {
         val meta = MediaMetadata.Builder()
             .setTitle(item.title)
             .setArtist(item.artist)
             .setAlbumTitle(item.album)
-            .apply { item.coverPath?.let { setArtworkUri(api.absolute(it).toUri()) } }
+            .apply { item.coverPath?.let { setArtworkUri(resolveSrc(it).toUri()) } }
             .build()
         return MediaItem.Builder()
             .setMediaId(item.uid)
-            .setUri(api.absolute(item.src))
+            .setUri(resolveSrc(item.src))
             .setMediaMetadata(meta)
             .build()
     }

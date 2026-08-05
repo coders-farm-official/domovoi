@@ -4,7 +4,8 @@ Design system for **Domovoi** — a local-first home voice assistant. A domovoi 
 
 This is a tech-forward management UI you'd reach from a laptop or a phone on the same Wi-Fi as your Pi satellites. The dashboard (web backend, port `6369`) currently ships these core surfaces, plus routes that installed plugins contribute:
 
-- **Music / Podcasts / Audiobooks / News** — library, acquisitions, now-playing across rooms
+- **Chat** — threaded text chat with the local models (vision-capable when a message carries images); the cat glyph marks assistant lines
+- **Music / Podcasts / Audiobooks / Videos / News** — library, acquisitions, now-playing across rooms, video playback with resume (image browsing lives in Files; the Images generation page comes from the Image Generation plugin)
 - **People** — recognized voices, last-heard timestamps, presence tiers
 - **Satellites** — per-room Pi status (online/offline, Wi-Fi rx/tx, version)
 - **Calendar** — local + synced events, timers, reminders

@@ -5772,7 +5772,7 @@
           "documents"
         ],
         "summary": "List Documents",
-        "description": "List files in the flat ``documents_dir`` filtered by extension for\nthe requested view. Joins with ``document_sessions`` so the UI knows\nwhich engine (if any) holds each file's lock.\n\nThe ``all`` view (the unified Documents page's source) lists EVERY file\nand tags each with a ``category`` telling the UI how to open it\n(office / drawing / newtab / text). ``doc`` is a narrower catch-all\nkept for compatibility \u2014 every file NOT claimed by the sheet/drawing\nviews; ``sheet``/``drawing`` stay exact-extension filters.",
+        "description": "List files in the flat ``documents_dir`` filtered by extension for\nthe requested view, each tagged with the ``category`` that tells the\nUI how to open it.",
         "operationId": "list_documents_api_documents__get",
         "parameters": [
           {
@@ -5826,7 +5826,7 @@
           "documents"
         ],
         "summary": "List Documents",
-        "description": "List files in the flat ``documents_dir`` filtered by extension for\nthe requested view. Joins with ``document_sessions`` so the UI knows\nwhich engine (if any) holds each file's lock.\n\nThe ``all`` view (the unified Documents page's source) lists EVERY file\nand tags each with a ``category`` telling the UI how to open it\n(office / drawing / newtab / text). ``doc`` is a narrower catch-all\nkept for compatibility \u2014 every file NOT claimed by the sheet/drawing\nviews; ``sheet``/``drawing`` stay exact-extension filters.",
+        "description": "List files in the flat ``documents_dir`` filtered by extension for\nthe requested view, each tagged with the ``category`` that tells the\nUI how to open it.",
         "operationId": "list_documents_api_documents_get",
         "parameters": [
           {
@@ -5880,7 +5880,7 @@
           "documents"
         ],
         "summary": "Create Document",
-        "description": "Create a new blank file for a view. Name is a bare filename (any\ndirectory component is stripped).\n\nFor doc/sheet/drawing the kind's default extension is appended when the\nuser didn't type one recognized for that kind. For the ``text`` kind\nthe name is used VERBATIM \u2014 no extension is forced, so a user can make\na bare ``notes`` or ``script.sh`` or anything else.",
+        "description": "Create a new blank file for a view. Name is a bare filename (any\ndirectory component is stripped). For doc/sheet/drawing the kind's\ndefault extension is appended when the user didn't type a recognized\none; the ``text`` kind takes the name VERBATIM.",
         "operationId": "create_document_api_documents_create_post",
         "requestBody": {
           "content": {
@@ -5922,7 +5922,7 @@
           "documents"
         ],
         "summary": "Delete Documents",
-        "description": "Delete one or more files from ``documents_dir``. Each path is\ncontainment-checked; any editor lock on a deleted file is released so a\nstale ``document_sessions`` row can't wedge a later re-create of the same\nname. Best-effort per file \u2014 a bad/missing path lands in ``failed`` rather\nthan aborting the whole batch.",
+        "description": "Delete one or more files from ``documents_dir``. Best-effort per\nfile \u2014 a bad/missing path lands in ``failed`` rather than aborting\nthe whole batch.",
         "operationId": "delete_documents_api_documents_delete_post",
         "requestBody": {
           "content": {
@@ -5964,7 +5964,7 @@
           "documents"
         ],
         "summary": "Download Zip",
-        "description": "Zip the requested files and return the archive. The dashboard uses this\nfor multi-select downloads (a single file downloads directly via /raw).\nBuilt in memory \u2014 fine for a LAN dashboard's file counts \u2014 with an\nexplicit Content-Length so the browser can show real download progress.\nEvery path is containment-checked; missing ones are skipped.",
+        "description": "Zip the requested files and return the archive (multi-select\ndownload). Built in memory with an explicit Content-Length; every\npath is containment-checked; missing ones are skipped.",
         "operationId": "download_zip_api_documents_download_zip_post",
         "requestBody": {
           "content": {
@@ -5998,63 +5998,13 @@
         }
       }
     },
-    "/api/documents/file/{rel_path}": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Serve File",
-        "description": "Serve a file's bytes to a document-server container. Guarded by a\nsigned ``token`` (minted in /open) so this isn't an open read\nprimitive across the LAN \u2014 the token names the exact rel_path it may\nread and which engine it was signed for.",
-        "operationId": "serve_file_api_documents_file__rel_path__get",
-        "parameters": [
-          {
-            "name": "rel_path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Rel Path"
-            }
-          },
-          {
-            "name": "token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/documents/text/{rel_path}": {
       "get": {
         "tags": [
           "documents"
         ],
         "summary": "Read Text File",
-        "description": "Read a file as UTF-8 text for the in-app editor.\n\nFalls back gracefully instead of choking on non-text input: a file\nover ``_TEXT_MAX_BYTES`` or that isn't valid UTF-8 returns 415 with\n``{editable:false, reason:\"too_large\"|\"binary\"}`` so the UI can offer\nDownload / Open-raw instead. On success returns the text plus the\ndetected newline so the editor can preserve line endings on save.",
+        "description": "Read a file as UTF-8 text for the in-app editors (text + markdown).\nFalls back gracefully instead of choking on non-text input: a file\nover ``_TEXT_MAX_BYTES`` or that isn't valid UTF-8 returns 415 with\n``{editable:false, reason:\"too_large\"|\"binary\"}``.",
         "operationId": "read_text_file_api_documents_text__rel_path__get",
         "parameters": [
           {
@@ -6095,7 +6045,7 @@
           "documents"
         ],
         "summary": "Write Text File",
-        "description": "Write text back to a file as UTF-8 (RW \u2014 this dir is read-write,\nunlike the MPD ``:ro`` music mount). Containment-checked. Newlines in\nthe payload are preserved verbatim (no translation).",
+        "description": "Write text back to a file as UTF-8. Containment-checked; newlines\npreserved verbatim.",
         "operationId": "write_text_file_api_documents_text__rel_path__put",
         "parameters": [
           {
@@ -6142,13 +6092,216 @@
         }
       }
     },
+    "/api/documents/sheet/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Read Sheet",
+        "description": "The grid model for the homegrown sheet editor. 415 for sheet types\nit can't round-trip (.xls/.ods \u2192 the UI offers download instead).",
+        "operationId": "read_sheet_api_documents_sheet__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Read Sheet Api Documents Sheet  Rel Path  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Write Sheet",
+        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl).",
+        "operationId": "write_sheet_api_documents_sheet__rel_path__put",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SheetWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/export/doc/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Export Doc",
+        "description": "Export a markdown/text document as .docx (attachment). ``.doc`` is\na legacy binary format nothing open writes reliably \u2014 Word opens\n.docx everywhere the user asked for .doc.",
+        "operationId": "export_doc_api_documents_export_doc__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          },
+          {
+            "name": "fmt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "const": "docx",
+              "type": "string",
+              "default": "docx",
+              "title": "Fmt"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/export/sheet/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Export Sheet",
+        "description": "Export a sheet as .csv or .xlsx (attachment), converting through\nthe same grid model the editor uses.",
+        "operationId": "export_sheet_api_documents_export_sheet__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          },
+          {
+            "name": "fmt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "csv",
+                "xlsx"
+              ],
+              "type": "string",
+              "default": "csv",
+              "title": "Fmt"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/upload": {
       "post": {
         "tags": [
           "documents"
         ],
         "summary": "Upload Documents",
-        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped so\na second upload of the same name doesn't clobber the first. Every\nresolved target is containment-checked inside ``documents_dir``.",
+        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped.",
         "operationId": "upload_documents_api_documents_upload_post",
         "requestBody": {
           "content": {
@@ -6190,7 +6343,7 @@
           "documents"
         ],
         "summary": "Serve Raw",
-        "description": "Serve a file's bytes to the BROWSER (so a plain\n``<a target=_blank>`` / ``window.open`` works) with the right\n``Content-Type`` and an inline ``Content-Disposition``.\n\nUnlike the token-guarded ``/file`` serve (which feeds the office\n*container*), this is an unauthenticated LAN-local read \u2014 consistent\nwith the dashboard's other browser-facing file serves (e.g. music\naudio). Its read scope is bounded entirely by the containment check:\nit can only serve files that resolve inside ``documents_dir``.",
+        "description": "Serve a file's bytes to the BROWSER (plain ``window.open`` works)\nwith the right ``Content-Type`` and an inline ``Content-Disposition``.\nRead scope is bounded entirely by the containment check.",
         "operationId": "serve_raw_api_documents_raw__rel_path__get",
         "parameters": [
           {
@@ -6225,306 +6378,13 @@
         }
       }
     },
-    "/api/documents/open": {
-      "post": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Open Document",
-        "description": "Acquire the per-file engine lock and return the iframe config the\nfrontend needs to embed the editor.\n\nThe ``document_sessions UNIQUE(rel_path)`` constraint makes a second\nengine's open on a locked file fail fast (409). Re-opening in the SAME\nengine that already holds the lock is idempotent (reuses the row).",
-        "operationId": "open_document_api_documents_open_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OpenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Open Document Api Documents Open Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/documents/callback/{engine}": {
-      "post": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Editor Callback",
-        "description": "OnlyOffice status callback. The body carries a ``status`` and, when\nthe doc is ready to persist, a ``url`` to download the edited bytes.\nJWT (``token`` in the body, JWT_IN_BODY) is verified. On save we\ndownload and write the file back; on the editing session ending we\nrelease the lock.\n\nCollabora never hits this path (it saves via WOPI PutFile); if it's\nrouted here we just no-op successfully.\n\nMust return ``{\"error\": 0}`` \u2014 anything else makes OnlyOffice retry.",
-        "operationId": "editor_callback_api_documents_callback__engine__post",
-        "parameters": [
-          {
-            "name": "engine",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Engine"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Editor Callback Api Documents Callback  Engine  Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/documents/close": {
-      "post": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Close Document",
-        "description": "Release a file's lock. Idempotent \u2014 closing an unlocked file is a\nno-op success (the sweeper or a prior callback may have cleared it).",
-        "operationId": "close_document_api_documents_close_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CloseRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Close Document Api Documents Close Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/documents/wopi/files/{file_id}": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Wopi Check File Info",
-        "description": "WOPI CheckFileInfo \u2014 Collabora fetches file metadata + permissions\nbefore loading. UserCanWrite=True: the office save path is RW (unlike\nthe MPD :ro music mount).",
-        "operationId": "wopi_check_file_info_api_documents_wopi_files__file_id__get",
-        "parameters": [
-          {
-            "name": "file_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "File Id"
-            }
-          },
-          {
-            "name": "access_token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Access Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Wopi Check File Info Api Documents Wopi Files  File Id  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/documents/wopi/files/{file_id}/contents": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Wopi Get File",
-        "description": "WOPI GetFile \u2014 Collabora downloads the current bytes.",
-        "operationId": "wopi_get_file_api_documents_wopi_files__file_id__contents_get",
-        "parameters": [
-          {
-            "name": "file_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "File Id"
-            }
-          },
-          {
-            "name": "access_token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Access Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Wopi Put File",
-        "description": "WOPI PutFile \u2014 Collabora saves edited bytes back. Writes into\n``documents_dir`` (containment-checked) and heartbeats the lock.",
-        "operationId": "wopi_put_file_api_documents_wopi_files__file_id__contents_post",
-        "parameters": [
-          {
-            "name": "file_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "File Id"
-            }
-          },
-          {
-            "name": "access_token",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Access Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Wopi Put File Api Documents Wopi Files  File Id  Contents Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/documents/drawings/read": {
       "post": {
         "tags": [
           "documents"
         ],
         "summary": "Read Drawing",
-        "description": "Load an Excalidraw scene (.excalidraw JSON) or .svg for editing.\nSingle-user, in-page \u2014 no lock.",
+        "description": "Load an Excalidraw scene (.excalidraw JSON) or .svg for editing.",
         "operationId": "read_drawing_api_documents_drawings_read_post",
         "requestBody": {
           "content": {
@@ -6570,7 +6430,7 @@
           "documents"
         ],
         "summary": "Write Drawing",
-        "description": "Save an Excalidraw scene / exported SVG into ``documents_dir``.\nCreates or overwrites. No lock (single-user).",
+        "description": "Save an Excalidraw scene / exported SVG into ``documents_dir``.",
         "operationId": "write_drawing_api_documents_drawings_write_post",
         "requestBody": {
           "content": {
@@ -6599,30 +6459,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/documents/engines": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Engines",
-        "description": "Which engines the operator has enabled + their browser base URLs.\nThe pages disable an engine's \"Open in \u2026\" button when its flag is off\n(and when the other engine holds the file lock).",
-        "operationId": "engines_api_documents_engines_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Engines Api Documents Engines Get"
                 }
               }
             }
@@ -6660,7 +6496,7 @@
           "files"
         ],
         "summary": "Browse",
-        "description": "One directory level inside a library, sorted dirs-first then name. Every\nentry's realpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. For ``core:documents``, rows carry the\neditor ``locked_by`` from ``document_sessions``.",
+        "description": "One directory level inside a library, sorted dirs-first then name. Every\nentry's realpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. (The per-file editor-lock join is\ngone with the office engines \u2014 the homegrown editors don't lock.)",
         "operationId": "browse_api_files_browse_get",
         "parameters": [
           {
@@ -7261,7 +7097,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PositionSave"
+                "$ref": "#/components/schemas/web__backend__api__podcasts__PositionSave"
               }
             }
           }
@@ -7618,7 +7454,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PositionSave"
+                "$ref": "#/components/schemas/web__backend__api__audiobooks__PositionSave"
               }
             }
           }
@@ -7644,6 +7480,874 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/videos/list": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "List Videos",
+        "description": "Every video across every present library. Bounded per library; the\nwalk runs in worker threads (one per library, gathered).",
+        "operationId": "list_videos_api_videos_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Videos Api Videos List Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/videos/stream": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Stream",
+        "description": "Range/206 playback (or attachment with ``?download=1``) of one video.",
+        "operationId": "stream_api_videos_stream_get",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Download"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/videos/poster": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Poster",
+        "description": "Cached poster frame for one video. 204 when extraction isn't possible\n(missing ffmpeg, unreadable file) \u2014 the client shows a placeholder tile.\nCache key includes size+mtime so an edited file re-extracts.",
+        "operationId": "poster_api_videos_poster_get",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/videos/position": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Get Position",
+        "operationId": "get_position_api_videos_position_get",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Position Api Videos Position Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Save Position",
+        "description": "Upsert one resume row. The two ON CONFLICT targets mirror the partial\nunique indexes (person vs anon). Fires the NOTIFY that becomes the\n``video_positions.changed`` WS event.",
+        "operationId": "save_position_api_videos_position_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/web__backend__api__videos__PositionSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Save Position Api Videos Position Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Clear Position",
+        "description": "Drop one resume row (\"remove from recently played\").",
+        "operationId": "clear_position_api_videos_position_delete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionClear"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Clear Position Api Videos Position Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/videos/recent": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Recent",
+        "description": "Newest position rows for this device (+person), existence-checked\nagainst the current registry. A row whose library is absent (ejected\ndrive) or whose file is gone is skipped, never deleted \u2014 the drive may\ncome back. Rows fetched with headroom so filtering still fills `limit`.",
+        "operationId": "recent_api_videos_recent_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 12,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Recent Api Videos Recent Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/images/raw": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Raw",
+        "description": "The original image, served inline (the Files tab's Open target).",
+        "operationId": "raw_api_images_raw_get",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/images/thumb": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Thumb",
+        "description": "Cached thumbnail in one of the size buckets. 204 when the source\ncan't be decoded (client falls back to the raw image / a glyph tile).",
+        "operationId": "thumb_api_images_thumb_get",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "m",
+              "title": "Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Threads",
+        "operationId": "list_threads_api_chat_threads_get",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Archived"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Threads Api Chat Threads Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Create Thread",
+        "operationId": "create_thread_api_chat_threads_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Thread Api Chat Threads Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}": {
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Patch Thread",
+        "operationId": "patch_thread_api_chat_threads__thread_id__patch",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Thread Api Chat Threads  Thread Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Delete Thread",
+        "description": "Delete a thread and its messages (CASCADE). Upload files referenced by\nthe thread are removed too when no other message references them.",
+        "operationId": "delete_thread_api_chat_threads__thread_id__delete",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Thread Api Chat Threads  Thread Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/messages": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Messages",
+        "operationId": "list_messages_api_chat_threads__thread_id__messages_get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Messages Api Chat Threads  Thread Id  Messages Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Send Message",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\"}    (also persisted on the row)",
+        "operationId": "send_message_api_chat_threads__thread_id__messages_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/uploads": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Upload",
+        "description": "Stage one image for a chat message. Returns the server-generated\ntoken the send call references; files are capped and extension-checked.",
+        "operationId": "upload_api_chat_uploads_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_api_chat_uploads_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Upload Api Chat Uploads Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/uploads/{token}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Upload",
+        "description": "Serve a staged/persisted chat image inline (for rendering in the\ntranscript). Token-addressed \u2014 the client never names paths.",
+        "operationId": "get_upload_api_chat_uploads__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/models": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Models",
+        "description": "Installed Ollama models + the configured defaults, for the composer's\nmodel picker.",
+        "operationId": "chat_models_api_chat_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Chat Models Api Chat Models Get"
                 }
               }
             }
@@ -8695,6 +9399,20 @@
         ],
         "title": "AnnounceRequest"
       },
+      "Body_upload_api_chat_uploads_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_api_chat_uploads_post"
+      },
       "Body_upload_api_files_upload_post": {
         "properties": {
           "library_id": {
@@ -9242,19 +9960,6 @@
         "title": "ClipSelectionBody",
         "description": "Bulk selection. Applies ``selected`` to the clips matched by the\noptional filters (both may be combined): ``names`` = an explicit subset,\n``only_verdict`` = only clips with that verdict. With neither filter it\napplies to ALL clips (select-all / deselect-all)."
       },
-      "CloseRequest": {
-        "properties": {
-          "rel_path": {
-            "type": "string",
-            "title": "Rel Path"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rel_path"
-        ],
-        "title": "CloseRequest"
-      },
       "ConfigResponse": {
         "properties": {
           "bot_name": {
@@ -9403,7 +10108,6 @@
               "doc",
               "sheet",
               "drawing",
-              "collabora_drawing",
               "text"
             ],
             "title": "Kind"
@@ -9554,7 +10258,7 @@
           "category": {
             "type": "string",
             "title": "Category",
-            "default": "office"
+            "default": "text"
           }
         },
         "type": "object",
@@ -9563,8 +10267,7 @@
           "name",
           "ext",
           "size",
-          "modified_at",
-          "locked_by"
+          "modified_at"
         ],
         "title": "DocumentRow"
       },
@@ -10658,28 +11361,6 @@
         ],
         "title": "NowPlayingSong"
       },
-      "OpenRequest": {
-        "properties": {
-          "rel_path": {
-            "type": "string",
-            "title": "Rel Path"
-          },
-          "engine": {
-            "type": "string",
-            "enum": [
-              "onlyoffice",
-              "collabora"
-            ],
-            "title": "Engine"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rel_path",
-          "engine"
-        ],
-        "title": "OpenRequest"
-      },
       "PasswordChangeRequest": {
         "properties": {
           "old_password": {
@@ -11122,8 +11803,16 @@
         ],
         "title": "PlaylistTrackAdd"
       },
-      "PositionSave": {
+      "PositionClear": {
         "properties": {
+          "library_id": {
+            "type": "string",
+            "title": "Library Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
           "device_id": {
             "type": "string",
             "title": "Device Id"
@@ -11138,29 +11827,15 @@
               }
             ],
             "title": "Person Id"
-          },
-          "position_sec": {
-            "type": "integer",
-            "title": "Position Sec"
-          },
-          "speed": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Speed"
           }
         },
         "type": "object",
         "required": [
-          "device_id",
-          "position_sec"
+          "library_id",
+          "path",
+          "device_id"
         ],
-        "title": "PositionSave"
+        "title": "PositionClear"
       },
       "PreferencesPatch": {
         "properties": {
@@ -11630,6 +12305,44 @@
         "title": "SatellitePairing",
         "description": "WS pairing status for a room (V002). ``paired`` is whether a\n``satellite_pairings`` row exists (the room has claimed its token,\ntrust-on-first-use); ``paired_at`` / ``last_seen_at`` are that row's\ntimestamps. An unpaired room reports ``paired=False`` with null times \u2014\nit still accepts a tokenless satellite unless strict pairing is on."
       },
+      "SendBody": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Content"
+          },
+          "images": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Images"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "SendBody"
+      },
       "Session": {
         "properties": {
           "id": {
@@ -11723,6 +12436,61 @@
         ],
         "title": "SetupRequest"
       },
+      "SheetCell": {
+        "properties": {
+          "v": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "V"
+          },
+          "f": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F"
+          }
+        },
+        "type": "object",
+        "title": "SheetCell"
+      },
+      "SheetWriteRequest": {
+        "properties": {
+          "rows": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SheetCell"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "SheetWriteRequest"
+      },
       "SubscribeRequest": {
         "properties": {
           "feed_url": {
@@ -11768,6 +12536,53 @@
           "text"
         ],
         "title": "TextWriteRequest"
+      },
+      "ThreadCreate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "title": "ThreadCreate"
+      },
+      "ThreadPatch": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          }
+        },
+        "type": "object",
+        "title": "ThreadPatch"
       },
       "Timer": {
         "properties": {
@@ -12575,6 +13390,46 @@
         ],
         "title": "ZipRequest"
       },
+      "web__backend__api__audiobooks__PositionSave": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "position_sec": {
+            "type": "integer",
+            "title": "Position Sec"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "position_sec"
+        ],
+        "title": "PositionSave"
+      },
       "web__backend__api__documents__DeleteRequest": {
         "properties": {
           "rel_paths": {
@@ -12620,6 +13475,108 @@
           "paths"
         ],
         "title": "DeleteRequest"
+      },
+      "web__backend__api__podcasts__PositionSave": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "position_sec": {
+            "type": "integer",
+            "title": "Position Sec"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "position_sec"
+        ],
+        "title": "PositionSave"
+      },
+      "web__backend__api__videos__PositionSave": {
+        "properties": {
+          "library_id": {
+            "type": "string",
+            "title": "Library Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "position_sec": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Position Sec"
+          },
+          "duration_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Sec"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "library_id",
+          "path",
+          "device_id",
+          "position_sec"
+        ],
+        "title": "PositionSave"
       }
     }
   }

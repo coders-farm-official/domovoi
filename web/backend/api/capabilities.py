@@ -79,13 +79,12 @@ def _features() -> dict[str, bool]:
 
         return {
             "chat": bool(getattr(settings, "chat_mode_enabled", False)),
-            "office": bool(
-                getattr(settings, "onlyoffice_enabled", False)
-                or getattr(settings, "collabora_enabled", False)
-            ),
+            # The Documents suite is homegrown/in-page now — always on
+            # (the former flag gated the OnlyOffice/Collabora sidecars).
+            "office": True,
         }
     except Exception:  # pragma: no cover - config import failure
-        return {"chat": False, "office": False}
+        return {"chat": False, "office": True}
 
 
 @router.get("")

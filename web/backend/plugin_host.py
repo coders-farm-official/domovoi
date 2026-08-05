@@ -55,10 +55,12 @@ log = logging.getLogger(__name__)
 # ─── Published core nav orders (§5.2 — versioned API surface) ─────────────
 # Plugins slot anywhere; equal values sort core-first then slug.
 CORE_NAV: dict[str, int] = {
+    "chat": 8,
     "music": 10,
     "podcasts": 12,
     "audiobooks": 14,
-    "news": 16,
+    "videos": 15,
+    "news": 18,
     "people": 20,
     "satellites": 30,
     "calendar": 40,

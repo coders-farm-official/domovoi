@@ -94,6 +94,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "must already be pulled.",
         "str", tier="reapply",
     ),
+    FieldSpec(
+        "ollama_vision_model", "Vision model", "Models",
+        "The vision-capable Ollama model the text-chat surface uses when a "
+        "message carries images. Applies immediately; it must already be "
+        "pulled.",
+        "str", tier="reapply",
+    ),
 
     # ─── Voice & speech ────────────────────────────────────────────────
     FieldSpec(

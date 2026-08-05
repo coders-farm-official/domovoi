@@ -24,6 +24,7 @@ import kotlinx.serialization.Serializable
 
 /** Well-known Android capability slugs. */
 const val CAP_STATIONS = "stations"
+const val CAP_IMAGEGEN = "imagegen"
 
 @Serializable
 data class CapabilityPlugin(

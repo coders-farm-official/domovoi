@@ -2,18 +2,20 @@
  * exposes (core media dirs, enabled-plugin media libraries, present
  * removable drives), driven by the generic /api/files/* surface.
  *
- * This file ALSO carries the shared office-suite half unchanged
- * (OnlyOfficeEditor / CollaboraEditor / EditorOverlay / TextEditorOverlay /
- * window.OfficeSuite + the /api/documents/* helpers). That half is reused
- * verbatim for the Documents library's in-place editing: when a Files row
- * inside `core:documents` is opened for editing, the page calls the exact
- * same /api/documents/open|close|text|raw flow it always did. The generic
- * /api/files/* endpoints never touch that surface (design's load-bearing
- * decision — zero editing blast radius).
+ * Documents-library editing is fully homegrown now — the former
+ * OnlyOffice/Collabora iframe engines are retired. Rows inside
+ * `core:documents` route their open-action BY TYPE (client-derived
+ * `category`, mirroring the backend's _doc_category):
+ *   * 'doc'      → markdown editor overlay (doc_editor.jsx · window.DocEditor)
+ *   * 'sheet'    → spreadsheet editor overlay (sheet_editor.jsx · window.SheetEditor)
+ *   * 'drawing'  → in-page Excalidraw editor (.excalidraw)
+ *   * 'newtab'   → open the /raw endpoint in a NEW TAB (pdf/images)
+ *   * 'download' → legacy office formats — save-to-device only
+ *   * 'text'     → in-app text editor overlay (.txt/unknown)
  *
- * Loads BEFORE drawings.jsx (which registers window.DrawingSuite that the
- * page borrows for .excalidraw editing). Babel-in-browser shares one global
- * scope; the integration pass fixes script-tag order.
+ * Loads BEFORE doc_editor.jsx / sheet_editor.jsx / drawings.jsx, which
+ * register the editor overlays this page borrows. Babel-in-browser shares
+ * one global scope; index.html fixes script-tag order.
  *
  * Data sources:
  *   Files browser (all libraries):
@@ -23,8 +25,8 @@
  *     * POST /api/files/upload      — upload into the current dir.
  *     * POST /api/files/delete      — delete files / (recursive) folders.
  *     * POST /api/files/import      — copy from a removable drive into a library.
- *   Documents-library editing (unchanged):
- *     * GET  /api/documents/engines / /api/documents/open|close / /text / /raw.
+ *   Documents-library editing:
+ *     * /api/documents/{text,sheet,raw,create,export} — homegrown editors.
  */
 
 /* ---- shared: dynamic script loader (dedup by URL) ---------- */
@@ -42,130 +44,6 @@ const officeLoadScript = (url) => {
   return _officeScripts[url];
 };
 
-/* ---- shared hooks ------------------------------------------ */
-const useEngines = () => {
-  const { data } = useApiObject('/api/documents/engines');
-  return data || { onlyoffice: { enabled: false }, collabora: { enabled: false } };
-};
-
-const useDocuments = (kind) => {
-  const { items, loading, refresh } = useApiList(`/api/documents?kind=${kind}`);
-  return { items, loading, refresh };
-};
-
-/* ---- shared: OnlyOffice iframe editor ---------------------- */
-const OnlyOfficeEditor = ({ session, onClose }) => {
-  const holderRef = React.useRef(null);
-  const editorRef = React.useRef(null);
-  const holderId = `oo-holder-${session.editor_key}`;
-
-  React.useEffect(() => {
-    let cancelled = false;
-    officeLoadScript(session.script_url).then(() => {
-      if (cancelled || !window.DocsAPI || !holderRef.current) return;
-      try {
-        editorRef.current = new window.DocsAPI.DocEditor(holderId, {
-          ...session.config,
-          type: 'desktop',
-          width: '100%',
-          height: '100%',
-          events: { onRequestClose: onClose },
-        });
-      } catch (e) {
-        console.error('OnlyOffice editor init failed:', e);
-      }
-    }).catch(e => console.error(e));
-    return () => {
-      cancelled = true;
-      try { editorRef.current && editorRef.current.destroyEditor(); } catch {}
-    };
-  }, []);
-
-  return <div ref={holderRef} id={holderId} style={{ width: '100%', height: '100%' }}/>;
-};
-
-/* ---- shared: Collabora WOPI iframe editor ------------------ */
-const CollaboraEditor = ({ session }) => {
-  const formRef = React.useRef(null);
-  const frameName = `collabora-${session.editor_key}`;
-  React.useEffect(() => {
-    // Collabora loads via a form POST (access_token as a hidden field)
-    // targeting the iframe — the WOPI handshake, not a plain src.
-    if (formRef.current) formRef.current.submit();
-  }, []);
-  return (
-    <>
-      <form ref={formRef} action={session.action_url} method="post"
-            target={frameName} style={{ display: 'none' }}>
-        <input type="hidden" name="access_token" value={session.access_token}/>
-      </form>
-      <iframe name={frameName} title="Collabora"
-              allow="clipboard-read; clipboard-write"
-              style={{ width: '100%', height: '100%', border: 'none' }}/>
-    </>
-  );
-};
-
-/* ---- shared: full-screen editor overlay ------------------- */
-const EditorOverlay = ({ session, onClose }) => (
-  <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)',
-                display: 'flex', flexDirection: 'column' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                  borderBottom: '1px solid var(--border)', background: 'var(--card)' }}>
-      <Icon name={session.engine === 'onlyoffice' ? 'file-text' : 'file'} size={16}/>
-      <strong style={{ fontSize: 14 }}>{session.rel_path}</strong>
-      <Pill tone="idle">{session.engine}</Pill>
-      <span style={{ flex: 1 }}/>
-      <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-        changes autosave to the file
-      </span>
-      <Button icon="x" onClick={onClose}>Close</Button>
-    </div>
-    <div style={{ flex: 1, minHeight: 0 }}>
-      {session.engine === 'onlyoffice'
-        ? <OnlyOfficeEditor session={session} onClose={onClose}/>
-        : <CollaboraEditor session={session}/>}
-    </div>
-  </div>
-);
-
-/* ---- shared: one file row --------------------------------- */
-const OfficeRow = ({ doc, engines, onOpen }) => {
-  const lockedByOther = (eng) => doc.locked_by && doc.locked_by !== eng;
-  const btn = (eng, label, icon) => {
-    const disabled = !engines[eng]?.enabled || lockedByOther(eng);
-    const title = !engines[eng]?.enabled
-      ? `${eng} is disabled`
-      : lockedByOther(eng)
-        ? `locked — open in ${doc.locked_by}`
-        : `open in ${eng}`;
-    return (
-      <Button icon={icon} disabled={disabled} title={title}
-              onClick={() => onOpen(doc.rel_path, eng)}>
-        {label}
-      </Button>
-    );
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
-                  borderTop: '1px solid var(--border-soft)' }}>
-      <Icon name="file" size={18}/>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
-                      overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {doc.name}<span style={{ color: 'var(--fg-faint)' }}>{doc.ext}</span>
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
-          {fmtBytes(doc.size)} · {liveRelTime(new Date(doc.modified_at * 1000).toISOString())}
-          {doc.locked_by && <> · <span style={{ color: 'var(--warn)' }}>editing in {doc.locked_by}</span></>}
-        </div>
-      </div>
-      {btn('onlyoffice', 'OnlyOffice', 'file-text')}
-      {btn('collabora', 'Collabora', 'file')}
-    </div>
-  );
-};
-
 const fmtBytes = (n) => {
   if (n == null) return '—';
   if (n < 1024) return `${n} B`;
@@ -173,96 +51,8 @@ const fmtBytes = (n) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-/* ---- shared: the reusable Office page --------------------- */
-const OfficePage = ({ kind, title, sub }) => {
-  const engines = useEngines();
-  const { items, loading, refresh } = useDocuments(kind);
-  const [session, setSession] = React.useState(null);
-  const [creating, setCreating] = React.useState(false);
-  const [fire, toastNode] = useToast();
-
-  const onOpen = async (rel_path, engine) => {
-    try {
-      const cfg = await apiPost('/api/documents/open', { rel_path, engine });
-      setSession(cfg);
-    } catch (e) {
-      fire(`Couldn't open: ${String(e.message || e).slice(0, 80)}`);
-    }
-  };
-
-  const onClose = async () => {
-    const rel = session?.rel_path;
-    setSession(null);
-    if (rel) { try { await apiPost('/api/documents/close', { rel_path: rel }); } catch {} }
-    refresh();
-  };
-
-  const onCreate = async () => {
-    const name = window.prompt(`New ${kind} name:`);
-    if (!name) return;
-    setCreating(true);
-    try {
-      await apiPost('/api/documents/create', { name, kind });
-      fire('Created');
-      refresh();
-    } catch (e) {
-      fire(`Create failed: ${String(e.message || e).slice(0, 80)}`);
-    } finally { setCreating(false); }
-  };
-
-  const anyEngine = engines.onlyoffice?.enabled || engines.collabora?.enabled;
-
-  return (
-    <div className="page">
-      <PageHeader title={title} sub={sub}
-        actions={<Button variant="primary" icon="plus" disabled={creating} onClick={onCreate}>New</Button>}/>
-
-      {!anyEngine && (
-        <Card>
-          <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--fg-muted)' }}>
-            No office engine is enabled. Set <code className="mono">onlyoffice_enabled</code> or{' '}
-            <code className="mono">collabora_enabled</code> (with JWT secrets + LAN URLs), start the
-            container, and reload.
-          </div>
-        </Card>
-      )}
-
-      <Card>
-        {loading ? (
-          <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Loading…</div>
-        ) : items.length === 0 ? (
-          <Empty title="no files yet" sub={`drop files into documents_dir, or click New`}/>
-        ) : (
-          items.map(doc => (
-            <OfficeRow key={doc.rel_path} doc={doc} engines={engines} onOpen={onOpen}/>
-          ))
-        )}
-      </Card>
-
-      {session && <EditorOverlay session={session} onClose={onClose}/>}
-      {toastNode}
-    </div>
-  );
-};
-
-/* expose the shared surface for spreadsheets.jsx */
-window.OfficeSuite = {
-  OfficePage, OfficeRow, EditorOverlay, OnlyOfficeEditor, CollaboraEditor,
-  useEngines, useDocuments, officeLoadScript, fmtBytes,
-};
-
-/* ============================================================ *
- *  Documents-library editing helpers (unchanged surface).
- *
- *  Inside the Files browser, rows belonging to the `core:documents`
- *  library route their open-action BY TYPE (client-derived `category`,
- *  mirroring the backend's _doc_category):
- *    * 'office'            → OnlyOffice iframe (word-processor + sheet).
- *    * 'collabora_drawing' → Collabora Draw iframe (.odg).
- *    * 'drawing'           → in-page Excalidraw editor (.excalidraw).
- *    * 'newtab'  (pdf/img) → open the /raw endpoint in a NEW TAB.
- *    * 'text'              → in-app text editor overlay (.txt/.md/unknown).
- * ============================================================ */
+/* Slim shared surface (drawings.jsx borrows these two). */
+window.OfficeSuite = { officeLoadScript, fmtBytes };
 
 /* ---- raw / text / download helpers ------------------------ */
 const docRawUrl = (rel) => `/api/documents/raw/${encodeURIComponent(rel)}`;
@@ -427,36 +217,37 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
 };
 
 /* ---- one Documents-library file row: checkbox + Edit/Open · Download · Delete ----
- * Exactly one primary action, chosen by file TYPE (no per-engine choice):
- *   office            → Edit in OnlyOffice
- *   collabora_drawing → Edit in Collabora Draw
- *   drawing           → Edit in Excalidraw
- *   text              → Edit in the in-app text editor
- *   newtab (pdf/img)  → Open in a new tab
+ * Exactly one primary action, chosen by file TYPE:
+ *   doc              → Edit in the markdown editor
+ *   sheet            → Edit in the spreadsheet editor
+ *   drawing          → Edit in Excalidraw
+ *   text             → Edit in the in-app text editor
+ *   newtab (pdf/img) → Open in a new tab
+ *   download         → legacy office formats — Download is the action
  */
-const DocRow = ({ doc, engines, selected, onToggleSelect,
-                  onOpenOffice, onOpenText, onOpenDrawing, onDelete }) => {
-  const cat = doc.category || 'office';
+const DocRow = ({ doc, selected, onToggleSelect,
+                  onOpenDoc, onOpenSheet, onOpenText, onOpenDrawing, onDelete }) => {
+  const cat = doc.category || 'text';
   const icon = cat === 'newtab' ? (doc.ext === '.pdf' ? 'file-text' : 'image')
-    : cat === 'collabora_drawing' ? 'pen-tool'
     : cat === 'drawing' ? 'pen-tool'
-    : cat === 'office' ? 'file-text' : 'file';
+    : cat === 'sheet' ? 'table'
+    : cat === 'doc' || cat === 'download' ? 'file-text' : 'file';
 
   let primary;
-  if (cat === 'office') {
-    const on = engines.onlyoffice?.enabled;
-    primary = { label: 'Edit', icon: 'edit', disabled: !on,
-      title: on ? 'edit in OnlyOffice' : 'OnlyOffice is disabled',
-      onClick: () => onOpenOffice(doc.rel_path, 'onlyoffice') };
-  } else if (cat === 'collabora_drawing') {
-    const on = engines.collabora?.enabled;
-    primary = { label: 'Edit', icon: 'edit', disabled: !on,
-      title: on ? 'edit in Collabora' : 'Collabora is disabled',
-      onClick: () => onOpenOffice(doc.rel_path, 'collabora') };
+  if (cat === 'doc') {
+    primary = { label: 'Edit', icon: 'edit', title: 'edit markdown',
+      onClick: () => onOpenDoc(doc.rel_path) };
+  } else if (cat === 'sheet') {
+    primary = { label: 'Edit', icon: 'edit', title: 'edit spreadsheet',
+      onClick: () => onOpenSheet(doc.rel_path) };
   } else if (cat === 'drawing') {
     primary = { label: 'Edit', icon: 'edit-3', onClick: () => onOpenDrawing(doc) };
   } else if (cat === 'text') {
     primary = { label: 'Edit', icon: 'edit', onClick: () => onOpenText(doc.rel_path) };
+  } else if (cat === 'download') {
+    primary = { label: 'Download', icon: 'download',
+      title: 'legacy office format — download to edit elsewhere',
+      onClick: () => downloadDoc(doc.rel_path) };
   } else {
     primary = { label: 'Open', icon: 'external-link', title: 'open in a new tab',
       onClick: () => openDocInNewTab(doc.rel_path) };
@@ -477,31 +268,28 @@ const DocRow = ({ doc, engines, selected, onToggleSelect,
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
           {fmtBytes(doc.size)} · {liveRelTime(new Date(doc.modified_at * 1000).toISOString())}
-          {doc.locked_by && <> · <span style={{ color: 'var(--warn)' }}>editing in {doc.locked_by}</span></>}
         </div>
       </div>
       <Button icon={primary.icon} disabled={primary.disabled} title={primary.title}
               onClick={primary.onClick}>{primary.label}</Button>
-      <Button icon="download" title="download"
-              onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
+      {cat !== 'download' && (
+        <Button icon="download" title="download"
+                onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
+      )}
       <Button icon="trash-2" title="delete" onClick={() => onDelete(doc)}>Delete</Button>
     </div>
   );
 };
 
-/* ---- "+ New" create menu (Documents library only) ----------
- * `engine` gates a row on that office engine being enabled (Collabora
- * Drawing greys out when Collabora is off). Basic Drawing (Excalidraw) is
- * always available; it needs no server engine. */
+/* ---- "+ New" create menu (Documents library only) ---------- */
 const NEW_KINDS = [
-  { kind: 'doc',               label: 'Document',         icon: 'file-text', hint: 'Word document · .docx' },
-  { kind: 'sheet',             label: 'Spreadsheet',      icon: 'table',     hint: 'Workbook · .xlsx' },
-  { kind: 'collabora_drawing', label: 'Collabora Drawing', icon: 'pen-tool', hint: 'Vector drawing · Collabora · .odg', engine: 'collabora' },
-  { kind: 'drawing',           label: 'Basic Drawing',    icon: 'edit-3',    hint: 'Excalidraw whiteboard' },
-  { kind: 'text',              label: 'Text file',        icon: 'file',      hint: 'Plain text · name as typed' },
+  { kind: 'doc',     label: 'Document',      icon: 'file-text', hint: 'Markdown document · .md' },
+  { kind: 'sheet',   label: 'Spreadsheet',   icon: 'table',     hint: 'Workbook · .xlsx' },
+  { kind: 'drawing', label: 'Drawing',       icon: 'edit-3',    hint: 'Excalidraw whiteboard' },
+  { kind: 'text',    label: 'Text file',     icon: 'file',      hint: 'Plain text · name as typed' },
 ];
 
-const NewMenu = ({ disabled, engines, onPick }) => {
+const NewMenu = ({ disabled, onPick }) => {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   React.useEffect(() => {
@@ -521,28 +309,21 @@ const NewMenu = ({ disabled, engines, onPick }) => {
                       minWidth: 240, background: 'var(--card)', border: '1px solid var(--border)',
                       borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md), var(--inner-highlight)',
                       padding: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {NEW_KINDS.map((it) => {
-            const off = it.engine && !engines?.[it.engine]?.enabled;
-            return (
-              <button key={it.kind} disabled={off}
-                      onClick={() => { if (off) return; setOpen(false); onPick(it.kind); }}
-                      onMouseEnter={(e) => { if (!off) e.currentTarget.style.background = 'var(--bg)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      title={off ? `${it.engine} is disabled` : undefined}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-                               background: 'transparent', border: 'none', borderRadius: 'var(--r-sm)',
-                               cursor: off ? 'not-allowed' : 'pointer', opacity: off ? 0.45 : 1,
-                               textAlign: 'left', font: 'inherit', color: 'var(--fg)' }}>
-                <Icon name={it.icon} size={16}/>
-                <span style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{it.label}</span>
-                  <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-                    {off ? 'Collabora is disabled' : it.hint}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+          {NEW_KINDS.map((it) => (
+            <button key={it.kind}
+                    onClick={() => { setOpen(false); onPick(it.kind); }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                             background: 'transparent', border: 'none', borderRadius: 'var(--r-sm)',
+                             cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'var(--fg)' }}>
+              <Icon name={it.icon} size={16}/>
+              <span style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{it.label}</span>
+                <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{it.hint}</span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -556,12 +337,13 @@ const NewMenu = ({ disabled, engines, onPick }) => {
 /* Client mirror of the backend _doc_category (documents.py). Drives the
  * per-row editing affordance for the Documents library only. */
 const _FILES_OFFICE_WP = new Set(['.docx', '.doc', '.odt', '.rtf']);
-const _FILES_SHEET = new Set(['.xlsx', '.xls', '.ods', '.csv']);
+const _FILES_SHEET_EDIT = new Set(['.xlsx', '.csv']);
 const _FILES_IMAGE = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.avif', '.svg']);
 const extOf = (name) => { const i = name.lastIndexOf('.'); return i >= 0 ? name.slice(i).toLowerCase() : ''; };
 const docCategory = (ext) => {
-  if (_FILES_OFFICE_WP.has(ext) || _FILES_SHEET.has(ext)) return 'office';
-  if (ext === '.odg') return 'collabora_drawing';
+  if (ext === '.md' || ext === '.markdown') return 'doc';
+  if (_FILES_SHEET_EDIT.has(ext)) return 'sheet';
+  if (_FILES_OFFICE_WP.has(ext) || ext === '.xls' || ext === '.ods' || ext === '.odg') return 'download';
   if (ext === '.excalidraw') return 'drawing';
   if (ext === '.pdf' || _FILES_IMAGE.has(ext)) return 'newtab';
   return 'text';
@@ -580,7 +362,7 @@ const entryToDoc = (entry) => {
 
 /* Per-entry-kind lucide glyph for the generic (non-Documents) rows. */
 const entryIcon = (kind) => ({
-  folder: 'folder', audio: 'music', 'doc-office': 'file-text',
+  folder: 'folder', audio: 'music', video: 'film', 'doc-office': 'file-text',
   'doc-text': 'file', image: 'image', pdf: 'file-text', other: 'file',
 }[kind] || 'file');
 
@@ -754,10 +536,15 @@ const ImportMenu = ({ importables, disabled, onPick }) => {
 /* One generic browser row: folder (navigates) or file. Handles selection,
  * Download, Delete (editable), and Import (removable source). Documents-
  * library FILE rows use DocRow instead (editing affordance). */
-const BrowserRow = ({ entry, selected, onToggleSelect, editable, removable,
+const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, removable,
                       importables, onOpen, onDownload, onDelete, onImport }) => {
   const isDir = entry.is_dir;
   const iso = entry.mtime ? new Date(entry.mtime * 1000).toISOString() : null;
+  // Images in ANY library open inline in a new tab via the generic
+  // library-image serve (the Files tab owns image browsing).
+  const openImage = () => window.open(
+    `${API_BASE}/api/images/raw?library_id=${encodeURIComponent(libraryId)}`
+    + `&path=${encodeURIComponent(entry.rel)}`, '_blank', 'noopener');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
                   borderTop: '1px solid var(--border-soft)',
@@ -778,6 +565,9 @@ const BrowserRow = ({ entry, selected, onToggleSelect, editable, removable,
       </div>
       {isDir && (
         <Button icon="chevron-right" title="open folder" onClick={onOpen}>Open</Button>
+      )}
+      {!isDir && entry.kind === 'image' && (
+        <Button icon="external-link" title="open in a new tab" onClick={openImage}>Open</Button>
       )}
       <Button icon="download" title="download" onClick={onDownload}>Download</Button>
       {removable && (
@@ -855,7 +645,6 @@ const DeleteConfirmDialog = ({ state, busy, onCancel, onConfirm }) => {
  * New(upload) / Download / Delete / Import controls. Documents-library rows
  * keep the exact office/text/drawing/newtab editing routing. */
 const FilesPage = () => {
-  const engines = useEngines();
   // Excalidraw machinery lives in drawings.jsx; reuse it for .excalidraw rows.
   const useExcalidrawHook = window.DrawingSuite && window.DrawingSuite.useExcalidraw;
   const lib = useExcalidrawHook ? useExcalidrawHook() : null;
@@ -867,7 +656,8 @@ const FilesPage = () => {
   const [path, setPath] = React.useState('');
   const [browseLoading, setBrowseLoading] = React.useState(false);
   const [selected, setSelected] = React.useState(() => new Set());  // rels
-  const [session, setSession] = React.useState(null);   // office editor
+  const [docRel, setDocRel] = React.useState(null);     // markdown editor
+  const [sheetRel, setSheetRel] = React.useState(null); // spreadsheet editor
   const [textRel, setTextRel] = React.useState(null);   // text editor
   const [drawing, setDrawing] = React.useState(null);   // excalidraw: {rel_path}
   const [uploading, setUploading] = React.useState(false);
@@ -934,18 +724,26 @@ const FilesPage = () => {
   const clearSelection = () => setSelected(new Set());
   const entriesFor = (rels) => entries.filter((e) => rels.has(e.rel));
 
-  // ── Documents-library editing (unchanged /api/documents flow) ──
-  const onOpenOffice = async (rel_path, engine) => {
-    try { setSession(await apiPost('/api/documents/open', { rel_path, engine })); }
-    catch (e) { fire(`Couldn't open: ${String(e.message || e).slice(0, 80)}`); }
-  };
-  const onCloseOffice = async () => {
-    const rel = session?.rel_path;
-    setSession(null);
-    if (rel) { try { await apiPost('/api/documents/close', { rel_path: rel }); } catch {} }
-    refresh();
-  };
+  // ── Documents-library editing (homegrown overlays) ──
   const onCloseText = () => { setTextRel(null); refresh(); };
+  const onCloseDoc = () => { setDocRel(null); refresh(); };
+  const onCloseSheet = () => { setSheetRel(null); refresh(); };
+
+  // "+ New" (Documents library) — create then open the right editor.
+  const onCreate = async (kind) => {
+    const name = window.prompt(`New ${kind === 'doc' ? 'document' : kind} name:`);
+    if (!name) return;
+    try {
+      const row = await apiPost('/api/documents/create', { name, kind });
+      refresh();
+      if (row.category === 'doc') setDocRel(row.rel_path);
+      else if (row.category === 'sheet') setSheetRel(row.rel_path);
+      else if (row.category === 'drawing') setDrawing(row);
+      else if (row.category === 'text') setTextRel(row.rel_path);
+    } catch (e) {
+      fire(`Create failed: ${String(e.message || e).slice(0, 80)}`);
+    }
+  };
 
   // ── New (upload into the current directory) ──
   const onUpload = async (fileList) => {
@@ -1048,26 +846,17 @@ const FilesPage = () => {
         actions={<>
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
                  onChange={(e) => onUpload(e.target.files)}/>
-          <Button variant="primary" icon="upload" disabled={uploading || !canUpload}
+          {isDocuments && <NewMenu disabled={!canUpload} onPick={onCreate}/>}
+          <Button variant={isDocuments ? 'secondary' : 'primary'} icon="upload"
+                  disabled={uploading || !canUpload}
                   title={canUpload ? 'upload into this folder' : 'this library is read-only'}
                   onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-            {uploading ? 'Uploading…' : 'New'}
+            {uploading ? 'Uploading…' : 'Upload'}
           </Button>
         </>}/>
 
       <LibrarySelector libraries={libraries} activeId={activeId}
                        onSelect={onSelectLibrary} onRefresh={loadLibraries}/>
-
-      {isDocuments && !engines.onlyoffice?.enabled && (
-        <Card>
-          <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--fg-muted)' }}>
-            OnlyOffice is disabled — documents & spreadsheets can’t be edited (they still download).
-            Drawings, text files, PDFs and images work regardless. Set{' '}
-            <code className="mono">onlyoffice_enabled</code> to edit Office files
-            {!engines.collabora?.enabled && <>, and <code className="mono">collabora_enabled</code> for Collabora drawings</>}.
-          </div>
-        </Card>
-      )}
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px',
@@ -1120,15 +909,16 @@ const FilesPage = () => {
           entries.map((entry) => {
             if (!entry.is_dir && isDocuments && view.doc_editing) {
               return (
-                <DocRow key={entry.rel} doc={entryToDoc(entry)} engines={engines}
+                <DocRow key={entry.rel} doc={entryToDoc(entry)}
                         selected={selected.has(entry.rel)} onToggleSelect={toggleSelect}
-                        onOpenOffice={onOpenOffice} onOpenText={setTextRel}
+                        onOpenDoc={setDocRel} onOpenSheet={setSheetRel}
+                        onOpenText={setTextRel}
                         onOpenDrawing={(d) => setDrawing(d)}
                         onDelete={(d) => requestDelete([entries.find((e) => e.rel === d.rel_path)])}/>
               );
             }
             return (
-              <BrowserRow key={entry.rel} entry={entry}
+              <BrowserRow key={entry.rel} entry={entry} libraryId={activeId}
                           selected={selected.has(entry.rel)} onToggleSelect={toggleSelect}
                           editable={view.editable} removable={isRemovable}
                           importables={importables}
@@ -1141,7 +931,12 @@ const FilesPage = () => {
         )}
       </Card>
 
-      {session && <EditorOverlay session={session} onClose={onCloseOffice}/>}
+      {docRel && window.DocEditor && (
+        <window.DocEditor rel_path={docRel} onClose={onCloseDoc} fire={fire}/>
+      )}
+      {sheetRel && window.SheetEditor && (
+        <window.SheetEditor rel_path={sheetRel} onClose={onCloseSheet} fire={fire}/>
+      )}
       {textRel && <TextEditorOverlay rel_path={textRel} onClose={onCloseText} fire={fire}/>}
       {drawing && DrawingOverlayCmp && (
         <DrawingOverlayCmp file={drawing} lib={lib}

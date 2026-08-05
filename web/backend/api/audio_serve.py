@@ -38,6 +38,20 @@ _AUDIO_CONTENT_TYPES: dict[str, str] = {
 # folder audiobook) filter on the same extensions this module can serve.
 AUDIO_EXTENSIONS = frozenset(_AUDIO_CONTENT_TYPES)
 
+# Video containers the Videos tab serves through the same Range machinery.
+# .mkv rides as x-matroska: Chromium-family browsers demux Matroska (h264/
+# aac plays fine); a browser that can't fires the <video> error event and
+# the page offers save-to-device instead. Android's ExoPlayer plays all of
+# these natively.
+VIDEO_CONTENT_TYPES: dict[str, str] = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+}
+VIDEO_EXTENSIONS = frozenset(VIDEO_CONTENT_TYPES)
+
 _STREAM_CHUNK = 256 * 1024
 
 # Characters that are unsafe in a filename on some OS the file may land on
@@ -110,14 +124,19 @@ async def _iter_file(path: Path, start: int, end: int):
 
 
 def serve_audio_range(
-    target: Path, request: Request, download_name: str | None = None
+    target: Path,
+    request: Request,
+    download_name: str | None = None,
+    content_type: str | None = None,
 ) -> StreamingResponse:
     """Stream ``target`` with Range/206 support. Caller guarantees ``target``
     is a real file already validated inside its configured dir. With
     ``download_name`` the response is marked ``attachment`` (save-to-device)
-    instead of inline playback."""
+    instead of inline playback. ``content_type`` overrides the audio-map
+    lookup (the Videos router passes its own video MIME)."""
     file_size = target.stat().st_size
-    content_type = _AUDIO_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+    if content_type is None:
+        content_type = _AUDIO_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
     rng = parse_range(request.headers.get("range"), file_size)
     base = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=86400"}
     if download_name:

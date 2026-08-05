@@ -6,6 +6,7 @@
   <title>Domovoi Web</title>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="/vendor/xspreadsheet/xspreadsheet.css">
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#e8a33d">
 </head>
@@ -19,6 +20,10 @@
   <script src="/vendor/react/react-dom.development.js"></script>
   <script src="/vendor/babel/babel.min.js"></script>
   <script src="/vendor/lucide/lucide.min.js"></script>
+  <!-- Homegrown editors: marked (markdown preview, MIT) + x-spreadsheet
+       (grid with client-side formulas, MIT). Vendored like everything else. -->
+  <script src="/vendor/marked/marked.min.js"></script>
+  <script src="/vendor/xspreadsheet/xspreadsheet.js"></script>
 
   <script type="text/babel" data-presets="react" src="auth.js"></script>
   <script type="text/babel" data-presets="react" src="data.js"></script>
@@ -28,18 +33,23 @@
   <script type="text/babel" data-presets="react" src="music.jsx"></script>
   <script type="text/babel" data-presets="react" src="podcasts.jsx"></script>
   <script type="text/babel" data-presets="react" src="audiobooks.jsx"></script>
+  <script type="text/babel" data-presets="react" src="videos.jsx"></script>
+  <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
   <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
   <script type="text/babel" data-presets="react" src="plugins.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
-  <!-- Files is a multi-library browser; files.jsx also carries the shared
-       office suite (reused for the Documents library's editing) and MUST load
-       before drawings.jsx, which registers window.DrawingSuite that the page
-       borrows for .excalidraw editing. models.jsx defines ModelsPanel, now a
-       Settings tab. -->
+  <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
+       sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,
+       the homegrown Documents-library editors) and drawings.jsx (which
+       registers window.DrawingSuite for .excalidraw editing and borrows
+       helpers files.jsx exports). models.jsx defines ModelsPanel, a Settings
+       tab. -->
   <script type="text/babel" data-presets="react" src="files.jsx"></script>
+  <script type="text/babel" data-presets="react" src="doc_editor.jsx"></script>
+  <script type="text/babel" data-presets="react" src="sheet_editor.jsx"></script>
   <script type="text/babel" data-presets="react" src="drawings.jsx"></script>
   <script type="text/babel" data-presets="react" src="models.jsx"></script>
   <script type="text/babel" data-presets="react" src="news.jsx"></script>
@@ -59,9 +69,11 @@
      */
     window.DomovoiCore = window.DomovoiCore || {};
     window.DomovoiCore.pages = {
+      chat: () => window.ChatPage,
       music: () => window.MusicPage,
       podcasts: () => window.PodcastsPage,
       audiobooks: () => window.AudiobooksPage,
+      videos: () => window.VideosPage,
       news: () => window.NewsPage,
       people: () => window.PeoplePage,
       satellites: () => window.SatellitesPage,

@@ -24,12 +24,14 @@ from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
 from web.backend.api import calendar as calendar_api
 from web.backend.api import capabilities as capabilities_api
+from web.backend.api import chat as chat_api
 from web.backend.api import config as config_api
 from web.backend.api import denylist as denylist_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import greetings as greetings_api
+from web.backend.api import images as images_api
 from web.backend.api import models as models_api
 from web.backend.api import music as music_api
 from web.backend.api import news as news_api
@@ -41,6 +43,7 @@ from web.backend.api import podcasts as podcasts_api
 from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
+from web.backend.api import videos as videos_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend import plugin_host
@@ -262,6 +265,9 @@ app.include_router(documents_api.router)
 app.include_router(files_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
+app.include_router(videos_api.router)
+app.include_router(images_api.router)
+app.include_router(chat_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
 

@@ -30,13 +30,21 @@ cd android
 # APK lands in app/build/outputs/apk/debug/
 ```
 
-## First run
+## First run / offline-local mode
 
-The app asks for the dashboard URL — the web backend on your LAN,
-e.g. `http://192.168.1.20:6369`. It health-checks `/api/health` before
-accepting. Change it later under Settings → Connection. Traffic is
-plain HTTP on your LAN (same trust model as the web dashboard);
-cleartext is enabled in the manifest for that reason.
+Without a configured server the app runs in **local mode**: just a Music
+and a Videos tab, backed by the device's own media via MediaStore
+(granular `READ_MEDIA_AUDIO` / `READ_MEDIA_VIDEO` permissions on API
+33+). A `connect` chip opens the discovery screen — the web backend on
+your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
+`/api/health` before accepting. Change it later under Settings →
+Connection. Traffic is plain HTTP on your LAN (same trust model as the
+web dashboard); cleartext is enabled in the manifest for that reason.
+
+While connected, the save-to-device actions across Music / Videos /
+Podcasts / Audiobooks download through the system `DownloadManager` into
+`Downloads/Domovoi`, which MediaStore indexes — so anything saved shows
+up in local mode automatically.
 
 ## Layout
 
@@ -50,8 +58,9 @@ app/src/main/java/com/domovoi/app/
     ├── theme/             # domovoi design tokens (oklch → sRGB), light/dark
     ├── components/        # Pill, StatusDot, cards, dialogs, Domovoi glyphs, fmt helpers
     ├── shell/             # adaptive nav: bottom bar (phone) / rail (medium) / sidebar (tablet)
-    └── screens/           # music, podcasts, audiobooks, news, people, satellites,
-                           # calendar, stations, documents, settings, manual
+    └── screens/           # chat, music, podcasts, audiobooks, videos, images, news,
+                           # people, satellites, calendar, stations, documents,
+                           # local (offline MediaStore music+videos), settings, manual
 ```
 
 Responsive behavior: compact widths get a bottom bar (Music /
@@ -78,10 +87,11 @@ web-dashboard plugin pages only; this app stays provider-agnostic.
 
 ## Known gaps vs the web app
 
-- No embedded OnlyOffice/Collabora editors on Documents — office files
-  can be created/uploaded/downloaded/deleted; editing hands off to the
-  web dashboard. Text files get a native editor; drawings are view/
-  download only (no Excalidraw canvas).
+- Documents editing is simpler than the web's: markdown gets the native
+  text editor with a formatting toolbar (no preview pane), spreadsheets
+  get a plain value grid (formulas save as `=...` strings but aren't
+  evaluated on-device), legacy office files download only, and drawings
+  are view/download only (no Excalidraw canvas).
 - No 10-band EQ / spectrum visualizer in the player (ExoPlayer has no
   Web-Audio-style filter graph without a custom audio processor).
 - No offline pin/auto-cache of tracks yet (the web PWA's Cache Storage

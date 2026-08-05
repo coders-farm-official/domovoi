@@ -136,6 +136,48 @@ async def pull_model(
                     continue
 
 
+async def chat_stream(
+    messages: list[dict[str, Any]],
+    model: str,
+    base_url: str | None = None,
+    connect_timeout: float = 10.0,
+) -> AsyncIterator[str]:
+    """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
+    assistant-content deltas as they arrive.
+
+    ``messages`` is the Ollama chat shape: ``[{"role": "user"|"assistant"|
+    "system", "content": str, "images": [<base64>, ...]?}]`` — the optional
+    ``images`` list is how vision models receive attachments. Used by the
+    web text-chat surface (module-level like :func:`pull_model`; the voice
+    pipeline's Protocol clients are untouched). No overall read timeout — a
+    long completion on a big model is legitimate; only connect is bounded.
+    Raises on transport errors so the caller can surface the failure."""
+    import httpx
+
+    url = f"{_ollama_base(base_url)}/api/chat"
+    timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        async with c.stream(
+            "POST", url, json={"model": model, "messages": messages, "stream": True}
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("error"):
+                    raise RuntimeError(str(chunk["error"]))
+                delta = (chunk.get("message") or {}).get("content")
+                if delta:
+                    yield delta
+                if chunk.get("done"):
+                    return
+
+
 def pct_from_progress(chunk: dict[str, Any]) -> int | None:
     """Map one Ollama pull line to a 0-100 percentage, or None if the line
     carries no byte totals (manifest / verify phases). Clamped to [0,100]."""

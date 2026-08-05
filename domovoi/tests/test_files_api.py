@@ -148,39 +148,14 @@ def test_browse_excludes_secret_shaped_names(registry, roots):
 
 
 @requires_db
-def test_browse_documents_surfaces_lock(registry, roots):
-    from domovoi.db.session import session_scope
-    from sqlalchemy import text
-    import asyncio
-
+def test_browse_documents_rows_never_locked(registry, roots):
+    """The engine-lock concept is retired with the office sidecars — the
+    homegrown editors are last-write-wins, so locked_by is always None."""
     (roots["docs"] / "report.docx").write_bytes(b"d")
-
-    async def _lock():
-        async with session_scope() as s:
-            await s.execute(
-                text("DELETE FROM document_sessions WHERE rel_path = :p"),
-                {"p": "report.docx"},
-            )
-            await s.execute(
-                text(
-                    "INSERT INTO document_sessions (rel_path, engine, editor_key) "
-                    "VALUES ('report.docx', 'onlyoffice', 'k1')"
-                )
-            )
-
-    asyncio.run(_lock())
-    try:
-        with _client() as c:
-            r = c.get("/api/files/browse", params={"library_id": "core:documents"})
-        entry = next(e for e in r.json()["entries"] if e["name"] == "report.docx")
-        assert entry["locked_by"] == "onlyoffice"
-    finally:
-        async def _unlock():
-            async with session_scope() as s:
-                await s.execute(
-                    text("DELETE FROM document_sessions WHERE rel_path = 'report.docx'")
-                )
-        asyncio.run(_unlock())
+    with _client() as c:
+        r = c.get("/api/files/browse", params={"library_id": "core:documents"})
+    entry = next(e for e in r.json()["entries"] if e["name"] == "report.docx")
+    assert entry["locked_by"] is None
 
 
 @requires_db
@@ -376,37 +351,13 @@ def test_delete_recursive_does_not_follow_symlink_out(registry, roots, tmp_path)
 
 
 @requires_db
-def test_delete_releases_document_lock(registry, roots):
-    from domovoi.db.session import session_scope
-    from sqlalchemy import text
-    import asyncio
-
-    (roots["docs"] / "locked.docx").write_bytes(b"d")
-
-    async def _lock():
-        async with session_scope() as s:
-            await s.execute(text("DELETE FROM document_sessions WHERE rel_path = 'locked.docx'"))
-            await s.execute(
-                text(
-                    "INSERT INTO document_sessions (rel_path, engine, editor_key) "
-                    "VALUES ('locked.docx', 'collabora', 'k9')"
-                )
-            )
-
-    async def _count():
-        async with session_scope() as s:
-            return (
-                await s.execute(
-                    text("SELECT COUNT(*) FROM document_sessions WHERE rel_path = 'locked.docx'")
-                )
-            ).scalar_one()
-
-    asyncio.run(_lock())
+def test_delete_documents_file(registry, roots):
+    (roots["docs"] / "gone.docx").write_bytes(b"d")
     with _client() as c:
-        r = c.post("/api/files/delete", json={"library_id": "core:documents", "paths": ["locked.docx"]})
+        r = c.post("/api/files/delete", json={"library_id": "core:documents", "paths": ["gone.docx"]})
     assert r.status_code == 200
-    assert r.json()["deleted"] == ["locked.docx"]
-    assert asyncio.run(_count()) == 0
+    assert r.json()["deleted"] == ["gone.docx"]
+    assert not (roots["docs"] / "gone.docx").exists()
 
 
 # ─── POST /import ───────────────────────────────────────────────────────────

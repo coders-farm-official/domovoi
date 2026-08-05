@@ -60,11 +60,45 @@ private sealed class EditorStatus {
     data class Error(val message: String) : EditorStatus()
 }
 
+/** One markdown toolbar action: wrap the selection or prefix its lines. */
+private data class MdTool(val label: String, val before: String, val after: String = "", val linePrefix: Boolean = false)
+
+private val MD_TOOLS = listOf(
+    MdTool("B", "**", "**"),
+    MdTool("I", "*", "*"),
+    MdTool("H1", "# ", linePrefix = true),
+    MdTool("H2", "## ", linePrefix = true),
+    MdTool("•", "- ", linePrefix = true),
+    MdTool("1.", "1. ", linePrefix = true),
+    MdTool("`", "`", "`"),
+    MdTool(">", "> ", linePrefix = true),
+)
+
+private fun applyMdTool(value: androidx.compose.ui.text.input.TextFieldValue, tool: MdTool): androidx.compose.ui.text.input.TextFieldValue {
+    val s = value.selection.min
+    val e = value.selection.max
+    val text = value.text
+    return if (tool.linePrefix) {
+        val lineStart = text.lastIndexOf('\n', (s - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val next = text.substring(0, lineStart) + tool.before + text.substring(lineStart)
+        value.copy(text = next, selection = androidx.compose.ui.text.TextRange(e + tool.before.length))
+    } else {
+        val sel = text.substring(s, e)
+        val next = text.substring(0, s) + tool.before + sel + tool.after + text.substring(e)
+        value.copy(
+            text = next,
+            selection = androidx.compose.ui.text.TextRange(s + tool.before.length, s + tool.before.length + sel.length),
+        )
+    }
+}
+
 /**
- * Full-screen in-app text editor (web TextEditorOverlay): GET /text → edit in
- * a monospace field → Save PUTs {text}. Saves on the button only, so closing
- * with unsaved edits asks first. A 415 means the file isn't previewable as
- * text — offer the raw download instead.
+ * Full-screen in-app text editor (web TextEditorOverlay / DocEditor):
+ * GET /text → edit in a monospace field → Save PUTs {text}. Markdown files
+ * additionally get a formatting toolbar (the mobile analog of the web
+ * markdown editor's). Saves on the button only, so closing with unsaved
+ * edits asks first. A 415 means the file isn't previewable as text — offer
+ * the raw download instead.
  */
 @Composable
 internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
@@ -72,9 +106,10 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val isMarkdown = relPath.lowercase().endsWith(".md") || relPath.lowercase().endsWith(".markdown")
 
     var status by remember { mutableStateOf<EditorStatus>(EditorStatus.Loading) }
-    var text by remember { mutableStateOf("") }
+    var field by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
     var dirty by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
@@ -96,10 +131,11 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
                         }
                         !resp.isSuccessful -> EditorStatus.Error("${resp.code} ${resp.message}")
                         else -> {
-                            text = runCatching {
+                            val loaded = runCatching {
                                 DomovoiJson.parseToJsonElement(body)
                                     .jsonObject["text"]?.jsonPrimitive?.contentOrNull
                             }.getOrNull() ?: ""
+                            field = androidx.compose.ui.text.input.TextFieldValue(loaded)
                             EditorStatus.Ready
                         }
                     }
@@ -113,7 +149,7 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
         saving = true
         scope.launch {
             runCatching {
-                app.api.put(docTextPath(relPath), buildJsonObject { put("text", text) })
+                app.api.put(docTextPath(relPath), buildJsonObject { put("text", field.text) })
             }
                 .onSuccess {
                     dirty = false
@@ -152,7 +188,7 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Pill("text", Tone.Idle)
+                Pill(if (isMarkdown) "markdown" else "text", Tone.Idle)
                 if (dirty) {
                     Text(
                         "unsaved",
@@ -170,6 +206,29 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
                 }
             }
             HorizontalDivider(color = Domovoi.colors.border)
+
+            if (isMarkdown && status == EditorStatus.Ready) {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(Domovoi.colors.card)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    MD_TOOLS.forEach { tool ->
+                        androidx.compose.material3.TextButton(onClick = {
+                            field = applyMdTool(field, tool)
+                            dirty = true
+                        }) {
+                            Text(
+                                tool.label,
+                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFamily),
+                                color = Domovoi.colors.fgMuted,
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = Domovoi.colors.borderSoft)
+            }
 
             when (val st = status) {
                 EditorStatus.Loading -> LoadingState()
@@ -199,10 +258,10 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
                     }
                 }
                 EditorStatus.Ready -> TextField(
-                    value = text,
+                    value = field,
                     onValueChange = {
-                        text = it
-                        dirty = true
+                        if (it.text != field.text) dirty = true
+                        field = it
                     },
                     modifier = Modifier.fillMaxSize(),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFamily),

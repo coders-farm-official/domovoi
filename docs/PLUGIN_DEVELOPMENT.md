@@ -554,8 +554,9 @@ Disabled/errored/uninstalled plugins drop out of the registry automatically.
 
 `read_only = false` makes the library **editable** (upload/delete) and an
 **import destination**; `read_only = true` is browse + download only. Plugin
-libraries never expose the OnlyOffice/Collabora "Edit" affordance (that is
-`core:documents` only) and do not trigger a core reindex.
+libraries never expose the document-editing affordance (the homegrown
+markdown/sheet/drawing editors are `core:documents` only) and do not trigger
+a core reindex.
 
 A static root (`install_dir` / `data_dir` / `absolute`) that does not exist at
 install time produces a **warning**, never a hard failure — `config`-based roots

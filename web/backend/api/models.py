@@ -55,6 +55,7 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 ROLE_TO_FIELD = {
     "qa": "ollama_model",
     "tool": "ollama_tool_model",
+    "vision": "ollama_vision_model",
     "stt": "whisper_model",
 }
 
@@ -169,7 +170,7 @@ async def set_active(body: SetActiveBody):
     if field is None:
         raise HTTPException(status_code=400, detail=f"unknown role {body.role!r}")
 
-    if field in ("ollama_model", "ollama_tool_model"):
+    if field in ("ollama_model", "ollama_tool_model", "ollama_vision_model"):
         tags = await ollama_client.list_models()
         installed_names = {m.get("name") or m.get("model") for m in tags}
         # Only enforce when Ollama is reachable (non-empty) — if it's down we

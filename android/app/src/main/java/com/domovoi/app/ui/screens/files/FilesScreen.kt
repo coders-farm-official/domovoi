@@ -78,6 +78,7 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
+import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
 import com.domovoi.app.ui.screens.documents.openRawDoc
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
@@ -138,6 +139,7 @@ fun FilesScreen() {
     val data = browse.data
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
+    var sheetEditorRel by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<FileEntry?>(null) }
     var importEntry by remember { mutableStateOf<FileEntry?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing
@@ -170,12 +172,30 @@ fun FilesScreen() {
         }
         val id = selectedId ?: return
         if (isDocuments) {
-            // Documents library keeps the existing native flows: text edits
-            // in-app, image/pdf/office open with the system viewer via /raw.
-            when (e.kind) {
-                "doc-text" -> textEditorRel = e.rel
+            // Documents library edits in-app: text/markdown in the text
+            // editor, .xlsx/.csv in the sheet editor; everything else opens
+            // with the system viewer via /raw.
+            val ext = e.name.substringAfterLast('.', "").lowercase()
+            when {
+                ext == "xlsx" || ext == "csv" -> sheetEditorRel = e.rel
+                e.kind == "doc-text" -> textEditorRel = e.rel
                 else -> openRawDoc(ctx, app, e.rel)
             }
+        } else if (e.kind == "image") {
+            // Images in ANY library open inline (system viewer) via the
+            // generic library-image serve — web-parity with the Files
+            // tab's "Open" action.
+            ctx.startActivity(
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(
+                        app.api.absolute(
+                            "/api/images/raw?library_id=${android.net.Uri.encode(id)}" +
+                                "&path=${android.net.Uri.encode(e.rel)}",
+                        ),
+                    ),
+                ),
+            )
         } else {
             openFileDownload(ctx, app, id, e.rel)
         }
@@ -299,6 +319,12 @@ fun FilesScreen() {
         textEditorRel?.let { rel ->
             TextEditorOverlay(rel) {
                 textEditorRel = null
+                browse.refresh()
+            }
+        }
+        sheetEditorRel?.let { rel ->
+            SheetEditorOverlay(rel) {
+                sheetEditorRel = null
                 browse.refresh()
             }
         }

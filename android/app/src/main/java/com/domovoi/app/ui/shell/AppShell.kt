@@ -87,7 +87,7 @@ fun AppShell() {
     CompositionLocalProvider(LocalToast provides toast) {
         Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
             if (serverUrl.isBlank()) {
-                StartupScreen()
+                OfflineShell()
             } else {
                 ShellContent()
             }
@@ -158,6 +158,106 @@ private fun ShellContent() {
             WindowWidthSizeClass.COMPACT -> CompactShell(route, navigate, counts)
             WindowWidthSizeClass.MEDIUM -> RailShell(route, navigate, counts)
             else -> DrawerShell(route, navigate, counts)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Offline/local mode: no domovoi configured. Music + Videos are the only
+// tabs, backed by on-device media (MediaStore); "connect" opens the
+// discovery/startup screen. Connecting flips prefs.serverUrl, which
+// recomposes AppShell straight into the full workspace.
+// ---------------------------------------------------------------------------
+@Composable
+private fun OfflineShell() {
+    var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
+    var showConnect by rememberSaveable { mutableStateOf(false) }
+
+    if (showConnect) {
+        Box(Modifier.fillMaxSize()) {
+            StartupScreen()
+            Row(
+                Modifier.align(Alignment.TopStart).padding(12.dp)
+                    .background(Domovoi.colors.sunken, RoundedCornerShape(999.dp))
+                    .clickable { showConnect = false }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "← back to local media",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
+        }
+        return
+    }
+
+    Scaffold(
+        containerColor = Domovoi.colors.canvas,
+        topBar = {
+            Surface(color = Domovoi.colors.canvas) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DomovoiGlyph(20)
+                    Text(
+                        "  domovoi / local media",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                    Box(Modifier.weight(1f))
+                    Row(
+                        Modifier
+                            .background(Domovoi.colors.sunken, RoundedCornerShape(999.dp))
+                            .clickable { showConnect = true }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Dns, contentDescription = "connect",
+                            tint = Domovoi.colors.brand, modifier = Modifier.size(13.dp),
+                        )
+                        Text(
+                            "connect",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Domovoi.colors.fgMuted,
+                        )
+                    }
+                }
+            }
+        },
+        bottomBar = {
+            Column {
+                DockedPlayer()
+                NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
+                    listOf(Route.Music, Route.Videos).forEachIndexed { i, r ->
+                        NavigationBarItem(
+                            selected = tab == i,
+                            onClick = { tab = i },
+                            icon = { Icon(r.icon, contentDescription = r.label) },
+                            label = { Text(r.label.lowercase(), style = MaterialTheme.typography.labelMedium) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Domovoi.colors.brandFg,
+                                indicatorColor = Domovoi.colors.brand,
+                                selectedTextColor = Domovoi.colors.fg,
+                                unselectedIconColor = Domovoi.colors.fgMuted,
+                                unselectedTextColor = Domovoi.colors.fgMuted,
+                            ),
+                        )
+                    }
+                }
+            }
+        },
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            if (tab == 0) {
+                com.domovoi.app.ui.screens.local.LocalMusicScreen()
+            } else {
+                com.domovoi.app.ui.screens.local.LocalVideosScreen()
+            }
         }
     }
 }

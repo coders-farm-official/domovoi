@@ -9,10 +9,10 @@ client only ever sends a ``library_id`` + a **relative** path; the absolute
 (``require_admin_read`` for GET, ``require_admin_mutation`` for writes).
 
 This module is **additive** — it does NOT touch ``/api/documents`` (design's
-load-bearing decision): OnlyOffice/Collabora editing keeps its exact signed-URL
-surface, and the Files page's "Edit" affordance for ``core:documents`` still
-calls the existing ``/api/documents/open`` flow. ``doc_editing`` gates that
-affordance per-library.
+load-bearing decision): the homegrown editors keep their own surface, and the
+Files page's "Edit" affordance for ``core:documents`` opens them through the
+existing document endpoints. ``doc_editing`` gates that affordance
+per-library.
 
 The only web→core hop is the post-write reindex trigger for indexed libraries
 (music), proxied like ``music.py`` via ``post_admin`` with the caller's
@@ -32,11 +32,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from web.backend.api.audio_serve import (
     AUDIO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
     attachment_headers,
     safe_download_name,
     serve_audio_range,
@@ -56,7 +56,6 @@ from web.backend.api.files_security import (
     safe_join,
 )
 from web.backend.api.music import _safe_basename, _unique_path
-from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, post_admin
 
 log = logging.getLogger(__name__)
@@ -89,12 +88,14 @@ async def _resolve_library(library_id: str) -> MediaLibrary:
 
 # ─── Entry-kind classification (mirrors documents._doc_category buckets) ──────
 def _entry_kind(entry: Path, is_dir: bool) -> str:
-    """kind ∈ folder | audio | doc-office | doc-text | image | pdf | other."""
+    """kind ∈ folder | audio | video | doc-office | doc-text | image | pdf | other."""
     if is_dir:
         return "folder"
     ext = entry.suffix.lower()
     if ext in AUDIO_EXTENSIONS:
         return "audio"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
     if ext == ".pdf":
         return "pdf"
     if ext in _OFFICE_WP_EXTS or ext in _SHEET_EXTS:
@@ -201,8 +202,8 @@ async def browse(
 ) -> BrowseResponse:
     """One directory level inside a library, sorted dirs-first then name. Every
     entry's realpath is re-checked inside the root (drops symlinks that escape)
-    and secret-shaped names are filtered. For ``core:documents``, rows carry the
-    editor ``locked_by`` from ``document_sessions``."""
+    and secret-shaped names are filtered. (The per-file editor-lock join is
+    gone with the office engines — the homegrown editors don't lock.)"""
     lib = await _resolve_library(library_id)
     root = lib.root_path
     target = safe_join(root, path)
@@ -212,17 +213,6 @@ async def browse(
     rel = target.relative_to(root).as_posix()
     rel = "" if rel == "." else rel
     breadcrumb = [seg for seg in rel.split("/") if seg] if rel else []
-
-    # Document locks (only for core:documents — its rel_path == our rel).
-    locks: dict[str, str] = {}
-    if lib.id == "core:documents":
-        async with session_scope() as s:
-            locks = {
-                r[0]: r[1]
-                for r in (
-                    await s.execute(text("SELECT rel_path, engine FROM document_sessions"))
-                ).all()
-            }
 
     entries: list[BrowseEntry] = []
     try:
@@ -253,7 +243,7 @@ async def browse(
                 size=None if is_dir else st.st_size,
                 mtime=st.st_mtime,
                 kind=_entry_kind(entry, is_dir),
-                locked_by=locks.get(erel) if lib.id == "core:documents" else None,
+                locked_by=None,
             )
         )
 
@@ -439,14 +429,6 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
             failed.append(f"{rel}: exceeded member cap")
         except OSError as e:
             failed.append(f"{rel}: {e}")
-
-    # Release document_sessions locks for any deleted core:documents paths.
-    if lib.id == "core:documents" and deleted:
-        async with session_scope() as s:
-            await s.execute(
-                text("DELETE FROM document_sessions WHERE rel_path = ANY(:rels)"),
-                {"rels": deleted},
-            )
 
     reindex_triggered = False
     if deleted and lib.reindex_kind in INDEXED_KINDS:

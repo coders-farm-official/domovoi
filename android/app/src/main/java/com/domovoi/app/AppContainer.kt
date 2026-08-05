@@ -6,6 +6,9 @@ import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.PlayerController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
@@ -13,6 +16,10 @@ class AppContainer(context: Context) {
     val api = ApiClient(prefs)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
+
+    /** App-lifetime scope for fire-and-forget work that must outlive a
+     *  composable (e.g. the video position save on player dispose). */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 }
 
 val LocalApp = staticCompositionLocalOf<AppContainer> {

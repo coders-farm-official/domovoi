@@ -23,6 +23,7 @@ import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
+import com.domovoi.app.ui.screens.chat.ChatScreen
 import com.domovoi.app.ui.screens.files.FilesScreen
 import com.domovoi.app.ui.screens.manual.ManualScreen
 import com.domovoi.app.ui.screens.music.MusicScreen
@@ -32,6 +33,8 @@ import com.domovoi.app.ui.screens.podcasts.PodcastsScreen
 import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.screens.settings.SettingsScreen
 import com.domovoi.app.ui.screens.stations.StationsScreen
+import com.domovoi.app.ui.screens.images.ImagesScreen
+import com.domovoi.app.ui.screens.videos.VideosScreen
 import com.domovoi.app.ui.shell.OverflowRoutes
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.visibleWith
@@ -52,9 +55,12 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit) {
         return
     }
     when (route) {
+        Route.Chat -> ChatScreen()
         Route.Music -> MusicScreen()
         Route.Podcasts -> PodcastsScreen()
         Route.Audiobooks -> AudiobooksScreen()
+        Route.Videos -> VideosScreen()
+        Route.Images -> ImagesScreen()
         Route.News -> NewsScreen()
         Route.People -> PeopleScreen()
         Route.Satellites -> SatellitesScreen()

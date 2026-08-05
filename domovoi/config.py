@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"         # QA / conversational — fast, cheap
     ollama_tool_model: str = "qwen2.5:14b"    # tool-call routing — needs strong schema adherence
+    # Vision-capable model for the text-chat surface: any chat message that
+    # carries images is answered by this model instead of ollama_model.
+    ollama_vision_model: str = "qwen2.5vl:7b"
     # Per-request read timeout (seconds) for Ollama. A stalled Ollama (model
     # still loading, GPU wedged) must not pin a user-facing voice turn open
     # forever — this bounds the wait so the turn fails gracefully instead.
@@ -239,6 +242,26 @@ class Settings(BaseSettings):
     # and writes this dir; nothing else in the core touches it.
     cover_art_dir: str = os.path.expanduser("~/.domovoi/cover_art")
 
+    # ─── Video poster cache (browser/Android Videos tab) ────────────────
+    # Mirrors cover_art_dir: the web backend caches one ffmpeg-extracted
+    # poster frame per video here, keyed by a hash of (library, path,
+    # mtime, size) with a ``.none`` sentinel for files ffmpeg can't read,
+    # so unplayable/artless files aren't re-probed on every request. The
+    # GET /api/videos/poster endpoint owns this dir; nothing else touches it.
+    video_posters_dir: str = os.path.expanduser("~/.domovoi/video_posters")
+
+    # ─── Pictures library + Images tab ──────────────────────────────────
+    # Host path exposed as the core:pictures Files library and walked by the
+    # Images tab. Generated images land in the "Domovoi Generated" subfolder.
+    pictures_dir: str = os.path.expanduser("~/Pictures")
+    # Browser-thumbnail cache for the Images tab (Pillow-resized, keyed by
+    # size bucket + content hash with .none sentinels — cover-art pattern).
+    image_thumbs_dir: str = os.path.expanduser("~/.domovoi/image_thumbs")
+
+    # (Image GENERATION is not a core feature — it ships as the separately
+    # installed Image Generation plugin, which manages its own ComfyUI
+    # engine and config under the IMAGEGEN_ prefix.)
+
     # ─── Spoken audio (Podcasts + Audiobooks) ─────────────────────────
     # Host paths, mirroring music_dir. Downloaded podcast episodes land in
     # podcasts_dir; local audiobook files (.m4b / per-chapter folders) live
@@ -272,50 +295,16 @@ class Settings(BaseSettings):
     audiobook_indexer_enabled: bool = True
     audiobook_indexer_interval_sec: float = 300.0
 
-    # ─── Offline office suite (Documents / Spreadsheets / Drawings) ────
+    # ─── Documents suite (Documents / Spreadsheets / Drawings) ─────────
     # Root of user document storage. Mirrors music_dir: a single FLAT dir
-    # holding every type mixed together (a .docx, .xlsx, and .excalidraw
-    # all sit side-by-side). The three web pages are filtered VIEWS over
-    # this one directory, never separate stores. The web backend reads
-    # this via `from domovoi.config import settings as core_settings`
-    # exactly like music.py reads music_dir.
+    # holding every type mixed together (a .md, .xlsx, and .excalidraw
+    # all sit side-by-side). The pages are filtered VIEWS over this one
+    # directory, never separate stores. The web backend reads this via
+    # `from domovoi.config import settings as core_settings` exactly like
+    # music.py reads music_dir. Editing is fully homegrown/in-page
+    # (markdown doc editor, x-spreadsheet grid, Excalidraw) — the former
+    # OnlyOffice/Collabora sidecar containers are retired.
     documents_dir: str = os.path.expanduser("~/Documents")
-
-    # Office editor sidecars. Off by default (toolchain-gated, like the
-    # radio SDR / RADIO_SDR_ENABLED). Each is a STATIC docker-compose
-    # service (NOT lazy like MPD), iframe-embedded in the dashboard. The
-    # web backend won't surface an engine whose flag is off, so someone
-    # can run just one engine.
-    onlyoffice_enabled: bool = False
-    collabora_enabled: bool = False
-
-    # Browser-reachable base URLs for the two document servers. Like
-    # mpd_http_base, these MUST be LAN-routable hostnames, NOT localhost —
-    # the iframe loads the editor JS/assets from them AND the container
-    # reaches back to the web backend's callback/WOPI endpoints. localhost
-    # resolves to the wrong host on one side and breaks both directions.
-    onlyoffice_base_url: str = "http://my-domovoi.local:6381"
-    collabora_base_url: str = "http://my-domovoi.local:6980"
-    # Where the containers reach the web backend to fetch/save files
-    # (OnlyOffice document.url + callbackUrl; Collabora WOPISrc). Also
-    # LAN-routable, never localhost.
-    office_callback_base: str = "http://my-domovoi.local:6369"
-
-    # JWT shared secrets for the iframe/host/container handshake. Both
-    # engines refuse to load with a blank secret in current versions —
-    # non-optional in practice. OnlyOffice signs its editor config with
-    # onlyoffice_jwt_secret; the Collabora WOPI access_token is signed
-    # with collabora_jwt_secret. Set both in .env, never commit them.
-    onlyoffice_jwt_secret: str = ""
-    collabora_jwt_secret: str = ""
-
-    # How long (seconds) a document_sessions lock may sit un-touched
-    # before the stale-lock sweeper clears it. A crashed/closed editor
-    # stops sending callbacks/heartbeats; without this a wedged lock
-    # greys the other engine's button forever. Generous default so a user
-    # who steps away mid-edit doesn't lose their lock.
-    document_lock_stale_sec: float = 900.0
-    document_lock_sweeper_interval_sec: float = 60.0
 
     # ─── Media acquisition queue (design §4.8) ─────────────────────────
     # The queue holds USER-requested media (voice adds, dashboard adds,

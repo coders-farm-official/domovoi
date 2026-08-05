@@ -404,6 +404,7 @@ CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
     ("core:audiobooks", "Audiobooks", "book-open", "audiobooks_dir", True, True, "audiobooks", False),
     ("core:podcasts", "Podcasts", "podcast", "podcasts_dir", True, True, "podcasts", False),
     ("core:documents", "Documents", "file-text", "documents_dir", True, True, "documents", True),
+    ("core:pictures", "Pictures", "image", "pictures_dir", True, True, "pictures", False),
 )
 
 # reindex_kind values that trigger a post-write reindex.
