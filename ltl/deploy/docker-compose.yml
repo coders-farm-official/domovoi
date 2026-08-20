@@ -1,0 +1,76 @@
+# LTL Remote — one VPS, three containers.
+#
+#   caddy      TLS, static frontend, reverse proxy
+#   backend    control plane + relay (Spring Boot)
+#   postgres   the control-plane database
+#
+# Bring it up with:
+#
+#   cp .env.example .env      # then fill it in
+#   docker compose up -d
+#
+# Postgres is NOT published to the host. The backend reaches it over the
+# compose network, and nothing else needs to.
+
+services:
+  postgres:
+    build: ../ltl-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ltldb}
+      POSTGRES_USER: ${POSTGRES_USER:-ltluser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ltluser} -d ${POSTGRES_DB:-ltldb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ltl]
+
+  backend:
+    build: ../ltl-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ltldb}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-ltluser}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      STYTCH_PROJECT_ID: ${STYTCH_PROJECT_ID:-}
+      STYTCH_PROJECT_SECRET: ${STYTCH_PROJECT_SECRET:-}
+      STYTCH_PUBLIC_TOKEN: ${STYTCH_PUBLIC_TOKEN:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL in .env}
+      APP_SECURE_COOKIES: "true"
+    networks: [ltl]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LTL_DOMAIN: ${LTL_DOMAIN:?set LTL_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../ltl-frontend:/srv/ltl-frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [ltl]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  ltl:
+    driver: bridge

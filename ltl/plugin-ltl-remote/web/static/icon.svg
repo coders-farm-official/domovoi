@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+     stroke-linejoin="round" width="24" height="24" role="img"
+     aria-label="Remote Access">
+  <!-- The house, reached from a distance: a roofline with a signal
+       arc leaning in from outside it. -->
+  <path d="M3 11.5 10 5.5l7 6"/>
+  <path d="M5 10.8V19h10v-8.2"/>
+  <path d="M8.5 19v-4h3v4"/>
+  <path d="M18.5 6.5a7 7 0 0 1 0 11"/>
+  <path d="M20.8 3.8a10.5 10.5 0 0 1 0 16.4"/>
+</svg>

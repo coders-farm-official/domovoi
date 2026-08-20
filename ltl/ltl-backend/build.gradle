@@ -1,0 +1,49 @@
+plugins {
+	id('java')
+	id("org.springframework.boot") version "3.3.3"
+	id("io.spring.dependency-management") version "1.1.6"
+}
+
+group = "com.lazythumblabs.ltl"
+version = "1.0.0"
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.compilerArgs.add("-parameters")
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation("org.springframework.boot:spring-boot-starter-web")
+	implementation("org.springframework.boot:spring-boot-starter-security")
+	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
+	implementation("org.springframework.boot:spring-boot-starter-validation")
+	// The relay data plane. Java 21 virtual threads make holding a few
+	// thousand idle household sockets in one JVM cheap enough that the
+	// control plane and the relay can share a deployable.
+	implementation("org.springframework.boot:spring-boot-starter-websocket")
+	implementation("com.stytch.java:sdk:6.0.0")
+	implementation("com.stripe:stripe-java:28.2.0")
+	implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+	runtimeOnly("org.postgresql:postgresql")
+
+	// Scooped ships no test dependencies. Adding them here is a
+	// deliberate departure: the relay's frame codec has to agree byte for
+	// byte with a Python implementation, and the entitlement state
+	// machine decides whether customers can reach their own houses.
+	// Neither is something to verify by hand.
+	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.named("test") {
+	useJUnitPlatform()
+}

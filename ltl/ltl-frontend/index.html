@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LTL Remote — reach your Domovoi from anywhere</title>
+  <meta name="description" content="Outbound, end-to-end encrypted remote access for your Domovoi home voice assistant. No port forwarding. We relay your traffic; we can't read it.">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/svg+xml" href="images/logo.svg">
+</head>
+<body>
+    <nav class="nav">
+      <a class="nav-brand" href="index.html">
+        <img src="images/logo.svg" alt="">
+        <span>Lazy Thumb Labs</span>
+      </a>
+      <div class="nav-links">
+        <a class="nav-item" href="index.html">Remote</a>
+        <a class="nav-item" href="pricing.html">Pricing</a>
+        <a class="nav-item" href="app.html">Account</a>
+      </div>
+    </nav>
+  <main class="content">
+    <h1>Your house, from anywhere. Still yours.</h1>
+    <p class="lede">
+      Domovoi is built to stay on your network — its own documentation tells you not to
+      port-forward it. LTL Remote is the way around that without giving anything up:
+      your server dials <em>out</em> to us, and we carry bytes we can't read.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <h2>No holes in your router</h2>
+        <p class="muted">
+          The Domovoi plugin opens one outbound connection and keeps it open. Nothing
+          listens on your home network. It works behind CGNAT and double NAT, which is
+          most residential internet.
+        </p>
+      </div>
+      <div class="card">
+        <h2>We relay, we don't read</h2>
+        <p class="muted">
+          Your phone and your house agree on session keys directly. We forward sealed
+          frames between two sockets and count the bytes for billing. We can see that you
+          connected. We cannot see your dashboard, your library, or your voice.
+        </p>
+      </div>
+      <div class="card">
+        <h2>You approve devices, not us</h2>
+        <p class="muted">
+          A device registered here can't reach anything until an admin approves it on your
+          own Domovoi dashboard, after comparing a fingerprint. If we were compromised
+          tomorrow, we still couldn't let anyone in.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>How it goes</h2>
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">1 · Install the plugin</div>
+          <div class="row-meta">Install <span class="mono">ltl_remote</span> on your Domovoi server and enable it.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">2 · Type eight words</div>
+          <div class="row-meta">Your dashboard shows a pairing code. Enter it here while signed in. Only a hash of it ever reaches us.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">3 · Approve your phone</div>
+          <div class="row-meta">Add a device here, then approve it on the dashboard — checking that the two fingerprints match.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">4 · That's it</div>
+          <div class="row-meta">Your dashboard, your library, your rooms — from a train.</div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:16px">
+        <a class="btn btn-primary" href="pricing.html">See plans</a>
+        <a class="btn" href="app.html">I already have an account</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>What we can and can't see</h2>
+      <p class="muted">
+        We hold: your email, which households you've paired, their public keys and
+        fingerprints, which devices you registered, when links open and close, roughly
+        where from, and how many bytes moved. That's what routing and billing need.
+      </p>
+      <p class="muted" style="margin-top:10px">
+        We don't hold: request paths, headers, bodies, media, or audio. Not because we
+        delete them — because the relay never parses them, so there's nothing to keep.
+        The protocol and the honest list of residual risks are both written down.
+      </p>
+    </div>
+  </main>
+    <footer class="footer">
+      Lazy Thumb Labs · <a href="https://github.com/coders-farm-official/domovoi">Domovoi</a> is
+      local-first; this is how you reach it from elsewhere.
+    </footer>
+</body>
+</html>

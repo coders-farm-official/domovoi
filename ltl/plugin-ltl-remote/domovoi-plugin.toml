@@ -1,0 +1,90 @@
+[plugin]
+slug = "ltl_remote"
+name = "LTL Remote"
+version = "1.0.0"
+publisher = "Lazy Thumb Labs"
+license = "MIT"
+description = "Reach your Domovoi dashboard and voice API from outside the house over an outbound, end-to-end encrypted link. No port forwarding; the relay cannot read your traffic."
+homepage = "https://lazythumblabs.com/remote"
+domovoi_api = ">=1.0,<2.0"
+
+[entry_points]
+core = "domovoi_plugin_ltl_remote.core"
+web = "domovoi_plugin_ltl_remote.web"
+
+[capabilities]
+# This plugin neither offers nor consumes a capability. It is a transport:
+# it carries HTTP and WebSocket traffic to services that already exist,
+# and deliberately knows nothing about what is inside.
+provides = []
+consumes = []
+consumes_optional = []
+
+[requirements]
+python = ["httpx==0.28.1", "websockets==15.0.1", "cryptography==46.0.3"]
+lockfile = "requirements.lock"
+system = []
+
+[[handlers]]
+name = "ltl_remote"
+band = 265
+requires_network = "no"
+label = "Remote Access"
+tone = "info"
+icon = "web/static/icon.svg"
+corpus = [
+  "is remote access on",
+  "remote access status",
+  "who can access domovoi remotely",
+  "turn off remote access",
+]
+
+[[workers]]
+name = "ltl_relay_link"
+kind = "longrun"
+[[workers]]
+name = "ltl_remote_reaper"
+kind = "poll"
+[[workers]]
+name = "publish_identity"
+kind = "startup"
+
+[config]
+env_prefix = "LTL_"
+
+[permissions]
+network = true
+subprocess = false
+hardware = false
+warnings = [
+  "Opens an outbound connection to Lazy Thumb Labs and keeps it open, so devices you approve can reach this server from anywhere.",
+  "Devices you approve on the Remote Access page can use the dashboard and the core API remotely — including admin actions such as installing plugins, which run code on this machine. Turn off 'Allow core API remotely' to limit remote access to the dashboard.",
+  "Lazy Thumb Labs relays your traffic but cannot read it: sessions are encrypted end to end between your device and this server. LTL can still see when you connect, from roughly where, and how much data moves.",
+  "Requires a Lazy Thumb Labs account and, past the free tier, a paid subscription.",
+  "Records a metadata-only access log (method, path, status, byte counts) of what remote devices did. No request bodies are stored.",
+]
+
+[web]
+scripts = ["web/static/remote.jsx"]
+
+[[web.pages]]
+route = "remote"
+page = "RemoteAccessPage"
+nav_label = "Remote Access"
+nav_icon = "web/static/icon.svg"
+nav_order = 70
+badge = { endpoint = "/api/plugins/ltl_remote/badge", key = "pending" }
+
+[[realtime]]
+notify_channel = "plugin_ltl_remote_link_changed"
+realtime_channel = "ltl_remote.link"
+snapshot = "snapshot_link"
+
+[[realtime]]
+notify_channel = "plugin_ltl_remote_devices_changed"
+realtime_channel = "ltl_remote.devices"
+snapshot = "snapshot_devices"
+
+# No [satellite] section: remote access is entirely server-side. The Pis
+# keep talking to the core over the LAN exactly as before, and nothing
+# about this plugin is pushed to them.

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — LTL Remote</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/svg+xml" href="images/logo.svg">
+</head>
+<body>
+    <nav class="nav">
+      <a class="nav-brand" href="index.html">
+        <img src="images/logo.svg" alt="">
+        <span>Lazy Thumb Labs</span>
+      </a>
+      <div class="nav-links">
+        <a class="nav-item" href="index.html">Remote</a>
+        <a class="nav-item" href="pricing.html">Pricing</a>
+        <a class="nav-item" href="app.html">Account</a>
+      </div>
+    </nav>
+  <main class="content narrow">
+    <h1>Sign in</h1>
+    <p class="lede">Lazy Thumb Labs accounts are handled by Stytch.</p>
+    <div id="status" class="hidden"></div>
+    <form id="signin-form" class="card">
+      <label for="token">Session token</label>
+      <input type="text" id="token" autocomplete="off" spellcheck="false"
+             placeholder="paste the session JWT from your magic link">
+      <button class="btn btn-primary" type="submit">Continue</button>
+      <p class="subtle" style="margin-top:12px">
+        Opening a magic link fills this in automatically. The token is read from the URL
+        fragment, so it never reaches a server log.
+      </p>
+    </form>
+  </main>
+    <footer class="footer">
+      Lazy Thumb Labs · <a href="https://github.com/coders-farm-official/domovoi">Domovoi</a> is
+      local-first; this is how you reach it from elsewhere.
+    </footer>
+  <script type="module" src="js/signin.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Direct, pinned requirements for the LTL Remote plugin.
+# The manifest's [requirements].python list mirrors these EXACTLY;
+# regenerate the hashed lockfile with:
+#
+#   pip-compile --generate-hashes --output-file=requirements.lock requirements.in
+#
+# httpx        — outbound calls to the LTL control plane, and the
+#                loopback forwarder's streaming client.
+# websockets   — the relay socket and the tunneled local sockets. Client
+#                side only; the plugin never listens.
+# cryptography — P-256 ECDH/ECDSA, HKDF and AES-GCM for the end-to-end
+#                layer. The only dependency here that is load-bearing for
+#                security, which is why it is pinned tightly.
+httpx==0.28.1
+websockets==15.0.1
+cryptography==46.0.3

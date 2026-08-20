@@ -1,0 +1,63 @@
+# Caddy in front of everything: automatic TLS, the static frontend, and a
+# reverse proxy for the API and the relay.
+#
+# Two settings here are load-bearing rather than cosmetic:
+#
+#   * X-Forwarded-For. The enroll endpoint is unauthenticated by design
+#     (a server opening a pairing window has no account yet) and is rate
+#     limited per source address. Deployed without a proxy that sets this
+#     header, the limit would be worth nothing. Caddy sets it by default
+#     on reverse_proxy; it is called out here so nobody removes it.
+#
+#   * No timeouts on /relay/*. Household agent sockets are held open for
+#     days and are idle most of that time. A read timeout there would
+#     mean a reconnect storm rather than a saving.
+
+{$LTL_DOMAIN} {
+	encode zstd gzip
+
+	# The relay data plane. WebSocket upgrades, long-lived, no buffering.
+	handle /relay/* {
+		reverse_proxy backend:8080 {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
+
+	# The control plane.
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+
+	handle /swagger-ui/* {
+		reverse_proxy backend:8080
+	}
+	handle /v3/api-docs/* {
+		reverse_proxy backend:8080
+	}
+
+	# Everything else is the static frontend.
+	handle {
+		root * /srv/ltl-frontend
+		try_files {path} {path}.html /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# The app is self-contained: no CDN scripts, no external styles.
+		# connect-src allows wss: for the relay socket.
+		Content-Security-Policy "default-src 'self'; connect-src 'self' wss:; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

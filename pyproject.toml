@@ -151,4 +151,4 @@ include = ["domovoi*", "web*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["domovoi/tests", "plugins/radio/tests"]
+testpaths = ["domovoi/tests", "plugins/radio/tests", "ltl/plugin-ltl-remote/tests"]

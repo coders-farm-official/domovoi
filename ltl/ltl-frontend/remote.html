@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote console — LTL Remote</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/svg+xml" href="images/logo.svg">
+</head>
+<body>
+    <nav class="nav">
+      <a class="nav-brand" href="index.html">
+        <img src="images/logo.svg" alt="">
+        <span>Lazy Thumb Labs</span>
+      </a>
+      <div class="nav-links">
+        <a class="nav-item" href="index.html">Remote</a>
+        <a class="nav-item" href="pricing.html">Pricing</a>
+        <a class="nav-item" href="app.html">Account</a>
+      </div>
+    </nav>
+  <main class="content" id="remote">
+    <h1 id="title">Connecting…</h1>
+    <p class="lede">
+      Everything below arrives encrypted end to end between this browser and your Domovoi
+      server. The relay in between carried it without being able to read it.
+    </p>
+
+    <div id="error" class="hidden"></div>
+
+    <div class="card hidden" id="fp-card">
+      <h2>Fingerprint</h2>
+      <div class="keyline" id="fp">—</div>
+      <p class="subtle">
+        Compare this with the fingerprint on your Domovoi dashboard's Remote Access page.
+        They must match. If they ever differ, disconnect — that is what a substituted key
+        looks like, and it is the one thing this check exists to catch.
+      </p>
+    </div>
+
+    <div class="card hidden" id="actions">
+      <h2>Try the tunnel</h2>
+      <p class="muted">
+        Real requests to your Domovoi dashboard, over the encrypted link.
+      </p>
+      <div class="btn-row">
+        <button class="btn" id="btn-satellites">Satellites</button>
+        <button class="btn" id="btn-now-playing">Now playing</button>
+        <button class="btn" id="btn-plugins">Plugins</button>
+        <button class="btn" id="btn-blocked">Try a blocked path</button>
+        <button class="btn btn-danger" id="btn-disconnect">Disconnect</button>
+      </div>
+      <p class="subtle" style="margin-top:10px">
+        “Try a blocked path” asks for <span class="mono">/etc/passwd</span>. Your server
+        refuses it before opening any local connection — the allowlist is enforced at
+        home, not here.
+      </p>
+      <div id="output" style="margin-top:16px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Link log</h2>
+      <div id="log-slot"></div>
+    </div>
+  </main>
+    <footer class="footer">
+      Lazy Thumb Labs · <a href="https://github.com/coders-farm-official/domovoi">Domovoi</a> is
+      local-first; this is how you reach it from elsewhere.
+    </footer>
+  <script type="module" src="js/remote.js"></script>
+</body>
+</html>
