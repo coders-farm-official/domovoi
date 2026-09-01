@@ -429,11 +429,6 @@ const Sidebar = ({ route, setRoute, counts, manifest }) => {
 
 // Who you are and which server you're pointed at.
 //
-// Both values were hardcoded ("Kamron" / "my-domovoi.local") from the
-// original UI mockup, so every install in the world showed one developer's
-// name and a hostname that belonged to nobody. Read them from what the app
-// actually knows instead:
-//
 //   * host — ServerStore.currentLabel(), the same origin the Topbar shows.
 //   * name — Domovoi has no per-user login, only an admin gate. So report
 //     the auth state honestly rather than inventing a person: the sidebar
