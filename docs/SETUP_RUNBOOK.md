@@ -226,19 +226,58 @@ Ollama model settings are hot and take effect on the next turn.
 This isolates the whole class of "is it the Pi or is it the server?"
 problems you'd otherwise hit blind.
 
-Use the dashboard's chat or text-command surface to send a couple of
-utterances:
+Post text straight at the core's **`/v1/intent`** endpoint. That is the
+same router the satellites drive — it runs fast paths, handlers, and the
+tool model, and writes an `intents_log` row per turn.
 
-- `set a timer for 2 minutes` — exercises a fast path. No LLM involved.
-  Should come back instantly and appear on the Timers screen.
-- `what is the capital of Mongolia` — exercises STT-free routing through
-  the tool model and the Q&A model. Slower. This is the one that tells you
-  whether Ollama is reachable and which models are actually loaded.
+> **Not the dashboard's chat box.** That surface streams directly to
+> Ollama (`chat_stream`) and never enters the router, so it proves Ollama
+> is reachable and nothing else — no handler runs, no timer is created,
+> and `intents_log` stays empty.
 
-Watch the core's terminal while you do it. It logs the model load at
-startup (`loading Whisper model=... device=... compute=...`) and timing
-per turn. **Write down what you see** — on a CPU host this is your
-baseline for deciding whether to move up or down a Whisper size.
+A fast path, no LLM involved — should return instantly and appear on the
+Timers screen:
+
+```bash
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"set a timer for 2 minutes","room_id":"kitchen"}'
+```
+
+A routed turn through the tool model and then the Q&A model — slower, and
+the one that proves your model settings are actually working:
+
+```bash
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"what is the capital of Mongolia","room_id":"kitchen"}'
+```
+
+**Test TTS too, while you're here.** Setting `synthesize` returns WAV
+bytes, which exercises router → handler → TTS in one call — the best
+smoke test available before a satellite exists:
+
+```bash
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"what time is it","room_id":"kitchen","synthesize":true}' -o /tmp/tts-test.wav -D -
+```
+
+The response headers carry `X-Response-Text` and `X-Matched-Handler`, and
+`/tmp/tts-test.wav` should be a non-trivial size. Copy it to a machine
+with speakers if you want to hear it.
+
+Watch the core's log while you do it. At startup it prints the model load
+(`loading Whisper model=... device=... compute=...` → `Whisper ready`) —
+that gap is boot cost, paid once, and the first one also includes
+downloading the model.
+
+**Per-turn latency is not logged.** It's written to the database instead:
+one row per routed turn in `intents_log`, with `latency_ms` covering the
+whole turn (STT → routing → handler), not STT alone. To read it:
+
+```bash
+docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, matched_handler, matched_path, latency_ms, transcript FROM intents_log ORDER BY at DESC LIMIT 10;"
+```
+
+**Write down what you see** — on a CPU host that's your baseline for
+deciding whether to move up or down a Whisper size. Compare a fast-path
+turn (a timer) against a routed one (a question): the difference is what
+the language models cost you.
 
 > **Gate:** both commands return sensible answers, and the core log shows
 > Whisper loaded on the device you expect.

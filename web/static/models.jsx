@@ -155,6 +155,23 @@ const ROLE_SUB = {
   stt: 'Whisper transcription',
 };
 
+// Why the role slots are empty. Every failure used to read "domovoi
+// unreachable", which sends you hunting for a stopped service when the real
+// answer is usually that you just aren't logged in — an admin-gated endpoint
+// answering 401 is the single most common case here, and it is not a
+// connectivity problem. Keep the three states distinct.
+const activeMessage = (data, error) => {
+  if (!error) return 'loading…';
+  if (error.status === 401 || error.status === 403) {
+    return 'admin login required — sign in to view and change active models';
+  }
+  if (error.status === 502) {
+    return 'domovoi unreachable — active models unavailable';
+  }
+  const detail = (error.detail && error.detail.detail) || error.message || 'unknown error';
+  return `couldn't load active models (${error.status || 'no response'}): ${detail}`;
+};
+
 const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch }) => {
   const [pick, setPick] = React.useState(r.model || '');
   React.useEffect(() => { setPick(r.model || ''); }, [r.model]);
@@ -337,7 +354,8 @@ const ModelsPanel = () => {
   const { data: catalog } = useApiObject('/api/models/catalog');
   const { data: installedData, refresh: refreshInstalled } =
     useApiObject('/api/models/installed', { eventTypes: ['model_jobs.changed'] });
-  const { data: activeData, refresh: refreshActive } = useApiObject('/api/models/active');
+  const { data: activeData, error: activeError, refresh: refreshActive } =
+    useApiObject('/api/models/active');
   const { items: jobs } = useApiList('/api/models/jobs', { eventTypes: ['model_jobs.changed'],
     pickItems: (d) => (d && d.jobs) || [] });
 
@@ -426,7 +444,7 @@ const ModelsPanel = () => {
       <Card title="Active models" sub="One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.">
         {roles.length === 0
           ? <div style={{ padding: 14, fontSize: 12, color: 'var(--fg-muted)' }}>
-              {activeData === null ? 'domovoi unreachable — active models unavailable' : 'loading…'}
+              {activeMessage(activeData, activeError)}
             </div>
           : roles.map((r) => (
               <ActiveRow key={r.role} r={r} installed={installed} whisperNames={whisperNames}

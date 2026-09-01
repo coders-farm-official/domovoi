@@ -65,10 +65,9 @@ language; the English-only models are meaningfully faster but will
 mistranscribe rather than switch.
 
 > These are ballparks, not promises — core count, memory bandwidth, and
-> what else the box is doing all move them. Measure yours: the core logs
-> transcription timing per turn, and the
-> [runbook's Step 4](SETUP_RUNBOOK.md#step-4--first-voice-turn) walks
-> through reading it.
+> what else the box is doing all move them. Measure yours rather than
+> trusting the table: see [Measuring turn latency](#measuring-turn-latency)
+> below.
 
 ### `qwen2.5:7b` instead of `qwen2.5:14b`
 
@@ -167,6 +166,34 @@ config is built to avoid. See
 Piper's voice model downloads from Hugging Face once, on first render.
 After that it is fully offline — which also makes it the rung that keeps
 working when your internet doesn't.
+
+### Measuring turn latency
+
+Two different numbers, often confused:
+
+**Model load** is logged, and is boot cost only:
+
+```bash
+journalctl -u domovoi-core | grep -iE "loading Whisper|Whisper ready"
+```
+
+The gap between those lines is how long Whisper took to load. The *first*
+one also downloads the model from Hugging Face, so restart once and time
+the second for a true figure.
+
+**Per-turn latency is not logged.** It goes to the database — one row per
+routed turn in `intents_log`, where `latency_ms` covers the whole turn
+(STT → routing → handler), not STT in isolation:
+
+```bash
+docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, matched_handler, matched_path, latency_ms, transcript FROM intents_log ORDER BY at DESC LIMIT 10;"
+```
+
+`matched_path` is the useful column next to it: it tells you whether a
+turn took a regex fast path or went through the language models. Compare
+the two and you can see exactly what the LLM costs on your hardware —
+which is the number that should drive your model choices, not the table
+above.
 
 ---
 

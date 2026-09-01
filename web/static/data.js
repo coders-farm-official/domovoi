@@ -139,6 +139,7 @@ const apiFetch = async (path, opts = {}) => {
     const text = await r.text().catch(() => '');
     const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
     err.status = r.status;   // callers branch on auth failures (retry-after-login)
+    try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
   }
   if (r.status === 204) return null;
@@ -310,6 +311,20 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
+  // Recover after login. An admin-gated path 401s on first mount (the token
+  // lives only in JS memory, so a page load always starts unauthenticated),
+  // which pops the login modal via _maybeRequestLogin — but nothing re-ran
+  // the request once the user authenticated, leaving the panel stuck on a
+  // stale error against a now-valid session. Re-fetch when a 401/403 is
+  // followed by a successful login.
+  React.useEffect(() => {
+    if (!error || (error.status !== 401 && error.status !== 403)) return;
+    if (typeof Auth === 'undefined') return;
+    try {
+      return Auth.subscribe(() => { if (Auth.isLoggedIn()) refresh(); });
+    } catch { /* auth.js absent — nothing to recover from */ }
+  }, [error, refresh]);
+
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;
     return stateBus.subscribe((ev) => {
@@ -349,6 +364,21 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
   }, [path]);
 
   React.useEffect(() => { refresh(); }, [refresh]);
+
+  // Recover after login. An admin-gated path 401s on first mount (the token
+  // lives only in JS memory, so a page load always starts unauthenticated),
+  // which pops the login modal via _maybeRequestLogin — but nothing re-ran
+  // the request once the user authenticated, leaving the panel stuck on a
+  // stale error against a now-valid session. Re-fetch when a 401/403 is
+  // followed by a successful login.
+  React.useEffect(() => {
+    if (!error || (error.status !== 401 && error.status !== 403)) return;
+    if (typeof Auth === 'undefined') return;
+    try {
+      return Auth.subscribe(() => { if (Auth.isLoggedIn()) refresh(); });
+    } catch { /* auth.js absent — nothing to recover from */ }
+  }, [error, refresh]);
+
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;
     return stateBus.subscribe((ev) => {
