@@ -38,13 +38,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi.clients import ollama as ollama_client
 from web.backend.db import session_scope
-from web.backend.domovoi_client import bridge_response, get_admin, post_admin
+from web.backend.domovoi_client import (
+    auth_forward_headers,
+    bridge_response,
+    get_admin,
+    post_admin,
+)
 
 log = logging.getLogger(__name__)
 
@@ -127,12 +132,18 @@ async def get_installed() -> dict[str, Any]:
 
 
 @router.get("/active")
-async def get_active() -> Any:
+async def get_active(request: Request) -> Any:
     """The three role slots (Q&A / tool / STT) with their LIVE current model
     and change-tier, derived from the Domovoi server's editable-config registry.
     Proxied so the values reflect the Domovoi server's singleton, not the web
     process's stale copy."""
-    status, payload = await get_admin("/v1/admin/config")
+    # Forward the caller's credentials: /v1/admin/config is admin-gated on
+    # the core, and both processes validate against the same admin_sessions
+    # table (design §7.3). Without this the hop is anonymous and the core
+    # answers 401 no matter how many times the user logs in.
+    status, payload = await get_admin(
+        "/v1/admin/config", headers=auth_forward_headers(request)
+    )
     if status != 200 or not isinstance(payload, dict):
         return bridge_response(status, payload)
     by_name = {f["name"]: f for f in payload.get("fields", [])}
@@ -156,7 +167,7 @@ class SetActiveBody(BaseModel):
 
 
 @router.post("/active")
-async def set_active(body: SetActiveBody):
+async def set_active(body: SetActiveBody, request: Request):
     """Switch the model in a role slot. Writes the mapped config field through
     the Domovoi server (validate → persist → live-apply where the tier allows).
     ``ollama_model``/``ollama_tool_model`` apply instantly (reapply);
@@ -182,7 +193,9 @@ async def set_active(body: SetActiveBody):
             )
 
     status, payload = await post_admin(
-        "/v1/admin/config", {"changes": {field: body.model}}
+        "/v1/admin/config",
+        {"changes": {field: body.model}},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -191,10 +204,12 @@ async def set_active(body: SetActiveBody):
 
 
 @router.get("/hardware")
-async def get_hardware():
+async def get_hardware(request: Request):
     """Live host hardware (GPUs + CPU/RAM/disk), proxied from the Domovoi server
     which owns the CUDA context. The denominator for fit badges."""
-    return bridge_response(*await get_admin("/v1/admin/hardware"))
+    return bridge_response(
+        *await get_admin("/v1/admin/hardware", headers=auth_forward_headers(request))
+    )
 
 
 # ─── Delete ──────────────────────────────────────────────────────────────────

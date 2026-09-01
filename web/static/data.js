@@ -295,12 +295,15 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  // Guards the post-login retry below to one attempt per error.
+  const retriedRef = React.useRef(false);
 
   const refresh = React.useCallback(async () => {
     try {
       const data = await apiGet(path);
       setItems(pickItems(data) || []);
       setError(null);
+      retriedRef.current = false;
     } catch (e) {
       console.warn(`fetch ${path}:`, e);
       setError(e);
@@ -317,11 +320,20 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
   // the request once the user authenticated, leaving the panel stuck on a
   // stale error against a now-valid session. Re-fetch when a 401/403 is
   // followed by a successful login.
+  //
+  // AT MOST ONE retry per error, reset on any success. A 401 that persists
+  // while logged in is a real failure (e.g. a web→core hop that forgets to
+  // forward credentials), and retrying it on every Auth notify produces an
+  // infinite login-modal loop rather than surfacing the bug.
   React.useEffect(() => {
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
-      return Auth.subscribe(() => { if (Auth.isLoggedIn()) refresh(); });
+      return Auth.subscribe(() => {
+        if (!Auth.isLoggedIn() || retriedRef.current) return;
+        retriedRef.current = true;
+        refresh();
+      });
     } catch { /* auth.js absent — nothing to recover from */ }
   }, [error, refresh]);
 
@@ -341,6 +353,8 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  // Guards the post-login retry below to one attempt per error.
+  const retriedRef = React.useRef(false);
 
   const refresh = React.useCallback(async () => {
     // Skip when path is null/empty (drawers fetch conditionally
@@ -355,6 +369,7 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
     try {
       setData(await apiGet(path));
       setError(null);
+      retriedRef.current = false;
     } catch (e) {
       console.warn(`fetch ${path}:`, e);
       setError(e);
@@ -371,11 +386,20 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
   // the request once the user authenticated, leaving the panel stuck on a
   // stale error against a now-valid session. Re-fetch when a 401/403 is
   // followed by a successful login.
+  //
+  // AT MOST ONE retry per error, reset on any success. A 401 that persists
+  // while logged in is a real failure (e.g. a web→core hop that forgets to
+  // forward credentials), and retrying it on every Auth notify produces an
+  // infinite login-modal loop rather than surfacing the bug.
   React.useEffect(() => {
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
-      return Auth.subscribe(() => { if (Auth.isLoggedIn()) refresh(); });
+      return Auth.subscribe(() => {
+        if (!Auth.isLoggedIn() || retriedRef.current) return;
+        retriedRef.current = true;
+        refresh();
+      });
     } catch { /* auth.js absent — nothing to recover from */ }
   }, [error, refresh]);
 
