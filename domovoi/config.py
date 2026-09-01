@@ -77,7 +77,17 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "float16"
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
-    tts_engine: str = "edge"                         # preferred engine
+    # Preferred engine; the router falls through edge → piper → system on
+    # per-engine failure regardless of where it starts.
+    #
+    # Defaults to `piper` (fully local) because local-first is the product
+    # promise, and `edge` sends the text of every spoken response to
+    # Microsoft — the one place the default config would otherwise leak what
+    # the household is being told. Edge remains a first-class choice for
+    # anyone who wants the nicer voices and is happy with that trade; it is
+    # opt-in rather than opt-out. Piper's voice model auto-downloads from
+    # Hugging Face once, on first render.
+    tts_engine: str = "piper"                        # preferred engine
     tts_edge_voice: str = "en-US-AriaNeural"
     tts_piper_voice: str = "en_US-lessac-medium"
     tts_speed: float = 1.0

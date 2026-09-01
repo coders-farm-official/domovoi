@@ -332,14 +332,16 @@ WantedBy=multi-user.target
 ```ini
 [Unit]
 Description=Domovoi core voice service
-After=domovoi-db.service
+After=domovoi-db.service ollama.service
 Requires=domovoi-db.service
+Wants=ollama.service
 
 [Service]
 Type=simple
 User=domovoi
 WorkingDirectory=/opt/domovoi
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/domovoi
 ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
 Restart=on-failure
 RestartSec=5
@@ -361,6 +363,7 @@ Type=simple
 User=domovoi
 WorkingDirectory=/opt/domovoi
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/domovoi
 ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
 Restart=on-failure
 RestartSec=5
@@ -372,7 +375,20 @@ WantedBy=multi-user.target
 Note `WorkingDirectory` differs: the two Python services run from the
 **repo root** so `python -m` resolves the packages, while the database
 unit runs from `domovoi/` where the compose file lives. Same split as the
-dev scripts.
+dev scripts. No venv activation is needed — `ExecStart` names the venv's
+interpreter directly, which is equivalent.
+
+Two details worth not skipping:
+
+- **`After=ollama.service`** keeps the core from starting before Ollama is
+  listening. The core survives it either way, but the first routed turn
+  after a reboot shouldn't have to fail first.
+- **`Environment=HOME=...`** — `~/.domovoi/` holds your Piper voices,
+  trained wake-word models, the sounds cache, and the first-boot setup
+  code, all resolved through `Path.home()`. It would very likely resolve
+  correctly without this, but a service quietly writing its state into the
+  wrong home directory is a miserable thing to diagnose later. Set it and
+  point it at the service user's real home.
 
 Enable and start:
 

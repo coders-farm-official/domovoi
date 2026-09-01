@@ -114,10 +114,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Voice & speech ────────────────────────────────────────────────
     FieldSpec(
         "tts_engine", "TTS engine", "Voice & speech",
-        "Preferred text-to-speech engine. 'edge' = cloud neural voices "
-        "(best quality, needs internet), 'piper' = fully local, 'system' = "
-        "OS fallback. Falls through the chain if the preferred one fails.",
-        "choice", tier="reapply", choices=["edge", "piper", "system"],
+        "Preferred text-to-speech engine. 'piper' (the default) = fully "
+        "local neural voices, nothing leaves your network. 'edge' = "
+        "Microsoft's cloud voices — nicer sounding and free of CPU cost, "
+        "but the TEXT OF EVERY SPOKEN RESPONSE is sent to Microsoft, so "
+        "choose it deliberately. 'system' = the OS's own synthesizer "
+        "(espeak-ng on Linux, SAPI on Windows), robotic but always there. "
+        "Falls through the chain if the preferred one fails.",
+        "choice", tier="reapply", choices=["piper", "edge", "system"],
     ),
     FieldSpec(
         "tts_speed", "Speaking rate", "Voice & speech",

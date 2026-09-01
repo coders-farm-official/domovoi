@@ -32,7 +32,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 
 Two honest nuances, so you can decide for yourself:
 
-1. **Edge TTS sends response *text* out.** The default text-to-speech engine is Microsoft's Edge neural voices, which means the *text Domovoi speaks back to you* (not your voice, not your audio) goes to a Microsoft service. If that's not acceptable, set the TTS engine to `piper` (fully local neural TTS) in the dashboard's settings gear — the quality is very good and nothing leaves the house.
+1. **Edge TTS sends response *text* out — but it's off by default.** Text-to-speech defaults to `piper`, fully local neural TTS, so out of the box nothing Domovoi says leaves the house. Microsoft's Edge neural voices are available in the settings gear if you prefer them, and they sound better — but switching means the *text Domovoi speaks back to you* (not your voice, not your audio) goes to a Microsoft service. Worth choosing on purpose rather than inheriting.
 2. **Song identification sends short audio clips out — but not from your microphone.** The bundled radio plugin can sample short clips of *radio streams* you've favorited, and the library enricher can fingerprint *your music files*, sending those to online identification services (Shazam via `shazamio`, optionally AcoustID/MusicBrainz). Radio-stream audio and library files, never mic audio. Both are switchable off (see the table below).
 
 ## What touches the internet, and how do I turn each thing off?
@@ -41,7 +41,7 @@ Every optional outbound touchpoint, sourced from the code:
 
 | Feature | What goes out | Where | How to disable |
 |---|---|---|---|
-| Edge TTS (default engine) | Response text | Microsoft Edge TTS service | Settings gear → TTS engine → `piper` (or `system`); env `TTS_ENGINE=piper` |
+| Edge TTS — **opt-in, not the default** | Response text | Microsoft Edge TTS service | Nothing to disable: the default engine is `piper` (fully local). This row applies only if you switch to `edge` yourself (Settings gear → TTS engine, or `TTS_ENGINE=edge`) |
 | Connectivity probe | A TCP dial, no payload | `1.1.1.1:443` every 30 s | Change `CONNECTIVITY_PROBE_TARGET` to a LAN host (the probe is how Domovoi knows it's offline — don't remove it, repoint it) |
 | Model downloads | One-time fetches | Whisper models, Piper voices (Hugging Face), Ollama model pulls | Nothing recurring — happens at setup / first use of a new model or voice |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching; `NEWS_AUTO_FETCH` (topic feeds) is already off by default |

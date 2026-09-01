@@ -24,7 +24,7 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_model` | `large-v3` | **`small.en`**, or `medium` if you need the accuracy |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
-| `tts_engine` | `edge` | `edge` — unchanged, and now matters more (see below) |
+| `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
 All of these are dashboard settings — gear → **Advanced** for the Whisper
@@ -141,14 +141,32 @@ occasionally. That is a much better trade than the raw numbers suggest,
 and it's worth setting expectations with the household on exactly this
 split.
 
-### TTS is free
+### TTS: the one place local-first costs you something
 
-Keep `tts_engine = edge`. Online Edge voices cost your CPU nothing — the
-audio arrives over the network already rendered — and they're the fastest
-option available. Piper (local neural) is the automatic fallback when the
-internet is down, and it *does* cost CPU, but only then.
+`tts_engine` defaults to `piper`, which renders every spoken response
+locally — on this box, that means on the same CPU already doing Whisper
+and the language models. Edge, by contrast, arrives over the network
+already rendered and costs zero local compute.
 
-On a GPU host this default is a nicety. On a CPU host it's load-bearing.
+So this is the one setting where the local-first default and the
+CPU-host advice genuinely pull in opposite directions, and it's worth
+being clear-eyed rather than pretending otherwise.
+
+**Start on Piper anyway.** It's fast — a `medium` voice renders a
+typical one- or two-sentence reply in well under a second on eight modern
+cores — and it runs after the answer is already decided, so it lands at
+the tail of the turn rather than in the middle of it. For most households
+it simply isn't the bottleneck.
+
+Reach for `edge` if you measure otherwise, or if you want the nicer
+voices badly enough. Just do it knowingly: it sends **the text of every
+spoken response** to Microsoft, which is the single thing the default
+config is built to avoid. See
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+
+Piper's voice model downloads from Hugging Face once, on first render.
+After that it is fully offline — which also makes it the rung that keeps
+working when your internet doesn't.
 
 ---
 

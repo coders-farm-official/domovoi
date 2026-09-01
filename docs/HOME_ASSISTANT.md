@@ -27,9 +27,10 @@ own satellite hardware:
 - **STT** — Whisper, running on the server's GPU (CUDA). Never leaves the box.
 - **Intent routing** — a fast-path pattern router backed by two local Ollama
   models (one for conversational Q&A, one for tool-call dispatch).
-- **TTS** — a fallback chain (`edge → piper → system`); fully offline if you
-  pick Piper. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off)
-  for the cloud caveat on the default engine.
+- **TTS** — local neural (Piper) by default, so nothing spoken leaves the
+  network; Microsoft's Edge voices are an opt-in upgrade with a cloud
+  caveat. Either way the engine chain falls back gracefully. See
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off).
 - **Satellites** — Raspberry Pis with a ReSpeaker mic board, running
   openWakeWord on-device. Wake word defaults to `hey_jarvis`; you can record
   and train a custom "Hey Domovoi" model from the dashboard

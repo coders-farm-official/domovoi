@@ -247,8 +247,11 @@ text-to-speech, satellite WebSockets, background workers, the plugin runtime
 — while the **dashboard** (`:6369`) serves the web UI and proxies
 live-state/admin actions to the core. Each room gets its own MPD music
 daemon, provisioned lazily in Docker when the room's satellite first
-connects. TTS falls back gracefully: natural online voices when the internet
-is up, local neural (Piper) when it isn't, system voice as the last resort.
+connects. TTS is local by default — neural **Piper** voices rendered on the
+server, so nothing Domovoi says leaves your network. Microsoft's online Edge
+voices are available as a deliberate opt-in for anyone who prefers them, and
+the engine chain falls back gracefully (`piper → system`, or `edge → piper →
+system` if you enable Edge) so the house keeps talking whatever happens.
 
 Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 [UML diagrams](docs/uml/) · [API reference](docs/API_REFERENCE.md)
