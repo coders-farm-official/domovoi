@@ -110,8 +110,25 @@ _NOW_PLAYING_RE = re.compile(
     r"^(?:what(?:'s| is) playing|what song is this|what is this song|who sang that|who sings this)$"
 )
 _VOLUME_SET_RE = re.compile(r"^(?:set (?:the )?volume to|volume) (\d{1,3})$")
-_VOLUME_UP_RE = re.compile(r"^(?:volume up|louder|turn it up)$")
-_VOLUME_DOWN_RE = re.compile(r"^(?:volume down|quieter|turn it down)$")
+# Volume is among the most-said things in the house, so it must stay on the
+# fast path across the phrasings people actually use. The original patterns
+# only accepted "volume up" / "louder" / "turn it up"; the very natural
+# "turn the volume up" and "turn up the volume" missed and fell through to
+# the LLM router — a few seconds instead of ~20 ms on a CPU host, on a
+# command said many times a day. Still fully anchored (the router lowercases
+# and strips trailing punctuation first), so nothing matches by accident.
+_VOLUME_UP_RE = re.compile(
+    r"^(?:volume up"
+    r"|louder"
+    r"|turn (?:it|the volume|the music|the sound) up"
+    r"|turn up the (?:volume|music|sound))$"
+)
+_VOLUME_DOWN_RE = re.compile(
+    r"^(?:volume down"
+    r"|quieter|softer"
+    r"|turn (?:it|the volume|the music|the sound) down"
+    r"|turn down the (?:volume|music|sound))$"
+)
 
 # Volume is presented to the user as a 1-10 knob — people say "set it to 5",
 # not "to 50%". Level 1 maps to 50% hardware (below that the line-level output
