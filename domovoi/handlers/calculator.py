@@ -104,6 +104,14 @@ def _normalize_math(expr: str) -> str:
     """Convert spoken math vocabulary into operators simpleeval
     understands. Order matters — replace multi-word phrases first."""
     s = expr.strip()
+    # Drop a leading article. The spoken-prefix path hands us whatever
+    # followed "what is" / "calculate", so "what is the square root of 144"
+    # arrives here as "the square root of 144". _safe_eval strips ALL
+    # whitespace before parsing, so a surviving article fuses onto the next
+    # token — "the sqrt(144)" becomes "thesqrt(144)", "the 12 times 9"
+    # becomes "the12*9" — and both are rejected as unknown names. The user
+    # just hears "I couldn't work that out" for a perfectly ordinary phrasing.
+    s = re.sub(r"^(?:the|a)\s+", "", s, flags=re.I)
     # Multi-word first.
     s = re.sub(r"\bsquare root of\b", "sqrt ", s)
     s = re.sub(r"\bto the power of\b", " ** ", s)

@@ -714,3 +714,34 @@ async def test_router_routes_unit_conversion(db_session) -> None:
     await db_session.commit()
     assert response.matched_handler == "calculator"
     assert "3.53" in response.text  # 100 g = 3.527 oz, rounded to 2 dp
+
+
+# ─── Spoken articles (regression) ──────────────────────────────────────────
+# The prefix path hands _normalize_math whatever followed "what is", so a
+# natural "what is THE square root of 144" arrives with the article attached.
+# _safe_eval strips all whitespace before parsing, so a surviving article
+# fuses onto the next token ("thesqrt(144)", "the12*9") and is rejected as an
+# unknown name. The original suite only ever exercised article-free inputs
+# like "compute sqrt(144)", so this shipped broken.
+
+@pytest.mark.parametrize("spoken,expected", [
+    ("the square root of 144", 12.0),
+    ("a square root of 25", 5.0),
+    ("the 12 times 9", 108),
+    ("the 100 divided by 7", pytest.approx(14.2857142, rel=1e-6)),
+    ("the 2 to the power of 10", 1024),
+    # Article-free forms must be unaffected.
+    ("square root of 144", 12.0),
+    ("12 times 9", 108),
+])
+def test_leading_article_is_stripped(spoken, expected):
+    from domovoi.handlers.calculator import _normalize_math, _safe_eval
+    assert _safe_eval(_normalize_math(spoken)) == expected
+
+
+def test_article_stripping_does_not_eat_real_tokens():
+    """Only a LEADING article goes; nothing mid-expression is touched."""
+    from domovoi.handlers.calculator import _normalize_math
+    # "the" inside the expression isn't a prefix and has no business being
+    # removed — the expression should be left alone to fail loudly instead.
+    assert _normalize_math("12 times the 9") == "12 * the 9"
