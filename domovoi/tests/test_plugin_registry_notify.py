@@ -2,8 +2,8 @@
 
 That NOTIFY is user-visible, not merely cache invalidation: the dashboard
 turns it into a "plugins changed — reload to get the new pages" toast.
-Boot-time plugin discovery re-writes each plugin's status (``loaded`` over
-an already-``loaded`` row), so an unconditional NOTIFY meant EVERY core
+Boot-time plugin discovery re-writes each plugin's status (``ok`` over an
+already-``ok`` row), so an unconditional NOTIFY meant EVERY core
 restart told every open dashboard that its plugins had changed — observed
 2026-09-01 with only the bundled radio plugin installed and nothing touched.
 
@@ -21,6 +21,18 @@ from domovoi.tests.conftest import requires_db
 pytestmark = [requires_db, pytest.mark.asyncio]
 
 SLUG = "notifytest"
+
+# Status values must come from the enum, not from log messages. The loader
+# logs "plugin radio v1.0.0 loaded", but "loaded" is NOT a valid status —
+# writing it raises ValueError deep inside update_plugin. Asserting at MODULE
+# level (not inside a test) means a wrong constant fails at collection on any
+# machine, including one with no Postgres where every test here would
+# otherwise skip and hide the mistake.
+STATUS_OK = "ok"
+STATUS_ERR = "load_error"
+assert {STATUS_OK, STATUS_ERR} <= reg.VALID_STATUS, (
+    f"test uses statuses outside VALID_STATUS={sorted(reg.VALID_STATUS)}"
+)
 
 
 @pytest.fixture
@@ -40,7 +52,7 @@ async def plugin_row(db_session):
         source_ref=None,
         install_dir="/tmp/notifytest",
         manifest={"slug": SLUG},
-        status="loaded",
+        status=STATUS_OK,
     )
     yield
     await reg.delete_plugin(SLUG)
@@ -60,13 +72,13 @@ def notifies(monkeypatch):
 
 async def test_no_op_update_does_not_notify(plugin_row, notifies):
     """Re-writing the SAME status — what boot-time discovery does — must be
-    silent."""
-    await reg.set_status(SLUG, "loaded", None)
+    silent. VALID_STATUS is {ok, degraded, load_error, uninstalled}."""
+    await reg.set_status(SLUG, STATUS_OK, None)
     assert notifies == [], "a no-op write must not announce a change"
 
 
 async def test_real_change_still_notifies(plugin_row, notifies):
-    await reg.set_status(SLUG, "load_error", "boom")
+    await reg.set_status(SLUG, STATUS_ERR, "boom")
     assert notifies == [SLUG]
 
 
@@ -87,7 +99,7 @@ async def test_null_transitions_are_detected(plugin_row, notifies):
 
 async def test_partial_change_in_a_multi_field_update_notifies(plugin_row, notifies):
     """One differing field is enough, even when the others match."""
-    await reg.update_plugin(SLUG, status="loaded", last_error="new")
+    await reg.update_plugin(SLUG, status=STATUS_OK, last_error="new")
     assert notifies == [SLUG]
 
 
@@ -112,5 +124,5 @@ async def test_manifest_jsonb_comparison(plugin_row, notifies):
 
 
 async def test_unknown_slug_notifies_nothing(notifies):
-    await reg.update_plugin("does-not-exist", status="loaded")
+    await reg.update_plugin("does-not-exist", status=STATUS_OK)
     assert notifies == []
