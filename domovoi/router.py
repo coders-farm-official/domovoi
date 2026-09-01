@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import registered_values
+from domovoi.clients.mpd import MPDNotProvisioned
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.config import settings
 from domovoi.confirmations import CORE_KIND_PREFIX, request_confirmation
@@ -172,6 +173,25 @@ async def _maybe_offer_pending_memory(
         return None
 
 
+def _no_speakers_yet(session_id: UUID | None, ctx: Context) -> Response:
+    """Audio was asked for before any satellite has ever connected.
+
+    Per-room MPD daemons are provisioned lazily on a satellite's first
+    connect, so on a fresh install there is nowhere to play. That is an
+    ordinary first-run state — reachable simply by exercising
+    ``/v1/intent`` before building a Pi — not a fault, so answer it the way
+    a handler would instead of raising into a 500.
+    """
+    return Response(
+        text=(
+            "I can't play anything yet — no satellite has connected, so "
+            "there are no speakers set up in any room."
+        ),
+        session_id=session_id,
+        online=ctx.online,
+    )
+
+
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
@@ -321,7 +341,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 )
                 return response
 
-            response = await fp.method(handler, m, ctx, session)
+            try:
+                response = await fp.method(handler, m, ctx, session)
+            except MPDNotProvisioned:
+                response = _no_speakers_yet(session_id, ctx)
             response.matched_handler = handler.name
             response.matched_path = "fast"
             response.session_id = session_id
@@ -352,9 +375,12 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             if path == "llm_offline":
                 response = await handler.fallback_offline(intent, ctx, session)
             else:
-                response = await handler.execute_from_tool(
-                    tool_call.get("args", {}), ctx, session
-                )
+                try:
+                    response = await handler.execute_from_tool(
+                        tool_call.get("args", {}), ctx, session
+                    )
+                except MPDNotProvisioned:
+                    response = _no_speakers_yet(session_id, ctx)
             response.matched_handler = handler.name
             response.matched_path = path
             response.session_id = session_id

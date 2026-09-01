@@ -522,6 +522,18 @@ def _resolve_room(room_id: str | None) -> str | None:
     return next(iter(_room_ports.keys()))
 
 
+class MPDNotProvisioned(RuntimeError):
+    """No room has an MPD daemon yet.
+
+    Raised when a handler asks for a client before any satellite has ever
+    connected. This is a NORMAL state on a fresh install — the server is
+    fully usable over ``/v1/intent`` before a single Pi exists — so the
+    router catches it and degrades to a spoken explanation rather than
+    letting it surface as a 500. Typed (not a bare RuntimeError) so that
+    catch stays narrow and never swallows a real MPD fault.
+    """
+
+
 def get_mpd_client_for(room_id: str | None) -> MPDClient:
     """Return the MPD client bound to ``room_id``'s daemon.
 
@@ -547,7 +559,7 @@ def get_mpd_client_for(room_id: str | None) -> MPDClient:
 
     key = _resolve_room(room_id)
     if key is None:
-        raise RuntimeError(
+        raise MPDNotProvisioned(
             "No MPD rooms provisioned yet. A satellite must connect to "
             "/v1/stream/{room_id} at least once before handlers can use MPD."
         )
