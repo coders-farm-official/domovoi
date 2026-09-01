@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import time
 
 from domovoi.config import settings
 
@@ -66,6 +67,82 @@ async def current_sha() -> str:
         return sha
     except Exception:  # noqa: BLE001 — no git / not a repo / timeout → "unknown"
         return "unknown"
+
+
+# ─── What's RUNNING vs what's CHECKED OUT ────────────────────────────────
+#
+# `current_sha()` shells out to git on every call, so it always reports the
+# WORKING TREE. After a `git pull` without a restart, the tree has moved but
+# the process is still executing the modules it imported at boot — and the
+# dashboard's "what's running / is there an update?" panel would confidently
+# show the new SHA while the old code served every request. That is precisely
+# the moment someone goes looking at the version panel, and precisely when it
+# used to mislead (observed 2026-09-01: a calculator fix appeared "deployed"
+# while the fixed code had never been loaded).
+#
+# So capture the SHA ONCE at startup. `boot_sha()` is what the process is
+# actually running; `current_sha()` is what's on disk. When they differ, a
+# restart is pending.
+_BOOT_SHA: str | None = None
+_BOOT_MONOTONIC: float | None = None
+_BOOT_WALL: float | None = None
+
+
+async def capture_boot_state() -> None:
+    """Record the SHA and wall-clock time at process start. Called once from
+    the core's startup hook, before serving traffic. Idempotent."""
+    global _BOOT_SHA, _BOOT_MONOTONIC, _BOOT_WALL
+    if _BOOT_SHA is not None:
+        return
+    _BOOT_SHA = await current_sha()
+    _BOOT_MONOTONIC = time.monotonic()
+    _BOOT_WALL = time.time()
+
+
+def boot_sha() -> str:
+    """The SHA this process was launched from, or "unknown" if startup never
+    captured it (stub/test contexts that skip the boot hook)."""
+    return _BOOT_SHA or "unknown"
+
+
+def uptime_sec() -> float | None:
+    """Seconds since the boot state was captured, or None if never captured.
+    Monotonic, so a clock adjustment can't make it go backwards."""
+    if _BOOT_MONOTONIC is None:
+        return None
+    return time.monotonic() - _BOOT_MONOTONIC
+
+
+def started_at() -> float | None:
+    """Unix timestamp of process start, or None if never captured. Wall-clock,
+    for display; use :func:`uptime_sec` for durations."""
+    return _BOOT_WALL
+
+
+async def version_state() -> dict:
+    """Everything the dashboard needs to tell "running" from "checked out".
+
+    ``restart_required`` is the honest answer to "is what I just pulled
+    actually live?" — True only when both SHAs are known and differ. A dirty
+    tree is ignored for that comparison: the ``-dirty`` suffix moves with any
+    uncommitted edit and would otherwise scream "restart" forever on a
+    development box.
+    """
+    checkout = await current_sha()
+    running = boot_sha()
+    known = running != "unknown" and checkout != "unknown"
+    return {
+        # `sha` stays for backwards compatibility with existing callers —
+        # and now means the RUNNING code, which is what they meant to ask.
+        "sha": running,
+        "running_sha": running,
+        "checkout_sha": checkout,
+        "restart_required": bool(
+            known and running.removesuffix("-dirty") != checkout.removesuffix("-dirty")
+        ),
+        "started_at": started_at(),
+        "uptime_sec": uptime_sec(),
+    }
 
 
 async def fetch() -> dict:

@@ -176,6 +176,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pre-warm the clients so first-request latency is bounded.
     # In stub mode these are instant; with real clients this blocks for
     # Whisper load (~30 s on large-v3).
+    # Pin the version label to the code this process actually imported,
+    # before anything can pull underneath us. See git_version.capture_boot_state.
+    await git_version.capture_boot_state()
+
     log.info("warming clients (use_stubs=%s)", settings.use_stubs)
     get_ollama_client()
     get_tts_client()
@@ -1183,9 +1187,15 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
 
 @app.get("/v1/admin/version")
 async def admin_version() -> dict[str, Any]:
-    """The core's current version label (short HEAD SHA, +"-dirty"
-    when the working tree is dirty). "unknown" if git isn't available."""
-    return {"sha": await git_version.current_sha()}
+    """What this process is RUNNING, and what's checked out on disk.
+
+    ``sha``/``running_sha`` is captured at boot, so it reflects the code
+    actually loaded. ``checkout_sha`` is read live from the working tree.
+    After a pull without a restart the two differ and ``restart_required``
+    is true — the panel must not claim a pulled fix is live when the old
+    modules are still serving requests.
+    """
+    return await git_version.version_state()
 
 
 @app.post("/v1/admin/version/check")

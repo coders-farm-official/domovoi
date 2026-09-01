@@ -442,6 +442,19 @@ const AdminSection = () => {
   );
 };
 
+// "running 2h 14m" — coarse on purpose: this answers "did it restart when I
+// thought it did?", not "how long exactly".
+const fmtUptime = (sec) => {
+  if (sec == null || !isFinite(sec) || sec < 0) return '';
+  const s = Math.floor(sec);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+};
+
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   const { data: core, refresh: refreshCore } = useApiObject('/api/config/version');
@@ -496,7 +509,12 @@ const VersionSection = () => {
   };
 
   const webVer = cfg && cfg.web_version;
+  // `sha` is the RUNNING code (captured at the core's boot), not whatever is
+  // checked out right now — those diverge after a pull without a restart,
+  // which is exactly when someone looks at this panel.
   const coreSha = core && core.sha;
+  const checkoutSha = core && core.checkout_sha;
+  const restartPending = !!(core && core.restart_required);
   const behind = status && status.upstream ? status.behind : null;
 
   return (
@@ -507,12 +525,32 @@ const VersionSection = () => {
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
         <div className="label">domovoi</div>
-        <div className="mono" style={{ color: coreSha ? 'var(--fg)' : 'var(--fg-faint)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="mono" style={{ color: coreSha ? 'var(--fg)' : 'var(--fg-faint)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ userSelect: 'all' }}>{coreSha || '—'}</span>
           {coreSha && coreSha.endsWith('-dirty') &&
             <Pill tone="warn">uncommitted changes</Pill>}
+          {core && core.uptime_sec != null && (
+            <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+              running {fmtUptime(core.uptime_sec)}
+            </span>
+          )}
         </div>
+        {restartPending && (
+          <React.Fragment>
+            <div className="label">checked out</div>
+            <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ userSelect: 'all' }}>{checkoutSha}</span>
+              <Pill tone="warn">restart to load</Pill>
+            </div>
+          </React.Fragment>
+        )}
       </div>
+      {restartPending && (
+        <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
+          New code is on disk but this process is still running the old
+          modules — restart the Domovoi server for it to take effect.
+        </div>
+      )}
       <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
           {checking ? 'Checking…' : 'Check for updates'}

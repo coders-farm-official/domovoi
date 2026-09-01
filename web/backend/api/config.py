@@ -82,9 +82,14 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
 
 @router.get("/config/version")
 async def get_version():
-    """The Domovoi server's current version label (short HEAD SHA, +"-dirty"
-    when the working tree is dirty). Read-only proxy to the Domovoi server,
-    which owns the git working tree — the web process can't see it."""
+    """What the Domovoi server is RUNNING, and what's checked out on disk.
+
+    Returns ``sha``/``running_sha`` (captured at the core's boot, so it names
+    the code actually loaded), ``checkout_sha`` (read live from the working
+    tree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two
+    SHAs diverge after a ``git pull`` without a restart — the case this panel
+    most needs to get right. Read-only proxy to the Domovoi server, which
+    owns the git working tree; the web process can't see it."""
     return bridge_response(*await get_admin("/v1/admin/version"))
 
 
