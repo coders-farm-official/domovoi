@@ -148,28 +148,49 @@ async def insert_plugin(
 
 
 async def update_plugin(slug: str, **fields: Any) -> None:
-    """Update arbitrary columns (+ ``updated_at``) and NOTIFY. ``manifest``
-    and ``pip_report`` dicts are JSON-encoded automatically."""
+    """Update arbitrary columns (+ ``updated_at``) and NOTIFY **iff a value
+    actually changed**. ``manifest`` and ``pip_report`` dicts are JSON-encoded
+    automatically.
+
+    The no-op guard matters because ``plugins_changed`` is a user-visible
+    signal, not just cache invalidation: the dashboard turns it into a
+    "plugins changed — reload to get the new pages" toast. Boot-time plugin
+    discovery re-writes each plugin's status (``loaded`` over an already
+    ``loaded`` row), so an unconditional NOTIFY made **every core restart**
+    tell every open dashboard that its plugins had changed when nothing had.
+
+    Implemented as an ``IS DISTINCT FROM`` predicate rather than a
+    read-then-compare so it stays a single atomic statement — no race where
+    a concurrent write lands between the check and the update. ``rowcount``
+    is then the authoritative "did anything change".
+    """
     if not fields:
         return
     if "status" in fields and fields["status"] not in VALID_STATUS:
         raise ValueError(f"invalid plugin status {fields['status']!r}")
     sets: list[str] = []
+    changed: list[str] = []
     params: dict[str, Any] = {"slug": slug}
     for key, value in fields.items():
         if key in ("manifest", "pip_report") and value is not None:
             sets.append(f"{key} = CAST(:{key} AS JSONB)")
+            changed.append(f"{key} IS DISTINCT FROM CAST(:{key} AS JSONB)")
             params[key] = json.dumps(value)
         else:
             sets.append(f"{key} = :{key}")
+            changed.append(f"{key} IS DISTINCT FROM :{key}")
             params[key] = value
     sets.append("updated_at = now()")
     async with session_scope() as s:
-        await s.execute(
-            text(f"UPDATE plugins SET {', '.join(sets)} WHERE slug = :slug"),
+        result = await s.execute(
+            text(
+                f"UPDATE plugins SET {', '.join(sets)} "
+                f"WHERE slug = :slug AND ({' OR '.join(changed)})"
+            ),
             params,
         )
-        await _notify(s, slug)
+        if result.rowcount:
+            await _notify(s, slug)
 
 
 async def set_enabled(slug: str, enabled: bool) -> None:
