@@ -422,16 +422,48 @@ const Sidebar = ({ route, setRoute, counts, manifest }) => {
         </nav>
       </div>
 
-      <div className="footer">
-        <div className="who">
-          <Avatar name="Kamron"/>
-          <div>
-            <div className="name">Kamron</div>
-            <div className="host">my-domovoi.local</div>
-          </div>
+      <SidebarFooter/>
+    </aside>
+  );
+};
+
+// Who you are and which server you're pointed at.
+//
+// Both values were hardcoded ("Kamron" / "my-domovoi.local") from the
+// original UI mockup, so every install in the world showed one developer's
+// name and a hostname that belonged to nobody. Read them from what the app
+// actually knows instead:
+//
+//   * host — ServerStore.currentLabel(), the same origin the Topbar shows.
+//   * name — Domovoi has no per-user login, only an admin gate. So report
+//     the auth state honestly rather than inventing a person: the sidebar
+//     doubles as the answer to "why is that page asking me to sign in?".
+const SidebarFooter = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+
+  // Auth lives in JS memory and changes on login/logout — re-render with it.
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined') return;
+    try { return Auth.subscribe(force); } catch { /* auth.js absent */ }
+  }, []);
+
+  let signedIn = false;
+  try { signedIn = typeof Auth !== 'undefined' && Auth.isLoggedIn(); } catch {}
+
+  const host = (() => {
+    try { return ServerStore.currentLabel(); } catch { return window.location.host; }
+  })();
+
+  return (
+    <div className="footer">
+      <div className="who">
+        <Avatar name={signedIn ? 'Admin' : 'Guest'}/>
+        <div>
+          <div className="name">{signedIn ? 'Admin' : 'Not signed in'}</div>
+          <div className="host" title={host}>{host}</div>
         </div>
       </div>
-    </aside>
+    </div>
   );
 };
 
