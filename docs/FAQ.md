@@ -17,7 +17,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
-- [Why Windows-first?](#why-windows-first)
+- [Linux or Windows for the server?](#linux-or-windows-for-the-server)
 
 ---
 
@@ -58,8 +58,8 @@ The install-time trust screen for any *third-party* plugin lists that plugin's o
 
 **The server** — one machine that stays on:
 
-- Windows (the primary target — see [Why Windows-first?](#why-windows-first)), with Docker Desktop for Postgres and the per-room music daemons.
-- An NVIDIA GPU is strongly recommended: the default STT is Whisper `large-v3` on CUDA, and the local Ollama models (a 3B conversational model and a 14B tool-routing model by default) want VRAM too.
+- **Linux or Windows** — both supported; see [Linux or Windows for the server?](#linux-or-windows-for-the-server). Either way Docker runs Postgres and the per-room music daemons (Docker Engine on Linux, Docker Desktop on Windows).
+- An NVIDIA GPU is recommended but **not required**: the default STT is Whisper `large-v3` on CUDA, and the local Ollama models (a 3B conversational model and a 14B tool-routing model by default) want VRAM too. On a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
 - **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top. The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
 **Satellites** — one small box per room you want to talk to:
@@ -183,9 +183,15 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
 
 Restore on a new machine: install Domovoi, start Postgres, restore the dump (`docker exec -i domovoi-postgres psql -U domovoi domovoi < domovoi-backup.sql`), copy `~/.domovoi/` and your media back, copy your `.env`, start the core. Returning users note: admin credentials live in the database, so a restored database keeps your password; a *fresh* database means first-run setup again (new setup code in `~/.domovoi/setup-code.txt`). Satellites reconnect on their own — their config never left the Pi.
 
-## Why Windows-first?
+## Linux or Windows for the server?
 
-Because the reference deployment is a Windows machine with a good NVIDIA GPU — for many households, the gaming PC is the best AI hardware in the house, and Domovoi is built to run well on it rather than demanding a Linux box. The code carries real Windows-specific engineering (CUDA DLL preloading for Whisper, Docker Desktop networking quirks, console-encoding-safe setup codes), and Postgres, MPD, and SearXNG run in containers either way. Linux isn't rejected — the code is Python and containers throughout — but Windows is what's tested end to end, and the docs assume it. The two Linux-only bits (wake-word training, some audio tooling) are explicitly bridged via WSL2/Docker.
+**Either. Pick by what the box is.**
+
+**Linux** is the better host for a dedicated always-on machine, and it's where the project is heading. A headless install leaves several GB more RAM for models, wake-word training runs natively instead of bridging through WSL2, `ffmpeg`/`fpcalc`/`mpg123` are one `apt install`, and autostart is a systemd unit instead of a scheduled-task workaround. Setup: [LINUX_HOST.md](LINUX_HOST.md).
+
+**Windows** remains fully supported and is the better choice when the server is also the household's gaming PC — for many homes that machine already has the best GPU in the house, and Domovoi is built to run well on it rather than demanding a separate Linux box. It carries genuine Windows-specific engineering: CUDA DLL preloading for Whisper (`domovoi/bootstrap.py`), Docker Desktop networking, console-encoding-safe setup codes, and a SAPI voice as the last TTS fallback.
+
+Postgres, MPD, and SearXNG run in containers either way, and the application code is plain Python. The differences are real but small, and each one is documented rather than assumed.
 
 ---
 

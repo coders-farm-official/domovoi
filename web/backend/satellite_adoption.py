@@ -181,7 +181,9 @@ def write_provision(mount: Path, doc: dict[str, Any]) -> None:
 
     1. write to ``provision.json.part`` + flush + fsync,
     2. ``os.replace`` to the final name,
-    3. best-effort ``FlushFileBuffers`` on the raw volume handle so FAT
+    3. fsync the containing directory so the rename itself is durable
+       (POSIX; a no-op where the platform won't open a directory fd),
+    4. best-effort ``FlushFileBuffers`` on the raw volume handle so FAT
        metadata leaves the Windows cache promptly.
 
     Durability here only affects LATENCY — correctness lives device-side
@@ -196,7 +198,26 @@ def write_provision(mount: Path, doc: dict[str, Any]) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(part, final)
+    _fsync_dir(mount)
     _flush_volume(mount)
+
+
+def _fsync_dir(mount: Path) -> None:
+    """fsync the directory so the rename is durable, not just the file's
+    contents. Matters on Linux, where the card is yanked seconds after the
+    adopt click and nothing else forces the metadata out. Windows can't
+    open a directory as a file descriptor — there ``_flush_volume`` is the
+    equivalent. Best-effort: never raises."""
+    try:
+        fd = os.open(str(mount), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        log.debug("directory fsync on %s failed: %s", mount, e)
+    finally:
+        os.close(fd)
 
 
 def _flush_volume(mount: Path) -> None:

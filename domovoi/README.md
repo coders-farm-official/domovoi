@@ -65,6 +65,21 @@ curl http://localhost:6370/v1/connectivity
 curl http://localhost:6370/v1/health
 ```
 
+### CUDA runtime (NVIDIA hosts)
+
+The cuBLAS/cuDNN wheels Whisper needs on CUDA live in their own `cuda`
+extra, so a CPU-only or non-NVIDIA host doesn't pull ~2-3 GB it will never
+load:
+
+```bash
+pip install -e ".[real-clients,cuda]"
+```
+
+Without an NVIDIA GPU, skip it and set `whisper_device=cpu` +
+`whisper_compute_type=int8` — see
+[docs/CPU_HOST.md](../docs/CPU_HOST.md). A `cuda` device on a machine that
+can't do CUDA now fails at startup with a message naming the fix.
+
 ### Voice-profile install (Windows quirk)
 
 Resemblyzer pins `webrtcvad>=2.0.10`, which has no Windows binary
@@ -81,6 +96,11 @@ pip install --no-deps resemblyzer
 
 `librosa` and `torch` are Resemblyzer's other deps and ship cp312
 Windows wheels, so they install cleanly through the extra.
+
+**On Linux this workaround is unnecessary** — `webrtcvad` compiles from
+source given `python3-dev` and `build-essential`, so a plain
+`pip install resemblyzer` works. See
+[docs/LINUX_HOST.md](../docs/LINUX_HOST.md).
 
 Verify it's all there:
 

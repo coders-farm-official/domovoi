@@ -8,8 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 (github.com/coders-farm-official/domovoi). A domovoi is a Slavic household
 guardian spirit, often taking the form of a cat; the cat mascot appears
 throughout the UI. The system runs on the user's own hardware: a central
-server (Windows-first, CUDA for Whisper STT), Raspberry Pi wake-word
-satellites around the house, a LAN web dashboard, and an Android app.
+server, Raspberry Pi wake-word satellites around the house, a LAN web
+dashboard, and an Android app.
+
+**Host platforms: Linux-first, Windows fully supported.** Linux is the
+primary target for a dedicated always-on server; Windows stays first-class
+because the household gaming PC is often the best GPU in the house. Neither
+is a second-class citizen — when adding platform-touching code, make the
+POSIX path work and keep the Windows path intact, guarded by
+`sys.platform`. Whisper on CUDA is one supported configuration, not an
+assumption: `whisper_device` is `cuda` or `cpu`, and the CUDA runtime
+wheels live in their own `cuda` extra. See `docs/LINUX_HOST.md` and
+`docs/CPU_HOST.md`.
 
 | Path | What it is |
 |---|---|
@@ -52,12 +62,14 @@ lives). Docker commands run from `domovoi/` (where the compose file lives).
 
 ```powershell
 # One-shot dev bootstrap (Postgres + Flyway + core)
-./domovoi/scripts/dev.ps1            # PowerShell
 ./domovoi/scripts/dev.sh             # bash / git-bash
+./domovoi/scripts/dev.ps1            # PowerShell
 
 # Manual equivalent
 pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[cuda]"                  # only on an NVIDIA host
 pip install --no-deps resemblyzer         # Windows quirk — see domovoi/README.md
+                                          # (on Linux, plain `pip install resemblyzer` works)
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway            # prod migrations
@@ -65,6 +77,10 @@ docker compose run --rm flyway-test       # test-DB migrations
 cd ..
 python -m domovoi.main               # core voice service on :6370
 python -m web.backend.main           # web dashboard on :6369 (separate process)
+
+# Web dashboard (separate process)
+./web/scripts/dev.sh                 # bash
+./web/scripts/dev.ps1                # PowerShell
 
 # Tests (conftest forces USE_STUBS=true and refuses non-_test DB)
 pytest

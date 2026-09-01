@@ -22,16 +22,22 @@ Prerequisites:
 * **Python 3.11+** (the codebase uses 3.11 syntax throughout)
 * **Docker** (Postgres + Flyway run in containers; Postgres publishes host
   port **6432**)
-* Windows is the first-class server host; Linux/macOS work for most
-  development (the CUDA/DLL paths are Windows-specific and stubbed in tests)
-* Optional for real voice work: an NVIDIA GPU (Whisper runs on CUDA) and
-  [Ollama](https://ollama.com) on `:11434`
+* **Linux, Windows, or macOS** all work for development. Linux and Windows
+  are both supported server hosts (see [LINUX_HOST.md](LINUX_HOST.md));
+  the CUDA/DLL paths are Windows-specific and stubbed in tests
+* Optional for real voice work: [Ollama](https://ollama.com) on `:11434`,
+  plus an NVIDIA GPU if you want Whisper on CUDA — `pip install -e
+  ".[real-clients,cuda]"`. Without one, set `whisper_device=cpu` and
+  `whisper_compute_type=int8` ([CPU_HOST.md](CPU_HOST.md))
 
 One-shot bootstrap (brings up Postgres, runs migrations, starts the core):
 
+```bash
+./domovoi/scripts/dev.sh         # bash
+```
+
 ```powershell
 ./domovoi/scripts/dev.ps1        # PowerShell
-./domovoi/scripts/dev.sh         # bash / git-bash
 ```
 
 Manual equivalent — note the directory dance: `pip install` and `pytest` run

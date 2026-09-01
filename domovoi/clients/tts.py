@@ -6,7 +6,11 @@ engine), so HTTP clients can stream it directly without re-encoding.
 
 - `edge`   — Microsoft Edge neural voices (online, very natural, ~24 kHz)
 - `piper`  — local neural (offline, auto-downloads voice, 22 kHz)
-- `system` — pyttsx3/SAPI5 on Windows; skipped on other platforms
+- `system` — the OS's own synthesizer: pyttsx3/SAPI5 on Windows,
+  `espeak-ng` (or `espeak`) on Linux/BSD, `say` on macOS. Robotic, but it
+  is the floor of the chain — the thing that still talks when the network
+  is down AND the Piper voice is missing or broken. Returns None when no
+  system synthesizer is installed, which just ends the chain.
 
 Per-engine failure (network drop, missing voice, etc.) advances to the next.
 The chain starts at the configured preferred engine. Synchronous engine work
@@ -18,9 +22,12 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import shutil
+import subprocess
 import sys
 import tempfile
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -202,9 +209,8 @@ def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
     return _pcm_to_wav_bytes(pcm, sr)
 
 
-def _synth_system_sync(text: str) -> bytes | None:
-    if sys.platform != "win32":
-        return None
+def _synth_system_windows(text: str) -> bytes | None:
+    """pyttsx3 → SAPI5."""
     try:
         import pyttsx3
     except ImportError:
@@ -222,6 +228,67 @@ def _synth_system_sync(text: str) -> bytes | None:
         return data
     except Exception:
         return None
+
+
+# Non-Windows system synthesizers, tried in PATH order. Each entry renders
+# `text` (fed on stdin) to a WAV at `path`. Reading the text from stdin
+# rather than argv keeps a leading "-" from being parsed as an option and
+# sidesteps command-line length limits.
+def _espeak_argv(exe: str, path: str) -> list[str]:
+    return [exe, "--stdin", "-w", path]
+
+
+def _say_argv(exe: str, path: str) -> list[str]:
+    # macOS `say` writes AIFF by default; pin WAVE/LEI16 so the bytes we
+    # return are a real WAV. `-f -` reads the text from stdin.
+    return [exe, "-o", path, "--file-format=WAVE",
+            "--data-format=LEI16@22050", "-f", "-"]
+
+
+_SYSTEM_TTS_POSIX: tuple[tuple[str, Callable[[str, str], list[str]]], ...] = (
+    # espeak-ng is the near-universal Linux/BSD choice: tiny, no daemon,
+    # and in every distro's default repos.
+    ("espeak-ng", _espeak_argv),
+    ("espeak", _espeak_argv),
+    ("say", _say_argv),
+)
+
+
+def _synth_system_posix(text: str) -> bytes | None:
+    """First available OS synthesizer on PATH, rendered to a WAV file."""
+    for name, build_argv in _SYSTEM_TTS_POSIX:
+        exe = shutil.which(name)
+        if exe is None:
+            continue
+        path = ""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                path = f.name
+            subprocess.run(
+                build_argv(exe, path),
+                input=text.encode("utf-8"),
+                capture_output=True,
+                timeout=settings.tts_system_timeout_sec,
+                check=True,
+            )
+            data = Path(path).read_bytes()
+            # A synthesizer that produced no audio is a failure, not a
+            # silent success — end the chain rather than emit a header-only
+            # WAV (mirrors the Piper guard above; 44 = WAV header size).
+            return data if len(data) > 44 else None
+        except Exception as e:  # noqa: BLE001 — any failure just ends the chain
+            log.debug("system TTS via %s failed: %s", name, e)
+            return None
+        finally:
+            if path:
+                Path(path).unlink(missing_ok=True)
+    return None
+
+
+def _synth_system_sync(text: str) -> bytes | None:
+    if sys.platform == "win32":
+        return _synth_system_windows(text)
+    return _synth_system_posix(text)
 
 
 class RealTTSClient:

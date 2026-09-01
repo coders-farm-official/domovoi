@@ -117,6 +117,12 @@ services:
       - "6283:8283"
     volumes:
       - domovoi-letta-pgdata:/var/lib/postgresql/data
+    # Docker Desktop (Windows/Mac) resolves host.docker.internal on its own;
+    # native Docker Engine on Linux does NOT. Mapping it to host-gateway
+    # explicitly makes the name work on every host, so OLLAMA_BASE_URL and
+    # settings.letta_tool_callback_url below need no per-platform variant.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Host-native Ollama (LLM + embeddings) reached from inside the
       # container. Windows/Mac use host.docker.internal; on Linux this

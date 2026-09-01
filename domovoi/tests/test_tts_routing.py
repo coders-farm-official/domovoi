@@ -109,3 +109,92 @@ def test_piper_voice_path_resolves_bare_name_in_voices_dir(tmp_path, monkeypatch
     (tmp_path / "custom.onnx").write_bytes(b"m")
     (tmp_path / "custom.onnx.json").write_text("{}")
     assert tts_mod._piper_voice_path("custom") == tmp_path / "custom.onnx"
+
+
+# ─── System engine: the floor of the chain, per platform ──────────────────
+# The `system` rung used to be Windows-only (pyttsx3/SAPI), which left a
+# Linux host with `edge → piper` and nothing beneath it. These cover the
+# POSIX synthesizer probe.
+
+
+def _fake_which(available: set[str]):
+    return lambda name: f"/usr/bin/{name}" if name in available else None
+
+
+def _fake_run(recorder: list, *, wav_bytes: bytes = b"RIFF" + b"\x00" * 60):
+    def run(argv, **kwargs):
+        recorder.append((argv, kwargs.get("input")))
+        # The real binaries write the WAV to the -w/-o path in argv.
+        out = argv[argv.index("-w") + 1] if "-w" in argv else argv[argv.index("-o") + 1]
+        with open(out, "wb") as f:
+            f.write(wav_bytes)
+        return None
+
+    return run
+
+
+def test_system_posix_prefers_espeak_ng(monkeypatch):
+    monkeypatch.setattr(tts_mod.shutil, "which", _fake_which({"espeak-ng", "espeak"}))
+    calls: list = []
+    monkeypatch.setattr(tts_mod.subprocess, "run", _fake_run(calls))
+
+    out = tts_mod._synth_system_posix("hello")
+
+    assert out is not None and out.startswith(b"RIFF")
+    argv, stdin = calls[0]
+    assert argv[0].endswith("espeak-ng")
+    # Text goes on stdin, never argv — a leading "-" must not become a flag.
+    assert stdin == b"hello"
+    assert "hello" not in argv
+
+
+def test_system_posix_falls_back_to_espeak(monkeypatch):
+    monkeypatch.setattr(tts_mod.shutil, "which", _fake_which({"espeak"}))
+    calls: list = []
+    monkeypatch.setattr(tts_mod.subprocess, "run", _fake_run(calls))
+
+    assert tts_mod._synth_system_posix("hi") is not None
+    assert calls[0][0][0].endswith("espeak")
+
+
+def test_system_posix_returns_none_when_nothing_installed(monkeypatch):
+    monkeypatch.setattr(tts_mod.shutil, "which", _fake_which(set()))
+    assert tts_mod._synth_system_posix("hi") is None
+
+
+def test_system_posix_header_only_wav_is_a_failure(monkeypatch):
+    """A synthesizer that emitted no audio must end the chain rather than
+    hand back a silent WAV (mirrors the Piper zero-frame guard)."""
+    monkeypatch.setattr(tts_mod.shutil, "which", _fake_which({"espeak-ng"}))
+    monkeypatch.setattr(
+        tts_mod.subprocess, "run", _fake_run([], wav_bytes=b"RIFF" + b"\x00" * 20)
+    )
+    assert tts_mod._synth_system_posix("hi") is None
+
+
+def test_system_posix_subprocess_failure_is_swallowed(monkeypatch):
+    monkeypatch.setattr(tts_mod.shutil, "which", _fake_which({"espeak-ng"}))
+
+    def boom(*a, **kw):
+        raise OSError("no such binary")
+
+    monkeypatch.setattr(tts_mod.subprocess, "run", boom)
+    assert tts_mod._synth_system_posix("hi") is None
+
+
+def test_system_sync_dispatches_by_platform(monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(
+        tts_mod, "_synth_system_windows", lambda t: seen.append("win") or b"W"
+    )
+    monkeypatch.setattr(
+        tts_mod, "_synth_system_posix", lambda t: seen.append("posix") or b"P"
+    )
+
+    monkeypatch.setattr(tts_mod.sys, "platform", "win32")
+    assert tts_mod._synth_system_sync("hi") == b"W"
+
+    monkeypatch.setattr(tts_mod.sys, "platform", "linux")
+    assert tts_mod._synth_system_sync("hi") == b"P"
+
+    assert seen == ["win", "posix"]

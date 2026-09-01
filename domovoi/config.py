@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     tts_edge_voice: str = "en-US-AriaNeural"
     tts_piper_voice: str = "en_US-lessac-medium"
     tts_speed: float = 1.0
+    # Wall-clock cap on the `system` engine's subprocess (espeak-ng / say on
+    # non-Windows; the Windows SAPI path is in-process and unaffected). This
+    # is the last rung of the fallback chain, so a wedged binary must not
+    # hold a voice turn open — fail fast and let the turn end silently.
+    tts_system_timeout_sec: float = 10.0
     # Where uploaded Piper voice models (.onnx + .onnx.json) live. Reuses
     # the cache dir tts.py already downloads HF Piper voices into, so an
     # uploaded model and an auto-downloaded one sit side by side.

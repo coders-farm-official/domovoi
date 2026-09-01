@@ -68,8 +68,6 @@ real-clients = [
     # Pi can play them via mpg123. Per-voice greeting/canned clip renderer
     # (canned_sounds.py). Small pure-wheel dep with Windows wheels.
     "lameenc>=1.7",
-    "nvidia-cublas-cu12",
-    "nvidia-cudnn-cu12",
     # Local-music indexer reads ID3/Vorbis/MP4 tags. Pure-Python; small
     # dep. Tested against MP3/M4A/FLAC/OGG/Opus.
     "mutagen>=1.47",
@@ -84,6 +82,20 @@ real-clients = [
     # — downloaded-episode playback works without it, matching the handler's
     # `degraded` contract.
     "feedparser>=6.0",
+]
+# CUDA runtime for Whisper. Split out of `real-clients` so a CPU-only or
+# non-NVIDIA host (see docs/CPU_HOST.md) doesn't pull ~2-3 GB of wheels it
+# will never load. Install alongside real-clients on an NVIDIA box:
+#
+#   pip install -e ".[real-clients,cuda]"
+#
+# On Windows these wheels are effectively required — `domovoi/bootstrap.py`
+# preloads their DLLs because the Windows loader won't resolve ctranslate2's
+# dependent DLLs on its own. On Linux they're optional if CUDA is already
+# installed system-wide; installing them anyway is the reliable path.
+cuda = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
 ]
 # VoiceProfileHandler runtime deps. Split into a separate extra because
 # Resemblyzer's `webrtcvad>=2.0.10` pin has no Windows binary wheels and

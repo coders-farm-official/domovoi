@@ -74,11 +74,16 @@ owning devices and automations. Setup and patterns:
 
 ## First install
 
+> Setting up a system for the first time? This section is the quickstart.
+> The **[day-one setup runbook](docs/SETUP_RUNBOOK.md)** walks the same
+> ground in order, with the decisions you can't easily reverse, the
+> verification gates between steps, and the fleet build-out after.
+
 ### Prerequisites
 
 | What | Why |
 |---|---|
-| A PC with an **NVIDIA GPU** | Whisper speech-to-text runs on CUDA. Windows is the documented, tested host. |
+| A PC with an **NVIDIA GPU** | Whisper speech-to-text runs on CUDA. Windows is the documented, tested host. No NVIDIA GPU? It still runs — see [Running without an NVIDIA GPU](docs/CPU_HOST.md). Prefer Linux? See [Running the server on Linux](docs/LINUX_HOST.md). |
 | **Python 3.11+** | The core service and dashboard run natively (they need GPU access, so they're not containerized). |
 | **Docker Desktop** | Runs Postgres, database migrations, and per-room audio (MPD) containers. |
 | **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both. |
@@ -117,11 +122,13 @@ cd domovoi
 
 # Python dependencies (run from the repo root, where pyproject.toml lives)
 pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[cuda]"            # NVIDIA hosts only — CUDA runtime wheels
 pip install --no-deps resemblyzer   # Windows quirk — see domovoi/README.md
+                                    # (on Linux: plain `pip install resemblyzer`)
 
 # One-shot bootstrap: starts Postgres, runs migrations, starts the core service
+./domovoi/scripts/dev.sh            # bash
 ./domovoi/scripts/dev.ps1           # PowerShell
-./domovoi/scripts/dev.sh            # bash / git-bash
 ```
 
 Prefer to see each step? The manual equivalent:
@@ -316,6 +323,7 @@ Want to write one? Start at the
 
 | Doc | What's in it |
 |---|---|
+| [Setup runbook](docs/SETUP_RUNBOOK.md) | Day-one bring-up in order — server, first satellite, fleet, verification gates |
 | [FAQ](docs/FAQ.md) | Quick answers — privacy, hardware, common "can it…?" questions |
 | [Glossary](docs/GLOSSARY.md) | The words we use (satellite, handler, capability, band…) |
 | [Architecture](docs/ARCHITECTURE.md) | How the system works, for the curious and the contributing |
@@ -326,6 +334,8 @@ Want to write one? Start at the
 | [Home Assistant](docs/HOME_ASSISTANT.md) | Running Domovoi alongside Home Assistant |
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
+| [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
+| [Running the server on Linux](docs/LINUX_HOST.md) | Linux install, what differs from the Windows-first docs, systemd units |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
 
 ---
