@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -198,7 +199,10 @@ private fun OfflineShell() {
         topBar = {
             Surface(color = Domovoi.colors.canvas) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     DomovoiGlyph(20)
@@ -424,9 +428,17 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
     val serverLabel = knownServers.firstOrNull { it.url == serverUrl }?.name
         ?: serverUrl.removePrefix("http://").removePrefix("https://")
 
+    // targetSdk 35 forces edge-to-edge, so this bar is laid out from y=0 and
+    // would render UNDER the status bar — clock and battery icons on top of
+    // the title, and the row's tap targets unreachable behind them. Scaffold
+    // only hands its contentWindowInsets to the BODY; topBar/bottomBar have
+    // to consume their own (M3's own TopAppBar does exactly this internally).
     Surface(color = Domovoi.colors.canvas) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("domovoi", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgSubtle)
