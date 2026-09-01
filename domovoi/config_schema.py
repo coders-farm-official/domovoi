@@ -95,6 +95,15 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "str", tier="reapply",
     ),
     FieldSpec(
+        "ollama_tool_think", "Tool model thinks first", "Models",
+        "Let the tool-routing model emit reasoning tokens before it answers "
+        "(only affects models that have a thinking mode). Routing is the "
+        "latency-critical step of every non-fast-path turn, so this is OFF by "
+        "default — leave it off on a CPU host. Ignored by models without a "
+        "thinking mode. Applies immediately.",
+        "bool", tier="reapply",
+    ),
+    FieldSpec(
         "ollama_vision_model", "Vision model", "Models",
         "The vision-capable Ollama model the text-chat surface uses when a "
         "message carries images. Applies immediately; it must already be "

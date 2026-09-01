@@ -84,6 +84,28 @@ things your household says.
 If you notice the router picking wrong handlers, that's your signal to go
 back to 14B and accept the latency — or to add a fast path (see below).
 
+### Thinking models: keep thinking off
+
+Most current models have a **thinking mode** — they emit reasoning tokens
+before answering. That's usually an upgrade, and on a CPU host it is
+exactly the wrong trade for *this* call: routing sits in the latency path
+of every non-fast-path turn, so a router that reasons first adds that cost
+to every single command.
+
+`ollama_tool_think` (dashboard → **Models**) controls it, and it defaults
+to **off**. Leave it off here. It's a hot setting, so you can A/B it in
+seconds if you're curious whether a given model routes better with it.
+
+This is what makes newer tool models usable on a CPU box at all — without
+it, swapping in a thinking-capable router makes every command feel slow
+and the model gets blamed for it.
+
+The flag degrades safely in both directions: Domovoi omits it entirely
+when the installed `ollama` client predates the kwarg, and if a server
+rejects it for a model with no thinking mode, the turn is retried once
+without it and the flag latches off for the process. Neither case costs
+you a failed route.
+
 ### Leave chat mode off
 
 Open-mic conversational mode routes every turn through Letta and a 14B

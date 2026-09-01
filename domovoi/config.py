@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"         # QA / conversational — fast, cheap
     ollama_tool_model: str = "qwen2.5:14b"    # tool-call routing — needs strong schema adherence
+    # Whether the tool-routing model is allowed to "think" (emit reasoning
+    # tokens) before answering. OFF by default: routing is the latency-critical
+    # step of every non-fast-path turn, and a router that reasons first adds
+    # that cost to every command — painful on a CPU host (docs/CPU_HOST.md).
+    # Ollama ignores this for models with no thinking mode, and Domovoi drops
+    # the flag automatically when the installed ollama client is too old to
+    # accept it, so leaving it False is always safe. Turn it ON only if you
+    # have GPU headroom and find your model routes materially better with it.
+    ollama_tool_think: bool = False
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
     ollama_vision_model: str = "qwen2.5vl:7b"

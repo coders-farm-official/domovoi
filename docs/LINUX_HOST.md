@@ -133,7 +133,7 @@ long poles are `numba` (pulled in by `librosa`), `torch`, and
 land, so it's the one to watch.
 
 ```bash
-python3 -c "import json,urllib.request as u,re; [print(p, sorted({m.group(1) for f in json.load(u.urlopen(f'https://pypi.org/pypi/{p}/json'))['urls'] for m in [re.search(r'-(cp3\d+)-',f['filename'])] if m and 'manylinux' in f['filename'] and 'x86_64' in f['filename']})) for p in ('numba','torch','ctranslate2')]"
+python3 -c "import json,urllib.request as u,re; [print(p, sorted({m.group(1) for f in json.load(u.urlopen(f'https://pypi.org/pypi/{p}/json'))['urls'] for m in [re.search(r'-(cp3\d+)-',f['filename'])] if m and 'manylinux' in f['filename'] and 'x86_64' in f['filename']})) for p in ('numba','torch','ctranslate2','shazamio-core')]"
 ```
 
 If your target Python's tag is in all three lists, you're clear.
@@ -147,8 +147,23 @@ Every compiled dependency had cp314 manylinux x86_64 wheels: `torch`
 which is forward-compatible with every CPython from 3.9 on. The NVIDIA
 CUDA wheels are `py3-none-manylinux` — no Python tag at all.
 
-The lone exception is `webrtcvad`: sdist-only on *every* Python version,
-not a 3.14 issue. See the `resemblyzer` note under [Install](#install).
+Two dependencies still compile from source, and both are worth knowing
+about because **neither shows up if you only check the packages named in
+`pyproject.toml`** — they are transitive:
+
+- **`webrtcvad`** (via `resemblyzer`) — sdist-only on *every* Python
+  version, so not a 3.14 issue. See the `resemblyzer` note under
+  [Install](#install).
+- **`shazamio-core`** (via `shazamio`, the library-enricher fallback) — a
+  Rust/pyo3 extension binding ALSA. `shazamio` itself is pure Python, which
+  makes this easy to miss. When its prebuilt wheel is absent for your
+  Python, pip compiles it, and that needs `pkg-config` + `libasound2-dev`
+  from the prerequisites above plus a Rust toolchain (pip fetches one
+  automatically).
+
+The lesson generalizes: when checking wheel coverage for a new Python,
+walk the *transitive* compiled dependencies, not just the direct ones. A
+pure-Python wrapper can hide a Rust extension.
 
 Docker publishes native `resolute` packages, and Ollama's installer
 branches on kernel and architecture rather than Ubuntu release.
@@ -182,12 +197,19 @@ you're not using that.)
 Prerequisites:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential git ffmpeg mpg123 libchromaprint-tools espeak-ng
+sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools espeak-ng
 ```
 
 `libchromaprint-tools` provides `fpcalc` for library enrichment,
 `espeak-ng` is the last-resort TTS voice, and `python3-dev` +
 `build-essential` are what let `webrtcvad` compile.
+
+`pkg-config` and `libasound2-dev` are there for **`shazamio-core`** — a
+Rust/pyo3 extension that binds ALSA. It's a transitive dependency of
+`shazamio` (the library-enricher fallback), and on any Python new enough
+to be missing its prebuilt wheel, pip compiles it from source. Without
+these two the build dies with *"The pkg-config command could not be
+found"* and takes the whole install down with it.
 
 Docker Engine — follow Docker's official apt-repository instructions for
 your release, then:
@@ -217,6 +239,20 @@ git clone https://github.com/coders-farm-official/domovoi && cd domovoi
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 ```
+
+**Install CPU-only torch first.** This step is not optional on a machine
+without an NVIDIA GPU:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
+cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it —
+and `torch` arrives via the `voice-profile` extra. That is entirely
+separate from the `cuda` extra below, which only covers the wheels
+`ctranslate2` wants. Installing the `+cpu` build first means the next
+command sees `torch>=2.0` already satisfied and never pulls the CUDA one.
 
 ```bash
 pip install -e ".[dev,real-clients,voice-profile]"

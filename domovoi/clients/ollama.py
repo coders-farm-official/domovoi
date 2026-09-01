@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
 
 from domovoi.config import settings
@@ -501,6 +502,25 @@ class OllamaStubClient:
         return []
 
 
+@lru_cache(maxsize=1)
+def _client_accepts_think() -> bool:
+    """Whether the installed ollama-python accepts ``chat(think=...)``.
+
+    The kwarg arrived well after this repo's ``ollama>=0.3`` floor, so an
+    older environment would raise TypeError on every route and silently
+    degrade all routing to the QA fallthrough. Probe the signature once
+    instead of discovering it per-turn.
+    """
+    try:
+        import inspect
+
+        from ollama import AsyncClient
+
+        return "think" in inspect.signature(AsyncClient.chat).parameters
+    except Exception:  # noqa: BLE001 — no ollama, odd signature: just don't send it
+        return False
+
+
 class RealOllamaClient:
     """Async Ollama client with tool-calling + streaming.
 
@@ -508,6 +528,8 @@ class RealOllamaClient:
     the package installed (though it's a core dep — the laziness is cheap
     insurance against transient install issues).
     """
+
+    _THINK_UNSUPPORTED_HINTS = ("think", "reasoning")
 
     def __init__(
         self,
@@ -534,6 +556,12 @@ class RealOllamaClient:
         )
         self._qa_model = qa_model
         self._tool_model = tool_model
+        # Bound at construction like the model names (reset_ollama_client is
+        # the reapply hook for both). `_send_think` starts as "the installed
+        # client accepts the kwarg" and latches off if the server rejects it
+        # for this model — see `route`.
+        self._tool_think = settings.ollama_tool_think
+        self._send_think = _client_accepts_think()
 
     def _system_prompt(self, override: str | None) -> str:
         if override:
@@ -554,38 +582,7 @@ class RealOllamaClient:
         tools = [{"type": "function", "function": s} for s in tool_schemas]
 
         try:
-            response = await self._client.chat(
-                model=self._tool_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an intent router for a voice assistant. The transcript "
-                            "is speech-to-text and may contain mis-heard or spurious words, "
-                            "especially at the start (a garbled wake word or noise) — focus "
-                            "on the actionable core of the utterance, not stray leading "
-                            "words. If the user clearly wants an action (play/find/add music, "
-                            "set a timer, control the home, etc.), pick the closest matching "
-                            "tool even when the phrasing is imperfect. Only respond with "
-                            "plain text and no tool call when the utterance is genuinely a "
-                            "question or has no actionable intent."
-                        ),
-                    },
-                    {"role": "user", "content": transcript},
-                ],
-                tools=tools,
-                stream=False,
-                # Deterministic, best-guess routing. Intent classification
-                # wants the model's single most-likely tool for a given
-                # transcript, not sampled variety — at Ollama's default
-                # temperature (0.8) the same utterance routes inconsistently
-                # (observed: a lightly-garbled "…play the new TI song" routed
-                # to `music` on some calls and declined to plain text on
-                # others). temperature=0 makes a transcript route the same
-                # way every time and biases toward acting on borderline
-                # commands instead of randomly bailing to the QA fallthrough.
-                options={"temperature": 0},
-            )
+            response = await self._route_chat(transcript, tools)
         except Exception as e:
             log.warning("ollama route failed: %s — falling through to qa", e)
             return None
@@ -606,6 +603,71 @@ class RealOllamaClient:
         if not name:
             return None
         return {"handler": name, "args": args or {}}
+
+    async def _route_chat(self, transcript: str, tools: list[dict[str, Any]]) -> Any:
+        """The routing chat call, with a one-time retry that drops ``think``.
+
+        Thinking is a per-model capability, so a server can reject the flag
+        even when the client understands it. Rather than let that degrade
+        every routed turn to the QA fallthrough, retry once without it and
+        latch the flag off for this client's lifetime — the cost is paid on a
+        single turn, not forever.
+        """
+        try:
+            return await self._chat_for_route(transcript, tools, send_think=self._send_think)
+        except Exception as e:
+            if not self._send_think or not self._looks_like_think_rejection(e):
+                raise
+            log.info(
+                "tool model %s rejected the 'think' flag (%s) — retrying without it "
+                "and disabling it for this client",
+                self._tool_model, e,
+            )
+            self._send_think = False
+            return await self._chat_for_route(transcript, tools, send_think=False)
+
+    @classmethod
+    def _looks_like_think_rejection(cls, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(h in text for h in cls._THINK_UNSUPPORTED_HINTS)
+
+    async def _chat_for_route(
+        self, transcript: str, tools: list[dict[str, Any]], *, send_think: bool
+    ) -> Any:
+        extra: dict[str, Any] = {"think": self._tool_think} if send_think else {}
+        return await self._client.chat(
+            model=self._tool_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an intent router for a voice assistant. The transcript "
+                        "is speech-to-text and may contain mis-heard or spurious words, "
+                        "especially at the start (a garbled wake word or noise) — focus "
+                        "on the actionable core of the utterance, not stray leading "
+                        "words. If the user clearly wants an action (play/find/add music, "
+                        "set a timer, control the home, etc.), pick the closest matching "
+                        "tool even when the phrasing is imperfect. Only respond with "
+                        "plain text and no tool call when the utterance is genuinely a "
+                        "question or has no actionable intent."
+                    ),
+                },
+                {"role": "user", "content": transcript},
+            ],
+            tools=tools,
+            stream=False,
+            # Deterministic, best-guess routing. Intent classification
+            # wants the model's single most-likely tool for a given
+            # transcript, not sampled variety — at Ollama's default
+            # temperature (0.8) the same utterance routes inconsistently
+            # (observed: a lightly-garbled "…play the new TI song" routed
+            # to `music` on some calls and declined to plain text on
+            # others). temperature=0 makes a transcript route the same
+            # way every time and biases toward acting on borderline
+            # commands instead of randomly bailing to the QA fallthrough.
+            options={"temperature": 0},
+            **extra,
+            )
 
     def _build_messages(
         self,
