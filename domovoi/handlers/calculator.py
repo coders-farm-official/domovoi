@@ -195,7 +195,10 @@ def _safe_eval(expr: str) -> float | int:
         ast.BinOp,
         ast.UnaryOp,
         ast.Constant,
-        ast.Num,  # py < 3.12 compat — harmless alias
+        # NOTE: no ast.Num here. It was a pre-3.8 alias for Constant, and
+        # referencing it is an AttributeError on modern CPython (removed by
+        # 3.14) — which broke every arithmetic turn, not just the tests.
+        # ast.Constant already covers numeric literals.
         ast.Load,
         ast.Add,
         ast.Sub,

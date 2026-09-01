@@ -135,17 +135,40 @@ def _documents_dir() -> Path:
     return Path(core_settings.documents_dir).expanduser().resolve(strict=False)
 
 
+# "C:/x", "c:x" (drive-relative) and "//server/share" (UNC) — all forms that
+# a naive join would let escape, or silently reinterpret, depending on OS.
+_DRIVE_QUALIFIED_RE = re.compile(r"^(?:[A-Za-z]:|//)")
+
+
 def _safe_target(rel_path: str) -> Path:
     """Resolve ``rel_path`` inside ``documents_dir`` or 400.
 
     Same realpath / ``relative_to()`` containment check music.py uses.
-    Rejects absolute paths and ``..`` traversal: joining an absolute or
-    drive-relative path escapes the base, and the post-resolve
-    ``relative_to`` catches it.
+    ``rel_path`` is documents-dir-relative; absolute and drive-qualified
+    inputs are rejected outright, and ``..`` traversal is caught by the
+    post-resolve ``relative_to``.
+
+    The absolute check has to be EXPLICIT rather than relying on the join
+    to escape the base, because that only worked on Windows: there a
+    ``C:/...`` input keeps its drive and replaces the base, so
+    ``relative_to`` raised — but on POSIX ``lstrip("/")`` turns ``/etc/x``
+    into the relative ``etc/x``, which lands *inside* the base and passes
+    the containment check. Containment held either way, but the caller got
+    a silent reinterpretation on Linux and a 400 on Windows for identical
+    input. Reject up front so both platforms behave the same.
     """
     if not rel_path or rel_path.strip() == "":
         raise HTTPException(status_code=400, detail="empty document path")
-    cleaned = rel_path.replace("\\", "/").lstrip("/")
+    normalized = rel_path.replace("\\", "/")
+    if normalized.startswith("/") or _DRIVE_QUALIFIED_RE.match(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"refusing path {rel_path!r}: document paths are relative to "
+                f"DOCUMENTS_DIR, not absolute."
+            ),
+        )
+    cleaned = normalized
     base = _documents_dir()
     target = (base / cleaned).resolve(strict=False)
     try:

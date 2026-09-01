@@ -9,6 +9,7 @@ shazamio.Shazam) so tests don't hit the network.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,20 @@ import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db
+
+# shazamio is an OPTIONAL extra (see pyproject's `shazam`). find_spec only
+# checks presence — it deliberately does NOT import, so this costs nothing and
+# cannot itself trigger the failure below.
+#
+# It guards ABSENCE, not brokenness. A source-built shazamio-core can segfault
+# at import (CPython 3.14, observed 2026-09-01), and nothing inside Python can
+# catch that — the process dies. The real defence is not installing it, which
+# is why it left `real-clients` and `dev` for its own extra. If you install
+# `shazam` on a Python without a real wheel, this suite will still die here.
+requires_shazamio = pytest.mark.skipif(
+    importlib.util.find_spec("shazamio") is None,
+    reason="shazamio not installed (optional `shazam` extra)",
+)
 from domovoi.workers.library_enricher import (
     EnrichmentResult,
     _enrich_via_acoustid,
@@ -103,6 +118,7 @@ async def test_acoustid_returns_high_score_match(monkeypatch, tmp_path) -> None:
     assert result.source == "acoustid"
 
 
+@requires_shazamio
 @pytest.mark.asyncio
 async def test_shazam_parses_track_dict(monkeypatch, tmp_path) -> None:
     """shazamio returns a nested dict — verify the parser pulls title
@@ -136,6 +152,7 @@ async def test_shazam_parses_track_dict(monkeypatch, tmp_path) -> None:
     assert result.source == "shazam"
 
 
+@requires_shazamio
 @pytest.mark.asyncio
 async def test_shazam_handles_no_track(monkeypatch, tmp_path) -> None:
     """shazamio returning an empty / track-less response → None."""

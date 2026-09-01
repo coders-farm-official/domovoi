@@ -73,15 +73,37 @@ real-clients = [
     "mutagen>=1.47",
     # Library enricher (workers/library_enricher.py). pyacoustid wraps
     # Chromaprint via the `fpcalc` binary (must be on PATH — see
-    # domovoi/README.md "Library enrichment setup"). shazamio is
-    # the fallback for tracks AcoustID's catalog doesn't cover.
+    # domovoi/README.md "Library enrichment setup"). Pure Python.
+    # NOTE: shazamio — the second-stage fallback — is deliberately NOT
+    # here; see the `shazam` extra below.
     "pyacoustid>=1.3",
-    "shazamio>=0.7",
     # Podcast RSS parsing for the feed poller (workers/podcast_feed_poller.py).
     # Pure-Python, no build step. Only the (network) feed-poll path imports it
     # — downloaded-episode playback works without it, matching the handler's
     # `degraded` contract.
     "feedparser>=6.0",
+]
+# Shazam fallback for the library enricher — the second stage, used only for
+# tracks AcoustID's catalog doesn't cover. Its own extra, and NOT part of
+# `real-clients`, for two reasons:
+#
+#  1. Its compiled core (`shazamio-core`) publishes wheels for a narrow set
+#     of Python versions. On anything else pip builds it from Rust source,
+#     which needs a toolchain plus `pkg-config` and `libasound2-dev`.
+#  2. Worse, a source build is not necessarily a working build: on CPython
+#     3.14 the resulting extension SEGFAULTS at import (observed 2026-09-01,
+#     shazamio-core 1.1.2 on Ubuntu 26.04). `_enrich_via_shazam` imports it
+#     lazily behind `except ImportError`, but a segfault is not an exception
+#     — it takes the whole core process down, and the enricher worker would
+#     retry into a crash loop.
+#
+# The enricher degrades cleanly when it's absent ("shazamio not installed;
+# skipping Shazam layer") and keeps working on AcoustID alone. Install it
+# only if `shazamio-core` ships a real wheel for your Python:
+#
+#   pip install -e ".[shazam]"
+shazam = [
+    "shazamio>=0.7",
 ]
 # CUDA runtime for Whisper. Split out of `real-clients` so a CPU-only or
 # non-NVIDIA host (see docs/CPU_HOST.md) doesn't pull ~2-3 GB of wheels it
@@ -149,7 +171,6 @@ dev = [
     # `pip install -e ".[dev]"` must be enough to run pytest.
     "numpy>=1.26",
     "pyacoustid>=1.3",
-    "shazamio>=0.7",
 ]
 
 [build-system]
