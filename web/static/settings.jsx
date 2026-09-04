@@ -535,9 +535,7 @@ const VersionSection = () => {
 
   const restart = async () => {
     if (!window.confirm(
-      'Restart the Domovoi services to load the pulled code?
-
-' +
+      'Restart the Domovoi services to load the pulled code?\n\n' +
       'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
       'a few seconds and connected satellites reconnect on their own.'
     )) return;
