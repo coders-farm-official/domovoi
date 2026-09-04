@@ -118,7 +118,10 @@ async def media_targets() -> list[dict[str, Any]]:
     import shutil as _shutil
 
     out: list[dict[str, Any]] = []
-    for mount in detect_removable():
+    for rm in detect_removable():
+        mount = rm.get("mount")
+        if not mount:
+            continue
         p = Path(mount)
         try:
             looks = looks_like_pi_boot(p, PI02W.boot_marker)
@@ -151,11 +154,16 @@ async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
     if kind == "drive":
         token = str(body.target.get("token") or "")
         match = next(
-            (m for m in detect_removable() if drive_token(m) == token), None
+            (
+                m
+                for m in detect_removable()
+                if m.get("mount") and drive_token(m["mount"]) == token
+            ),
+            None,
         )
         if match is None:
             raise HTTPException(status_code=410, detail="target drive not present")
-        mount, target_ref = Path(match), token
+        mount, target_ref = Path(match["mount"]), token
 
     async with session_scope() as s:
         existing = (

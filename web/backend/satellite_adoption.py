@@ -83,7 +83,10 @@ def _candidate_mounts() -> list[tuple[Path, bool]]:
     if override is not None:
         return [(p, False) for p in override]
     out: list[tuple[Path, bool]] = []
-    for mount in detect_removable():
+    for rm in detect_removable():
+        mount = rm.get("mount")
+        if not mount:
+            continue
         # A:/B: are floppy ghosts on some boards; probing them can beep or
         # block. Nothing real enumerates there.
         if mount.upper().rstrip("\\").rstrip(":") in ("A", "B"):
