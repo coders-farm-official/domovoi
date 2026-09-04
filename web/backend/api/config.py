@@ -101,6 +101,26 @@ async def check_version():
     return bridge_response(*await post_admin("/v1/admin/version/check", {}))
 
 
+@router.post(
+    "/config/version/restart",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def restart_version(request: Request):
+    """Bounce the Domovoi services so pulled code actually loads.
+
+    Admin-gated at both hops. The response comes back before the restart
+    fires, so a client that then sees the connection drop should treat that
+    as the restart succeeding, not as an error. Hosts without the sudoers
+    grant return ``ok: false`` with the reason instead."""
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/version/restart",
+            {},
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
 @router.post("/config/version/pull")
 async def pull_version():
     """`git pull --ff-only` on the Domovoi server — a deliberate, separate

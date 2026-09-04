@@ -84,6 +84,39 @@ you'd be debugging two unknowns at once. Use the manual path in
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) — it's proven,
 and it's the same amount of work the second time you do it.
 
+### 2b. Restart-from-the-dashboard needs one sudoers line
+
+The version panel's **Restart to apply changes** button bounces both
+services so pulled code actually loads. The service user can't do that
+unaided, so grant exactly that one command — the same least-privilege
+pattern the satellite uses for its own self-restart
+([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1):
+
+```bash
+sudo visudo -f /etc/sudoers.d/domovoi-restart
+```
+
+```
+domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-web.service
+```
+
+Replace `domovoi` with the `User=` from your unit files. Verify without
+actually restarting anything:
+
+```bash
+sudo -n -l /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-web.service
+```
+
+That's the same probe the server runs to decide whether to offer the
+button; `domovoi/self_restart.py` reports `restart_capable` from it. Skip
+this and nothing breaks — the panel shows the manual `systemctl` command
+instead of a button, which is exactly the pre-existing behaviour.
+
+> Both units are bounced together on purpose: a pull moves the whole
+> checkout, and core and web import from the same tree, so restarting one
+> would leave the other serving stale code — the confusion the version
+> panel exists to end.
+
 ### 3. `host.docker.internal` doesn't exist (handled)
 
 Chat mode's Letta container reaches the host's Ollama at

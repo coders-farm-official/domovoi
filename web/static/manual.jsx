@@ -69,7 +69,7 @@ const UM_HOWTO = {
   domovoi: {
     act: ['Restart it on the Domovoi host to apply restart-tier config changes.',
           'Check health at /v1/health and connectivity at /v1/connectivity.',
-          'Pull latest under Configuration → Version, then bounce it by hand.'],
+          'Update under Configuration → Version: check, pull, then restart to apply.'],
     diag: ['Nothing responds? Confirm the process is up and Postgres is reachable.',
            'Bad routing? Make sure both Ollama models are installed and loaded.'] },
   whisper: {

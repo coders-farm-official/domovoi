@@ -133,7 +133,25 @@ internal data class ConfigSummary(
 )
 
 @Serializable
-internal data class VersionInfo(val sha: String? = null)
+internal data class VersionInfo(
+    /** The RUNNING code, captured at the core's boot — not the working tree. */
+    val sha: String? = null,
+    val running_sha: String? = null,
+    /** What's on disk right now; diverges from [sha] after a pull. */
+    val checkout_sha: String? = null,
+    val restart_required: Boolean = false,
+    /** Whether the host has the sudoers grant to bounce itself. */
+    val restart_capable: Boolean = false,
+    val restart_hint: String? = null,
+    val uptime_sec: Double? = null,
+)
+
+@Serializable
+internal data class VersionRestart(
+    val ok: Boolean = false,
+    val units: List<String> = emptyList(),
+    val error: String? = null,
+)
 
 @Serializable
 internal data class VersionCheck(

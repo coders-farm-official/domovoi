@@ -383,15 +383,18 @@ const VoicesPanel = () => {
  *
  * Above the editor sits a Version section: the web build, the server's
  * git SHA (with a "-dirty" suffix when its working tree has uncommitted
- * changes), and an update check. "Pull latest" only appears once the
- * server is behind, and it does NOT restart the host — the operator
- * must bounce it by hand, so the action is gated behind a confirm.
+ * changes), and an update check. The panel offers exactly ONE action at a
+ * time, in the order an operator needs them: "Restart to apply changes"
+ * when code is on disk but not loaded, else "Pull the latest" when behind,
+ * else "Check for updates". The restart is replaced by the manual command
+ * on a host without the sudoers grant (see restart_capable).
  *
  * Data:
  *   GET   /api/config              · web build (web_version)
  *   GET   /api/config/version      · domovoi git SHA → { sha }
  *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, error }
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
+ *   POST  /api/config/version/restart · bounce core+web → { ok, units, error }
  *   GET   /api/config/editable     · the field set + current values
  *   PATCH /api/config/editable     · { changes } → { applied, rejected, restart_required }
  */
@@ -461,6 +464,7 @@ const VersionSection = () => {
   const [fire, node] = useToast();
   const [checking, setChecking] = React.useState(false);
   const [pulling, setPulling] = React.useState(false);
+  const [restarting, setRestarting] = React.useState(false);
   const [status, setStatus] = React.useState(null);   // result of /version/check
 
   const check = async () => {
@@ -487,15 +491,15 @@ const VersionSection = () => {
   const pull = async () => {
     if (!window.confirm(
       'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
-      'This updates the files on the Domovoi host but does NOT restart the ' +
-      'server — you must bounce the service by hand for the new code ' +
-      'to take effect. Satellites can then be upgraded individually.'
+      'This updates the files on the Domovoi host but does not load them — ' +
+      'this panel will then offer the restart that does. Satellites can be ' +
+      'upgraded individually afterwards.'
     )) return;
     setPulling(true);
     try {
       const res = await apiPost('/api/config/version/pull', {});
       if (res && res.pulled) {
-        fire(`pulled${res.new_sha ? ` — now ${res.new_sha}` : ''}. Restart the Domovoi server by hand.`);
+        fire(`pulled${res.new_sha ? ` — now ${res.new_sha}` : ''}. Restart to apply.`);
         setStatus(null);
         refreshCore();
       } else {
@@ -508,6 +512,54 @@ const VersionSection = () => {
     }
   };
 
+  // After the bounce the server is briefly gone; a failed poll is the
+  // expected middle of a successful restart, not an error to report.
+  const waitForServer = async () => {
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const v = await apiGet('/api/config/version');
+        if (v && !v.restart_required) {
+          refreshCore();
+          setStatus(null);
+          fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
+          return true;
+        }
+      } catch (e) { /* still down — keep waiting */ }
+    }
+    fire('restart is taking longer than expected — check the service by hand');
+    refreshCore();
+    return false;
+  };
+
+  const restart = async () => {
+    if (!window.confirm(
+      'Restart the Domovoi services to load the pulled code?
+
+' +
+      'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
+      'a few seconds and connected satellites reconnect on their own.'
+    )) return;
+    setRestarting(true);
+    try {
+      const res = await apiPost('/api/config/version/restart', {});
+      if (res && res.ok) {
+        fire('restarting…');
+        await waitForServer();
+      } else {
+        fire(`restart failed: ${(res && res.error) || 'unknown'}`);
+      }
+    } catch (e) {
+      // The response should beat the bounce, but if the connection dropped
+      // first the restart probably still fired — verify instead of crying.
+      fire('restarting…');
+      await waitForServer();
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   const webVer = cfg && cfg.web_version;
   // `sha` is the RUNNING code (captured at the core's boot), not whatever is
   // checked out right now — those diverge after a pull without a restart,
@@ -516,6 +568,12 @@ const VersionSection = () => {
   const checkoutSha = core && core.checkout_sha;
   const restartPending = !!(core && core.restart_required);
   const behind = status && status.upstream ? status.behind : null;
+  const restartCapable = !!(core && core.restart_capable);
+  const restartHint = core && core.restart_hint;
+  // One action at a time, in the order the operator actually needs them:
+  // code already on disk beats fetching more of it, and "check" is only
+  // honest when we have no reason to think anything is pending.
+  const mode = restartPending ? 'restart' : ((behind || 0) > 0 ? 'pull' : 'check');
 
   return (
     <Card title="Version"
@@ -548,29 +606,45 @@ const VersionSection = () => {
       {restartPending && (
         <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
           New code is on disk but this process is still running the old
-          modules — restart the Domovoi server for it to take effect.
+          modules{restartCapable ? ' — restart below to load it.'
+                                 : ' — restart the Domovoi server for it to take effect.'}
         </div>
       )}
       <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
-          {checking ? 'Checking…' : 'Check for updates'}
-        </Button>
-        {behind != null && (
+        {mode === 'restart' && restartCapable && (
+          <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
+            {restarting ? 'Restarting…' : 'Restart to apply changes'}
+          </Button>
+        )}
+        {mode === 'pull' && (
+          <Button variant="primary" icon="download" onClick={pull} disabled={pulling}>
+            {pulling ? 'Pulling…' : 'Pull the latest'}
+          </Button>
+        )}
+        {mode === 'check' && (
+          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
+            {checking ? 'Checking…' : 'Check for updates'}
+          </Button>
+        )}
+        {mode !== 'restart' && behind != null && (
           <span style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
             {behind > 0
               ? `${behind} commit${behind === 1 ? '' : 's'} behind`
               : 'up to date'}
           </span>
         )}
-        {behind > 0 && (
-          <Button variant="primary" icon="download" onClick={pull} disabled={pulling}>
-            {pulling ? 'Pulling…' : 'Pull latest'}
-          </Button>
-        )}
       </div>
-      {behind > 0 && (
+      {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
-          Pull updates the host files only — the Domovoi server does not self-restart; bounce it by hand.
+          Pull updates the host files only — this panel will then offer the restart that loads them.
+        </div>
+      )}
+      {mode === 'restart' && !restartCapable && (
+        <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
+          {restartHint || 'This host can’t restart itself.'} Run by hand:
+          <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
+            sudo systemctl restart domovoi-core domovoi-web
+          </div>
         </div>
       )}
       {node}

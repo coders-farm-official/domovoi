@@ -142,7 +142,7 @@ internal val MANUAL_HOWTO = listOf(
         listOf(
             "Restart it on the server to apply restart-tier config changes.",
             "Check health at /v1/health and connectivity at /v1/connectivity.",
-            "Pull latest under Configuration → Version, then bounce it by hand.",
+            "Update under Configuration → Version: check, pull, then restart to apply.",
         ),
         listOf(
             "Nothing responds? Confirm the process is up and Postgres is reachable.",

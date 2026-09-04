@@ -158,9 +158,10 @@ posture; the specifically dangerous ones carry the Bearer gate.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/admin/version` | Open | — | `{"sha": "<short HEAD sha>[-dirty]"}` (`"unknown"` without git). |
+| `GET /v1/admin/version` | Open | — | `{sha, running_sha, checkout_sha, restart_required, restart_capable, restart_hint, started_at, uptime_sec}`. `sha`/`running_sha` are captured at boot (the code actually loaded); `checkout_sha` is read live from the tree. |
 | `POST /v1/admin/version/check` | Open | — | Fetch upstream and report behind/ahead counts. Read-only, best-effort. |
-| `POST /v1/admin/version/pull` | Open | — | `git pull --ff-only`; a dirty/diverged tree returns `pulled: false` + stderr. Never restarts the process. |
+| `POST /v1/admin/version/pull` | Open | — | `git pull --ff-only`; a dirty/diverged tree returns `pulled: false` + stderr. Never restarts the process — that's the separate restart below. |
+| `POST /v1/admin/version/restart` | **Admin (Bearer)** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
 | `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | — | The editable-config registry joined with live values (`{fields, plugin_fields}`). Gated because plugin config can carry secrets (returned pre-masked). |
 | `POST /v1/admin/config` | **Admin (Bearer)** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
 | `POST /v1/admin/chat-tool` | Open | `{tool, args}` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. |
@@ -360,6 +361,7 @@ All **Open**.
 | `GET /api/config/version` | Open | — | Proxy → core version label. |
 | `POST /api/config/version/check` | Open | — | Proxy → core upstream check. |
 | `POST /api/config/version/pull` | Open | — | Proxy → core `git pull --ff-only`. |
+| `POST /api/config/version/restart` | **Admin (Bearer or cookie)** | — | Proxy → core service restart. Admin-gated at both hops. The connection drops moments after the response; clients treat that as success and poll `GET /api/config/version` until `restart_required` clears. |
 
 ### 3.10 Playlists
 

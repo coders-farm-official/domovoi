@@ -54,6 +54,7 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -97,9 +98,21 @@ private fun VersionCard() {
     var pulling by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<VersionCheck?>(null) }
     var confirmPull by remember { mutableStateOf(false) }
+    var restarting by remember { mutableStateOf(false) }
+    var confirmRestart by remember { mutableStateOf(false) }
 
     val sha = core.data?.sha
     val behind = status?.takeIf { it.upstream != null }?.behind
+    val restartPending = core.data?.restart_required == true
+    val restartCapable = core.data?.restart_capable == true
+    // One action at a time, in the order the operator actually needs them:
+    // code already on disk beats fetching more of it, and "check" is only
+    // honest when nothing is known to be pending.
+    val mode = when {
+        restartPending -> "restart"
+        (behind ?: 0) > 0 -> "pull"
+        else -> "check"
+    }
 
     fun check() {
         scope.launch {
@@ -150,6 +163,54 @@ private fun VersionCard() {
         }
     }
 
+    /** The server is briefly gone mid-bounce; a failed poll is the expected
+     *  middle of a successful restart, not an error worth reporting. */
+    suspend fun waitForServer() {
+        val deadline = System.currentTimeMillis() + 90_000
+        while (System.currentTimeMillis() < deadline) {
+            delay(2_000)
+            try {
+                val v = app.api.get("/api/config/version").decode<VersionInfo>()
+                if (!v.restart_required) {
+                    core.refresh()
+                    status = null
+                    toast("restarted — now running ${v.running_sha ?: v.sha ?: "new code"}")
+                    return
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // still down — keep waiting
+            }
+        }
+        toast("restart is taking longer than expected — check the service by hand")
+        core.refresh()
+    }
+
+    fun restart() {
+        scope.launch {
+            restarting = true
+            try {
+                val res = app.api.post("/api/config/version/restart").decode<VersionRestart>()
+                if (res.ok) {
+                    toast("restarting…")
+                    waitForServer()
+                } else {
+                    toast("restart failed: ${res.error ?: "unknown"}")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The response should beat the bounce; if the connection
+                // dropped first the restart probably still fired — verify.
+                toast("restarting…")
+                waitForServer()
+            } finally {
+                restarting = false
+            }
+        }
+    }
+
     PanelCard(
         "Version",
         "Build identifiers for the web dashboard and the core service, plus a git update check.",
@@ -177,16 +238,54 @@ private fun VersionCard() {
                     if (sha?.endsWith("-dirty") == true) Pill("uncommitted changes", Tone.Warn)
                 }
             }
+            if (restartPending) {
+                Column {
+                    SectionLabel("checked out")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            core.data?.checkout_sha ?: "—",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = Domovoi.colors.fg,
+                        )
+                        Pill("restart to load", Tone.Warn)
+                    }
+                }
+                Text(
+                    "New code is on disk but this process is still running the old modules.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.warn,
+                )
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                OutlinedButton(enabled = !checking, onClick = { check() }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(if (checking) "Checking…" else "Check for updates")
+                when {
+                    mode == "restart" && restartCapable ->
+                        Button(enabled = !restarting, onClick = { confirmRestart = true }) {
+                            Icon(Icons.Filled.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (restarting) "Restarting…" else "Restart to apply changes")
+                        }
+                    mode == "pull" ->
+                        Button(enabled = !pulling, onClick = { confirmPull = true }) {
+                            Icon(Icons.Filled.Download, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (pulling) "Pulling…" else "Pull the latest")
+                        }
+                    else ->
+                        OutlinedButton(enabled = !checking, onClick = { check() }) {
+                            Icon(Icons.Filled.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (checking) "Checking…" else "Check for updates")
+                        }
                 }
-                if ((behind ?: -1) >= 0) {
+                if (mode != "restart" && (behind ?: -1) >= 0) {
                     Text(
                         if (behind!! > 0) {
                             "$behind commit${if (behind == 1) "" else "s"} behind"
@@ -198,17 +297,18 @@ private fun VersionCard() {
                         modifier = Modifier.padding(top = 12.dp),
                     )
                 }
-                if ((behind ?: 0) > 0) {
-                    Button(enabled = !pulling, onClick = { confirmPull = true }) {
-                        Icon(Icons.Filled.Download, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (pulling) "Pulling…" else "Pull latest")
-                    }
-                }
             }
-            if ((behind ?: 0) > 0) {
+            if (mode == "pull") {
                 Text(
-                    "Pull updates the host files only — the core service does not self-restart; bounce it by hand.",
+                    "Pull updates the host files only — this panel will then offer the restart that loads them.",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = Domovoi.colors.fgFaint,
+                )
+            }
+            if (mode == "restart" && !restartCapable) {
+                Text(
+                    (core.data?.restart_hint ?: "This host cannot restart itself.") +
+                        " Run by hand: sudo systemctl restart domovoi-core domovoi-web",
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = Domovoi.colors.fgFaint,
                 )
@@ -219,12 +319,23 @@ private fun VersionCard() {
     if (confirmPull) {
         ConfirmDialog(
             title = "Pull the latest domovoi code?",
-            body = "git pull --ff-only updates the files on the core service host but does NOT restart " +
-                "the core service — you must bounce the service by hand for the new code to take " +
-                "effect. Satellites can then be upgraded individually.",
+            body = "git pull --ff-only updates the files on the core service host but does not load " +
+                "them — this panel will then offer the restart that does. Satellites can be " +
+                "upgraded individually afterwards.",
             confirmLabel = "pull",
             onConfirm = { pull() },
             onDismiss = { confirmPull = false },
+        )
+    }
+
+    if (confirmRestart) {
+        ConfirmDialog(
+            title = "Restart to apply changes?",
+            body = "This bounces domovoi-core and domovoi-web so the pulled code loads. Voice is " +
+                "unavailable for a few seconds and connected satellites reconnect on their own.",
+            confirmLabel = "restart",
+            onConfirm = { restart() },
+            onDismiss = { confirmRestart = false },
         )
     }
 }

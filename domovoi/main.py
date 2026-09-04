@@ -26,6 +26,7 @@ from sqlalchemy import text  # noqa: E402
 
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
+from domovoi import self_restart  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     check_outbound_fetch,
     require_admin_mutation,
@@ -1212,6 +1213,22 @@ async def admin_version_pull() -> dict[str, Any]:
     the check). A dirty or diverged tree returns pulled=False plus the git
     stderr; we never force. The core process is NOT restarted here."""
     return await git_version.pull()
+
+
+@app.post(
+    "/v1/admin/version/restart",
+    # Admin-tier: this bounces the host's services. Same gate as the
+    # satellite code push, for the same reason — it changes what runs.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_version_restart() -> dict[str, Any]:
+    """Bounce domovoi-core + domovoi-web so pulled code actually loads.
+
+    Returns immediately; the restart fires a beat later so this response
+    reaches the client before systemd kills the process. A host without the
+    sudoers grant gets ``ok: false`` and the reason — never a prompt, never a
+    half-restart."""
+    return await self_restart.restart()
 
 
 class _AdminSatelliteUpgradeBody(BaseModel):

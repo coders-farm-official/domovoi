@@ -25,6 +25,7 @@ import asyncio
 import subprocess
 import time
 
+from domovoi import self_restart
 from domovoi.config import settings
 
 # git is fast on a local clone; if it hasn't answered in 10s something is
@@ -131,6 +132,9 @@ async def version_state() -> dict:
     checkout = await current_sha()
     running = boot_sha()
     known = running != "unknown" and checkout != "unknown"
+    # Whether the dashboard can offer a working "restart to apply" button, or
+    # has to fall back to printing the command.
+    can_restart, restart_hint = await self_restart.capable_async()
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
@@ -142,6 +146,8 @@ async def version_state() -> dict:
         ),
         "started_at": started_at(),
         "uptime_sec": uptime_sec(),
+        "restart_capable": can_restart,
+        "restart_hint": restart_hint,
     }
 
 
