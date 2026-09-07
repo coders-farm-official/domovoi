@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation
-from domovoi.satellite_media import builder, cache, fetchers
+from domovoi.satellite_media import builder, cache, fetchers, overlay
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
 
@@ -42,6 +42,12 @@ class PrepareRequest(BaseModel):
     mic_profile: str = "respeaker_2mic_hat_v2"
     target: dict = Field(default_factory=lambda: {"kind": "zip"})
     offline: bool = True
+    # "usb"    — the device presents a DOMOVOI-SET drive to this server.
+    # "portal" — the device raises its own Wi-Fi setup AP, and the customer
+    #            onboards it from a phone. Portal cards deliberately skip the
+    #            dwc2 peripheral-mode overlay, which a USB mic array can't
+    #            share a single-port Pi with.
+    setup_transport: str = "usb"
 
 
 async def _job_row(job_id: int) -> dict[str, Any] | None:
@@ -146,6 +152,11 @@ async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=f"unsupported board {body.board!r}")
     if body.mic_profile not in MIC_PROFILES:
         raise HTTPException(status_code=422, detail=f"unknown mic profile {body.mic_profile!r}")
+    if body.setup_transport not in overlay.SETUP_TRANSPORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown setup transport {body.setup_transport!r}",
+        )
     kind = body.target.get("kind")
     if kind not in ("drive", "zip"):
         raise HTTPException(status_code=422, detail="target.kind must be drive|zip")
@@ -209,6 +220,7 @@ async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> N
         result = await builder.build(
             board_id=body.board,
             mic_profile=body.mic_profile,
+            setup_transport=body.setup_transport,
             target_kind=body.target.get("kind", "zip"),
             target_mount=mount,
             job_id=str(job_id),

@@ -66,6 +66,7 @@ const PrepareMediaCard = ({ fire }) => {
   const [board, setBoard] = React.useState('pi02w');
   const [mic, setMic] = React.useState('respeaker_2mic_hat_v2');
   const [target, setTarget] = React.useState('zip');
+  const [transport, setTransport] = React.useState('portal');
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
 
@@ -87,6 +88,7 @@ const PrepareMediaCard = ({ fire }) => {
     try {
       const body = {
         board, mic_profile: mic,
+        setup_transport: transport,
         target: target === 'zip' ? { kind: 'zip' } : { kind: 'drive', token: target },
         offline: true,
       };
@@ -141,6 +143,10 @@ const PrepareMediaCard = ({ fire }) => {
             </select>
             <select value={mic} onChange={e => setMic(e.target.value)} style={smInput}>
               {(status?.mic_profiles || []).map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
+              <option value="portal">wi-fi setup portal</option>
+              <option value="usb">usb adoption (plug into this server)</option>
             </select>
             <select value={target} onChange={e => setTarget(e.target.value)} style={smInput}>
               <option value="zip">download overlay zip</option>

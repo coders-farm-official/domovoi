@@ -36,6 +36,7 @@ from domovoi.admin_auth import (  # noqa: E402
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
 from domovoi.canned_sounds import regenerate_if_needed as regenerate_canned_sounds  # noqa: E402
 from domovoi.canned_sounds import voice_dir  # noqa: E402
+from domovoi.db.repositories import SatelliteApprovalRepository
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi.clients.ollama import get_ollama_client  # noqa: E402
 from domovoi.clients.tts import get_tts_client  # noqa: E402
@@ -1656,6 +1657,51 @@ async def admin_update_satellite_config(
             latency_ms=int((time.monotonic() - started) * 1000),
         )
     return {"sent": sorted(accepted), "rejected": rejected, "restarting": True}
+
+
+@app.get("/v1/admin/satellites/approvals")
+async def admin_satellite_approvals() -> list[dict[str, Any]]:
+    """Satellites waiting for a human to approve them.
+
+    Portal-onboarded devices land here instead of claiming their room on
+    trust: the core was never a participant in their adoption, so there is
+    no preseeded token to match. The token hash is never returned — the
+    dashboard's job is to match the four-digit code the customer saw."""
+    async with session_scope() as s:
+        return await SatelliteApprovalRepository(s).list_pending()
+
+
+@app.post(
+    "/v1/admin/satellites/approvals/{room_id}/approve",
+    # Admin-tier: this is the decision that turns trust-on-first-use into a
+    # decision someone actually made, and it binds a room to a device.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_satellite_approve(room_id: str) -> dict[str, Any]:
+    """Promote a pending satellite into a real pairing.
+
+    409 when nothing is pending — a second click, or an approval racing a
+    reject, must not invent a pairing out of nothing."""
+    async with session_scope() as s:
+        ok = await SatelliteApprovalRepository(s).approve(room_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="nothing pending for that room")
+    log.info("pairing: room=%s APPROVED by an operator", room_id)
+    return {"approved": True, "room_id": room_id}
+
+
+@app.post(
+    "/v1/admin/satellites/approvals/{room_id}/reject",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
+    """Drop a pending request.
+
+    The device keeps retrying — rejection is not a ban, and the UI must not
+    imply otherwise. Powering the satellite off is what stops it."""
+    async with session_scope() as s:
+        ok = await SatelliteApprovalRepository(s).reject(room_id)
+    return {"rejected": bool(ok), "room_id": room_id}
 
 
 @app.delete(

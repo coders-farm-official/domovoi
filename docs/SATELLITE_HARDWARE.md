@@ -59,6 +59,38 @@ panel; voice is optional per device (`[mic] enabled`) — the default video
 build has no mic and adds one later by plugging in a supported board.
 Setup: [satellite/VIDEO_SATELLITE.md](../satellite/VIDEO_SATELLITE.md).
 
+## The shipped path — the satellite's own setup Wi-Fi
+
+A satellite built for **portal onboarding** needs no cable to the server, no
+card handling and no tools. Powered on for the first time it raises its own
+WPA2 network, `Domovoi-Setup-<id>`, with a per-device key printed on the box.
+Join it from a phone and the setup page opens by itself — the same captive
+portal mechanism hotel Wi-Fi uses. Pick the house network, name the room,
+done: the satellite joins your Wi-Fi and appears on the dashboard.
+
+Two details that are load-bearing rather than cosmetic:
+
+- **Approve it on the dashboard.** As the setup network closes the portal
+  shows a four-digit code, and the satellite presents that code when it
+  connects. Because the server took no part in the exchange, it has nothing
+  preseeded to match — so it parks the device under *waiting for approval*
+  until a human confirms the code. That is what stops whoever connects first
+  from claiming a room. (A satellite provisioned by hand presents no code and
+  keeps the older trust-on-first-use behaviour.)
+- **No USB gadget overlay.** Portal builds deliberately skip
+  `dtoverlay=dwc2,dr_mode=peripheral`. Nothing ever reverts it, and on a Pi
+  Zero 2 W it pins the only data port as a peripheral — where a USB mic array
+  can never enumerate. USB-adopted units get the overlay and now remove it
+  themselves once adoption succeeds.
+
+The server address is found automatically: the satellite sweeps its own /24
+for `/v1/health` at first start and saves what answers. Deliberately not
+mDNS — multicast over Wi-Fi is exactly what fails at 3 a.m. Type an address
+into the portal to skip discovery.
+
+Choose the route when you prepare the card: **Satellites → prepare satellite
+media → wi-fi setup portal** (the default) or **usb adoption**.
+
 ## The golden path — prepare media from the dashboard
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite

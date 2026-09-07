@@ -114,6 +114,10 @@ WAKE_THRESHOLD_SIDECAR = CONFIG_DIR / "wake_threshold"
 # Deleting it (or an admin "reset pairing" on the server) makes the next
 # connect re-pair. Best-effort chmod 0o600: readable only by the Pi user.
 PAIRING_TOKEN_SIDECAR = CONFIG_DIR / "pairing_token"
+# Written by the setup portal and shown to the customer as the AP drops.
+# The dashboard asks them to match it before this satellite is trusted,
+# which is what turns trust-on-first-use into an actual decision.
+APPROVAL_CODE_SIDECAR = CONFIG_DIR / "approval_code"
 
 # Self-upgrade (Feature 10). The satellite mirrors the server's
 # `satellite/` source tree on an `upgrade` frame, verifying each file body
@@ -3964,6 +3968,7 @@ class Satellite:
                     # mismatch. None only if the sidecar couldn't be read/written
                     # (degrades to a tokenless older-style hello).
                     "pairing_token": _effective_pairing_token(),
+                    "approval_code": _effective_approval_code(),
                     # Satellite kind ("voice" | "video") — drives which
                     # per-type controls the dashboard offers, and is
                     # persisted server-side for offline display.
@@ -4207,6 +4212,53 @@ def _list_devices() -> None:
     print(sd.query_devices())
 
 
+def _effective_approval_code() -> str | None:
+    """The setup code this device should present until it is approved.
+    Absent on USB-adopted units, which are preseeded and never pend."""
+    try:
+        code = APPROVAL_CODE_SIDECAR.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return code or None
+
+
+def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
+    """Turn an ``auto`` domovoi_url into a real one and persist it.
+
+    Returns False when discovery found nothing — the caller exits rather
+    than looping against an address that cannot work. systemd restarts us,
+    so a server that is merely slow to boot gets picked up on the retry.
+    """
+    from satellite import discovery
+
+    resolved = discovery.resolve_url(cfg.domovoi_url)
+    if resolved is None:
+        log.error(
+            "no Domovoi server found on this network. Set [satellite] "
+            "domovoi_url in %s to the server's address (ws://<ip>:6370).",
+            config_path,
+        )
+        return False
+    if resolved == cfg.domovoi_url:
+        return True
+
+    cfg.domovoi_url = resolved
+    # Persist so the sweep happens once per device, not once per boot.
+    try:
+        from satellite import config_writer
+
+        original = config_path.read_text(encoding="utf-8")
+        updated = config_writer.apply_changes(
+            original, {"satellite.domovoi_url": resolved}
+        )
+        config_path.write_text(updated, encoding="utf-8", newline="\n")
+        log.info("discovered the Domovoi server at %s (saved)", resolved)
+    except OSError as e:
+        # Usable this boot even if we can't write it down.
+        log.warning("discovered %s but could not save it: %s", resolved, e)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pi satellite client for the Domovoi voice assistant.")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help=f"Config file (default: {CONFIG_PATH})")
@@ -4250,6 +4302,12 @@ def main(argv: list[str] | None = None) -> int:
         level=cfg.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # A portal-onboarded satellite ships with the `auto` sentinel: the core
+    # was never a participant in its adoption, so nothing ever told it an
+    # address. Resolve once, write the answer back, and never sweep again.
+    if not _resolve_server_url(cfg, args.config):
+        return 3
 
     sat = Satellite(cfg)
 

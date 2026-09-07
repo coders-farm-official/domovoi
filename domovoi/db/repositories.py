@@ -1799,6 +1799,120 @@ class SatellitePairingRepository:
         return row is not None
 
 
+class SatelliteApprovalRepository:
+    """CRUD for `satellite_approvals` — satellites waiting on a human (V009).
+
+    A portal-onboarded satellite parks here instead of claiming its room,
+    because the core was never a participant in its adoption and has no
+    preseeded token to match. Approving copies ``token_hash`` into
+    `satellite_pairings`, which binds the room to THAT device rather than
+    merely to the room name."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def request(
+        self,
+        room_id: str,
+        *,
+        token_hash: str,
+        code: str | None = None,
+        mac: str | None = None,
+        board: str | None = None,
+        sat_type: str = "voice",
+    ) -> None:
+        """Record (or refresh) a pending approval. The device retries on its
+        own, so repeat connects bump attempts rather than piling up rows.
+
+        A retry presenting a DIFFERENT token replaces the hash: the honest
+        reading is that the device was re-provisioned, and the customer will
+        be shown the new code to match anyway."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellite_approvals "
+                "(room_id, token_hash, code, mac, board, sat_type) "
+                "VALUES (:r, :h, :c, :m, :b, :t) "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "token_hash = EXCLUDED.token_hash, code = EXCLUDED.code, "
+                "mac = EXCLUDED.mac, board = EXCLUDED.board, "
+                "sat_type = EXCLUDED.sat_type, last_seen_at = now(), "
+                "attempts = satellite_approvals.attempts + 1"
+            ),
+            {
+                "r": room_id, "h": token_hash, "c": code,
+                "m": mac, "b": board, "t": sat_type,
+            },
+        )
+
+    async def list_pending(self) -> list[dict]:
+        """Everything waiting on a human, oldest first. The token hash is
+        never returned — the dashboard has no use for it."""
+        rows = (
+            await self.s.execute(
+                text(
+                    "SELECT room_id, code, mac, board, sat_type, "
+                    "first_seen_at, last_seen_at, attempts "
+                    "FROM satellite_approvals ORDER BY first_seen_at"
+                )
+            )
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def get(self, room_id: str) -> dict | None:
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT room_id, token_hash, code, mac, board, sat_type "
+                    "FROM satellite_approvals WHERE room_id = :r"
+                ),
+                {"r": room_id},
+            )
+        ).mappings().first()
+        return dict(row) if row else None
+
+    async def approve(self, room_id: str) -> bool:
+        """Promote a pending request into a real pairing, atomically.
+
+        Returns False when nothing was pending — an approval racing a reject
+        (or a second click) must not invent a pairing out of nothing."""
+        row = (
+            await self.s.execute(
+                text(
+                    "DELETE FROM satellite_approvals WHERE room_id = :r "
+                    "RETURNING token_hash"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        if row is None:
+            return False
+        await self.s.execute(
+            text(
+                "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
+                "VALUES (:r, :h, now()) "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "token_hash = EXCLUDED.token_hash, paired_at = now(), "
+                "last_seen_at = now()"
+            ),
+            {"r": room_id, "h": row.token_hash},
+        )
+        return True
+
+    async def reject(self, room_id: str) -> bool:
+        """Drop a pending request. The device keeps retrying — rejection is
+        not a ban, and pretending otherwise would be a lie the UI can't
+        keep. Powering the satellite off is what actually stops it."""
+        row = (
+            await self.s.execute(
+                text(
+                    "DELETE FROM satellite_approvals WHERE room_id = :r RETURNING 1"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        return row is not None
+
+
 _SATELLITE_COLS = (
     "room_id, sat_type, room_label, hardware, board, mac, "
     "adopted_via, adopted_at, created_at, updated_at"

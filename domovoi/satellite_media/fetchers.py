@@ -38,6 +38,11 @@ BASE_APT_PACKAGES = (
     "alsa-utils",
     "mtools",
     "dosfstools",
+    # The setup portal's wildcard DNS. NetworkManager usually pulls this in
+    # on Pi OS, but a shipped unit must not depend on that being true — a
+    # satellite that cannot raise its portal because it has no internet is
+    # unrecoverable in a customer's hands.
+    "dnsmasq-base",
 )
 
 

@@ -50,6 +50,8 @@ PSK, re-presented so the dashboard can show the error) → ``active``.
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import json
 from typing import Any
@@ -59,7 +61,50 @@ VOLUME_LABEL = "DOMOVOI-SET"          # FAT volume labels max out at 11 chars
 DEVICE_INFO_NAME = "device-info.json"
 PROVISION_NAME = "provision.json"
 
-DEVICE_STATUSES = ("bootstrapping", "awaiting_provision", "wifi_failed", "active")
+DEVICE_STATUSES = (
+    "bootstrapping",
+    "awaiting_provision",
+    "wifi_failed",
+    # The portal transport can't ask the core whether a room is free —
+    # it isn't on the house network yet. A collision therefore surfaces
+    # only after joining, and re-presents setup with this status.
+    "room_taken",
+    "active",
+)
+
+# room_id is identity everywhere (WS path, MPD room, intercom address,
+# every intents_log row), so a customer-typed name is normalised before
+# it ever becomes one — never trusted as typed.
+# A blank server address means "discover it at first start". An explicit
+# sentinel keeps validate_provision strict about non-empty strings instead
+# of teaching it to accept blanks, and gives client.py something
+# unambiguous to branch on.
+AUTO_DISCOVER_URL = "auto"
+
+ROOM_ID_MAX_LEN = 32
+_ROOM_DISALLOWED = re.compile(r"[^a-z0-9-]")
+
+
+def slugify_room(value: str) -> str:
+    """Normalise a room name to a room_id: lowercase, spaces to dashes,
+    every other symbol dropped. Raises ProvisionInvalid when nothing
+    usable survives or the result is too long — callers show the result
+    back to the user before committing, so a silent mangling can't pass
+    unnoticed.
+
+    ``"Kids' Room!"`` -> ``"kids-room"``; ``"!!!"`` -> raises.
+    """
+    slug = (value or "").strip().lower()
+    slug = re.sub(r"\s+", "-", slug)      # runs of whitespace -> ONE dash
+    slug = _ROOM_DISALLOWED.sub("", slug)  # drop everything else
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    if not slug:
+        raise ProvisionInvalid("room name has no usable characters")
+    if len(slug) > ROOM_ID_MAX_LEN:
+        raise ProvisionInvalid(
+            f"room name too long ({len(slug)} > {ROOM_ID_MAX_LEN})"
+        )
+    return slug
 
 
 class ProvisionInvalid(ValueError):

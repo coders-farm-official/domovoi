@@ -44,6 +44,7 @@ async def build(
     *,
     board_id: str,
     mic_profile: str,
+    setup_transport: str = "usb",
     target_kind: str,               # "drive" | "zip"
     target_mount: Path | None,
     job_id: str,
@@ -57,6 +58,8 @@ async def build(
     board = BOARDS.get(board_id)
     if board is None or not board.supported:
         raise ValueError(f"board {board_id!r} is not supported for prepared media")
+    if setup_transport not in overlay.SETUP_TRANSPORTS:
+        raise ValueError(f"unknown setup transport {setup_transport!r}")
     if mic_profile not in MIC_PROFILES:
         raise ValueError(f"unknown mic profile {mic_profile!r}")
     if target_kind == "drive":
@@ -115,7 +118,9 @@ async def build(
     await progress("assemble", 65, "rendering bootstrap scripts")
     stage2 = overlay.render_stage2(SAT_USER)
     fin = payload.finalize(workspace, asm["dir"], stage2)
-    firstrun = overlay.render_firstrun(SAT_USER, mic_profile, sat_type)
+    firstrun = overlay.render_firstrun(
+        SAT_USER, mic_profile, sat_type, setup_transport
+    )
     core_sha = await git_version.current_sha()
     info = overlay.build_info(
         board=board.id,
@@ -127,7 +132,14 @@ async def build(
         plugins=asm["plugins"],
         offline=effective_offline,
     )
-    device_info = overlay.initial_device_info(sat_type)
+    # Portal units get per-device AP credentials baked now — the card has
+    # never booted, so there is no MAC to derive an identity from later.
+    ap = overlay.generate_ap_credentials() if setup_transport == "portal" else None
+    device_info = overlay.initial_device_info(
+        sat_type,
+        setup_transport=setup_transport,
+        ap_ssid=ap["ssid"] if ap else None,
+    )
 
     # ── Phase 3: write ────────────────────────────────────────────────
     if target_kind == "drive":
@@ -149,6 +161,8 @@ async def build(
             firstrun=firstrun,
             info=info,
             device_info=device_info,
+            ap=ap,
+            usb_gadget=(setup_transport == "usb"),
         )
         await progress("done", 100, "card ready — eject, boot, then plug into this machine to adopt")
         result: dict[str, Any] = {"ok": True, "written": written}
@@ -168,6 +182,8 @@ async def build(
             firstrun=firstrun,
             info=info,
             device_info=device_info,
+            ap=ap,
+            usb_gadget=(setup_transport == "usb"),
         )
         (staging / "README.txt").write_text(
             "Domovoi satellite overlay\n"

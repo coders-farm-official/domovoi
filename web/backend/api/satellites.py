@@ -219,6 +219,50 @@ def _server_tz() -> str | None:
         return None
 
 
+@router.get("/approvals")
+async def list_approvals(request: Request):
+    """Satellites waiting on a human. Declared BEFORE /{room_id} so the
+    path parameter can't shadow it."""
+    return bridge_response(
+        *await get_admin(
+            "/v1/admin/satellites/approvals",
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
+@router.post(
+    "/approvals/{room_id}/approve",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def approve_satellite(room_id: str, request: Request):
+    """Approve a pending satellite — writes the pairing that binds this room
+    to this device. Admin-gated at both hops."""
+    return bridge_response(
+        *await post_admin(
+            f"/v1/admin/satellites/approvals/{room_id}/approve",
+            {},
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
+@router.post(
+    "/approvals/{room_id}/reject",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def reject_satellite(room_id: str, request: Request):
+    """Drop a pending request. The device keeps retrying until it is
+    approved or powered off."""
+    return bridge_response(
+        *await post_admin(
+            f"/v1/admin/satellites/approvals/{room_id}/reject",
+            {},
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
 @router.delete("/{room_id}", dependencies=[Depends(require_admin_mutation)])
 async def delete_satellite(room_id: str, request: Request):
     """Remove a never-connected (`waiting`) satellite — inventory row +

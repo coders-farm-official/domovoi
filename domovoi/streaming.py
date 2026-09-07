@@ -250,6 +250,7 @@ from domovoi.clients.whisper import get_whisper_client
 from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
 from domovoi.db.repositories import (
+    SatelliteApprovalRepository,
     SatellitePairingRepository,
     SatellitesRepository,
     SessionRepository,
@@ -831,7 +832,42 @@ class StreamSession:
                 if presented is not None:
                     token_hash = token_sha256(presented)
                     if row is None:
-                        # Case 1 — first token wins: claim the room.
+                        # Case 1 — nobody has claimed this room yet.
+                        #
+                        # A device that presents an approval_code came through
+                        # the Wi-Fi setup portal, where the core was never a
+                        # participant and so could not preseed a pairing. It
+                        # parks for a human instead of claiming the room on
+                        # trust: the customer matches the code they saw as the
+                        # setup network closed. Without that, whoever guesses a
+                        # room_id and connects first wins it.
+                        #
+                        # A device with NO code is the manual/legacy path and
+                        # keeps the historical trust-on-first-use behaviour —
+                        # upgrading the server must not strand satellites that
+                        # were provisioned by hand.
+                        code = ctrl.get("approval_code")
+                        code = code.strip() if isinstance(code, str) else None
+                        if code:
+                            approvals = SatelliteApprovalRepository(s)
+                            await approvals.request(
+                                self.room_id,
+                                token_hash=token_hash,
+                                code=code,
+                                mac=ctrl.get("mac"),
+                                board=ctrl.get("board"),
+                                sat_type=ctrl.get("sat_type") or "voice",
+                            )
+                            log.info(
+                                "pairing: room=%s awaiting approval (code shown "
+                                "to the operator)", self.room_id,
+                            )
+                            await self._safe_send_text({
+                                "type": "error",
+                                "reason": "awaiting_approval",
+                                "message": "waiting for approval on the dashboard",
+                            })
+                            return False
                         await repo.pair(self.room_id, token_hash)
                         log.info(
                             "pairing: room=%s paired (trust-on-first-use)",

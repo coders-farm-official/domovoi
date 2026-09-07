@@ -1218,6 +1218,45 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
   );
 };
 
+/* ---- Wi-Fi onboarding: satellites waiting for a human ---------------
+ *
+ * A satellite set up through its own Wi-Fi portal can't be preseeded — the
+ * server was never part of that exchange — so it parks here instead of
+ * claiming its room on trust. The customer saw a four-digit code as the
+ * setup network closed; matching it is what makes this a decision someone
+ * made rather than whoever connected first.
+ */
+const ApprovalCard = ({ a, busy, onApprove, onReject }) => (
+  <Card>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
+                  flexWrap: 'wrap' }}>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontWeight: 600 }}>{a.room_id}</div>
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          {a.board || 'unknown board'}
+          {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
+          {' · '}{a.sat_type || 'voice'}
+          {a.attempts > 1 ? ` · ${a.attempts} attempts` : ''}
+        </div>
+      </div>
+      {a.code && (
+        <div className="mono" style={{ fontSize: 24, letterSpacing: '0.16em',
+                                       padding: '6px 12px', borderRadius: 'var(--r-sm)',
+                                       background: 'var(--sunken)' }}>
+          {a.code}
+        </div>
+      )}
+      <Button variant="primary" icon="check" disabled={busy}
+              onClick={() => onApprove(a)}>approve</Button>
+      <Button variant="ghost" icon="x" disabled={busy}
+              onClick={() => onReject(a)}>reject</Button>
+    </div>
+    <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+      Approve only if this code matches the one shown during setup.
+    </div>
+  </Card>
+);
+
 const PendingSatCard = ({ p, adopted, onAdopt }) => {
   const failed = p.status === 'wifi_failed';
   const readopt = !!p.already_adopted_as;
@@ -1268,6 +1307,33 @@ const SatellitesPage = () => {
   const { items: sats, loading, refresh } = useApiList('/api/satellites', {
     eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed'],
   });
+  const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
+  const [approvalBusy, setApprovalBusy] = React.useState('');
+
+  // The satellite retries on its own, so this list settles without a push
+  // channel; poll while the page is open.
+  React.useEffect(() => {
+    const t = setInterval(refreshApprovals, 5000);
+    return () => clearInterval(t);
+  }, [refreshApprovals]);
+
+  const decide = async (a, action) => {
+    if (action === 'reject' && !window.confirm(
+      `Reject ${a.room_id}?\n\nThe satellite keeps retrying until it is ` +
+      `approved or powered off — this clears the request, it doesn't ban the device.`
+    )) return;
+    setApprovalBusy(a.room_id);
+    try {
+      await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`, {});
+      fire(action === 'approve' ? `${a.room_id} approved` : `${a.room_id} rejected`);
+      refreshApprovals();
+    } catch (e) {
+      fire(`${action} failed: ${e.message}`);
+    } finally {
+      setApprovalBusy('');
+    }
+  };
+
   const { items: pending } = useApiList('/api/satellites/pending', {
     eventTypes: ['satellites.pending.changed'],
   });
@@ -1303,6 +1369,17 @@ const SatellitesPage = () => {
         title="Satellites"
         sub={`${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`}
       />
+
+      {approvals.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+          <div className="label">waiting for approval</div>
+          {approvals.map(a => (
+            <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
+                          onApprove={x => decide(x, 'approve')}
+                          onReject={x => decide(x, 'reject')}/>
+          ))}
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>

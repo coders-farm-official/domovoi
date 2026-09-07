@@ -45,7 +45,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from satellite import config_writer
 from satellite import provisioning_protocol as proto
@@ -104,6 +104,31 @@ def image_sat_type() -> str:
         return v if v in ("voice", "video") else "voice"
     except OSError:
         return "voice"
+
+
+def image_device_profile() -> str:
+    """The mic board this image was built for, stamped by stage 1. The
+    portal only asks the customer when the image didn't decide."""
+    try:
+        v = (CONFIG_DIR / "image_device_profile").read_text().strip()
+        return v or "respeaker_2mic_hat"
+    except OSError:
+        return "respeaker_2mic_hat"
+
+
+def portal_credentials() -> dict[str, str] | None:
+    """The baked setup-AP credentials, or None for a USB-gadget unit.
+
+    Presence of this sidecar is what selects the transport: media prep
+    writes it only for units meant to onboard over the Wi-Fi portal."""
+    try:
+        doc = json.loads((CONFIG_DIR / "ap.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(doc, dict) and doc.get("ssid") and doc.get("psk"):
+        return {"ssid": str(doc["ssid"]), "psk": str(doc["psk"])}
+    log.warning("ap.json present but unusable — falling back to USB gadget")
+    return None
 
 
 # ─── Gadget backend (configfs + mtools; injectable for tests) ─────────────
@@ -281,15 +306,14 @@ def provisioning_active() -> bool:
 def apply_provision(
     payload: dict[str, Any],
     *,
-    backend: GadgetBackend,
-    image: Path,
+    transport: Transport,
     wifi_attempts: int,
     wifi_join_timeout: float,
     run=subprocess.run,
 ) -> tuple[bool, str | None]:
     """Write config + pairing token, join Wi-Fi, clean up. (ok, error).
-    The provision file is wiped from the image BEFORE any possible
-    re-expose, so credentials never ride the volume again."""
+    The credentials are cleared from the transport BEFORE any possible
+    re-expose, so they never ride a setup volume twice."""
     # 1. Config from the example, comment-preserving.
     example = EXAMPLE_CONFIG.read_text(encoding="utf-8")
     changes: dict[str, Any] = {
@@ -314,8 +338,8 @@ def apply_provision(
             capture_output=True, timeout=15,
         )
 
-    # 4. Credentials off the volume BEFORE any re-expose.
-    backend.delete_file(image, proto.PROVISION_NAME)
+    # 4. Credentials unreadable BEFORE any re-expose.
+    transport.clear_provision()
 
     # 5. Wi-Fi — the step that can fail on a typo'd PSK.
     wifi = payload["wifi"]
@@ -332,11 +356,164 @@ def apply_provision(
     return False, last_err or "wifi join failed"
 
 
+BOOT_DIRS = (Path("/boot/firmware"), Path("/boot"))
+_GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
+_GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
+
+
+def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
+    """Take the USB controller back out of peripheral mode after adoption.
+
+    Media prep writes ``dtoverlay=dwc2,dr_mode=peripheral`` so the device can
+    present itself as a flash drive. Nothing else ever removes it, and on a
+    Pi Zero 2 W that pins the ONLY data port as a peripheral — where a USB
+    mic array cannot enumerate. Without this a satellite adopts perfectly
+    and then can't hear anything.
+
+    Best-effort and never raises: a satellite that is otherwise provisioned
+    must still boot. Returns the files changed, for logging and tests.
+    """
+    changed: list[str] = []
+    for boot in (boot_dirs if boot_dirs is not None else BOOT_DIRS):
+        cfg = boot / "config.txt"
+        if not cfg.is_file():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8", errors="replace")
+            kept = [ln for ln in text.splitlines()
+                    if ln.strip() != _GADGET_CONFIG_LINE]
+            if len(kept) != len(text.splitlines()):
+                cfg.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+                changed.append(str(cfg))
+        except OSError as e:
+            log.warning("could not revert %s: %s", cfg, e)
+
+        cmdline = boot / "cmdline.txt"
+        if not cmdline.is_file():
+            continue
+        try:
+            raw = cmdline.read_text(encoding="utf-8", errors="replace")
+            line = raw.strip().splitlines()[0] if raw.strip() else ""
+            tokens = [t for t in line.split() if t != _GADGET_CMDLINE_TOKEN]
+            rebuilt = " ".join(tokens) + "\n"
+            if rebuilt != raw:
+                # A malformed cmdline can stop the Pi booting — one line, no
+                # stray newline, exactly as the firmware expects.
+                cmdline.write_text(rebuilt, encoding="utf-8", newline="\n")
+                changed.append(str(cmdline))
+        except OSError as e:
+            log.warning("could not revert %s: %s", cmdline, e)
+        break   # the first boot dir that exists is the real one
+    if changed:
+        log.info("USB gadget mode reverted in %s", ", ".join(changed))
+    return changed
+
+
+# ─── Transport seam ───────────────────────────────────────────────────────
+#
+# How a satellite is reachable during adoption is the ONLY thing that varies
+# between onboarding routes: the USB gadget (bench + manufacturing) and the
+# Wi-Fi setup portal (shipped units) carry an identical protocol. `run()`
+# below is written against this seam and never learns which it has.
+
+
+class Transport(Protocol):
+    """Publish device-info, receive a provision payload, go away again."""
+
+    def expose(self, device_info: dict[str, Any]) -> None:
+        """Publish ``device_info`` and become reachable to an adopter."""
+
+    def wait_for_provision(self, nonce: str) -> dict[str, Any] | None:
+        """Block until a payload validates against ``nonce``. None only when
+        a bounded test loop gives up."""
+
+    def withdraw(self) -> None:
+        """Stop being reachable, without discarding anything."""
+
+    def clear_provision(self) -> None:
+        """Ensure the credentials can't be read back. The gadget deletes the
+        file from its image; the portal no-ops, having never written one."""
+
+    def dispose(self) -> None:
+        """Final cleanup once provisioning has succeeded."""
+
+    def reboot(self) -> None:
+        """Reboot into the provisioned client."""
+
+
+class GadgetTransport:
+    """The USB mass-storage route: wraps a :class:`GadgetBackend` and the
+    backing image so the backend itself stays exactly as it was (and every
+    existing fake keeps working)."""
+
+    def __init__(
+        self,
+        backend: GadgetBackend,
+        image: Path,
+        *,
+        poll_sec: float = 2.0,
+        max_loops: int | None = None,
+    ) -> None:
+        self.backend = backend
+        self.image = image
+        self.poll_sec = poll_sec
+        self.max_loops = max_loops
+
+    def expose(self, device_info: dict[str, Any]) -> None:
+        # Rebuild + rebind so the host sees a clean re-plug; the image is
+        # never loop-mounted while bound (host + device on one FAT corrupts).
+        self.backend.unbind()
+        self.backend.build_image(self.image, device_info)
+        self.backend.bind(self.image)
+
+    def wait_for_provision(self, nonce: str) -> dict[str, Any] | None:
+        return _poll_for_provision(
+            self.backend, self.image, nonce, self.poll_sec,
+            max_loops=self.max_loops,
+        )
+
+    def withdraw(self) -> None:
+        self.backend.unbind()
+
+    def clear_provision(self) -> None:
+        self.backend.delete_file(self.image, proto.PROVISION_NAME)
+
+    def dispose(self) -> None:
+        self.image.unlink(missing_ok=True)
+        # Adoption is over, so the USB controller no longer needs to be a
+        # peripheral — and leaving it pinned means a USB mic array can never
+        # enumerate on a single-data-port Pi. Portal units never get the
+        # overlay in the first place; this is the USB route's equivalent.
+        revert_usb_gadget_boot_config()
+
+    def reboot(self) -> None:
+        self.backend.reboot()
+
+
+def _default_transport() -> GadgetBackend | Transport:
+    """Pick the onboarding transport this image was built for. Baked AP
+    credentials mean the Wi-Fi setup portal; their absence means the USB
+    mass-storage gadget, which stays the bench and manufacturing route."""
+    creds = portal_credentials()
+    if creds is None:
+        return GadgetBackend()
+    from satellite.portal_transport import PortalTransport
+
+    profile = image_device_profile()
+    return PortalTransport(
+        ap_ssid=creds["ssid"],
+        ap_psk=creds["psk"],
+        device_profile=profile,
+        sat_type=image_sat_type(),
+        profiles=_profiles() or [profile],
+    )
+
+
 # ─── Main loop ────────────────────────────────────────────────────────────
 
 
 def run(
-    backend: GadgetBackend | None = None,
+    backend: GadgetBackend | Transport | None = None,
     *,
     image: Path | None = None,
     poll_sec: float = 2.0,
@@ -347,10 +524,20 @@ def run(
     """The provisioning state machine. Returns an exit code (0 = nothing to
     do or provisioned successfully). ``max_loops`` bounds the poll loop for
     tests; None = poll until provisioned or killed. ``image`` resolves to
-    the module's IMAGE_FILE at CALL time (monkeypatch-friendly)."""
-    backend = backend or GadgetBackend()
+    the module's IMAGE_FILE at CALL time (monkeypatch-friendly).
+
+    The first argument is a :class:`Transport`. A bare
+    :class:`GadgetBackend` is still accepted and wrapped, so existing
+    callers and fakes keep working unchanged."""
     if image is None:
         image = IMAGE_FILE
+    if backend is None:
+        backend = _default_transport()
+    transport: Transport = (
+        GadgetTransport(backend, image, poll_sec=poll_sec, max_loops=max_loops)
+        if isinstance(backend, GadgetBackend)
+        else backend
+    )
     if is_provisioned():
         log.info("already provisioned — nothing to do")
         return 0
@@ -375,32 +562,26 @@ def run(
             error=error,
             profiles_supported=_profiles(),
         )
-        backend.unbind()
-        backend.build_image(image, info)
-        backend.bind(image)
+        transport.expose(info)
         _write_state({"phase": status, "error": error, "nonce": nonce})
-        log.info("gadget exposed (status=%s nonce=%s) — waiting for adopt", status, nonce)
+        log.info("setup exposed (status=%s nonce=%s) — waiting for adopt", status, nonce)
 
-        payload = _poll_for_provision(
-            backend, image, nonce, poll_sec,
-            max_loops=max_loops,
-        )
+        payload = transport.wait_for_provision(nonce)
         if payload is None:
-            # Only reachable with max_loops (tests) — a real device polls on.
+            # Only reachable with max_loops (tests) — a real device waits on.
             return 1
-        backend.unbind()
+        transport.withdraw()
         ok, err = apply_provision(
             payload,
-            backend=backend,
-            image=image,
+            transport=transport,
             wifi_attempts=wifi_attempts,
             wifi_join_timeout=wifi_join_timeout,
         )
         if ok:
             _write_state({"phase": "done"})
-            image.unlink(missing_ok=True)
+            transport.dispose()
             log.info("provisioned as %r — rebooting", payload["room_id"])
-            backend.reboot()
+            transport.reboot()
             return 0
         # Wi-Fi failed: strip the half-applied config (the client must not
         # start against a network we never joined), then re-present with

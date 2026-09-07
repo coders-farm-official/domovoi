@@ -1,5 +1,13 @@
 # Pi Satellite Provisioning Checklist
 
+> **Shipped units use the Wi-Fi setup portal.** A card prepared with
+> `setup_transport = "portal"` never touches this checklist and never
+> touches the server: power the device on, join its `Domovoi-Setup-<id>`
+> network from a phone, and the setup page opens itself. Approve the
+> four-digit code on the dashboard to finish. See
+> [docs/SATELLITE_HARDWARE.md](../docs/SATELLITE_HARDWARE.md). USB adoption
+> below remains the bench and manufacturing route.
+>
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
 > with the Domovoi satellite payload (dashboard → Satellites → prepare
 > media, or an image that boots into provisioning mode), you don't need

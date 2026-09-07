@@ -13,6 +13,7 @@
 #   @SAT_USER@      the account to create/use
 #   @MIC_PROFILE@   respeaker_2mic_hat_v1|_v2 | xvf3800_usb | none
 #   @SAT_TYPE@      voice | video
+#   @SETUP_TRANSPORT@  usb | portal  (how this unit is adopted)
 
 set -u
 BOOT="$(cd "$(dirname "$0")" && pwd)"
@@ -21,6 +22,7 @@ PAYDIR=/opt/domovoi-payload
 SAT_USER="@SAT_USER@"
 MIC_PROFILE="@MIC_PROFILE@"
 SAT_TYPE="@SAT_TYPE@"
+SETUP_TRANSPORT="@SETUP_TRANSPORT@"
 LOG=/var/log/domovoi-firstrun.log
 
 mkdir -p "$STEPS"
@@ -123,8 +125,32 @@ if ! skip code; then
   [ -d "$PAYDIR/plugins" ] && cp -r "$PAYDIR/plugins" "$HOME_DIR/.domovoi/plugin_payloads" || true
   [ -d "$PAYDIR/debs" ] && cp -r "$PAYDIR/debs" "$HOME_DIR/.domovoi/deb_cache" || true
   [ "$SAT_TYPE" = "video" ] && echo video >"$HOME_DIR/.domovoi/image_sat_type" || true
+  # The mic board is decided at prepare time; provisioning mode needs it
+  # to fill device_profile without asking the customer.
+  printf '%s\n' "$MIC_PROFILE" >"$HOME_DIR/.domovoi/image_device_profile"
+  # Setup-AP credentials for the portal transport. Presence of this
+  # file is what selects the portal over the USB gadget at boot 2.
+  if [ -f "$BOOT/domovoi/ap.json" ]; then
+    cp "$BOOT/domovoi/ap.json" "$HOME_DIR/.domovoi/ap.json"
+    chmod 600 "$HOME_DIR/.domovoi/ap.json"
+  fi
   chown -R "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi" "$HOME_DIR/.domovoi" "$HOME_DIR/satellite-venv"
   done_step code
+fi
+
+# 5b. Setup-portal DNS. NetworkManager's shared mode runs its own dnsmasq;
+#     without a catch-all the captive-portal probes resolve nowhere and the
+#     sign-in page never opens by itself.
+if [ "$SETUP_TRANSPORT" = "portal" ] && ! skip portaldns; then
+  info bootstrapping portal-dns
+  mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+  cat >/etc/NetworkManager/dnsmasq-shared.d/domovoi-portal.conf <<'EOF'
+# Domovoi setup portal — every name resolves to us so the captive check
+# fails deliberately and the phone opens the sign-in page.
+address=/#/192.168.4.1
+dhcp-option=6,192.168.4.1
+EOF
+  done_step portaldns
 fi
 
 # 6. Mic-board overlay (prebuilt dtbo from the payload when present).
