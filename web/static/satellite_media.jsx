@@ -59,12 +59,13 @@ const CredentialsModal = ({ creds, onClose }) => {
         </div>
         <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 18 }}>
           {ap
-            ? 'This satellite will create its own Wi-Fi network. You need this password to connect to it and finish setup.'
+            ? 'This satellite will create its own Wi-Fi network. Connect to it with this password and the setup page should open by itself — if it does not, browse to the address below.'
             : 'This card is adopted over USB, so it has no setup network.'}
         </div>
 
         {ap && row('wi-fi network', ap.ssid)}
         {ap && row('wi-fi password', ap.psk)}
+        {ap && row('setup page', 'http://192.168.4.1')}
         {con && row('console login', `${con.username} / ${con.password}`)}
 
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 16,

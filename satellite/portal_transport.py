@@ -159,8 +159,21 @@ class PortalTransport:
         # the interface can no longer survey the neighbourhood.
         self.networks = scan_networks(run=self.run)
         self._persist_approval_code()
-        self._start_ap()
+        # Serve BEFORE the radio exists, not after. A phone probes for a
+        # captive portal the instant it associates, and a probe that finds
+        # nothing listening is recorded as "connected, no internet" with no
+        # sign-in offer at all — a verdict the phone then CACHES against that
+        # SSID, so the prompt never appears again on that device. Listening
+        # first means the very first probe is always answered.
+        #
+        # Possible only because the socket binds 0.0.0.0: it needs no address
+        # from an interface that doesn't exist yet.
         self._start_server()
+        try:
+            self._start_ap()
+        except Exception:
+            self._stop_server()      # don't leave a socket behind on failure
+            raise
         log.info(
             "setup portal up: ssid=%s http://%s:%d (%d networks visible)",
             self.ap_ssid, self.ip, self.port, len(self.networks),

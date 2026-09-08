@@ -268,6 +268,39 @@ def test_clear_provision_drops_the_payload(portal):
 # ─── AP lifecycle ─────────────────────────────────────────────────────────
 
 
+def test_the_server_listens_before_the_ap_exists(monkeypatch, tmp_path):
+    """A phone probes the instant it associates. If nothing answers, the OS
+    records "connected, no internet" with no sign-in offer AND caches that
+    verdict against the SSID — so the prompt never appears again on that
+    device. Listening first means the first probe is always answered."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    seen = {}
+    calls = []
+    base = _fake_run(calls)
+
+    t = _transport(calls, tmp_path)
+
+    def run(cmd, **kw):
+        if "hotspot" in " ".join(cmd):
+            seen["server_up_when_ap_raised"] = t._server is not None
+        return base(cmd, **kw)
+
+    t.run = run
+    t.expose(_info())
+    try:
+        assert seen["server_up_when_ap_raised"] is True
+    finally:
+        t.withdraw()
+
+
+def test_a_failed_ap_leaves_no_socket_behind(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    with pytest.raises(RuntimeError):
+        t.expose(_info())
+    assert t._server is None
+
+
 def test_expose_scans_before_raising_the_ap(portal):
     """Once the radio is hosting it can't survey the neighbourhood, so the
     scan has to come first."""
