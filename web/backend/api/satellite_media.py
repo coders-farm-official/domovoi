@@ -48,6 +48,9 @@ class PrepareRequest(BaseModel):
     #            dwc2 peripheral-mode overlay, which a USB mic array can't
     #            share a single-port Pi with.
     setup_transport: str = "usb"
+    # No safe default exists — legal channels and power limits are per
+    # market, so this is a deliberate choice per batch, not a fallback.
+    wifi_country: str = "US"
 
 
 async def _job_row(job_id: int) -> dict[str, Any] | None:
@@ -152,6 +155,10 @@ async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=f"unsupported board {body.board!r}")
     if body.mic_profile not in MIC_PROFILES:
         raise HTTPException(status_code=422, detail=f"unknown mic profile {body.mic_profile!r}")
+    try:
+        overlay.validate_wifi_country(body.wifi_country)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     if body.setup_transport not in overlay.SETUP_TRANSPORTS:
         raise HTTPException(
             status_code=422,
@@ -221,6 +228,7 @@ async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> N
             board_id=body.board,
             mic_profile=body.mic_profile,
             setup_transport=body.setup_transport,
+            wifi_country=body.wifi_country,
             target_kind=body.target.get("kind", "zip"),
             target_mount=mount,
             job_id=str(job_id),
@@ -230,14 +238,23 @@ async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> N
         async with session_scope() as s:
             await s.execute(
                 text(
+                    # `offline` is stored at INSERT from the REQUEST. The
+                    # builder can downgrade it — an empty cache bucket makes
+                    # it fall back to installing over the internet — so write
+                    # the effective value back. Otherwise the jobs list shows
+                    # what was asked for and calls it what was achieved,
+                    # which is the one field an operator checks to confirm a
+                    # card will work with no network.
                     "UPDATE satellite_media_jobs SET status = 'done', pct = 100, "
                     "status_text = 'ready', warnings = CAST(:w AS jsonb), "
-                    "artifact_path = :a, completed_at = now(), updated_at = now() "
+                    "artifact_path = :a, offline = :off, "
+                    "completed_at = now(), updated_at = now() "
                     "WHERE id = :i"
                 ),
                 {
                     "w": json.dumps(result.get("warnings") or []),
                     "a": result.get("artifact_path"),
+                    "off": bool(result.get("offline", False)),
                     "i": job_id,
                 },
             )

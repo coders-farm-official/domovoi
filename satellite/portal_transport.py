@@ -43,6 +43,13 @@ log = logging.getLogger(__name__)
 
 PORTAL_IP = "192.168.4.1"
 PORTAL_PORT = 80
+# Bind every interface rather than PORTAL_IP. Binding a specific address
+# races the AP's address assignment — the socket is created microseconds
+# after nmcli returns, and if the address isn't up yet bind() fails with
+# EADDRNOTAVAIL and takes the whole service down. An unprovisioned device
+# has no network but the setup AP and loopback, so there is nothing else to
+# be exposed on.
+BIND_HOST = "0.0.0.0"
 AP_CONNECTION = "domovoi-setup"
 
 # The connectivity-check URLs each OS probes right after associating. We
@@ -112,6 +119,7 @@ class PortalTransport:
         iface: str | None = None,
         ip: str = PORTAL_IP,
         port: int = PORTAL_PORT,
+        bind_host: str = BIND_HOST,
         profiles: list[str] | None = None,
         state_dir: Path | None = None,
         run=subprocess.run,
@@ -122,8 +130,9 @@ class PortalTransport:
         self.device_profile = device_profile
         self.sat_type = sat_type
         self.iface = iface
-        self.ip = ip
+        self.ip = ip            # advertised: DNS target and redirect URL
         self.port = port
+        self.bind_host = bind_host
         self.profiles = profiles or [device_profile]
         self.state_dir = state_dir or Path("~/.domovoi").expanduser()
         self.run = run
@@ -212,6 +221,21 @@ class PortalTransport:
         # never logged — same rule as apply_wifi().
         self.run(cmd, capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False)
         self._ap_up = True
+        # NetworkManager's shared mode picks its own subnet (10.42.x.1 by
+        # default, and which one depends on what's already in use). The
+        # captive-portal DNS drop-in written at prepare time points at a
+        # FIXED address, so pin the AP to match — otherwise every hostname
+        # resolves to an address nothing is listening on and the sign-in
+        # page never opens.
+        self.run(
+            [nmcli, "connection", "modify", AP_CONNECTION,
+             "ipv4.method", "shared", "ipv4.addresses", f"{self.ip}/24"],
+            capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False,
+        )
+        self.run(
+            [nmcli, "connection", "up", AP_CONNECTION],
+            capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False,
+        )
 
     def _stop_ap(self) -> None:
         if not self._ap_up:
@@ -226,7 +250,7 @@ class PortalTransport:
 
     def _start_server(self) -> None:
         handler = _make_handler(self)
-        self._server = self._server_factory((self.ip, self.port), handler)
+        self._server = self._server_factory((self.bind_host, self.port), handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, name="domovoi-portal", daemon=True
         )

@@ -45,6 +45,7 @@ async def build(
     board_id: str,
     mic_profile: str,
     setup_transport: str = "usb",
+    wifi_country: str = "US",
     target_kind: str,               # "drive" | "zip"
     target_mount: Path | None,
     job_id: str,
@@ -58,6 +59,7 @@ async def build(
     board = BOARDS.get(board_id)
     if board is None or not board.supported:
         raise ValueError(f"board {board_id!r} is not supported for prepared media")
+    overlay.validate_wifi_country(wifi_country)   # fail before any work
     if setup_transport not in overlay.SETUP_TRANSPORTS:
         raise ValueError(f"unknown setup transport {setup_transport!r}")
     if mic_profile not in MIC_PROFILES:
@@ -119,7 +121,7 @@ async def build(
     stage2 = overlay.render_stage2(SAT_USER)
     fin = payload.finalize(workspace, asm["dir"], stage2)
     firstrun = overlay.render_firstrun(
-        SAT_USER, mic_profile, sat_type, setup_transport
+        SAT_USER, mic_profile, sat_type, setup_transport, wifi_country
     )
     core_sha = await git_version.current_sha()
     info = overlay.build_info(
@@ -135,6 +137,10 @@ async def build(
     # Portal units get per-device AP credentials baked now — the card has
     # never booted, so there is no MAC to derive an identity from later.
     ap = overlay.generate_ap_credentials() if setup_transport == "portal" else None
+    # Answers Pi OS's first-boot user wizard unattended. Without it a unit
+    # sits on "enter a new username" at the console forever — invisible on a
+    # voice satellite, front and centre on a video one.
+    console = overlay.generate_console_credentials(SAT_USER)
     device_info = overlay.initial_device_info(
         sat_type,
         setup_transport=setup_transport,
@@ -162,6 +168,7 @@ async def build(
             info=info,
             device_info=device_info,
             ap=ap,
+            console=console,
             usb_gadget=(setup_transport == "usb"),
             usb_host=(
                 setup_transport != "usb"

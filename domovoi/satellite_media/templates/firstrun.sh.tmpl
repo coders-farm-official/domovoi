@@ -14,15 +14,25 @@
 #   @MIC_PROFILE@   respeaker_2mic_hat_v1|_v2 | xvf3800_usb | none
 #   @SAT_TYPE@      voice | video
 #   @SETUP_TRANSPORT@  usb | portal  (how this unit is adopted)
+#   @WIFI_COUNTRY@  ISO 3166-1 alpha-2 wireless regulatory domain
 
 set -u
-BOOT="$(cd "$(dirname "$0")" && pwd)"
+# This script lives at <boot>/domovoi/firstrun.sh, but every path below is
+# relative to the boot partition ROOT ($BOOT/domovoi/payload.tar.gz,
+# $BOOT/config.txt, $BOOT/overlays/). So BOOT is the script's PARENT.
+#
+# Getting this wrong is silent and total: step 0 cd's into a directory that
+# doesn't exist, fail() exits 1, and because systemd.run_success_action only
+# reboots on SUCCESS the device sits in an empty target with a blank screen
+# and no stage 1 at all. Confirmed on hardware 2026-09-08.
+BOOT="$(cd "$(dirname "$0")/.." && pwd)"
 STEPS=/var/lib/domovoi/bootstrap-steps
 PAYDIR=/opt/domovoi-payload
 SAT_USER="@SAT_USER@"
 MIC_PROFILE="@MIC_PROFILE@"
 SAT_TYPE="@SAT_TYPE@"
 SETUP_TRANSPORT="@SETUP_TRANSPORT@"
+WIFI_COUNTRY="@WIFI_COUNTRY@"
 LOG=/var/log/domovoi-firstrun.log
 
 mkdir -p "$STEPS"
@@ -138,6 +148,28 @@ if ! skip code; then
   done_step code
 fi
 
+# 5a. Wireless regulatory domain.
+#
+#     Stock Pi OS soft-blocks the radio via rfkill until a country is set —
+#     the regulatory domain decides legal channels and power, so the driver
+#     refuses to transmit without one. Imager normally sets this and we tell
+#     people to skip Imager's pre-configuration, so nothing did. On a portal
+#     unit a blocked radio is terminal: no setup AP, no way to onboard it at
+#     all, ever.
+if ! skip wificountry; then
+  info bootstrapping wifi-country
+  if command -v raspi-config >/dev/null 2>&1; then
+    raspi-config nonint do_wifi_country "$WIFI_COUNTRY" || \
+      echo "WARN: could not set wifi country $WIFI_COUNTRY"
+  else
+    # Non-Pi boards (Radxa) have no raspi-config; set the domain directly.
+    iw reg set "$WIFI_COUNTRY" 2>/dev/null || \
+      echo "WARN: no raspi-config and iw reg set failed"
+  fi
+  rfkill unblock wifi 2>/dev/null || true
+  done_step wificountry
+fi
+
 # 5b. Setup-portal DNS. NetworkManager's shared mode runs its own dnsmasq;
 #     without a catch-all the captive-portal probes resolve nowhere and the
 #     sign-in page never opens by itself.
@@ -194,7 +226,34 @@ if ! skip units; then
   done_step units
 fi
 
-# 8. USB gadget prerequisites are in config.txt/cmdline.txt already (the
-#    overlay wrote them at prepare time). Done — hand off to boot 2.
+# 8. Remove our own first-boot hook from the kernel cmdline.
+#
+#    MUST happen, and must happen last. `systemd.unit=kernel-command-line.target`
+#    sends EVERY boot into a minimal target rather than multi-user.target;
+#    left in place, boot 2 re-enters it, re-runs this script (every step
+#    skips, so it exits 0 in seconds), and `systemd.run_success_action=reboot`
+#    reboots again — a silent loop that never starts domovoi-provisioning,
+#    so the setup portal never appears. Raspberry Pi Imager's firstrun does
+#    the same cleanup for the same reason.
+#
+#    One line, no trailing blank line: a malformed cmdline can stop the Pi
+#    booting entirely. Only OUR tokens go; modules-load=dwc2 on a USB-gadget
+#    build must survive (provisioning removes that itself once adopted).
+if ! skip cmdline; then
+  info bootstrapping cmdline-cleanup
+  for CMD in "$BOOT/cmdline.txt" /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+    [ -f "$CMD" ] || continue
+    NEW="$(tr ' ' '
+' <"$CMD"       | grep -v '^systemd\.run'       | grep -v '^systemd\.unit=kernel-command-line\.target$'       | tr '
+' ' ' | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//')"
+    [ -n "$NEW" ] && printf '%s
+' "$NEW" >"$CMD"
+    break
+  done
+  done_step cmdline
+fi
+
+# 9. USB gadget prerequisites are in config.txt already (the overlay wrote
+#    them at prepare time). Done — hand off to boot 2.
 info awaiting_provision stage1-done
 echo "stage 1 complete; rebooting into adoption mode"

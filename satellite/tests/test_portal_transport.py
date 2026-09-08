@@ -46,6 +46,7 @@ def portal(monkeypatch, tmp_path):
         device_profile="xvf3800_usb",
         profiles=["xvf3800_usb", "respeaker_2mic_hat"],
         ip="127.0.0.1",
+        bind_host="127.0.0.1",       # the real default is 0.0.0.0
         port=0,                      # ephemeral — never needs root
         state_dir=tmp_path / "domovoi-state",
         run=_fake_run(calls),
@@ -322,3 +323,50 @@ def test_device_profile_falls_back_when_unstamped(cfg):
     assert pm.image_device_profile() == "respeaker_2mic_hat"
     (cfg / "image_device_profile").write_text("xvf3800_usb\n")
     assert pm.image_device_profile() == "xvf3800_usb"
+
+
+# ─── binding and the AP address ───────────────────────────────────────────
+#
+# Found on hardware: the server bound PORTAL_IP explicitly and died with
+# EADDRNOTAVAIL because NetworkManager's shared mode had raised the AP on
+# its own 10.42.0.1 instead. The service crash-looped 27 times while the
+# setup network flapped up and down.
+
+
+def test_the_server_binds_every_interface_by_default():
+    """A specific bind races the AP's address assignment; the socket is
+    created microseconds after nmcli returns."""
+    assert pt.BIND_HOST == "0.0.0.0"
+    transport = pt.PortalTransport(
+        ap_ssid="x", ap_psk="y", device_profile="xvf3800_usb",
+    )
+    assert transport.bind_host == "0.0.0.0"
+    assert transport.ip == pt.PORTAL_IP        # still advertised for DNS
+
+
+def test_bind_host_is_separate_from_the_advertised_address(portal):
+    """The redirect URL and DNS target must stay the advertised address even
+    though the socket listens more broadly."""
+    status, _body, headers = _get(portal, "/generate_204", redirects=False)
+    assert status == 302
+    assert headers["Location"] == f"http://{portal.ip}/"
+
+
+def test_the_ap_is_pinned_to_the_advertised_address(portal):
+    """The captive-portal DNS drop-in is baked at prepare time and points at
+    a FIXED address. If the AP comes up on NetworkManager's own subnet
+    instead, every hostname resolves somewhere nothing is listening."""
+    joined = [" ".join(c) for c in portal.calls]
+    modify = next(c for c in joined if "connection modify" in c)
+    assert "ipv4.addresses" in modify
+    assert f"{portal.ip}/24" in modify
+    assert "ipv4.method shared" in modify
+    # and re-activated so the new address actually applies
+    assert any("connection up" in c for c in joined)
+
+
+def test_pinning_happens_after_the_hotspot_exists(portal):
+    joined = [" ".join(c) for c in portal.calls]
+    hotspot = next(i for i, c in enumerate(joined) if "hotspot" in c)
+    modify = next(i for i, c in enumerate(joined) if "connection modify" in c)
+    assert hotspot < modify

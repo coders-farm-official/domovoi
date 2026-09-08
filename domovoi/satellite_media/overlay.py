@@ -20,6 +20,9 @@ prepared card.
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from string import Template
@@ -55,6 +58,24 @@ _FIRSTRUN_CMDLINE_TOKENS = (
 )
 
 SETUP_TRANSPORTS = ("usb", "portal")
+
+# ISO 3166-1 alpha-2, which is what the 802.11 regulatory domain uses.
+# Deliberately NOT defaulted anywhere: the legal channel set and power
+# limits differ by market, and a unit shipped with the wrong domain is a
+# compliance problem rather than a misconfiguration. Format-validated only —
+# maintaining a country list here would rot, and the kernel rejects codes it
+# doesn't know.
+_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+
+
+def validate_wifi_country(code: str) -> str:
+    """Normalise and check a regulatory domain, or raise ValueError."""
+    normalised = (code or "").strip().upper()
+    if not _COUNTRY_RE.match(normalised):
+        raise ValueError(
+            f"wifi_country must be a two-letter ISO 3166-1 code, got {code!r}"
+        )
+    return normalised
 
 # WPA2 needs 8-63 characters. The alphabet drops the glyph pairs people
 # mistype off a printed label (0/O, 1/l/I), because this key is read off a
@@ -137,11 +158,13 @@ def render_firstrun(
     mic_profile: str,
     sat_type: str,
     setup_transport: str = "usb",
+    wifi_country: str = "US",
 ) -> str:
     return render_template(
         "firstrun.sh.tmpl",
         {"SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
-            "SETUP_TRANSPORT": setup_transport},
+            "SETUP_TRANSPORT": setup_transport,
+            "WIFI_COUNTRY": validate_wifi_country(wifi_country)},
     )
 
 
@@ -184,6 +207,54 @@ def generate_ap_credentials(rng=None) -> dict:
     return {"ssid": f"Domovoi-Setup-{ident}", "psk": psk}
 
 
+# Raspberry Pi OS Lite flashed with no pre-configuration has NO user
+# account and blocks first boot on an interactive "enter a new username"
+# wizard on tty1. That is merely annoying on a voice satellite and
+# unacceptable on a video one, where it is the first thing a customer sees
+# on their screen. `userconf.txt` at the root of the boot partition is the
+# mechanism Pi OS provides to answer that wizard unattended.
+USERCONF_NAME = "userconf.txt"
+CONSOLE_JSON_PATH = "domovoi/console.json"
+
+
+def generate_console_credentials(username: str, rng=None) -> dict:
+    """A per-card console login. Same shape and reasoning as the setup-AP
+    credentials: unique per unit, printable on a label, drawn from an
+    alphabet without the glyphs people mistype."""
+    import secrets
+
+    rng = rng or secrets
+    password = "".join(rng.choice(_PSK_ALPHABET) for _ in range(_PSK_LEN))
+    return {"username": username, "password": password}
+
+
+def hash_password(password: str, run=subprocess.run) -> str | None:
+    """SHA-512 crypt hash for ``userconf.txt``, or None if we can't make one.
+
+    Python's ``crypt`` module was REMOVED in 3.13, so there is no stdlib
+    option on a modern host — shell out to openssl, which any Linux box
+    running this pipeline has. The password goes in on **stdin**, never
+    argv, so it can't be read out of ``ps`` by another user on the build
+    machine.
+    """
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        return None
+    try:
+        proc = run(
+            [openssl, "passwd", "-6", "-stdin"],
+            input=password, text=True, capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    digest = (proc.stdout or "").strip()
+    # $6$ is SHA-512 crypt; anything else means openssl gave us a format
+    # Pi OS won't accept, and a bad hash locks the account silently.
+    return digest if digest.startswith("$6$") else None
+
+
 def initial_device_info(
     sat_type: str,
     *,
@@ -223,6 +294,7 @@ def write_overlay(
     info: dict,
     device_info: dict,
     ap: dict | None = None,
+    console: dict | None = None,
     usb_gadget: bool = True,
     usb_host: bool = False,
 ) -> list[str]:
@@ -259,6 +331,22 @@ def write_overlay(
         json.dumps(device_info, indent=2), encoding="utf-8"
     )
     written.append("domovoi/device-info.json")
+
+    if console is not None:
+        # userconf.txt lives at the ROOT of the boot partition — Pi OS looks
+        # for it there, not under our directory.
+        digest = hash_password(console["password"])
+        if digest:
+            (boot_dir / USERCONF_NAME).write_text(
+                f"{console['username']}:{digest}\n", encoding="utf-8", newline="\n"
+            )
+            written.append(USERCONF_NAME)
+            # The plaintext, for the label — same trust model as ap.json:
+            # anyone holding the card can read either.
+            (ddir / "console.json").write_text(
+                json.dumps(console, indent=2), encoding="utf-8"
+            )
+            written.append(CONSOLE_JSON_PATH)
 
     if ap is not None:
         # Kept out of device-info.json, which is served to adopters.

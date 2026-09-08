@@ -1,5 +1,12 @@
 /* Prepare-satellite-media card (Satellites page, below Broadcast).
- * Flow: flash stock OS with any tool → insert the card into THIS machine
+ * Flow (portal — the shipped path): flash stock OS, prepare here, boot the
+ * device; it raises its own `Domovoi-Setup-<id>` network, the customer sets
+ * it up from a phone and approves it on the dashboard. USB adoption instead
+ * has the device present itself as a drive to this machine. The job row
+ * doesn't record which transport built it, so its completion note stays
+ * neutral between the two.
+ *
+ * Legacy note: flash stock OS with any tool → insert the card into THIS machine
  * (or pick the zip download) → prepare → boot the device → plug it into
  * this machine's USB → adopt. Build progress rides the satellites.media
  * realtime channel (satellite_media_jobs, V004). */
@@ -50,7 +57,7 @@ const MediaJobRow = ({ j }) => {
       )}
       {j.status === 'done' && j.target_kind === 'drive' && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-          eject the card, boot the device, then plug it into this machine to adopt
+          eject the card, then boot the device to finish setup
         </div>
       )}
     </div>
@@ -67,6 +74,13 @@ const PrepareMediaCard = ({ fire }) => {
   const [mic, setMic] = React.useState('respeaker_2mic_hat_v2');
   const [target, setTarget] = React.useState('zip');
   const [transport, setTransport] = React.useState('portal');
+  // Remembered per browser: a shop building batches for one market shouldn't
+  // retype it, but it is never defaulted silently — the legal channel set
+  // differs by country and a wrong domain is a compliance problem.
+  const [country, setCountry] = React.useState(() => {
+    try { return localStorage.getItem('domovoi-wifi-country') || 'US'; }
+    catch (e) { return 'US'; }
+  });
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
 
@@ -89,9 +103,14 @@ const PrepareMediaCard = ({ fire }) => {
       const body = {
         board, mic_profile: mic,
         setup_transport: transport,
+        wifi_country: country,
         target: target === 'zip' ? { kind: 'zip' } : { kind: 'drive', token: target },
         offline: true,
       };
+      if (!/^[A-Z]{2}$/.test(country)) {
+        fire('set a two-letter wi-fi country first — a blocked radio can never be set up');
+        return;
+      }
       const r = await apiPost('/api/satellites/media/prepare', body);
       fire(r.attached ? 'attached to the running build' : 'build started');
     } catch (e) {
@@ -126,7 +145,9 @@ const PrepareMediaCard = ({ fire }) => {
         <Icon name="disc-3" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>prepare satellite media</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          flash stock OS · prepare here · boot · plug in to adopt
+          {transport === 'portal'
+            ? 'flash stock OS · prepare here · boot · set up from a phone'
+            : 'flash stock OS · prepare here · boot · plug in to adopt'}
         </span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
       </button>
@@ -144,6 +165,17 @@ const PrepareMediaCard = ({ fire }) => {
             <select value={mic} onChange={e => setMic(e.target.value)} style={smInput}>
               {(status?.mic_profiles || []).map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+                            color: 'var(--fg-muted)' }}>
+              wi-fi country
+              <input value={country} maxLength={2} size={2} style={smInput}
+                     onChange={e => {
+                       const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
+                       setCountry(v);
+                       try { localStorage.setItem('domovoi-wifi-country', v); }
+                       catch (err) { /* private window — session only */ }
+                     }}/>
+            </label>
             <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
               <option value="portal">wi-fi setup portal</option>
               <option value="usb">usb adoption (plug into this server)</option>

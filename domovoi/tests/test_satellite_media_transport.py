@@ -281,3 +281,244 @@ def test_generated_script_is_valid_shell():
     script = fetchers.build_deb_script(sorted(fetchers.BASE_APT_PACKAGES))
     proc = sp.run(["sh", "-n"], input=script, text=True, capture_output=True)
     assert proc.returncode == 0, proc.stderr
+
+
+# ─── first-boot hook cleanup ──────────────────────────────────────────────
+#
+# `systemd.unit=kernel-command-line.target` sends EVERY boot into a minimal
+# target. Left in the cmdline, boot 2 re-enters it, re-runs firstrun (all
+# steps skip), exits 0, and systemd.run_success_action=reboot reboots — a
+# silent loop that never reaches multi-user.target, so the satellite never
+# starts and no setup network ever appears. Found on the first real Pi.
+
+
+def test_firstrun_removes_its_own_cmdline_hook():
+    script = overlay.render_firstrun("domo", "xvf3800_usb", "voice", "portal")
+    assert "cmdline-cleanup" in script
+    assert 'systemd' + chr(92) + '.run' in script
+
+
+def test_cmdline_cleanup_strips_only_our_tokens(tmp_path):
+    """Run the real shell against a realistic cmdline: our three tokens go,
+    everything else — including the gadget module a USB build needs — stays,
+    and the result is exactly one line."""
+    import subprocess as sp
+
+    cmd = tmp_path / "cmdline.txt"
+    cmd.write_text(
+        "console=serial0,115200 console=tty1 root=PARTUUID=abcd-02 "
+        "rootfstype=ext4 fsck.repair=yes rootwait modules-load=dwc2 "
+        "systemd.run=/boot/firmware/domovoi/firstrun.sh "
+        "systemd.run_success_action=reboot "
+        "systemd.unit=kernel-command-line.target\n"
+    )
+    script = rf'''
+CMD="{cmd.as_posix()}"
+NEW="$(tr ' ' '\n' <"$CMD" \
+  | grep -v '^systemd\.run' \
+  | grep -v '^systemd\.unit=kernel-command-line\.target$' \
+  | tr '\n' ' ' | sed -e 's/[[:space:]]\{{1,\}}/ /g' -e 's/^ //' -e 's/ $//')"
+[ -n "$NEW" ] && printf '%s\n' "$NEW" >"$CMD"
+'''
+    proc = sp.run(["sh", "-c", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    out = cmd.read_text()
+    assert "systemd." not in out                  # the loop is gone
+    assert out.count("\n") == 1 and out.endswith("\n")   # ONE line
+    assert "modules-load=dwc2" in out             # USB builds still boot
+    assert "root=PARTUUID=abcd-02" in out         # and still find their root
+    assert "rootwait" in out
+
+
+# ─── console credentials (Pi OS first-boot wizard) ────────────────────────
+#
+# Lite flashed with no pre-configuration has no user and blocks first boot
+# on "enter a new username" at tty1. Merely annoying on a voice satellite;
+# on a video one it is the first thing a customer sees on their screen.
+
+import shutil as _shutil  # noqa: E402
+
+needs_openssl = pytest.mark.skipif(
+    _shutil.which("openssl") is None, reason="openssl not on PATH"
+)
+
+
+def test_console_credentials_shape():
+    c = overlay.generate_console_credentials("domovoi")
+    assert c["username"] == "domovoi"
+    assert len(c["password"]) == overlay._PSK_LEN
+
+
+def test_console_password_avoids_glyphs_people_mistype():
+    for _ in range(30):
+        c = overlay.generate_console_credentials("domovoi")
+        assert not set(c["password"]) & set("0O1lI")
+
+
+def test_console_credentials_differ_per_card():
+    seen = {overlay.generate_console_credentials("domovoi")["password"]
+            for _ in range(25)}
+    assert len(seen) == 25
+
+
+@needs_openssl
+def test_password_hash_is_sha512_crypt():
+    """Python's crypt module was removed in 3.13, so this comes from
+    openssl. Pi OS only accepts a $6$ hash; anything else silently locks
+    the account."""
+    digest = overlay.hash_password("correct-horse")
+    assert digest and digest.startswith("$6$")
+
+
+def test_hash_password_degrades_when_openssl_is_missing(monkeypatch):
+    monkeypatch.setattr(overlay.shutil, "which", lambda n: None)
+    assert overlay.hash_password("anything") is None
+
+
+def test_hash_password_rejects_a_wrong_format(monkeypatch):
+    import subprocess as sp
+    monkeypatch.setattr(overlay.shutil, "which", lambda n: "/usr/bin/openssl")
+    monkeypatch.setattr(overlay.subprocess, "run", lambda *a, **k:
+                        sp.CompletedProcess(a, 0, stdout="$1$md5hash\n", stderr=""))
+    assert overlay.hash_password("x") is None
+
+
+@needs_openssl
+def test_userconf_lands_at_the_boot_root_with_only_the_hash(tmp_path):
+    """Pi OS looks for userconf.txt at the root of the boot partition, not
+    under our directory. And the file carries the HASH — the plaintext
+    belongs only in console.json."""
+    boot = tmp_path / "bootfs"
+    boot.mkdir()
+    (boot / "config.txt").write_text(STOCK_CONFIG)
+    (boot / "cmdline.txt").write_text(STOCK_CMDLINE)
+    tar = tmp_path / "payload.tar.gz"
+    tar.write_bytes(b"x")
+    creds = overlay.generate_console_credentials("domovoi")
+
+    written = overlay.write_overlay(
+        boot,
+        payload_tar=tar, payload_sha256="0" * 64,
+        firstrun="#!/bin/bash\ntrue\n", info={},
+        device_info=overlay.initial_device_info("voice"),
+        console=creds,
+    )
+
+    assert overlay.USERCONF_NAME in written
+    conf = (boot / overlay.USERCONF_NAME).read_text()
+    assert conf.startswith("domovoi:$6$")
+    assert conf.count("\n") == 1
+    assert creds["password"] not in conf          # hash only, never plaintext
+
+    assert overlay.CONSOLE_JSON_PATH in written
+    doc = json.loads((boot / "domovoi" / "console.json").read_text())
+    assert doc == creds                            # plaintext, for the label
+
+
+def test_no_console_creds_means_no_userconf(tmp_path):
+    boot = tmp_path / "bootfs"
+    boot.mkdir()
+    (boot / "config.txt").write_text(STOCK_CONFIG)
+    (boot / "cmdline.txt").write_text(STOCK_CMDLINE)
+    tar = tmp_path / "payload.tar.gz"
+    tar.write_bytes(b"x")
+    written = overlay.write_overlay(
+        boot, payload_tar=tar, payload_sha256="0" * 64,
+        firstrun="#!/bin/bash\ntrue\n", info={},
+        device_info=overlay.initial_device_info("voice"),
+    )
+    assert overlay.USERCONF_NAME not in written
+    assert not (boot / overlay.USERCONF_NAME).exists()
+
+
+# ─── the boot-partition root ──────────────────────────────────────────────
+#
+# firstrun.sh lives at <boot>/domovoi/firstrun.sh but every path it uses is
+# relative to the boot ROOT. Deriving BOOT from its own directory made step 0
+# cd into <boot>/domovoi/domovoi, fail(), and exit 1 — and because
+# systemd.run_success_action only reboots on success, the device sat in an
+# empty target with a blank screen and no stage 1. Silent and total.
+
+
+def test_boot_is_the_parent_of_the_script_directory():
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal")
+    line = next(l for l in script.splitlines() if l.startswith("BOOT="))
+    assert '/..' in line, "BOOT must be the boot ROOT, not the domovoi/ subdir"
+
+
+def test_boot_resolves_to_the_partition_root(tmp_path):
+    """Run the real derivation with the real layout."""
+    import subprocess as sp
+
+    boot = tmp_path / "firmware"
+    (boot / "domovoi").mkdir(parents=True)
+    script = boot / "domovoi" / "firstrun.sh"
+    script.write_text(
+        'BOOT="$(cd "$(dirname "$0")/.." && pwd)"\nprintf %s "$BOOT"\n'
+    )
+    proc = sp.run(["sh", str(script)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    # Compare shape, not the absolute path: the shell may report a
+    # translated path on a Windows dev box. What matters is that BOOT is the
+    # partition root and NOT the domovoi/ subdirectory the script sits in.
+    resolved = proc.stdout.strip().rstrip("/")
+    assert resolved.endswith("/firmware")
+    assert not resolved.endswith("/domovoi")
+
+
+def test_every_boot_path_is_root_relative():
+    """If any path stopped assuming the root, the fix above would break it."""
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal")
+    assert '"$BOOT/domovoi/payload.tar.gz"' in script
+    assert '"$BOOT/domovoi"' in script          # the sha256 check
+    assert '"$BOOT/config.txt"' in script
+    assert '"$BOOT/cmdline.txt"' in script      # the hook cleanup
+    assert '"$BOOT/domovoi/domovoi' not in script   # the bug itself
+
+
+# ─── wireless regulatory domain ───────────────────────────────────────────
+#
+# Nothing set one, so every card booted with the radio soft-blocked by
+# rfkill. On a portal unit that is terminal — no radio, no setup AP, no way
+# to onboard it at all. Confirmed on hardware 2026-09-08.
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("US", "US"), ("gb", "GB"), (" de ", "DE"), ("Jp", "JP"),
+])
+def test_country_codes_are_normalised(raw, expected):
+    assert overlay.validate_wifi_country(raw) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "U", "USA", "1A", "U1", "  ", "US-CA", None])
+def test_bad_country_codes_are_refused(bad):
+    """A wrong regulatory domain is a compliance problem, so this fails loudly
+    rather than falling back to something plausible."""
+    with pytest.raises(ValueError):
+        overlay.validate_wifi_country(bad)
+
+
+def test_firstrun_sets_the_country_and_unblocks_the_radio():
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "GB")
+    assert 'WIFI_COUNTRY="GB"' in script
+    assert "do_wifi_country" in script
+    assert "rfkill unblock wifi" in script
+
+
+def test_firstrun_falls_back_for_non_pi_boards():
+    """Radxa images have no raspi-config; the domain still has to be set."""
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    assert "command -v raspi-config" in script
+    assert "iw reg set" in script
+
+
+def test_the_country_step_is_marked_and_skippable():
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    assert "skip wificountry" in script
+    assert "done_step wificountry" in script
+
+
+def test_render_rejects_a_bad_country_before_writing_anything():
+    with pytest.raises(ValueError):
+        overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "nope")
