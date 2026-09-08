@@ -194,7 +194,12 @@ async def build(
             info=info,
             device_info=device_info,
             ap=ap,
+            console=console,
             usb_gadget=(setup_transport == "usb"),
+            usb_host=(
+                setup_transport != "usb"
+                and mic_profile in overlay.USB_MIC_PROFILES
+            ),
         )
         (staging / "README.txt").write_text(
             "Domovoi satellite overlay\n"
@@ -224,4 +229,9 @@ async def build(
 
     result["warnings"] = warnings
     result["offline"] = effective_offline
+    # Handed back so the caller can show them ONCE. They are already on the
+    # card in plaintext, so this is convenience rather than exposure — but
+    # the caller must not persist them, or a secret that should die with the
+    # card ends up in a database backup instead.
+    result["credentials"] = {"ap": ap, "console": console}
     return result

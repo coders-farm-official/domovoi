@@ -24,7 +24,64 @@ const smBytes = (n) => {
   return `${Math.max(1, Math.round(n / 1024))} KiB`;
 };
 
-const MediaJobRow = ({ j }) => {
+/* ---- Setup credentials -----------------------------------------------
+ *
+ * What the person holding the card needs in order to connect to the
+ * satellite they just prepared: the setup network's key, and the console
+ * login. Both are already on the card in plaintext (domovoi/ap.json and
+ * domovoi/console.json), so showing them here is convenience, not new
+ * exposure — it saves pulling the card and mounting it somewhere.
+ *
+ * They live in the web process's memory and nowhere else, so a restart
+ * loses them. The copy says so, and says where to look instead.
+ */
+const CredentialsModal = ({ creds, onClose }) => {
+  const ap = creds.ap;
+  const con = creds.console;
+  const row = (label, value) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: 10,
+                  alignItems: 'baseline', marginBottom: 8 }}>
+      <div className="label">{label}</div>
+      <div className="mono" style={{ userSelect: 'all', fontSize: 14 }}>{value}</div>
+    </div>
+  );
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  background: 'oklch(0.1 0 0 / 0.5)' }}
+         onClick={onClose}>
+      <div onClick={e => e.stopPropagation()}
+           style={{ background: 'var(--card)', border: '1px solid var(--border)',
+                    borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-md)',
+                    padding: '20px 22px', width: 520, maxWidth: '92vw' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
+          setup details for this card
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 18 }}>
+          {ap
+            ? 'This satellite will create its own Wi-Fi network. You need this password to connect to it and finish setup.'
+            : 'This card is adopted over USB, so it has no setup network.'}
+        </div>
+
+        {ap && row('wi-fi network', ap.ssid)}
+        {ap && row('wi-fi password', ap.psk)}
+        {con && row('console login', `${con.username} / ${con.password}`)}
+
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 16,
+                      paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
+          Write these down now. They are shown from memory and disappear when the
+          dashboard restarts — after that, read <span className="mono">domovoi/ap.json</span> and{' '}
+          <span className="mono">domovoi/console.json</span> from the card itself.
+        </div>
+        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button variant="primary" onClick={onClose}>done</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MediaJobRow = ({ j, onShowCredentials }) => {
   const live = j.status === 'running' || j.status === 'pending';
   return (
     <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-soft)' }}>
@@ -60,6 +117,13 @@ const MediaJobRow = ({ j }) => {
           eject the card, then boot the device to finish setup
         </div>
       )}
+      {j.status === 'done' && j.target_kind === 'drive' && onShowCredentials && (
+        <div style={{ marginTop: 6 }}>
+          <Button variant="ghost" icon="key" onClick={() => onShowCredentials(j)}>
+            show setup details
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
@@ -83,6 +147,18 @@ const PrepareMediaCard = ({ fire }) => {
   });
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  const [creds, setCreds] = React.useState(null);
+
+  const showCredentials = async (job) => {
+    try {
+      setCreds(await apiGet(`/api/satellites/media/jobs/${job.id}/credentials`));
+    } catch (e) {
+      // 404 is the normal case after a dashboard restart, not a fault.
+      fire(e.status === 404
+        ? 'setup details are no longer in memory — read domovoi/ap.json from the card'
+        : `couldn't load setup details: ${e.message}`);
+    }
+  };
 
   // Re-scan drives while the section is open (a just-inserted card should
   // appear without a manual refresh).
@@ -225,11 +301,14 @@ const PrepareMediaCard = ({ fire }) => {
 
           {jobs.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              {jobs.slice(0, 5).map(j => <MediaJobRow key={j.id} j={j}/>)}
+              {jobs.slice(0, 5).map(j => (
+                <MediaJobRow key={j.id} j={j} onShowCredentials={showCredentials}/>
+              ))}
             </div>
           )}
         </div>
       )}
+      {creds && <CredentialsModal creds={creds} onClose={() => setCreds(null)}/>}
     </div>
   );
 };

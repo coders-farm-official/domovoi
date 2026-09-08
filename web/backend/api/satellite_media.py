@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from domovoi.satellite_media import builder, cache, fetchers, overlay
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
@@ -35,6 +35,22 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/satellites/media", tags=["satellite-media"])
 
 _NOTIFY = "SELECT pg_notify('satellite_media_jobs_changed', :p)"
+
+# What a person needs to connect to the satellite they just prepared: the
+# setup network's key, and the console login. Held in PROCESS MEMORY only —
+# never written to satellite_media_jobs, never logged. A web restart drops
+# them and the card remains the source of truth (domovoi/ap.json and
+# domovoi/console.json), so nothing is lost, but they also can't outlive the
+# card by sitting in a database backup.
+_JOB_CREDENTIALS: dict[int, dict[str, Any]] = {}
+_CREDENTIAL_CAP = 20
+
+
+def _remember_credentials(job_id: int, creds: dict[str, Any]) -> None:
+    _JOB_CREDENTIALS[job_id] = creds
+    # Bounded so a long-lived process can't accumulate them indefinitely.
+    while len(_JOB_CREDENTIALS) > _CREDENTIAL_CAP:
+        _JOB_CREDENTIALS.pop(next(iter(_JOB_CREDENTIALS)))
 
 
 class PrepareRequest(BaseModel):
@@ -235,6 +251,9 @@ async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> N
             offline=body.offline,
             progress=progress,
         )
+        creds = result.get("credentials") or {}
+        if creds.get("ap") or creds.get("console"):
+            _remember_credentials(job_id, creds)
         async with session_scope() as s:
             await s.execute(
                 text(
@@ -280,6 +299,31 @@ async def media_jobs(limit: int = 10) -> list[dict[str, Any]]:
             )
         ).mappings()
         return [_public(dict(r)) for r in rows]
+
+
+@router.get(
+    "/jobs/{job_id}/credentials",
+    # Reading secrets, so gated — but a GET, so the dashboard cookie is
+    # enough (mutations are the Bearer-only tier).
+    dependencies=[Depends(require_admin_read)],
+)
+async def media_job_credentials(job_id: int) -> dict[str, Any]:
+    """The setup-AP and console credentials for a prepared card.
+
+    404 once the web process has restarted — they live in memory only. The
+    card always has them, so the message says where to look rather than
+    pretending they're gone for good."""
+    creds = _JOB_CREDENTIALS.get(job_id)
+    if creds is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "credentials aren't in memory any more (the dashboard was "
+                "restarted). Read domovoi/ap.json and domovoi/console.json "
+                "from the card."
+            ),
+        )
+    return creds
 
 
 @router.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_admin_mutation)])

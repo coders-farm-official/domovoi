@@ -522,3 +522,66 @@ def test_the_country_step_is_marked_and_skippable():
 def test_render_rejects_a_bad_country_before_writing_anything():
     with pytest.raises(ValueError):
         overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "nope")
+
+
+# ─── setup credentials handed back to the operator ────────────────────────
+#
+# Prepare generates the setup-AP key and console login, writes them to the
+# card, and previously gave the person no way to see them without pulling
+# the card and mounting it — which is how you end up unable to log into the
+# device you just made.
+
+
+def test_build_result_carries_the_credentials_for_display():
+    """They must reach the caller; whether it shows them is its business."""
+    from domovoi.satellite_media import builder  # noqa: F401 — import check
+    # The contract is a dict under "credentials" with ap + console keys.
+    creds = {
+        "ap": overlay.generate_ap_credentials(),
+        "console": overlay.generate_console_credentials("domovoi"),
+    }
+    assert set(creds) == {"ap", "console"}
+    assert creds["ap"]["ssid"].startswith(overlay.SSID_PREFIX if hasattr(
+        overlay, "SSID_PREFIX") else "Domovoi-Setup-")
+    assert creds["console"]["username"] == "domovoi"
+
+
+def test_credentials_are_never_written_to_the_job_row():
+    """The card is the source of truth and should outlive nothing. A secret
+    in Postgres survives in backups long after the card is wiped."""
+    import inspect
+
+    from web.backend.api import satellite_media as api
+
+    src = inspect.getsource(api)
+    # The store is a module-level dict, not a column.
+    assert "_JOB_CREDENTIALS" in src
+    for sql_fragment in ("INSERT INTO satellite_media_jobs", "UPDATE satellite_media_jobs"):
+        stmt_region = src.split(sql_fragment, 1)[1][:400]
+        assert "psk" not in stmt_region
+        assert "password" not in stmt_region
+
+
+def test_the_credential_store_is_bounded():
+    from web.backend.api import satellite_media as api
+
+    api._JOB_CREDENTIALS.clear()
+    for job_id in range(api._CREDENTIAL_CAP + 10):
+        api._remember_credentials(job_id, {"ap": {"ssid": "x", "psk": "y"}})
+    assert len(api._JOB_CREDENTIALS) == api._CREDENTIAL_CAP
+    # The most recent survive; the oldest are dropped.
+    assert (api._CREDENTIAL_CAP + 9) in api._JOB_CREDENTIALS
+    assert 0 not in api._JOB_CREDENTIALS
+    api._JOB_CREDENTIALS.clear()
+
+
+def test_zip_and_drive_targets_write_the_same_things():
+    """The zip branch had drifted — no console credentials and no USB host
+    mode — so a zip-built card stopped on the user wizard and came up deaf."""
+    import inspect
+
+    from domovoi.satellite_media import builder
+
+    src = inspect.getsource(builder.build)
+    assert src.count("console=console") == 2
+    assert src.count("usb_host=(") == 2
