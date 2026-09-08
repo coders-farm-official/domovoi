@@ -533,8 +533,28 @@ const VersionSection = () => {
     return false;
   };
 
-  const restart = async () => {
-    if (!window.confirm(
+  // Wait for the login modal (popped by data.js on a 401/403) to succeed,
+  // so an admin action interrupted by an expired bearer can finish itself
+  // instead of making the operator find the button again.
+  const waitForLogin = (ms = 120000) => new Promise((resolve) => {
+    if (Auth.isLoggedIn()) { resolve(true); return; }
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try { un(); } catch (e) { /* already unsubscribed */ }
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const un = Auth.subscribe(() => {
+      if (Auth.isLoggedIn()) finish(true);
+      else if (!Auth.modalOpen) finish(false);   // dismissed without signing in
+    });
+    const timer = setTimeout(() => finish(false), ms);
+  });
+
+  const restart = async (retrying = false) => {
+    if (!retrying && !window.confirm(
       'Restart the Domovoi services to load the pulled code?\n\n' +
       'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
       'a few seconds and connected satellites reconnect on their own.'
@@ -555,10 +575,17 @@ const VersionSection = () => {
       // button spinning for 90s over a request that never left the house.
       // Only a connection-level failure (no status) can mean the bounce cut
       // us off mid-request, and that is the case worth polling through.
-      if (e && e.status) {
-        fire(e.status === 401 || e.status === 403
-          ? 'admin sign-in required — sign in, then click restart again'
-          : `restart failed: ${e.message}`);
+      if (e && (e.status === 401 || e.status === 403)) {
+        // data.js has already opened the login modal. Finish the job once
+        // they're signed in rather than stranding a half-done action.
+        fire('admin sign-in required to restart');
+        if (await waitForLogin()) {
+          setRestarting(false);
+          return restart(true);
+        }
+        fire('restart cancelled — not signed in');
+      } else if (e && e.status) {
+        fire(`restart failed: ${e.message}`);
       } else {
         fire('restarting…');
         await waitForServer();
