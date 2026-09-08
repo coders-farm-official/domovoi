@@ -35,6 +35,19 @@ _END_MARKER = "# --- end domovoi satellite ---"
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
 
+# Forced HOST mode, for units with a USB mic array and no gadget to host.
+# Two problems, one line: the Pi's legacy `dwc_otg` driver mis-clocks
+# isochronous USB audio, delivering ~8x the sample rate — relentless "mic
+# queue overflowing" and a wake word that never fires. The upstream `dwc2`
+# driver this loads clocks it correctly, so `dwc_otg.speed=1` becomes
+# unnecessary. It also drives the port as a host regardless of the ID pin,
+# so a plain data cable works where the array would otherwise need a true
+# OTG adapter — one fewer part in the box, one fewer support question.
+_HOST_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=host"
+
+# Mic boards that hang off USB and therefore need host mode.
+USB_MIC_PROFILES = ("xvf3800_usb",)
+
 _FIRSTRUN_CMDLINE_TOKENS = (
     "systemd.run=/boot/firmware/domovoi/firstrun.sh",
     "systemd.run_success_action=reboot",
@@ -65,13 +78,20 @@ DNSMASQ_DROPIN = (
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 
-def edit_config_txt(text: str, *, usb_gadget: bool = True) -> str:
+def edit_config_txt(
+    text: str, *, usb_gadget: bool = True, usb_host: bool = False
+) -> str:
     """Append the media-prep block once. Idempotent.
 
     ``usb_gadget`` controls whether the dwc2 peripheral-mode overlay is
     included. Portal units must NOT get it: nothing ever reverts it, and it
     holds the only data port on a Pi Zero 2 W in peripheral mode, where a
-    USB mic array cannot enumerate."""
+    USB mic array cannot enumerate.
+
+    ``usb_host`` forces host mode instead — for a unit with a USB mic array
+    and no gadget to present. The two are mutually exclusive; gadget wins,
+    because a USB-transport unit needs peripheral mode to be adopted at all
+    and swaps to host once adoption is done."""
     if _MARKER in text:
         return text
     if text and not text.endswith("\n"):
@@ -79,6 +99,8 @@ def edit_config_txt(text: str, *, usb_gadget: bool = True) -> str:
     lines = [_MARKER]
     if usb_gadget:
         lines.append(_GADGET_CONFIG_LINE)
+    elif usb_host:
+        lines.append(_HOST_CONFIG_LINE)
     lines.append(_END_MARKER)
     return text + "\n".join(lines) + "\n"
 
@@ -202,6 +224,7 @@ def write_overlay(
     device_info: dict,
     ap: dict | None = None,
     usb_gadget: bool = True,
+    usb_host: bool = False,
 ) -> list[str]:
     """Write the overlay onto a mounted boot partition (or any staging
     dir for the zip path). Returns the relative paths written. The tar is
@@ -213,7 +236,11 @@ def write_overlay(
     for name, editor in (("config.txt", edit_config_txt), ("cmdline.txt", edit_cmdline_txt)):
         p = boot_dir / name
         original = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
-        edited = editor(original, usb_gadget=usb_gadget)
+        edited = (
+            editor(original, usb_gadget=usb_gadget, usb_host=usb_host)
+            if name == "config.txt"
+            else editor(original, usb_gadget=usb_gadget)
+        )
         if edited != original:
             p.write_text(edited, encoding="utf-8", newline="\n")
             written.append(name)

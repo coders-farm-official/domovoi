@@ -159,3 +159,125 @@ def test_firstrun_has_no_unreplaced_placeholders():
     assert "@SETUP_TRANSPORT@" not in script
     assert "@SAT_USER@" not in script
     assert "\r" not in script                 # LF only — shebangs break on CRLF
+
+
+# ─── USB mic clocking (host mode) ─────────────────────────────────────────
+
+HOST_OVERLAY = "dtoverlay=dwc2,dr_mode=host"
+
+
+def test_portal_xvf3800_gets_host_mode():
+    """Without this the unit lands on the legacy dwc_otg driver, which
+    delivers USB audio ~8x too fast — the wake word never fires. It also
+    means a plain data cable works instead of a true OTG adapter."""
+    config = overlay.edit_config_txt(STOCK_CONFIG, usb_gadget=False, usb_host=True)
+    assert HOST_OVERLAY in config
+    assert GADGET_OVERLAY not in config
+
+
+def test_gadget_wins_over_host():
+    """A USB-transport unit must be a peripheral to be adopted at all; it
+    swaps to host once adoption is done."""
+    config = overlay.edit_config_txt(STOCK_CONFIG, usb_gadget=True, usb_host=True)
+    assert GADGET_OVERLAY in config
+    assert HOST_OVERLAY not in config
+
+
+def test_hat_units_get_neither():
+    config = overlay.edit_config_txt(STOCK_CONFIG, usb_gadget=False, usb_host=False)
+    assert HOST_OVERLAY not in config and GADGET_OVERLAY not in config
+
+
+def test_host_mode_write_is_idempotent():
+    once = overlay.edit_config_txt(STOCK_CONFIG, usb_gadget=False, usb_host=True)
+    assert overlay.edit_config_txt(once, usb_gadget=False, usb_host=True) == once
+
+
+def test_portal_card_for_a_usb_mic_carries_host_mode(tmp_path):
+    creds = overlay.generate_ap_credentials()
+    boot = tmp_path / "bootfs"
+    boot.mkdir()
+    (boot / "config.txt").write_text(STOCK_CONFIG)
+    (boot / "cmdline.txt").write_text(STOCK_CMDLINE)
+    tar = tmp_path / "payload.tar.gz"
+    tar.write_bytes(b"x")
+    overlay.write_overlay(
+        boot,
+        payload_tar=tar, payload_sha256="0" * 64,
+        firstrun="#!/bin/bash\ntrue\n", info={},
+        device_info=overlay.initial_device_info(
+            "voice", setup_transport="portal", ap_ssid=creds["ssid"]),
+        ap=creds, usb_gadget=False, usb_host=True,
+    )
+    assert HOST_OVERLAY in (boot / "config.txt").read_text()
+
+
+# ─── cache refresh tolerance ──────────────────────────────────────────────
+#
+# One unfetchable item used to abort a whole bucket: an sdist-only wheel took
+# every other wheel with it, and a library Debian renamed in the time_t
+# transition took every other deb with it.
+
+from domovoi.satellite_media import fetchers  # noqa: E402
+
+
+def test_sdist_only_packages_are_separated():
+    """spidev publishes no wheel for any platform, so --only-binary can never
+    satisfy it — and it fails the entire download."""
+    keep, skip = fetchers.split_unfetchable(
+        ["numpy>=1.26", "spidev>=3.6", "scipy>=1.3,<2"]
+    )
+    assert keep == ["numpy>=1.26", "scipy>=1.3,<2"]
+    assert skip == ["spidev>=3.6"]
+
+
+@pytest.mark.parametrize("spec,name", [
+    ("spidev>=3.6", "spidev"),
+    ("spidev", "spidev"),
+    ("SpiDev == 3.6", "spidev"),
+    ("scikit-learn>=1,<2", "scikit-learn"),
+    ("requests[socks]>=2", "requests"),
+    ("webrtcvad-wheels>=2.0.14", "webrtcvad-wheels"),
+])
+def test_requirement_names_are_parsed_from_specs(spec, name):
+    assert fetchers._requirement_name(spec) == name
+
+
+def test_nothing_is_skipped_when_everything_has_wheels():
+    reqs = ["numpy>=1.26", "scipy>=1.3,<2"]
+    assert fetchers.split_unfetchable(reqs) == (reqs, [])
+
+
+def test_renamed_debian_libraries_are_tried_first():
+    """libasound2 is a virtual package on Trixie with no candidate; the real
+    one is libasound2t64. apt-get download cannot fetch a virtual name."""
+    script = fetchers.build_deb_script(["libasound2"])
+    assert script.index("libasound2t64") < script.index("libasound2:arm64")
+
+
+def test_one_missing_package_does_not_abort_the_rest():
+    script = fetchers.build_deb_script(["libasound2", "mpg123", "mtools"])
+    assert "set -e" not in script
+    assert script.count("if ") == 3          # each package independently
+    assert "mpg123" in script and "mtools" in script
+
+
+def test_missing_packages_are_reported_not_swallowed():
+    script = fetchers.build_deb_script(["mpg123"])
+    assert fetchers.MISSING_MARKER in script
+    assert fetchers.parse_missing(
+        f"downloading...\n{fetchers.MISSING_MARKER} libasound2 mtools\n"
+    ) == ["libasound2", "mtools"]
+
+
+def test_a_clean_run_reports_nothing_missing():
+    assert fetchers.parse_missing("all fine\n") == []
+
+
+def test_generated_script_is_valid_shell():
+    """A quoting slip here fails inside a container, where the error is a
+    wall of apt output rather than a syntax message."""
+    import subprocess as sp
+    script = fetchers.build_deb_script(sorted(fetchers.BASE_APT_PACKAGES))
+    proc = sp.run(["sh", "-n"], input=script, text=True, capture_output=True)
+    assert proc.returncode == 0, proc.stderr

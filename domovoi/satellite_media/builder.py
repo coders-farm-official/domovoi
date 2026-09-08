@@ -163,6 +163,10 @@ async def build(
             device_info=device_info,
             ap=ap,
             usb_gadget=(setup_transport == "usb"),
+            usb_host=(
+                setup_transport != "usb"
+                and mic_profile in overlay.USB_MIC_PROFILES
+            ),
         )
         await progress("done", 100, "card ready — eject, boot, then plug into this machine to adopt")
         result: dict[str, Any] = {"ok": True, "written": written}

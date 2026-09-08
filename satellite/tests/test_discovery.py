@@ -186,3 +186,75 @@ def test_revert_is_idempotent(boot):
 
 def test_revert_never_raises_on_a_missing_boot_dir(tmp_path):
     assert pm.revert_usb_gadget_boot_config([tmp_path / "nope"]) == []
+
+
+# ─── where setup-AP credentials come from ─────────────────────────────────
+#
+# This ordering is what makes mass production work. firstrun copies
+# boot:domovoi/ap.json into ~/.domovoi inside its `code` step, which is
+# already done on a golden master — so a card personalized after flashing
+# has fresh credentials on its BOOT partition that nothing would ever copy
+# across. Reading only the home copy leaves every mass-flashed unit with no
+# portal at all.
+
+
+@pytest.fixture
+def dirs(tmp_path, monkeypatch):
+    boot = tmp_path / "firmware"
+    (boot / "domovoi").mkdir(parents=True)
+    home = tmp_path / "dot-domovoi"
+    home.mkdir()
+    monkeypatch.setattr(pm, "BOOT_DIRS", (boot,))
+    monkeypatch.setattr(pm, "CONFIG_DIR", home)
+    return boot, home
+
+
+def _creds(path, ssid, psk="abcdefghijkm"):
+    import json
+    path.write_text(json.dumps({"ssid": ssid, "psk": psk}), encoding="utf-8")
+
+
+def test_credentials_are_read_from_the_boot_partition(dirs):
+    boot, _home = dirs
+    _creds(boot / "domovoi" / "ap.json", "Domovoi-Setup-BOOT")
+    assert pm.portal_credentials()["ssid"] == "Domovoi-Setup-BOOT"
+
+
+def test_the_home_copy_still_works(dirs):
+    _boot, home = dirs
+    _creds(home / "ap.json", "Domovoi-Setup-HOME")
+    assert pm.portal_credentials()["ssid"] == "Domovoi-Setup-HOME"
+
+
+def test_the_boot_partition_wins(dirs):
+    """A personalized card's own identity must beat whatever the golden
+    master happened to be carrying."""
+    boot, home = dirs
+    _creds(boot / "domovoi" / "ap.json", "Domovoi-Setup-BOOT")
+    _creds(home / "ap.json", "Domovoi-Setup-HOME")
+    assert pm.portal_credentials()["ssid"] == "Domovoi-Setup-BOOT"
+
+
+def test_a_personalized_card_selects_the_portal(dirs):
+    """The end-to-end case: flashed from a sanitized master (no home copy),
+    personalized on the bench (boot copy only)."""
+    boot, _home = dirs
+    _creds(boot / "domovoi" / "ap.json", "Domovoi-Setup-K4T9")
+    (pm.CONFIG_DIR / "image_device_profile").write_text("xvf3800_usb\n")
+    from satellite import portal_transport as pt
+    transport = pm._default_transport()
+    assert isinstance(transport, pt.PortalTransport)
+    assert transport.ap_ssid == "Domovoi-Setup-K4T9"
+
+
+def test_no_credentials_anywhere_means_the_usb_gadget(dirs):
+    assert pm.portal_credentials() is None
+    assert isinstance(pm._default_transport(), pm.GadgetBackend)
+
+
+@pytest.mark.parametrize("body", ['{"ssid": "x"}', "garbage", "{}", "[]"])
+def test_an_unusable_boot_copy_falls_through_to_home(dirs, body):
+    boot, home = dirs
+    (boot / "domovoi" / "ap.json").write_text(body, encoding="utf-8")
+    _creds(home / "ap.json", "Domovoi-Setup-HOME")
+    assert pm.portal_credentials()["ssid"] == "Domovoi-Setup-HOME"

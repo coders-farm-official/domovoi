@@ -46,6 +46,43 @@ BASE_APT_PACKAGES = (
 )
 
 
+# Published as sdist only — there is no wheel for ANY platform, so pip's
+# --only-binary=:all: (mandatory for a cross-platform download) can never
+# satisfy them. Left in the main list, one of these fails the whole batch and
+# takes every other wheel with it.
+#
+# spidev drives the 2-Mics HAT's APA102 LEDs over SPI. It is irrelevant to a
+# USB mic array, and even on a HAT the satellite runs fine without it — the
+# LEDs stay dark and a warning lands in the log (PROVISIONING §4b). Skipping
+# it is the right trade against having no offline payload at all.
+SDIST_ONLY_PACKAGES = ("spidev",)
+
+# Debian's 64-bit time_t transition renamed several libraries. The old names
+# survive as VIRTUAL packages with no installation candidate, which
+# `apt-get download` cannot fetch — it fails with "no candidate" rather than
+# "not found". Alternates are tried in order; the first that resolves wins,
+# so listing a name that doesn't exist on a given release costs nothing.
+DEB_ALTERNATES = {
+    "libasound2": ("libasound2t64", "libasound2"),
+    "libportaudio2": ("libportaudio2t64", "libportaudio2"),
+}
+
+
+def _requirement_name(spec: str) -> str:
+    """The distribution name from a requirement line."""
+    for sep in ("[", "=", ">", "<", "!", "~", ";", " "):
+        spec = spec.split(sep, 1)[0]
+    return spec.strip().lower()
+
+
+def split_unfetchable(reqs: list[str]) -> tuple[list[str], list[str]]:
+    """(fetchable, skipped) — skipped are the sdist-only ones."""
+    keep, skip = [], []
+    for spec in reqs:
+        (skip if _requirement_name(spec) in SDIST_ONLY_PACKAGES else keep).append(spec)
+    return keep, skip
+
+
 def satellite_requirements(repo_root: Path) -> list[str]:
     reqs = repo_root / "satellite" / "requirements.txt"
     out: list[str] = []
@@ -73,7 +110,7 @@ def fetch_wheels(
     ]
     for p in platforms:
         base_cmd += ["--platform", p]
-    reqs = satellite_requirements(repo_root)
+    reqs, skipped = split_unfetchable(satellite_requirements(repo_root))
     # openwakeword installs --no-deps on the Pi (PROVISIONING §6); pip +
     # setuptools + wheel ride along so stage-1 can bootstrap the venv with
     # --no-index (no ensurepip needed).
@@ -98,6 +135,12 @@ def fetch_wheels(
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"wheel fetch unavailable: {e}"
     cache.stamp("wheels")
+    if skipped:
+        return True, (
+            f"wheels cached in {dest} (no wheels exist for "
+            f"{', '.join(skipped)} — LEDs on a 2-Mics HAT need an on-device "
+            "build; harmless for USB mic arrays)"
+        )
     return True, f"wheels cached in {dest}"
 
 
@@ -120,12 +163,7 @@ def fetch_debs(
         return False, "docker unavailable — deb cache skipped (stage 2 uses apt online)"
     dest = cache.bucket("debs", os_release)
     pkgs = sorted({*BASE_APT_PACKAGES, *extra_packages})
-    script = (
-        "set -e; dpkg --add-architecture arm64; "
-        "sed -i 's/^Components:/Components:/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true; "
-        "apt-get update -qq; cd /out; "
-        + " ; ".join(f"apt-get download {p}:arm64 || apt-get download {p}" for p in pkgs)
-    )
+    script = build_deb_script(pkgs)
     try:
         r = run(
             [
@@ -140,8 +178,50 @@ def fetch_debs(
             return False, f"deb fetch failed: {(r.stderr or '')[-400:]}"
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"deb fetch unavailable: {e}"
+    missing = parse_missing(r.stdout or "")
     cache.stamp("debs")
+    if missing:
+        # Not fatal: stage 2 apt-installs whatever is absent, online. Worth
+        # saying out loud, because it silently un-does "fully offline".
+        return True, (
+            f"debs cached in {dest} — could not fetch {', '.join(missing)}; "
+            "a satellite will apt-get those online during stage 2"
+        )
     return True, f"debs cached in {dest}"
+
+
+MISSING_MARKER = "DOMOVOI_MISSING:"
+
+
+def build_deb_script(pkgs: list[str]) -> str:
+    """Shell for the arm64 download container.
+
+    Deliberately NOT ``set -e``: one package with no candidate must not abort
+    the other twelve. Anything unfetchable is reported on stdout instead.
+    """
+    lines = [
+        "dpkg --add-architecture arm64",
+        "apt-get update -qq",
+        "cd /out",
+        "miss=''",
+    ]
+    for pkg in pkgs:
+        names = DEB_ALTERNATES.get(pkg, (pkg,))
+        attempts = " || ".join(
+            f"apt-get download {n}:arm64 2>/dev/null || apt-get download {n} 2>/dev/null"
+            for n in names
+        )
+        lines.append(f"if {attempts}; then :; else miss=\"$miss {pkg}\"; fi")
+    lines.append(f'[ -z "$miss" ] || echo "{MISSING_MARKER}$miss"')
+    return "; ".join(lines)
+
+
+def parse_missing(stdout: str) -> list[str]:
+    """Package names the container could not download."""
+    for line in stdout.splitlines():
+        if line.startswith(MISSING_MARKER):
+            return sorted(line[len(MISSING_MARKER):].split())
+    return []
 
 
 def fetch_oww_models() -> tuple[bool, str]:
@@ -154,8 +234,10 @@ def fetch_oww_models() -> tuple[bool, str]:
         oww_utils.download_models(target_directory=str(dest))
     except ImportError:
         return False, (
-            "openwakeword not installed server-side — models skipped "
-            "(a voice satellite's stage 2 downloads them online)"
+            "openwakeword not installed on this server, so the wake-word "
+            "models can't be cached and the payload is not fully offline "
+            "(stage 2 fetches them over the internet instead). Fix with: "
+            "pip install --no-deps openwakeword, then refresh again"
         )
     except Exception as e:  # noqa: BLE001 — network/hub errors degrade
         return False, f"model download failed: {e}"

@@ -106,6 +106,9 @@ def image_sat_type() -> str:
         return "voice"
 
 
+BOOT_DIRS = (Path("/boot/firmware"), Path("/boot"))
+
+
 def image_device_profile() -> str:
     """The mic board this image was built for, stamped by stage 1. The
     portal only asks the customer when the image didn't decide."""
@@ -116,18 +119,48 @@ def image_device_profile() -> str:
         return "respeaker_2mic_hat"
 
 
-def portal_credentials() -> dict[str, str] | None:
-    """The baked setup-AP credentials, or None for a USB-gadget unit.
-
-    Presence of this sidecar is what selects the transport: media prep
-    writes it only for units meant to onboard over the Wi-Fi portal."""
+def _read_ap_json(path: Path) -> dict[str, str] | None:
     try:
-        doc = json.loads((CONFIG_DIR / "ap.json").read_text(encoding="utf-8"))
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if isinstance(doc, dict) and doc.get("ssid") and doc.get("psk"):
         return {"ssid": str(doc["ssid"]), "psk": str(doc["psk"])}
-    log.warning("ap.json present but unusable — falling back to USB gadget")
+    log.warning("%s present but unusable — ignoring", path)
+    return None
+
+
+def ap_credential_paths() -> list[Path]:
+    """Where to look for setup-AP credentials, most authoritative first.
+
+    The BOOT partition is checked before the home copy, and that order is
+    load-bearing for mass production. ``firstrun.sh`` copies
+    ``boot:domovoi/ap.json`` into ``~/.domovoi`` inside its ``code`` step —
+    which is already marked done on a golden master. A card flashed from
+    that master and personalized afterwards has fresh credentials on its
+    boot partition that nothing would ever copy across, so reading only the
+    home copy would leave every mass-flashed unit falling back to the USB
+    gadget with no portal at all.
+
+    Boot-first also gives the right precedence when both exist: the card's
+    own identity beats whatever the master happened to carry.
+    """
+    return [boot / "domovoi" / "ap.json" for boot in BOOT_DIRS] + [
+        CONFIG_DIR / "ap.json"
+    ]
+
+
+def portal_credentials() -> dict[str, str] | None:
+    """The baked setup-AP credentials, or None for a USB-gadget unit.
+
+    Presence of this sidecar is what selects the transport: media prep and
+    the packaging bench write it only for units meant to onboard over the
+    Wi-Fi setup portal."""
+    for path in ap_credential_paths():
+        creds = _read_ap_json(path)
+        if creds is not None:
+            log.info("setup-AP credentials from %s", path)
+            return creds
     return None
 
 
@@ -356,9 +389,10 @@ def apply_provision(
     return False, last_err or "wifi join failed"
 
 
-BOOT_DIRS = (Path("/boot/firmware"), Path("/boot"))
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
+_HOST_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=host"
+_USB_MIC_PROFILES = ("xvf3800_usb",)
 
 
 def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
@@ -382,7 +416,15 @@ def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
             text = cfg.read_text(encoding="utf-8", errors="replace")
             kept = [ln for ln in text.splitlines()
                     if ln.strip() != _GADGET_CONFIG_LINE]
-            if len(kept) != len(text.splitlines()):
+            # A USB mic array needs the port driven as a host, and the dwc2
+            # driver clocks its audio correctly where the legacy dwc_otg one
+            # delivers ~8x the sample rate. Swap rather than merely remove.
+            if (
+                image_device_profile() in _USB_MIC_PROFILES
+                and not any(ln.strip() == _HOST_CONFIG_LINE for ln in kept)
+            ):
+                kept.append(_HOST_CONFIG_LINE)
+            if kept != text.splitlines():
                 cfg.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
                 changed.append(str(cfg))
         except OSError as e:
