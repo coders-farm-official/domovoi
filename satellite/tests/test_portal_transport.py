@@ -26,10 +26,28 @@ PSK = "correct-horse-battery"
 SCAN_STDOUT = "HomeNet:71\nHomeNet:44\nNeighbour:31\n:55\n"
 
 
-def _fake_run(calls):
+# p2p-dev-wlan0 is listed FIRST on purpose: it's a virtual companion that
+# cannot host an AP, and nmcli will happily pick it if nobody says otherwise.
+DEVICE_STATUS = "lo:loopback\np2p-dev-wlan0:wifi-p2p\nwlan0:wifi\n"
+ACTIVE_CONNECTIONS = "lo\ndomovoi-setup\n"
+
+
+def _fake_run(calls, *, fail_on=None, active=ACTIVE_CONNECTIONS):
+    """``fail_on`` is a substring; any command containing it returns rc=1."""
     def run(cmd, **kw):
         calls.append(list(cmd))
-        stdout = SCAN_STDOUT if "list" in cmd else ""
+        joined = " ".join(cmd)
+        if fail_on and fail_on in joined:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="Error: nmcli said no.")
+        if "--active" in joined:
+            stdout = active
+        elif "wifi list" in joined:
+            stdout = SCAN_STDOUT
+        elif "device status" in joined:
+            stdout = DEVICE_STATUS
+        else:
+            stdout = ""
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
     return run
 
@@ -370,3 +388,98 @@ def test_pinning_happens_after_the_hotspot_exists(portal):
     hotspot = next(i for i, c in enumerate(joined) if "hotspot" in c)
     modify = next(i for i, c in enumerate(joined) if "connection modify" in c)
     assert hotspot < modify
+
+
+# ─── nmcli failures must not look like success ────────────────────────────
+#
+# Found on hardware: every nmcli call was fire-and-forget. `nmcli device wifi
+# hotspot` failed, we set _ap_up = True regardless, bound the server on
+# 0.0.0.0 (which succeeds with or without an AP), logged "setup portal up",
+# and waited 21 minutes for a phone that had nothing to join. `nmcli
+# connection show` listed only `lo`.
+
+
+def _transport(calls, tmp_path, **kw):
+    return pt.PortalTransport(
+        ap_ssid="Domovoi-Setup-A4F2", ap_psk="unit-test-key",
+        device_profile="xvf3800_usb", ip="127.0.0.1", bind_host="127.0.0.1",
+        port=0, state_dir=tmp_path / "state", run=_fake_run(calls, **kw),
+    )
+
+
+def _info():
+    return proto.build_device_info(
+        nonce=NONCE, mac="b8:27:eb:aa:bb:cc", board="raspberry_pi_zero_2_w",
+        model="Raspberry Pi Zero 2 W", profiles_supported=["xvf3800_usb"],
+    )
+
+
+def test_a_failed_hotspot_raises_instead_of_pretending(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = _transport(calls, tmp_path, fail_on="wifi hotspot")
+    with pytest.raises(RuntimeError, match="raising the setup AP"):
+        t.expose(_info())
+    assert t._ap_up is False, "must not claim an AP that was never created"
+
+
+def test_the_failure_message_carries_nmcli_stderr(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    with pytest.raises(RuntimeError, match="nmcli said no"):
+        t.expose(_info())
+
+
+def test_the_failure_message_never_leaks_the_psk(monkeypatch, tmp_path):
+    """The command is in argv; it must not end up in an exception or log."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    try:
+        t.expose(_info())
+    except RuntimeError as e:
+        assert "unit-test-key" not in str(e)
+    else:
+        pytest.fail("should have raised")
+
+
+def test_the_interface_is_named_and_p2p_is_skipped(portal):
+    """p2p-dev-wlan0 cannot host an AP but sits right next to wlan0 in
+    nmcli's list. Letting nmcli choose is how this failed."""
+    hotspot = next(c for c in portal.calls if "hotspot" in " ".join(c))
+    assert "ifname" in hotspot
+    assert hotspot[hotspot.index("ifname") + 1] == "wlan0"
+
+
+def test_no_wifi_interface_is_a_clear_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = pt.PortalTransport(
+        ap_ssid="x", ap_psk="y", device_profile="xvf3800_usb",
+        ip="127.0.0.1", bind_host="127.0.0.1", port=0,
+        state_dir=tmp_path / "state",
+        run=lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 0, stdout="lo:loopback\n", stderr=""),
+    )
+    with pytest.raises(RuntimeError, match="no Wi-Fi interface"):
+        t.expose(_info())
+
+
+def test_an_ap_that_isnt_actually_active_is_caught(monkeypatch, tmp_path):
+    """nmcli can return 0 and still leave nothing usable behind."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    t = _transport([], tmp_path, active="lo\n")     # AP missing from active
+    with pytest.raises(RuntimeError, match="not active"):
+        t.expose(_info())
+
+
+def test_teardown_failures_are_logged_not_raised(monkeypatch, tmp_path, caplog):
+    """Bringing the AP up must fail loudly; taking it down must not — the
+    device is about to reboot anyway."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = _transport(calls, tmp_path)
+    t.expose(_info())
+    t.run = _fake_run(calls, fail_on="connection down")
+    with caplog.at_level("WARNING"):
+        t.withdraw()
+    assert "taking the setup AP down" in caplog.text

@@ -207,43 +207,115 @@ class PortalTransport:
 
     # ── AP control ───────────────────────────────────────────────────────
 
-    def _start_ap(self) -> None:
+    def _nmcli(self, args: list[str], what: str) -> subprocess.CompletedProcess:
+        """Run one nmcli command and RAISE on failure.
+
+        Every call here used to be fire-and-forget. A hotspot that failed to
+        come up looked exactly like one that worked: the service went on to
+        bind its socket, reported "setup portal up", and waited forever for
+        a phone that had nothing to join. Failing loudly means systemd
+        restarts us and the journal says why.
+
+        The command is never included in the message — the PSK is in argv.
+        """
         nmcli = _nmcli()
         if nmcli is None:
             raise RuntimeError(
                 "nmcli not found — the setup portal needs NetworkManager"
             )
-        cmd = [nmcli, "device", "wifi", "hotspot", "con-name", AP_CONNECTION,
-               "ssid", self.ap_ssid, "password", self.ap_psk]
+        try:
+            proc = self.run(
+                [nmcli, *args], capture_output=True, text=True,
+                timeout=_NMCLI_TIMEOUT_SEC, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise RuntimeError(f"{what} failed: {e}") from e
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"{what} failed (rc={proc.returncode}): "
+                f"{(proc.stderr or '').strip()}"
+            )
+        return proc
+
+    def wifi_interface(self) -> str | None:
+        """The first real Wi-Fi interface.
+
+        ``p2p-dev-*`` is a virtual companion device that cannot host an
+        access point, and it sits right next to wlan0 in nmcli's list. Left
+        to choose for itself, nmcli can land on the wrong one — so name the
+        interface explicitly rather than hoping.
+        """
         if self.iface:
-            cmd += ["ifname", self.iface]
+            return self.iface
+        try:
+            proc = self._nmcli(
+                ["-t", "-f", "DEVICE,TYPE", "device", "status"],
+                "listing wifi interfaces",
+            )
+        except RuntimeError:
+            return None
+        for line in (proc.stdout or "").splitlines():
+            device, _, kind = line.partition(":")
+            if kind.strip() == "wifi" and not device.startswith("p2p-"):
+                return device
+        return None
+
+    def _start_ap(self) -> None:
+        iface = self.wifi_interface()
+        if iface is None:
+            raise RuntimeError(
+                "no Wi-Fi interface available — is the radio rfkill-blocked "
+                "for want of a wireless country?"
+            )
+        cmd = ["device", "wifi", "hotspot", "con-name", AP_CONNECTION,
+               "ssid", self.ap_ssid, "password", self.ap_psk, "ifname", iface]
         # The PSK rides in argv, which is root-only readable here, and is
         # never logged — same rule as apply_wifi().
-        self.run(cmd, capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False)
+        self._nmcli(cmd, f"raising the setup AP on {iface}")
         self._ap_up = True
+
         # NetworkManager's shared mode picks its own subnet (10.42.x.1 by
         # default, and which one depends on what's already in use). The
         # captive-portal DNS drop-in written at prepare time points at a
         # FIXED address, so pin the AP to match — otherwise every hostname
         # resolves to an address nothing is listening on and the sign-in
         # page never opens.
-        self.run(
-            [nmcli, "connection", "modify", AP_CONNECTION,
+        self._nmcli(
+            ["connection", "modify", AP_CONNECTION,
              "ipv4.method", "shared", "ipv4.addresses", f"{self.ip}/24"],
-            capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False,
+            "pinning the setup AP address",
         )
-        self.run(
-            [nmcli, "connection", "up", AP_CONNECTION],
-            capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False,
-        )
+        self._nmcli(["connection", "up", AP_CONNECTION],
+                    "activating the setup AP")
+        self._verify_ap_active()
+
+    def _verify_ap_active(self) -> None:
+        """Confirm the AP is really there before anyone is told it is.
+
+        nmcli can return 0 and still leave nothing usable behind, and the
+        cost of believing it is a device that waits forever for a phone that
+        can't see it.
+        """
+        proc = self._nmcli(["-t", "-f", "NAME", "connection", "show", "--active"],
+                           "checking active connections")
+        active = [ln.strip() for ln in (proc.stdout or "").splitlines()]
+        if AP_CONNECTION not in active:
+            raise RuntimeError(
+                f"the setup AP is not active after being brought up "
+                f"(active connections: {', '.join(active) or 'none'})"
+            )
+        log.info("setup AP %s active on %s", self.ap_ssid, self.ip)
 
     def _stop_ap(self) -> None:
+        """Best-effort teardown. Unlike bringing it up, a failure here is not
+        worth crashing over — the device is about to reboot anyway."""
         if not self._ap_up:
             return
-        nmcli = _nmcli()
-        if nmcli is not None:
-            self.run([nmcli, "connection", "down", AP_CONNECTION],
-                     capture_output=True, timeout=_NMCLI_TIMEOUT_SEC, check=False)
+        try:
+            self._nmcli(["connection", "down", AP_CONNECTION],
+                        "taking the setup AP down")
+        except RuntimeError as e:
+            log.warning("%s", e)
         self._ap_up = False
 
     # ── HTTP server ──────────────────────────────────────────────────────

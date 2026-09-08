@@ -585,3 +585,18 @@ def test_zip_and_drive_targets_write_the_same_things():
     src = inspect.getsource(builder.build)
     assert src.count("console=console") == 2
     assert src.count("usb_host=(") == 2
+
+
+def test_the_console_account_can_become_root():
+    """Media prep creates this user AND hands its password to the operator
+    via userconf.txt. Without sudo there is no route to root at all — the
+    root account is locked on Pi OS, and sudoers.d/domovoi-satellite grants
+    three specific commands. A unit nobody can get a shell on is a unit
+    nobody can support."""
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    line = next(l for l in script.splitlines() if "usermod -aG" in l)
+    groups = line.split("usermod -aG ", 1)[1].split()[0]
+    assert "sudo" in groups.split(",")
+    # and the hardware groups it already needed
+    for g in ("audio", "video", "gpio", "spi", "i2c"):
+        assert g in groups.split(",")

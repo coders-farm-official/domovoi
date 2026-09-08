@@ -80,7 +80,12 @@ fi
 if ! skip user; then
   info bootstrapping create-user
   id "$SAT_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$SAT_USER"
-  usermod -aG audio,video,plugdev,gpio,spi,i2c "$SAT_USER" 2>/dev/null || true
+  # `sudo` matters: this is also the console account media prep hands the
+  # operator (userconf.txt), and without it there is NO route to root on the
+  # device at all — the root account is locked on Pi OS and the
+  # sudoers.d/domovoi-satellite file grants three specific commands only.
+  # A unit you cannot get a shell on is a unit you cannot support.
+  usermod -aG sudo,audio,video,plugdev,gpio,spi,i2c "$SAT_USER" 2>/dev/null || true
   done_step user
 fi
 HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
