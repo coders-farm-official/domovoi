@@ -203,5 +203,12 @@ def bridge_response(status_code: int, payload: Any):
             status_code=502,
             content={"detail": "domovoi unreachable"},
         )
-    content = payload if isinstance(payload, dict) else {"detail": str(payload)}
+    # Lists are valid JSON responses too — an endpoint that returns a
+    # collection (satellite approvals, say) would otherwise be stringified
+    # into {"detail": "[]"} and the caller would render nothing, silently.
+    # The str() fallback is for text/error bodies, not for structured data.
+    if isinstance(payload, (dict, list)):
+        content = payload
+    else:
+        content = {"detail": str(payload)}
     return JSONResponse(status_code=status_code, content=content)
