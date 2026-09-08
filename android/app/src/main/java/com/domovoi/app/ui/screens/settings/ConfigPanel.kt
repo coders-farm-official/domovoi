@@ -53,6 +53,7 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
+import com.domovoi.app.net.ApiException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -200,9 +201,21 @@ private fun VersionCard() {
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ApiException) {
+                // The server answered. Most often 403: mutations are
+                // Bearer-only and a session cookie alone doesn't authorize
+                // them. Reporting it beats spinning for 90s on a request
+                // that never reached the core.
+                toast(
+                    if (e.status == 401 || e.status == 403) {
+                        "admin sign-in required — sign in, then restart again"
+                    } else {
+                        "restart failed: ${e.message}"
+                    },
+                )
             } catch (e: Exception) {
-                // The response should beat the bounce; if the connection
-                // dropped first the restart probably still fired — verify.
+                // No status — a connection-level failure, which is exactly
+                // what a successful bounce looks like from here.
                 toast("restarting…")
                 waitForServer()
             } finally {

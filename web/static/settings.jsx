@@ -549,10 +549,20 @@ const VersionSection = () => {
         fire(`restart failed: ${(res && res.error) || 'unknown'}`);
       }
     } catch (e) {
-      // The response should beat the bounce, but if the connection dropped
-      // first the restart probably still fired — verify instead of crying.
-      fire('restarting…');
-      await waitForServer();
+      // A status means the SERVER answered — most often 403, because
+      // mutations are Bearer-only and the dashboard cookie alone doesn't
+      // authorize them. Treating that as "probably restarting" leaves the
+      // button spinning for 90s over a request that never left the house.
+      // Only a connection-level failure (no status) can mean the bounce cut
+      // us off mid-request, and that is the case worth polling through.
+      if (e && e.status) {
+        fire(e.status === 401 || e.status === 403
+          ? 'admin sign-in required — sign in, then click restart again'
+          : `restart failed: ${e.message}`);
+      } else {
+        fire('restarting…');
+        await waitForServer();
+      }
     } finally {
       setRestarting(false);
     }

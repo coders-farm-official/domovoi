@@ -365,9 +365,9 @@ All **Open**.
 | `POST /api/config/version/check` | Open | — | Proxy → core upstream check. |
 | `POST /api/config/version/pull` | Open | — | Proxy → core `git pull --ff-only`. |
 | `GET /api/satellites/approvals` | **Admin read** | — | Proxy → pending approvals. Declared before `/{room_id}` so the path parameter can't shadow it. |
-| `POST /api/satellites/approvals/{room_id}/approve` | **Admin (Bearer or cookie)** | — | Proxy → approve. |
-| `POST /api/satellites/approvals/{room_id}/reject` | **Admin (Bearer or cookie)** | — | Proxy → reject. |
-| `POST /api/config/version/restart` | **Admin (Bearer or cookie)** | — | Proxy → core service restart. Admin-gated at both hops. The connection drops moments after the response; clients treat that as success and poll `GET /api/config/version` until `restart_required` clears. |
+| `POST /api/satellites/approvals/{room_id}/approve` | **Admin (Bearer)** | — | Proxy → approve. |
+| `POST /api/satellites/approvals/{room_id}/reject` | **Admin (Bearer)** | — | Proxy → reject. |
+| `POST /api/config/version/restart` | **Admin (Bearer)** | — | Proxy → core service restart. Admin-gated at both hops. The connection drops moments after the response; clients treat that as success and poll `GET /api/config/version` until `restart_required` clears. |
 
 ### 3.10 Playlists
 
