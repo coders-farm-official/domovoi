@@ -485,6 +485,10 @@ def test_the_interface_is_named_and_p2p_is_skipped(portal):
 
 def test_no_wifi_interface_is_a_clear_error(monkeypatch, tmp_path):
     monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    # Don't sit through the real boot-race wait.
+    monkeypatch.setattr(pt, "_IFACE_WAIT_SEC", 0.05)
+    monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
     calls = []
     t = pt.PortalTransport(
         ap_ssid="x", ap_psk="y", device_profile="xvf3800_usb",
@@ -516,3 +520,53 @@ def test_teardown_failures_are_logged_not_raised(monkeypatch, tmp_path, caplog):
     with caplog.at_level("WARNING"):
         t.withdraw()
     assert "taking the setup AP down" in caplog.text
+
+
+# ─── the wireless device can lag the service ──────────────────────────────
+
+
+def test_it_waits_for_a_late_wifi_interface(monkeypatch, tmp_path):
+    """Observed on hardware: the service beat the wireless device to
+    readiness, failed, and systemd restarted it eight seconds later — eight
+    seconds with no setup network."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
+    sleeps = []
+    monkeypatch.setattr(pt.time, "sleep", lambda s: sleeps.append(s))
+
+    attempts = {"n": 0}
+    calls = []
+    base = _fake_run(calls)
+
+    def run(cmd, **kw):
+        if "device status" in " ".join(cmd):
+            attempts["n"] += 1
+            if attempts["n"] < 3:          # not there yet
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="lo:loopback\n", stderr="")
+        return base(cmd, **kw)
+
+    t = _transport(calls, tmp_path)
+    t.run = run
+    t.expose(_info())
+    try:
+        assert attempts["n"] >= 3          # polled until it appeared
+        assert sleeps                      # and actually waited between tries
+    finally:
+        t.withdraw()
+
+
+def test_it_gives_up_eventually_with_a_clear_reason(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt, "_IFACE_WAIT_SEC", 0.05)
+    monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+    t = pt.PortalTransport(
+        ap_ssid="x", ap_psk="y", device_profile="xvf3800_usb",
+        ip="127.0.0.1", bind_host="127.0.0.1", port=0,
+        state_dir=tmp_path / "state",
+        run=lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 0, stdout="lo:loopback\n", stderr=""),
+    )
+    with pytest.raises(RuntimeError, match="rfkill-blocked"):
+        t.expose(_info())

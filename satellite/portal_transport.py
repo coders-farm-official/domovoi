@@ -31,6 +31,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -68,6 +69,9 @@ PROBE_PATHS = (
 )
 
 _SCAN_TIMEOUT_SEC = 20.0
+# The wireless device can lag the service at boot.
+_IFACE_WAIT_SEC = 30.0
+_IFACE_POLL_SEC = 1.0
 _NMCLI_TIMEOUT_SEC = 30.0
 
 
@@ -273,12 +277,34 @@ class PortalTransport:
                 return device
         return None
 
+    def wait_for_wifi_interface(self, timeout: float | None = None) -> str | None:
+        """Poll for a Wi-Fi interface rather than assuming one at boot.
+
+        Observed on hardware: this service wins the race against the
+        wireless device becoming ready, fails, and is restarted by systemd
+        eight seconds later — during which the setup network doesn't exist.
+        Waiting turns a crash-and-retry into a short pause.
+        """
+        # Resolved at CALL time, not bound as a default: a default argument
+        # is evaluated once at import and would make the module constant
+        # look tunable while silently ignoring any change to it.
+        timeout = _IFACE_WAIT_SEC if timeout is None else timeout
+        deadline = time.monotonic() + timeout
+        while True:
+            iface = self.wifi_interface()
+            if iface is not None:
+                return iface
+            if time.monotonic() >= deadline:
+                return None
+            log.info("waiting for a Wi-Fi interface to appear...")
+            time.sleep(_IFACE_POLL_SEC)
+
     def _start_ap(self) -> None:
-        iface = self.wifi_interface()
+        iface = self.wait_for_wifi_interface()
         if iface is None:
             raise RuntimeError(
-                "no Wi-Fi interface available — is the radio rfkill-blocked "
-                "for want of a wireless country?"
+                f"no Wi-Fi interface after {_IFACE_WAIT_SEC:.0f}s — is the "
+                "radio rfkill-blocked for want of a wireless country?"
             )
         cmd = ["device", "wifi", "hotspot", "con-name", AP_CONNECTION,
                "ssid", self.ap_ssid, "password", self.ap_psk, "ifname", iface]
