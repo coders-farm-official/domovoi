@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 
 UNITS = ("domovoi-core.service", "domovoi-web.service")
 
+# Strong references to in-flight restart tasks (see restart()).
+_PENDING: set[asyncio.Task] = set()
+
 # Long enough for the HTTP response to flush before systemd kills this
 # process — the client must learn the restart started, or it can't tell
 # "restarting" from "the server broke".
@@ -92,20 +95,33 @@ async def capable_async() -> tuple[bool, str | None]:
 
 def _spawn_restart() -> None:
     """Fire the restart. ``--no-block`` returns immediately instead of waiting
-    on units that are about to kill this very process."""
+    on units that are about to kill this very process.
+
+    The outcome is LOGGED rather than discarded. The endpoint has already
+    answered "ok" by the time this runs — all it knew was that a restart had
+    been scheduled — so if sudo refuses here, the journal is the only place
+    anyone can find out. Silence looks identical to success from the UI."""
     systemctl, sudo = _systemctl(), _sudo()
     if systemctl is None or sudo is None:  # pragma: no cover — capable() gates
+        log.error("self-restart: systemctl or sudo vanished between probe and fire")
         return
+    cmd = [sudo, "-n", systemctl, "--no-block", "restart", *UNITS]
     try:
-        subprocess.run(
-            [sudo, "-n", systemctl, "--no-block", "restart", *UNITS],
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_TIMEOUT_SEC,
-            check=False,
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=_PROBE_TIMEOUT_SEC, check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:  # pragma: no cover
+    except (OSError, subprocess.TimeoutExpired) as e:
         log.error("self-restart failed to spawn: %s", e)
+        return
+    if proc.returncode != 0:
+        log.error(
+            "self-restart REFUSED (rc=%s): %s — check the sudoers grant in "
+            "docs/LINUX_HOST.md matches this exact command: %s",
+            proc.returncode, (proc.stderr or "").strip(), " ".join(cmd),
+        )
+    else:
+        log.warning("self-restart: systemctl accepted the bounce")
 
 
 async def restart() -> dict:
@@ -122,7 +138,13 @@ async def restart() -> dict:
         await asyncio.sleep(_RESTART_DELAY_SEC)
         await asyncio.to_thread(_spawn_restart)
 
-    asyncio.create_task(_later())
+    # Hold a strong reference. asyncio keeps only a weak one, so a task with
+    # no other referent can be garbage-collected mid-sleep — and the restart
+    # then simply never happens, while the endpoint has already reported
+    # success. The discard callback keeps the set from growing.
+    task = asyncio.create_task(_later())
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
     log.warning("self-restart requested — bouncing %s", " ".join(UNITS))
     return {
         "ok": True,

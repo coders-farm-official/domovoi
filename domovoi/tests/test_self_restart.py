@@ -146,3 +146,65 @@ def test_version_state_reports_restart_capability(monkeypatch):
     state = asyncio.run(git_version.version_state())
     assert state["restart_capable"] is False
     assert "sudoers" in state["restart_hint"]
+
+
+# ─── the two ways a restart silently doesn't happen ───────────────────────
+
+
+def test_the_scheduled_task_is_strongly_referenced(monkeypatch):
+    """asyncio keeps only a weak reference, so a task nobody holds can be
+    collected mid-sleep — the restart then never fires while the endpoint
+    has already answered ok."""
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0))
+    monkeypatch.setattr(self_restart, "_RESTART_DELAY_SEC", 0.05)
+
+    async def _go():
+        self_restart._PENDING.clear()
+        await self_restart.restart()
+        assert len(self_restart._PENDING) == 1     # held while in flight
+        await asyncio.sleep(0.2)
+        return len(self_restart._PENDING)
+
+    assert asyncio.run(_go()) == 0                 # and released after
+
+
+def test_a_refused_restart_is_logged_not_swallowed(monkeypatch, caplog):
+    """The endpoint answered 'ok' a second ago — it only knew the bounce was
+    scheduled. If sudo refuses here, the journal is the only evidence."""
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+
+    def refuse(cmd, **kw):
+        if "-l" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="sudo: a password is required")
+
+    monkeypatch.setattr(self_restart.subprocess, "run", refuse)
+    with caplog.at_level("ERROR"):
+        self_restart._spawn_restart()
+    assert "REFUSED" in caplog.text
+    assert "password is required" in caplog.text
+    assert "sudoers" in caplog.text          # says where to look
+
+
+def test_an_accepted_restart_says_so(monkeypatch, caplog):
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0))
+    with caplog.at_level("WARNING"):
+        self_restart._spawn_restart()
+    assert "accepted" in caplog.text
+
+
+def test_the_refusal_log_never_leaks_a_password(monkeypatch, caplog):
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+
+    def refuse(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="denied")
+
+    monkeypatch.setattr(self_restart.subprocess, "run", refuse)
+    with caplog.at_level("ERROR"):
+        self_restart._spawn_restart()
+    # The logged command is the systemctl invocation only — no credentials
+    # exist in this path, and none should ever appear if that changes.
+    assert "password=" not in caplog.text
