@@ -600,3 +600,14 @@ def test_the_console_account_can_become_root():
     # and the hardware groups it already needed
     for g in ("audio", "video", "gpio", "spi", "i2c"):
         assert g in groups.split(",")
+
+
+def test_dnsmasq_advertises_the_portal_over_dhcp():
+    """RFC 8910 (option 114) tells the client the portal URL outright.
+    Probe interception is defeated by private DNS and by the per-SSID
+    "no internet" verdict phones cache; an explicit advertisement isn't."""
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    assert "dhcp-option=114,http://192.168.4.1/" in script
+    # and the two it already had
+    assert "address=/#/192.168.4.1" in script      # wildcard DNS
+    assert "dhcp-option=6,192.168.4.1" in script   # we are the resolver

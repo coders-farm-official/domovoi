@@ -417,8 +417,15 @@ def _make_handler(transport: PortalTransport):
 
         # BaseHTTPRequestHandler logs to stderr; route it to our logger so a
         # journal reader sees one consistent stream.
+        #
+        # INFO, not DEBUG. This service lives for minutes and serves a
+        # handful of requests, so the volume is nil — and it answers the one
+        # question that is otherwise unanswerable: did the phone's captive
+        # probe actually arrive? "No auto-open" has two completely different
+        # causes (the probe never reached us, or our answer was wrong) and
+        # they are indistinguishable without this line.
         def log_message(self, fmt: str, *args: Any) -> None:
-            log.debug("portal %s - %s", self.address_string(), fmt % args)
+            log.info("portal %s - %s", self.address_string(), fmt % args)
 
         # ── helpers ──
         def _send(self, body: str, status: int = 200,

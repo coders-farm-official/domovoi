@@ -186,6 +186,11 @@ if [ "$SETUP_TRANSPORT" = "portal" ] && ! skip portaldns; then
 # fails deliberately and the phone opens the sign-in page.
 address=/#/192.168.4.1
 dhcp-option=6,192.168.4.1
+# RFC 8910: tell the client the captive-portal URL EXPLICITLY over DHCP
+# rather than relying on it noticing that its probe was hijacked. Supported
+# by Android 11+ and iOS 14+, and far more dependable than probe
+# interception, which private DNS and cached per-SSID verdicts both defeat.
+dhcp-option=114,http://192.168.4.1/
 EOF
   done_step portaldns
 fi
