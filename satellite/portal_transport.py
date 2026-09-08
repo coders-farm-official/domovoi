@@ -208,6 +208,24 @@ class PortalTransport:
     def reboot(self) -> None:
         self.run(["systemctl", "--no-block", "reboot"], timeout=60)
 
+    def setup_error(self) -> str | None:
+        """Why the last attempt failed, in words for the person retrying.
+
+        The state machine re-raises the AP after a failed join with the
+        reason in device_info — but nothing showed it, so the customer
+        rejoined to a blank form and had no idea the password was wrong.
+        Silence here is the difference between "try again" and "this thing
+        is broken".
+        """
+        status = (self.device_info or {}).get("status")
+        detail = ((self.device_info or {}).get("error") or "").strip()
+        if status == "wifi_failed":
+            msg = "Couldn't join that network. Check the password and try again."
+            return f"{msg} ({detail})" if detail else msg
+        if status == "room_taken":
+            return "That room name is already in use. Pick a different one."
+        return None
+
     def _persist_approval_code(self) -> None:
         """The code outlives this process: the portal shows it, the reboot
         happens, and the client presents it on connect so the dashboard can
@@ -488,7 +506,7 @@ def _make_handler(transport: PortalTransport):
         def do_GET(self) -> None:  # noqa: N802 — stdlib naming
             path = urllib.parse.urlparse(self.path).path
             if path == "/":
-                self._form()
+                self._form(error=transport.setup_error())
             elif path == "/device-info":
                 self._send(json.dumps(transport.device_info),
                            ctype="application/json")

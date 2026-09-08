@@ -706,8 +706,10 @@ async def sounds_file(path: str, voice: str | None = None) -> FileResponse:
 # allowlist below also keeps caches (__pycache__/*.pyc), editor backups
 # (*.bak), and any .env secret from ever leaving the host.
 SATELLITE_CODE_DIR = Path(settings.repo_dir) / "satellite"
+# Kept in sync with satellite_media/payload.py::_CODE_EXT_ALLOW — see the
+# note there on why ".example" matters.
 _SAT_CODE_EXT_ALLOW = frozenset(
-    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json"}
+    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
 )
 
 

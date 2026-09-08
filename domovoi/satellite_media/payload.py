@@ -37,7 +37,13 @@ log = logging.getLogger(__name__)
 
 # Keep in sync with domovoi/main.py::_SAT_CODE_EXT_ALLOW (duplicated here
 # so assembling a payload never imports the core app module).
-_CODE_EXT_ALLOW = frozenset({".py", ".toml", ".txt", ".md", ".service", ".sh", ".json"})
+# ".example" earns its place: satellite/config.toml.example is the
+# TEMPLATE apply_provision builds every device config from. Without it the
+# very first step of provisioning raises FileNotFoundError, before the
+# radio is touched — so the device looks like it failed to join Wi-Fi.
+_CODE_EXT_ALLOW = frozenset(
+    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
+)
 
 
 def _allowed_code_file(p: Path) -> bool:

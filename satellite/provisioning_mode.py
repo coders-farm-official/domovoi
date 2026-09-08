@@ -336,6 +336,43 @@ def provisioning_active() -> bool:
 # ─── Apply ────────────────────────────────────────────────────────────────
 
 
+def resolve_auto_url(configured: str) -> str | None:
+    """Turn the ``auto`` sentinel into a real address, right after Wi-Fi joins.
+
+    This MUST happen here rather than being left to the client. Stage 2 reads
+    ``domovoi_url`` out of config.toml with plain tomllib and curls it — it
+    cannot expand a sentinel, so it never reaches the server, never enables
+    domovoi-satellite.service, and the client that *could* resolve it never
+    runs. A deadlock: the device sits happily on the network, invisible to
+    the core, with nothing in any log that names the cause.
+
+    Best-effort. A failure leaves the sentinel in place but says so loudly,
+    because the symptom is otherwise just a satellite that never appears.
+    """
+    if (configured or "").strip().lower() != proto.AUTO_DISCOVER_URL:
+        return configured or None
+    from satellite import discovery      # stdlib-only, like this module
+
+    url = discovery.resolve_url(proto.AUTO_DISCOVER_URL)
+    if url is None:
+        log.error(
+            "joined Wi-Fi but found no Domovoi server on this network. "
+            "Set [satellite] domovoi_url in %s by hand.", CONFIG_PATH,
+        )
+        return None
+    try:
+        current = CONFIG_PATH.read_text(encoding="utf-8")
+        CONFIG_PATH.write_text(
+            config_writer.apply_changes(current, {"satellite.domovoi_url": url}),
+            encoding="utf-8", newline="\n",
+        )
+    except OSError as e:
+        log.error("discovered %s but could not save it: %s", url, e)
+        return None
+    log.info("discovered the Domovoi server at %s", url)
+    return url
+
+
 def apply_provision(
     payload: dict[str, Any],
     *,
@@ -383,6 +420,7 @@ def apply_provision(
             bool(wifi.get("hidden")), wifi_join_timeout, run=run,
         )
         if ok:
+            resolve_auto_url(payload.get("domovoi_url", ""))
             return True, None
         last_err = err
         log.warning("wifi attempt %d/%d failed: %s", attempt, wifi_attempts, err)

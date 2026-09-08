@@ -258,3 +258,67 @@ def test_an_unusable_boot_copy_falls_through_to_home(dirs, body):
     (boot / "domovoi" / "ap.json").write_text(body, encoding="utf-8")
     _creds(home / "ap.json", "Domovoi-Setup-HOME")
     assert pm.portal_credentials()["ssid"] == "Domovoi-Setup-HOME"
+
+
+# ─── the auto sentinel must not survive provisioning ──────────────────────
+#
+# stage2.sh reads domovoi_url from config.toml with plain tomllib and curls
+# it. It cannot expand a sentinel — so "auto" makes stage 2 fail to reach the
+# server, never enable domovoi-satellite.service, and the client that COULD
+# resolve it never runs. The device sits on the network invisible to the
+# core. Found on hardware after a successful onboarding.
+
+
+@pytest.fixture
+def cfgfile(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[satellite]\n"
+        '# the server this room talks to\n'
+        'domovoi_url = "auto"\n'
+        'room_id = "kitchen"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pm, "CONFIG_PATH", cfg)
+    return cfg
+
+
+def test_auto_is_replaced_with_a_real_address(cfgfile, monkeypatch):
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    assert pm.resolve_auto_url("auto") == "ws://192.168.0.117:6370"
+    body = cfgfile.read_text()
+    assert 'domovoi_url = "ws://192.168.0.117:6370"' in body
+    assert '"auto"' not in body
+
+
+def test_the_rewrite_preserves_the_rest_of_the_file(cfgfile, monkeypatch):
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "10.0.0.4")
+    pm.resolve_auto_url("auto")
+    body = cfgfile.read_text()
+    assert "# the server this room talks to" in body    # comments survive
+    assert 'room_id = "kitchen"' in body
+
+
+def test_an_explicit_address_is_left_alone(cfgfile):
+    """Someone who typed an address into the setup form meant it."""
+    assert pm.resolve_auto_url("ws://192.168.0.5:6370") == "ws://192.168.0.5:6370"
+    assert 'domovoi_url = "auto"' in cfgfile.read_text()   # untouched
+
+
+def test_failed_discovery_leaves_the_sentinel_and_says_so(cfgfile, monkeypatch, caplog):
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: None)
+    with caplog.at_level("ERROR"):
+        assert pm.resolve_auto_url("auto") is None
+    assert "no Domovoi server" in caplog.text
+    assert "by hand" in caplog.text                        # actionable
+    assert 'domovoi_url = "auto"' in cfgfile.read_text()
+
+
+def test_it_runs_only_after_wifi_joins(monkeypatch, tmp_path):
+    """Discovery needs the LAN, so it cannot run before the join — and must
+    run before apply_provision returns, because the reboot follows."""
+    import inspect
+    src = inspect.getsource(pm.apply_provision)
+    join = src.index("apply_wifi(")
+    resolve = src.index("resolve_auto_url(")
+    assert join < resolve

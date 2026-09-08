@@ -570,3 +570,65 @@ def test_it_gives_up_eventually_with_a_clear_reason(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="rfkill-blocked"):
         t.expose(_info())
+
+
+# ─── telling the customer what went wrong ─────────────────────────────────
+#
+# The state machine re-raises the AP after a failed Wi-Fi join, with the
+# reason in device_info. Nothing surfaced it, so you rejoined to a blank
+# form with no hint the password was wrong — and the only evidence was a
+# missing config.toml on a device you may not be able to log into.
+
+
+def _expose_with(monkeypatch, tmp_path, **info_overrides):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = _transport(calls, tmp_path)
+    info = _info()
+    info.update(info_overrides)
+    t.expose(info)
+    return t
+
+
+def test_a_failed_join_is_explained_on_the_form(monkeypatch, tmp_path):
+    t = _expose_with(monkeypatch, tmp_path, status="wifi_failed",
+                     error="Secrets were required, but not provided")
+    try:
+        _s, body, _h = _get(t, "/")
+        assert "Check the password" in body
+        assert "Secrets were required" in body      # nmcli's own words
+    finally:
+        t.withdraw()
+
+
+def test_a_taken_room_is_explained_on_the_form(monkeypatch, tmp_path):
+    t = _expose_with(monkeypatch, tmp_path, status="room_taken")
+    try:
+        _s, body, _h = _get(t, "/")
+        assert "already in use" in body
+    finally:
+        t.withdraw()
+
+
+def test_a_first_attempt_shows_no_error(monkeypatch, tmp_path):
+    t = _expose_with(monkeypatch, tmp_path)      # awaiting_provision
+    try:
+        _s, body, _h = _get(t, "/")
+        assert "Check the password" not in body
+        assert 'class="err"' not in body
+    finally:
+        t.withdraw()
+
+
+def test_the_error_never_echoes_the_password(monkeypatch, tmp_path):
+    t = _expose_with(monkeypatch, tmp_path, status="wifi_failed",
+                     error="bad key: hunter2")
+    try:
+        # The device only ever stores nmcli's message, but assert the form
+        # doesn't reflect a submitted password back either.
+        _s, body = _post(t, "/provision", {
+            "ssid": "HomeNet", "psk": "s3cret-pw", "room": "", "room_custom": "!!!",
+        })
+        assert "s3cret-pw" not in body
+    finally:
+        t.withdraw()

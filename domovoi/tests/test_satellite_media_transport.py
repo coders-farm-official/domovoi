@@ -611,3 +611,49 @@ def test_dnsmasq_advertises_the_portal_over_dhcp():
     # and the two it already had
     assert "address=/#/192.168.4.1" in script      # wildcard DNS
     assert "dhcp-option=6,192.168.4.1" in script   # we are the resolver
+
+
+# ─── the payload must carry the config template ───────────────────────────
+#
+# apply_provision's FIRST action is to read satellite/config.toml.example and
+# build the device's config from it. ".example" wasn't in the allowlist, so
+# every payload we ever built omitted it — provisioning raised
+# FileNotFoundError before touching the radio, and the state machine's
+# cleanup deleted config.toml, making it look like a failed Wi-Fi join.
+
+
+def test_the_config_template_ships_in_the_payload():
+    from pathlib import Path
+
+    from domovoi.satellite_media.payload import _allowed_code_file
+
+    assert _allowed_code_file(Path("satellite/config.toml.example"))
+
+
+def test_the_template_actually_exists_to_be_shipped():
+    """A missing template is unrecoverable on-device; assert at the source."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    assert (root / "satellite" / "config.toml.example").is_file()
+
+
+def test_the_two_allowlists_stay_in_sync():
+    """payload.py duplicates main.py's allowlist deliberately (so assembling
+    a payload never imports the core app). Duplicated constants drift — this
+    is the check that notices."""
+    from domovoi.main import _SAT_CODE_EXT_ALLOW
+    from domovoi.satellite_media.payload import _CODE_EXT_ALLOW
+
+    assert _CODE_EXT_ALLOW == _SAT_CODE_EXT_ALLOW
+
+
+def test_junk_is_still_excluded():
+    from pathlib import Path
+
+    from domovoi.satellite_media.payload import _allowed_code_file
+
+    for rejected in ("satellite/client.pyc", "satellite/__pycache__/x.py",
+                     "satellite/tests/test_x.py", "satellite/.env.local",
+                     "satellite/config.toml.bak", "satellite/notes.rst"):
+        assert not _allowed_code_file(Path(rejected)), rejected

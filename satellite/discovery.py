@@ -132,7 +132,7 @@ def find_core(
     return None
 
 
-def resolve_url(configured: str, *, port: int = CORE_PORT, finder=find_core) -> str | None:
+def resolve_url(configured: str, *, port: int = CORE_PORT, finder=None) -> str | None:
     """Turn a configured ``domovoi_url`` into a usable one.
 
     Anything but the ``auto`` sentinel is returned untouched — an address
@@ -141,6 +141,11 @@ def resolve_url(configured: str, *, port: int = CORE_PORT, finder=find_core) -> 
     value = (configured or "").strip()
     if value and value.lower() != AUTO:
         return value
+    # Resolved at CALL time. As a default argument this binds once at import,
+    # which silently ignores any later substitution — and a test that thinks
+    # it injected a fake then sweeps the real network instead, passing or
+    # failing on whatever happens to be plugged in.
+    finder = find_core if finder is None else finder
     host = finder(port=port)
     if host is None:
         return None
