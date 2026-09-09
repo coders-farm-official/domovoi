@@ -648,6 +648,21 @@ def test_the_two_allowlists_stay_in_sync():
     assert _CODE_EXT_ALLOW == _SAT_CODE_EXT_ALLOW
 
 
+def test_stage2_syncs_exactly_what_the_server_serves():
+    """There was a THIRD copy of the allowlist, hard-coded in stage2.sh,
+    which the two-way check above could not see. It was the one that got
+    missed: the payload and the server both learned to carry
+    config.toml.example while stage 2 went on refusing to sync it."""
+    from domovoi.satellite_media import overlay
+    from domovoi.satellite_media.payload import _CODE_EXT_ALLOW
+
+    rendered = overlay.render_stage2("domo")
+    line = next(ln for ln in rendered.splitlines()
+                if ln.startswith("allow = frozenset("))
+    assert "@" not in line, "placeholder left unrendered"
+    assert eval(line.split("=", 1)[1].strip()) == _CODE_EXT_ALLOW  # noqa: S307
+
+
 def test_junk_is_still_excluded():
     from pathlib import Path
 

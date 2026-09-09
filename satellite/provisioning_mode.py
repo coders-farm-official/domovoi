@@ -585,7 +585,12 @@ def _default_transport() -> GadgetBackend | Transport:
         ap_psk=creds["psk"],
         device_profile=profile,
         sat_type=image_sat_type(),
-        profiles=_profiles() or [profile],
+        # ONLY the profile this image was built for. Offering the whole
+        # catalogue put a Radxa video board at the top of the form on a Pi
+        # with a USB mic array — the list is sorted and nothing was
+        # selected. A prepared card knows its own hardware, so asking the
+        # customer is both pointless and a way to get it wrong.
+        profiles=[profile],
     )
 
 

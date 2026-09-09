@@ -92,6 +92,7 @@ def render_form(
     error: str | None = None,
     room: str | None = None,
     ssid: str | None = None,
+    profile: str | None = None,
 ) -> str:
     """The setup form. ``networks`` is what the device itself can see, so the
     customer picks their house network from a list instead of typing an SSID
@@ -116,11 +117,15 @@ def render_form(
             "type the name exactly.</div>"
         )
 
+    # Shown only where there is a genuine choice, which a prepared card is
+    # not: it declares its mic board. When it IS shown, the declared one is
+    # preselected instead of whatever happens to sort first.
     profile_field = ""
     if len(profs) > 1:
         profile_field = (
             "<label for=\"profile\">Microphone board</label>"
-            f"<select id=\"profile\" name=\"profile\">{_options(profs)}</select>"
+            f"<select id=\"profile\" name=\"profile\">"
+            f"{_options(profs, profile or profs[0])}</select>"
         )
 
     body = f"""

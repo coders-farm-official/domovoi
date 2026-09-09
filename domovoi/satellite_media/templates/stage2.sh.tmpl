@@ -11,7 +11,7 @@
 # /var/lib/domovoi/bootstrap-steps/, done-flag at
 # /var/lib/domovoi/bootstrap-done.
 #
-# Placeholders: @SAT_USER@
+# Placeholders: @SAT_USER@, @CODE_EXT_ALLOW@
 
 set -u
 SAT_USER="@SAT_USER@"
@@ -60,7 +60,7 @@ from satellite.sound_sync import http_base_from_ws
 from satellite import code_sync, plugin_sync
 base = http_base_from_ws(cfg["satellite"]["domovoi_url"])
 root = pathlib.Path.home() / "domovoi" / "satellite"
-allow = frozenset({".py", ".toml", ".txt", ".md", ".service", ".sh", ".json"})
+allow = frozenset(@CODE_EXT_ALLOW@)
 code_sync.sync_code(base, root, allow, {})
 res = plugin_sync.sync_plugin_payloads(base)
 if res["root_work"]:

@@ -169,7 +169,17 @@ def render_firstrun(
 
 
 def render_stage2(sat_user: str) -> str:
-    return render_template("stage2.sh.tmpl", {"SAT_USER": sat_user})
+    # The extension allowlist is rendered in rather than spelled out in the
+    # template. It was a third hand-maintained copy, and it was the one that
+    # got missed: the payload and the server both learned to carry
+    # config.toml.example while stage 2 went on refusing to sync it, so a
+    # satellite that ever lost that file could never get it back.
+    from domovoi.satellite_media.payload import _CODE_EXT_ALLOW
+
+    allow = "{" + ", ".join(repr(e) for e in sorted(_CODE_EXT_ALLOW)) + "}"
+    return render_template(
+        "stage2.sh.tmpl", {"SAT_USER": sat_user, "CODE_EXT_ALLOW": allow}
+    )
 
 
 def build_info(

@@ -69,6 +69,11 @@ PROBE_PATHS = (
 )
 
 _SCAN_TIMEOUT_SEC = 20.0
+# A wireless device that has only just appeared reports itself ready before
+# it can actually survey, and the first rescan comes back empty. Ask again
+# rather than telling the customer there are no networks.
+_SCAN_ATTEMPTS = 3
+_SCAN_RETRY_SEC = 2.0
 # The wireless device can lag the service at boot.
 _IFACE_WAIT_SEC = 30.0
 _IFACE_POLL_SEC = 1.0
@@ -79,22 +84,47 @@ def _nmcli() -> str | None:
     return shutil.which("nmcli")
 
 
-def scan_networks(run=subprocess.run) -> list[str]:
+def scan_networks(run=subprocess.run, *, iface: str | None = None,
+                  attempts: int | None = None) -> list[str]:
     """Visible SSIDs, strongest first. Best-effort: a failed scan yields an
     empty list and the form falls back to a free-text field rather than
-    dead-ending the customer."""
+    dead-ending the customer.
+
+    Call this only once a Wi-Fi interface exists. Scanning before the device
+    is up returns nothing at all, and "no networks found" on a form served
+    by a working access point is a confusing thing to hand someone.
+    """
     nmcli = _nmcli()
     if nmcli is None:
         return []
-    try:
-        proc = run(
-            [nmcli, "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list", "--rescan", "yes"],
-            capture_output=True, text=True, timeout=_SCAN_TIMEOUT_SEC, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log.warning("wifi scan failed: %s", e)
-        return []
-    if proc.returncode != 0:
+    attempts = _SCAN_ATTEMPTS if attempts is None else attempts
+    cmd = [nmcli, "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list", "--rescan", "yes"]
+    if iface:
+        cmd += ["ifname", iface]
+    proc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            proc = run(cmd, capture_output=True, text=True,
+                       timeout=_SCAN_TIMEOUT_SEC, check=False)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("wifi scan attempt %d failed: %s", attempt, e)
+            proc = None
+        else:
+            if proc.returncode != 0:
+                # Silence here is how a scan that never worked looked
+                # identical to a neighbourhood with no Wi-Fi in it.
+                log.warning(
+                    "wifi scan attempt %d exited %d: %s",
+                    attempt, proc.returncode, (proc.stderr or "").strip(),
+                )
+                proc = None
+            elif (proc.stdout or "").strip():
+                break
+            else:
+                log.info("wifi scan attempt %d saw nothing — retrying", attempt)
+        if attempt < attempts:
+            time.sleep(_SCAN_RETRY_SEC)
+    if proc is None or proc.returncode != 0:
         return []
     rows: list[dict[str, Any]] = []
     for line in (proc.stdout or "").splitlines():
@@ -159,9 +189,16 @@ class PortalTransport:
         # A fresh code per session, for the same reason as the nonce: an
         # approval shown in a previous attempt must not still be valid.
         self.approval_code = f"{secrets.randbelow(10000):04d}"
+        # Wait for the radio BEFORE surveying with it. This service can win
+        # the race against the wireless device at boot, and a scan issued
+        # then finds no device, returns nothing, and leaves the form saying
+        # "no networks found" on a device whose access point then comes up
+        # perfectly — the wait used to live inside _start_ap(), which is
+        # after this point, so the AP survived the race and the scan didn't.
+        iface = self.wait_for_wifi_interface()
         # Scan BEFORE the radio is committed to hosting — once the AP is up
         # the interface can no longer survey the neighbourhood.
-        self.networks = scan_networks(run=self.run)
+        self.networks = scan_networks(run=self.run, iface=iface)
         self._persist_approval_code()
         # Serve BEFORE the radio exists, not after. A phone probes for a
         # captive portal the instant it associates, and a probe that finds
@@ -174,7 +211,7 @@ class PortalTransport:
         # from an interface that doesn't exist yet.
         self._start_server()
         try:
-            self._start_ap()
+            self._start_ap(iface=iface)
         except Exception:
             self._stop_server()      # don't leave a socket behind on failure
             raise
@@ -317,8 +354,10 @@ class PortalTransport:
             log.info("waiting for a Wi-Fi interface to appear...")
             time.sleep(_IFACE_POLL_SEC)
 
-    def _start_ap(self) -> None:
-        iface = self.wait_for_wifi_interface()
+    def _start_ap(self, *, iface: str | None = None) -> None:
+        # Already waited for by expose(); re-resolved only when this is
+        # driven directly, as the tests do.
+        iface = iface or self.wait_for_wifi_interface()
         if iface is None:
             raise RuntimeError(
                 f"no Wi-Fi interface after {_IFACE_WAIT_SEC:.0f}s — is the "
@@ -498,6 +537,7 @@ def _make_handler(transport: PortalTransport):
             self._send(portal_pages.render_form(
                 networks=transport.networks,
                 profiles=transport.profiles,
+                profile=transport.device_profile,
                 error=error,
                 **kw,
             ))

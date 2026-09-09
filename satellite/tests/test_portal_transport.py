@@ -9,6 +9,7 @@ through an injected ``run``.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import threading
 import urllib.error
@@ -17,6 +18,7 @@ import urllib.request
 
 import pytest
 
+from satellite import portal_pages
 from satellite import portal_transport as pt
 from satellite import provisioning_protocol as proto
 
@@ -632,3 +634,145 @@ def test_the_error_never_echoes_the_password(monkeypatch, tmp_path):
         assert "s3cret-pw" not in body
     finally:
         t.withdraw()
+
+
+# ─── surveying the neighbourhood ──────────────────────────────────────────
+#
+# Found on hardware: the access point came up perfectly and the form said
+# "No networks found in the last scan — type the name exactly". The wait for
+# the wireless device lived inside _start_ap(), which runs AFTER the scan,
+# so the AP survived the boot race and the scan lost it — on a slower boot
+# the same image had listed two networks.
+
+
+def _late_radio_run(calls, *, ready_on=2):
+    """nmcli against a host whose wireless device appears on the ``ready_on``
+    lookup. Before then there is no wifi device, and a scan therefore
+    reports nothing at all rather than failing."""
+    base = _fake_run(calls)
+    seen = {"n": 0}
+
+    def run(cmd, **kw):
+        joined = " ".join(cmd)
+        if "device status" in joined:
+            seen["n"] += 1
+            if seen["n"] < ready_on:
+                calls.append(list(cmd))
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="lo:loopback\n", stderr="")
+        if "wifi list" in joined and seen["n"] < ready_on:
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return base(cmd, **kw)
+    return run
+
+
+def test_the_scan_waits_for_the_radio_instead_of_reporting_no_networks(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+
+    calls: list[list[str]] = []
+    t = _transport(calls, tmp_path)
+    t.run = _late_radio_run(calls)
+    t.expose(_info())
+    try:
+        assert t.networks == ["HomeNet", "Neighbour"]
+    finally:
+        t.withdraw()
+
+
+def test_nothing_is_scanned_before_a_wifi_device_exists(monkeypatch, tmp_path):
+    """The ordering itself, so a future edit can't quietly restore the race."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+
+    calls: list[list[str]] = []
+    t = _transport(calls, tmp_path)
+    t.run = _late_radio_run(calls, ready_on=3)
+    t.expose(_info())
+    try:
+        joined = [" ".join(c) for c in calls]
+        found = [i for i, c in enumerate(joined) if "device status" in c][-1]
+        scan = next(i for i, c in enumerate(joined) if "wifi list" in c)
+        assert found < scan
+    finally:
+        t.withdraw()
+
+
+def test_the_scan_names_the_interface(portal):
+    """Same reason the hotspot does: left to choose, nmcli can pick the p2p
+    companion device."""
+    scan = next(c for c in portal.calls if "list" in c)
+    assert scan[scan.index("ifname") + 1] == "wlan0"
+
+
+def test_an_empty_scan_is_retried(monkeypatch, tmp_path):
+    """A radio that has only just come up answers the first rescan with
+    nothing."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+
+    calls: list[list[str]] = []
+    base = _fake_run(calls)
+    tries = {"n": 0}
+
+    def run(cmd, **kw):
+        if "wifi list" in " ".join(cmd):
+            tries["n"] += 1
+            if tries["n"] == 1:
+                calls.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return base(cmd, **kw)
+
+    assert pt.scan_networks(run, iface="wlan0") == ["HomeNet", "Neighbour"]
+    assert tries["n"] == 2
+
+
+def test_a_scan_that_never_works_says_why(monkeypatch, caplog):
+    """Returning [] in silence is what made a scan that never ran look
+    identical to a house with no Wi-Fi in it."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="Error: No Wi-Fi device found.")
+
+    with caplog.at_level(logging.WARNING):
+        assert pt.scan_networks(run, iface="wlan0", attempts=2) == []
+    assert "No Wi-Fi device found" in caplog.text
+
+
+# ─── the card knows its own hardware ──────────────────────────────────────
+#
+# Found on hardware: an xvf3800_usb card offered a "Microphone board"
+# dropdown showing radxa_zero3w_video. The transport was handed the entire
+# profile catalogue, sorted, with nothing selected — so the form defaulted
+# to whatever sorts first, and submitting it would have provisioned the
+# wrong device profile.
+
+
+def test_a_prepared_card_does_not_ask_which_mic_board(cfg, monkeypatch):
+    from satellite import provisioning_mode as pm
+    monkeypatch.setattr(pt.shutil, "which", lambda name: f"/usr/bin/{name}")
+    (cfg / "ap.json").write_text(
+        json.dumps({"ssid": "Domovoi-Setup-9C1E", "psk": "unit-test-key"})
+    )
+    (cfg / "image_device_profile").write_text("xvf3800_usb\n")
+
+    transport = pm._default_transport()
+    assert transport.profiles == ["xvf3800_usb"]
+    body = portal_pages.render_form(networks=[], profiles=transport.profiles,
+                                    profile=transport.device_profile)
+    assert "Microphone board" not in body
+
+
+def test_the_declared_board_is_the_selected_one_when_asked(portal):
+    """The fixture offers a choice; the card's own profile must win it."""
+    _s, body, _h = _get(portal, "/")
+    assert 'value="xvf3800_usb" selected' in body
+    assert 'value="respeaker_2mic_hat" selected' not in body
