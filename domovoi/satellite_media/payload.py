@@ -100,6 +100,7 @@ async def assemble(
         ("debs", os_release),
         ("dtbo", None),
         ("oww_models", None),
+        ("xvf_host", None),
     ):
         src = cache.CACHE_ROOT / bucket_name / (sub or "")
         src = Path(str(src).rstrip("/\\"))

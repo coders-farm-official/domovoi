@@ -369,6 +369,7 @@ async def media_cache_refresh() -> dict[str, Any]:
         ),
         "debs": fetchers.fetch_debs(PI02W.os_release),
         "oww_models": fetchers.fetch_oww_models(),
+        "xvf_host": fetchers.fetch_xvf_host(),
     }
     return {
         k: {"ok": ok, "message": msg} for k, (ok, msg) in results.items()

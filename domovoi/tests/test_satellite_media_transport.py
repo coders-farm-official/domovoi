@@ -920,3 +920,70 @@ def test_the_console_layout_is_rendered_and_validated():
     for bad in ("", "u", "usa", "u1", "us-intl"):
         with pytest.raises(ValueError):
             overlay.validate_keyboard_layout(bad)
+
+
+# ─── the ring is the satellite's only way to show it is listening ─────────
+#
+# xvf_host was a documented MANUAL step (PROVISIONING §E) that no prepared
+# card ever ran, so a shipped unit sat in the XMOS chip's own default
+# direction-of-arrival display and never reacted to Domovoi — indisitinguishable
+# from a broken device. Nothing in the media pipeline referenced it at all.
+
+
+def test_the_led_tool_travels_in_the_payload():
+    import inspect
+
+    from domovoi.satellite_media import cache, payload
+
+    assert "xvf_host" in cache.status("3.13", "trixie")
+    src = inspect.getsource(payload.assemble)
+    assert '("xvf_host", None)' in src
+
+
+def test_the_whole_folder_is_installed_not_just_the_binary():
+    """xvf_host loads libcommand_map.so from its OWN directory — upstream
+    ships it beside three .so files — and a lone binary dies at runtime with
+    "cannot open shared object file"."""
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    step = body.split("# 6b.", 1)[1].split("# 7.", 1)[0]
+    assert "/opt/xvf3800" in step
+    # A recursive copy of the directory, never a copy of the binary alone.
+    assert 'cp -r "$PAYDIR"/xvf_host/. /opt/xvf3800/' in step
+    assert "chmod +x /opt/xvf3800/xvf_host" in step
+
+
+def test_the_client_is_allowed_to_drive_the_ring():
+    """USB control needs root; the client tries a plain call then falls back
+    to `sudo -n`, so the allowlist entry is what makes the ring work at all."""
+    from domovoi.satellite_media import overlay
+
+    sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
+    assert "domovoi ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host" in sudoers
+
+
+def test_the_profile_points_where_stage_one_installs_it():
+    """/opt/xvf3800 is deliberately not on PATH, so `xvf_host` as a bare
+    name would never resolve on a prepared card."""
+    from satellite import devices
+
+    prof = devices.PROFILES["xvf3800_usb"]
+    assert prof.led_backend == "ws2812_xvf"
+    assert prof.led_xvf_host_path == "/opt/xvf3800/xvf_host"
+
+
+def test_libusb_ships_because_xvf_host_links_against_it():
+    assert "libusb-1.0-0" in fetchers.BASE_APT_PACKAGES
+
+
+def test_a_missing_led_tool_is_reported_not_swallowed():
+    """A dark ring on a customer's unit reads as a dead device, so the
+    prepare job has to say so rather than quietly producing one."""
+    from domovoi.satellite_media import fetchers as f
+
+    ok, msg = f.fetch_xvf_host(run=lambda *a, **k: (_ for _ in ()).throw(
+        OSError("no git here")
+    ))
+    assert ok is False
+    assert "xvf_host" in msg

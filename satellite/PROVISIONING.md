@@ -573,7 +573,9 @@ Get the exact `CARD=` name from `arecord -L` (it's usually `Array`). The shippin
 
 ### E. Install the `xvf_host` LED/control tool
 
-The 12-LED ring is driven through Seeed's `xvf_host` CLI (it also configures the chip). Without it the satellite still runs — the ring just stays dark.
+The 12-LED ring is driven through Seeed's `xvf_host` CLI (it also configures the chip). Without it the satellite still runs — the ring just stays dark, which on a finished unit reads as a dead device rather than a plain one.
+
+> **A card from media prep has already done all of this.** The tool is fetched into the `xvf_host` cache bucket, travels in the payload, and stage 1 installs it to `/opt/xvf3800` with the sudoers entry and `libusb-1.0-0` alongside. The steps below are for a satellite you are building by hand.
 
 `xvf_host` is **not** a single file — it loads `libcommand_map.so` (and other companion files) from its *own* directory, so it must stay alongside them. Install the whole `rpi_64bit/` folder, don't copy just the binary (a lone binary fails with `libcommand_map.so: cannot open shared object file`).
 

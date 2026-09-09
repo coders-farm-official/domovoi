@@ -6,3 +6,6 @@
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
+# The XVF3800's LED ring is driven over USB, which needs root. The client
+# tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
+@USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host

@@ -100,6 +100,11 @@ async def build(
             ok, msg = fetchers.fetch_oww_models()
             if not ok:
                 warnings.append(msg)
+        if not st["xvf_host"]["ok"]:
+            await progress("fetch", 45, "fetching the XVF3800 LED tool")
+            ok, msg = fetchers.fetch_xvf_host()
+            if not ok:
+                warnings.append(msg)
 
     # ── Phase 2: assemble ─────────────────────────────────────────────
     await progress("assemble", 50, "assembling offline payload")

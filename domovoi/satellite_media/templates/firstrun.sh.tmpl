@@ -287,6 +287,23 @@ if ! skip micboard; then
   done_step micboard
 fi
 
+# 6b. XVF3800 LED/control tool.
+#
+#     The whole folder, never just the binary: xvf_host loads
+#     libcommand_map.so from its own directory and dies with "cannot open
+#     shared object file" if separated from it.
+#
+#     The ring is the satellite's only way to show it is listening, so a
+#     card without this looks broken rather than merely plain — it sits in
+#     the XMOS chip's own default display and never reacts to Domovoi.
+if [ -d "$PAYDIR/xvf_host" ] && ! skip xvfhost; then
+  info bootstrapping xvf-host
+  mkdir -p /opt/xvf3800
+  cp -r "$PAYDIR"/xvf_host/. /opt/xvf3800/
+  chmod +x /opt/xvf3800/xvf_host 2>/dev/null ||     echo "WARN: no xvf_host binary in the payload — the LED ring stays dark"
+  done_step xvfhost
+fi
+
 # 7. Units + sudoers + root helper.
 if ! skip units; then
   info bootstrapping systemd-units

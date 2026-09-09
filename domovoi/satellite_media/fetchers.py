@@ -22,8 +22,10 @@ the on-device compile the manual checklist documents.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from domovoi.satellite_media import cache
@@ -44,6 +46,8 @@ BASE_APT_PACKAGES = (
     "alsa-utils",
     "mtools",
     "dosfstools",
+    # xvf_host links against libusb to talk to the XVF3800 over USB.
+    "libusb-1.0-0",
     # The setup portal's wildcard DNS. NetworkManager usually pulls this in
     # on Pi OS, but a shipped unit must not depend on that being true — a
     # satellite that cannot raise its portal because it has no internet is
@@ -244,6 +248,59 @@ def parse_missing(stdout: str) -> list[str]:
         if line.startswith(MISSING_MARKER):
             return sorted(line[len(MISSING_MARKER):].split())
     return []
+
+
+# Seeed's control tool for the XVF3800. The 12-LED ring is the satellite's
+# entire visual language — listening, thinking, speaking, and the green dot
+# that tracks your voice — and this binary is the ONLY way to drive it.
+# Without it a shipped unit sits in the XMOS chip's own default display and
+# never reacts to Domovoi at all, which reads as a dead device rather than a
+# missing tool. It was a documented manual step (PROVISIONING §E) that no
+# prepared card had ever run.
+XVF_HOST_REPO = (
+    "https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY.git"
+)
+XVF_HOST_SUBDIR = "host_control/rpi_64bit"
+
+
+def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
+    """The xvf_host LED/control tool into the cache. (ok, message).
+
+    NOT a single file: xvf_host loads ``libcommand_map.so`` from its OWN
+    directory, so the whole folder has to travel together — a lone binary
+    fails at runtime with "cannot open shared object file".
+    """
+    dest = cache.bucket("xvf_host")
+    git = shutil.which("git")
+    if git is None:
+        return False, (
+            "git is not available, so the XVF3800 LED tool can't be cached — "
+            "satellites built from this payload will have a dark ring"
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = Path(tmp) / "src"
+        try:
+            r = run(
+                [git, "clone", "--depth", "1", XVF_HOST_REPO, str(clone)],
+                capture_output=True, text=True, timeout=600,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"xvf_host fetch unavailable: {e}"
+        if r.returncode != 0:
+            return False, f"xvf_host clone failed: {(r.stderr or '')[-300:]}"
+        src = clone / XVF_HOST_SUBDIR
+        if not src.is_dir():
+            return False, (
+                f"{XVF_HOST_SUBDIR} is not in the upstream repo any more — "
+                "the layout changed; see PROVISIONING.md §E"
+            )
+        # Replace rather than merge: a stale companion .so beside a newer
+        # binary is exactly the failure this folder-not-file rule exists for.
+        if dest.is_dir():
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(src, dest)
+    cache.stamp("xvf_host")
+    return True, f"xvf_host cached in {dest} ({len(list(dest.iterdir()))} files)"
 
 
 def fetch_oww_models() -> tuple[bool, str]:

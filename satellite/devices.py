@@ -164,7 +164,11 @@ _XVF3800_USB = DeviceProfile(
     capture_select_channel=1,  # ch1 = ASR beam
     led_backend="ws2812_xvf",
     playback_sample_rate=16_000,
-    led_xvf_host_path="xvf_host",
+    # Absolute: stage 1 installs the whole folder to /opt/xvf3800 and it
+    # is deliberately NOT on PATH — the binary loads its companion
+    # libcommand_map.so from its own directory. [leds] xvf_host_path
+    # in config.toml still overrides this for a hand-built install.
+    led_xvf_host_path="/opt/xvf3800/xvf_host",
     supports_full_duplex=True,    # on-chip AEC → full duplex OK
     # On-chip 60 dB AGC owns input level — the ALSA-PGA tune has no control
     # to walk and would just no-op; disable it so boot is quiet and fast.

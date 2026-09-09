@@ -68,4 +68,7 @@ def status(python_version: str, os_release: str) -> dict[str, object]:
         "oww_models": _bucket_info(
             "oww_models", CACHE_ROOT / "oww_models", "*.onnx"
         ),
+        # Glob is "*" rather than an extension: this bucket is a binary plus
+        # its companion shared objects, which have no common suffix.
+        "xvf_host": _bucket_info("xvf_host", CACHE_ROOT / "xvf_host", "*"),
     }
