@@ -34,12 +34,11 @@ log = logging.getLogger(__name__)
 BASE_APT_PACKAGES = (
     "mpg123",
     "libportaudio2",
-    # portaudio links against JACK, and `apt-get download` fetches the named
-    # package ALONE — never its dependencies. So libportaudio2 shipped
-    # without this, sounddevice could not dlopen it, and the client died on
-    # `import sounddevice` with OSError: libjack.so.0. Naming it explicitly
-    # covers the offline path; stage 2's apt step is what actually resolves
-    # a dependency graph.
+    # portaudio links against JACK and Pi OS does not ship it. `apt-get
+    # download` fetches only what it is told, so this has to be named or
+    # libportaudio2 arrives unusable: sounddevice cannot dlopen it and the
+    # client dies on `import sounddevice` with OSError: libjack.so.0, having
+    # looked perfectly healthy right up to that point.
     "libjack-jackd2-0",
     "libasound2",
     "alsa-utils",
@@ -203,6 +202,21 @@ MISSING_MARKER = "DOMOVOI_MISSING:"
 
 def build_deb_script(pkgs: list[str]) -> str:
     """Shell for the arm64 download container.
+
+    ``apt-get download`` fetches EXACTLY the packages named — never their
+    dependencies. That is a deliberate limit, not an oversight: this cache
+    exists to get a master image to a working state, and a master is baked
+    with a network, where stage 2's apt step resolves dependencies properly
+    using the real package manager on the real device. Units flashed from
+    that master inherit a complete system and install nothing.
+
+    So a transitive dependency that Pi OS lacks has to be NAMED here
+    (libjack, below, is one — libportaudio2 pulls it and nothing else
+    would). The cost of getting that wrong is a card prepared fresh and
+    booted with no network, which is the bench case rather than a
+    customer's. Resolving the graph instead would mean an emulated arm64
+    container and shipping half the base system in the payload, which buys
+    nothing the master bake does not already give us.
 
     Deliberately NOT ``set -e``: one package with no candidate must not abort
     the other twelve. Anything unfetchable is reported on stdout instead.

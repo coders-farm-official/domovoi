@@ -114,9 +114,31 @@ HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
 if ! skip debs; then
   info bootstrapping install-debs
   if ls "$PAYDIR"/debs/*.deb >/dev/null 2>&1; then
-    dpkg -i --force-confold "$PAYDIR"/debs/*.deb || \
-    dpkg -i --force-confold "$PAYDIR"/debs/*.deb || \
-      echo "WARN: some debs failed — stage 2 retries via apt online"
+    # Install only what this image LACKS. The cache is resolved against a
+    # plain Debian of the same release, but Pi OS ships its own builds of
+    # some of these (alsa-utils 1.2.14-1+rpt1 vs Debian's 1.2.14-1), and
+    # dpkg -i on the lot happily downgrades them — which is what produced
+    # "dpkg: warning: downgrading ..." and then a half-configured system.
+    # The payload is here to fill gaps, not to overwrite the distribution.
+    TO_INSTALL=""
+    for D in "$PAYDIR"/debs/*.deb; do
+      P="$(dpkg-deb -f "$D" Package 2>/dev/null)" || continue
+      NEWV="$(dpkg-deb -f "$D" Version 2>/dev/null)" || continue
+      CURV="$(dpkg-query -W -f='${Version}' "$P" 2>/dev/null || true)"
+      if [ -n "$CURV" ] && dpkg --compare-versions "$CURV" ge "$NEWV"; then
+        continue
+      fi
+      TO_INSTALL="$TO_INSTALL $D"
+    done
+    if [ -n "$TO_INSTALL" ]; then
+      # Twice: the cache is unordered, so a package whose dependency sorts
+      # later fails the first pass and succeeds the second.
+      dpkg -i --force-confold $TO_INSTALL >/dev/null 2>&1 || \
+      dpkg -i --force-confold $TO_INSTALL || \
+        echo "WARN: some debs failed — stage 2 repairs via apt online"
+    else
+      echo "all cached debs already present at this version or newer"
+    fi
   else
     echo "WARN: no deb cache in payload — stage 2 installs via apt online"
   fi

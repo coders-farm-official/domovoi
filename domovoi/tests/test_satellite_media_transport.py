@@ -255,6 +255,18 @@ def test_renamed_debian_libraries_are_tried_first():
     assert script.index("libasound2t64") < script.index("libasound2:arm64")
 
 
+def test_portaudios_own_dependency_is_named_explicitly():
+    """`apt-get download` never fetches dependencies, so libjack has to be
+    in the list by name. It was not, libportaudio2 shipped unusable, and the
+    client died on `import sounddevice` with OSError: libjack.so.0 — behind
+    a deb cache that reported itself complete.
+
+    If this list ever gains a package whose dependencies Pi OS lacks, the
+    same thing happens again, quietly."""
+    assert "libjack-jackd2-0" in fetchers.BASE_APT_PACKAGES
+    assert "libjack-jackd2-0" in fetchers.DEB_ALTERNATES
+
+
 def test_one_missing_package_does_not_abort_the_rest():
     script = fetchers.build_deb_script(["libasound2", "mpg123", "mtools"])
     assert "set -e" not in script
