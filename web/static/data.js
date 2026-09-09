@@ -113,7 +113,7 @@ const ServerStore = {
 
 // Admin auth (auth.js, loaded first): the in-memory bearer token rides
 // along on every API call; a 401/403 from an admin-gated endpoint pops
-// the login modal so the user can authenticate and retry their action.
+// the login modal so the user can authenticate.
 const _authHeaders = () => {
   try { return (typeof Auth !== 'undefined' && Auth.headers()) || {}; }
   catch { return {}; }
@@ -123,9 +123,86 @@ const _maybeRequestLogin = (status) => {
   try { if (typeof Auth !== 'undefined') Auth.requestLogin(); } catch {}
 };
 
-const apiFetch = async (path, opts = {}) => {
+// ─── Resuming an action across a sign-in ────────────────────────────
+//
+// A 401/403 on a mutation used to end the story: the login modal popped
+// and the caller's promise rejected, so the operator signed in and then
+// had to go find the button and press it again. The request is replayed
+// here instead — once, as soon as a new bearer exists — so the thing the
+// user asked for is the thing that happens. Doing it in this layer is
+// what makes that true of every button on every page, rather than the
+// three that had hand-rolled it.
+//
+// Mutations only. A GET that 401s is a panel that renders empty, and the
+// hooks below already refetch after login; parking every admin-gated GET
+// of a page load behind the modal would turn a dismissible prompt into a
+// dashboard that looks hung.
+//
+// At MOST one replay, and only carrying a token the refused attempt did
+// not have. A 401 that persists against a fresh bearer is a real bug — a
+// web→core hop that forgets to forward credentials, say — and prompting
+// for it forever is a login-modal loop standing where a visible error
+// belongs.
+const _isAuthFailure = (status) => status === 401 || status === 403;
+
+const _isMutation = (method) => {
+  const m = (method || 'GET').toUpperCase();
+  return m !== 'GET' && m !== 'HEAD';
+};
+
+// Bodies that survive being sent twice: fetch re-reads a string or a
+// FormData on each call, where a stream is consumed by the first.
+const _replayableBody = (body) => (
+  body === undefined || body === null || typeof body === 'string'
+  || (typeof FormData !== 'undefined' && body instanceof FormData)
+);
+
+const _authToken = () => {
+  try { return typeof Auth !== 'undefined' ? Auth.token : null; }
+  catch { return null; }
+};
+
+const _signInAgain = async (refusedToken) => {
+  try {
+    if (typeof Auth === 'undefined') return false;
+    return await Auth.ensureLoggedIn(refusedToken);
+  } catch { return false; }
+};
+
+// Shared tail for apiFetch/apiUpload. `send` MUST rebuild its headers on
+// each call — that is how the replay carries the bearer the first attempt
+// was missing.
+const _sendWithAuthRetry = async (send, { method, body } = {}) => {
+  const refusedToken = _authToken();
+  let r = await send();
+  let promptedHere = false;
+  let signInDismissed = false;
+
+  if (_isAuthFailure(r.status) && _isMutation(method) && _replayableBody(body)) {
+    promptedHere = true;
+    if (await _signInAgain(refusedToken)) r = await send();
+    else signInDismissed = true;
+  }
+
+  if (!r.ok) {
+    // Never re-open a modal we have just come back from — that is the loop.
+    if (!promptedHere) _maybeRequestLogin(r.status);
+    const text = await r.text().catch(() => '');
+    const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
+    err.status = r.status;   // callers branch on auth failures
+    // Lets a caller say "cancelled" instead of "failed": the operator
+    // dismissed the sign-in, they did not hit a broken endpoint.
+    if (signInDismissed) err.authCancelled = true;
+    try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
+    throw err;
+  }
+  if (r.status === 204) return null;
+  return r.json();
+};
+
+const apiFetch = (path, opts = {}) => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const r = await fetch(url, {
+  const send = () => fetch(url, {
     credentials: 'include',
     ...opts,
     headers: {
@@ -134,16 +211,7 @@ const apiFetch = async (path, opts = {}) => {
       ...(opts.headers || {}),
     },
   });
-  if (!r.ok) {
-    _maybeRequestLogin(r.status);
-    const text = await r.text().catch(() => '');
-    const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
-    err.status = r.status;   // callers branch on auth failures (retry-after-login)
-    try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
-    throw err;
-  }
-  if (r.status === 204) return null;
-  return r.json();
+  return _sendWithAuthRetry(send, { method: opts.method, body: opts.body });
 };
 
 const apiGet = (path) => apiFetch(path);
@@ -172,24 +240,15 @@ const deviceDownload = (path) => {
 // Multipart upload (file + fields). Doesn't set Content-Type — the
 // browser fills in the multipart boundary. Used by the Voices page to
 // upload Piper .onnx models.
-const apiUpload = async (path, formData) => {
+const apiUpload = (path, formData) => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const r = await fetch(url, {
+  const send = () => fetch(url, {
     method: 'POST',
     body: formData,
     credentials: 'include',
     headers: _authHeaders(),
   });
-  if (!r.ok) {
-    _maybeRequestLogin(r.status);
-    const text = await r.text().catch(() => '');
-    const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
-    err.status = r.status;   // callers branch on auth failures (retry-after-login)
-    try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
-    throw err;
-  }
-  if (r.status === 204) return null;
-  return r.json();
+  return _sendWithAuthRetry(send, { method: 'POST', body: formData });
 };
 
 // ─── Shared WebSocket bus ───────────────────────────────────────────

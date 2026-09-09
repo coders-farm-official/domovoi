@@ -42,18 +42,39 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
-# 2. Online retries of stage-1 warnings (best-effort).
+# 2. The client's Python dependencies.
+#
+#    NOT a best-effort top-up. When the server's wheel cache was incomplete
+#    the card ships with none of them (the builder marks such a card
+#    non-offline precisely so this step installs them), which makes this the
+#    only place they are ever installed.
+#
+#    So the marker goes down only once the client can actually import what
+#    it needs. pip's exit code is not that test, and trusting it cost us a
+#    satellite: one failed run touched the marker anyway, permanently
+#    disabling the only recovery path, and the unit then crash-looped on
+#    `No module named numpy` 56 times with nothing but a console to say so.
 if [ ! -f "$STEPS/online-deps" ]; then
   as_user "$HOME_DIR/satellite-venv/bin/pip" install \
       -r "$HOME_DIR/domovoi/satellite/requirements.txt" || true
   as_user "$HOME_DIR/satellite-venv/bin/pip" install --no-deps openwakeword || true
-  touch "$STEPS/online-deps"
+  if as_user "$VENVPY" -c \
+      'import numpy, sounddevice, webrtcvad, websockets, onnxruntime'; then
+    touch "$STEPS/online-deps"
+    echo "satellite dependencies present"
+  else
+    echo "WARN: satellite dependencies still missing — retrying next boot"
+  fi
 fi
 
 # 3. Fresh code + plugin payloads from the LAN server (authoritative over
 #    the payload snapshot). Uses the satellite's own sync modules.
+#
+#    PYTHONPATH is what the satellite unit gets from WorkingDirectory, and
+#    this needs the same: without it `import satellite` fails outright and
+#    the sync silently never happened on any device.
 if [ ! -f "$STEPS/server-sync" ]; then
-  as_user "$VENVPY" - <<'EOF' || echo "WARN: server sync failed (client will sync on upgrade)"
+  if as_user env PYTHONPATH="$HOME_DIR/domovoi" "$VENVPY" - <<'EOF'
 import pathlib, tomllib
 cfg = tomllib.load(open(pathlib.Path.home() / ".domovoi/config.toml", "rb"))
 from satellite.sound_sync import http_base_from_ws
@@ -66,7 +87,11 @@ res = plugin_sync.sync_plugin_payloads(base)
 if res["root_work"]:
     plugin_sync.request_root_apply(res["meta"], res["root_work"])
 EOF
-  touch "$STEPS/server-sync"
+  then
+    touch "$STEPS/server-sync"
+  else
+    echo "WARN: server sync failed (client will sync on upgrade)"
+  fi
 fi
 
 # 4. Enable + start the satellite; mark done on the first clean start.
@@ -87,6 +112,12 @@ EOF
   done
   echo "stage 2 complete"
 else
+  # Say WHY, here, in this file. The unit's own journal is the only place
+  # that carries the reason, and reaching it meant unplugging the mic array
+  # to free the USB port for a keyboard.
   echo "satellite unit not active yet — will retry on next boot"
+  echo "--- last lines from domovoi-satellite ---"
+  journalctl -u domovoi-satellite.service -n 20 --no-pager 2>&1 || true
+  echo "--- end ---"
   exit 1
 fi

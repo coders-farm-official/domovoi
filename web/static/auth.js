@@ -69,12 +69,20 @@ const Auth = (() => {
     // in. Lets a flow that hit a 401/403 pause, authenticate, and
     // RESUME — instead of dying after the login (the failed action was
     // previously just lost).
-    ensureLoggedIn() {
-      if (token) return Promise.resolve(true);
+    //
+    // `refusedToken` is the bearer the caller actually sent and the
+    // server actually rejected. Handing that same token straight back
+    // would resume the flow with the credential that just failed, so a
+    // match counts as not-signed-in and prompts. Omit it and any live
+    // token satisfies the call, which is what a caller asking "is
+    // anyone signed in?" means.
+    ensureLoggedIn(refusedToken) {
+      const usable = () => !!token && token !== refusedToken;
+      if (usable()) return Promise.resolve(true);
       this.requestLogin();
       return new Promise((resolve) => {
         const un = this.subscribe(() => {
-          if (token) { un(); resolve(true); }
+          if (usable()) { un(); resolve(true); }
           else if (!modalOpen) { un(); resolve(false); }
         });
       });

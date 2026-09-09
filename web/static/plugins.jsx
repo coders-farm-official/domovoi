@@ -226,19 +226,16 @@ const useInstallFlow = (fire, refresh) => {
   const fileInputRef = React.useRef(null);
   const upgradeSlugRef = React.useRef(null);
 
-  /* On an auth failure, wait for the login modal to succeed and retry
-   * ONCE — the user's action resumes instead of silently dying after
-   * they sign in (bearer lives in JS memory, so any page refresh drops
-   * it and the next mutation 403s). */
-  const _retryAfterLogin = async (e, retryFn) => {
-    if (e.status !== 401 && e.status !== 403) return false;
-    const ok = await Auth.ensureLoggedIn();
-    if (ok) { await retryFn(); return true; }
+  /* data.js signs in and replays the request itself now, so an auth
+   * failure reaching this far means the operator dismissed the prompt.
+   * Asking again from here would only re-open the modal they closed. */
+  const _wasSignInDismissed = (e) => {
+    if (!e.authCancelled) return false;
     fire('sign-in cancelled — the install was not started');
     return true;
   };
 
-  const stageZip = async (file, slug, retried = false) => {
+  const stageZip = async (file, slug) => {
     const fd = new FormData();
     fd.append('file', file, file.name);
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
@@ -250,20 +247,20 @@ const useInstallFlow = (fire, refresh) => {
         sourceLabel: file.name, verb: slug ? 'upgrade' : 'install',
       });
     } catch (e) {
-      if (!retried && await _retryAfterLogin(e, () => stageZip(file, slug, true))) return;
+      if (_wasSignInDismissed(e)) return;
       // Installing a zip whose slug is already installed: re-stage the
       // same upload as an UPGRADE of that slug instead of dead-ending.
       const errInfo = (((e.detail || {}).detail || {}).error) || {};
       const existingSlug = (errInfo.details || {}).slug;
       if (!slug && errInfo.code === 'slug_exists' && existingSlug) {
         fire(`${existingSlug} is already installed — staging as an upgrade`);
-        return stageZip(file, existingSlug, retried);
+        return stageZip(file, existingSlug);
       }
       fire(`validation failed: ${e.message}`);
     }
   };
 
-  const stageGithub = async (url, slug, retried = false) => {
+  const stageGithub = async (url, slug) => {
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
     try {
       fire('downloading + validating…');
@@ -273,7 +270,7 @@ const useInstallFlow = (fire, refresh) => {
         sourceLabel: url, verb: slug ? 'upgrade' : 'install',
       });
     } catch (e) {
-      if (!retried && await _retryAfterLogin(e, () => stageGithub(url, slug, true))) return;
+      if (_wasSignInDismissed(e)) return;
       fire(`validation failed: ${e.message}`);
     }
   };

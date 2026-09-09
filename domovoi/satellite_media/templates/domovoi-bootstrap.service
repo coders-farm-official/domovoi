@@ -14,7 +14,10 @@ Type=oneshot
 User=root
 ExecStart=/bin/bash @HOME@/domovoi/satellite/scripts/stage2.sh
 Restart=on-failure
-RestartSec=30
+# Two minutes, not thirty seconds: a failing run of this unit can now be
+# retrying a pip install of numpy/scipy/onnxruntime, and a Pi Zero 2 W
+# reattempting that every 30s helps nobody.
+RestartSec=120
 StartLimitIntervalSec=0
 
 [Install]

@@ -672,3 +672,85 @@ def test_junk_is_still_excluded():
                      "satellite/tests/test_x.py", "satellite/.env.local",
                      "satellite/config.toml.bak", "satellite/notes.rst"):
         assert not _allowed_code_file(Path(rejected)), rejected
+
+
+# ─── the bootstrap scripts themselves ─────────────────────────────────────
+#
+# These templates are shell, rendered at prepare time and run once on a
+# device nobody can log into. Nothing else in the suite executes them, so a
+# syntax error ships silently and bricks provisioning.
+
+
+def _render_both():
+    from domovoi.satellite_media import overlay
+
+    return {
+        "stage2.sh": overlay.render_stage2("domovoi"),
+        "firstrun.sh": overlay.render_firstrun(
+            "domovoi", "xvf3800_usb", "voice", "portal", "US"
+        ),
+    }
+
+
+def test_the_rendered_bootstrap_scripts_are_valid_shell(tmp_path):
+    import shutil
+    import subprocess
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash available to parse with")
+    for name, body in _render_both().items():
+        path = tmp_path / name
+        path.write_text(body, encoding="utf-8", newline="\n")
+        r = subprocess.run(
+            [bash, "-n", str(path)], capture_output=True, text=True
+        )
+        assert r.returncode == 0, f"{name}: {r.stderr.strip()}"
+
+
+def test_no_placeholder_survives_rendering():
+    """An unrendered @NAME@ is a value the device never gets — how a
+    stage-2 allowlist would silently become the literal string.
+
+    Only the ones each renderer is responsible for: firstrun legitimately
+    CARRIES @USER@/@HOME@, as the sed patterns it uses to render the unit
+    files and sudoers on the device itself."""
+    substituted = {
+        "stage2.sh": ("SAT_USER", "CODE_EXT_ALLOW"),
+        "firstrun.sh": ("SAT_USER", "MIC_PROFILE", "SAT_TYPE",
+                        "SETUP_TRANSPORT", "WIFI_COUNTRY"),
+    }
+    rendered = _render_both()
+    for name, keys in substituted.items():
+        for key in keys:
+            assert f"@{key}@" not in rendered[name], f"{name}: @{key}@"
+
+
+def test_the_dependency_marker_waits_for_a_real_import():
+    """Found on hardware: pip failed once, the marker went down anyway, and
+    the only path that installs the client's dependencies was disabled
+    forever. The satellite crash-looped on `No module named numpy` 56 times.
+
+    So the marker must be guarded by an import check, not by pip's exit
+    code — which the `|| true` throws away regardless."""
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_stage2("domovoi")
+    lines = [ln.strip() for ln in body.splitlines()]
+    marker = next(i for i, ln in enumerate(lines) if 'touch "$STEPS/online-deps"' in ln)
+    # The touch is inside a conditional that imports what the client needs.
+    guard = "\n".join(lines[max(0, marker - 3):marker])
+    assert "import numpy" in guard, guard
+    assert lines[marker - 1].startswith("if ") or "then" in guard, guard
+
+
+def test_the_sync_step_can_import_the_satellite_package():
+    """`import satellite` needs the repo root on the path. The unit gets it
+    from WorkingDirectory; this heredoc had nothing, so the server sync
+    failed on every device with ModuleNotFoundError."""
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_stage2("domovoi")
+    sync = body.split("# 3.", 1)[1].split("# 4.", 1)[0]
+    assert "PYTHONPATH=" in sync, sync
+    assert "from satellite" in sync
