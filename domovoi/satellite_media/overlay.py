@@ -77,11 +77,46 @@ def validate_wifi_country(code: str) -> str:
         )
     return normalised
 
-# WPA2 needs 8-63 characters. The alphabet drops the glyph pairs people
-# mistype off a printed label (0/O, 1/l/I), because this key is read off a
-# box by a customer, once, under mild stress.
+# Raspberry Pi OS ships XKBLAYOUT="gb". On a US keyboard that moves the
+# symbols and puts | somewhere it isn't printed — which is exactly the
+# moment someone has plugged a keyboard into a wedged unit and is trying to
+# pipe something into grep. Not exposed in the prepare form: it is a
+# property of the keyboard whoever supports the device will plug in, not of
+# the unit, and one more dropdown earns nothing.
+DEFAULT_KEYBOARD_LAYOUT = "us"
+
+
+def validate_keyboard_layout(code: str) -> str:
+    """A two-letter X11 layout, lowercased. Anything else is rejected rather
+    than written through: a bogus XKBLAYOUT leaves console-setup unable to
+    configure any keyboard at all, which is worse than the wrong one."""
+    normalised = (code or "").strip().lower()
+    if not re.fullmatch(r"[a-z]{2}", normalised):
+        raise ValueError(
+            f"keyboard_layout must be two letters, got {code!r}"
+        )
+    return normalised
+
+
+# The alphabet drops the glyph pairs people mistype off a printed label
+# (0/O, 1/l/I), because these are read off a box once, under mild stress,
+# and typed on a phone or an unfamiliar console keyboard. 32 symbols, so
+# every character is worth exactly 5 bits.
 _PSK_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
-_PSK_LEN = 12
+
+# WPA2's floor is 8. This one is deliberately above it: the setup AP is what
+# encrypts the customer's HOME Wi-Fi password on its way to the device, and
+# anyone in radio range during those few minutes can record the handshake
+# and attack it at leisure. At 8 characters that is 40 bits — days on one
+# GPU. At 10 it is 50 bits, about a thousand times more, for two extra
+# characters typed once.
+_AP_PSK_LEN = 10
+
+# The console login has no such exposure: SSH is not enabled on these
+# images, so this is reachable only by someone holding the device and a
+# keyboard, with no remote channel to guess down. 8 characters is the right
+# trade against typing it on a tiny keyboard beside a wedged satellite.
+_CONSOLE_PASSWORD_LEN = 8
 
 # Wildcard DNS is what actually brings the OS connectivity-probe hostnames
 # to us; without it the sign-in sheet never opens. NetworkManager's shared
@@ -177,12 +212,14 @@ def render_firstrun(
     sat_type: str,
     setup_transport: str = "usb",
     wifi_country: str = "US",
+    keyboard_layout: str = DEFAULT_KEYBOARD_LAYOUT,
 ) -> str:
     return render_template(
         "firstrun.sh.tmpl",
         {"SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
             "SETUP_TRANSPORT": setup_transport,
             "WIFI_COUNTRY": validate_wifi_country(wifi_country),
+            "KEYBOARD_LAYOUT": validate_keyboard_layout(keyboard_layout),
             "SDIST_ONLY": sdist_only_packages()},
     )
 
@@ -235,7 +272,7 @@ def generate_ap_credentials(rng=None) -> dict:
 
     rng = rng or secrets
     ident = "".join(rng.choice("0123456789ABCDEF") for _ in range(4))
-    psk = "".join(rng.choice(_PSK_ALPHABET) for _ in range(_PSK_LEN))
+    psk = "".join(rng.choice(_PSK_ALPHABET) for _ in range(_AP_PSK_LEN))
     return {"ssid": f"Domovoi-Setup-{ident}", "psk": psk}
 
 
@@ -256,7 +293,9 @@ def generate_console_credentials(username: str, rng=None) -> dict:
     import secrets
 
     rng = rng or secrets
-    password = "".join(rng.choice(_PSK_ALPHABET) for _ in range(_PSK_LEN))
+    password = "".join(
+        rng.choice(_PSK_ALPHABET) for _ in range(_CONSOLE_PASSWORD_LEN)
+    )
     return {"username": username, "password": password}
 
 

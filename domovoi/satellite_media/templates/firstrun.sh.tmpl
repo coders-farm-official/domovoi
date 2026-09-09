@@ -15,6 +15,7 @@
 #   @SAT_TYPE@      voice | video
 #   @SETUP_TRANSPORT@  usb | portal  (how this unit is adopted)
 #   @WIFI_COUNTRY@  ISO 3166-1 alpha-2 wireless regulatory domain
+#   @KEYBOARD_LAYOUT@  two-letter X11 console keyboard layout
 
 set -u
 # This script lives at <boot>/domovoi/firstrun.sh, but every path below is
@@ -33,6 +34,7 @@ MIC_PROFILE="@MIC_PROFILE@"
 SAT_TYPE="@SAT_TYPE@"
 SETUP_TRANSPORT="@SETUP_TRANSPORT@"
 WIFI_COUNTRY="@WIFI_COUNTRY@"
+KEYBOARD_LAYOUT="@KEYBOARD_LAYOUT@"
 LOG=/var/log/domovoi-firstrun.log
 
 mkdir -p "$STEPS"
@@ -221,6 +223,28 @@ if ! skip wificountry; then
   fi
   rfkill unblock wifi 2>/dev/null || true
   done_step wificountry
+fi
+
+# 5ab. Console keyboard layout.
+#
+#      Pi OS ships XKBLAYOUT="gb". Every symbol a US keyboard prints is
+#      then somewhere else, and | in particular becomes unreachable — which
+#      matters because the only time anyone plugs a keyboard into one of
+#      these is when it has gone wrong and they want to pipe a log into
+#      grep.
+if ! skip keyboard; then
+  info bootstrapping keyboard
+  if [ -f /etc/default/keyboard ]; then
+    sed -i "s/^XKBLAYOUT=.*/XKBLAYOUT=\"$KEYBOARD_LAYOUT\"/" /etc/default/keyboard
+  else
+    printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS=""\n' \
+      "$KEYBOARD_LAYOUT" >/etc/default/keyboard
+  fi
+  # Regenerate the console keymap from that file. Best-effort: a unit with
+  # the wrong layout is inconvenient, not broken, and must still boot.
+  setupcon --save-only 2>/dev/null || \
+    echo "WARN: could not apply keyboard layout $KEYBOARD_LAYOUT"
+  done_step keyboard
 fi
 
 # 5b. Setup-portal DNS. NetworkManager's shared mode runs its own dnsmasq;

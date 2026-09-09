@@ -359,7 +359,7 @@ needs_openssl = pytest.mark.skipif(
 def test_console_credentials_shape():
     c = overlay.generate_console_credentials("domovoi")
     assert c["username"] == "domovoi"
-    assert len(c["password"]) == overlay._PSK_LEN
+    assert len(c["password"]) == overlay._CONSOLE_PASSWORD_LEN
 
 
 def test_console_password_avoids_glyphs_people_mistype():
@@ -877,3 +877,46 @@ def test_the_real_requirements_still_yield_the_client_imports(tmp_path):
     # The five stage 2 verifies before it marks itself done.
     for pkg in ("numpy", "sounddevice", "webrtcvad", "websockets", "onnxruntime"):
         assert pkg in r.stdout, f"{pkg} was filtered out of the install"
+
+
+# ─── typed by a person, once, on unfamiliar hardware ──────────────────────
+
+
+def test_the_setup_key_stays_above_wpa2s_floor():
+    """WPA2 permits 8. This one guards the customer's HOME Wi-Fi password
+    while it crosses the air to the device, and anyone in radio range during
+    setup can record the handshake and attack it offline afterwards. Every
+    character of this alphabet is 5 bits, so 8 would be 40 — days on a
+    single GPU."""
+    assert overlay._AP_PSK_LEN >= 10
+    assert len(overlay._PSK_ALPHABET) == 32
+    psk = overlay.generate_ap_credentials()["psk"]
+    assert len(psk) == overlay._AP_PSK_LEN
+    assert set(psk) <= set(overlay._PSK_ALPHABET)
+
+
+def test_neither_secret_contains_a_glyph_people_mistype():
+    """Both are read off a label and typed on a phone or an unfamiliar
+    console keyboard."""
+    banned = set("0O1lI")
+    assert not (set(overlay._PSK_ALPHABET) & banned)
+    for _ in range(50):
+        assert not (set(overlay.generate_ap_credentials()["psk"]) & banned)
+        assert not (
+            set(overlay.generate_console_credentials("domovoi")["password"])
+            & banned
+        )
+
+
+def test_the_console_layout_is_rendered_and_validated():
+    """Pi OS ships gb, where | is not where a US keyboard prints it — the
+    one character you want when a satellite has gone wrong."""
+    body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    assert 'KEYBOARD_LAYOUT="us"' in body
+    assert "XKBLAYOUT" in body
+    assert "@KEYBOARD_LAYOUT@" not in body
+
+    assert overlay.validate_keyboard_layout("US") == "us"
+    for bad in ("", "u", "usa", "u1", "us-intl"):
+        with pytest.raises(ValueError):
+            overlay.validate_keyboard_layout(bad)
