@@ -153,6 +153,24 @@ def render_template(name: str, substitutions: dict[str, str]) -> str:
     return out.replace("\r\n", "\n")
 
 
+def sdist_only_packages() -> str:
+    """The packages pip has to build rather than download, space-separated
+    for the shell. Same list the wheel fetcher skips — a package that cannot
+    ship as a wheel must not be allowed to fail the install either."""
+    from domovoi.satellite_media.fetchers import SDIST_ONLY_PACKAGES
+
+    return " ".join(SDIST_ONLY_PACKAGES)
+
+
+def apt_packages() -> str:
+    """The satellite's base apt set, space-separated for the shell. Same
+    list the deb cache is built from — what stage 1 installs offline and
+    stage 2 repairs online must not be two lists that drift."""
+    from domovoi.satellite_media.fetchers import BASE_APT_PACKAGES
+
+    return " ".join(BASE_APT_PACKAGES)
+
+
 def render_firstrun(
     sat_user: str,
     mic_profile: str,
@@ -164,7 +182,8 @@ def render_firstrun(
         "firstrun.sh.tmpl",
         {"SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
             "SETUP_TRANSPORT": setup_transport,
-            "WIFI_COUNTRY": validate_wifi_country(wifi_country)},
+            "WIFI_COUNTRY": validate_wifi_country(wifi_country),
+            "SDIST_ONLY": sdist_only_packages()},
     )
 
 
@@ -178,7 +197,10 @@ def render_stage2(sat_user: str) -> str:
 
     allow = "{" + ", ".join(repr(e) for e in sorted(_CODE_EXT_ALLOW)) + "}"
     return render_template(
-        "stage2.sh.tmpl", {"SAT_USER": sat_user, "CODE_EXT_ALLOW": allow}
+        "stage2.sh.tmpl",
+        {"SAT_USER": sat_user, "CODE_EXT_ALLOW": allow,
+            "SDIST_ONLY": sdist_only_packages(),
+            "APT_PACKAGES": apt_packages()},
     )
 
 

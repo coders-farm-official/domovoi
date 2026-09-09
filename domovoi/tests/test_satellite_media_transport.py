@@ -716,9 +716,9 @@ def test_no_placeholder_survives_rendering():
     CARRIES @USER@/@HOME@, as the sed patterns it uses to render the unit
     files and sudoers on the device itself."""
     substituted = {
-        "stage2.sh": ("SAT_USER", "CODE_EXT_ALLOW"),
+        "stage2.sh": ("SAT_USER", "CODE_EXT_ALLOW", "SDIST_ONLY"),
         "firstrun.sh": ("SAT_USER", "MIC_PROFILE", "SAT_TYPE",
-                        "SETUP_TRANSPORT", "WIFI_COUNTRY"),
+                        "SETUP_TRANSPORT", "WIFI_COUNTRY", "SDIST_ONLY"),
     }
     rendered = _render_both()
     for name, keys in substituted.items():
@@ -751,6 +751,117 @@ def test_the_sync_step_can_import_the_satellite_package():
     from domovoi.satellite_media import overlay
 
     body = overlay.render_stage2("domovoi")
-    sync = body.split("# 3.", 1)[1].split("# 4.", 1)[0]
+    # Anchored on the step's own marker, not its comment number — the steps
+    # get renumbered whenever one is inserted ahead of them.
+    sync = body.split('"$STEPS/server-sync"', 1)[1]
     assert "PYTHONPATH=" in sync, sync
     assert "from satellite" in sync
+
+
+# ─── the package that took everything down with it ────────────────────────
+#
+# Found on hardware: `pip install -r requirements.txt` is all-or-nothing, and
+# spidev is sdist-only with no aarch64 wheel. pip failed to build it and
+# aborted the WHOLE transaction, so numpy never installed despite its wheel
+# being right there in the payload — offline in stage 1 and online in stage
+# 2, both. The wheel fetcher already sidesteps this for the download
+# (SDIST_ONLY_PACKAGES); the install paths had never been told.
+
+
+def test_the_install_never_sees_the_unbuildable_packages():
+    from domovoi.satellite_media import overlay
+
+    for body in _render_both().values():
+        assert "strip_sdist_only" in body
+        # The requirements file itself must not be handed to pip directly —
+        # that is the all-or-nothing call that failed.
+        for line in body.splitlines():
+            if "pip" in line and "install" in line and "-r " in line:
+                assert "$REQ_CORE" in line, line
+
+
+def test_the_unbuildable_list_comes_from_the_fetcher():
+    """One definition. A package that cannot ship as a wheel must not be
+    allowed to fail the install either, and both facts follow from the same
+    list rather than two that drift."""
+    from domovoi.satellite_media import overlay
+    from domovoi.satellite_media.fetchers import SDIST_ONLY_PACKAGES
+
+    for body in _render_both().values():
+        line = next(ln for ln in body.splitlines() if ln.startswith("SDIST_ONLY="))
+        assert line == f'SDIST_ONLY="{" ".join(SDIST_ONLY_PACKAGES)}"', line
+
+
+def test_the_filter_drops_spidev_and_keeps_everything_else(tmp_path):
+    """Exercise the rendered shell, not a Python re-implementation of it."""
+    import shutil
+    import subprocess
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash available to run the filter")
+
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_stage2("domovoi")
+    start = body.index("SDIST_ONLY=")
+    helper = body[start:body.index("\n}\n", start) + 3]
+
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text(
+        "# a comment\n"
+        "numpy>=1.26\n"
+        "spidev>=3.6\n"
+        "webrtcvad-wheels>=2.0.14\n"
+        "spidev2>=1\n"          # lookalike: must SURVIVE
+        "spidev-extra>=1\n"     # lookalike: must SURVIVE
+        "requests>=2.0,<3\n",
+        encoding="utf-8", newline="\n",
+    )
+    script = tmp_path / "run.sh"
+    script.write_text(
+        helper
+        + f'\nstrip_sdist_only "{reqs.as_posix()}"\ncat "$REQ_CORE"\n',
+        encoding="utf-8", newline="\n",
+    )
+    r = subprocess.run([bash, str(script)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    kept = [ln for ln in r.stdout.splitlines() if ln and not ln.startswith("#")]
+    assert "spidev>=3.6" not in kept
+    assert kept == [
+        "numpy>=1.26",
+        "webrtcvad-wheels>=2.0.14",
+        "spidev2>=1",
+        "spidev-extra>=1",
+        "requests>=2.0,<3",
+    ], kept
+
+
+def test_the_real_requirements_still_yield_the_client_imports(tmp_path):
+    """The filter must not eat anything the client actually imports."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash available to run the filter")
+
+    from domovoi.satellite_media import overlay
+
+    repo_root = Path(__file__).resolve().parents[2]
+    reqs = repo_root / "satellite" / "requirements.txt"
+    body = overlay.render_stage2("domovoi")
+    start = body.index("SDIST_ONLY=")
+    helper = body[start:body.index("\n}\n", start) + 3]
+
+    script = tmp_path / "run.sh"
+    script.write_text(
+        helper + f'\nstrip_sdist_only "{reqs.as_posix()}"\ncat "$REQ_CORE"\n',
+        encoding="utf-8", newline="\n",
+    )
+    r = subprocess.run([bash, str(script)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    # The five stage 2 verifies before it marks itself done.
+    for pkg in ("numpy", "sounddevice", "webrtcvad", "websockets", "onnxruntime"):
+        assert pkg in r.stdout, f"{pkg} was filtered out of the install"

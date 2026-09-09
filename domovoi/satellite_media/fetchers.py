@@ -34,6 +34,13 @@ log = logging.getLogger(__name__)
 BASE_APT_PACKAGES = (
     "mpg123",
     "libportaudio2",
+    # portaudio links against JACK, and `apt-get download` fetches the named
+    # package ALONE — never its dependencies. So libportaudio2 shipped
+    # without this, sounddevice could not dlopen it, and the client died on
+    # `import sounddevice` with OSError: libjack.so.0. Naming it explicitly
+    # covers the offline path; stage 2's apt step is what actually resolves
+    # a dependency graph.
+    "libjack-jackd2-0",
     "libasound2",
     "alsa-utils",
     "mtools",
@@ -65,6 +72,7 @@ SDIST_ONLY_PACKAGES = ("spidev",)
 DEB_ALTERNATES = {
     "libasound2": ("libasound2t64", "libasound2"),
     "libportaudio2": ("libportaudio2t64", "libportaudio2"),
+    "libjack-jackd2-0": ("libjack-jackd2-0", "libjack0"),
 }
 
 

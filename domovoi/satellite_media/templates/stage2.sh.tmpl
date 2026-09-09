@@ -15,6 +15,7 @@
 
 set -u
 SAT_USER="@SAT_USER@"
+APT_PACKAGES="@APT_PACKAGES@"
 HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
 STEPS=/var/lib/domovoi/bootstrap-steps
 DONE=/var/lib/domovoi/bootstrap-done
@@ -29,6 +30,26 @@ echo "== domovoi stage-2 $(date -Is) =="
 
 as_user() { runuser -u "$SAT_USER" -- "$@"; }
 
+# Packages with no aarch64 wheel, which pip therefore has to BUILD. Left in
+# the requirements file, one of them fails the whole transaction and takes
+# every other package down with it — numpy included, even with its wheel
+# sitting right there in the payload. The wheel FETCHER already sidesteps
+# exactly this (fetchers.py SDIST_ONLY_PACKAGES); the install paths never
+# got told. Strip them out, install the rest, then attempt them on their own
+# where failing costs only the LEDs.
+SDIST_ONLY="@SDIST_ONLY@"
+REQ_CORE=/tmp/domovoi-req-core.txt
+strip_sdist_only() {
+  cp "$1" "$REQ_CORE"
+  for PKG in $SDIST_ONLY; do
+    # Name followed by a version specifier, an extra, or end of line —
+    # never a package that merely starts with the same letters.
+    grep -viE "^${PKG}([^A-Za-z0-9_-]|\$)" "$REQ_CORE" >"$REQ_CORE.new" || true
+    mv "$REQ_CORE.new" "$REQ_CORE"
+  done
+}
+
+
 # 1. Reach the server (config.toml carries domovoi_url).
 SERVER_HTTP="$(as_user "$VENVPY" - <<'EOF'
 import tomllib, pathlib
@@ -42,7 +63,36 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
-# 2. The client's Python dependencies.
+# 2. System packages.
+#
+#    Stage 1 installs these from the offline cache with a plain `dpkg -i`,
+#    which does not resolve dependencies — and the cache is built with
+#    `apt-get download`, which fetches only the packages named. libportaudio2
+#    therefore arrived without libjack, sounddevice could not load it, and
+#    the client died on import with the offline cache looking complete.
+#
+#    apt online is the thing that actually resolves a dependency graph.
+#    Stage 1 has warned "stage 2 retries via apt online" since it was
+#    written; this is the step that makes that true.
+if [ ! -f "$STEPS/online-debs" ]; then
+  apt-get update -qq || true
+  # Repair anything stage 1's dependency-free dpkg left half-configured.
+  apt-get -f install -y || true
+  APT_OK=1
+  for P in $APT_PACKAGES; do
+    # One name apt cannot resolve must not take the rest down with it —
+    # the lesson spidev taught us on the pip side.
+    apt-get install -y --no-install-recommends "$P" || APT_OK=0
+  done
+  if [ "$APT_OK" = 1 ]; then
+    touch "$STEPS/online-debs"
+    echo "system packages present"
+  else
+    echo "WARN: some system packages did not install — retrying next boot"
+  fi
+fi
+
+# 3. The client's Python dependencies.
 #
 #    NOT a best-effort top-up. When the server's wheel cache was incomplete
 #    the card ships with none of them (the builder marks such a card
@@ -55,9 +105,13 @@ done
 #    disabling the only recovery path, and the unit then crash-looped on
 #    `No module named numpy` 56 times with nothing but a console to say so.
 if [ ! -f "$STEPS/online-deps" ]; then
-  as_user "$HOME_DIR/satellite-venv/bin/pip" install \
-      -r "$HOME_DIR/domovoi/satellite/requirements.txt" || true
+  strip_sdist_only "$HOME_DIR/domovoi/satellite/requirements.txt"
+  as_user "$HOME_DIR/satellite-venv/bin/pip" install -r "$REQ_CORE" || true
   as_user "$HOME_DIR/satellite-venv/bin/pip" install --no-deps openwakeword || true
+  for PKG in $SDIST_ONLY; do
+    as_user "$HOME_DIR/satellite-venv/bin/pip" install "$PKG" \
+      || echo "WARN: $PKG did not build (LED indicators stay dark)"
+  done
   if as_user "$VENVPY" -c \
       'import numpy, sounddevice, webrtcvad, websockets, onnxruntime'; then
     touch "$STEPS/online-deps"
@@ -67,7 +121,7 @@ if [ ! -f "$STEPS/online-deps" ]; then
   fi
 fi
 
-# 3. Fresh code + plugin payloads from the LAN server (authoritative over
+# 4. Fresh code + plugin payloads from the LAN server (authoritative over
 #    the payload snapshot). Uses the satellite's own sync modules.
 #
 #    PYTHONPATH is what the satellite unit gets from WorkingDirectory, and
@@ -94,7 +148,7 @@ EOF
   fi
 fi
 
-# 4. Enable + start the satellite; mark done on the first clean start.
+# 5. Enable + start the satellite; mark done on the first clean start.
 systemctl enable --now domovoi-satellite.service
 sleep 8
 if systemctl is-active --quiet domovoi-satellite.service; then

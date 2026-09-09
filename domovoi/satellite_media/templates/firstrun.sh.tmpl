@@ -57,6 +57,26 @@ fail() { echo "FAIL: $1"; info bootstrapping "$2" "$1"; exit 1; }
 done_step() { touch "$STEPS/$1"; }
 skip() { [ -f "$STEPS/$1" ]; }
 
+# Packages with no aarch64 wheel, which pip therefore has to BUILD. Left in
+# the requirements file, one of them fails the whole transaction and takes
+# every other package down with it — numpy included, even with its wheel
+# sitting right there in the payload. The wheel FETCHER already sidesteps
+# exactly this (fetchers.py SDIST_ONLY_PACKAGES); the install paths never
+# got told. Strip them out, install the rest, then attempt them on their own
+# where failing costs only the LEDs.
+SDIST_ONLY="@SDIST_ONLY@"
+REQ_CORE=/tmp/domovoi-req-core.txt
+strip_sdist_only() {
+  cp "$1" "$REQ_CORE"
+  for PKG in $SDIST_ONLY; do
+    # Name followed by a version specifier, an extra, or end of line —
+    # never a package that merely starts with the same letters.
+    grep -viE "^${PKG}([^A-Za-z0-9_-]|\$)" "$REQ_CORE" >"$REQ_CORE.new" || true
+    mv "$REQ_CORE.new" "$REQ_CORE"
+  done
+}
+
+
 info bootstrapping stage1-start
 
 # 0. Payload integrity (power-loss-during-copy guard).
@@ -115,9 +135,15 @@ if ! skip venv; then
         --no-index --find-links "$PAYDIR/wheels" pip setuptools wheel \
       || PYV_OK=0
     if [ "$PYV_OK" = 1 ]; then
+      strip_sdist_only "$PAYDIR/satellite/requirements.txt"
       "$HOME_DIR/satellite-venv/bin/pip" install --no-index \
-          --find-links "$PAYDIR/wheels" -r "$PAYDIR/satellite/requirements.txt" \
+          --find-links "$PAYDIR/wheels" -r "$REQ_CORE" \
         || echo "WARN: offline requirements install incomplete — stage 2 retries online"
+      for PKG in $SDIST_ONLY; do
+        "$HOME_DIR/satellite-venv/bin/pip" install --no-index \
+            --find-links "$PAYDIR/wheels" "$PKG" \
+          || echo "WARN: $PKG unavailable offline (LED indicators stay dark)"
+      done
       "$HOME_DIR/satellite-venv/bin/pip" install --no-index --no-deps \
           --find-links "$PAYDIR/wheels" openwakeword \
         || echo "WARN: openwakeword offline install failed — stage 2 retries"
