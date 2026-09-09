@@ -221,3 +221,84 @@ def test_run_noop_when_provisioned(home):
     backend = FakeBackend()
     assert pm.run(backend, poll_sec=0, max_loops=1) == 0
     assert backend.built_infos == []        # gadget never composed
+
+
+# ─── files root writes that the satellite user has to read ────────────────
+#
+# Found on hardware, and it failed OPEN. Provisioning mode runs as root
+# (nmcli, the gadget, the reboot), so ~/.domovoi/pairing_token was written
+# root:root and then chmod 0600. The client runs as the satellite user, so
+# read_text() raised PermissionError, _effective_pairing_token caught it as
+# a plain OSError and returned None, the hello frame went out with no token,
+# and the core accepted the device on the legacy "no token, no row" path —
+# the approval a human is supposed to give was never even asked for. The
+# only visible symptom was a satellite that worked.
+
+
+def test_the_pairing_token_is_handed_to_the_user_that_reads_it():
+    import inspect
+
+    from satellite import provisioning_mode as pm
+
+    src = inspect.getsource(pm.apply_provision)
+    write = src.index("PAIRING_TOKEN_PATH.write_text")
+    given = src.index("give_to_satellite_user(PAIRING_TOKEN_PATH)")
+    mode = src.index("PAIRING_TOKEN_PATH.chmod")
+    # Ownership BEFORE the mode: 0600 has to mean "only the satellite user",
+    # not "only root", which is nobody who needs it.
+    assert write < given < mode
+
+
+def test_the_config_and_its_directory_are_handed_over_too():
+    """The client writes into both — the resolved domovoi_url lands in
+    config.toml, and the sidecars land beside it."""
+    import inspect
+
+    from satellite import provisioning_mode as pm
+
+    src = inspect.getsource(pm.apply_provision)
+    assert "give_to_satellite_user(CONFIG_DIR)" in src
+    assert "give_to_satellite_user(CONFIG_PATH)" in src
+
+
+def test_handing_a_file_over_never_strands_a_provision(monkeypatch, tmp_path, caplog):
+    """Best-effort by design: a chown failure must not abort a device
+    mid-provision. It must not be silent either — the symptom otherwise is
+    a satellite that works while skipping the approval it should have
+    waited for."""
+    from satellite import provisioning_mode as pm
+
+    target = tmp_path / "pairing_token"
+    target.write_text("x", encoding="utf-8")
+
+    def boom(*a, **kw):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(pm.os, "chown", boom, raising=False)
+    with caplog.at_level("WARNING"):
+        assert pm.give_to_satellite_user(target) is False
+    assert "could not give" in caplog.text
+
+
+def test_a_successful_handover_reports_it(monkeypatch, tmp_path):
+    from satellite import provisioning_mode as pm
+
+    target = tmp_path / "pairing_token"
+    target.write_text("x", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        pm.os, "chown", lambda p, u, g: calls.append((p, u, g)), raising=False
+    )
+    assert pm.give_to_satellite_user(target) is True
+    assert calls and calls[0][0] == target
+
+
+def test_the_approval_code_is_readable_by_the_client():
+    """Same root-writes/user-reads split, same consequence: without the code
+    the device cannot prove which unit the customer is looking at."""
+    import inspect
+
+    from satellite import portal_transport as pt
+
+    src = inspect.getsource(pt.PortalTransport._persist_approval_code)
+    assert "give_to_satellite_user" in src

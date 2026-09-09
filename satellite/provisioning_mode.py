@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import shutil
 import subprocess
@@ -321,6 +322,40 @@ def _write_state(state: dict[str, Any]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def give_to_satellite_user(path: Path) -> bool:
+    """Hand a file written by root to the user that has to read it.
+
+    Provisioning mode runs as root — nmcli, the USB gadget, timedatectl and
+    the reboot all need it — but everything it writes is read by the
+    satellite client running as the ordinary satellite user. A 0600 file
+    owned by root is not "private to the satellite", it is invisible to it.
+
+    That cost us the entire approval flow, silently. The pairing token was
+    written root:root 0600, ``_effective_pairing_token`` got PermissionError,
+    caught it as a plain OSError and returned None, the hello frame went out
+    tokenless, and the core accepted the device down the legacy "no token, no
+    row" path instead of parking it for a human to approve. config.toml only
+    escaped because write_text leaves it 0644.
+
+    The home directory is the reference: useradd made it, so it is owned by
+    the satellite user whatever that user is called. Best-effort — a failure
+    here must not strand a device mid-provision.
+    """
+    chown = getattr(os, "chown", None)
+    if chown is None:          # Windows dev host — no ownership to hand over
+        return False
+    try:
+        st = Path.home().stat()
+        chown(path, st.st_uid, st.st_gid)
+        return True
+    except OSError as e:
+        log.warning(
+            "could not give %s to the satellite user (%s) — the client may "
+            "not be able to read it", path, e,
+        )
+        return False
+
+
 def is_provisioned() -> bool:
     """Provisioned = a config exists and no provisioning phase is active.
     The satellite client's main() parks while this module owns the box."""
@@ -394,11 +429,18 @@ def apply_provision(
     }
     merged = config_writer.apply_changes(example, changes)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # The directory too: root created it, and the client writes into it (the
+    # resolved domovoi_url, the synced-sha sidecar) as the satellite user.
+    give_to_satellite_user(CONFIG_DIR)
     CONFIG_PATH.write_text(merged, encoding="utf-8")
+    give_to_satellite_user(CONFIG_PATH)
 
     # 2. Pairing token, owner-only. The core already stored its sha256 —
     #    first connect matches as an already-paired room.
     PAIRING_TOKEN_PATH.write_text(payload["pairing_token"], encoding="utf-8")
+    # Ownership BEFORE the mode, so 0600 means "only the satellite user"
+    # rather than "only root", which is nobody who needs it.
+    give_to_satellite_user(PAIRING_TOKEN_PATH)
     PAIRING_TOKEN_PATH.chmod(0o600)
 
     # 3. Timezone (best-effort).

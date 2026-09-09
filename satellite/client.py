@@ -919,15 +919,37 @@ class Satellite:
                     self._raw_q_drops = 0
                     self._raw_q_last_drop_log = now
 
-        self._input_stream = sd.RawInputStream(
-            samplerate=SAMPLE_RATE,
-            channels=channels,
-            dtype=dev.capture_dtype,
-            blocksize=FRAME_SAMPLES,
-            callback=cb,
-            device=self.cfg.input_device,
-        )
-        self._input_stream.start()
+        try:
+            self._input_stream = sd.RawInputStream(
+                samplerate=SAMPLE_RATE,
+                channels=channels,
+                dtype=dev.capture_dtype,
+                blocksize=FRAME_SAMPLES,
+                callback=cb,
+                device=self.cfg.input_device,
+            )
+            self._input_stream.start()
+        except sd.PortAudioError as e:
+            # PortAudio renders an unplugged microphone as "Error querying
+            # device -1", where -1 is "the system default input" and the real
+            # answer is almost always that nothing is plugged into the USB
+            # port. This runs BEFORE the client connects, so the satellite
+            # never reaches the dashboard either: this log line is the only
+            # place anyone can find out, and it has to earn that.
+            which = (
+                "the system default input"
+                if self.cfg.input_device is None
+                else f"input_device={self.cfg.input_device!r}"
+            )
+            log.error(
+                "could not open the microphone (%s): %s. Check the mic array "
+                "is plugged in and powered — `%s -m satellite.client "
+                "--list-devices` lists what this Pi can actually see. Pin a "
+                "specific one with [audio] input_device in %s, or set [mic] "
+                "enabled = false for a satellite that has no microphone.",
+                which, e, sys.executable, CONFIG_PATH,
+            )
+            raise
 
     def _stop_mic(self) -> None:
         if self._input_stream is not None:

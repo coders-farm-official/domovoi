@@ -271,6 +271,12 @@ class PortalTransport:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             path = self.state_dir / "approval_code"
             path.write_text(self.approval_code + "\n", encoding="utf-8")
+            # Written by root, read by the satellite client — see
+            # provisioning_mode.give_to_satellite_user.
+            from satellite.provisioning_mode import give_to_satellite_user
+
+            give_to_satellite_user(self.state_dir)
+            give_to_satellite_user(path)
             path.chmod(0o600)
         except OSError as e:
             # Not fatal: the satellite still adopts, the dashboard just has
