@@ -611,11 +611,24 @@ table.tbl .actions { text-align: right; }
 .cal-empty .s { font-size: 12px; color: var(--fg-faint); font-family: var(--ff-mono); }
 
 /* --- modal --- */
+/* Stacking, stated once, because the layers live inline across a dozen JSX
+   files and nothing else writes them down:
+       60 / 61   drawers (satellites.jsx)
+       70 / 71   nested overlays
+       80        full-screen takeovers (doc, sheet, drawings, files)
+       90        files modal, video player
+      100        modals — here
+   A modal is a BLOCKING dialog, so it belongs above whatever it was opened
+   from. At 30 it sat under all of them: the admin sign-in prompt appeared
+   BEHIND the satellite drawer, leaving a gated action impossible to finish
+   without dismissing the very thing you were acting on. That is the whole
+   class of bug, not just the auth case — the sign-in prompt can be raised
+   by an action started from any layer above, so it has to clear them all. */
 .cal-modal-bg {
   position: fixed; inset: 0;
   background: oklch(0 0 0 / 0.32);
   display: flex; align-items: center; justify-content: center;
-  z-index: 30;
+  z-index: 100;
   padding: 20px;
   animation: cal-fade var(--dur-fast) var(--ease);
 }
