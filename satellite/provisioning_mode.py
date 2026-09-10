@@ -323,6 +323,22 @@ def _write_state(state: dict[str, Any]) -> None:
 
 
 
+
+def _audio_device_match(profile_name: str) -> str:
+    """The PortAudio name substring this board pins its audio to, if any.
+
+    A name, not an index: indexes shuffle between boots, and a satellite
+    that works until someone reboots it is worse than one that never did.
+    """
+    try:
+        from satellite.devices import PROFILES
+
+        prof = PROFILES.get(profile_name)
+        return getattr(prof, "audio_device_match", "") or ""
+    except Exception:      # noqa: BLE001 - an unknown board just gets defaults
+        return ""
+
+
 def setup_status(state: str, *args: str) -> None:
     """Drive the setup indicator - the LED ring and the spoken line.
 
@@ -445,6 +461,15 @@ def apply_provision(
         "satellite.sat_type": payload.get("sat_type", "voice"),
         "device.profile": payload["device_profile"],
     }
+    # Pin capture AND playback to the array on boards that need it. Without
+    # this the client runs on the system default: capture lands on device
+    # -1, and playback leaves the array entirely, so its on-chip AEC has no
+    # echo reference and barge-in misfires on the satellite's own voice. It
+    # was a manual step in PROVISIONING that no prepared card ever ran.
+    match = _audio_device_match(payload["device_profile"])
+    if match:
+        changes["audio.input_device"] = match
+        changes["audio.output_device"] = match
     merged = config_writer.apply_changes(example, changes)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # The directory too: root created it, and the client writes into it (the

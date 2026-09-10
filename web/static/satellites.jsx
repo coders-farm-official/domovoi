@@ -664,6 +664,31 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               Remove
             </Button>
           )}
+          {/* A room that HAS connected. Retiring it is what frees the name:
+              until every one of these rows is gone, the setup portal and the
+              adopt flow both reject the name as taken, and a decommissioned
+              satellite holds its room forever. Offline only - the server
+              refuses to retire a room out from under a live device. */}
+          {!waiting && s.status !== 'online' && (
+            <Button icon="trash-2" onClick={async () => {
+              if (!window.confirm(
+                `Retire ${s.room_id}?\n\n` +
+                `Frees the name so a new satellite can use it. Removes this room's ` +
+                `pairing, any pending approval, and its music instance.\n\n` +
+                `Saved playlists for the room and conversation history are kept.`
+              )) return;
+              try {
+                await apiDelete(`/api/satellites/${s.room_id}?purge=true`);
+                fire(`retired ${s.room_id} - the name is free again`);
+                onClose && onClose();
+                refresh && refresh();
+              } catch (e) {
+                fire(`retire failed: ${e.message}`);
+              }
+            }}>
+              Retire room
+            </Button>
+          )}
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
           restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room

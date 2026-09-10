@@ -334,6 +334,45 @@ async def warm_known_rooms() -> int:
     return rooms_warmed
 
 
+async def remove_room(room_id: str) -> dict[str, bool]:
+    """Retire a room's MPD instance: stop and remove its container, drop its
+    ``mpd_rooms`` row, and release the ports back to the pool.
+
+    The VOLUME is deliberately kept. It holds that ROOM's music state -
+    playlists, stored queue - which belongs to the kitchen rather than to
+    whichever Pi happened to be sitting in it, and a replacement satellite
+    for the same room should inherit it. Deleting it is irreversible and
+    nobody has asked for it.
+
+    Best-effort on the docker half: a container that is already gone, or a
+    docker daemon that is not running, must not stop the row from being
+    removed - otherwise a room name stays claimed forever by a container
+    that no longer exists.
+    """
+    from domovoi.db.session import session_scope
+
+    removed_container = False
+    name = _container_name(room_id)
+    try:
+        state = await _container_state(name)
+        if state is not None:
+            await _run_docker("rm", "-f", name)
+            removed_container = True
+    except Exception as e:  # noqa: BLE001 - see docstring
+        log.warning("mpd: could not remove container for room %s: %s", room_id, e)
+
+    async with session_scope() as s:
+        result = await s.execute(
+            text("DELETE FROM mpd_rooms WHERE room_id = :r"), {"r": room_id}
+        )
+        removed_row = bool(result.rowcount)
+    log.info(
+        "mpd: retired room=%s (container=%s row=%s)",
+        room_id, removed_container, removed_row,
+    )
+    return {"container": removed_container, "row": removed_row}
+
+
 async def ensure_room(room_id: str) -> tuple[int, int]:
     """Provision (or reuse) the MPD daemon for ``room_id``.
 

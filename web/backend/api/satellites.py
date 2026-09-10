@@ -264,12 +264,17 @@ async def reject_satellite(room_id: str, request: Request):
 
 
 @router.delete("/{room_id}", dependencies=[Depends(require_admin_mutation)])
-async def delete_satellite(room_id: str, request: Request):
-    """Remove a never-connected (`waiting`) satellite — inventory row +
-    preseeded pairing. Proxies to the core, which 409s for provisioned
-    rooms."""
+async def delete_satellite(room_id: str, request: Request, purge: bool = False):
+    """Remove a satellite and release its room name.
+
+    Default: a never-connected (`waiting`) room - inventory row + preseeded
+    pairing; the core 409s once the room has actually connected.
+    ``purge=true``: retire a room that DID connect, dropping its pairing,
+    any pending approval, and its MPD instance, which is what frees the name
+    for reuse. The core refuses to purge a room whose satellite is connected
+    right now."""
     status, payload = await delete_admin(
-        f"/v1/admin/satellites/{room_id}",
+        f"/v1/admin/satellites/{room_id}" + ("?purge=true" if purge else ""),
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)

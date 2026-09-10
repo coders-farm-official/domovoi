@@ -1805,14 +1805,38 @@ async def admin_preseed_satellite_pairing(
     "/v1/admin/satellites/{room_id}",
     dependencies=[Depends(require_admin_mutation)],
 )
-async def admin_delete_satellite(room_id: str) -> dict[str, Any]:
-    """Remove a never-connected satellite: the inventory row AND its
-    preseeded pairing. The adopt flow's rollback (a mid-adopt unplug) and
-    the dashboard's Remove action for `waiting` rooms. 409 when the room
-    has an `mpd_rooms` row — a provisioned room isn't deletable this way
-    (its MPD container and history exist; that's a different, deliberate
-    operation)."""
-    from domovoi.db.repositories import SatellitePairingRepository, SatellitesRepository
+async def admin_delete_satellite(
+    room_id: str, request: Request, purge: bool = False
+) -> dict[str, Any]:
+    """Remove a satellite and release its room name.
+
+    Two modes, because they carry different weight:
+
+    * default — a never-connected room: the inventory row and its preseeded
+      pairing. This is the adopt flow's rollback for a mid-adopt unplug, and
+      it refuses (409) once the room has an ``mpd_rooms`` row, because that
+      means a real satellite connected and built state here.
+    * ``purge=true`` — retire a room that DID connect. Also drops the
+      pairing, any pending approval, the ``mpd_rooms`` row and its MPD
+      container, which is what actually frees the name for reuse. Without
+      this a decommissioned satellite holds its room name forever: the
+      adopt flow and the setup portal both reject a name that still has any
+      of those rows, and nothing could remove them.
+
+    A purge REFUSES a satellite that is currently connected (409). Retiring
+    a room out from under a live device would leave it streaming into a room
+    that no longer exists, and "it's offline" is the state an operator is
+    actually reasoning about when they decide to remove one.
+
+    History is kept in both modes. ``intents_log`` and ``conversation_log``
+    are append-only records of things that really happened, and a room name
+    being reused later does not make them untrue.
+    """
+    from domovoi.db.repositories import (
+        SatelliteApprovalRepository,
+        SatellitePairingRepository,
+        SatellitesRepository,
+    )
 
     async with session_scope() as s:
         provisioned = (
@@ -1821,21 +1845,48 @@ async def admin_delete_satellite(room_id: str) -> dict[str, Any]:
                 {"r": room_id},
             )
         ).first()
-        if provisioned is not None:
+        if provisioned is not None and not purge:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"room {room_id!r} is provisioned (has an MPD instance) — "
-                    "not deletable via adoption rollback"
+                    f"room {room_id!r} has connected and has an MPD instance — "
+                    "retire it with purge=true to free the name"
+                ),
+            )
+        if purge and room_id in getattr(request.app.state, "active_sessions", {}):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"room {room_id!r} is connected right now — take the "
+                    "satellite offline before retiring the room"
                 ),
             )
         removed_meta = await SatellitesRepository(s).delete(room_id)
         removed_pairing = await SatellitePairingRepository(s).reset_pairing(room_id)
+        removed_approval = False
+        if purge:
+            removed_approval = await SatelliteApprovalRepository(s).reject(room_id)
+
+    removed_mpd = {}
+    if purge and provisioned is not None:
+        from domovoi import mpd_provisioner
+
+        removed_mpd = await mpd_provisioner.remove_room(room_id)
+
     log.info(
-        "satellites: admin delete room=%s (meta=%s pairing=%s)",
-        room_id, removed_meta, removed_pairing,
+        "satellites: admin delete room=%s purge=%s (meta=%s pairing=%s "
+        "approval=%s mpd=%s)",
+        room_id, purge, removed_meta, removed_pairing, removed_approval,
+        removed_mpd,
     )
-    return {"room_id": room_id, "deleted": removed_meta or removed_pairing}
+    return {
+        "room_id": room_id,
+        "purged": purge,
+        "deleted": bool(
+            removed_meta or removed_pairing or removed_approval
+            or removed_mpd.get("row")
+        ),
+    }
 
 
 class _RoomLabelBody(BaseModel):

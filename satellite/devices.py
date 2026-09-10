@@ -125,6 +125,17 @@ class DeviceProfile:
     # video-kiosk profile has a screen, not a ring) so LED init is skipped
     # without a config edit. An explicit ``[leds] enabled`` still wins.
     leds_enabled_default: bool = True
+    # PortAudio device-name substring for boards where BOTH capture and
+    # playback must be pinned to one piece of hardware. A name rather than
+    # an index because indexes shuffle between boots; empty means "the
+    # system default is fine", which is true of a HAT sharing card 0.
+    #
+    # Provisioning writes this into [audio] so a shipped unit does not rely
+    # on the operator remembering PROVISIONING §F. Leaving output on the
+    # system default routes TTS away from the array, which starves the
+    # on-chip AEC of its echo reference and makes barge-in misfire on the
+    # satellite's own voice.
+    audio_device_match: str = ""
 
 
 # The HAT profile reproduces the client's historical hard-coded defaults
@@ -194,6 +205,7 @@ _XVF3800_USB = DeviceProfile(
     # and music ride through; the server's volume commands drive it.
     output_mixer_card="Array",
     output_mixer_control="PCM",
+    audio_device_match="reSpeaker XVF3800",
 )
 
 
