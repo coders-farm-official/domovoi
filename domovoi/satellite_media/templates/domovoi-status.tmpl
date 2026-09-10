@@ -14,7 +14,7 @@
 # or an array that has not enumerated must still finish setting itself up —
 # a dark ring is a disappointment, a failed provision is a returned unit.
 #
-# Placeholders: @HOME@, @ANNOUNCE@
+# Placeholders: @HOME@, @ANNOUNCE@, @ALSA_CARD@, @ALSA_CONTROL@
 
 set -u
 
@@ -28,6 +28,12 @@ ANNOUNCE="@ANNOUNCE@"
 # one boot and no longer.
 LAST=/run/domovoi-last-said
 VENVPY="@HOME@/satellite-venv/bin/python"
+# Setup runs before any of the client's audio config exists, so mpg123 would
+# otherwise land on the ALSA default — the Pi's onboard jack or HDMI, not the
+# USB array the customer's speaker is actually plugged into. Empty means the
+# board shares card 0 and the default is right.
+ALSA_CARD="@ALSA_CARD@"
+ALSA_CONTROL="@ALSA_CONTROL@"
 
 # The array renders effects itself; the host only picks one. Effect ids are
 # leds.py's: 0=off 1=breath 2=rainbow 3=single 4=direction-of-arrival.
@@ -105,6 +111,17 @@ xvf() {
 play() {
   [ "$ANNOUNCE" = "1" ] || return 0
   [ -f "$1" ] || return 0
+  if [ -n "$ALSA_CARD" ]; then
+    # Force the master up for the duration of setup. The array's jack is
+    # line-level and its PCM control starts wherever the firmware left it,
+    # so an announcement can be inaudible on a speaker turned all the way
+    # up. Nothing else is competing for the output yet, and the client
+    # takes the volume back the moment it starts.
+    amixer -c "$ALSA_CARD" sset "$ALSA_CONTROL" 100% >/dev/null 2>&1 || true
+    mpg123 -q -a "plughw:CARD=$ALSA_CARD" "$1" >/dev/null 2>&1 && return 0
+  fi
+  # No card pinned, or the pinned one refused it: better the default than
+  # silence.
   mpg123 -q "$1" >/dev/null 2>&1 || true
 }
 

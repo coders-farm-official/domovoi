@@ -1945,6 +1945,27 @@ async def admin_sounds_regenerate() -> dict[str, Any]:
     return {"started": True}
 
 
+@app.post("/v1/admin/sounds/setup-clips")
+async def admin_render_setup_clips() -> dict[str, Any]:
+    """Render the satellite's setup phrase set in the household's default
+    voice. Synchronous, unlike the regenerate above.
+
+    This exists because media prep runs in the WEB process, which may not
+    import ``domovoi.clients.tts`` (design §5.1) - it tried, the import was
+    refused, and every card shipped with no clips at all while the prepare
+    job carried the reason in a warning nobody was looking at. The web asks
+    over HTTP instead, which is how it reaches every other core capability.
+
+    Synchronous because prepare has to COPY the result: sixteen short lines
+    render in seconds, where the per-voice catalogue is dozens of calls and
+    rightly runs in the background.
+    """
+    from domovoi.canned_sounds import render_setup_clips
+
+    written, problems = await render_setup_clips()
+    return {"written": written, "problems": problems}
+
+
 class _VoiceSampleBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
 

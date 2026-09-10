@@ -124,7 +124,10 @@ async def build(
 
     await progress("assemble", 65, "rendering bootstrap scripts")
     stage2 = overlay.render_stage2(SAT_USER)
-    fin = payload.finalize(workspace, asm["dir"], stage2)
+    fin = payload.finalize(
+        workspace, asm["dir"], stage2,
+        overlay.render_status_helper(mic_profile),
+    )
     firstrun = overlay.render_firstrun(
         SAT_USER, mic_profile, sat_type, setup_transport, wifi_country
     )

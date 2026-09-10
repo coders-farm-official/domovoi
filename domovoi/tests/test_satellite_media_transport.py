@@ -1099,3 +1099,108 @@ def test_stage_two_repairs_a_card_that_shipped_without_them():
     assert step.index(".domovoi/oww_models") < step.index("download_models()")
     # Marked done only when a model is actually on disk.
     assert "*.onnx" in step
+
+
+# ─── the setup clips have to be rendered by the CORE ──────────────────────
+#
+# Found on hardware: media prep runs in the WEB process, which may not import
+# domovoi.clients.tts (design §5.1). payload.assemble tried anyway, the
+# import was refused, and every card shipped with no clips at all - while the
+# prepare job carried the exact reason in a warning nobody was reading. The
+# satellite set itself up in silence and the LED half hid it.
+
+
+def test_prepare_does_not_import_the_core_tts_client():
+    """The §5.1 boundary, asserted where it was crossed.
+
+    Checked against the parsed IMPORTS, not the source text - this module
+    explains the boundary in a comment, and a substring search flags the
+    explanation as the violation.
+    """
+    import ast
+    import inspect
+
+    from domovoi.satellite_media import payload
+
+    tree = ast.parse(inspect.getsource(payload))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+            for alias in node.names:
+                imported.add(f"{node.module}.{alias.name}")
+        elif isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+    offenders = {m for m in imported if "clients.tts" in m or "canned_sounds" in m}
+    assert not offenders, offenders
+
+
+def test_a_payload_without_clips_says_so():
+    """Warn on the FILES, not on a caught exception - that also catches a
+    render which succeeded and produced nothing."""
+    import inspect
+
+    from domovoi.satellite_media import payload
+
+    src = inspect.getsource(payload.assemble)
+    assert '"sounds" / "setup"' in src
+    assert "silently" in src
+
+
+def test_the_core_renders_them_synchronously():
+    """Prepare has to COPY the result, so this one cannot be the existing
+    fire-and-forget background regenerate."""
+    import inspect
+
+    from domovoi import main
+
+    src = inspect.getsource(main.admin_render_setup_clips)
+    assert "await render_setup_clips()" in src
+    assert "create_task" not in src
+
+
+def test_the_web_asks_the_core_for_them():
+    import inspect
+
+    from web.backend.api import satellite_media
+
+    src = inspect.getsource(satellite_media._run_build)
+    assert "/v1/admin/sounds/setup-clips" in src
+    # Before the build, which is what copies sounds_dir into the payload.
+    assert src.index("setup-clips") < src.index("builder.build")
+
+
+# ─── and they have to come out of the right speaker ───────────────────────
+
+
+def test_the_helper_pins_the_boards_alsa_card():
+    """mpg123 on the ALSA default lands on the Pi's onboard jack or HDMI,
+    not the USB array the customer's speaker is plugged into."""
+    from domovoi.satellite_media import overlay
+
+    xvf = overlay.render_status_helper("xvf3800_usb")
+    assert 'ALSA_CARD="Array"' in xvf
+    assert "plughw:CARD=$ALSA_CARD" in xvf
+    # And forces the master up: the array's jack is line-level, so a clip can
+    # be inaudible on a speaker turned all the way up.
+    assert "sset" in xvf and "100%" in xvf
+
+
+def test_an_unknown_board_falls_back_to_the_default():
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_status_helper("nope")
+    assert 'ALSA_CARD=""' in body
+    # The unpinned mpg123 call has to survive as the fallback.
+    assert body.count("mpg123") >= 2
+
+
+def test_the_helper_leaves_only_the_on_device_placeholder():
+    """@HOME@ is filled in by stage 1, where the satellite user's home is
+    actually known. Everything else must be resolved at prepare time."""
+    import re
+
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_status_helper("xvf3800_usb")
+    assert set(re.findall(r"@[A-Z_]+@", body)) == {"@HOME@"}

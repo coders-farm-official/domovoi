@@ -27,6 +27,7 @@ from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
 
 from web.backend.api.files_security import detect_removable, drive_token
+from web.backend.domovoi_client import post_admin
 from web.backend.db import session_scope
 from web.backend.satellite_adoption import _volume_label  # label pre-filter reuse
 
@@ -238,6 +239,24 @@ async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
 async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> None:
     async def progress(phase: str, pct: int, text_: str) -> None:
         await _update_job(job_id, phase=phase, pct=pct, status_text=text_)
+
+    # Ask the CORE to render the setup clips before the build copies
+    # sounds_dir into the payload. This process may not import
+    # domovoi.clients.tts (design §5.1) - it tried, the import was refused,
+    # and every card shipped silent while the reason sat in a job warning
+    # nobody reads. Over HTTP is how the web reaches every other core
+    # capability, and this is no different.
+    #
+    # Best-effort: a card with no clips still provisions perfectly, it just
+    # does it without speaking, and payload.assemble warns on the absent
+    # files rather than on a failure here.
+    try:
+        await progress("assemble", 45, "rendering setup announcements")
+        status, payload_ = await post_admin("/v1/admin/sounds/setup-clips", {})
+        if status != 200:
+            log.warning("setup clips: core returned %s (%s)", status, payload_)
+    except Exception as e:  # noqa: BLE001
+        log.warning("setup clips: could not reach the core (%s)", e)
 
     try:
         result = await builder.build(

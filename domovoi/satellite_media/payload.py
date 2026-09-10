@@ -109,29 +109,21 @@ async def assemble(
         else:
             warnings.append(f"cache bucket {bucket_name!r} is empty")
 
-    # Before the copy below, not after: sounds/setup/ rides along inside
-    # sounds_dir, so refreshing it here is the whole delivery mechanism.
-    progress("rendering setup clips")
-    try:
-        from domovoi.canned_sounds import render_setup_clips
-
-        _, clip_problems = await render_setup_clips()
-        if clip_problems:
-            warnings.append(
-                "some setup clips could not be rendered ("
-                + ", ".join(clip_problems[:4])
-                + ") - this satellite will set itself up silently"
-            )
-    except Exception as e:  # noqa: BLE001 - a quiet card still provisions
-        warnings.append(
-            f"setup clips not rendered ({e}) - this satellite will set "
-            "itself up silently"
-        )
-
     progress("collecting sounds + wake models")
     sounds_dir = Path(getattr(settings, "sounds_dir", "")) if getattr(settings, "sounds_dir", "") else None
     if sounds_dir and sounds_dir.is_dir():
         _copy_tree(sounds_dir, pay / "sounds", lambda p: True)
+    # Warn on the FILES, not on an exception. Rendering happens in the core
+    # (the web process may not import domovoi.clients.tts - design §5.1), so
+    # what matters here is simply whether the clips arrived. Checking the
+    # artifact rather than the attempt is also what catches a render that
+    # silently produced nothing.
+    if not list((pay / "sounds" / "setup").glob("*.mp3")):
+        warnings.append(
+            "no setup clips in the payload - this satellite will set itself "
+            "up silently (the ring still works)"
+        )
+
     wm = Path(settings.wake_models_dir) if getattr(settings, "wake_models_dir", "") else None
     if wm and wm.is_dir():
         _copy_tree(wm, pay / "wake_models", lambda p: True)
@@ -178,12 +170,9 @@ async def assemble(
     (system / "sudoers").write_text(
         overlay.render_template("sudoers.tmpl", {}), encoding="utf-8", newline="\n"
     )
-    # @HOME@ is filled in on the device, where the satellite user's home is
-    # actually known — same as the units beside it.
-    (system / "domovoi-status").write_text(
-        overlay.render_template("domovoi-status.tmpl", {"ANNOUNCE": "1"}),
-        encoding="utf-8", newline="\n",
-    )
+    # domovoi-status is rendered by the BUILDER and dropped in by finalize():
+    # it needs the mic profile, to know which ALSA card the setup clips have
+    # to play through.
 
     # manifest.json over everything assembled so far (+ bootstrap below).
     progress("hashing payload")
@@ -204,11 +193,17 @@ async def assemble(
     return {"dir": pay, "plugins": plugins_meta, "warnings": warnings}
 
 
-def finalize(workspace: Path, pay: Path, stage2: str) -> dict[str, Any]:
-    """Drop the rendered stage-2 script in, tar the payload, and hash it."""
+def finalize(
+    workspace: Path, pay: Path, stage2: str, status_helper: str = ""
+) -> dict[str, Any]:
+    """Drop the rendered scripts in, tar the payload, and hash it."""
     (pay / "bootstrap" / "stage2.sh").write_text(
         stage2, encoding="utf-8", newline="\n"
     )
+    if status_helper:
+        (pay / "system" / "domovoi-status").write_text(
+            status_helper, encoding="utf-8", newline="\n"
+        )
     tar_path = workspace / "payload.tar.gz"
     with tarfile.open(tar_path, "w:gz") as tf:
         tf.add(pay, arcname="payload")

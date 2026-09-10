@@ -224,6 +224,37 @@ def render_firstrun(
     )
 
 
+def render_status_helper(mic_profile: str, announce: bool = True) -> str:
+    """The setup indicator, rendered for a specific board.
+
+    The ALSA card matters. Setup runs before any of the client's audio
+    config exists, so ``mpg123`` would land on the ALSA default - which on a
+    Pi is the onboard jack or HDMI, not the USB array the customer's speaker
+    is plugged into. A setup announcement nobody can hear is the same as no
+    announcement at all.
+
+    Taken from the profile's ``output_mixer_card``, which already names the
+    array's ALSA card for exactly this reason; a board that doesn't set one
+    gets the default, which is correct for a HAT sharing card 0.
+    """
+    card = ""
+    control = "PCM"
+    try:
+        from satellite.devices import PROFILES
+
+        prof = PROFILES.get(mic_profile)
+        if prof is not None:
+            card = getattr(prof, "output_mixer_card", "") or ""
+            control = getattr(prof, "output_mixer_control", "") or "PCM"
+    except Exception:      # noqa: BLE001 - an unknown board gets the default
+        pass
+    return render_template(
+        "domovoi-status.tmpl",
+        {"ANNOUNCE": "1" if announce else "0",
+            "ALSA_CARD": card, "ALSA_CONTROL": control},
+    )
+
+
 def render_stage2(sat_user: str) -> str:
     # The extension allowlist is rendered in rather than spelled out in the
     # template. It was a third hand-maintained copy, and it was the one that
