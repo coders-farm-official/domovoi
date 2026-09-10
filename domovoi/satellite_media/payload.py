@@ -109,6 +109,25 @@ async def assemble(
         else:
             warnings.append(f"cache bucket {bucket_name!r} is empty")
 
+    # Before the copy below, not after: sounds/setup/ rides along inside
+    # sounds_dir, so refreshing it here is the whole delivery mechanism.
+    progress("rendering setup clips")
+    try:
+        from domovoi.canned_sounds import render_setup_clips
+
+        _, clip_problems = await render_setup_clips()
+        if clip_problems:
+            warnings.append(
+                "some setup clips could not be rendered ("
+                + ", ".join(clip_problems[:4])
+                + ") - this satellite will set itself up silently"
+            )
+    except Exception as e:  # noqa: BLE001 - a quiet card still provisions
+        warnings.append(
+            f"setup clips not rendered ({e}) - this satellite will set "
+            "itself up silently"
+        )
+
     progress("collecting sounds + wake models")
     sounds_dir = Path(getattr(settings, "sounds_dir", "")) if getattr(settings, "sounds_dir", "") else None
     if sounds_dir and sounds_dir.is_dir():
@@ -158,6 +177,12 @@ async def assemble(
     )
     (system / "sudoers").write_text(
         overlay.render_template("sudoers.tmpl", {}), encoding="utf-8", newline="\n"
+    )
+    # @HOME@ is filled in on the device, where the satellite user's home is
+    # actually known — same as the units beside it.
+    (system / "domovoi-status").write_text(
+        overlay.render_template("domovoi-status.tmpl", {"ANNOUNCE": "1"}),
+        encoding="utf-8", newline="\n",
     )
 
     # manifest.json over everything assembled so far (+ bootstrap below).

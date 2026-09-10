@@ -147,6 +147,51 @@ if ! skip debs; then
   done_step debs
 fi
 
+# 3b. The indicator: LED tool + status helper.
+#
+#     Deliberately THIS early. Everything below — the venv build, the code
+#     copy — is minutes of disk and CPU with nothing on screen, and that is
+#     exactly the stretch worth narrating. This step needs only the payload
+#     (step 1) and libusb (step 3), so it goes here rather than after the
+#     work it is meant to describe.
+#
+#     The whole folder, never just the binary: xvf_host loads
+#     libcommand_map.so from its own directory and dies with "cannot open
+#     shared object file" if separated from it.
+if [ -d "$PAYDIR/xvf_host" ] && ! skip xvfhost; then
+  info bootstrapping xvf-host
+  mkdir -p /opt/xvf3800
+  cp -r "$PAYDIR"/xvf_host/. /opt/xvf3800/
+  chmod +x /opt/xvf3800/xvf_host 2>/dev/null || \
+    echo "WARN: no xvf_host binary in the payload — the LED ring stays dark"
+  done_step xvfhost
+fi
+
+if [ -f "$PAYDIR/system/domovoi-status" ] && ! skip statushelper; then
+  sed -e "s|@HOME@|$HOME_DIR|g" "$PAYDIR/system/domovoi-status" \
+    >/usr/local/sbin/domovoi-status
+  chmod 0755 /usr/local/sbin/domovoi-status
+  done_step statushelper
+fi
+
+# From here on the device can say what it is doing.
+status() { [ -x /usr/local/sbin/domovoi-status ] && /usr/local/sbin/domovoi-status "$@" || true; }
+
+# openWakeWord resolves a named model relative to its own package, so the
+# base models and the pretrained wake words have to live there. Resolved
+# through the venv python rather than hardcoded: the path carries the
+# python version, which moves with the OS release.
+install_oww_models() {
+  [ -d "$1" ] || return 0
+  local dest
+  dest="$("$HOME_DIR/satellite-venv/bin/python" -c     'import openwakeword, os; print(os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models"))'     2>/dev/null)" || return 0
+  [ -n "$dest" ] || return 0
+  mkdir -p "$dest" || return 0
+  cp -r "$1"/. "$dest"/ 2>/dev/null || return 0
+  chown -R "$SAT_USER:$SAT_USER" "$dest" 2>/dev/null || true
+}
+status setting-up
+
 # 4. Python venv, pip bootstrapped FROM THE SHIPPED WHEELS (no ensurepip,
 #    no network): create --without-pip, then install pip from the cache.
 if ! skip venv; then
@@ -185,6 +230,16 @@ if ! skip code; then
   cp "$PAYDIR/pyproject.toml" "$HOME_DIR/domovoi/" 2>/dev/null || true
   mkdir -p "$HOME_DIR/.domovoi"
   [ -d "$PAYDIR/oww_models" ] && cp -r "$PAYDIR/oww_models" "$HOME_DIR/.domovoi/" || true
+  # ...and where openWakeWord ACTUALLY looks. The client loads a wake word by
+  # NAME, which the library resolves inside its own package - it never looks
+  # under ~/.domovoi. Shipping the models to the config dir alone got them
+  # onto the device and left the client dying on NO_SUCHFILE for
+  # hey_jarvis_v0.1.onnx, with the cache reporting itself complete.
+  #
+  # `--no-deps` is why this cannot be left to the library: its own
+  # auto-download on first use needs both the network and the deps we
+  # deliberately skip.
+  install_oww_models "$PAYDIR/oww_models"
   [ -d "$PAYDIR/sounds" ] && cp -r "$PAYDIR/sounds" "$HOME_DIR/.domovoi/" || true
   [ -d "$PAYDIR/wake_models" ] && cp -r "$PAYDIR/wake_models" "$HOME_DIR/.domovoi/" || true
   [ -d "$PAYDIR/plugins" ] && cp -r "$PAYDIR/plugins" "$HOME_DIR/.domovoi/plugin_payloads" || true
@@ -287,27 +342,17 @@ if ! skip micboard; then
   done_step micboard
 fi
 
-# 6b. XVF3800 LED/control tool.
-#
-#     The whole folder, never just the binary: xvf_host loads
-#     libcommand_map.so from its own directory and dies with "cannot open
-#     shared object file" if separated from it.
-#
-#     The ring is the satellite's only way to show it is listening, so a
-#     card without this looks broken rather than merely plain — it sits in
-#     the XMOS chip's own default display and never reacts to Domovoi.
-if [ -d "$PAYDIR/xvf_host" ] && ! skip xvfhost; then
-  info bootstrapping xvf-host
-  mkdir -p /opt/xvf3800
-  cp -r "$PAYDIR"/xvf_host/. /opt/xvf3800/
-  chmod +x /opt/xvf3800/xvf_host 2>/dev/null ||     echo "WARN: no xvf_host binary in the payload — the LED ring stays dark"
-  done_step xvfhost
-fi
-
 # 7. Units + sudoers + root helper.
 if ! skip units; then
   info bootstrapping systemd-units
   install -m 0755 "$PAYDIR/system/domovoi-apply-payload" /usr/local/sbin/domovoi-apply-payload
+  # Re-install rather than assume step 3b ran: a card whose payload predates
+  # the helper still gets it once the payload is refreshed.
+  if [ -f "$PAYDIR/system/domovoi-status" ]; then
+    sed -e "s|@HOME@|$HOME_DIR|g" "$PAYDIR/system/domovoi-status" \
+      >/usr/local/sbin/domovoi-status
+    chmod 0755 /usr/local/sbin/domovoi-status
+  fi
   install -m 0755 "$PAYDIR/bootstrap/stage2.sh" \
     "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
   chown "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"

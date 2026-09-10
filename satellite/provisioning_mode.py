@@ -322,6 +322,24 @@ def _write_state(state: dict[str, Any]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+
+def setup_status(state: str, *args: str) -> None:
+    """Drive the setup indicator - the LED ring and the spoken line.
+
+    The same ``domovoi-status`` helper stage 1 and stage 2 call, so all four
+    programs that make up setup share one description of each phase. Purely
+    best-effort: a satellite with no ring, no speaker, or no helper at all
+    must still provision.
+    """
+    helper_path = "/usr/local/sbin/domovoi-status"
+    try:
+        if not os.access(helper_path, os.X_OK):
+            return
+        subprocess.run([helper_path, state, *args], timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.debug("setup status %r failed: %s", state, e)
+
+
 def give_to_satellite_user(path: Path) -> bool:
     """Hand a file written by root to the user that has to read it.
 
@@ -690,6 +708,9 @@ def run(
             profiles_supported=_profiles(),
         )
         transport.expose(info)
+        # The portal is live. This is the one moment a customer is actively
+        # waiting on the device itself for a cue.
+        setup_status("join-failed" if status == "wifi_failed" else "ready-to-setup")
         _write_state({"phase": status, "error": error, "nonce": nonce})
         log.info("setup exposed (status=%s nonce=%s) — waiting for adopt", status, nonce)
 
@@ -697,6 +718,9 @@ def run(
         if payload is None:
             # Only reachable with max_loops (tests) — a real device waits on.
             return 1
+        # Credentials accepted. The AP goes down here, so the customer's
+        # phone drops the setup network and the device is their only signal.
+        setup_status("joining")
         transport.withdraw()
         ok, err = apply_provision(
             payload,
@@ -706,6 +730,9 @@ def run(
         )
         if ok:
             _write_state({"phase": "done"})
+            # Held briefly so success is seen rather than inferred from the
+            # reboot that follows it.
+            setup_status("on-network")
             transport.dispose()
             log.info("provisioned as %r — rebooting", payload["room_id"])
             transport.reboot()

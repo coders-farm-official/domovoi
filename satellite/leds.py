@@ -475,3 +475,62 @@ class LEDController:
             if self._state == "error":
                 self._state = "idle"
                 self._changed.set()
+
+
+# ─── Setup indicator, one-shot ────────────────────────────────────────────
+#
+# The XVF3800 renders effects on-chip, so `domovoi-status` drives it with two
+# shell calls and needs nothing else. The 2-Mics HAT's APA102 ring has no
+# such thing: every frame is clocked out over SPI by whoever owns the bus, so
+# a setup phase can only be a SOLID colour here, set once and left.
+#
+# It also arrives later. This path needs the venv and spidev, which is the
+# sdist-only package we deliberately allow to fail, so the HAT stays dark
+# through the early part of stage 1 where the XVF is already lit. That is a
+# real difference in what the two boards can do, not an oversight.
+#
+#   python -m satellite.leds <state>
+
+SETUP_COLORS: dict[str, tuple[int, int, int]] = {
+    "setting-up":        (255, 176, 46),
+    "ready-to-setup":    (0, 168, 255),
+    "phone-connected":   (0, 168, 255),
+    "joining":           (255, 176, 46),
+    "join-failed":       (229, 72, 77),
+    "on-network":        (48, 196, 107),
+    "finishing":         (255, 176, 46),
+    "awaiting-approval": (168, 85, 247),
+    "no-microphone":     (229, 72, 77),
+    "off":               (0, 0, 0),
+}
+
+
+def _setup_main(argv: list[str] | None = None) -> int:
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    if not args or args[0] not in SETUP_COLORS:
+        return 0
+    r, g, b = SETUP_COLORS[args[0]]
+    try:
+        from satellite.devices import PROFILES
+
+        prof = PROFILES.get("respeaker_2mic_hat")
+        brightness = getattr(prof, "leds_brightness", 16) if prof else 16
+        driver = _APA102Driver(LedConfig.num_leds, brightness)
+    except Exception as e:  # noqa: BLE001 - no SPI, no spidev, no ring
+        log.debug("setup LEDs unavailable: %s", e)
+        return 0
+    try:
+        for i in range(LedConfig.num_leds):
+            driver.set_pixel(i, r, g, b)
+        driver.show()
+    except Exception as e:  # noqa: BLE001
+        log.debug("setup LED write failed: %s", e)
+    # Deliberately no close(): it clears the ring, and the whole point is to
+    # leave this colour showing after the process exits.
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_setup_main())

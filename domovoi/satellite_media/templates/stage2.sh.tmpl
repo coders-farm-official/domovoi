@@ -29,6 +29,9 @@ exec >>"$LOG" 2>&1
 echo "== domovoi stage-2 $(date -Is) =="
 
 as_user() { runuser -u "$SAT_USER" -- "$@"; }
+status() { [ -x /usr/local/sbin/domovoi-status ] && /usr/local/sbin/domovoi-status "$@" || true; }
+
+status finishing
 
 # Packages with no aarch64 wheel, which pip therefore has to BUILD. Left in
 # the requirements file, one of them fails the whole transaction and takes
@@ -118,6 +121,34 @@ if [ ! -f "$STEPS/online-deps" ]; then
     echo "satellite dependencies present"
   else
     echo "WARN: satellite dependencies still missing — retrying next boot"
+  fi
+fi
+
+# 3b. Wake-word models.
+#
+#     Repairs a card whose stage 1 predates the fix, and covers a payload
+#     that shipped without them. openWakeWord loads a named model from
+#     inside its own package, so that - not ~/.domovoi - is the only place
+#     that counts. Its own auto-download needs the network AND the deps
+#     `--no-deps` skips, so we place the files ourselves and only fall back
+#     to the download when there is nothing to place.
+if [ ! -f "$STEPS/wake-models" ]; then
+  OWW_DIR="$(as_user "$VENVPY" -c 'import openwakeword, os; print(os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models"))' 2>/dev/null || true)"
+  if [ -n "$OWW_DIR" ]; then
+    mkdir -p "$OWW_DIR"
+    if [ -d "$HOME_DIR/.domovoi/oww_models" ]; then
+      cp -r "$HOME_DIR/.domovoi/oww_models"/. "$OWW_DIR"/ 2>/dev/null || true
+    fi
+    if ! ls "$OWW_DIR"/*.onnx >/dev/null 2>&1; then
+      as_user "$VENVPY" -c 'import openwakeword.utils as u; u.download_models()' || true
+    fi
+    chown -R "$SAT_USER:$SAT_USER" "$OWW_DIR" 2>/dev/null || true
+    if ls "$OWW_DIR"/*.onnx >/dev/null 2>&1; then
+      touch "$STEPS/wake-models"
+      echo "wake-word models present"
+    else
+      echo "WARN: no wake-word models - the satellite will hear nothing"
+    fi
   fi
 fi
 

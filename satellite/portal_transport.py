@@ -180,6 +180,7 @@ class PortalTransport:
         self._server: Any = None
         self._thread: threading.Thread | None = None
         self._ap_up = False
+        self.phone_seen = False
 
     # ── Transport seam ───────────────────────────────────────────────────
 
@@ -552,6 +553,16 @@ def _make_handler(transport: PortalTransport):
         def do_GET(self) -> None:  # noqa: N802 — stdlib naming
             path = urllib.parse.urlparse(self.path).path
             if path == "/":
+                # A browser has actually opened the sign-in page, as opposed
+                # to an OS probe hitting one of the PROBE_PATHS. Settling the
+                # ring from breath to solid acknowledges the phone without
+                # spending another spoken line. Once only - this is on the
+                # request path and xvf_host is a process spawn.
+                if not transport.phone_seen:
+                    transport.phone_seen = True
+                    from satellite.provisioning_mode import setup_status
+
+                    setup_status("phone-connected")
                 self._form(error=transport.setup_error())
             elif path == "/device-info":
                 self._send(json.dumps(transport.device_info),

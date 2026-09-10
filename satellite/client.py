@@ -26,6 +26,7 @@ import re
 import secrets
 import shutil
 import signal
+import os
 import subprocess
 import sys
 import threading
@@ -941,6 +942,10 @@ class Satellite:
                 if self.cfg.input_device is None
                 else f"input_device={self.cfg.input_device!r}"
             )
+            # The dashboard cannot help here: this runs before the client
+            # connects, so a mic-less unit never reaches the core at all and
+            # the ring is the only channel left to say anything on.
+            _setup_status("no-microphone")
             log.error(
                 "could not open the microphone (%s): %s. Check the mic array "
                 "is plugged in and powered — `%s -m satellite.client "
@@ -3848,6 +3853,22 @@ class Satellite:
             else:
                 log.warning("set_config: no changes in payload; ignoring")
         elif t == "error":
+            # A portal-onboarded satellite is parked here, not failing: the
+            # core has it as a pending approval and a human has to match its
+            # code on the dashboard. Say the code out loud - it otherwise
+            # exists only on a portal page the customer has probably closed,
+            # and hearing it FROM the device is what proves the approval on
+            # screen belongs to the unit in front of them.
+            if payload.get("reason") == "awaiting_approval":
+                _setup_status("awaiting-approval")
+                code = _effective_approval_code()
+                if code:
+                    _setup_status("say-code", code)
+                log.info(
+                    "waiting for approval on the dashboard (code %s)",
+                    "".join("*" for _ in code) if code else "unknown",
+                )
+                return
             self._leds.set_state("error")
             log.error("server error: %s", payload.get("message"))
             # Treat error like a terminal response so the mic thread
@@ -4232,6 +4253,22 @@ def _ensure_config(path: Path) -> bool:
 
 def _list_devices() -> None:
     print(sd.query_devices())
+
+
+def _setup_status(state: str, *args: str) -> None:
+    """Drive the setup indicator (LED ring + spoken line).
+
+    The same helper stage 1 and stage 2 call, so the states stay in one
+    place. Entirely best-effort — a satellite with no ring must not fail
+    because of it, and on a hand-built unit the helper simply isn't there.
+    """
+    helper = "/usr/local/sbin/domovoi-status"
+    try:
+        if not os.access(helper, os.X_OK):
+            return
+        subprocess.run([helper, state, *args], timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.debug("setup status %r failed: %s", state, e)
 
 
 def _effective_approval_code() -> str | None:

@@ -947,7 +947,9 @@ def test_the_whole_folder_is_installed_not_just_the_binary():
     from domovoi.satellite_media import overlay
 
     body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
-    step = body.split("# 6b.", 1)[1].split("# 7.", 1)[0]
+    # Anchored on the step's own marker, not its number - it moves whenever
+    # something is inserted ahead of it, and it just did.
+    step = body.split("skip xvfhost", 1)[1].split("done_step xvfhost", 1)[0]
     assert "/opt/xvf3800" in step
     # A recursive copy of the directory, never a copy of the binary alone.
     assert 'cp -r "$PAYDIR"/xvf_host/. /opt/xvf3800/' in step
@@ -987,3 +989,113 @@ def test_a_missing_led_tool_is_reported_not_swallowed():
     ))
     assert ok is False
     assert "xvf_host" in msg
+
+
+# ─── the setup indicator ──────────────────────────────────────────────────
+#
+# Four programs make up setup - firstrun.sh, provisioning_mode.py,
+# stage2.sh and the client - and none of them spans it. domovoi-status is
+# the one place that knows what each phase looks and sounds like.
+
+
+def test_the_indicator_is_installed_before_the_long_silence():
+    """The venv build and code copy are minutes of nothing on screen, which
+    is exactly the stretch worth narrating. The LED tool needs only the
+    payload and libusb, so it must land BEFORE that work, not after it."""
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    installed = body.index("/usr/local/sbin/domovoi-status")
+    venv = body.index("python3 -m venv")
+    assert installed < venv, "the indicator installs after the work it describes"
+    assert body.index("skip xvfhost") < venv
+
+
+def test_every_setup_phase_has_a_state():
+    """A phase that calls a state the helper does not know is a silent
+    no-op - the failure mode this test exists to catch."""
+    from domovoi.satellite_media import overlay
+
+    helper = overlay.render_template(
+        "domovoi-status.tmpl", {"HOME": "/home/domovoi", "ANNOUNCE": "1"}
+    )
+    known = {
+        "setting-up", "ready-to-setup", "phone-connected", "joining",
+        "join-failed", "on-network", "finishing", "awaiting-approval",
+        "no-microphone", "off", "say-code",
+    }
+    for state in known:
+        assert f"  {state})" in helper, state
+
+    import inspect
+
+    from satellite import client, provisioning_mode
+
+    called = set()
+    for src in (
+        overlay.render_firstrun("domovoi", "xvf3800_usb", "voice"),
+        overlay.render_stage2("domovoi"),
+        inspect.getsource(provisioning_mode),
+        inspect.getsource(client),
+    ):
+        for state in known:
+            if f'"{state}"' in src or f"status {state}" in src:
+                called.add(state)
+    # Everything actually invoked has to be a state the helper handles.
+    assert called <= known, called - known
+    # And the phases that matter are wired, not merely defined.
+    for state in ("setting-up", "ready-to-setup", "joining", "on-network",
+                  "finishing", "no-microphone"):
+        assert state in called, f"{state} is defined but nothing calls it"
+
+
+def test_the_indicator_never_breaks_provisioning():
+    """A dark ring is a disappointment; a failed provision is a returned
+    unit. Every caller has to swallow its own errors."""
+    import inspect
+
+    from satellite import provisioning_mode
+
+    src = inspect.getsource(provisioning_mode.setup_status)
+    assert "os.access" in src            # missing helper is not an error
+    assert "check=False" in src          # a non-zero exit is not an error
+    assert "except" in src
+
+
+# ─── wake-word models have to land where the library reads them ───────────
+#
+# Found on hardware: the cache reported oww_models ok with 9 files, the
+# payload carried them, and stage 1 copied them to ~/.domovoi/oww_models -
+# which nothing ever reads. The client loads a wake word by NAME, and
+# openWakeWord resolves that inside its own package, so it died on
+# NO_SUCHFILE for hey_jarvis_v0.1.onnx while every check said the models
+# had shipped.
+
+
+def test_stage_one_installs_models_into_the_library():
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    assert "install_oww_models" in body
+    # Resolved through the venv python, not hardcoded - the path carries the
+    # python version, which moves with the OS release.
+    assert "openwakeword.__file__" in body
+    assert '"resources", "models"' in body
+    # The config-dir copy stays (stage 2 repairs from it) but is no longer
+    # the only destination.
+    assert '"$HOME_DIR/.domovoi/"' in body
+
+
+def test_stage_two_repairs_a_card_that_shipped_without_them():
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_stage2("domovoi")
+    step = body.split("# 3b.", 1)[1].split("# 4.", 1)[0]
+    assert "openwakeword.__file__" in step
+    # Place from the payload first; the library's own download needs the
+    # network AND the deps --no-deps skips, so it is the fallback.
+    assert ".domovoi/oww_models" in step
+    assert "download_models()" in step
+    assert step.index(".domovoi/oww_models") < step.index("download_models()")
+    # Marked done only when a model is actually on disk.
+    assert "*.onnx" in step

@@ -1,0 +1,141 @@
+#!/bin/bash
+# Domovoi satellite — the setup indicator.
+#
+# Setup runs across three programs that share nothing but the filesystem:
+# firstrun.sh (bash, root), provisioning_mode.py (python, root) and
+# stage2.sh (bash, root) — plus the client, which is neither. This script is
+# the one place that knows what each phase looks and sounds like, so a phase
+# can be re-tuned without touching four callers.
+#
+#   domovoi-status <state>
+#   domovoi-status say-code <digits>
+#
+# Everything here is best-effort. A satellite with no LED ring, no speaker
+# or an array that has not enumerated must still finish setting itself up —
+# a dark ring is a disappointment, a failed provision is a returned unit.
+#
+# Placeholders: @HOME@, @ANNOUNCE@
+
+set -u
+
+STATE="${1:-}"
+[ -n "$STATE" ] || exit 0
+
+XVF=/opt/xvf3800/xvf_host
+CLIPS="@HOME@/.domovoi/sounds/setup"
+ANNOUNCE="@ANNOUNCE@"
+# tmpfs on purpose: the "don't repeat yourself" memory below should last for
+# one boot and no longer.
+LAST=/run/domovoi-last-said
+VENVPY="@HOME@/satellite-venv/bin/python"
+
+# The array renders effects itself; the host only picks one. Effect ids are
+# leds.py's: 0=off 1=breath 2=rainbow 3=single 4=direction-of-arrival.
+# led_brightness applies to breath and rainbow ONLY, so a state that should
+# read as quiet has to be a dim colour rather than a dimmed one.
+EFFECT=""
+COLOR=""
+SPEED=""
+CLIP=""
+
+case "$STATE" in
+  # Boot 1. Minutes of disk and CPU with nothing on screen — the longest
+  # silence in the whole flow, and the one people power-cycle through.
+  setting-up)        EFFECT=1; COLOR=0xffb02e; SPEED=1 ;;
+
+  # The soft AP is up and the portal is serving. The only moment a customer
+  # is actively waiting for a cue from the device itself.
+  ready-to-setup)    EFFECT=1; COLOR=0x00a8ff; SPEED=2; CLIP=ready ;;
+
+  # A phone associated and asked for the portal page. Settling the breath to
+  # solid acknowledges it without spending another sentence.
+  phone-connected)   EFFECT=3; COLOR=0x00a8ff ;;
+
+  # Credentials in, AP down, nmcli joining. The customer's phone drops the
+  # setup network here, so this is where a silent device feels broken.
+  joining)           EFFECT=1; COLOR=0xffb02e; SPEED=2; CLIP=joining ;;
+
+  # A mistyped password is the likeliest failure in the flow.
+  join-failed)       EFFECT=1; COLOR=0xe5484d; SPEED=2; CLIP=join_failed ;;
+
+  # Joined, and the core answered the subnet sweep. Held briefly so success
+  # is visible rather than inferred from the reboot that follows.
+  on-network)        EFFECT=3; COLOR=0x30c46b; CLIP=on_network ;;
+
+  # Boot 2 — reaching the core, installing what the offline payload missed.
+  finishing)         EFFECT=1; COLOR=0xffb02e; SPEED=1 ;;
+
+  # Connected and parked. The one state that needs a person at a DIFFERENT
+  # device, so it gets a colour used nowhere else.
+  awaiting-approval) EFFECT=1; COLOR=0xa855f7; SPEED=2 ;;
+
+  # The mic is unplugged or has not enumerated. Today this kills the client
+  # before it ever connects, so the dashboard cannot say anything at all —
+  # the ring is the only channel left.
+  no-microphone)     EFFECT=3; COLOR=0xe5484d; CLIP=no_microphone ;;
+
+  off)               EFFECT=0 ;;
+  say-code)          ;;
+  *) exit 0 ;;
+esac
+
+# Root drives the array directly; the satellite user goes through the single
+# sudoers entry for this binary. leds.py probes in exactly this order.
+xvf() {
+  [ -x "$XVF" ] || return 1
+  "$XVF" "$@" >/dev/null 2>&1 && return 0
+  sudo -n "$XVF" "$@" >/dev/null 2>&1
+}
+
+play() {
+  [ "$ANNOUNCE" = "1" ] || return 0
+  [ -f "$1" ] || return 0
+  mpg123 -q "$1" >/dev/null 2>&1 || true
+}
+
+# ── the setup code, spoken digit by digit ─────────────────────────────────
+#
+# The code otherwise exists only on the portal page, and a customer who
+# closed that tab has no way back to it. Hearing it FROM the device is also
+# what proves the pending approval on the dashboard belongs to the unit in
+# front of them.
+if [ "$STATE" = "say-code" ]; then
+  CODE="${2:-}"
+  [ -n "$CODE" ] || exit 0
+  play "$CLIPS/your_code_is.mp3"
+  i=0
+  while [ "$i" -lt "${#CODE}" ]; do
+    D="${CODE:$i:1}"
+    case "$D" in
+      [0-9]) play "$CLIPS/digit_$D.mp3" ;;
+    esac
+    i=$((i + 1))
+  done
+  exit 0
+fi
+
+RING_OK=0
+if [ -n "$COLOR" ]; then xvf led_color "$COLOR"; fi
+if [ -n "$SPEED" ]; then xvf led_speed "$SPEED"; fi
+if [ -n "$EFFECT" ]; then xvf led_effect "$EFFECT" && RING_OK=1; fi
+
+# The 2-Mics HAT, when there is no XVF3800 to talk to. Its APA102 ring has
+# no on-chip effects — every frame is clocked out over SPI by whoever owns
+# the bus — so a phase can only be a SOLID colour here, and only once the
+# venv and spidev exist. The XVF is lit from step 3b; this board is not.
+if [ "$RING_OK" = "0" ] && [ -x "$VENVPY" ]; then
+  ( cd "@HOME@/domovoi" && "$VENVPY" -m satellite.leds "$STATE" ) >/dev/null 2>&1 || true
+fi
+
+# Never say the same line twice running. Provisioning re-enters its states
+# on every retry, and a device that repeats itself every thirty seconds is
+# worse company than one that stays quiet.
+if [ -n "$CLIP" ]; then
+  PREV="$(cat "$LAST" 2>/dev/null || true)"
+  if [ "$PREV" != "$CLIP" ]; then
+    printf '%s' "$CLIP" >"$LAST" 2>/dev/null || true
+    play "$CLIPS/$CLIP.mp3"
+  fi
+fi
+
+exit 0

@@ -321,3 +321,97 @@ def regenerate_blocking() -> None:
     """Sync entry point for one-off CLI use. The lifespan path uses the
     async one directly."""
     asyncio.run(regenerate_if_needed())
+
+
+# ─── Setup clips — the satellite's voice before it has one ────────────────
+#
+# Everything above renders PER REGISTERED VOICE, because a satellite knows
+# which voice it answers in. During setup it does not: there is no config,
+# no pairing, and — until the very last moment — no network to ask over.
+#
+# So these render once, in the household's default voice, at the moment a
+# card is prepared. `settings.tts_engine` is that default: it is `piper`
+# unless the household has deliberately chosen the web engine, and prep runs
+# here on the server where the network for that exists. They land in
+# sounds/setup/, which media prep already copies into the payload and stage 1
+# already lands at ~/.domovoi/sounds — so the delivery path needs nothing new.
+#
+# The phrase list is frozen when the card is written. That is the trade for
+# being able to speak with no server: adding a line later means re-prepping.
+
+_SETUP_DIR = _SOUNDS_DIR / "setup"
+
+_DIGIT_WORDS = (
+    "zero", "one", "two", "three", "four",
+    "five", "six", "seven", "eight", "nine",
+)
+
+# (mp3, text). Spoken at four moments only — ready, joining, joined, and the
+# code — plus the two failures a customer can actually act on. Anything more
+# and a device you set up three of becomes tiresome by the second.
+SETUP_LINES: list[tuple[str, str]] = [
+    ("ready.mp3",
+     "I'm ready to set up. Connect to the Wi-Fi network named on the box."),
+    ("joining.mp3",
+     "Thanks. Joining your network now."),
+    ("join_failed.mp3",
+     "I couldn't join that network. Connect to my setup network and try again."),
+    ("on_network.mp3",
+     "I'm on your network. One moment while I finish setting up."),
+    ("no_microphone.mp3",
+     "I can't find my microphone. Check that it's plugged in."),
+    ("your_code_is.mp3", "Your setup code is"),
+    *[(f"digit_{d}.mp3", word) for d, word in enumerate(_DIGIT_WORDS)],
+]
+
+
+def default_voice() -> tuple[str, str]:
+    """The engine and model the household actually speaks in.
+
+    ``tts_engine`` defaults to ``piper`` because local-first is the product
+    promise; a household that has deliberately chosen the web engine is
+    honoured here too, since prep runs on the server where the network is.
+    """
+    engine = (settings.tts_engine or "piper").strip().lower()
+    if engine == "edge":
+        return "edge", settings.tts_edge_voice
+    return "piper", settings.tts_piper_voice
+
+
+async def render_setup_clips() -> tuple[int, list[str]]:
+    """Render the setup phrase set in the default voice. (written, problems).
+
+    Idempotent on the same sidecar rule as everything else here, so a
+    re-prep with an unchanged voice re-renders nothing. Never raises: a card
+    with no clips is a quiet satellite, not a broken one.
+    """
+    engine, model_ref = default_voice()
+    marker = _marker(engine, model_ref)
+    problems: list[str] = []
+    written = 0
+    try:
+        _SETUP_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return 0, [f"could not create {_SETUP_DIR}: {e}"]
+
+    for mp3_name, text in SETUP_LINES:
+        mp3_path = _SETUP_DIR / mp3_name
+        sidecar = _SETUP_DIR / f"{mp3_name.rsplit('.', 1)[0]}.voice"
+        if not _needs_regen(mp3_path, sidecar, marker, text):
+            continue
+        mp3_bytes = await _synth_clip_mp3(text, engine, model_ref)
+        if mp3_bytes is None:
+            problems.append(mp3_name)
+            continue
+        try:
+            mp3_path.write_bytes(mp3_bytes)
+            sidecar.write_text(f"{marker}\n{_hash(text)}\n", encoding="utf-8")
+            written += 1
+        except OSError as e:
+            problems.append(f"{mp3_name}: {e}")
+    if written:
+        log.info(
+            "rendered %d setup clip(s) in the default voice (engine=%s)",
+            written, engine,
+        )
+    return written, problems
