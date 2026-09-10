@@ -34,6 +34,13 @@ VENVPY="@HOME@/satellite-venv/bin/python"
 # board shares card 0 and the default is right.
 ALSA_CARD="@ALSA_CARD@"
 ALSA_CONTROL="@ALSA_CONTROL@"
+# Its own log. Every caller here discards this script's output — stage 1 and
+# stage 2 into their own logs, the client into a subprocess it never reads —
+# so without this there is no record anywhere of whether a clip played, only
+# a customer reporting silence. That is the position this file put us in.
+SLOG="@HOME@/.domovoi/setup-status.log"
+note() { printf '%s %s
+' "$(date -Is 2>/dev/null)" "$*" >>"$SLOG" 2>/dev/null || true; }
 
 # The array renders effects itself; the host only picks one. Effect ids are
 # leds.py's: 0=off 1=breath 2=rainbow 3=single 4=direction-of-arrival.
@@ -109,20 +116,37 @@ xvf() {
 }
 
 play() {
-  [ "$ANNOUNCE" = "1" ] || return 0
-  [ -f "$1" ] || return 0
+  [ "$ANNOUNCE" = "1" ] || { note "skip $1 (announce off)"; return 0; }
+  if [ ! -f "$1" ]; then
+    note "MISSING $1"
+    return 0
+  fi
+  if ! command -v mpg123 >/dev/null 2>&1; then
+    note "no mpg123 — cannot play $1"
+    return 0
+  fi
   if [ -n "$ALSA_CARD" ]; then
     # Force the master up for the duration of setup. The array's jack is
     # line-level and its PCM control starts wherever the firmware left it,
     # so an announcement can be inaudible on a speaker turned all the way
     # up. Nothing else is competing for the output yet, and the client
     # takes the volume back the moment it starts.
-    amixer -c "$ALSA_CARD" sset "$ALSA_CONTROL" 100% >/dev/null 2>&1 || true
-    mpg123 -q -a "plughw:CARD=$ALSA_CARD" "$1" >/dev/null 2>&1 && return 0
+    amixer -c "$ALSA_CARD" sset "$ALSA_CONTROL" 100% >/dev/null 2>&1       || note "amixer -c $ALSA_CARD sset $ALSA_CONTROL 100% failed"
+    if mpg123 -q -a "plughw:CARD=$ALSA_CARD" "$1" 2>>"$SLOG"; then
+      note "played $1 on plughw:CARD=$ALSA_CARD"
+      return 0
+    fi
+    note "plughw:CARD=$ALSA_CARD refused $1 — falling back to the ALSA default"
   fi
-  # No card pinned, or the pinned one refused it: better the default than
-  # silence.
-  mpg123 -q "$1" >/dev/null 2>&1 || true
+  # No card pinned, or the pinned one refused it. The default is very often
+  # HDMI on a Pi, which is silence with a monitor attached — hence the log
+  # line above, which is the only way to tell that apart from a clip that
+  # never existed.
+  if mpg123 -q "$1" 2>>"$SLOG"; then
+    note "played $1 on the ALSA default"
+  else
+    note "FAILED to play $1 anywhere"
+  fi
 }
 
 # ── the setup code, spoken digit by digit ─────────────────────────────────
