@@ -74,6 +74,21 @@ case "$STATE" in
   # the ring is the only channel left.
   no-microphone)     EFFECT=3; COLOR=0xe5484d; CLIP=no_microphone ;;
 
+  # Connected to Wi-Fi or not, the core cannot be reached. Its own colour
+  # because the alternative is what actually happened once: the ring kept
+  # showing "awaiting approval" for an hour while the dashboard said
+  # "waiting" and the client logged reconnects - three surfaces, none of
+  # them saying "no network". The ring is the only one that still works
+  # when the network is the broken thing, so it has to be the one that says
+  # so. It says "look at me", not which half is at fault; the log does that.
+  no-server)         EFFECT=1; COLOR=0xff6a00; SPEED=2 ;;
+
+  # A startup step failed in a way retrying may not fix (no wake-word model,
+  # unreadable config). Solid red and no speech: the ring is the only thing
+  # left that can say anything, and there is nothing useful to tell someone
+  # standing in front of it beyond "look at me".
+  startup-failed)    EFFECT=3; COLOR=0xe5484d ;;
+
   off)               EFFECT=0 ;;
   say-code)          ;;
   *) exit 0 ;;

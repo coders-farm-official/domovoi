@@ -367,6 +367,23 @@ class LEDController:
             self._state = state
             self._changed.set()
 
+    def resync(self) -> None:
+        """Re-render the current state even though it has not changed.
+
+        The setup indicator (``domovoi-status``) drives the ring DIRECTLY,
+        because it has to run from three programs that are not this one.
+        That leaves this controller's cached state disagreeing with what the
+        hardware is actually showing, and ``set_state`` short-circuits on an
+        unchanged state - so nothing ever repaints it.
+
+        Found on hardware: a satellite parked for approval went violet, was
+        approved, connected cleanly... and stayed violet, because the
+        controller still believed it was idle and had no reason to render.
+        """
+        with self._lock:
+            log.debug("[leds] resync (state=%s)", self._state)
+            self._changed.set()
+
     def set_state_unless(self, unless: str, new: str) -> None:
         """Transition to ``new`` unless the current state is ``unless``.
 
@@ -501,6 +518,8 @@ SETUP_COLORS: dict[str, tuple[int, int, int]] = {
     "finishing":         (255, 176, 46),
     "awaiting-approval": (168, 85, 247),
     "no-microphone":     (229, 72, 77),
+    "startup-failed":    (229, 72, 77),
+    "no-server":         (255, 106, 0),
     "off":               (0, 0, 0),
 }
 

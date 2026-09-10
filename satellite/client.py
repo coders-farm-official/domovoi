@@ -681,6 +681,10 @@ class Satellite:
         self.send_q: asyncio.Queue[tuple[str, Any]] | None = None  # set in run()
 
         self.shutdown_event = threading.Event()
+        # Set when a startup step fails unrecoverably. main() turns this into
+        # a non-zero exit so Restart=on-failure actually retries; a clean
+        # exit here is how a satellite silently ceases to exist.
+        self.fatal_error: str | None = None
         self.response_done = threading.Event()
         self.playback_active = threading.Event()
         self.stop_playback = threading.Event()
@@ -1686,8 +1690,63 @@ class Satellite:
             "ssid": ssid.group(1).strip() if ssid else None,
         }
 
+    def _nm_manages_wifi(self) -> bool:
+        """Whether NetworkManager owns wlan0 on this device.
+
+        A portal-onboarded satellite is NM end to end - the setup AP is an
+        `nmcli device wifi hotspot`, and the join is `nmcli device wifi
+        connect`. Under NM, wpa_supplicant is driven over D-Bus and wpa_cli
+        usually cannot reach its control socket at all, so the reassociate
+        below is a no-op on exactly the devices the portal creates.
+        """
+        try:
+            r = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if r.returncode != 0:
+            return False
+        for line in (r.stdout or "").splitlines():
+            device, _, state = line.partition(":")
+            if device.strip() == "wlan0":
+                return state.strip() != "unmanaged"
+        return False
+
+    def _reconnect_wifi_nm(self) -> bool:
+        """Ask NetworkManager to bring wlan0 back up.
+
+        NM normally reconnects on its own; this is for the case where it has
+        given up, which is what leaves a satellite with no address at all -
+        `hostname -I` empty, nothing reaching the core, and every surface an
+        operator can see reporting something else entirely.
+        """
+        try:
+            r = subprocess.run(
+                ["sudo", "-n", "/usr/bin/nmcli", "device", "connect", "wlan0"],
+                capture_output=True, text=True, timeout=30.0,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("nmcli reconnect: %s", e)
+            return False
+        if r.returncode == 0:
+            log.info("nmcli device connect wlan0: OK")
+            return True
+        log.warning(
+            "nmcli device connect wlan0 failed: rc=%d stderr=%r. Check the "
+            "sudoers entry - `sudo -n /usr/bin/nmcli device connect wlan0` "
+            "should run without prompting.",
+            r.returncode, (r.stderr or "").strip(),
+        )
+        return False
+
     def _reassociate_wifi(self) -> bool:
-        """Run `sudo -n /usr/sbin/wpa_cli -i wlan0 reassociate`.
+        """Recover the Wi-Fi link, by whichever mechanism owns it.
+
+        NetworkManager first when it manages the device: `wpa_cli` cannot
+        talk to an NM-driven supplicant, so on a portal-onboarded satellite
+        the wpa_supplicant path below simply fails every time.
 
         Returns True when wpa_cli prints OK. False on any failure —
         sudo prompt (sudoers entry missing or wrong path), wpa_cli
@@ -1700,6 +1759,8 @@ class Satellite:
         owns its own cooldown bookkeeping; voice deliberately bypasses
         cooldown — user intent overrides the safety throttle.
         """
+        if self._nm_manages_wifi():
+            return self._reconnect_wifi_nm()
         try:
             result = subprocess.run(
                 ["sudo", "-n", "/usr/sbin/wpa_cli", "-i", "wlan0", "reassociate"],
@@ -3481,6 +3542,14 @@ class Satellite:
             oww = self._load_wake_model()
         except Exception as e:
             log.error("failed to load wake-word model %r: %s", self._wake_word, e)
+            # Exit NON-ZERO for this, via fatal_error below. Returning 0 here
+            # meant `Restart=on-failure` saw a clean exit and never restarted:
+            # the satellite died once, permanently and silently, holding
+            # whatever colour the setup indicator last wrote. A device that
+            # crash-loops is annoying; one that quietly stops existing is
+            # undiagnosable without a keyboard it has no port for.
+            self.fatal_error = f"wake-word model {self._wake_word!r}: {e}"
+            _setup_status("startup-failed")
             self.shutdown_event.set()
             return
 
@@ -3667,6 +3736,13 @@ class Satellite:
                 UPGRADE_PENDING_MARKER.unlink(missing_ok=True)
             except OSError as e:
                 log.warning("upgrade: failed to clear pending marker: %s", e)
+            # Take the ring back from the setup indicator. Until this frame
+            # the device may have been showing a setup colour written
+            # straight to the hardware - "awaiting approval" violet, most
+            # of all - and the controller has no idea, so it would never
+            # repaint. A satellite that was approved and connected must not
+            # go on advertising that it is waiting for approval.
+            self._leds.resync()
         elif t == "transcript":
             log.info("heard: %s", payload.get("text"))
         elif t == "response_start":
@@ -4198,12 +4274,29 @@ class Satellite:
 
         try:
             backoff = 1.0
+            # Consecutive CONNECTION failures. A session that ends normally -
+            # including one the core rejects, which has its own colour - means
+            # the server was reachable, so it resets this.
+            unreachable = 0
             while not self.shutdown_event.is_set():
                 try:
                     await self._run_session()
                     backoff = 1.0
+                    unreachable = 0
                 except (OSError, websockets.WebSocketException) as e:
                     log.warning("connection lost: %s", e)
+                    unreachable += 1
+                    # Exactly at the threshold, not past it: the ring holds
+                    # the colour on its own, and every call here is a sudo +
+                    # process spawn this board cannot spare during an outage.
+                    if unreachable == _UNREACHABLE_AFTER:
+                        log.error(
+                            "cannot reach %s after %d attempts - showing it on "
+                            "the ring, which is the only surface left when the "
+                            "network is the thing that is broken",
+                            self.cfg.domovoi_url, unreachable,
+                        )
+                        _setup_status("no-server")
                 if self.shutdown_event.is_set():
                     break
                 log.info("reconnecting in %.1fs", backoff)
@@ -4253,6 +4346,13 @@ def _ensure_config(path: Path) -> bool:
 
 def _list_devices() -> None:
     print(sd.query_devices())
+
+
+# Connection attempts before the ring admits it cannot reach the server.
+# With the 1/2/4s backoff this is ~7 seconds - long enough that a blip during
+# a normal reconnect never shows, short enough that someone standing in front
+# of a dead satellite is not left guessing.
+_UNREACHABLE_AFTER = 3
 
 
 def _setup_status(state: str, *args: str) -> None:
@@ -4390,6 +4490,13 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(sat.run())
     except KeyboardInterrupt:
         sat.shutdown_event.set()
+    # A shutdown someone ASKED for exits 0; one forced by a startup failure
+    # exits non-zero so systemd retries it. The unit is Restart=on-failure,
+    # so this return value is the difference between a satellite that keeps
+    # trying and one that is simply gone.
+    if getattr(sat, "fatal_error", None):
+        log.error("exiting non-zero so systemd retries: %s", sat.fatal_error)
+        return 1
     return 0
 
 

@@ -3,6 +3,10 @@
 # the exact argv forms the client invokes; see PROVISIONING.md §6.7/§8.1
 # and docs/SECURITY_PRIVACY.md for the posture.
 @USER@ ALL=(root) NOPASSWD: /usr/sbin/wpa_cli -i wlan0 reassociate
+# A portal-onboarded satellite is NetworkManager end to end, and wpa_cli
+# cannot talk to an NM-driven supplicant - so the line above recovers
+# nothing on these units. This is the one that does.
+@USER@ ALL=(root) NOPASSWD: /usr/bin/nmcli device connect wlan0
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
