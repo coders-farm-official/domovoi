@@ -902,6 +902,7 @@ class Satellite:
         dev = self.cfg.device
         select = dev.capture_select_channel
         channels = dev.capture_channels
+        _log_capture_environment(self.cfg.input_device)
         if select is not None:
             log.info(
                 "mic capture: %s %dch, selecting channel %d (ASR beam) → mono int16",
@@ -4467,6 +4468,84 @@ def _list_devices() -> None:
 # of a dead satellite is not left guessing.
 _UNREACHABLE_AFTER = 3
 
+
+
+def _log_capture_environment(input_device: object) -> None:
+    """Say, once at startup, what the USB audio path actually looks like.
+
+    Exists because of a night spent unable to tell two Zero 2 Ws apart:
+    one delivered 33 mic callbacks a second and the other 259 - the array
+    running ~8x too fast - and nothing in the log said which USB driver was
+    loaded, whether the cmdline pin was even present, or what the array had
+    enumerated as. Every one of those is readable from /proc and /sys, and
+    a satellite can be reached only through its log. Best-effort; INFO.
+    """
+    try:
+        cmdline = Path("/proc/cmdline").read_text(encoding="utf-8", errors="replace")
+        usb_tokens = [t for t in cmdline.split() if "dwc" in t or "otg" in t]
+        log.info("usb: cmdline tokens %s", usb_tokens or "(none - no dwc_otg.speed pin)")
+    except OSError:
+        pass
+    try:
+        drivers = sorted(
+            d.name for d in Path("/sys/bus/usb/drivers").iterdir()
+            if d.name.startswith(("dwc", "xhci", "ehci", "ohci"))
+        )
+        loaded = sorted(
+            d.name for d in Path("/sys/bus/platform/drivers").iterdir()
+            if d.name.startswith("dwc")
+        )
+        log.info("usb: host drivers %s; platform dwc drivers %s", drivers, loaded)
+    except OSError:
+        pass
+    try:
+        # The enumerated USB SPEED is the fact that matters most. The Zero
+        # 2 W's controller mis-clocks isochronous audio at high speed (480)
+        # and not at full speed (12), and two arrays from different batches
+        # - UAC1 vs UAC2 firmware - can enumerate differently on the same
+        # Pi. bcdDevice tells the batches apart.
+        for dev in sorted(Path("/sys/bus/usb/devices").iterdir()):
+            try:
+                product = (dev / "product").read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if not any(k in product.lower() for k in ("xvf", "respeaker", "xmos", "array")):
+                continue
+            def _r(name: str) -> str:
+                try:
+                    return (dev / name).read_text(encoding="utf-8").strip()
+                except OSError:
+                    return "?"
+            log.info(
+                "usb device %s: %r speed=%s Mbit/s usb=%s bcdDevice=%s "
+                "vid:pid=%s:%s serial=%s",
+                dev.name, product, _r("speed"), _r("version"), _r("bcdDevice"),
+                _r("idVendor"), _r("idProduct"), _r("serial"),
+            )
+    except OSError:
+        pass
+    try:
+        for card in sorted(Path("/proc/asound").glob("card*")):
+            stream = card / "stream0"
+            if not stream.is_file():
+                continue
+            head = stream.read_text(encoding="utf-8", errors="replace").splitlines()
+            # The capture altsetting is what matters; keep it short.
+            keep = [ln.strip() for ln in head if any(
+                k in ln for k in ("Capture", "Rates", "Format", "Channels", "Interface", "Altset")
+            )][:12]
+            log.info("usb audio %s: %s", card.name, " | ".join(keep) or "(no stream info)")
+    except OSError:
+        pass
+    try:
+        info = sd.query_devices(input_device, "input")
+        log.info(
+            "portaudio input: %r (hostapi %s, default %s Hz, %s in ch)",
+            info.get("name"), info.get("hostapi"),
+            info.get("default_samplerate"), info.get("max_input_channels"),
+        )
+    except Exception as e:  # noqa: BLE001 - diagnostics must never fail startup
+        log.info("portaudio input: could not query %r: %s", input_device, e)
 
 def _setup_status(state: str, *args: str) -> None:
     """Drive the setup indicator (LED ring + spoken line).
