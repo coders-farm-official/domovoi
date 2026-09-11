@@ -43,6 +43,7 @@ The TTS engine chain is **edge → piper → system**: a per-engine failure (net
 | Domovoi is much quieter than music | TTS engines normalize well below full scale | Raise `[playback] gain` on the satellite (2.0–4.0 typical); it scales TTS and greeting clips but leaves music untouched |
 | Speech is choppy ("It's Wednes…day…") | WS delivery jitter draining the audio buffer, or the Wi-Fi rate wedge | Confirm `[playback] tts_prebuffer_sec` isn't set to 0; check the Wi-Fi watcher rows above |
 | A specific uploaded voice produces silence | Bad voice model rendering zero-frame WAVs | The router already treats zero-frame output as failure and falls through; delete or re-upload the voice on the Voices page |
+| Speaks in **Aria** (a cloud Edge voice) on a box you never set to Edge | Installed before 2026-09-11, when `.env.example` shipped `TTS_ENGINE=edge` against the code's `piper` default | On first boot the registry promoted Aria as the default voice and has preserved it since — changing `TTS_ENGINE` in `.env` now does **nothing** for speech, because the registry default is what `resolve_voice` uses. Fix it on the Voices page: set a Piper voice (e.g. Lessac or Amy) as default. Confirm with `GET /api/voices` — the row with `is_default` is what actually speaks; `GET /api/config`'s `tts_voice` now reports the same thing |
 
 ## Wake word not triggering
 
