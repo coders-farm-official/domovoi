@@ -4508,6 +4508,11 @@ class CaptureRateCorrector:
     to ``sample_rate`` and re-frames the output to ``frame_samples``.
     """
 
+    # Ignore the first second entirely. Seen on hardware: the steady state
+    # was 259 callbacks/s but the first two seconds measured 205 - buffers
+    # filling, the LED controller spawning xvf_host, the socket connecting -
+    # which rounded to 6x and resampled from the wrong rate.
+    WARMUP_SEC = 1.0
     MEASURE_SEC = 2.0
     # Below this the stream is "nominal with jitter"; above it something is
     # wrong with the clock. 1.5 sits well clear of both.
@@ -4526,6 +4531,7 @@ class CaptureRateCorrector:
         self._expected_rate = sample_rate / frame_samples
         self._now = now
         self._t0: float | None = None
+        self._measure_t0: float | None = None
         self._count = 0
         self.measured = False
         self.ratio = 1.0
@@ -4534,10 +4540,16 @@ class CaptureRateCorrector:
 
     def feed(self, mono_int16: bytes) -> list[bytes]:
         if not self.measured:
+            now = self._now()
             if self._t0 is None:
-                self._t0 = self._now()
+                self._t0 = now
+            since_start = now - self._t0
+            if since_start < self.WARMUP_SEC:
+                return [mono_int16]
+            if self._measure_t0 is None:
+                self._measure_t0 = now
             self._count += 1
-            elapsed = self._now() - self._t0
+            elapsed = now - self._measure_t0
             if elapsed >= self.MEASURE_SEC:
                 self._decide(self._count / elapsed)
             # Pass through while measuring: two seconds of possibly-wrong
@@ -4563,7 +4575,15 @@ class CaptureRateCorrector:
                 rate, ratio,
             )
             return
-        k = max(2, min(self.MAX_RATIO, int(round(ratio))))
+        # Snap to a power of two. The mechanism is the USB start-of-frame
+        # rate - 1 kHz at full speed, 8 kHz at high speed - so the ratios
+        # that can physically occur are powers of two, and a measurement
+        # of 6.2 or 7.8 both mean 8. Rounding to the nearest integer
+        # instead gave 6, and audio five semitones sharp.
+        import math
+
+        k = 2 ** int(round(math.log2(ratio)))
+        k = max(2, min(self.MAX_RATIO, k))
         src = self._sample_rate * k
         self.resampler = StreamingResampler(src, self._sample_rate)
         log.warning(

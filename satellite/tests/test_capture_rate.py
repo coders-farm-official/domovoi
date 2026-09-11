@@ -67,7 +67,7 @@ def test_jitter_does_not_trigger_correction():
     """A stream at 1.2x is a busy box, not a broken clock."""
     clock = FakeClock()
     c = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES, now=clock)
-    _feed_stream(c, clock, ratio=1.2, seconds=3.0)
+    _feed_stream(c, clock, ratio=1.2, seconds=4.0)
     assert c.measured and c.resampler is None
 
 
@@ -81,8 +81,9 @@ def test_an_8x_stream_is_detected_and_reframed():
     # After the 2s measurement window, output runs at realtime: ~33 frames
     # per second of WALL time, not ~259. Allow the pass-through window and
     # resampler latency.
-    realtime_frames = int(SAMPLE_RATE / FRAME_SAMPLES * 4.0)          # the 4s after measuring
-    passthrough = int(SAMPLE_RATE / FRAME_SAMPLES * 7.8 * 2.0)        # the 2s of measuring
+    window = CaptureRateCorrector.WARMUP_SEC + CaptureRateCorrector.MEASURE_SEC
+    realtime_frames = int(SAMPLE_RATE / FRAME_SAMPLES * (6.0 - window))
+    passthrough = int(SAMPLE_RATE / FRAME_SAMPLES * 7.8 * window)
     assert passthrough <= len(frames) <= passthrough + realtime_frames + 5
     assert all(len(f) == FRAME_SAMPLES * 2 for f in frames)
 
@@ -105,7 +106,8 @@ def test_the_corrected_audio_is_the_original_pitch():
 
     # Skip the measurement window's pass-through (still 8x-fast audio) and
     # look at what came out once correction was live.
-    passthrough = int(SAMPLE_RATE / FRAME_SAMPLES * k * CaptureRateCorrector.MEASURE_SEC)
+    window = CaptureRateCorrector.WARMUP_SEC + CaptureRateCorrector.MEASURE_SEC
+    passthrough = int(SAMPLE_RATE / FRAME_SAMPLES * k * window)
     corrected = np.frombuffer(b"".join(frames[passthrough + 4 :]), dtype=np.int16)
     assert len(corrected) > SAMPLE_RATE  # at least a second to analyse
 
@@ -136,8 +138,32 @@ def test_uncorrected_8x_audio_really_is_the_wrong_pitch():
 def test_ratio_is_clamped_to_something_sane():
     clock = FakeClock()
     c = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES, now=clock)
-    _feed_stream(c, clock, ratio=40.0, seconds=3.0)
+    _feed_stream(c, clock, ratio=40.0, seconds=4.0)
     assert c.resampler is not None
     # 40x is not a real USB failure mode; we cap rather than build a
     # 640 kHz resampler.
     assert c.resampler is not None and c.MAX_RATIO == 16
+
+
+def test_a_startup_underread_still_snaps_to_eight():
+    """Exactly what the first hardware run did: measured 6.2x during a slow
+    start, rounded to 6, resampled from 96 kHz instead of 128, and delivered
+    audio five semitones sharp. The physics only allows powers of two."""
+    clock = FakeClock()
+    c = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES, now=clock)
+    _feed_stream(c, clock, ratio=6.2, seconds=5.0)
+    assert c.resampler is not None
+    # StreamingResampler(src, dst): src must be 8x, not 6x.
+    assert c.resampler.src_rate == SAMPLE_RATE * 8
+
+
+def test_the_warmup_second_is_not_measured():
+    """A stream that is slow for its first second and correct after must
+    read as nominal - the transient is startup, not the clock."""
+    clock = FakeClock()
+    c = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES, now=clock)
+    # 0.5x for the first second (buffers filling)...
+    _feed_stream(c, clock, ratio=0.5, seconds=1.0)
+    # ...then exactly nominal.
+    _feed_stream(c, clock, ratio=1.0, seconds=3.0)
+    assert c.measured and c.resampler is None
