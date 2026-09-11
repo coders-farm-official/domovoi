@@ -1011,12 +1011,9 @@ const RoomSettingsBody = ({ room, fire }) => {
  * megabyte is thousands of lines, which is what anyone actually reads. */
 const LOG_VIEW_BYTES = 1024 * 1024;
 
-const fmtBytes = (n) => {
-  if (n == null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-};
+// `fmtBytes` comes from components.jsx (the shared kit). Don't redeclare it
+// here: page scripts share one global scope, and a second top-level `const`
+// of the same name is a SyntaxError that kills the next script to load.
 
 const RoomLogsBody = ({ room, online }) => {
   const [loading, setLoading] = React.useState(true);

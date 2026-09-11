@@ -45,14 +45,10 @@ const officeLoadScript = (url) => {
   return _officeScripts[url];
 };
 
-const fmtBytes = (n) => {
-  if (n == null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-};
-
-/* Slim shared surface (drawings.jsx borrows these two). */
+/* Slim shared surface (drawings.jsx borrows these two). `fmtBytes` is the
+ * shared-kit helper from components.jsx — not redeclared here, because page
+ * scripts share one global scope and a duplicate top-level `const` is a
+ * SyntaxError that silently turns this tab into the Music fallback. */
 window.OfficeSuite = { officeLoadScript, fmtBytes };
 
 /* ---- raw / text / download helpers ------------------------ */

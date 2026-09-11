@@ -696,6 +696,7 @@ class Satellite:
         # frames" warnings. Without this, a single stuck moment would
         # spam the journal at 33 Hz.
         self._raw_q_drops = 0
+        self._raw_q_callbacks = 0
         self._raw_q_last_drop_log = 0.0
         self.playback_q: queue.Queue[tuple[int, bytes]] = queue.Queue()
         self.send_q: asyncio.Queue[tuple[str, Any]] | None = None  # set in run()
@@ -908,6 +909,14 @@ class Satellite:
             )
 
         def cb(indata, frames, time_info, status) -> None:  # noqa: ANN001
+            # Counted unconditionally, so the overflow warning can report
+            # the callback rate it was measured against. Seen on hardware:
+            # ~6500 "frames dropped in 30s" from a stream whose 30 ms
+            # blocks can only fire ~1000 times in 30 s. Either the stream
+            # really is firing 6x faster than PortAudio negotiated, or the
+            # count means something other than it says - and only a number
+            # from inside this callback can tell those apart.
+            self._raw_q_callbacks += 1
             if status:
                 log.debug("mic status: %s", status)
             if select is None:
@@ -932,16 +941,22 @@ class Satellite:
                 self._raw_q_drops += 1
                 now = time.monotonic()
                 if now - self._raw_q_last_drop_log > 30.0:
+                    elapsed = now - self._raw_q_last_drop_log
                     log.warning(
-                        "mic queue overflowing: %d frames dropped in the "
-                        "last 30s. Wake-word predict is falling behind "
-                        "realtime — likely thermal throttling, swap, or "
-                        "another CPU hog. Wake-word will still fire on "
+                        "mic queue overflowing: %d of %d callbacks dropped "
+                        "in the last %.0fs (%.0f callbacks/s; %d frames "
+                        "each, %d queued). Wake-word predict is falling "
+                        "behind realtime — likely thermal throttling, swap, "
+                        "or another CPU hog. Wake-word will still fire on "
                         "recent audio (queue is bounded) but you may see "
                         "missed detections.",
-                        self._raw_q_drops,
+                        self._raw_q_drops, self._raw_q_callbacks,
+                        elapsed if elapsed < 1e6 else 0.0,
+                        self._raw_q_callbacks / elapsed if 0 < elapsed < 1e6 else 0.0,
+                        frames, self.raw_q.qsize(),
                     )
                     self._raw_q_drops = 0
+                    self._raw_q_callbacks = 0
                     self._raw_q_last_drop_log = now
 
         try:
@@ -953,6 +968,10 @@ class Satellite:
                 callback=cb,
                 device=self.cfg.input_device,
             )
+            # Anchor the overflow window to the stream's start, so the first
+            # warning measures a real interval rather than time since boot.
+            self._raw_q_last_drop_log = time.monotonic()
+            self._raw_q_callbacks = 0
             self._input_stream.start()
         except sd.PortAudioError as e:
             # PortAudio renders an unplugged microphone as "Error querying

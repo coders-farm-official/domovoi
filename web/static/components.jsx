@@ -240,6 +240,19 @@ const relTime = (iso) => {
   if (s < 86400) return `${Math.round(s/3600)}h ago`;
   return `${Math.round(s/86400)}d ago`;
 };
+/* Bytes → "1.2 MB". Lives HERE, in the shared kit, because every page script
+ * shares one global scope under Babel-in-browser: two pages each declaring
+ * their own top-level `const fmtBytes` is a SyntaxError that kills whichever
+ * script loads second — and a page that never registers falls back to the
+ * Music page (index.html's route map), which is how a duplicate helper once
+ * turned the Files tab into Music. One definition, used everywhere. */
+const fmtBytes = (n) => {
+  if (n == null) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const fmtDur = (sec) => {
   if (sec == null) return '—';
   const m = Math.floor(sec / 60); const s = Math.floor(sec % 60);
