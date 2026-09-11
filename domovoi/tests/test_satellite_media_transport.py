@@ -166,12 +166,14 @@ def test_firstrun_has_no_unreplaced_placeholders():
 HOST_OVERLAY = "dtoverlay=dwc2,dr_mode=host"
 
 
-def test_portal_xvf3800_gets_host_mode():
-    """Without this the unit lands on the legacy dwc_otg driver, which
-    delivers USB audio ~8x too fast — the wake word never fires. It also
-    means a plain data cable works instead of a true OTG adapter."""
+def test_portal_xvf3800_gets_no_dwc2_overlay():
+    """The dwc2 host overlay enumerates the array at HIGH speed, where its
+    output is not audio - measured on both boards we own. It also replaces
+    the driver that dwc_otg.speed=1 belongs to, making the real fix inert.
+    A USB-mic unit gets the cmdline pin and nothing in config.txt."""
     config = overlay.edit_config_txt(STOCK_CONFIG, usb_gadget=False, usb_host=True)
-    assert HOST_OVERLAY in config
+    assert HOST_OVERLAY not in config
+    assert "dwc2" not in config
     assert GADGET_OVERLAY not in config
 
 
@@ -193,7 +195,11 @@ def test_host_mode_write_is_idempotent():
     assert overlay.edit_config_txt(once, usb_gadget=False, usb_host=True) == once
 
 
-def test_portal_card_for_a_usb_mic_carries_host_mode(tmp_path):
+def test_portal_card_for_a_usb_mic_pins_full_speed_and_nothing_else(tmp_path):
+    """The whole boot-config footprint of a USB-mic portal card: the
+    dwc_otg.speed=1 token on the cmdline, and NO dwc2 overlay in config.txt.
+    The overlay is what enumerated the array at high speed, where its output
+    is not audio."""
     creds = overlay.generate_ap_credentials()
     boot = tmp_path / "bootfs"
     boot.mkdir()
@@ -209,7 +215,11 @@ def test_portal_card_for_a_usb_mic_carries_host_mode(tmp_path):
             "voice", setup_transport="portal", ap_ssid=creds["ssid"]),
         ap=creds, usb_gadget=False, usb_host=True,
     )
-    assert HOST_OVERLAY in (boot / "config.txt").read_text()
+    config = (boot / "config.txt").read_text()
+    assert HOST_OVERLAY not in config and "dwc2" not in config
+    cmdline = (boot / "cmdline.txt").read_text()
+    assert "dwc_otg.speed=1" in cmdline
+    assert cmdline.count("\n") == 1
 
 
 # ─── cache refresh tolerance ──────────────────────────────────────────────

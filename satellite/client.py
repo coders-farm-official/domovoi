@@ -4598,14 +4598,21 @@ class CaptureRateCorrector:
         k = max(2, min(self.MAX_RATIO, k))
         src = self._sample_rate * k
         self.resampler = StreamingResampler(src, self._sample_rate)
-        log.warning(
-            "mic delivers %.0f callbacks/s - %.1fx the negotiated rate. The "
-            "USB audio clock is running fast (high-speed enumeration on a "
-            "board whose controller mis-times isochronous audio). Treating "
-            "capture as %d Hz and resampling to %d Hz; the wake word cannot "
-            "work without this.",
-            rate, ratio, src, self._sample_rate,
+        log.error(
+            "mic delivers %.0f callbacks/s - %.1fx the negotiated rate: the "
+            "USB link enumerated at HIGH speed, and at that rate this array's "
+            "output is not audio (measured: ~13 distinct values per block, "
+            "held in runs of eight). Resampling to %d Hz as %d Hz so the "
+            "queue stops overflowing, but the wake word WILL NOT work. Fix "
+            "the link: dwc_otg.speed=1 must be on the kernel cmdline, the "
+            "array must be behind an OTG adapter, and config.txt must NOT "
+            "carry dtoverlay=dwc2 - that overlay replaces the driver the "
+            "pin belongs to.",
+            rate, ratio, self._sample_rate, src,
         )
+        # The ring is the surface a customer will actually see. Solid red:
+        # this unit is deaf until its USB link is fixed.
+        _setup_status("startup-failed")
 
 
 

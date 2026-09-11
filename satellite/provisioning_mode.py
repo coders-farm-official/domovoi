@@ -541,7 +541,10 @@ def apply_provision(
 
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
-_HOST_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=host"
+# Written by the media-prep overlay for a USB-mic unit, and what a USB-
+# adopted one needs added once its gadget mode is reverted. See
+# satellite_media/overlay.py for why it is this and NOT a dwc2 host overlay.
+_USB_FULLSPEED_TOKEN = "dwc_otg.speed=1"
 _USB_MIC_PROFILES = ("xvf3800_usb",)
 
 
@@ -564,16 +567,14 @@ def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
             continue
         try:
             text = cfg.read_text(encoding="utf-8", errors="replace")
+            # Remove the peripheral-mode overlay and nothing else. The
+            # host side comes from the OTG adapter's ID pin under the Pi's
+            # default dwc_otg driver; the dwc2 host overlay that used to be
+            # swapped in here enumerates the array at high speed, where its
+            # output is not audio. The full-speed pin goes on the CMDLINE,
+            # below.
             kept = [ln for ln in text.splitlines()
                     if ln.strip() != _GADGET_CONFIG_LINE]
-            # A USB mic array needs the port driven as a host, and the dwc2
-            # driver clocks its audio correctly where the legacy dwc_otg one
-            # delivers ~8x the sample rate. Swap rather than merely remove.
-            if (
-                image_device_profile() in _USB_MIC_PROFILES
-                and not any(ln.strip() == _HOST_CONFIG_LINE for ln in kept)
-            ):
-                kept.append(_HOST_CONFIG_LINE)
             if kept != text.splitlines():
                 cfg.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
                 changed.append(str(cfg))
@@ -587,6 +588,14 @@ def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
             raw = cmdline.read_text(encoding="utf-8", errors="replace")
             line = raw.strip().splitlines()[0] if raw.strip() else ""
             tokens = [t for t in line.split() if t != _GADGET_CMDLINE_TOKEN]
+            # A USB-adopted mic-array unit was prepared in peripheral mode
+            # and never got the full-speed pin a portal unit gets at prep.
+            # Add it now that the port is about to become a host.
+            if (
+                image_device_profile() in _USB_MIC_PROFILES
+                and not any(t.startswith("dwc_otg.speed=") for t in tokens)
+            ):
+                tokens.append(_USB_FULLSPEED_TOKEN)
             rebuilt = " ".join(tokens) + "\n"
             if rebuilt != raw:
                 # A malformed cmdline can stop the Pi booting — one line, no

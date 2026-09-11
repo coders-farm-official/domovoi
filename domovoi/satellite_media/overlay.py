@@ -37,27 +37,30 @@ _END_MARKER = "# --- end domovoi satellite ---"
 # would adopt cleanly and then be deaf.
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
-# Force the Pi's USB controller to full speed on a unit with a USB mic
-# array. The dwc_otg driver mis-clocks isochronous transfers at high speed
-# and the array then delivers audio ~8x too fast - 259 callbacks/s where
-# 33 were asked for, measured on hardware - which no wake model will ever
-# match at any threshold. dtoverlay=dwc2,dr_mode=host is meant to sidestep
-# this by switching drivers, and did on one board and not on the next; this
-# token is inert under dwc2 and the fix under dwc_otg, so every card gets
-# both. Survives stage 1's cmdline cleanup, which strips only our own
-# systemd.* hook tokens.
-_USB_FULLSPEED_TOKEN = "dwc_otg.speed=1"
-
-# Forced HOST mode, for units with a USB mic array and no gadget to host.
-# Loads the upstream `dwc2` driver, which clocks isochronous audio correctly
-# where the legacy `dwc_otg` one delivers ~8x the sample rate. It also
-# drives the port as a host regardless of the ID pin, so a plain data cable
-# works where the array would otherwise need a true OTG adapter — one fewer
-# part in the box, one fewer support question.
+# Force the Pi's USB link to FULL speed on a unit with a USB mic array.
+# This is the whole fix for the XVF3800 on a Zero 2 W, and it is the only
+# thing written to the boot config for one. Measured on both boards we own:
+# enumerated at high speed the array's capture stream fires ~259 callbacks/s
+# against 33 negotiated, and the samples are not audio at any pitch - 13
+# distinct values per 480-sample block, held in runs of eight, uncorrelated
+# from run to run. The XMOS DSP runs off its own crystal; pulled 8x faster
+# than it produces samples, the USB endpoint emits junk. No resampling
+# recovers it. At full speed the same array is fine.
 #
-# It was believed to make _USB_FULLSPEED_TOKEN unnecessary. It did on one
-# Zero 2 W and not on the next, so both are written now; see the token.
-_HOST_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=host"
+# The token belongs to the legacy dwc_otg driver, which is the Pi's default.
+# Host mode under it comes from the ID pin - an OTG adapter between the Pi
+# and the array - which is how production units are built.
+#
+# `dtoverlay=dwc2,dr_mode=host` was written here for a while so a plain
+# cable could work without that adapter. It REPLACES dwc_otg, which makes
+# this token inert, and dwc2 enumerates the array at high speed: the broken
+# mode. It worked exactly once, on one lucky full-speed enumeration, and
+# was documented as "dwc2 clocks it correctly" on the strength of that.
+# Do not write it for a USB-mic unit.
+#
+# Survives stage 1's cmdline cleanup, which strips only our own systemd.*
+# hook tokens.
+_USB_FULLSPEED_TOKEN = "dwc_otg.speed=1"
 
 # Mic boards that hang off USB and therefore need host mode.
 USB_MIC_PROFILES = ("xvf3800_usb",)
@@ -155,10 +158,12 @@ def edit_config_txt(
     holds the only data port on a Pi Zero 2 W in peripheral mode, where a
     USB mic array cannot enumerate.
 
-    ``usb_host`` forces host mode instead — for a unit with a USB mic array
-    and no gadget to present. The two are mutually exclusive; gadget wins,
-    because a USB-transport unit needs peripheral mode to be adopted at all
-    and swaps to host once adoption is done."""
+    ``usb_host`` is a unit with a USB mic array and no gadget to present.
+    It writes NOTHING here on purpose: the fix for that hardware is a
+    cmdline token (see _USB_FULLSPEED_TOKEN), and the dwc2 overlay that used
+    to be written in its place is precisely what broke it. Gadget wins over
+    host, because a USB-transport unit needs peripheral mode to be adopted
+    at all and provisioning reverts it afterwards."""
     if _MARKER in text:
         return text
     if text and not text.endswith("\n"):
@@ -166,8 +171,6 @@ def edit_config_txt(
     lines = [_MARKER]
     if usb_gadget:
         lines.append(_GADGET_CONFIG_LINE)
-    elif usb_host:
-        lines.append(_HOST_CONFIG_LINE)
     lines.append(_END_MARKER)
     return text + "\n".join(lines) + "\n"
 

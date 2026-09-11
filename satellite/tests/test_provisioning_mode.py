@@ -343,3 +343,67 @@ def test_the_approval_code_is_readable_by_the_client():
 
     src = inspect.getsource(pt.PortalTransport._persist_approval_code)
     assert "give_to_satellite_user" in src
+
+
+# ─── USB adoption hands the port to the mic array correctly ───────────────
+#
+# Measured on both Pi Zero 2 Ws: enumerated at high speed the XVF3800's
+# capture stream is not audio - 13 distinct values per block, held in runs
+# of eight. The revert after USB adoption used to SWAP the gadget overlay
+# for `dtoverlay=dwc2,dr_mode=host`, which is exactly the high-speed mode.
+# Now it removes the gadget overlay and pins full speed on the cmdline, the
+# same footprint a portal card gets at prepare time.
+
+
+def _boot(tmp_path, config: str, cmdline: str):
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    (boot / "config.txt").write_text(config, encoding="utf-8")
+    (boot / "cmdline.txt").write_text(cmdline, encoding="utf-8")
+    return boot
+
+
+def test_the_revert_never_writes_the_dwc2_host_overlay(tmp_path, monkeypatch):
+    from satellite import provisioning_mode as pm
+
+    monkeypatch.setattr(pm, "image_device_profile", lambda: "xvf3800_usb")
+    boot = _boot(
+        tmp_path,
+        "dtparam=audio=on\ndtoverlay=dwc2,dr_mode=peripheral\n",
+        "console=tty1 root=PARTUUID=x rootwait modules-load=dwc2\n",
+    )
+    pm.revert_usb_gadget_boot_config([boot])
+    config = (boot / "config.txt").read_text()
+    assert "dr_mode=peripheral" not in config
+    assert "dwc2" not in config
+
+
+def test_the_revert_pins_full_speed_for_a_usb_mic(tmp_path, monkeypatch):
+    from satellite import provisioning_mode as pm
+
+    monkeypatch.setattr(pm, "image_device_profile", lambda: "xvf3800_usb")
+    boot = _boot(
+        tmp_path,
+        "dtoverlay=dwc2,dr_mode=peripheral\n",
+        "console=tty1 root=PARTUUID=x rootwait modules-load=dwc2\n",
+    )
+    pm.revert_usb_gadget_boot_config([boot])
+    cmdline = (boot / "cmdline.txt").read_text()
+    assert "modules-load=dwc2" not in cmdline
+    assert "dwc_otg.speed=1" in cmdline
+    # Still one line - a malformed cmdline stops the boot.
+    assert cmdline.count("\n") == 1 and cmdline.endswith("\n")
+
+
+def test_a_hat_unit_is_left_alone_on_the_cmdline(tmp_path, monkeypatch):
+    """The HAT is on the Pi's own I2S; nothing about USB speed applies."""
+    from satellite import provisioning_mode as pm
+
+    monkeypatch.setattr(pm, "image_device_profile", lambda: "respeaker_2mic_hat")
+    boot = _boot(
+        tmp_path,
+        "dtoverlay=dwc2,dr_mode=peripheral\n",
+        "console=tty1 root=PARTUUID=x rootwait modules-load=dwc2\n",
+    )
+    pm.revert_usb_gadget_boot_config([boot])
+    assert "dwc_otg.speed" not in (boot / "cmdline.txt").read_text()
