@@ -3,8 +3,46 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import logging
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+log = logging.getLogger(__name__)
+
+# Whether conversation_log has V011's `utterance_trigger` column. Probed once
+# per process, then cached.
+#
+# The column is additive, but the INSERT that uses it is on the path EVERY
+# spoken turn takes — so a core started against a database that hasn't had
+# Flyway run would fail every interaction, not degrade. That's too sharp an
+# edge for a diagnostic field. Same tolerance `_list_rooms` extends to a
+# missing V003, for the same reason.
+_HAS_UTTERANCE_TRIGGER: bool | None = None
+
+
+async def _has_utterance_trigger(s: AsyncSession) -> bool:
+    global _HAS_UTTERANCE_TRIGGER
+    if _HAS_UTTERANCE_TRIGGER is None:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'conversation_log'
+                      AND column_name = 'utterance_trigger'
+                    """
+                )
+            )
+        ).first()
+        _HAS_UTTERANCE_TRIGGER = row is not None
+        if not _HAS_UTTERANCE_TRIGGER:
+            log.warning(
+                "conversation_log.utterance_trigger is missing — recording "
+                "turns without it. Run the Flyway migrations (V011) to see "
+                "what opened the mic for each turn in the dashboard."
+            )
+    return _HAS_UTTERANCE_TRIGGER
 
 
 class TimerRepository:
@@ -177,18 +215,30 @@ class ConversationLogRepository:
         presence_tier: str | None,
         online: bool | None,
         latency_ms: int | None,
+        trigger: str | None = None,
     ) -> None:
+        with_trigger = await _has_utterance_trigger(self.s)
+        cols = (
+            "presence_tier, online, latency_ms, utterance_trigger"
+            if with_trigger
+            else "presence_tier, online, latency_ms"
+        )
+        vals = (
+            ":presence_tier, :online, :latency_ms, :trigger"
+            if with_trigger
+            else ":presence_tier, :online, :latency_ms"
+        )
         await self.s.execute(
             text(
-                """
+                f"""
                 INSERT INTO conversation_log
                     (session_id, room_id, person_id, user_text,
                      assistant_text, matched_handler, matched_path,
-                     presence_tier, online, latency_ms)
+                     {cols})
                 VALUES
                     (:session_id, :room_id, :person_id, :user_text,
                      :assistant_text, :matched_handler, :matched_path,
-                     :presence_tier, :online, :latency_ms)
+                     {vals})
                 """
             ),
             {
@@ -202,6 +252,7 @@ class ConversationLogRepository:
                 "presence_tier": presence_tier,
                 "online": online,
                 "latency_ms": latency_ms,
+                **({"trigger": trigger} if with_trigger else {}),
             },
         )
 

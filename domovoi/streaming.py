@@ -65,6 +65,12 @@ Client → Server
                            and after a set_voice action. Server caches
                            per-room and synthesizes that room's responses +
                            greetings in it. None/unknown → registry default.
+  text  logs_chunk         {"type":"logs_chunk","request_id":str,"seq":int,
+                            "data":str,"final":bool,"stats":{...}?}
+                           - one slice of the log tail requested by `get_logs`,
+                           chunked because a 10 MB frame is a bad bet at both
+                           ends. `seq` starts at 0 and must arrive in order;
+                           `stats` rides the frame marked `final`.
   text  config_status      {"type":"config_status","config":{"section.key":val,...}}
                            — Pi reports its current EFFECTIVE editable config
                            (flat, keyed by section.key) on connect. Server
@@ -140,6 +146,10 @@ Server → Client
   text  wake_models_changed {"type":"wake_models_changed"} — Feature 5. The
                            served wake models changed; the Pi re-syncs its
                            ~/.domovoi/wake_models cache from /v1/wake-models.
+  text  get_logs           {"type":"get_logs","request_id":str,"max_bytes":int}
+                           - ask the satellite for the tail of its in-RAM log
+                           ring. The ONLY request/response pair in this
+                           protocol; answered by `logs_chunk` frames below.
   text  set_config         {"type":"set_config","changes":{"section.key":val,...}}
                            — push web-edited config to the Pi. It merges the
                            changes into config.toml (preserving comments),
@@ -234,7 +244,7 @@ import re
 import secrets
 import time
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -370,6 +380,22 @@ class WakeRecordingState:
     clip_seconds: float
     target_count: int
     clips_written: int = 0
+
+
+@dataclass
+class _LogRequest:
+    """One in-flight `get_logs` → `logs_chunk`… exchange.
+
+    This is the ONLY request/response pair in an otherwise one-way
+    protocol, so the correlation id, reassembly buffer and expected
+    sequence live here rather than in a general mechanism with a single
+    caller. ``future`` resolves on the chunk marked ``final``, or takes an
+    exception if the satellite disconnects or misorders the series.
+    """
+
+    future: "asyncio.Future[dict[str, Any]]"
+    chunks: list[str] = field(default_factory=list)
+    next_seq: int = 0
 
 
 async def _resume_mpd_for_room(room_id: str) -> None:
@@ -620,6 +646,17 @@ class StreamSession:
         # value, not the live `wake_recording`, so a stop_wake_recording racing
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
+        # Text of the reply most recently sent to this room's speaker.
+        # Kept so a barge-triggered utterance can be checked against what the
+        # satellite was saying when the mic opened — on a board whose AEC is
+        # underperforming, the "interruption" is sometimes its own voice.
+        # Best-effort and intentionally not cleared on response_end: the echo
+        # arrives just AFTER the reply ends, so the value has to outlive it.
+        self._last_spoken_text: str = ""
+        # In-flight `get_logs` pulls, keyed by request id. Per-session (not
+        # app.state) because the exchange is meaningless across a reconnect:
+        # a new socket can't answer the old one's request.
+        self._log_requests: dict[str, _LogRequest] = {}
 
     async def run(self) -> None:
         await self.ws.accept()
@@ -717,6 +754,15 @@ class StreamSession:
                     self.wake_recording.clips_written,
                 )
                 self.wake_recording = None
+            # Fail any in-flight log pull now. The remaining chunks are
+            # never coming, so waiting out the full timeout would only make
+            # the dashboard look hung when the real answer is "it left".
+            for pending in self._log_requests.values():
+                if not pending.future.done():
+                    pending.future.set_exception(
+                        ConnectionError("satellite disconnected mid-log-transfer")
+                    )
+            self._log_requests.clear()
             # Deregister, but only if we're still the active session for
             # this room. A reconnect that overwrote us shouldn't have its
             # entry yanked when the stale instance unwinds.
@@ -1035,7 +1081,9 @@ class StreamSession:
             # from the transcript before routing.
             greeting_played = bool(ctrl.get("greeting_played"))
             self._response_task = asyncio.create_task(
-                self._process_utterance(pcm, greeting_played=greeting_played)
+                self._process_utterance(
+                    pcm, greeting_played=greeting_played, trigger=trigger,
+                )
             )
             return
         if t == "barge_in":
@@ -1087,6 +1135,11 @@ class StreamSession:
                 self.ws.app.state.satellite_voice[self.room_id] = str(voice)
             else:
                 self.ws.app.state.satellite_voice.pop(self.room_id, None)
+            return
+        if t == "logs_chunk":
+            # One slice of a log pull we asked for. Reassembly is sync and
+            # cheap; the request's future resolves on the `final` chunk.
+            self._on_logs_chunk(ctrl)
             return
         if t == "config_status":
             # Satellite reporting its current editable config (on connect),
@@ -1204,7 +1257,11 @@ class StreamSession:
         })
 
     async def _process_utterance(
-        self, pcm_bytes: bytes, *, greeting_played: bool = False
+        self,
+        pcm_bytes: bytes,
+        *,
+        greeting_played: bool = False,
+        trigger: str | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -1222,6 +1279,49 @@ class StreamSession:
                     if cleaned != transcript:
                         log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
                         transcript = cleaned
+
+            # Self-echo guard. A barge-triggered capture opens WHILE the
+            # speaker is still playing and carries the frames that tripped
+            # the barge (`_barge_prefix`) into the utterance — so when the
+            # thing that tripped it was residual echo rather than a person,
+            # what arrives here is the satellite quoting itself. Only barge
+            # turns are checked: a wake-word or follow-up capture starts
+            # after playback has drained, and gating on the trigger keeps
+            # this away from the case where a user genuinely repeats a word
+            # the bot just said.
+            if trigger == "barge_in" and self._last_spoken_text:
+                from domovoi.self_echo_filter import (
+                    is_self_echo,
+                    strip_leading_echo,
+                )
+                if is_self_echo(transcript, self._last_spoken_text):
+                    log.warning(
+                        "self-echo: dropping barge-triggered turn in room=%s — "
+                        "transcript %r is the satellite's own reply %r coming "
+                        "back through the mic. Barge-in is firing on speaker "
+                        "echo; raise [barge_in] min_speech_ms or set "
+                        "require_wake_word=true for this room.",
+                        self.room_id, transcript, self._last_spoken_text,
+                    )
+                    # End the turn with no speech and no DB row. interrupted=True
+                    # (not False) because without a response_start this turn the
+                    # Pi's `_response_audio_received` may still be set from the
+                    # PREVIOUS response — and the deferred-drain branch would
+                    # then park the mic thread waiting on a drain that never
+                    # comes. interrupted=True takes the immediate-release path.
+                    await self._safe_send_text({
+                        "type": "response_end",
+                        "interrupted": True,
+                        "expect_followup": False,
+                    })
+                    return
+                cleaned = strip_leading_echo(transcript, self._last_spoken_text)
+                if cleaned != transcript:
+                    log.info(
+                        "self-echo: stripped leading echo in room=%s: %r → %r",
+                        self.room_id, transcript, cleaned,
+                    )
+                    transcript = cleaned
             await self._safe_send_text({"type": "transcript", "text": transcript})
 
             probe: ConnectivityProbe = self.ws.app.state.probe
@@ -1267,6 +1367,7 @@ class StreamSession:
                 person_id=person_id,
                 presence_tier=presence_tier,
                 embedding_bytes=embedding_bytes,
+                trigger=trigger,
                 wifi_status=wifi_status,
                 satellite_volume=satellite_volume,
                 voice=satellite_voice,
@@ -2267,6 +2368,13 @@ class StreamSession:
             )
 
     async def _safe_send_text(self, payload: dict[str, Any]) -> None:
+        # Remember the reply we're about to speak, so a barge-triggered
+        # capture can be tested against it (see `self_echo_filter`). Hooked
+        # here rather than at each call site because every response_start on
+        # the command path goes through this helper, and a missed site would
+        # silently disarm the guard for that path.
+        if payload.get("type") == "response_start":
+            self._last_spoken_text = str(payload.get("text") or "")
         try:
             await self.ws.send_text(json.dumps(payload))
         except Exception:
@@ -2458,6 +2566,59 @@ class StreamSession:
                 }
             )
         )
+
+    def _on_logs_chunk(self, ctrl: dict[str, Any]) -> None:
+        """Reassemble one `logs_chunk` frame into its pending request.
+
+        A gap or a repeat in the sequence FAILS the request rather than
+        stitching the pieces anyway: a log whose ordering you can't trust
+        is worse than an error, because it reads as evidence.
+        """
+        rid = str(ctrl.get("request_id") or "")
+        pending = self._log_requests.get(rid)
+        if pending is None or pending.future.done():
+            # A late chunk from a pull that already timed out, or one
+            # addressed to a session we replaced. Nothing to do with it.
+            return
+        seq = ctrl.get("seq")
+        if seq != pending.next_seq:
+            pending.future.set_exception(RuntimeError(
+                f"satellite sent log chunk {seq!r}, expected {pending.next_seq}"
+            ))
+            return
+        pending.next_seq += 1
+        pending.chunks.append(str(ctrl.get("data") or ""))
+        if ctrl.get("final"):
+            stats = ctrl.get("stats")
+            pending.future.set_result({
+                "text": "".join(pending.chunks),
+                "stats": stats if isinstance(stats, dict) else {},
+                "chunks": pending.next_seq,
+            })
+
+    async def request_logs(
+        self, *, max_bytes: int, timeout: float = 60.0
+    ) -> dict[str, Any]:
+        """Pull this satellite's recent log output over the live WS.
+
+        The Pi keeps its own log in a RAM ring (`satellite/log_buffer.py`)
+        and answers with a numbered series of `logs_chunk` frames, which
+        this reassembles. Raises on a dead socket, `TimeoutError` if the
+        satellite goes quiet mid-transfer, so the admin endpoint can tell
+        the difference between "offline" and "stopped answering".
+        """
+        request_id = secrets.token_hex(8)
+        pending = _LogRequest(future=asyncio.get_running_loop().create_future())
+        self._log_requests[request_id] = pending
+        try:
+            await self.ws.send_text(json.dumps({
+                "type": "get_logs",
+                "request_id": request_id,
+                "max_bytes": int(max_bytes),
+            }))
+            return await asyncio.wait_for(pending.future, timeout)
+        finally:
+            self._log_requests.pop(request_id, None)
 
     async def send_config(self, changes: dict[str, Any]) -> None:
         """Push web-edited config ({"section.key": value}) to this

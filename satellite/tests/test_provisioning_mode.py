@@ -139,6 +139,47 @@ def test_full_apply_flow(home, monkeypatch):
     assert pm.is_provisioned() is True
 
 
+def test_an_aec_board_gets_all_three_audio_keys_pinned(home, monkeypatch):
+    """A board that relies on on-chip AEC must have PortAudio capture AND
+    playback AND the mpg123 path pinned to the array.
+
+    Regression: this used to write only the two [audio] keys, so every
+    prepared card shipped with TTS going through the array while music, the
+    wake greeting and the canned clips left via the ALSA default — audio the
+    chip never sees, and therefore audio its AEC cannot cancel. The greeting
+    overlaps command capture on the explicit promise that the AEC keeps it
+    out of the mic, so that promise was silently false on every shipped unit.
+    PROVISIONING §F documents all three; only two were written.
+    """
+    backend = FakeBackend()
+    _install_provision_on_first_read(
+        backend, device_profile="xvf3800_usb", sat_type="voice",
+    )
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    assert pm.run(backend, poll_sec=0, max_loops=10) == 0
+
+    cfg = tomllib.loads(pm.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert cfg["device"]["profile"] == "xvf3800_usb"
+    assert cfg["audio"]["input_device"] == "reSpeaker XVF3800"
+    assert cfg["audio"]["output_device"] == "reSpeaker XVF3800"
+    # The one that was missing.
+    assert cfg["music"]["alsa_device"] == "plughw:CARD=Array,DEV=0"
+    assert cfg["music"]["alsa_device"] != "default"
+
+
+def test_a_board_without_a_pinned_device_is_left_alone(home, monkeypatch):
+    """The video kiosk has no array to pin to — provisioning must not invent
+    an ALSA device for it, or HDMI audio breaks on a board that was fine."""
+    backend = FakeBackend()
+    _install_provision_on_first_read(backend)   # radxa_zero3w_video
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    assert pm.run(backend, poll_sec=0, max_loops=10) == 0
+
+    cfg = tomllib.loads(pm.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "input_device" not in cfg.get("audio", {})
+    assert cfg.get("music", {}).get("alsa_device", "default") == "default"
+
+
 def test_two_stable_reads_required(home, monkeypatch):
     """A file that changes between polls (torn write in progress) must not
     apply; only two identical consecutive reads do."""

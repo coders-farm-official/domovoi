@@ -30,6 +30,14 @@ class Context(BaseModel):
     person_id: int | None = None
     presence_tier: str | None = None  # "low" | "medium" | "high"
     embedding_bytes: bytes | None = None
+    # What opened the mic for this utterance: "wake_word", "barge_in",
+    # "followup", or "push_to_talk" (None on non-satellite paths like
+    # /v1/intent). Stamped from the `utterance_start` frame and persisted to
+    # conversation_log, because without it a turn's ORIGIN is invisible after
+    # the fact — and "was this a real wake word or the satellite barging in
+    # on its own TTS?" is the first question worth asking about a turn that
+    # looks wrong. Reconstructing it from timestamps is guesswork.
+    trigger: str | None = None
     # Most recent WiFi self-report from the originating Pi (rx_mbits,
     # tx_mbits, ssid). The streaming layer stamps it from
     # ``app.state.wifi_status[room_id]`` before routing so WifiHandler's

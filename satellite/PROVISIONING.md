@@ -622,6 +622,8 @@ output_device = "reSpeaker XVF3800"    # MUST be the array (AEC reference)
 alsa_device = "plughw:CARD=Array,DEV=0"   # name-based; `Array` from `arecord -L`
 ```
 
+**Portal-onboarded units write all three of these automatically** — `apply_provision` pins `[audio] input_device`, `[audio] output_device` AND `[music] alsa_device` from the device profile. You only set them by hand on a card you built manually. Until 2026-09-10 it wrote only the two `[audio]` keys, so prepared cards shipped with TTS going through the array while music, the wake greeting and the canned clips went out the ALSA default — audio the chip never plays is audio its AEC cannot cancel, and the greeting overlaps command capture on exactly that assumption. If you have a satellite provisioned before then, check `[music] alsa_device`: `default` means it never got pinned.
+
 Selecting the profile auto-disables the ALSA mic-gain tune and the software noise-gate auto-calibration (the chip does both on-chip) and keeps barge-in on normal VAD (on-chip AEC cancels the echo) — you don't set those by hand.
 
 - [ ] First run (§6.6) — you should additionally see `device profile: xvf3800_usb (...)` and `mic capture: int16 2ch, selecting channel 1 (ASR beam) → mono int16` in the log, and the LED ring should track idle→listening→thinking→speaking. If you see the `output_device is unset` warning, pin it (§F above).

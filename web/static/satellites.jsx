@@ -17,6 +17,7 @@
  *   * POST /api/satellites/{room}/dropin/end                  — drawer · overview · Hang up
  *   * GET  /api/satellites/{room}/config                      — drawer · settings tab (load)
  *   * PATCH /api/satellites/{room}/config                     — drawer · settings tab (save → Pi rewrites config.toml + restarts)
+ *   * GET  /api/satellites/{room}/logs                        — drawer · logs tab (lazy: fetched only when the tab is opened)
  *   * /ws/state · `satellites.presence.changed`               — refresh roster
  *   * /ws/state · `satellites.wifi.changed`                   — refresh roster
  *   * /ws/state · `satellites.dropins.changed`                — refresh roster (live drop-in pairings)
@@ -172,6 +173,17 @@ const SatSessionRow = ({ session, turns }) => {
   );
 };
 
+/* How a turn's mic was opened. "wake_word" is the ordinary case and would
+ * just be noise on every row, so only the exceptions get a pill: a barge-in
+ * (which on a board with imperfect AEC can be the satellite interrupting
+ * ITSELF) and a follow-up (no wake word required, so an unexpected one
+ * explains a turn nobody meant to start). Null on rows older than V011. */
+const TRIGGER_PILL = {
+  barge_in: { label: 'barge-in', tone: 'warn' },
+  followup: { label: 'follow-up', tone: 'idle' },
+  push_to_talk: { label: 'push-to-talk', tone: 'idle' },
+};
+
 const SatConversationTurn = ({ c }) => {
   const long = (c.assistant_text || '').length > 140;
   const [more, setMore] = React.useState(false);
@@ -182,6 +194,11 @@ const SatConversationTurn = ({ c }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{relTime(c.at)}</span>
         <Pill tone={c.matched_handler ? 'live' : 'idle'}>{c.matched_handler || 'qa'}</Pill>
+        {TRIGGER_PILL[c.utterance_trigger] && (
+          <Pill tone={TRIGGER_PILL[c.utterance_trigger].tone}>
+            {TRIGGER_PILL[c.utterance_trigger].label}
+          </Pill>
+        )}
         <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginLeft: 'auto' }}>#{c.id}</span>
       </div>
       <div style={{ fontSize: 13, marginBottom: 4 }}>“{c.user_text}”</div>
@@ -987,6 +1004,83 @@ const RoomSettingsBody = ({ room, fire }) => {
   );
 };
 
+/* ---- Logs tab --------------------------------------------- */
+/* How much of the satellite's 10 MB ring we render. The whole ring is
+ * reachable from the API (?max_bytes=), but a browser <pre> of 10 MB of
+ * text janks the drawer on a Pi-class client for no benefit — the last
+ * megabyte is thousands of lines, which is what anyone actually reads. */
+const LOG_VIEW_BYTES = 1024 * 1024;
+
+const fmtBytes = (n) => {
+  if (n == null) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const RoomLogsBody = ({ room, online }) => {
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [data, setData] = React.useState(null);
+  const preRef = React.useRef(null);
+
+  const load = React.useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      setData(await apiGet(`/api/satellites/${room}/logs?max_bytes=${LOG_VIEW_BYTES}`));
+    } catch (e) {
+      setError(e.message || String(e));
+      setData(null);
+    } finally { setLoading(false); }
+  }, [room]);
+
+  // Fetch on mount only. The drawer renders this component solely while its
+  // tab is selected, so mounting IS the visit — nothing is pulled off the
+  // satellite until someone actually looks, and switching back re-reads.
+  React.useEffect(() => { load(); }, [load]);
+
+  // Land on the newest line, the way `tail` does. The buffer is oldest→newest
+  // and the interesting part is always the bottom.
+  React.useEffect(() => {
+    if (data && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+  }, [data]);
+
+  if (loading)
+    return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading logs…</div>;
+
+  if (error)
+    return <Empty glyph="sleeping" title="couldn't read the log"
+                  sub={online ? error : 'the satellite must be online — the buffer lives in its own process'}
+                  action={<Button icon="rotate-cw" onClick={load}>Try again</Button>}/>;
+
+  const text = (data && data.text) || '';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)',
+                    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Button icon="rotate-cw" onClick={load}>Refresh</Button>
+        {data && data.truncated &&
+          <Pill tone="idle">showing last {fmtBytes(data.bytes)} of {fmtBytes(data.buffered_bytes)}</Pill>}
+        {data && !data.truncated &&
+          <Pill tone="idle">{fmtBytes(data.bytes)} buffered</Pill>}
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
+          in memory on the Pi · lost on restart
+        </span>
+      </div>
+      {text === ''
+        ? <Empty glyph="sleeping" title="log is empty" sub="the satellite has not written anything since it started"/>
+        : <pre ref={preRef} className="mono" style={{
+            flex: 1, margin: 0, padding: '12px 16px', overflow: 'auto',
+            background: 'var(--sunken)', color: 'var(--fg-muted)',
+            fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre',
+            // pre-wrap would reflow long tracebacks into an unreadable
+            // block; a horizontal scrollbar keeps one record on one line.
+            tabSize: 4,
+          }}>{text}</pre>}
+    </div>
+  );
+};
+
 /* ---- Drawer ----------------------------------------------- */
 const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
@@ -1008,6 +1102,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
     { id: 'recently',      label: 'Recently played', icon: 'music' },
     { id: 'notes',         label: 'Notes',           icon: 'sticky-note' },
     { id: 'timers',        label: 'Timers',          icon: 'timer' },
+    { id: 'logs',          label: 'Logs',            icon: 'terminal' },
     { id: 'settings',      label: 'Settings',        icon: 'settings' },
   ];
 
@@ -1033,6 +1128,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'recently'      && <RoomRecentlyPlayedBody room={s.room_id} fire={fire}/>}
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
+          {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomSettingsBody room={s.room_id} fire={fire}/>}
         </div>
       </aside>

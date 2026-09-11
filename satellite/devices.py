@@ -136,6 +136,19 @@ class DeviceProfile:
     # on-chip AEC of its echo reference and makes barge-in misfire on the
     # satellite's own voice.
     audio_device_match: str = ""
+    # ALSA device for the mpg123 paths — music, the wake greeting, and the
+    # canned network-issues clip. SEPARATE from `audio_device_match` because
+    # those go out through mpg123/ALSA, not PortAudio, and so are named
+    # differently and read from a different config key ([music] alsa_device).
+    #
+    # It matters for the same reason: audio the array never plays is audio
+    # its AEC cannot cancel. `_play_greeting` overlaps command capture on the
+    # explicit promise that "the chip's AEC keeps it out of the mic" — a
+    # promise that is only true if the clip actually leaves through the chip.
+    # Empty means the profile has nothing to pin and the [music] default
+    # stands. Provisioning writes this, so a prepared card does not depend on
+    # anyone remembering PROVISIONING §F.
+    provisioned_music_alsa_device: str = ""
 
 
 # The HAT profile reproduces the client's historical hard-coded defaults
@@ -206,6 +219,10 @@ _XVF3800_USB = DeviceProfile(
     output_mixer_card="Array",
     output_mixer_control="PCM",
     audio_device_match="reSpeaker XVF3800",
+    # Name-based (`Array` from `arecord -L`) for the same reboot-proofing as
+    # audio_device_match — card indexes shuffle, names don't. Matches the
+    # card name `output_mixer_card` already assumes.
+    provisioned_music_alsa_device="plughw:CARD=Array,DEV=0",
 )
 
 

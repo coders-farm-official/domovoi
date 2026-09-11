@@ -130,6 +130,7 @@ async def _persist_turn(
         matched_handler=matched_handler,
         matched_path=matched_path,
         presence_tier=ctx.presence_tier,
+        trigger=ctx.trigger,
         online=ctx.online,
         latency_ms=latency_ms,
     )

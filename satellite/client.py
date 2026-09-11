@@ -50,6 +50,7 @@ from satellite import (
     devices,
     display_power,
     kiosk,
+    log_buffer,
     sound_sync,
     wake_model_sync,
 )
@@ -65,6 +66,25 @@ SAMPLE_RATE = 16_000
 FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)  # 480
 FRAME_BYTES = FRAME_SAMPLES * 2  # int16 = 2 bytes/sample
+
+# Log format, shared by the stderr handler (journald picks that up) and by
+# the in-memory ring the dashboard reads, so a line looks identical whether
+# you read it over SSH or in the browser.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+# This process's own recent log output, kept in RAM so the core can pull it
+# over the existing WS instead of someone SSH-ing to a Pi in another room.
+# Module-level rather than a Satellite attribute so `main()` installs the
+# handler BEFORE the client is constructed — a startup failure is exactly
+# the thing you want to be able to read back afterwards.
+LOG_RING = log_buffer.RingLogBuffer()
+
+# Characters of log text per `logs_chunk` frame. Small on purpose: one 10 MB
+# frame is a bad bet at both ends (uvicorn caps inbound WS messages, and JSON
+# escaping inflates the payload past its raw byte count), and small frames
+# let a big pull interleave with audio on the shared send queue rather than
+# blocking it.
+LOG_CHUNK_CHARS = 128 * 1024
 
 CONFIG_DIR = Path.home() / ".domovoi"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
@@ -987,6 +1007,40 @@ class Satellite:
         if self.loop is None or self.send_q is None:
             return
         self.loop.call_soon_threadsafe(self.send_q.put_nowait, ("bytes", frame))
+
+    async def _send_logs(self, request_id: str, max_bytes: int | None) -> None:
+        """Answer a `get_logs` frame: stream the log ring back in chunks.
+
+        Always sends at least one frame and marks exactly one frame `final`,
+        including for an empty buffer — the core resolves its pending request
+        on `final`, so a silent path would leave the dashboard waiting on a
+        timeout that tells the user nothing.
+        """
+        text = LOG_RING.tail(max_bytes)
+        stats = LOG_RING.stats()
+        sent_chunks = 0
+        for seq, piece, final in log_buffer.chunk_text(text, LOG_CHUNK_CHARS):
+            frame: dict[str, Any] = {
+                "type": "logs_chunk",
+                "request_id": request_id,
+                "seq": seq,
+                "data": piece,
+                "final": final,
+            }
+            if final:
+                # Rides the last frame so the dashboard can say "10.0 MB
+                # buffered, 1.0 MB shown" without a second round trip.
+                frame["stats"] = stats
+            self._emit_text(frame)
+            sent_chunks += 1
+            if not final:
+                # Yield between chunks so a multi-MB pull doesn't starve the
+                # audio frames sharing this send queue.
+                await asyncio.sleep(0)
+        log.info(
+            "get_logs: sent %d byte(s) of log text in %d chunk(s) (ring holds %d)",
+            len(text.encode("utf-8", errors="replace")), sent_chunks, stats["bytes"],
+        )
 
     # ── Music streaming ───────────────────────────────────────────────
 
@@ -4046,6 +4100,20 @@ class Satellite:
                 daemon=True,
                 name="set-display",
             ).start()
+        elif t == "get_logs":
+            # The dashboard is asking for this satellite's recent log output.
+            # Answered on a task, not inline: a multi-MB transfer would
+            # otherwise stall the receiver loop — and with it every
+            # response_start / music_stop / barge frame — for its duration.
+            rid = str(payload.get("request_id") or "")
+            try:
+                want: int | None = int(payload.get("max_bytes") or 0) or None
+            except (TypeError, ValueError):
+                want = None
+            if rid:
+                asyncio.create_task(self._send_logs(rid, want))
+            else:
+                log.warning("get_logs: no request_id in payload; ignoring")
         elif t == "pong":
             pass
         else:
@@ -4230,6 +4298,32 @@ class Satellite:
                 "--list-devices / PROVISIONING) or barge-in may misfire on "
                 "speaker echo.",
                 self.cfg.device.name,
+            )
+        # The same failure by the OTHER door. TTS rides PortAudio
+        # ([audio] output_device); music, the wake greeting and the canned
+        # clips ride mpg123/ALSA ([music] alsa_device). Pinning only the
+        # first leaves every clip leaving through a device the array never
+        # sees — so its AEC has no reference for them, and `_play_greeting`
+        # overlaps command capture on a promise ("the chip's AEC keeps it
+        # out of the mic") that is not true as configured.
+        # getattr, not attribute access: an upgrade syncs client.py and
+        # devices.py as separate files, so a sync interrupted between them
+        # would boot new client code against an old profile lacking this
+        # field — and a crash here is a wedged satellite. Same defensive
+        # read `provisioning_mode._music_alsa_device` uses.
+        want_music_dev = getattr(
+            self.cfg.device, "provisioned_music_alsa_device", ""
+        )
+        if want_music_dev and self.cfg.music_alsa_device != want_music_dev:
+            log.warning(
+                "device profile %r plays music and local clips through the "
+                "array for on-chip AEC, but [music] alsa_device is %r, not "
+                "%r. The wake greeting overlaps command capture assuming the "
+                "AEC cancels it — through another device it cannot, and the "
+                "greeting bleeds into the transcript. Set [music] "
+                "alsa_device (PROVISIONING §F); get the card name from "
+                "`arecord -L`.",
+                self.cfg.device.name, self.cfg.music_alsa_device, want_music_dev,
             )
 
         self._leds.start()
@@ -4457,10 +4551,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_device is not None:
         cfg.output_device = args.output_device
 
-    logging.basicConfig(
-        level=cfg.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    logging.basicConfig(level=cfg.log_level, format=LOG_FORMAT)
+    # Mirror everything into the in-memory ring the dashboard reads. On the
+    # ROOT logger, so third-party output lands there too — websockets'
+    # connection errors and sounddevice's PortAudio complaints are exactly
+    # the lines you want when a satellite is misbehaving, and neither comes
+    # from the `satellite` logger.
+    _ring_handler = log_buffer.RingLogHandler(LOG_RING)
+    _ring_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    logging.getLogger().addHandler(_ring_handler)
 
     # A portal-onboarded satellite ships with the `auto` sentinel: the core
     # was never a participant in its adoption, so nothing ever told it an

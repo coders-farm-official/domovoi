@@ -145,7 +145,8 @@ async def list_conversations(
             text(
                 """
                 SELECT id, session_id::text, at, room_id, user_text,
-                       assistant_text, matched_handler, matched_path
+                       assistant_text, matched_handler, matched_path,
+                       utterance_trigger
                 FROM conversation_log
                 WHERE person_id = :pid
                 ORDER BY at DESC
@@ -608,6 +609,8 @@ def _row_to_turn(r: Any) -> ConversationTurn:
         assistant_text=r[5],
         matched_handler=r[6],
         matched_path=r[7],
+        # Optional: only the SELECTs that ask for it have an 8th column.
+        utterance_trigger=r[8] if len(r) > 8 else None,
     )
 
 

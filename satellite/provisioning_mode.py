@@ -339,6 +339,24 @@ def _audio_device_match(profile_name: str) -> str:
         return ""
 
 
+def _music_alsa_device(profile_name: str) -> str:
+    """The ALSA device this board pins its mpg123 audio to, if any.
+
+    Separate from :func:`_audio_device_match` because music, the wake
+    greeting and the canned clips go out through mpg123/ALSA rather than
+    PortAudio — a different key, a different naming scheme, and (before
+    this) a different outcome: TTS pinned to the array while every clip
+    left through the system default, where the array's AEC never sees it.
+    """
+    try:
+        from satellite.devices import PROFILES
+
+        prof = PROFILES.get(profile_name)
+        return getattr(prof, "provisioned_music_alsa_device", "") or ""
+    except Exception:      # noqa: BLE001 - an unknown board just gets defaults
+        return ""
+
+
 def setup_status(state: str, *args: str) -> None:
     """Drive the setup indicator - the LED ring and the spoken line.
 
@@ -470,6 +488,15 @@ def apply_provision(
     if match:
         changes["audio.input_device"] = match
         changes["audio.output_device"] = match
+    # And the mpg123 side. PROVISIONING §F documents all THREE keys, but this
+    # function used to write only the two above — so every prepared card
+    # shipped with music, the wake greeting and the canned clips leaving
+    # through the ALSA default while TTS went through the array. The greeting
+    # overlaps command capture on the promise that the chip's AEC keeps it out
+    # of the mic; that promise only holds if the clip goes through the chip.
+    music_dev = _music_alsa_device(payload["device_profile"])
+    if music_dev:
+        changes["music.alsa_device"] = music_dev
     merged = config_writer.apply_changes(example, changes)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # The directory too: root created it, and the client writes into it (the

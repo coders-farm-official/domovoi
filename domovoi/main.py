@@ -19,7 +19,7 @@ bootstrap.register_nvidia_dlls()
 
 from pathlib import Path  # noqa: E402
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.responses import Response as FastAPIResponse  # noqa: E402
 from sqlalchemy import text  # noqa: E402
@@ -1659,6 +1659,66 @@ async def admin_update_satellite_config(
             latency_ms=int((time.monotonic() - started) * 1000),
         )
     return {"sent": sorted(accepted), "rejected": rejected, "restarting": True}
+
+
+# Mirrors satellite/log_buffer.DEFAULT_MAX_BYTES. Deliberately NOT imported
+# from there: the core serves the satellite package as data
+# (SATELLITE_CODE_DIR) and has never imported it as a module. A satellite
+# running a bigger ring just returns less than it holds, which is harmless.
+SATELLITE_LOG_MAX_BYTES = 10 * 1024 * 1024
+
+
+@app.get("/v1/admin/satellite/{room_id}/logs")
+async def admin_get_satellite_logs(
+    room_id: str,
+    max_bytes: int = Query(
+        default=SATELLITE_LOG_MAX_BYTES, ge=1024, le=SATELLITE_LOG_MAX_BYTES
+    ),
+) -> dict[str, Any]:
+    """Tail of a satellite's in-RAM log ring, pulled over its live WS.
+
+    404 when the room isn't connected: the buffer lives inside the Pi's
+    process, so an offline satellite has no log to give here (journald on
+    the Pi still does, over SSH). The distinct 503/504 exist so the
+    dashboard can say which of "it left" and "it stopped answering"
+    happened — they need different next steps.
+    """
+    target = app.state.active_sessions.get(room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    try:
+        result = await target.request_logs(max_bytes=max_bytes)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="satellite stopped answering mid-log-transfer",
+        ) from None
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        log.warning("admin get logs room=%s failed: %s", room_id, e)
+        raise HTTPException(
+            status_code=502, detail=f"couldn't reach satellite: {e}"
+        ) from e
+
+    body: str = result["text"]
+    stats: dict[str, Any] = result.get("stats") or {}
+    held = stats.get("bytes")
+    returned = len(body.encode("utf-8", errors="replace"))
+    return {
+        "room_id": room_id,
+        "text": body,
+        "bytes": returned,
+        "requested_max_bytes": max_bytes,
+        # What the Pi is holding vs what we asked for, so the UI can say
+        # "showing 1.0 MB of 8.3 MB buffered" instead of implying the tail
+        # is the whole story.
+        "buffered_bytes": held,
+        "buffer_max_bytes": stats.get("max_bytes"),
+        "dropped_lines": stats.get("dropped_lines"),
+        "truncated": bool(held is not None and held > returned),
+        "chunks": result.get("chunks"),
+    }
 
 
 @app.get("/v1/admin/satellites/approvals")

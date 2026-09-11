@@ -55,6 +55,28 @@ The TTS engine chain is **edge → piper → system**: a per-engine failure (net
 | Word sits in "training" forever | Trainer disabled or unconfigured | Training is Linux-only, so on the Windows server it shells out: set `WAKE_WORD_TRAINER_ENABLED=true` **and** `WAKE_WORD_TRAIN_COMMAND` to your WSL2/Docker pipeline (see `scripts/wake_word/README.md` and `DOCKER_TRAINER.md`). An empty command marks queued words failed with a runbook pointer |
 | (Developers) model scores never move when feeding audio manually | openWakeWord chunk-size quirk | `predict()` needs chunks in multiples of 80 ms (1280 samples @ 16 kHz); sub-minimum chunks make the model silently return nothing. The client accumulates 30 ms mic frames into 1280-sample slices — keep that buffering if you touch the audio loop |
 
+## Domovoi answers itself / a turn nobody spoke
+
+The satellite hears its own voice, transcribes it, and routes it as a new
+command. The tell is a turn whose `user_text` is the *previous* turn's
+`assistant_text` — in the 2026-09-10 office log, "Stopped." came back 3.9
+seconds later as the question "stopped.".
+
+Barge-in is the usual door in: it arms for the whole of playback and fires on
+250 ms of anything VAD calls speech, so residual echo that the AEC didn't
+fully cancel can trip it — and the frames that tripped it are carried into the
+next capture as its opening audio. The core now drops a turn it recognizes as
+its own reply verbatim (look for `self-echo: dropping barge-triggered turn`),
+but that is a net under the problem, not a fix for it.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| A turn's `user_text` is the previous turn's `assistant_text` | Barge-in firing on speaker echo | Set `[barge_in] require_wake_word = true` for the room (dashboard → satellite → Settings). Only the wake word then interrupts, and the echoed frames are not carried into the capture |
+| Same, but you want to keep talk-over interruption | Detector tuned below the residual echo floor | Raise `[barge_in] min_speech_ms` (250 → 500–700), raise `vad_aggressiveness_during_tts` (→ 3), raise `[noise_gate] dbfs` (the XVF3800 profile ships a deliberately permissive −60 dB) |
+| Turns tagged `barge-in` in the Conversations tab that you didn't start | Same root cause; the pill is the diagnostic | The Logs tab shows the matching `barge-in detected` line with its timestamp |
+| The wake greeting appears at the start of transcripts | Greeting playing through a device the array can't cancel | Check `[music] alsa_device` — on an XVF3800 it must be the array (`plughw:CARD=Array,DEV=0`), not `default`. TTS uses `[audio] output_device`; music, greetings and canned clips use `[music] alsa_device`, and pinning only the first is a silent half-fix |
+| Long recordings of room conversation as one "command" | A barge opened a capture with no pre-speech timeout | It runs to `[listen] max_record_seconds` (default 30 s). Lower it, or stop the barge from misfiring above |
+
 ## Music won't play
 
 Per-room playback = an MPD container per room on the server + `mpg123` on the Pi consuming its HTTP stream. Check both ends.

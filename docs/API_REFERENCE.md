@@ -153,6 +153,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/satellites/{room_id}/label` | Open | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
 | `POST /v1/admin/satellite/{room_id}/config` | Open | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
+| `GET /v1/admin/satellite/{room_id}/logs` | Open | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering. |
 
 ### 2.6 Admin: version, config, chat, hardware
 
@@ -312,7 +313,8 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability. |
 | `GET /api/satellites/{room_id}` | Open | — | One room. |
 | `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
-| `GET /api/satellites/{room_id}/conversations` | Open | `?limit=50` | Recent turns in this room. |
+| `GET /api/satellites/{room_id}/conversations` | Open | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
+| `GET /api/satellites/{room_id}/logs` | **Admin (read)** | `?max_bytes=` (1 KB–10 MB, default 1 MB) | Satellite's recent log output, live over its WS. Gated: the satellite logs every transcript, so this returns room conversation content. `404` when the room isn't connected — the buffer lives in the Pi's process. |
 | `GET /api/satellites/{room_id}/notes` | Open | — | Notes taken in this room. |
 | `GET /api/satellites/{room_id}/recently-played` | Open | `?limit=100` | Play history for the room. |
 | `GET /api/satellites/{room_id}/timers` | Open | — | Active timers/reminders. |

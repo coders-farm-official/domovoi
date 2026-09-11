@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_admin_read
 
 from satellite import provisioning_protocol as proto
 
@@ -355,7 +355,8 @@ async def list_conversations(
             text(
                 """
                 SELECT id, session_id::text, at, room_id, user_text,
-                       assistant_text, matched_handler, matched_path
+                       assistant_text, matched_handler, matched_path,
+                       utterance_trigger
                 FROM conversation_log
                 WHERE room_id = :room_id
                 ORDER BY at DESC
@@ -374,6 +375,7 @@ async def list_conversations(
                 assistant_text=r[5],
                 matched_handler=r[6],
                 matched_path=r[7],
+                utterance_trigger=r[8],
             )
             for r in rows.all()
         ]
@@ -649,6 +651,34 @@ async def get_satellite_config(room_id: str):
     reported). Passes through to the Domovoi server, which holds the live
     per-room config cache. 404 if the room isn't connected."""
     status, payload = await get_admin(f"/v1/admin/satellite/{room_id}/config")
+    return bridge_response(status, payload)
+
+
+@router.get(
+    "/{room_id}/logs",
+    # §7.3 gated read: the satellite logs every transcript it hears
+    # ("heard: <text>" in client.py), so this returns room conversation
+    # content, not just diagnostics. Same tier as a config read.
+    dependencies=[Depends(require_admin_read)],
+)
+async def get_satellite_logs(
+    room_id: str,
+    max_bytes: int = Query(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024),
+):
+    """Tail of the satellite's in-RAM log ring, pulled live over its WS.
+
+    Defaults to the most recent 1 MB (what the drawer's Logs tab renders);
+    pass ``max_bytes`` up to 10 MB for the whole ring. 404 when the room
+    isn't connected — the buffer lives in the Pi's process.
+
+    The timeout outlasts the core's own 60 s WS wait on purpose, so a slow
+    satellite surfaces the core's 504 ("stopped answering") instead of this
+    hop timing out first and reporting a less specific 502.
+    """
+    status, payload = await get_admin(
+        f"/v1/admin/satellite/{room_id}/logs?max_bytes={int(max_bytes)}",
+        timeout=75.0,
+    )
     return bridge_response(status, payload)
 
 

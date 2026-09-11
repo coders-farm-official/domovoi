@@ -247,6 +247,11 @@ class ConversationTurn(BaseModel):
     assistant_text: str | None = None
     matched_handler: str | None = None
     matched_path: str | None = None
+    # What opened the mic: "wake_word" | "barge_in" | "followup" |
+    # "push_to_talk". None for rows written before V011 and for turns that
+    # never came from a satellite mic. Surfaced so a turn that looks wrong
+    # can be traced to its origin without inferring it from timestamps.
+    utterance_trigger: str | None = None
 
 
 class RecentlyPlayed(BaseModel):
