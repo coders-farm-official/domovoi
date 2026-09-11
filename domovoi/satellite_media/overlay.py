@@ -37,15 +37,26 @@ _END_MARKER = "# --- end domovoi satellite ---"
 # would adopt cleanly and then be deaf.
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
+# Force the Pi's USB controller to full speed on a unit with a USB mic
+# array. The dwc_otg driver mis-clocks isochronous transfers at high speed
+# and the array then delivers audio ~8x too fast - 259 callbacks/s where
+# 33 were asked for, measured on hardware - which no wake model will ever
+# match at any threshold. dtoverlay=dwc2,dr_mode=host is meant to sidestep
+# this by switching drivers, and did on one board and not on the next; this
+# token is inert under dwc2 and the fix under dwc_otg, so every card gets
+# both. Survives stage 1's cmdline cleanup, which strips only our own
+# systemd.* hook tokens.
+_USB_FULLSPEED_TOKEN = "dwc_otg.speed=1"
 
 # Forced HOST mode, for units with a USB mic array and no gadget to host.
-# Two problems, one line: the Pi's legacy `dwc_otg` driver mis-clocks
-# isochronous USB audio, delivering ~8x the sample rate — relentless "mic
-# queue overflowing" and a wake word that never fires. The upstream `dwc2`
-# driver this loads clocks it correctly, so `dwc_otg.speed=1` becomes
-# unnecessary. It also drives the port as a host regardless of the ID pin,
-# so a plain data cable works where the array would otherwise need a true
-# OTG adapter — one fewer part in the box, one fewer support question.
+# Loads the upstream `dwc2` driver, which clocks isochronous audio correctly
+# where the legacy `dwc_otg` one delivers ~8x the sample rate. It also
+# drives the port as a host regardless of the ID pin, so a plain data cable
+# works where the array would otherwise need a true OTG adapter — one fewer
+# part in the box, one fewer support question.
+#
+# It was believed to make _USB_FULLSPEED_TOKEN unnecessary. It did on one
+# Zero 2 W and not on the next, so both are written now; see the token.
 _HOST_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=host"
 
 # Mic boards that hang off USB and therefore need host mode.
@@ -161,16 +172,20 @@ def edit_config_txt(
     return text + "\n".join(lines) + "\n"
 
 
-def edit_cmdline_txt(text: str, *, usb_gadget: bool = True) -> str:
+def edit_cmdline_txt(
+    text: str, *, usb_gadget: bool = True, usb_host: bool = False
+) -> str:
     """Append the first-boot hook tokens to the SINGLE kernel line (Pi
     firmware requires one line). Idempotent per token; preserves order.
-    The dwc2 module is loaded only for USB-gadget units."""
+    The dwc2 module is loaded only for USB-gadget units; USB-host units
+    (a USB mic array) get the full-speed pin - see _USB_FULLSPEED_TOKEN."""
     line = text.strip().splitlines()[0] if text.strip() else ""
     tokens = line.split() if line else []
-    wanted = (
-        (_GADGET_CMDLINE_TOKEN,) + _FIRSTRUN_CMDLINE_TOKENS
-        if usb_gadget else _FIRSTRUN_CMDLINE_TOKENS
-    )
+    wanted: tuple[str, ...] = _FIRSTRUN_CMDLINE_TOKENS
+    if usb_gadget:
+        wanted = (_GADGET_CMDLINE_TOKEN,) + wanted
+    elif usb_host:
+        wanted = (_USB_FULLSPEED_TOKEN,) + wanted
     for tok in wanted:
         key = tok.split("=", 1)[0]
         if not any(t == tok or t.startswith(key + "=") for t in tokens):
@@ -410,11 +425,7 @@ def write_overlay(
     for name, editor in (("config.txt", edit_config_txt), ("cmdline.txt", edit_cmdline_txt)):
         p = boot_dir / name
         original = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
-        edited = (
-            editor(original, usb_gadget=usb_gadget, usb_host=usb_host)
-            if name == "config.txt"
-            else editor(original, usb_gadget=usb_gadget)
-        )
+        edited = editor(original, usb_gadget=usb_gadget, usb_host=usb_host)
         if edited != original:
             p.write_text(edited, encoding="utf-8", newline="\n")
             written.append(name)

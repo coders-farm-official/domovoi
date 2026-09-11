@@ -1204,3 +1204,52 @@ def test_the_helper_leaves_only_the_on_device_placeholder():
 
     body = overlay.render_status_helper("xvf3800_usb")
     assert set(re.findall(r"@[A-Z_]+@", body)) == {"@HOME@"}
+
+
+# ─── the USB controller has to be pinned to full speed ────────────────────
+#
+# Found on hardware, on the SECOND Zero 2 W: the client's mic stream fired
+# at 259 callbacks/s where 33 were asked for - the array delivering audio
+# ~8x too fast, which no wake model matches at any threshold. The first
+# board had been fine, because dtoverlay=dwc2,dr_mode=host switched it to a
+# driver that clocks correctly. On the second the overlay evidently did not
+# take, and the prepare wrote nothing else. dwc_otg.speed=1 is the fix under
+# the legacy driver and inert under dwc2, so a USB-mic card now gets both.
+
+
+def test_a_usb_mic_card_pins_full_speed():
+    base = "console=tty1 root=PARTUUID=abc rootwait\n"
+    out = overlay.edit_cmdline_txt(base, usb_gadget=False, usb_host=True)
+    assert "dwc_otg.speed=1" in out
+    # Still one line, no trailing junk: a malformed cmdline stops the boot.
+    assert out.count("\n") == 1 and out.endswith("\n")
+
+
+def test_it_is_idempotent_and_survives_the_firstrun_cleanup():
+    base = "console=tty1 root=PARTUUID=abc rootwait\n"
+    once = overlay.edit_cmdline_txt(base, usb_gadget=False, usb_host=True)
+    assert overlay.edit_cmdline_txt(once, usb_gadget=False, usb_host=True) == once
+    # Stage 1 strips only its own systemd.* hook tokens afterwards; this one
+    # has to outlive that or it never applies to the boot that matters.
+    body = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    cleanup = body.split("cmdline-cleanup", 1)[1].split("done_step cmdline", 1)[0]
+    assert "dwc_otg" not in cleanup
+
+
+def test_a_gadget_card_does_not_get_it():
+    """USB-transport units are in peripheral mode; the array is not on that
+    port until adoption flips it. Nothing to pin."""
+    base = "console=tty1 root=PARTUUID=abc rootwait\n"
+    out = overlay.edit_cmdline_txt(base, usb_gadget=True, usb_host=False)
+    assert "dwc_otg.speed=1" not in out
+    assert "modules-load=dwc2" in out
+
+
+def test_config_and_cmdline_agree_on_usb_host():
+    """write_overlay passes usb_host to BOTH editors now - it used to reach
+    only config.txt."""
+    import inspect
+
+    src = inspect.getsource(overlay.write_overlay)
+    assert "editor(original, usb_gadget=usb_gadget, usb_host=usb_host)" in src
+    assert 'if name == "config.txt"' not in src
