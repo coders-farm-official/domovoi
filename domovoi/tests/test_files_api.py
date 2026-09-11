@@ -5,8 +5,13 @@ test_music_upload_api / test_documents). The registry is stubbed to a
 controlled set of libraries rooted in tmp dirs so each endpoint's behavior —
 editable/importable rejection, ejected-drive 410, reindex fanout, upload
 dedupe, recursive-delete confinement, import containment — is deterministic.
-Admin gating passes via the pre-setup grace (fresh test DB has no admin
-credential).
+
+Trust posture under test: reads and the open writes (upload / move / import)
+need no admin at all; only ``/delete`` is admin-gated, and passes here via the
+pre-setup grace (fresh test DB has no admin credential) except in the tests
+that deliberately claim the admin tier to prove the split. Every open write
+names a ``device_id`` — the ``files_device_blocks`` tests at the bottom are
+what that field is for.
 """
 
 from __future__ import annotations
@@ -235,12 +240,12 @@ def test_upload_saves_dedupes_and_reindexes(registry, roots, reindex_spy):
     with _client() as c:
         r1 = c.post(
             "/api/files/upload",
-            data={"library_id": "core:music", "path": ""},
+            data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
             files=[("files", ("t.mp3", b"one", "audio/mpeg"))],
         )
         r2 = c.post(
             "/api/files/upload",
-            data={"library_id": "core:music", "path": ""},
+            data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
             files=[("files", ("t.mp3", b"two", "audio/mpeg"))],
         )
     assert r1.status_code == 200
@@ -257,7 +262,7 @@ def test_upload_rejected_on_non_editable(registry, reindex_spy):
     with _client() as c:
         r = c.post(
             "/api/files/upload",
-            data={"library_id": "removable:E", "path": ""},
+            data={"library_id": "removable:E", "path": "", "device_id": "browser-test"},
             files=[("files", ("x.mp3", b"x", "audio/mpeg"))],
         )
     assert r.status_code == 403
@@ -270,7 +275,7 @@ def test_upload_no_reindex_for_documents(registry, roots, reindex_spy):
     with _client() as c:
         r = c.post(
             "/api/files/upload",
-            data={"library_id": "core:documents", "path": ""},
+            data={"library_id": "core:documents", "path": "", "device_id": "browser-test"},
             files=[("files", ("n.txt", b"hi", "text/plain"))],
         )
     assert r.status_code == 200
@@ -372,6 +377,7 @@ def test_import_file_from_removable(registry, roots, reindex_spy):
                 "source_path": "track.flac",
                 "target_library_id": "core:music",
                 "target_path": "",
+                "device_id": "browser-test",
             },
         )
     assert r.status_code == 200
@@ -396,6 +402,7 @@ def test_import_directory_confined(registry, roots):
                 "source_path": "album",
                 "target_library_id": "core:music",
                 "target_path": "",
+                "device_id": "browser-test",
             },
         )
     assert r.status_code == 200
@@ -414,6 +421,7 @@ def test_import_rejects_non_importable_target(registry, roots):
                 "source_path": "x.mp3",
                 "target_library_id": "plugin:jelly:videos",  # importable=False
                 "target_path": "",
+                "device_id": "browser-test",
             },
         )
     assert r.status_code == 409
@@ -430,6 +438,7 @@ def test_import_rejects_non_removable_source(registry, roots):
                 "source_path": "x.mp3",
                 "target_library_id": "core:documents",
                 "target_path": "",
+                "device_id": "browser-test",
             },
         )
     assert r.status_code == 409
@@ -446,6 +455,7 @@ def test_import_ejected_source_410(registry, roots):
                 "source_path": "x.mp3",
                 "target_library_id": "core:music",
                 "target_path": "",
+                "device_id": "browser-test",
             },
         )
     assert r.status_code == 410
@@ -471,6 +481,14 @@ def no_reindex(monkeypatch):
         return True
 
     monkeypatch.setattr(files_api, "_trigger_reindex", _trigger)
+
+    # The direct-call tests below exercise the pure move logic with no DB, so
+    # the device-block lookup (which needs one) is stubbed to "not blocked".
+    # Enforcement itself is covered by the HTTP tests under @requires_db.
+    async def _allow(device_id):
+        return None
+
+    monkeypatch.setattr(files_api, "_assert_can_write", _allow)
     return calls
 
 
@@ -478,6 +496,7 @@ def _move(**kw):
     """Call the move endpoint directly (no admin dependency, no DB)."""
     import asyncio
 
+    kw.setdefault("device_id", "browser-test")
     req = files_api.MoveRequest(**kw)
     return asyncio.run(files_api.move(None, req))
 
@@ -716,6 +735,7 @@ def test_move_endpoint_moves_over_http(registry, roots, reindex_spy):
         r = c.post("/api/files/move", json={
             "source_library_id": "core:music", "paths": ["song.flac"],
             "target_library_id": "core:music", "target_path": "Beatles",
+            "device_id": "browser-test",
         })
     assert r.status_code == 200, r.text
     body = r.json()
@@ -730,6 +750,7 @@ def test_move_endpoint_requires_at_least_one_path(registry, roots):
         r = c.post("/api/files/move", json={
             "source_library_id": "core:music", "paths": [],
             "target_library_id": "core:music", "target_path": "",
+            "device_id": "browser-test",
         })
     assert r.status_code == 422
 
@@ -740,5 +761,253 @@ def test_move_endpoint_404s_for_an_unknown_library(registry, roots):
         r = c.post("/api/files/move", json={
             "source_library_id": "core:nope", "paths": ["x"],
             "target_library_id": "core:music", "target_path": "",
+            "device_id": "browser-test",
         })
     assert r.status_code == 404
+
+
+# ─── Trust posture: open reads/writes, admin-only delete ───────────────────
+#
+# The pre-setup grace makes every gate pass on a fresh test DB, which is
+# exactly the condition under which the old "everything is admin" gating
+# looked fine in tests and broke on a real install. So these claim the admin
+# tier first and prove the split from the OTHER side: no credential sent.
+
+
+@pytest.fixture
+def admin_claimed():
+    """Set an admin credential (so the pre-setup grace no longer applies) and
+    clear it afterwards. The token is never sent — these tests are about what
+    an UNAUTHENTICATED device may do once an admin exists."""
+    import asyncio
+
+    from sqlalchemy import text as sql
+
+    from domovoi import admin_auth
+    from web.backend.db import session_scope
+
+    async def _claim():
+        async with session_scope() as s:
+            await admin_auth.set_password(s, "correct-horse-battery")
+
+    async def _clear():
+        async with session_scope() as s:
+            await s.execute(sql("TRUNCATE admin_auth, admin_sessions CASCADE"))
+
+    asyncio.run(_clear())
+    asyncio.run(_claim())
+    yield
+    asyncio.run(_clear())
+
+
+@requires_db
+def test_reads_and_open_writes_need_no_admin_once_one_exists(
+    registry, roots, reindex_spy, admin_claimed
+):
+    (roots["music"] / "a.mp3").write_bytes(b"a")
+    (roots["music"] / "Beatles").mkdir()
+    with _client() as c:
+        assert c.get("/api/files/libraries").status_code == 200
+        assert c.get(
+            "/api/files/browse", params={"library_id": "core:music", "path": ""}
+        ).status_code == 200
+        assert c.get(
+            "/api/files/download", params={"library_id": "core:music", "path": "a.mp3"}
+        ).status_code == 200
+        up = c.post(
+            "/api/files/upload",
+            data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
+            files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        )
+        assert up.status_code == 200, up.text
+        mv = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["a.mp3"],
+            "target_library_id": "core:music", "target_path": "Beatles",
+            "device_id": "browser-test",
+        })
+        assert mv.status_code == 200, mv.text
+
+
+@requires_db
+def test_delete_is_the_one_verb_that_needs_admin(registry, roots, admin_claimed):
+    (roots["music"] / "keep.mp3").write_bytes(b"k")
+    with _client() as c:
+        r = c.post(
+            "/api/files/delete",
+            json={"library_id": "core:music", "paths": ["keep.mp3"]},
+        )
+    assert r.status_code == 401
+    assert "admin" in r.json()["detail"]
+    # Nothing happened.
+    assert (roots["music"] / "keep.mp3").exists()
+
+
+@requires_db
+def test_open_writes_must_name_a_device(registry, roots):
+    """The blocklist would be trivially evaded by omitting the field, which is
+    far easier than claiming someone else's id — so every open write must name
+    a device. Reading still doesn't have to."""
+    (roots["usb"] / "x.mp3").write_bytes(b"x")
+    with _client() as c:
+        up = c.post(
+            "/api/files/upload",
+            data={"library_id": "core:music", "path": ""},
+            files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        )
+        assert up.status_code == 422
+        mv = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["u.mp3"],
+            "target_library_id": "core:music", "target_path": "",
+        })
+        assert mv.status_code == 422
+        im = c.post("/api/files/import", json={
+            "source_library_id": "removable:E", "source_path": "x.mp3",
+            "target_library_id": "core:music", "target_path": "",
+        })
+        assert im.status_code == 422
+        assert c.get(
+            "/api/files/browse", params={"library_id": "core:music", "path": ""}
+        ).status_code == 200
+
+
+# ─── Device blocks ─────────────────────────────────────────────────────────
+
+
+def test_blocked_message_names_the_device_and_the_note() -> None:
+    assert files_api._blocked_message(
+        {"device_name": "Kids iPad", "device_id": "android-kid", "note": "bedtime"}
+    ) == "Kids iPad isn't allowed to change files (bedtime)"
+    # Falls back to the id when the block was made by id alone, and drops
+    # the parenthetical when there's no note.
+    assert files_api._blocked_message(
+        {"device_name": None, "device_id": "android-kid", "note": None}
+    ) == "android-kid isn't allowed to change files"
+
+
+@pytest.fixture
+def clean_block_tables():
+    import asyncio
+
+    from sqlalchemy import text as sql
+
+    from web.backend.db import session_scope
+
+    async def _truncate():
+        async with session_scope() as s:
+            await s.execute(
+                sql("TRUNCATE files_device_blocks, devices RESTART IDENTITY CASCADE")
+            )
+
+    asyncio.run(_truncate())
+    yield
+    asyncio.run(_truncate())
+
+
+@requires_db
+def test_files_blocks_crud_and_duplicate_conflict(clean_block_tables):
+    with _client() as c:
+        made = c.post(
+            "/api/files/device-blocks",
+            json={"device_id": "android-kid", "device_name": "Kids iPad",
+                  "note": "bedtime"},
+        )
+        assert made.status_code == 201, made.text
+        block_id = made.json()["id"]
+        assert [b["id"] for b in c.get("/api/files/device-blocks").json()] == [block_id]
+
+        again = c.post(
+            "/api/files/device-blocks", json={"device_id": "android-kid"}
+        )
+        assert again.status_code == 409
+
+        assert c.post("/api/files/device-blocks", json={"note": "x"}).status_code == 400
+
+        assert c.delete(f"/api/files/device-blocks/{block_id}").status_code == 204
+        assert c.get("/api/files/device-blocks").json() == []
+        assert c.delete(f"/api/files/device-blocks/{block_id}").status_code == 404
+
+
+@requires_db
+def test_a_blocked_device_can_read_but_not_write(
+    registry, roots, reindex_spy, clean_block_tables
+):
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    (roots["music"] / "Beatles").mkdir()
+    (roots["usb"] / "x.mp3").write_bytes(b"x")
+    with _client() as c:
+        c.post(
+            "/api/devices/register",
+            json={"device_id": "android-kid", "name": "Kids iPad"},
+        )
+        c.post(
+            "/api/files/device-blocks",
+            json={"device_id": "android-kid", "device_name": "Kids iPad",
+                  "note": "bedtime"},
+        )
+
+        # Reading is never blocked — and the read says why writes will be.
+        view = c.get(
+            "/api/files/browse",
+            params={"library_id": "core:music", "path": "", "device_id": "android-kid"},
+        )
+        assert view.status_code == 200
+        assert view.json()["writable"] is False
+        assert "Kids iPad" in view.json()["blocked_reason"]
+        assert "bedtime" in view.json()["blocked_reason"]
+
+        up = c.post(
+            "/api/files/upload",
+            data={"library_id": "core:music", "path": "", "device_id": "android-kid"},
+            files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        )
+        assert up.status_code == 403
+        assert "Kids iPad" in up.json()["detail"]
+        mv = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["song.flac"],
+            "target_library_id": "core:music", "target_path": "Beatles",
+            "device_id": "android-kid",
+        })
+        assert mv.status_code == 403
+        im = c.post("/api/files/import", json={
+            "source_library_id": "removable:E", "source_path": "x.mp3",
+            "target_library_id": "core:music", "target_path": "",
+            "device_id": "android-kid",
+        })
+        assert im.status_code == 403
+        # Nothing moved, nothing copied, nothing reindexed.
+        assert (roots["music"] / "song.flac").exists()
+        assert not (roots["music"] / "x.mp3").exists()
+        assert reindex_spy == []
+
+        # Another device is unaffected.
+        other = c.get(
+            "/api/files/browse",
+            params={"library_id": "core:music", "path": "", "device_id": "browser-ok"},
+        ).json()
+        assert other["writable"] is True and other["blocked_reason"] is None
+        ok = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["song.flac"],
+            "target_library_id": "core:music", "target_path": "Beatles",
+            "device_id": "browser-ok",
+        })
+        assert ok.status_code == 200, ok.text
+
+
+@requires_db
+def test_a_name_block_survives_a_reinstall(registry, roots, clean_block_tables):
+    """Block by NAME only; a fresh install (new id, same household label)
+    is still caught because the server resolves the id to its registered
+    name before matching."""
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    with _client() as c:
+        c.post("/api/files/device-blocks", json={"device_name": "Kids iPad"})
+        c.post(
+            "/api/devices/register",
+            json={"device_id": "android-newinstall", "name": "Kids iPad"},
+        )
+        mv = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["song.flac"],
+            "target_library_id": "core:music", "target_path": "",
+            "device_id": "android-newinstall",
+        })
+    assert mv.status_code == 403

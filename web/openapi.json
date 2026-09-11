@@ -7230,7 +7230,7 @@
           "files"
         ],
         "summary": "Browse",
-        "description": "One directory level inside a library, sorted dirs-first then name. Every\nentry's realpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. (The per-file editor-lock join is\ngone with the office engines \u2014 the homegrown editors don't lock.)",
+        "description": "One directory level inside a library, sorted dirs-first then name. Every\nentry's realpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. (The per-file editor-lock join is\ngone with the office engines \u2014 the homegrown editors don't lock.)\n\n``device_id`` is optional and only affects ``writable`` / ``blocked_reason``\n\u2014 reading is never blocked, so a blocked device can still SEE the folder\nand is told why it can't change it.",
         "operationId": "browse_api_files_browse_get",
         "parameters": [
           {
@@ -7250,6 +7250,24 @@
               "type": "string",
               "default": "",
               "title": "Path"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device Id"
             }
           }
         ],
@@ -7333,7 +7351,7 @@
           "files"
         ],
         "summary": "Upload",
-        "description": "Upload files into the currently-browsed directory. Rejected unless the\nlibrary is editable. Each name is sanitized to a bare basename, deduped,\nand the deduped target re-containment-checked before write.",
+        "description": "Upload files into the currently-browsed directory. Open (daily tier);\n``403`` when the calling device is blocked. Rejected unless the library is\neditable. Each name is sanitized to a bare basename, deduped, and the\ndeduped target re-containment-checked before write.",
         "operationId": "upload_api_files_upload_post",
         "requestBody": {
           "content": {
@@ -7417,7 +7435,7 @@
           "files"
         ],
         "summary": "Import Media",
-        "description": "Copy a file/dir from a removable source into an importable library.\nServer-side copy (the browser never streams the bytes), member+byte capped,\nand the source side never follows a symlink out of the mount.",
+        "description": "Copy a file/dir from a removable source into an importable library.\nOpen (daily tier); ``403`` when the calling device is blocked. Server-side\ncopy (the browser never streams the bytes), member+byte capped, and the\nsource side never follows a symlink out of the mount.",
         "operationId": "import_media_api_files_import_post",
         "requestBody": {
           "content": {
@@ -7459,7 +7477,7 @@
           "files"
         ],
         "summary": "Move",
-        "description": "Move files and folders into another folder \u2014 the drag-and-drop verb.\n\nWithin one library or between two, as long as BOTH are editable: a move\ndeletes from the source, so a read-only root (a removable drive, a\nread-only plugin library) can only ever be a destination. Removables stay\ncopy-only through ``/import``.\n\nPer-path outcome rather than all-or-nothing, like ``/delete``: one\ncolliding name shouldn't abandon the other forty files in the drag.\n\nThe guards, in the order they matter:\n\n* ``safe_join`` on every source path AND the destination \u2014 containment is\n  never re-implemented here (see files_security).\n* A library ROOT can't be moved.\n* A directory can't be moved into itself or into its own descendant.\n  ``shutil.move`` would happily start recursing into the copy it is\n  creating; the check is a realpath prefix test, so a symlinked path that\n  resolves back inside the source is caught too.\n* An existing destination name FAILS rather than being overwritten or\n  silently renamed. A move that quietly replaced a file would be the one\n  unrecoverable operation on this page.\n* Secret-shaped names are refused the same way upload/import refuse them.",
+        "description": "Move files and folders into another folder \u2014 the drag-and-drop verb.\nOpen (daily tier); ``403`` when the calling device is blocked.\n\nWithin one library or between two, as long as BOTH are editable: a move\ndeletes from the source, so a read-only root (a removable drive, a\nread-only plugin library) can only ever be a destination. Removables stay\ncopy-only through ``/import``.\n\nPer-path outcome rather than all-or-nothing, like ``/delete``: one\ncolliding name shouldn't abandon the other forty files in the drag.\n\nThe guards, in the order they matter:\n\n* ``safe_join`` on every source path AND the destination \u2014 containment is\n  never re-implemented here (see files_security).\n* A library ROOT can't be moved.\n* A directory can't be moved into itself or into its own descendant.\n  ``shutil.move`` would happily start recursing into the copy it is\n  creating; the check is a realpath prefix test, so a symlinked path that\n  resolves back inside the source is caught too.\n* An existing destination name FAILS rather than being overwritten or\n  silently renamed. A move that quietly replaced a file would be the one\n  unrecoverable operation on this page.\n* Secret-shaped names are refused the same way upload/import refuse them.",
         "operationId": "move_api_files_move_post",
         "requestBody": {
           "content": {
@@ -7481,6 +7499,106 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/device-blocks": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List Blocks",
+        "operationId": "list_blocks_api_files_device_blocks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FilesBlock"
+                  },
+                  "type": "array",
+                  "title": "Response List Blocks Api Files Device Blocks Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Create Block",
+        "description": "Block a device from writing to any library (upload / move / import).\nNeeds a device id, a name, or both \u2014 a block naming neither would match\nnothing, and the schema refuses it.",
+        "operationId": "create_block_api_files_device_blocks_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilesBlockCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilesBlock"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/device-blocks/{block_id}": {
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Delete Block",
+        "operationId": "delete_block_api_files_device_blocks__block_id__delete",
+        "parameters": [
+          {
+            "name": "block_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Block Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -10200,6 +10318,12 @@
             "title": "Path",
             "default": ""
           },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          },
           "files": {
             "items": {
               "type": "string",
@@ -10212,6 +10336,7 @@
         "type": "object",
         "required": [
           "library_id",
+          "device_id",
           "files"
         ],
         "title": "Body_upload_api_files_upload_post"
@@ -10380,6 +10505,22 @@
             },
             "type": "array",
             "title": "Entries"
+          },
+          "writable": {
+            "type": "boolean",
+            "title": "Writable",
+            "default": true
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
           }
         },
         "type": "object",
@@ -11387,6 +11528,97 @@
         "title": "FavoriteNowPlayingResult",
         "description": "Result of favoriting whatever is currently playing in a room.\n\n``kind`` tells the dashboard what happened so it can render the\nappropriate toast: ``library`` = an existing library row's flag was\nflipped (returns ``track_id``); ``acquisition`` = an external\nstream was queued into the generic media-acquisition queue\n(returns ``acquisition_id`` + the core's user-facing ``message``,\nwhich carries the graceful-absence copy when no provider plugin is\ninstalled)."
       },
+      "FilesBlock": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "FilesBlock"
+      },
+      "FilesBlockCreate": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "title": "FilesBlockCreate"
+      },
       "Greeting": {
         "properties": {
           "id": {
@@ -11534,13 +11766,20 @@
             "type": "string",
             "title": "Target Path",
             "default": ""
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
           }
         },
         "type": "object",
         "required": [
           "source_library_id",
           "source_path",
-          "target_library_id"
+          "target_library_id",
+          "device_id"
         ],
         "title": "ImportRequest"
       },
@@ -11847,13 +12086,20 @@
             "type": "string",
             "title": "Target Path",
             "default": ""
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
           }
         },
         "type": "object",
         "required": [
           "source_library_id",
           "paths",
-          "target_library_id"
+          "target_library_id",
+          "device_id"
         ],
         "title": "MoveRequest"
       },

@@ -71,6 +71,7 @@ import com.domovoi.app.net.moveFiles
 import com.domovoi.app.net.openFileDownload
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.uploadFiles
+import com.domovoi.app.net.ApiException
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
@@ -136,9 +137,15 @@ fun FilesScreen() {
     val browse = rememberApi(selectedId, path, eventTypes = setOf("library.indexer.changed")) {
         val id = selectedId
         if (id.isNullOrBlank()) null
-        else it.api.get(filesBrowsePath(id, path)).decode<FileBrowse>()
+        else it.api.get(filesBrowsePath(id, path, it.prefs.deviceId)).decode<FileBrowse>()
     }
     val data = browse.data
+    // Two different "no": the LIBRARY is read-only (editable=false), or THIS
+    // DEVICE has been blocked by an admin (writable=false). Upload / move /
+    // import need both. Delete is admin-gated server-side and this app can't
+    // sign in as admin, so its button stays but the failure says so.
+    val blocked = data?.writable == false
+    val canWrite = editable && !blocked
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
@@ -224,7 +231,18 @@ fun FilesScreen() {
                     )
                     browse.refresh()
                 }
-                .onFailure { toast("delete failed: ${it.message}") }
+                .onFailure {
+                    // Delete is the one Files verb behind the admin password,
+                    // and this app has no admin session to present.
+                    val status = (it as? ApiException)?.status
+                    toast(
+                        if (status == 401 || status == 403) {
+                            "delete needs admin — use the dashboard, or ask an admin"
+                        } else {
+                            "delete failed: ${it.message}"
+                        },
+                    )
+                }
             busy = null
         }
     }
@@ -280,7 +298,7 @@ fun FilesScreen() {
                 "Files",
                 "browse every library — music, docs, plugins & removable drives",
                 actions = {
-                    if (editable) {
+                    if (canWrite) {
                         OutlinedButton(
                             onClick = { filePicker.launch("*/*") },
                             enabled = busy == null,
@@ -298,6 +316,21 @@ fun FilesScreen() {
                 onSelect = { selectedId = it; path = "" },
             )
             Spacer(Modifier.height(10.dp))
+
+            if (blocked) {
+                // Said once, above the list, rather than on every row: this
+                // device can look but not touch, and here's who to ask.
+                DomovoiCard(modifier = Modifier.fillMaxWidth(), padding = 12) {
+                    Text(
+                        (data?.blockedReason ?: "this device isn't allowed to change files") +
+                            ". You can browse and download, but not upload, move or import. " +
+                            "An admin lifts the block in the dashboard under Settings → Devices.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
 
             if (selectedId != null) {
                 Breadcrumb(
@@ -323,7 +356,7 @@ fun FilesScreen() {
                     ErrorState(browse.error ?: "request failed", browse.refresh)
                 data != null && data.entries.isEmpty() -> EmptyState(
                     "empty folder",
-                    if (editable) "upload files, or pick another library" else "nothing here yet",
+                    if (canWrite) "upload files, or pick another library" else "nothing here yet",
                 )
                 data != null -> DomovoiCard(
                     modifier = Modifier.fillMaxWidth().weight(1f),
@@ -334,7 +367,8 @@ fun FilesScreen() {
                             FileRow(
                                 entry = e,
                                 editable = editable,
-                                removable = isRemovable,
+                                writable = canWrite,
+                                removable = isRemovable && !blocked,
                                 onOpen = { onEntryPrimary(e) },
                                 onDownload = { onEntryDownload(e) },
                                 onDelete = { confirmDelete = e },
@@ -515,7 +549,10 @@ private fun Breadcrumb(
 @Composable
 private fun FileRow(
     entry: FileEntry,
+    /** The library allows writes (shows delete — admin-gated server-side). */
     editable: Boolean,
+    /** This device may write here (shows move); false when admin-blocked. */
+    writable: Boolean,
     removable: Boolean,
     onOpen: () -> Unit,
     onDownload: () -> Unit,
@@ -569,7 +606,7 @@ private fun FileRow(
             IconButton(onClick = onDownload) {
                 Icon(Icons.Outlined.Download, "download", tint = Domovoi.colors.fgMuted)
             }
-            if (editable) {
+            if (writable) {
                 // The web moves things by drag and drop; a phone gets a
                 // destination picker instead (FilesMoveSheet).
                 IconButton(onClick = onMove) {
@@ -578,6 +615,8 @@ private fun FileRow(
                         tint = Domovoi.colors.fgMuted,
                     )
                 }
+            }
+            if (editable) {
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Outlined.Delete, "delete", tint = Domovoi.colors.fgMuted)
                 }

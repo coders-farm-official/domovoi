@@ -14,10 +14,11 @@ installed Image Generation plugin (Coders Farm), which manages a local
 ComfyUI engine and serves its own pages/routes under
 ``/api/plugins/imagegen``.
 
-Both endpoints are admin-read-gated (the dashboard cookie is enough for
-``<img src>``), and every path passes the same containment the Files
-surface uses: the client only ever names a ``library_id`` + relative
-path.
+Both endpoints are OPEN (daily tier) — they serve the same libraries the
+Files surface lets any device on the LAN browse and download, and a phone
+that can list a folder should be able to see the thumbnails in it. Every
+path passes the same containment the Files surface uses: the client only
+ever names a ``library_id`` + relative path.
 """
 
 from __future__ import annotations
@@ -27,10 +28,9 @@ import logging
 from pathlib import Path
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
-from domovoi.admin_auth import require_admin_read
 from domovoi.config import settings as core_settings
 from web.backend.api.documents import _IMAGE_EXTS
 from web.backend.api.files_security import MediaLibrary, build_libraries, safe_join
@@ -74,7 +74,7 @@ def _resolve_image(lib: MediaLibrary, path: str) -> Path:
 
 
 # ─── Raw (inline click-through) ─────────────────────────────────────────────
-@router.get("/raw", dependencies=[Depends(require_admin_read)])
+@router.get("/raw")
 async def raw(
     library_id: str = Query(...),
     path: str = Query(...),
@@ -112,7 +112,7 @@ def _make_thumb(src: Path, dest: Path, max_edge: int) -> bool:
         return False
 
 
-@router.get("/thumb", dependencies=[Depends(require_admin_read)])
+@router.get("/thumb")
 async def thumb(
     library_id: str = Query(...),
     path: str = Query(...),

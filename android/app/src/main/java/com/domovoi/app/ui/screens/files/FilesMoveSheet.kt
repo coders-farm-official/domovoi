@@ -80,7 +80,7 @@ internal fun FilesMoveSheet(
         val id = libId ?: return@LaunchedEffect
         loading = true
         error = null
-        runCatching { app.api.get(filesBrowsePath(id, path)).decode<FileBrowse>() }
+        runCatching { app.api.get(filesBrowsePath(id, path, app.prefs.deviceId)).decode<FileBrowse>() }
             .onSuccess { entries = it.entries.filter { e -> e.isDir } }
             .onFailure { error = it.message ?: "couldn't open folder"; entries = emptyList() }
         loading = false

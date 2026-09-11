@@ -178,6 +178,18 @@ read-only plugin library can only be a destination. Copying *off* a removable
 drive is still the separate **import** action. If one item in a multi-item drag
 fails, the rest still move and the toast says what went wrong.
 
+None of this needs the admin password — browsing, downloading, uploading,
+moving and importing are open to every phone and browser on your network, the
+same as playing music. **Deleting** is the one Files action that does need
+admin, because it's the one that destroys something; the phone app can't sign
+in as admin, so delete from the dashboard. If one device keeps filling the
+libraries with things it shouldn't, an admin can take uploading, moving and
+importing away from it in **Settings → Devices → Files access** — it can still
+browse and download, and the Files page tells it why it can't change anything.
+The same honesty note as queue access applies: a device tells the server who it
+is, so this settles a household argument rather than stopping someone
+determined.
+
 ## What music sources exist out of the box?
 
 - **Your local library** — files in your music folder (`MUSIC_DIR`, default `~/Music`), indexed and playable by voice per room, with playlists, album art in the browser player, and optional automatic metadata cleanup.

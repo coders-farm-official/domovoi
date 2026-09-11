@@ -799,8 +799,12 @@ const FilesPage = () => {
     if (!libId) { setView(null); return; }
     setBrowseLoading(true);
     try {
+      // device_id only affects `writable` / `blocked_reason` in the answer:
+      // reading is never blocked, but the page disables its own write
+      // controls from this rather than discovering the 403 on first drop.
       const r = await apiGet(
-        `/api/files/browse?library_id=${encodeURIComponent(libId)}&path=${encodeURIComponent(p || '')}`);
+        `/api/files/browse?library_id=${encodeURIComponent(libId)}&path=${encodeURIComponent(p || '')}`
+        + `&device_id=${encodeURIComponent(DeviceIdentity.id())}`);
       setView(r);
       setPath(r.path || '');
       setSelected(new Set());
@@ -858,12 +862,14 @@ const FilesPage = () => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
     if (!activeLib?.editable) { fire('this library is read-only'); return; }
+    if (view?.writable === false) { fire(view.blocked_reason || 'this device is blocked from changing files'); return; }
     setUploading(true);
     fire(`uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
     try {
       const fd = new FormData();
       fd.append('library_id', activeId);
       fd.append('path', path);
+      fd.append('device_id', DeviceIdentity.id());
       files.forEach((f) => fd.append('files', f));
       const res = await apiUpload('/api/files/upload', fd);
       const parts = [`uploaded ${res.saved.length} file${res.saved.length === 1 ? '' : 's'}`];
@@ -961,6 +967,7 @@ const FilesPage = () => {
         paths: payload.paths,
         target_library_id: targetLibraryId,
         target_path: targetPath || '',
+        device_id: DeviceIdentity.id(),
       });
       const okN = (res.moved || []).length;
       const skipN = (res.skipped || []).length;
@@ -994,6 +1001,7 @@ const FilesPage = () => {
     const files = e.dataTransfer.files;
     if (!files || !files.length) return;
     if (!activeLib?.editable) { fire('this library is read-only'); return; }
+    if (view?.writable === false) { fire(view.blocked_reason || 'this device is blocked from changing files'); return; }
     onUpload(files);
   };
 
@@ -1008,6 +1016,7 @@ const FilesPage = () => {
         source_path: entry.rel,
         target_library_id: targetId,
         target_path: '',
+        device_id: DeviceIdentity.id(),
       });
       const parts = [`imported ${(res.copied || []).length} item${(res.copied || []).length === 1 ? '' : 's'}`];
       if (res.skipped?.length) parts.push(`${res.skipped.length} skipped`);
@@ -1020,7 +1029,15 @@ const FilesPage = () => {
 
   const DrawingOverlayCmp = window.DrawingSuite && window.DrawingSuite.DrawingOverlay;
   const nSel = selected.size;
-  const canUpload = !!activeLib?.editable;
+  // Two different "no": the LIBRARY is read-only (editable=false), or THIS
+  // DEVICE has been blocked by an admin (writable=false). Upload / move /
+  // import need both; delete is admin-gated server-side and stays visible —
+  // the login modal handles the 401.
+  const blocked = view?.writable === false;
+  const canWrite = !!view?.editable && !blocked;
+  const canUpload = !!activeLib?.editable && !blocked;
+  const uploadTitle = blocked ? (view.blocked_reason || 'this device is blocked from changing files')
+    : canUpload ? 'upload into this folder' : 'this library is read-only';
 
   return (
     /* The desktop-file drop is handled ONCE, here on the page root: without
@@ -1039,7 +1056,7 @@ const FilesPage = () => {
           {isDocuments && <NewMenu disabled={!canUpload} onPick={onCreate}/>}
           <Button variant={isDocuments ? 'secondary' : 'primary'} icon="upload"
                   disabled={uploading || !canUpload}
-                  title={canUpload ? 'upload into this folder' : 'this library is read-only'}
+                  title={uploadTitle}
                   onClick={() => fileInputRef.current && fileInputRef.current.click()}>
             {uploading ? 'Uploading…' : 'Upload'}
           </Button>
@@ -1047,7 +1064,20 @@ const FilesPage = () => {
 
       <LibrarySelector libraries={libraries} activeId={activeId}
                        onSelect={onSelectLibrary} onRefresh={loadLibraries}
-                       onDropMove={onDropIntoLibrary}/>
+                       onDropMove={canWrite ? onDropIntoLibrary : null}/>
+
+      {blocked && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 14px',
+                      marginBottom: 12, borderRadius: 'var(--r-sm)',
+                      border: '1px solid var(--border)', background: 'var(--sunken)',
+                      fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          <Icon name="lock" size={13}/>
+          <span>
+            {view.blocked_reason}. You can browse and download, but not upload, move or
+            import from this device. An admin lifts the block in Settings → Devices.
+          </span>
+        </div>
+      )}
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px',
@@ -1060,7 +1090,7 @@ const FilesPage = () => {
           )}
           <FilesBreadcrumb lib={activeLib}
                            segments={view?.breadcrumb || []} onNav={navigate}
-                           onDropMove={view?.editable ? onDropIntoPath : null}/>
+                           onDropMove={canWrite ? onDropIntoPath : null}/>
           <span style={{ flex: 1 }}/>
           {nSel > 0 ? (
             <>
@@ -1108,21 +1138,21 @@ const FilesPage = () => {
                         onOpenDoc={setDocRel} onOpenSheet={setSheetRel}
                         onOpenText={setTextRel}
                         onOpenDrawing={(d) => setDrawing(d)}
-                        onDragStartEntry={view.editable ? onDragStartEntry : null}
+                        onDragStartEntry={canWrite ? onDragStartEntry : null}
                         onDelete={(d) => requestDelete([entries.find((e) => e.rel === d.rel_path)])}/>
               );
             }
             return (
               <BrowserRow key={entry.rel} entry={entry} libraryId={activeId}
                           selected={selected.has(entry.rel)} onToggleSelect={toggleSelect}
-                          editable={view.editable} removable={isRemovable}
+                          editable={view.editable} removable={isRemovable && !blocked}
                           importables={importables}
                           onOpen={() => navigate(entry.rel)}
                           onDownload={() => downloadEntry(entry)}
                           onDelete={() => requestDelete([entry])}
                           onImport={doImport}
-                          onDragStartEntry={view.editable ? onDragStartEntry : null}
-                          onDropMove={view.editable ? onDropIntoEntry : null}/>
+                          onDragStartEntry={canWrite ? onDragStartEntry : null}
+                          onDropMove={canWrite ? onDropIntoEntry : null}/>
             );
           })
         )}

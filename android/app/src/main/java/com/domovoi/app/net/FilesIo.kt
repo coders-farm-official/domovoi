@@ -29,15 +29,24 @@ import java.io.IOException
  * The client only ever sends a `library_id` + a RELATIVE `path`; the absolute
  * root is server-side. Query values are %-encoded via [Uri.encode] so a
  * `library_id` like "core:music" and a `path` with "/" survive intact.
+ *
+ * Trust posture: browse/download/upload/move/import are open on the LAN
+ * (daily tier, like editing a room queue); only delete needs an admin
+ * session, which this app has no way to present — so a delete answers 401
+ * and the screen says "admin sign-in required". Every open write names this
+ * install's device id (the same one the room queue uses), which is what an
+ * admin's files block matches on.
  */
 
 // ---------------------------------------------------------------------------
 // URL helpers
 // ---------------------------------------------------------------------------
 
-/** GET /api/files/browse for a library + rel dir (both %-encoded as query values). */
-internal fun filesBrowsePath(libraryId: String, path: String): String =
-    "/api/files/browse?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(path)
+/** GET /api/files/browse for a library + rel dir (both %-encoded as query
+ *  values). `deviceId` only affects the answer's `writable`/`blocked_reason`. */
+internal fun filesBrowsePath(libraryId: String, path: String, deviceId: String): String =
+    "/api/files/browse?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(path) +
+        "&device_id=" + Uri.encode(deviceId)
 
 /** Absolute /api/files/download URL for a file or directory (dir → server zip). */
 internal fun filesDownloadUrl(app: AppContainer, libraryId: String, rel: String): String =
@@ -86,6 +95,7 @@ internal suspend fun uploadFiles(
     val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
     builder.addFormDataPart("library_id", libraryId)
     builder.addFormDataPart("path", path)
+    builder.addFormDataPart("device_id", app.prefs.deviceId)
     var added = 0
     uris.forEach { uri ->
         val bytes = runCatching {
@@ -157,6 +167,7 @@ internal suspend fun importFile(
             put("source_path", sourcePath)
             put("target_library_id", targetLibraryId)
             put("target_path", targetPath)
+            put("device_id", app.prefs.deviceId)
         },
     )
     val obj = res as? JsonObject ?: JsonObject(emptyMap())
@@ -191,6 +202,7 @@ internal suspend fun moveFiles(
             put("paths", buildJsonArray { paths.forEach { add(it) } })
             put("target_library_id", targetLibraryId)
             put("target_path", targetPath)
+            put("device_id", app.prefs.deviceId)
         },
     )
     val obj = res as? JsonObject ?: JsonObject(emptyMap())

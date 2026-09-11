@@ -1535,12 +1535,134 @@ const QueueAccessCard = ({ fire }) => {
   );
 };
 
+/* Files access — the Files surface is open on the LAN (browse, download,
+ * upload, move, import; only delete needs admin), so this is the control
+ * that takes WRITES away from one device without making every phone sign
+ * in. Same device model and the same honesty note as the queue blocks. */
+const FilesAccessCard = ({ fire }) => {
+  const { items: devices, loading: devicesLoading } = useApiList('/api/devices');
+  const { items: blocks, loading: blocksLoading, refresh: refreshBlocks } =
+    useApiList('/api/files/device-blocks');
+
+  const [pick, setPick] = React.useState('');     // device_id
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const addBlock = async () => {
+    const device = devices.find((d) => d.device_id === pick);
+    if (!device) { fire('pick a device to block'); return; }
+    setBusy(true);
+    try {
+      // Both id and name, like the queue blocks: the id survives a rename,
+      // the name survives a reinstall. The server matches either.
+      await apiPost('/api/files/device-blocks', {
+        device_id: device.device_id,
+        device_name: device.name,
+        note: note.trim() || null,
+      });
+      fire(`${device.name} can no longer change files`);
+      setPick(''); setNote('');
+      refreshBlocks();
+    } catch (e) {
+      fire(e.status === 409
+        ? 'that device is already blocked'
+        : `block failed: ${apiErrorText(e)}`);
+    } finally { setBusy(false); }
+  };
+
+  const removeBlock = async (b) => {
+    try {
+      await apiDelete(`/api/files/device-blocks/${b.id}`);
+      fire('block removed');
+      refreshBlocks();
+    } catch (e) {
+      fire(`remove failed: ${apiErrorText(e)}`);
+    }
+  };
+
+  const selectStyle = {
+    font: 'inherit', fontSize: 13, height: 30, padding: '0 8px',
+    borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+    background: 'var(--card)', color: 'var(--fg)',
+  };
+
+  return (
+    <Card title="Files access"
+          sub="Stop a device from uploading, moving or importing files. It can still browse and download; deleting always needs admin.">
+      <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'flex-start',
+                    borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+        <Icon name="info" size={13}/>
+        <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          Same caveat as queue access: a device tells the server who it is, and
+          nothing on a trusted LAN forces it to be honest. This reliably keeps a
+          known device from filling the libraries; it isn’t a defence against
+          someone determined. Changing blocks needs admin.
+        </span>
+      </div>
+
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center',
+                    flexWrap: 'wrap' }}>
+        <select value={pick} onChange={(e) => setPick(e.target.value)} style={selectStyle}>
+          <option value="">
+            {devicesLoading ? 'loading devices…' : 'pick a device…'}
+          </option>
+          {devices.map((d) => (
+            <option key={d.device_id} value={d.device_id}>
+              {d.name} ({d.device_id})
+            </option>
+          ))}
+        </select>
+        <input value={note} onChange={(e) => setNote(e.target.value)}
+               placeholder="why (optional)" maxLength={200}
+               style={{ ...selectStyle, flex: '1 1 160px' }}/>
+        <Button variant="primary" icon="lock" disabled={busy || !pick} onClick={addBlock}>
+          block
+        </Button>
+      </div>
+
+      {blocksLoading && blocks.length === 0 ? (
+        <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading blocks…</div>
+      ) : blocks.length === 0 ? (
+        <div style={{ padding: '4px 16px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No blocks — every device may upload, move and import.
+        </div>
+      ) : (
+        <table className="tbl">
+          <thead><tr>
+            <th>device</th><th>why</th><th>added</th><th className="actions"></th>
+          </tr></thead>
+          <tbody>
+            {blocks.map((b) => (
+              <tr key={b.id}>
+                <td>
+                  <div style={{ fontWeight: 500 }}>{b.device_name || '—'}</div>
+                  {b.device_id && (
+                    <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>
+                      {b.device_id}
+                    </div>
+                  )}
+                </td>
+                <td style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{b.note || '—'}</td>
+                <td className="mono">{b.created_at ? relTime(b.created_at) : '—'}</td>
+                <td className="actions">
+                  <Button icon="x" onClick={() => removeBlock(b)}>unblock</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+};
+
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
   return (
     <>
       <ThisDeviceCard fire={fire}/>
       <QueueAccessCard fire={fire}/>
+      <FilesAccessCard fire={fire}/>
       {toastNode}
     </>
   );
@@ -1555,7 +1677,7 @@ const SETTINGS_TABS = [
   { id: 'greetings', label: 'Greetings' },
   { id: 'voices', label: 'Voices' },
   { id: 'wakewords', label: 'Wake Words' },
-  { id: 'devices', label: 'Devices' },        // device names + queue access
+  { id: 'devices', label: 'Devices' },        // device names + queue / files access
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'config', label: 'Configuration' },   // last tab, by request
 ];

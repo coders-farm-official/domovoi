@@ -24,9 +24,10 @@ Endpoints:
 Browse/serve security mirrors ``files.py``: the client only ever names a
 ``library_id`` + relative path, every path passes ``safe_join``, walked
 entries are realpath-checked inside their root, and secret-shaped names are
-filtered. File-content endpoints are admin-read-gated (cookie is enough for
-GETs, so plain ``<video src>`` / ``<img src>`` work); the position store is
-open like the podcasts one — it holds only rel paths and timestamps.
+filtered. Everything here is OPEN (daily tier): the file-content endpoints
+serve the same libraries the Files surface lets any LAN device browse and
+download, and the position store holds only rel paths and timestamps, like
+the podcasts one.
 """
 
 from __future__ import annotations
@@ -38,12 +39,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_read
 from domovoi.config import settings as core_settings
 from web.backend.api.audio_serve import (
     VIDEO_CONTENT_TYPES,
@@ -96,7 +96,7 @@ def _resolve_video(lib: MediaLibrary, path: str) -> Path:
 
 
 # ─── GET /list ───────────────────────────────────────────────────────────────
-@router.get("/list", dependencies=[Depends(require_admin_read)])
+@router.get("/list")
 async def list_videos() -> dict[str, Any]:
     """Every video across every present library. Bounded per library; the
     walk runs in worker threads (one per library, gathered)."""
@@ -121,7 +121,7 @@ async def list_videos() -> dict[str, Any]:
 
 
 # ─── GET /stream ─────────────────────────────────────────────────────────────
-@router.get("/stream", dependencies=[Depends(require_admin_read)])
+@router.get("/stream")
 async def stream(
     request: Request,
     library_id: str = Query(...),
@@ -184,7 +184,7 @@ async def _extract_poster(src: Path, dest: Path) -> bool:
     return False
 
 
-@router.get("/poster", dependencies=[Depends(require_admin_read)])
+@router.get("/poster")
 async def poster(
     library_id: str = Query(...),
     path: str = Query(...),
