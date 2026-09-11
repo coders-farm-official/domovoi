@@ -911,6 +911,9 @@ class Satellite:
 
         corrector = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES)
         self._capture_corrector = corrector
+        # Describe a handful of raw blocks once the corrector has decided,
+        # spaced out so at least one lands on speech rather than silence.
+        probe_state = {"left": 6, "skip": 0}
 
         def _enqueue(data: bytes) -> None:
             try:
@@ -960,6 +963,15 @@ class Satellite:
             self._raw_q_callbacks += 1
             if status:
                 log.debug("mic status: %s", status)
+            if corrector.measured and probe_state["left"] > 0:
+                probe_state["skip"] += 1
+                if probe_state["skip"] % 200 == 1:      # ~every 0.8s at 8x, 6s at 1x
+                    probe_state["left"] -= 1
+                    log.info(
+                        "capture block %d/6: %s",
+                        6 - probe_state["left"],
+                        _describe_capture_block(bytes(indata), channels, select),
+                    )
             if select is None:
                 data = bytes(indata)
             else:
@@ -4595,6 +4607,58 @@ class CaptureRateCorrector:
             rate, ratio, src, self._sample_rate,
         )
 
+
+
+def _describe_capture_block(raw_stereo_int16: bytes, channels: int, select: int | None) -> str:
+    """One line describing the STRUCTURE of a raw capture block, for the
+    log. Exists because the corrector assumed an 8x-fast USB clock means
+    the array genuinely samples at 128 kHz - but the XMOS DSP runs off its
+    own crystal at a fixed rate, so a USB endpoint pulled 8x faster than
+    the DSP produces samples must be REPEATING something. Which thing
+    decides whether a polyphase resample recovers speech or mush:
+
+      * each sample held for 8 slots  -> mean run length ~8, autocorr at
+        lag 1 ~1.0, resampling averages 8 identical samples: fine
+      * each 16-sample packet sent 8x -> run length ~1, but autocorr at
+        lag 16 ~1.0: resampling averages a stutter, and nothing matches
+
+    Also reports the per-channel level, because the ASR beam being on the
+    OTHER channel at this rate would look exactly like silence.
+    """
+    try:
+        import numpy as np
+
+        a = np.frombuffer(raw_stereo_int16, dtype=np.int16)
+        if channels > 1:
+            a = a[: len(a) - len(a) % channels].reshape(-1, channels)
+            levels = []
+            for ch in range(channels):
+                x = a[:, ch].astype(np.float64)
+                rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+                levels.append(f"ch{ch}={20 * np.log10(max(rms, 1.0) / 32768):.0f}dBFS")
+            mono = a[:, select if select is not None else 0].astype(np.float64)
+        else:
+            x = a.astype(np.float64)
+            rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+            levels = [f"ch0={20 * np.log10(max(rms, 1.0) / 32768):.0f}dBFS"]
+            mono = x
+        if len(mono) < 64:
+            return "block too short"
+        # Runs of identical consecutive samples.
+        changes = np.count_nonzero(np.diff(mono))
+        run_len = len(mono) / max(changes + 1, 1)
+        # Normalised autocorrelation at the lags that distinguish the cases.
+        m = mono - mono.mean()
+        denom = float(np.dot(m, m)) or 1.0
+        def ac(lag: int) -> float:
+            return float(np.dot(m[:-lag], m[lag:]) / denom) if lag < len(m) else 0.0
+        return (
+            f"{' '.join(levels)} | selected ch{select} | run_len={run_len:.1f} "
+            f"| autocorr lag1={ac(1):.2f} lag8={ac(8):.2f} lag16={ac(16):.2f} "
+            f"lag32={ac(32):.2f} | distinct={len(np.unique(mono))}"
+        )
+    except Exception as e:  # noqa: BLE001 - diagnostics never break capture
+        return f"(could not describe: {e})"
 
 def _log_capture_environment(input_device: object) -> None:
     """Say, once at startup, what the USB audio path actually looks like.
