@@ -247,3 +247,200 @@ def test_snapshots_are_verbatim_json_payloads(web_client) -> None:
     }
     # The GET-flood regression guard: nothing elapsed-shaped in payloads.
     assert "elapsed_sec" not in str(stations)
+
+
+# ─── Play without favoriting + the Recent strip (V002) ──────────────────
+#
+# The load-bearing claim of this section: playing a station never puts it
+# in Favorites, and a station that was only ever played doesn't accumulate
+# in the table once it ages out of the 10-row strip.
+
+
+def _play_hit(client, suffix: str):
+    """POST /play with a directory-hit shape (nothing persisted yet)."""
+    resp = client.post(
+        "/api/plugins/radio/play",
+        json={
+            "name": f"Station {suffix}",
+            "source": "online",
+            "stream_url": f"http://{suffix}.example/stream.mp3",
+            "external_id": f"uuid-{suffix}",
+            "country_code": "US",
+            "tags": ["indie"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _recent(client):
+    resp = client.get("/api/plugins/radio/recent")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_play_persists_the_hit_without_favoriting(web_client) -> None:
+    played = _play_hit(web_client, "kexp")
+    assert played["id"] > 0                 # persisted — the stream proxy needs an id
+    assert played["favorited"] is False     # …but NOT starred
+    assert played["created_by_play"] is True
+    assert played["last_played_at"] is not None
+
+    # The favorites surface must not show it.
+    favorites = web_client.get(
+        "/api/plugins/radio/stations", params={"favorited_only": True}
+    ).json()
+    assert favorites == []
+    # Recent must.
+    assert [s["name"] for s in _recent(web_client)] == ["Station kexp"]
+
+
+def test_play_is_idempotent_on_external_id(web_client) -> None:
+    first = _play_hit(web_client, "kexp")
+    second = _play_hit(web_client, "kexp")
+    assert first["id"] == second["id"]
+    assert len(_recent(web_client)) == 1
+    all_rows = web_client.get("/api/plugins/radio/stations").json()
+    assert len(all_rows) == 1
+
+
+def test_play_an_existing_favorite_stamps_recent_and_keeps_the_star(web_client) -> None:
+    seeded = _seed_station(web_client)
+    resp = web_client.post(
+        "/api/plugins/radio/play", json={"station_id": seeded["id"]}
+    )
+    assert resp.status_code == 200, resp.text
+    played = resp.json()
+    assert played["favorited"] is True          # untouched
+    assert played["created_by_play"] is False   # never implicitly created
+    assert played["last_played_at"] is not None
+    assert [s["id"] for s in _recent(web_client)] == [seeded["id"]]
+
+
+def test_play_404s_on_an_unknown_station_id(web_client) -> None:
+    resp = web_client.post("/api/plugins/radio/play", json={"station_id": 9999})
+    assert resp.status_code == 404
+    assert "9999" in resp.json()["detail"]
+
+
+def test_play_400s_without_enough_to_persist(web_client) -> None:
+    """No id, no known external_id, and no name+url — there is nothing to
+    stream and nothing to create, so say which half is missing."""
+    resp = web_client.post(
+        "/api/plugins/radio/play", json={"external_id": "uuid-never-seen"}
+    )
+    assert resp.status_code == 400
+    assert "name + stream_url" in resp.json()["detail"]
+
+
+def test_recent_trims_to_ten_and_reclaims_play_only_rows(web_client) -> None:
+    for i in range(12):
+        _play_hit(web_client, f"s{i:02d}")
+
+    recent = _recent(web_client)
+    assert len(recent) == 10
+    # Newest first: the last two played lead.
+    assert [s["name"] for s in recent[:2]] == ["Station s11", "Station s10"]
+
+    # The two that fell out existed only because they were played, so the
+    # trim deleted them outright rather than leaving orphan rows behind.
+    remaining = {
+        s["name"] for s in web_client.get("/api/plugins/radio/stations").json()
+    }
+    assert "Station s00" not in remaining
+    assert "Station s01" not in remaining
+    assert len(remaining) == 10
+
+
+def test_favoriting_a_played_row_survives_falling_out_of_recent(web_client) -> None:
+    """The trim must only reclaim rows that were NEVER favorited — a star
+    promotes a played-once row to a keeper."""
+    keeper = _play_hit(web_client, "keeper")
+    patched = web_client.patch(
+        f"/api/plugins/radio/stations/{keeper['id']}", json={"favorited": True}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["created_by_play"] is False
+
+    for i in range(10):
+        _play_hit(web_client, f"f{i:02d}")
+
+    # Aged out of the strip…
+    assert keeper["id"] not in {s["id"] for s in _recent(web_client)}
+    # …but still a favorite.
+    favorites = web_client.get(
+        "/api/plugins/radio/stations", params={"favorited_only": True}
+    ).json()
+    assert [s["id"] for s in favorites] == [keeper["id"]]
+
+
+def test_an_unfavorited_import_row_is_not_reclaimed_when_it_ages_out(web_client) -> None:
+    """An unfavorited FM row from the FCC import is NOT created_by_play, so
+    playing it once and letting it age out must leave the import intact."""
+    fm = _seed_station(
+        web_client, name="WJIM", source="fm", external_id="facility-1",
+        stream_url="http://wjim.example/simulcast.mp3",
+    )
+    unstarred = web_client.patch(
+        f"/api/plugins/radio/stations/{fm['id']}", json={"favorited": False}
+    )
+    assert unstarred.status_code == 200, unstarred.text
+
+    web_client.post("/api/plugins/radio/play", json={"station_id": fm["id"]})
+    for i in range(10):
+        _play_hit(web_client, f"g{i:02d}")
+
+    assert fm["id"] not in {s["id"] for s in _recent(web_client)}
+    still_there = web_client.get(
+        "/api/plugins/radio/stations", params={"source": "fm"}
+    ).json()
+    assert [s["name"] for s in still_there] == ["WJIM"]
+
+
+def test_recent_rejects_a_limit_above_the_strip_size(web_client) -> None:
+    resp = web_client.get("/api/plugins/radio/recent", params={"limit": 11})
+    assert resp.status_code == 422
+
+
+# ─── Favorites pagination + the instant-favorites search query ──────────
+
+
+def test_favorites_paginate_by_limit_and_offset(web_client) -> None:
+    for name in ("Alpha", "Bravo", "Charlie", "Delta", "Echo"):
+        _seed_station(web_client, name=name, external_id=f"uuid-{name.lower()}")
+
+    def page(offset: int) -> list[str]:
+        rows = web_client.get(
+            "/api/plugins/radio/stations",
+            params={"favorited_only": True, "limit": 2, "offset": offset},
+        ).json()
+        return [s["name"] for s in rows]
+
+    # Ordered by name, so the pages partition the set with no overlap.
+    assert page(0) == ["Alpha", "Bravo"]
+    assert page(2) == ["Charlie", "Delta"]
+    assert page(4) == ["Echo"]
+    assert page(6) == []
+    # /badge is what the page uses as the pagination total.
+    assert web_client.get("/api/plugins/radio/badge").json() == {"favorites": 5}
+
+
+def test_favorites_filter_matches_name_call_sign_or_city(web_client) -> None:
+    """Backs the search surface's instant "your favorites" group — one
+    cheap local query, no directory hop."""
+    _seed_station(web_client, name="KEXP Seattle", external_id="uuid-a",
+                  call_sign="KEXP")
+    _seed_station(web_client, name="Jazz24", external_id="uuid-b",
+                  call_sign="KNKX", market_city="Tacoma")
+
+    def q(term: str) -> list[str]:
+        rows = web_client.get(
+            "/api/plugins/radio/stations",
+            params={"favorited_only": True, "q": term, "limit": 8},
+        ).json()
+        return [s["name"] for s in rows]
+
+    assert q("seattle") == ["KEXP Seattle"]      # name, case-insensitive
+    assert q("knkx") == ["Jazz24"]               # call sign
+    assert q("tacoma") == ["Jazz24"]             # market city
+    assert q("nothinghere") == []

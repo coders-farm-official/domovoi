@@ -28,6 +28,8 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Dev install** — registering a plugin directory in place with `domovoi plugin dev <path>` for local development: same manifest validation as a real install, but no zip, no lockfile requirement, no trust screen. See [Plugin Development](PLUGIN_DEVELOPMENT.md).
 
+**Device** — a browser or phone that has introduced itself to the server (`POST /api/devices/register`), identified by the id it already mints for resume positions (`browser-…`, `android-…`) and carrying a human NAME you can edit. The name is what a *room queue* shows in its "added by" tag and what a *queue block* can match on. A device id is self-asserted — there is no credential behind it, by the same LAN-trust reasoning as the rest of the daily tier. Not to be confused with a *satellite*, which is a room, not a client.
+
 **Drop-in** — a live two-way audio call into a satellite room ("drop in on the kitchen"), relayed by the core as raw audio with no STT or TTS in the path. The receiving room either auto-answers or is asked first, depending on the configured accept mode. Usually room-to-room, but the Android app can also drop in *from your phone*: it joins the room's audio bridge over `WS /v1/dropin/{room_id}` as a call peer without registering as a satellite (see [API_REFERENCE.md](API_REFERENCE.md)).
 
 **Event bus** — the core's in-process publish/subscribe channel (`core.*` events, `plugin.<slug>.*` for plugins). Fire-and-forget with no delivery guarantee — anything that must survive a crash uses a database queue instead, and bus-driven cleanup is always backed by a periodic reconciliation sweep.
@@ -76,9 +78,13 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Provider plugin** — a separately installed plugin that connects Domovoi to an external media source, by acting as a *fulfiller*, a streaming search provider, or both. Core ships with none; the generic queue means you choose what, if anything, to install.
 
+**Queue block** — an admin rule barring a *device* from editing a *room queue*, scoped to one room or all of them. Matches on device id OR device name, so it survives both a rename and a reinstall. Household policy, not a security boundary: a device id is self-asserted, so this settles who controls the kitchen speaker rather than keeping out an attacker. Managing blocks needs the admin password, which is what stops them being lifted from the blocked device.
+
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
 **Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and the Satellites page address; each room owns one satellite and one *MPD* instance.
+
+**Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every client sees the same list and can add to, reorder, or clear it. Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 
 **Satellite** — the per-room listening device: a Raspberry Pi (Zero 2 W / Pi 4) with a ReSpeaker mic board, running the client in `satellite/`. It owns the local audio loop — wake word, VAD endpointing, *barge-in*, LEDs — and streams audio to the core over a WebSocket (`ws://<server>:6370`). Config lives in `~/.domovoi/config.toml` on the Pi; it runs as the `domovoi-satellite` systemd service.
 

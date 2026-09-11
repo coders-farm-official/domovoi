@@ -18,6 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -30,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +55,7 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -67,10 +72,20 @@ private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
  *   - "fm"     → /api/plugins/radio/stations?source=fm against the FCC import,
  *                numeric input becomes an exact frequency_mhz match.
  * Pagination is "full-page-looks-like-there's-more" — no total count.
+ *
+ * Favorites answer FIRST: typing debounce-queries the local favorites table
+ * (a cheap ILIKE over name/call sign/city) and shows the hits above the
+ * directory results, which still only load on submit — the station directory
+ * is a network hop and shouldn't be touched per keystroke. Matching favorites
+ * are scope-independent, because "where's that station I already saved" is
+ * the question being answered.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun StationSearchCard(onFavorite: suspend (Station) -> Unit) {
+fun StationSearchCard(
+    onFavorite: suspend (Station) -> Unit,
+    onPlay: (Station) -> Unit,
+) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
@@ -82,6 +97,25 @@ fun StationSearchCard(onFavorite: suspend (Station) -> Unit) {
     var offset by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var submitted by remember { mutableStateOf(false) }
+    var favMatches by remember { mutableStateOf<List<Station>>(emptyList()) }
+
+    // Instant favorites. LaunchedEffect(q) cancels the previous coroutine on
+    // each keystroke, so the delay IS the debounce and a superseded response
+    // can never overwrite a newer one.
+    LaunchedEffect(q) {
+        val query = q.trim()
+        if (query.isEmpty()) {
+            favMatches = emptyList()
+            return@LaunchedEffect
+        }
+        delay(220)
+        favMatches = runCatching {
+            app.api.get(
+                "/api/plugins/radio/stations?favorited_only=true" +
+                    "&q=${enc(query)}&limit=8",
+            ).decode<List<Station>>()
+        }.getOrDefault(emptyList())   // degrade quietly; the directory still works
+    }
 
     suspend fun doSearch(newOffset: Int, queryText: String) {
         if (scopeSel == "online" && queryText.isEmpty() && country.trim().isEmpty()) {
@@ -199,6 +233,38 @@ fun StationSearchCard(onFavorite: suspend (Station) -> Unit) {
             }
         }
 
+        // Matching favorites — answered locally, so they're on screen before
+        // the directory request has even been sent.
+        if (favMatches.isNotEmpty()) {
+            HorizontalDivider(color = Domovoi.colors.borderSoft)
+            Column(Modifier.fillMaxWidth().background(Domovoi.colors.sunken)) {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Star, contentDescription = null,
+                        tint = Domovoi.colors.brand, modifier = Modifier.size(11.dp),
+                    )
+                    Text(
+                        "your favorites",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${favMatches.size} match" + if (favMatches.size == 1) "" else "es",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgFaint,
+                    )
+                }
+                favMatches.forEach { s -> FavoriteMatchRow(s, onPlay) }
+                Spacer(Modifier.padding(bottom = 6.dp))
+            }
+        }
+
         // Tag chip row — only meaningful for online (radio-browser tags).
         if (scopeSel == "online" && !loading && !submitted) {
             FlowRow(
@@ -257,7 +323,7 @@ fun StationSearchCard(onFavorite: suspend (Station) -> Unit) {
             HorizontalDivider(color = Domovoi.colors.borderSoft)
             Column(Modifier.fillMaxWidth()) {
                 results.forEach { hit ->
-                    SearchResultRow(hit, scopeSel, onFavorite)
+                    SearchResultRow(hit, scopeSel, onFavorite, onPlay)
                     HorizontalDivider(color = Domovoi.colors.borderSoft)
                 }
             }
@@ -319,6 +385,51 @@ private fun ScopeButton(label: String, sub: String, selected: Boolean, onClick: 
     }
 }
 
+/* ---- Matching-favorite row (inside the search surface) ----------------------- */
+
+/** Already saved, so there's nothing to favorite here — the whole row plays. */
+@Composable
+private fun FavoriteMatchRow(s: Station, onPlay: (Station) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onPlay(s) }
+            .padding(horizontal = 16.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            if (s.source == "fm") Icons.Filled.CellTower else Icons.Filled.Radio,
+            contentDescription = null,
+            tint = Domovoi.colors.fgMuted, modifier = Modifier.size(12.dp),
+        )
+        Text(
+            s.name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = Domovoi.colors.fg,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Text(
+            listOfNotNull(
+                if (s.source == "fm" && s.frequency_mhz != null) {
+                    "${fmtFreq(s.frequency_mhz)} FM"
+                } else {
+                    s.call_sign ?: s.country_code ?: "online"
+                },
+                s.now_playing,
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = Domovoi.colors.fgFaint,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            Icons.Filled.PlayArrow, contentDescription = "play",
+            tint = Domovoi.colors.brand, modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
 /* ---- Search result row -------------------------------------------------------- */
 
 @Composable
@@ -326,6 +437,7 @@ private fun SearchResultRow(
     hit: Station,
     scopeSel: String,
     onFavorite: suspend (Station) -> Unit,
+    onPlay: (Station) -> Unit,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -372,8 +484,12 @@ private fun SearchResultRow(
         }
     }
 
+    // The row plays; only the star favorites. Keeping those apart is the
+    // point — a station you just want to hear shouldn't land in Favorites
+    // (and on the sampler's poll schedule) to be heard.
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable { onPlay(hit) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -437,7 +553,18 @@ private fun SearchResultRow(
                 )
             }
         }
-        Pill(if (favorited) "saved" else "tap star", if (favorited) Tone.Brand else Tone.Idle)
+        if (favorited) Pill("saved", Tone.Brand)
+        IconButton(
+            onClick = { onPlay(hit) },
+            enabled = stationPlayable(hit),
+        ) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "play ${hit.name}",
+                tint = if (stationPlayable(hit)) Domovoi.colors.brand else Domovoi.colors.fgSubtle,
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 

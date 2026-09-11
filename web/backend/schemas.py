@@ -132,6 +132,15 @@ class NowPlaying(BaseModel):
     source: str | None = None
     source_url: str | None = None
     source_ref: str | None = None
+    # MPD songid of the playing queue entry — the key the room-queue
+    # provenance table is on, so the card and the queue agree on which
+    # entry they're talking about. Null when nothing is playing.
+    song_id: int | None = None
+    # Name of the device that added this entry to the room's queue, when we
+    # have a record of it. Null for voice-added entries, casts that predate
+    # the feature, and anything that reached MPD from outside Domovoi — the
+    # UI renders nothing rather than guessing.
+    added_by: str | None = None
 
 
 class FavoriteNowPlayingResult(BaseModel):

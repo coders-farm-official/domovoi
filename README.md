@@ -266,6 +266,8 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Barge-in (interrupt Domovoi mid-sentence) | ✅ | — | — |
 | Intercom & drop-in between rooms | ✅ initiate & receive | — | ✅ drop into a room from your phone |
 | Music playback | ✅ in-room via MPD | ✅ full web player | ✅ native local player |
+| Edit a room's shared queue (reorder, drop, clear) | voice: play / skip / stop | ✅ drag to reorder | ✅ move & remove |
+| Browse & organise files across every library | — | ✅ drag and drop to move | ✅ move via a destination picker |
 | Library, playlists, podcasts, audiobooks, news | voice control | ✅ full management | ✅ dashboard parity |
 | Save music, podcasts & audiobooks to your device | — | ✅ browser download | ✅ via DownloadManager |
 | Calendar, documents, people & voice profiles | voice where it makes sense | ✅ | ✅ |
@@ -286,6 +288,13 @@ The differences are deliberate:
   can be installed, and installs are admin-gated behind an explicit trust
   screen. It's also where you record, train, and deploy custom wake words and
   edit any satellite's settings remotely.
+- **The room queue belongs to the room, not to a device.** Each client also
+  has its own private player queue, but the queue a room's speaker plays from
+  is shared: anyone can add to it, reorder it, or drop a track, and every
+  entry is tagged with the device that queued it. Devices name themselves in
+  Settings, and an admin can take queue editing away from a named device —
+  per room or everywhere — which is the answer to one household member
+  commandeering the kitchen.
 - **The Android app** mirrors the dashboard plus a native music player. Its
   screens are **capability-gated**: it asks the server what's installed and
   only renders screens for capabilities that exist — install the radio

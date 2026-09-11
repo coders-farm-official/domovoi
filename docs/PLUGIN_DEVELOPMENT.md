@@ -1163,10 +1163,10 @@ the event and makes its own decisions.
 detections **and** runs the reconciliation sweep that clears library soft
 refs that no longer resolve. The bus is latency; the sweep is truth.
 
-### 5.5 Migrations (`migrations/V001__radio_schema.sql`)
+### 5.5 Migrations (`migrations/V001__radio_schema.sql`, `V002__recent_plays.sql`)
 
 Three tables in `plugin_radio` — `radio_stations`, `radio_detections`,
-`track_fingerprints` — plus targeted indexes. The rules it demonstrates:
+`track_fingerprints` — plus targeted indexes. The rules V001 demonstrates:
 
 * Unqualified names (the runner sets `search_path = plugin_radio, public`).
 * **No foreign keys into core tables**: `library_track_id` is a soft
@@ -1176,10 +1176,23 @@ Three tables in `plugin_radio` — `radio_stations`, `radio_detections`,
   ('online','fm')`); sets that have already churned once are app-validated
   instead (`fingerprint_source`).
 
+`V002` is the worked example of **adding to a shipped schema**: append-only,
+gapless, never editing V001 — the runner checksums applied files, so an edit
+in place is a boot failure rather than an upgrade. It adds `last_played_at`
++ `created_by_play` for the play-without-favoriting flow, and it shows the
+shape of a column that exists to make a row *reclaimable*: `created_by_play`
+marks a station persisted only because someone played it, so the trim can
+delete it once it ages out of the Recent strip — while leaving alone the rows
+that are merely unfavorited (an FCC import, a since-unstarred favorite),
+which are indistinguishable if you only test `NOT favorited`.
+
 ### 5.6 `web.py` and the dashboard page
 
 The web router serves search (proxying the station directory), station CRUD,
-a detections feed with cursor pagination, the sidebar badge, and a browser
+`POST /play` (resolve-or-create + stamp, deliberately NOT a favorite), a
+`GET /recent` strip the server itself keeps trimmed to ten, a detections feed
+with cursor pagination, the sidebar badge (which the page reuses as its
+favorites-pagination total, so there's no second count query), and a browser
 stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
 (FCC import, simulcast resolve) are **proxied to the plugin's own core

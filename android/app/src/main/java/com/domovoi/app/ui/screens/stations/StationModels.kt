@@ -33,6 +33,18 @@ data class Station(
     // headers after several polls ("no live metadata").
     val icy_supported: Boolean? = null,
     val last_sampled_at: String? = null,
+    // Recency (plugin V002). `last_played_at` sorts the Recent strip;
+    // `created_by_play` marks a row that exists only because it was played
+    // — never favorited, reclaimed server-side when it ages out of the 10.
+    val last_played_at: String? = null,
+    val created_by_play: Boolean = false,
+)
+
+/** GET /api/plugins/radio/badge — the favorites total, reused here as the
+ *  page count for favorites pagination (no separate count query). */
+@Serializable
+data class StationsBadge(
+    val favorites: Int = 0,
 )
 
 @Serializable

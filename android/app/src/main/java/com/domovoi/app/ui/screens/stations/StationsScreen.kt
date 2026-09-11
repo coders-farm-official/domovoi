@@ -17,23 +17,30 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,7 +58,6 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
-import com.domovoi.app.player.PlayItem
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
@@ -68,6 +74,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+/** Favorites page size — the server pages them; /badge supplies the total. */
+private const val FAVORITES_PAGE_SIZE = 20
+
 /**
  * Stations page — radio search + favorites + detail w/ detection feed.
  * Android analog of web/static/stations.jsx.
@@ -78,12 +87,47 @@ fun StationsScreen() {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     var selectedId by remember { mutableStateOf<Long?>(null) }
+    var favPage by remember { mutableIntStateOf(0) }
 
-    val favState = rememberApi(eventTypes = setOf("radio.stations.changed")) {
-        it.api.get("/api/plugins/radio/stations?favorited_only=true&limit=500").decode<List<Station>>()
+    // Favorites page server-side; `favPage` is a rememberApi key so changing
+    // it refetches. The total comes from /badge (already counting favorites
+    // for the sidebar) rather than a second count query.
+    val favState = rememberApi(favPage, eventTypes = setOf("radio.stations.changed")) {
+        it.api.get(
+            "/api/plugins/radio/stations?favorited_only=true" +
+                "&limit=$FAVORITES_PAGE_SIZE&offset=${favPage * FAVORITES_PAGE_SIZE}",
+        ).decode<List<Station>>()
+    }
+    val badgeState = rememberApi(eventTypes = setOf("radio.stations.changed")) {
+        it.api.get("/api/plugins/radio/badge").decode<StationsBadge>()
+    }
+    val recentState = rememberApi(eventTypes = setOf("radio.stations.changed")) {
+        it.api.get("/api/plugins/radio/recent").decode<List<Station>>()
     }
     val favorites = favState.data ?: emptyList()
+    val recent = recentState.data ?: emptyList()
+    val favTotal = badgeState.data?.favorites
     val selected = favorites.firstOrNull { it.id == selectedId }
+
+    val favPages = favTotal?.let {
+        maxOf(1, (it + FAVORITES_PAGE_SIZE - 1) / FAVORITES_PAGE_SIZE)
+    }
+    val hasPrevFav = favPage > 0
+    // With a known total, trust it; otherwise fall back to the page-is-full
+    // heuristic the search surface uses.
+    val hasNextFav = if (favTotal != null) {
+        (favPage + 1) * FAVORITES_PAGE_SIZE < favTotal
+    } else {
+        favorites.size == FAVORITES_PAGE_SIZE
+    }
+
+    // Unfavoriting the last row on the last page would otherwise strand the
+    // user on an empty page they can only leave with prev.
+    LaunchedEffect(favState.loading, favorites.size, favPage) {
+        if (!favState.loading && favorites.isEmpty() && favPage > 0) favPage -= 1
+    }
+
+    val playStation = rememberStationPlayer { recentState.refresh() }
 
     val compact = currentWindowAdaptiveInfo()
         .windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.COMPACT
@@ -113,6 +157,7 @@ fun StationsScreen() {
                     toast("forgot ${st.name}")
                     if (selectedId == st.id) selectedId = null
                     favState.refresh()
+                    recentState.refresh()
                 }
                 .onFailure { toast("forget failed: ${it.message}") }
         }
@@ -142,7 +187,8 @@ fun StationsScreen() {
         item {
             PageHeader(
                 "Stations",
-                "${favorites.size} favorited · sampler runs in the background",
+                "${favTotal ?: favorites.size} favorited · ${recent.size} recent · " +
+                    "tap a station to play it",
             ) {
                 OutlinedButton(onClick = { fccImport() }) {
                     Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -152,51 +198,191 @@ fun StationsScreen() {
             }
         }
 
-        item { StationSearchCard(onFavorite) }
+        item { StationSearchCard(onFavorite, playStation) }
 
         item {
+            val recentCard: @Composable (Modifier) -> Unit = { m ->
+                RecentCard(
+                    modifier = m,
+                    recent = recent,
+                    loading = recentState.loading,
+                    onPlay = playStation,
+                    onChanged = { favState.refresh(); recentState.refresh() },
+                )
+            }
+            val favoritesCard: @Composable (Modifier) -> Unit = { m ->
+                FavoritesCard(
+                    modifier = m,
+                    favorites = favorites,
+                    loading = favState.loading,
+                    error = favState.error,
+                    refresh = favState.refresh,
+                    total = favTotal,
+                    page = favPage,
+                    pages = favPages,
+                    hasPrev = hasPrevFav,
+                    hasNext = hasNextFav,
+                    onPage = { favPage = it },
+                    selectedId = selectedId,
+                    onSelect = { selectedId = it },
+                    onPlay = playStation,
+                    onForget = { forget(it) },
+                )
+            }
+
             if (compact) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    FavoritesCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        favorites = favorites,
-                        loading = favState.loading,
-                        error = favState.error,
-                        refresh = favState.refresh,
-                        selectedId = selectedId,
-                        onSelect = { selectedId = it },
-                        onForget = { forget(it) },
-                    )
+                    recentCard(Modifier.fillMaxWidth())
+                    favoritesCard(Modifier.fillMaxWidth())
                     if (selected != null) {
                         StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth())
                     }
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    FavoritesCard(
-                        modifier = Modifier.weight(0.42f),
-                        favorites = favorites,
-                        loading = favState.loading,
-                        error = favState.error,
-                        refresh = favState.refresh,
-                        selectedId = selectedId,
-                        onSelect = { selectedId = it },
-                        onForget = { forget(it) },
-                    )
+                    Column(
+                        Modifier.weight(0.42f),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        recentCard(Modifier.fillMaxWidth())
+                        favoritesCard(Modifier.fillMaxWidth())
+                    }
                     Box(Modifier.weight(0.58f)) {
                         if (selected != null) {
                             StationDetailCard(selected, favState.refresh, Modifier.fillMaxWidth())
                         } else {
                             DomovoiCard(Modifier.fillMaxWidth()) {
                                 EmptyState(
-                                    "pick a favorite",
-                                    "or search above to find stations",
+                                    "tap a station to play it",
+                                    "playing doesn't favorite — the star does that",
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/* ---- Recent card (last 10 played, server-trimmed) ---------------------------- */
+
+/**
+ * Trimmed to 10 rows by the plugin, not by this list — there is no longer
+ * history to page through, by design. A row can be a favorite or a station
+ * played once out of search; the star tells them apart and promotes the latter.
+ */
+@Composable
+private fun RecentCard(
+    modifier: Modifier,
+    recent: List<Station>,
+    loading: Boolean,
+    onPlay: (Station) -> Unit,
+    onChanged: () -> Unit,
+) {
+    DomovoiCard(modifier, padding = 0) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Filled.History, contentDescription = null,
+                tint = Domovoi.colors.fgMuted, modifier = Modifier.size(13.dp),
+            )
+            Text(
+                "Recent",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = Domovoi.colors.fg,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "last ${recent.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgFaint,
+            )
+        }
+        HorizontalDivider(color = Domovoi.colors.borderSoft)
+        when {
+            loading && recent.isEmpty() -> LoadingState()
+            recent.isEmpty() -> EmptyState(
+                "nothing played yet",
+                "tap any station to start it",
+            )
+            else -> Column(Modifier.fillMaxWidth()) {
+                recent.forEach { s ->
+                    RecentRow(s, onPlay, onChanged)
+                    HorizontalDivider(color = Domovoi.colors.borderSoft)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentRow(s: Station, onPlay: (Station) -> Unit, onChanged: () -> Unit) {
+    val app = LocalApp.current
+    val toast = LocalToast.current
+    val scope = rememberCoroutineScope()
+    var busy by remember(s.id) { mutableStateOf(false) }
+
+    // Recent rows are already persisted, so favoriting is always a PATCH —
+    // no POST /stations path to worry about here.
+    fun toggleFavorite() {
+        if (busy) return
+        scope.launch {
+            busy = true
+            runCatching {
+                app.api.patch(
+                    "/api/plugins/radio/stations/${s.id}",
+                    buildJsonObject { put("favorited", !s.favorited) },
+                )
+            }.onSuccess {
+                toast(if (s.favorited) "unfavorited ${s.name}" else "favorited ${s.name}")
+                onChanged()
+            }.onFailure { toast("favorite failed: ${it.message}") }
+            busy = false
+        }
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier.weight(1f).clickable { onPlay(s) }
+                .padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Icon(
+                if (s.source == "fm") Icons.Filled.CellTower else Icons.Filled.Radio,
+                contentDescription = null,
+                tint = Domovoi.colors.fgMuted, modifier = Modifier.size(12.dp),
+            )
+            Text(
+                s.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Domovoi.colors.fg,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            s.last_played_at?.let {
+                Text(
+                    relTime(it),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgFaint,
+                )
+            }
+        }
+        IconButton(onClick = { toggleFavorite() }, enabled = !busy) {
+            Icon(
+                if (s.favorited) Icons.Filled.Star else Icons.Filled.StarBorder,
+                contentDescription = if (s.favorited) "unfavorite" else "favorite",
+                tint = if (s.favorited) Domovoi.colors.brand else Domovoi.colors.fgSubtle,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }
@@ -210,8 +396,15 @@ private fun FavoritesCard(
     loading: Boolean,
     error: String?,
     refresh: () -> Unit,
+    total: Int?,
+    page: Int,
+    pages: Int?,
+    hasPrev: Boolean,
+    hasNext: Boolean,
+    onPage: (Int) -> Unit,
     selectedId: Long?,
     onSelect: (Long) -> Unit,
+    onPlay: (Station) -> Unit,
     onForget: (Station) -> Unit,
 ) {
     DomovoiCard(modifier, padding = 0) {
@@ -232,7 +425,7 @@ private fun FavoritesCard(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                "${favorites.size}",
+                "${total ?: favorites.size}",
                 style = MaterialTheme.typography.labelSmall,
                 color = Domovoi.colors.fgFaint,
             )
@@ -241,6 +434,10 @@ private fun FavoritesCard(
         when {
             loading && favorites.isEmpty() -> LoadingState()
             error != null && favorites.isEmpty() -> ErrorState(error, refresh)
+            favorites.isEmpty() && page > 0 -> EmptyState(
+                "nothing on this page",
+                "go back a page",
+            )
             favorites.isEmpty() -> EmptyState(
                 "no favorites yet",
                 "search and tap the star to start collecting",
@@ -251,10 +448,34 @@ private fun FavoritesCard(
                         s = s,
                         active = selectedId == s.id,
                         onSelect = { onSelect(s.id) },
+                        onPlay = onPlay,
                         onForget = { onForget(s) },
                         refresh = refresh,
                     )
                 }
+            }
+        }
+        if (hasPrev || hasNext) {
+            Row(
+                Modifier.fillMaxWidth().background(Domovoi.colors.sunken)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { onPage((page - 1).coerceAtLeast(0)) },
+                    enabled = hasPrev && !loading,
+                ) { Text("prev") }
+                Text(
+                    if (pages != null) "page ${page + 1} / $pages" else "page ${page + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgMuted,
+                )
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(
+                    onClick = { onPage(page + 1) },
+                    enabled = hasNext && !loading,
+                ) { Text("next") }
             }
         }
     }
@@ -267,6 +488,7 @@ private fun FavoriteRow(
     s: Station,
     active: Boolean,
     onSelect: () -> Unit,
+    onPlay: (Station) -> Unit,
     onForget: () -> Unit,
     refresh: () -> Unit,
 ) {
@@ -278,17 +500,6 @@ private fun FavoriteRow(
         mutableStateOf((s.sample_interval_sec ?: 300).toString())
     }
     var confirmForget by remember(s.id) { mutableStateOf(false) }
-
-    fun playHere() {
-        // FM/SDR rows without a resolved simulcast have nothing the app can
-        // stream — the radio proxy would 409. Be honest up front.
-        if ((s.source == "fm" || s.source == "sdr") && s.stream_url.isNullOrBlank()) {
-            toast("${s.name} is FM/SDR with no stream URL — play it through a room instead")
-            return
-        }
-        app.player.playItems(listOf(PlayItem.fromStation(s.id, s.name)))
-        toast("streaming ${s.name} here")
-    }
 
     fun saveInterval() {
         val v = draft.trim().toIntOrNull()
@@ -314,9 +525,11 @@ private fun FavoriteRow(
         Modifier.fillMaxWidth()
             .background(if (active) Domovoi.colors.brandSoft else Color.Transparent),
     ) {
+        // The row PLAYS; details (detections + stream settings) live behind
+        // the chevron. Common action one tap, uncommon action still one tap.
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onSelect)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().clickable { onPlay(s) }
+                .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -355,6 +568,13 @@ private fun FavoriteRow(
                 if (s.last_sampled_at != null) Tone.Ok else Tone.Idle,
                 live = s.last_sampled_at != null,
             )
+            IconButton(onClick = onSelect, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    if (active) Icons.Filled.KeyboardArrowDown else Icons.Filled.ChevronRight,
+                    contentDescription = if (active) "hide details" else "details and detections",
+                    tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp),
+                )
+            }
         }
 
         if (active) {
@@ -378,7 +598,7 @@ private fun FavoriteRow(
                     Button(onClick = { saveInterval() }) { Text("save") }
                     OutlinedButton(onClick = { editing = false }) { Text("cancel") }
                 } else {
-                    OutlinedButton(onClick = { playHere() }) {
+                    OutlinedButton(onClick = { onPlay(s) }) {
                         Icon(Icons.Filled.Headset, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("play here")

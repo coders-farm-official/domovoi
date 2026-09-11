@@ -136,6 +136,14 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
                 || (np.song.file?.startsWith('http') ? 'online stream' : np.song.file?.split('/').pop())
                 || 'unknown'}
               {np.song.artist && <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}> · {np.song.artist}</span>}
+              {/* Who queued this, when we know. Greyed and appended rather
+                  than given its own line — "added by" is a footnote, not a
+                  headline, and it must not reflow the card when absent. */}
+              {np.added_by && (
+                <span style={{ color: 'var(--fg-faint)', fontWeight: 400, fontSize: 11 }}>
+                  {' · added by '}{np.added_by}
+                </span>
+              )}
             </div>
           ) : (
             <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>nothing playing in {np.room_id}</div>
@@ -511,6 +519,199 @@ const JobsTab = ({ jobs, availability, loading, rooms, onCancel, fire, refresh }
         </table>
       )}
     </>
+  );
+};
+
+/* ---- Room queue tab --------------------------------------- */
+/*
+ * The room's LIVE queue, editable: reorder by drag, drop an entry, clear it.
+ * Unlike the Player tab (this browser's own queue) this is the queue the
+ * room's speaker plays from — MPD's — so every client sees the same list and
+ * edits land for everyone.
+ *
+ * Each row carries an "added by <device>" tag when we know who queued it.
+ * Deliberately quiet: it lives on the secondary line, greyed, and simply
+ * isn't rendered for entries with no record (voice commands, casts from
+ * before devices had names). It is NEVER the reason a row is taller.
+ *
+ * An admin can block a device from editing a queue. The server is the
+ * authority (every edit is re-checked), but the read tells us up front, so a
+ * blocked device gets disabled controls and a plain explanation instead of a
+ * 403 on first click.
+ */
+const fmtQueueDur = (sec) => {
+  if (sec == null) return '—';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
+
+const QueueTab = ({ rooms, nowPlaying, fire }) => {
+  // Default to a room that's actually playing — that's the queue you came
+  // here to look at.
+  const playingRoom = (nowPlaying.find(np => np.state === 'play') || {}).room_id;
+  const [room, setRoom] = React.useState(playingRoom || rooms[0] || null);
+  React.useEffect(() => {
+    if (!room && (playingRoom || rooms[0])) setRoom(playingRoom || rooms[0]);
+  }, [playingRoom, rooms.join(','), room]);
+
+  const [order, setOrder] = React.useState(null);   // local drag order, or null
+  const [busy, setBusy] = React.useState(false);
+  const dragFrom = React.useRef(null);
+
+  const deviceId = DeviceIdentity.id();
+  const { data: queue, loading, refresh } = useApiObject(
+    room ? `/api/music/queue/${encodeURIComponent(room)}`
+           + `?device_id=${encodeURIComponent(deviceId)}` : null,
+    { eventTypes: ['music.now_playing.changed'] },
+  );
+
+  // Drop the optimistic order whenever the server's list changes underneath
+  // us (a track advanced, or someone else edited) — otherwise a stale local
+  // order would keep re-rendering over the truth.
+  const serverKey = (queue?.items || []).map(i => i.song_id).join(',');
+  React.useEffect(() => { setOrder(null); }, [serverKey, room]);
+
+  if (rooms.length === 0) {
+    return <Empty glyph="headphones" title="no rooms provisioned yet"
+                  sub="connect a satellite to bring its room online"/>;
+  }
+
+  const items = order || queue?.items || [];
+  const editable = queue ? queue.editable !== false : true;
+
+  const onDrop = async (toIdx) => {
+    const from = dragFrom.current;
+    dragFrom.current = null;
+    if (from == null || from === toIdx || !editable) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(toIdx, 0, moved);
+    setOrder(next);                       // optimistic
+    try {
+      await apiPost(`/api/music/queue/${encodeURIComponent(room)}/move`, {
+        song_id: moved.song_id, to_position: toIdx, device_id: deviceId,
+      });
+      refresh();
+    } catch (e) {
+      setOrder(null);                     // revert to the server's truth
+      fire(`move failed: ${apiErrorText(e)}`);
+    }
+  };
+
+  const removeItem = async (item) => {
+    setBusy(true);
+    try {
+      await apiPost(`/api/music/queue/${encodeURIComponent(room)}/remove`, {
+        song_ids: [item.song_id], device_id: deviceId,
+      });
+      fire(`removed "${item.title || 'track'}"`);
+      refresh();
+    } catch (e) {
+      fire(`remove failed: ${apiErrorText(e)}`);
+    } finally { setBusy(false); }
+  };
+
+  const clearQueue = async () => {
+    if (!window.confirm(`Clear ${room}'s queue and stop playback?`)) return;
+    setBusy(true);
+    try {
+      await apiPost(`/api/music/queue/${encodeURIComponent(room)}/clear`,
+                    { device_id: deviceId });
+      fire(`cleared ${room}'s queue`);
+      refresh();
+    } catch (e) {
+      fire(`clear failed: ${apiErrorText(e)}`);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8,
+                    flexWrap: 'wrap', borderBottom: '1px solid var(--border-soft)' }}>
+        <span className="label">room</span>
+        {rooms.map(r => (
+          <button key={r} onClick={() => setRoom(r)}
+                  style={{ font: 'inherit', fontSize: 12, cursor: 'pointer',
+                           padding: '4px 10px', borderRadius: 'var(--r-full)',
+                           border: '1px solid var(--border)',
+                           background: room === r ? 'var(--brand-soft)' : 'var(--card)',
+                           color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
+        ))}
+        <span style={{ flex: 1 }}/>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+          {items.length} track{items.length === 1 ? '' : 's'}
+        </span>
+        {items.length > 0 && editable && (
+          <Button icon="trash-2" disabled={busy} onClick={clearQueue}>clear</Button>
+        )}
+      </div>
+
+      {!editable && queue?.blocked_reason && (
+        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8,
+                      background: 'var(--warn-soft, var(--sunken))',
+                      borderBottom: '1px solid var(--border-soft)' }}>
+          <Icon name="lock" size={13}/>
+          <span style={{ fontSize: 12, color: 'var(--fg)' }}>
+            {queue.blocked_reason}. You can watch the queue but not change it.
+          </span>
+        </div>
+      )}
+
+      {loading && items.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading queue…</div>
+      ) : items.length === 0 ? (
+        <Empty glyph="headphones" title="queue is empty"
+               sub={`cast from the Player tab, or say "play something" in ${room}`}/>
+      ) : (
+        <div>
+          {items.map((item, idx) => (
+            <div key={item.song_id}
+                 draggable={editable}
+                 onDragStart={() => { dragFrom.current = idx; }}
+                 onDragOver={(e) => { if (editable) e.preventDefault(); }}
+                 onDrop={() => onDrop(idx)}
+                 style={{ display: 'grid',
+                          gridTemplateColumns: 'auto 26px 1fr auto auto',
+                          gap: 10, alignItems: 'center',
+                          padding: '9px 16px',
+                          borderTop: '1px solid var(--border-soft)',
+                          background: item.playing ? 'var(--brand-soft)' : 'transparent',
+                          cursor: editable ? 'grab' : 'default' }}>
+              <span style={{ color: 'var(--fg-faint)', display: 'inline-flex' }}>
+                <Icon name={editable ? 'grip-vertical' : 'minus'} size={13}/>
+              </span>
+              {item.playing
+                ? <Icon name="volume-2" size={13} style={{ color: 'var(--brand-press)' }}/>
+                : <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)',
+                                                  textAlign: 'right' }}>{idx + 1}</span>}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: item.playing ? 600 : 400,
+                              overflow: 'hidden', textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap' }}>
+                  {item.title || item.file || 'unknown'}
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)',
+                                               overflow: 'hidden', textOverflow: 'ellipsis',
+                                               whiteSpace: 'nowrap' }}>
+                  {item.artist || 'unknown artist'}
+                  {item.added_by && (
+                    <span style={{ color: 'var(--fg-faint)' }}> · added by {item.added_by}</span>
+                  )}
+                </div>
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                {fmtQueueDur(item.duration_sec)}
+              </span>
+              {editable
+                ? <IconButton name="x" title="remove from queue" disabled={busy}
+                              onClick={() => removeItem(item)}/>
+                : <span style={{ width: 28 }}/>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -1181,6 +1382,10 @@ const MusicPage = () => {
   const tabs = [
     { id: 'library',   label: 'Library',   count: libraryTotal ?? undefined },
     { id: 'player',    label: 'Player' },
+    // Room queue: what the SPEAKERS play from, as opposed to Player (this
+    // browser's own queue). Sits next to Player so the distinction is
+    // visible rather than explained.
+    { id: 'queue',     label: 'Room queue' },
     { id: 'playlists', label: 'Playlists', count: playlists.length || undefined },
     { id: 'stats',     label: 'Stats' },
     { id: 'jobs',      label: 'Jobs',      count: activeJobs || undefined },
@@ -1228,6 +1433,7 @@ const MusicPage = () => {
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'player'    && <NowPlayingPanel/>}
+        {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} fire={fire}/>}
         {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={(p) => onPlayPlaylist(p, rooms[0] || 'kitchen')} fire={fire}/>}
         {tab === 'stats'     && <StatsTab     stats={stats} loading={!stats}/>}
         {tab === 'jobs'      && <JobsTab jobs={acquisitions} availability={acqData} loading={acqLoading} rooms={rooms} onCancel={onCancelAcquisition} fire={fire} refresh={refreshAcquisitions}/>}

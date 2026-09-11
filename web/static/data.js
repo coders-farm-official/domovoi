@@ -214,6 +214,22 @@ const apiFetch = (path, opts = {}) => {
   return _sendWithAuthRetry(send, { method: opts.method, body: opts.body });
 };
 
+/* The human-readable half of a rejected apiFetch.
+ *
+ * `err.detail` is the PARSED RESPONSE BODY, not a string — FastAPI's is
+ * `{detail: "..."}`, so the useful text is one level down. Reaching for
+ * `e.detail` directly renders "[object Object]" in a toast, which is how this
+ * helper came to exist. Falls back to the message (which already carries
+ * "<status> <statusText>: <body>") and finally to String(e). */
+const apiErrorText = (e, max = 160) => {
+  const nested = e && e.detail && e.detail.detail;
+  const text = (typeof nested === 'string' && nested)
+    || (nested && JSON.stringify(nested))
+    || (e && e.message)
+    || String(e);
+  return String(text).slice(0, max);
+};
+
 const apiGet = (path) => apiFetch(path);
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
@@ -552,6 +568,92 @@ const useSidebarCounts = () => {
   return counts;
 };
 
+// ─── Device identity ────────────────────────────────────────────────
+// This browser's stable id + human name. The id is the SAME one spoken
+// audio has always used for resume positions ('domovoi-client-id'), so a
+// device is one device everywhere — renaming it in Settings relabels its
+// room-queue entries, and an admin block on it covers both features.
+//
+// register() is fire-and-forget on boot: it upserts the row, refreshes
+// last_seen_at, and seeds the name ONLY if the row is new (the server
+// COALESCEs), so this can run on every load without stomping a rename.
+
+const DeviceIdentity = (() => {
+  const ID_KEY = 'domovoi-client-id';
+  const NAME_KEY = 'domovoi-device-name';   // local echo, for instant render
+
+  const id = () => {
+    let v = null;
+    try { v = localStorage.getItem(ID_KEY); } catch {}
+    if (!v) {
+      v = 'browser-' + Math.random().toString(36).slice(2, 12);
+      try { localStorage.setItem(ID_KEY, v); } catch {}
+    }
+    return v;
+  };
+
+  /* A name a person will recognise in a queue, from what the browser will
+   * actually tell us. Deliberately coarse: userAgent parsing is a losing
+   * game, and this is only a SEED — the real answer is whatever the user
+   * types in Settings. */
+  const suggestedName = () => {
+    const ua = (navigator.userAgent || '');
+    const browser = /Edg\//.test(ua) ? 'Edge'
+      : /OPR\//.test(ua) ? 'Opera'
+      : /Firefox\//.test(ua) ? 'Firefox'
+      : /Chrome\//.test(ua) ? 'Chrome'
+      : /Safari\//.test(ua) ? 'Safari'
+      : 'Browser';
+    const os = /Windows/.test(ua) ? 'Windows'
+      : /Android/.test(ua) ? 'Android'
+      : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+      : /Mac OS X/.test(ua) ? 'macOS'
+      : /Linux/.test(ua) ? 'Linux'
+      : null;
+    return os ? `${browser} on ${os}` : browser;
+  };
+
+  const cachedName = () => {
+    try { return localStorage.getItem(NAME_KEY) || null; } catch { return null; }
+  };
+  const cacheName = (name) => {
+    try {
+      if (name) localStorage.setItem(NAME_KEY, name);
+      else localStorage.removeItem(NAME_KEY);
+    } catch {}
+  };
+
+  let registered = null;   // in-flight / resolved registration promise
+
+  const register = () => {
+    if (registered) return registered;
+    registered = apiPost('/api/devices/register', {
+      device_id: id(),
+      name: suggestedName(),
+      platform: 'browser',
+      user_agent: (navigator.userAgent || '').slice(0, 400),
+    }).then((row) => {
+      if (row && row.name) cacheName(row.name);
+      return row;
+    }).catch((e) => {
+      // Never fatal: the dashboard works unnamed, queue entries just show
+      // no "added by" tag. Retry on the next load.
+      console.warn('device register failed:', e);
+      registered = null;
+      return null;
+    });
+    return registered;
+  };
+
+  const rename = async (name) => {
+    const row = await apiPatch(`/api/devices/${encodeURIComponent(id())}`, { name });
+    if (row && row.name) cacheName(row.name);
+    return row;
+  };
+
+  return { id, name: cachedName, suggestedName, register, rename };
+})();
+
 // ─── Time helpers (page-local NOW vs reference NOW) ─────────────────
 // The skill's components.jsx exposes a frozen NOW for sample data.
 // The wired pages need wall-clock NOW so relative times tick.
@@ -570,7 +672,7 @@ const liveRelTime = (iso) => {
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
-  stateBus, ServerStore,
+  stateBus, ServerStore, DeviceIdentity, apiErrorText,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

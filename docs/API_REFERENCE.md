@@ -191,6 +191,14 @@ a spoken turn. Direct-play endpoints bypass the router, write only an
 `intents_log` row (transcript prefixed `[ui]`), and never fall through to an
 external streaming provider. All are **Open**.
 
+The `queue/*` endpoints are the exception to "music actions replace the
+queue": they edit the room's existing MPD queue in place. Entries are
+always addressed by MPD **songid**, never by position — a songid is stable
+for the life of a queue entry, so a concurrent reorder can't turn "remove
+entry 3" into "remove the wrong song". They know nothing about devices;
+the "added by" provenance and the device blocklist live in the web
+process (§3.5a).
+
 | Method & path | Request | Response / purpose |
 |---|---|---|
 | `POST /v1/admin/music/play` | `{room_id, query}` | Route `"play <query>"` through the full pipeline; dispatches the music-start frame to the room's Pi. Returns `{text, matched_handler, matched_path, music_action, online}`. |
@@ -198,6 +206,11 @@ external streaming provider. All are **Open**.
 | `POST /v1/admin/music/play-tracks` | `{room_id, track_ids: [..]}` (≤500) | Load an ordered queue of library tracks into the room's MPD and start playback (the browser player's "cast to room"). |
 | `POST /v1/admin/music/play-playlist` | `{room_id, playlist_id, shuffle?}` | Start a playlist (`playlist_id` 0 = the virtual Favorites). Ordered mode resumes from the saved position; stamps in-room playlist state so "next" stays in-playlist. |
 | `POST /v1/admin/music/{action}/{room_id}` | — | Transport controls; `action` ∈ `pause`, `resume`, `stop`, `skip`, `next`, `previous` (routed as the spoken equivalents). `400` for anything else. |
+| `GET /v1/admin/music/queue/{room_id}` | — | The room's live MPD queue in order: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec}], current_song_id}`. `502` MPD error. |
+| `POST /v1/admin/music/queue/{room_id}/add` | `{track_ids: [..]}` (≤500) | **Append** library tracks without clearing — the one music path that doesn't replace the queue. Starts playback when the room was idle with an empty queue. `{queued:[{song_id, file}], requested, started}`. `404` when MPD can't resolve any of them. |
+| `POST /v1/admin/music/queue/{room_id}/remove` | `{song_ids: [..]}` | Drop entries by songid. `{removed:[..], skipped:[..]}` — an id MPD no longer has is reported, not an error. |
+| `POST /v1/admin/music/queue/{room_id}/move` | `{song_id, to_position}` | Reorder. `404` when the id isn't in the queue any more. |
+| `POST /v1/admin/music/queue/{room_id}/clear` | — | Empty the queue and stop the room (dispatches the music-stop frame). |
 | `POST /v1/admin/library/reindex` | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
 | `POST /v1/admin/library/enrich` | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. |
 
@@ -275,6 +288,54 @@ ranges, and `*.local` origins only.
 | `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`. |
 | `POST /api/music/library/reindex` | Open | — | Proxy → core background reindex. |
 | `POST /api/music/library/enrich` | Open | — | Proxy → core background enrichment. |
+
+### 3.5a Music: the room queue (editable) and device names
+
+The room queue is MPD's, shared by every client — as opposed to each client's
+own player queue, which never leaves the device. This surface is what makes it
+editable, and what answers "who put this on?".
+
+Provenance lives in `room_queue_items`, keyed by `(room_id, MPD songid)`. The
+read prefers the device's CURRENT name and falls back to the snapshot taken at
+add time, so renaming a device relabels its queue entries while a device that
+has since been forgotten still shows the name it used. Entries with no record
+— voice commands, casts from before devices had names, anything that reached
+MPD from outside Domovoi — return `added_by: null`, and the UI renders nothing
+rather than guessing. `GET /api/music/now-playing` carries the same
+`song_id` + `added_by` pair for whatever each room is currently playing.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/music/queue/{room_id}` | Open | `?device_id=` | The queue with provenance joined: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec, added_by, added_by_device_id, added_at, playing}], current_song_id, editable, blocked_reason}`. Reading is **never** blocked — a blocked device still sees what's on, and `editable:false` + `blocked_reason` say why it can't change anything. Reaps provenance rows whose songid has left the queue. |
+| `POST /api/music/queue/{room_id}/add` | Open | `{track_ids:[..], device_id}` | Append, then stamp provenance. Proxy → core. `403` when the device is blocked here. |
+| `POST /api/music/queue/{room_id}/remove` | Open | `{song_ids:[..], device_id}` | Drop entries and their provenance rows. `403` when blocked. |
+| `POST /api/music/queue/{room_id}/move` | Open | `{song_id, to_position, device_id}` | Reorder. No DB write — provenance is keyed by songid, which is exactly why. `403` when blocked. |
+| `POST /api/music/queue/{room_id}/clear` | Open | `{device_id}` | Empty the queue and wipe the room's provenance. `403` when blocked. |
+| `GET /api/music/queue-blocks` | **Admin (read)** | — | Every block: `[{id, device_id, device_name, room_id, note, created_at}]`. `room_id: null` = every room. |
+| `POST /api/music/queue-blocks` | **Admin (mutation)** | `{device_id?, device_name?, room_id?, note?}` | Block a device from editing a queue. Needs at least one of id/name (`400` otherwise); `409` when that device is already blocked at that scope. |
+| `DELETE /api/music/queue-blocks/{id}` | **Admin (mutation)** | — | Unblock. `204`; `404` unknown id. |
+| `POST /api/devices/register` | Open | `{device_id, name?, platform?, user_agent?}` | Upsert this client's row and bump `last_seen_at`. Idempotent — clients call it every boot. `name` seeds the row only when it is NEW, so a client that always sends its platform default can't overwrite a chosen name. `400` malformed id. |
+| `PATCH /api/devices/{device_id}` | Open | `{name}` | Rename. Whitespace is collapsed so two names can't look identical yet block differently. `404` if the device has never registered. |
+| `GET /api/devices` | **Admin (read)** | `?limit=200` | The device roster, most-recently-seen first. Admin-gated: it's an inventory of what's on the network. Feeds the blocklist editor, so an admin picks a device from a list instead of typing an id. |
+
+`device_id` is **required** on every edit and optional only on the read. Not
+because it proves anything — it is self-asserted — but because a blocklist
+anyone evades by omitting the field is no control at all, and leaving it out is
+far easier than claiming someone else's id. A missing `device_id` on an edit is
+a `422`.
+
+A block matches on device **id** OR device **name**. Both matter: the id
+survives a rename (the obvious way to slip a block), the name survives a
+reinstall (new id, same household label). Creating a block from the roster
+fills both. A name block can only catch a device whose name the server knows —
+an id it has never seen has no name to compare, so it passes.
+
+**This is household policy, not a security boundary.** A `device_id` is
+self-asserted by the client over a trusted LAN, exactly like the rest of the
+daily tier, so someone determined can claim a different one. It reliably keeps
+a known device out of a queue; it is not a defence against an attacker.
+Managing blocks is admin-gated precisely so it can't be undone from the device
+it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### 3.6 People
 
@@ -453,6 +514,7 @@ every listing/serve/copy.
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). `404` missing · `413` cap · `400` traversal. |
 | `POST /api/files/upload` | multipart: `library_id`, `path`, `files[]` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `403` non-editable · `404` bad dest · `400` none saved. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
+| `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only · `404` missing target dir. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `409` source not removable / target not importable · `410` ejected source · `404` missing. |
 
 After a successful write to an indexed library (`reindex_kind == "music"`) the

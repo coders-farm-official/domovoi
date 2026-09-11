@@ -8,23 +8,52 @@
  * window global.
  *
  * Data sources (all under the plugin's own API prefix):
- *   * GET    /api/plugins/radio/stations?favorited_only=true   — favorites
+ *   * GET    /api/plugins/radio/stations?favorited_only=true   — favorites (paginated)
+ *   * GET    /api/plugins/radio/recent                         — last 10 played
+ *   * GET    /api/plugins/radio/badge                          — favorites total
  *   * GET    /api/plugins/radio/search?q=…                     — search proxy
+ *   * POST   /api/plugins/radio/play                           — play, no favorite
  *   * POST   /api/plugins/radio/stations                       — favorite a hit
  *   * PATCH  /api/plugins/radio/stations/{id}                  — interval / unfavorite
  *   * DELETE /api/plugins/radio/stations/{id}                  — drop entirely
  *   * POST   /api/plugins/radio/fcc-import                     — async import job
  *   * /ws/state · `radio.stations.changed` / `radio.detections.changed`
  *
+ * Playing is independent of favoriting: a row click anywhere on this page
+ * starts the station in the browser player, and POST /play persists an
+ * unsaved directory hit only so the stream proxy has an id to resolve.
+ * The star is the only thing that favorites.
+ *
  * Core-bundle globals used (loaded before any plugin script): React,
  * Card, Button, IconButton, Icon, Pill, StatusDot, Empty, PageHeader,
  * SleepingDomovoi, useToast, relTime, apiGet/apiPost/apiPatch/apiDelete,
- * useApiList, usePlayback.
+ * useApiList, useApiObject, usePlayback.
  */
 
 const RADIO_API = '/api/plugins/radio';
 const ONLINE_TAG_PRESETS = ['indie', 'jazz', 'classical', 'news', 'electronic', 'rock'];
 const PAGE_SIZE = 30;
+/* Favorites are paginated server-side; the total comes from /badge (which
+ * already counts favorites for the sidebar) rather than a second count
+ * query. Recent is capped at 10 by the server's trim, not here. */
+const FAVORITES_PAGE_SIZE = 20;
+
+/* Can the BROWSER play this station's stream? The server's stream proxy
+ * 409s on a missing/host-local URL (FM rows resolve to a transient local
+ * address, and FCC imports have no URL at all until a simulcast is
+ * resolved), so refuse those up front with a message that says what to do
+ * instead of waiting for <audio> to fail. */
+const browserPlayable = (st) => {
+  const url = String(st?.stream_url || '').toLowerCase();
+  if (!/^https?:\/\//.test(url)) return false;
+  return !['localhost', '127.0.0.1', '://0.0.0.0'].some((h) => url.includes(h));
+};
+
+const unplayableReason = (st) => (
+  st?.source === 'fm'
+    ? `${st.name} has no online simulcast yet — resolve one, or play it through a room`
+    : `${st?.name || 'that station'} has no browser-playable stream URL`
+);
 
 /* Build a player queue item for a station against the plugin's own
  * stream proxy route (the manifest's [[web.player_sources]] template). */
@@ -57,8 +86,16 @@ const radioQueueItem = (st) => ({
  *
  * Pagination is "full-page-means-maybe-more" — no count query; Prev
  * disabled at offset 0, Next disabled when the page came back short.
+ *
+ * Favorites answer FIRST. Typing debounce-queries the local favorites
+ * table (a cheap ILIKE against name/call sign/city) and renders the hits
+ * above the directory results, which still only load on submit — the
+ * station directory is a network hop and shouldn't be hit per keystroke.
+ * Matching favorites are scope-independent: an FM favorite shows up while
+ * the online scope is selected, because "where is that station I already
+ * saved" is the question being answered.
  */
-const StationSearch = ({ onFavorite, fire }) => {
+const StationSearch = ({ onFavorite, onPlay, fire }) => {
   const [scope, setScope] = React.useState('online');  // 'online' | 'fm'
   const [q, setQ] = React.useState('');
   const [country, setCountry] = React.useState('US');
@@ -66,12 +103,33 @@ const StationSearch = ({ onFavorite, fire }) => {
   const [offset, setOffset] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
+  const [favMatches, setFavMatches] = React.useState([]);
 
   // Reset paging + results when scope flips — stale results from the
   // previous scope confuse the column layout.
   React.useEffect(() => {
     setResults([]); setOffset(0); setSubmitted(false);
   }, [scope]);
+
+  // Instant favorites. `alive` drops a response that lost the race to a
+  // later keystroke, so the list can't flicker back to a stale query.
+  React.useEffect(() => {
+    const query = q.trim();
+    if (!query) { setFavMatches([]); return; }
+    let alive = true;
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          favorited_only: 'true', q: query, limit: '8',
+        });
+        const out = await apiGet(`${RADIO_API}/stations?${params}`);
+        if (alive) setFavMatches(Array.isArray(out) ? out : []);
+      } catch {
+        if (alive) setFavMatches([]);   // degrade quietly; directory still works
+      }
+    }, 220);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [q]);
 
   const runSearch = async (override) => {
     const query = (override?.q ?? q).trim();
@@ -195,6 +253,28 @@ const StationSearch = ({ onFavorite, fire }) => {
         </div>
       )}
 
+      {/* Matching favorites — answered locally, so they're on screen
+          before the directory request has even been sent. */}
+      {favMatches.length > 0 && (
+        <div style={{ borderBottom: '1px solid var(--border-soft)',
+                      background: 'var(--sunken)' }}>
+          <div style={{ padding: '8px 16px 2px', display: 'flex',
+                        alignItems: 'center', gap: 6 }}>
+            <Icon name="star" size={11}/>
+            <div className="eyebrow">your favorites</div>
+            <span className="mono" style={{ marginLeft: 'auto', fontSize: 10,
+                                            color: 'var(--fg-faint)' }}>
+              {favMatches.length} match{favMatches.length === 1 ? '' : 'es'}
+            </span>
+          </div>
+          <div style={{ padding: '4px 8px 8px' }}>
+            {favMatches.map((s) => (
+              <FavoriteMatchRow key={`fav-${s.id}`} s={s} onPlay={onPlay}/>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Local FM empty-state hint */}
       {scope === 'fm' && !loading && !submitted && (
         <div style={{ padding: '8px 16px 14px', fontSize: 11, color: 'var(--fg-muted)' }}>
@@ -235,7 +315,7 @@ const StationSearch = ({ onFavorite, fire }) => {
             {results.map(r => (
               <SearchResultRow key={(r.external_id || `id-${r.id}`) + '-' + offset}
                                hit={r} scope={scope}
-                               onFavorite={onFavorite} fire={fire}/>
+                               onFavorite={onFavorite} onPlay={onPlay} fire={fire}/>
             ))}
           </tbody>
         </table>
@@ -256,7 +336,36 @@ const StationSearch = ({ onFavorite, fire }) => {
   );
 };
 
-const SearchResultRow = ({ hit, scope, onFavorite, fire }) => {
+/* One matching favorite inside the search surface. Already saved, so
+ * there's nothing to favorite here — the whole row just plays. */
+const FavoriteMatchRow = ({ s, onPlay }) => (
+  <button type="button" onClick={() => onPlay(s)}
+          title={`play ${s.name}`}
+          style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                   width: '100%', padding: '7px 8px', borderRadius: 'var(--r-sm)',
+                   display: 'flex', alignItems: 'center', gap: 8,
+                   background: 'transparent', border: 'none', color: 'var(--fg)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--card)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+    <Icon name={s.source === 'fm' ? 'radio-tower' : 'radio'} size={12}/>
+    <span style={{ fontSize: 13, fontWeight: 500, minWidth: 0, overflow: 'hidden',
+                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {s.name}
+    </span>
+    <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)',
+                                    minWidth: 0, overflow: 'hidden',
+                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {s.source === 'fm' && s.frequency_mhz != null
+        ? `${s.frequency_mhz} FM`
+        : (s.call_sign || s.country_code || 'online')}
+      {s.now_playing ? ` · ${s.now_playing}` : ''}
+    </span>
+    <span style={{ flex: 1 }}/>
+    <Icon name="play" size={12} style={{ color: 'var(--brand)', flexShrink: 0 }}/>
+  </button>
+);
+
+const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
   // Local favorited state so the star feels snappy; the realtime push
   // refreshes the canonical list.
   const [favorited, setFavorited] = React.useState(hit.favorited);
@@ -302,10 +411,20 @@ const SearchResultRow = ({ hit, scope, onFavorite, fire }) => {
     }
   };
 
+  // The row plays; only the star cell favorites. Keeping those separate is
+  // the whole point — a station you just want to hear shouldn't end up in
+  // the favorites list (and on the sampler's poll schedule) to be heard.
+  const playable = browserPlayable(hit);
+  const rowProps = {
+    onClick: () => onPlay(hit),
+    title: playable ? `play ${hit.name}` : unplayableReason(hit),
+    style: { cursor: 'pointer' },
+  };
   return (
-    <tr>
+    <tr {...rowProps}>
       <td onClick={e => e.stopPropagation()} style={{ width: 40 }}>
         <IconButton name="star" onClick={toggle}
+                    title={favorited ? 'unfavorite' : 'favorite'}
                     style={favorited ? { color: 'var(--brand)' } : undefined}/>
       </td>
       {scope === 'online' ? (
@@ -344,29 +463,108 @@ const SearchResultRow = ({ hit, scope, onFavorite, fire }) => {
           </td>
         </>
       )}
-      <td className="actions">
-        <Pill tone={favorited ? 'live' : 'idle'}>{favorited ? 'saved' : 'tap star'}</Pill>
+      <td className="actions" onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6,
+                      justifyContent: 'flex-end' }}>
+          {favorited && <Pill tone="live">saved</Pill>}
+          <Button icon="play" onClick={() => onPlay(hit)} disabled={!playable}
+                  title={playable ? `play ${hit.name}` : unplayableReason(hit)}>
+            play
+          </Button>
+        </div>
       </td>
     </tr>
   );
 };
 
 /* ---- Favorited stations list ----------------------------------- */
-const FavoritesList = ({ stations, loading, selectedId, onSelect, onDelete, fire, refresh }) => {
+const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading favorites…</div>;
   if (stations.length === 0)
-    return <Empty glyph="sleeping" title="no favorites yet" sub="search and tap the star to start collecting"/>;
+    return page > 0
+      ? <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>nothing on this page</div>
+      : <Empty glyph="sleeping" title="no favorites yet" sub="search and tap the star to start collecting"/>;
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {stations.map(s => (
         <FavoriteRow key={s.id} s={s}
                      active={selectedId === s.id}
                      onSelect={() => onSelect(s.id)}
+                     onPlay={onPlay}
                      onDelete={onDelete}
                      refresh={refresh}
                      fire={fire}/>
       ))}
+    </div>
+  );
+};
+
+/* ---- Recent strip (the last 10 stations actually played) -------- */
+/*
+ * Server-trimmed to 10 rows — there is no longer history to page through,
+ * by design. A row here can be a favorite or a station played once out of
+ * search; the star tells them apart and promotes the latter.
+ */
+const RecentList = ({ stations, loading, onPlay, onFavorite, fire }) => {
+  if (loading && stations.length === 0)
+    return <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>;
+  if (stations.length === 0)
+    return (
+      <div style={{ padding: '16px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+        Nothing played yet — click any station to start it.
+      </div>
+    );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay}
+                                    onFavorite={onFavorite} fire={fire}/>)}
+    </div>
+  );
+};
+
+const RecentRow = ({ s, onPlay, onFavorite, fire }) => {
+  const [busy, setBusy] = React.useState(false);
+  // Recent rows are already persisted, so favoriting is a PATCH either
+  // way — no POST /stations path to worry about here.
+  const toggleFavorite = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiPatch(`${RADIO_API}/stations/${s.id}`, { favorited: !s.favorited });
+      fire(s.favorited ? `unfavorited ${s.name}` : `favorited ${s.name}`);
+      onFavorite && onFavorite();
+    } catch (e) {
+      fire(`favorite failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ borderTop: '1px solid var(--border-soft)', display: 'flex',
+                  alignItems: 'center' }}>
+      <button onClick={() => onPlay(s)} title={`play ${s.name}`}
+              style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                       flex: 1, minWidth: 0, padding: '9px 4px 9px 14px',
+                       display: 'flex', alignItems: 'center', gap: 7,
+                       background: 'transparent', border: 'none', color: 'var(--fg)' }}>
+        <Icon name={s.source === 'fm' ? 'radio-tower' : 'radio'} size={12}/>
+        <span style={{ fontSize: 13, minWidth: 0, overflow: 'hidden',
+                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {s.name}
+        </span>
+        {s.last_played_at && (
+          <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)',
+                                          flexShrink: 0 }}>
+            {relTime(s.last_played_at)}
+          </span>
+        )}
+      </button>
+      <div style={{ paddingRight: 8, flexShrink: 0 }}>
+        <IconButton name="star" onClick={toggleFavorite}
+                    title={s.favorited ? 'unfavorite' : 'favorite'}
+                    style={s.favorited ? { color: 'var(--brand)' } : undefined}/>
+      </div>
     </div>
   );
 };
@@ -418,25 +616,10 @@ const NowPlayingLine = ({ s }) => {
   );
 };
 
-const FavoriteRow = ({ s, active, onSelect, onDelete, refresh, fire }) => {
+const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) => {
   const [editing, setEditing] = React.useState(false);
   const [intervalDraft, setIntervalDraft] = React.useState(s.sample_interval_sec);
   React.useEffect(() => { setIntervalDraft(s.sample_interval_sec); setEditing(false); }, [s.id, s.sample_interval_sec]);
-
-  // Browser playback via the app-level player. Degrades to a toast
-  // when the provider isn't mounted; FM/SDR stations get the stream
-  // proxy's honest 409 the moment <audio> tries to load, so refuse
-  // them client-side with a clearer message.
-  const player = usePlayback();
-  const onPlayHere = (st) => {
-    if (!player.available) { fire('browser player not available'); return; }
-    if (st.source === 'fm') {
-      fire(`${st.name} is FM/SDR — play it through a room, not the browser`);
-      return;
-    }
-    player.playItems([radioQueueItem(st)]);
-    fire(`streaming ${st.name} in this browser`);
-  };
 
   const saveInterval = async () => {
     const v = parseInt(intervalDraft, 10);
@@ -456,27 +639,41 @@ const FavoriteRow = ({ s, active, onSelect, onDelete, refresh, fire }) => {
                   background: active ? 'var(--brand-soft)' : 'transparent',
                   borderLeftWidth: 3, borderLeftStyle: 'solid',
                   borderLeftColor: active ? 'var(--brand)' : 'transparent' }}>
-      <button onClick={onSelect}
-              style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
-                       width: '100%', padding: '12px 14px',
-                       display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center',
-                       background: 'transparent', border: 'none',
-                       color: active ? 'var(--brand-press)' : 'var(--fg)' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name={s.source === 'fm' ? 'radio-tower' : 'radio'} size={12}/>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</span>
+      {/* The row PLAYS. Details (the detection feed + stream URL editor) live
+          behind the chevron, so the common action — "put this on" — is one
+          click and the uncommon one is still one click. The chevron is a
+          SIBLING of the play button, not nested inside it: a button inside a
+          button is invalid markup, and relying on stopPropagation to tell the
+          two apart is a trap the first keyboard user would find. */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button onClick={() => onPlay(s)} title={`play ${s.name}`}
+                style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                         flex: 1, minWidth: 0, padding: '12px 6px 12px 14px',
+                         display: 'grid', gridTemplateColumns: '1fr auto', gap: 8,
+                         alignItems: 'center',
+                         background: 'transparent', border: 'none',
+                         color: active ? 'var(--brand-press)' : 'var(--fg)' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon name={s.source === 'fm' ? 'radio-tower' : 'radio'} size={12}/>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</span>
+            </div>
+            <NowPlayingLine s={s}/>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+              {s.source === 'fm' && s.frequency_mhz != null
+                ? `${s.frequency_mhz} FM`
+                : s.country_code || 'online'}
+              {' · sampling every '}{s.sample_interval_sec}s
+            </div>
           </div>
-          <NowPlayingLine s={s}/>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
-            {s.source === 'fm' && s.frequency_mhz != null
-              ? `${s.frequency_mhz} FM`
-              : s.country_code || 'online'}
-            {' · sampling every '}{s.sample_interval_sec}s
-          </div>
+          <StatusDot tone={s.last_sampled_at ? 'ok' : 'idle'} live={!!s.last_sampled_at}/>
+        </button>
+        <div style={{ paddingRight: 6, flexShrink: 0 }}>
+          <IconButton name={active ? 'chevron-down' : 'chevron-right'}
+                      onClick={onSelect}
+                      title={active ? 'hide details' : 'details & detections'}/>
         </div>
-        <StatusDot tone={s.last_sampled_at ? 'ok' : 'idle'} live={!!s.last_sampled_at}/>
-      </button>
+      </div>
 
       {active && (
         <div style={{ padding: '0 14px 12px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -494,7 +691,7 @@ const FavoriteRow = ({ s, active, onSelect, onDelete, refresh, fire }) => {
             </>
           ) : (
             <>
-              <Button icon="headphones" onClick={() => onPlayHere(s)}>play here</Button>
+              <Button icon="headphones" onClick={() => onPlay(s)}>play here</Button>
               <Button icon="pencil" onClick={() => setEditing(true)}>interval</Button>
               <span style={{ flex: 1 }}/>
               <Button icon="trash-2" onClick={() => onDelete(s)}
@@ -772,13 +969,69 @@ const FccImportButton = ({ fire }) => {
 /* ---- Page ------------------------------------------------------- */
 const StationsPage = () => {
   const [selectedId, setSelectedId] = React.useState(null);
+  const [favPage, setFavPage] = React.useState(0);
   const [fire, toastNode] = useToast();
 
-  const { items: favorites, loading, refresh } =
-    useApiList(`${RADIO_API}/stations?favorited_only=true&limit=500`,
-               { eventTypes: ['radio.stations.changed'] });
+  // Favorites are paged server-side. The total comes from /badge (the
+  // sidebar's favorites count) so there's no second count query — and it
+  // refetches on the same realtime event, so starring something on the
+  // phone renumbers the pages here.
+  const { items: favorites, loading, refresh } = useApiList(
+    `${RADIO_API}/stations?favorited_only=true&limit=${FAVORITES_PAGE_SIZE}`
+    + `&offset=${favPage * FAVORITES_PAGE_SIZE}`,
+    { eventTypes: ['radio.stations.changed'] },
+  );
+  const { data: badge } = useApiObject(`${RADIO_API}/badge`,
+                                       { eventTypes: ['radio.stations.changed'] });
+  const { items: recent, loading: recentLoading, refresh: refreshRecent } =
+    useApiList(`${RADIO_API}/recent`, { eventTypes: ['radio.stations.changed'] });
+
+  const favTotal = badge && typeof badge.favorites === 'number' ? badge.favorites : null;
+  const favPages = favTotal != null ? Math.max(1, Math.ceil(favTotal / FAVORITES_PAGE_SIZE)) : null;
+  const hasPrevFav = favPage > 0;
+  // With a known total, trust it; otherwise fall back to the page-is-full
+  // heuristic the search surface uses.
+  const hasNextFav = favTotal != null
+    ? (favPage + 1) * FAVORITES_PAGE_SIZE < favTotal
+    : favorites.length === FAVORITES_PAGE_SIZE;
+
+  // Unfavoriting the last row on the last page would otherwise strand the
+  // user on an empty page they can only escape with Prev.
+  React.useEffect(() => {
+    if (!loading && favorites.length === 0 && favPage > 0) setFavPage(p => p - 1);
+  }, [loading, favorites.length, favPage]);
 
   const selected = favorites.find(s => s.id === selectedId) || null;
+
+  // The one playback path on this page. Favoriting is NOT implied: POST
+  // /play persists an unsaved directory hit only because the stream proxy
+  // resolves row ids, and marks it created_by_play so the server's Recent
+  // trim reclaims it if it never gets starred.
+  const player = usePlayback();
+  const playStation = async (st) => {
+    if (!player.available) { fire('browser player not available'); return; }
+    if (!browserPlayable(st)) { fire(unplayableReason(st)); return; }
+    try {
+      const row = await apiPost(`${RADIO_API}/play`, st.id
+        ? { station_id: st.id }
+        : {
+            name: st.name,
+            source: st.source || 'online',
+            stream_url: st.stream_url,
+            external_id: st.external_id,
+            country_code: st.country_code,
+            language: st.language,
+            tags: st.tags || [],
+          });
+      player.playItems([radioQueueItem(row)]);
+      fire(`playing ${row.name}`);
+      // The realtime event refetches both lists within a tick or two; this
+      // makes the Recent strip move under the click that caused it.
+      refreshRecent();
+    } catch (e) {
+      fire(`play failed: ${e.message}`);
+    }
+  };
 
   const onFavorite = async (hit) => {
     // POST the search-hit shape — the server is idempotent on external_id.
@@ -801,6 +1054,7 @@ const StationsPage = () => {
       fire(`forgot ${s.name}`);
       if (selectedId === s.id) setSelectedId(null);
       refresh();
+      refreshRecent();
     } catch (e) {
       fire(`forget failed: ${e.message}`);
     }
@@ -810,28 +1064,60 @@ const StationsPage = () => {
     <div className="page">
       <PageHeader
         title="Stations"
-        sub={`${favorites.length} favorited · detectors run in the background`}
+        sub={`${favTotal != null ? favTotal : favorites.length} favorited`
+             + ` · ${recent.length} recent · click any station to play it`}
         actions={<FccImportButton fire={fire}/>}
       />
 
       {/* [1] Search */}
-      <StationSearch onFavorite={onFavorite} fire={fire}/>
+      <StationSearch onFavorite={onFavorite} onPlay={playStation} fire={fire}/>
 
-      {/* [2] Favorites + detail */}
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16, alignItems: 'stretch' }}>
-        <Card>
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-soft)',
-                        display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="star" size={13}/>
-            <div style={{ fontSize: 13, fontWeight: 500 }}>Favorites</div>
-            <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
-              {favorites.length}
-            </span>
-          </div>
-          <FavoritesList stations={favorites} loading={loading}
-                         selectedId={selectedId} onSelect={setSelectedId}
-                         onDelete={onDelete} refresh={refresh} fire={fire}/>
-        </Card>
+      {/* [2] Recent + favorites + detail */}
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Card>
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-soft)',
+                          display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="history" size={13}/>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Recent</div>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
+                last {recent.length || 0}
+              </span>
+            </div>
+            <RecentList stations={recent} loading={recentLoading}
+                        onPlay={playStation}
+                        onFavorite={() => { refresh(); refreshRecent(); }}
+                        fire={fire}/>
+          </Card>
+
+          <Card>
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-soft)',
+                          display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="star" size={13}/>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Favorites</div>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
+                {favTotal != null ? favTotal : favorites.length}
+              </span>
+            </div>
+            <FavoritesList stations={favorites} loading={loading} page={favPage}
+                           selectedId={selectedId} onSelect={setSelectedId}
+                           onPlay={playStation}
+                           onDelete={onDelete} refresh={refresh} fire={fire}/>
+            {(hasPrevFav || hasNextFav) && (
+              <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8,
+                            borderTop: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+                <Button icon="chevron-left" onClick={() => setFavPage(p => Math.max(0, p - 1))}
+                        disabled={!hasPrevFav || loading}>prev</Button>
+                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                  {favPages != null ? `page ${favPage + 1} / ${favPages}` : `page ${favPage + 1}`}
+                </span>
+                <span style={{ flex: 1 }}/>
+                <Button icon="chevron-right" onClick={() => setFavPage(p => p + 1)}
+                        disabled={!hasNextFav || loading}>next</Button>
+              </div>
+            )}
+          </Card>
+        </div>
 
         {selected ? (
           <StationDetail s={selected} fire={fire}/>
@@ -841,9 +1127,11 @@ const StationsPage = () => {
               <div style={{ display: 'inline-block', color: 'var(--fg-subtle)', marginBottom: 12 }}>
                 <SleepingDomovoi size={120}/>
               </div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg)' }}>Pick a favorite</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg)' }}>Click a station to play it</div>
               <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginTop: 6, maxWidth: 360, margin: '6px auto 0' }}>
-                Or search above to find stations. Detections appear alongside each favorite as the detectors hear songs.
+                Playing doesn’t favorite — the star does that. Open a favorite’s
+                chevron for its stream settings and the detections the detectors
+                have heard on it.
               </div>
             </div>
           </Card>

@@ -59,6 +59,15 @@ internal fun openFileDownload(context: Context, app: AppContainer, libraryId: St
 internal data class UploadResult(val saved: Int, val skipped: Int, val reindexTriggered: Boolean)
 internal data class DeleteResult(val deleted: Int, val failed: Int, val reindexTriggered: Boolean)
 internal data class ImportResult(val copied: Int, val skipped: Int, val reindexTriggered: Boolean)
+internal data class MoveResult(
+    val moved: Int,
+    val skipped: Int,
+    val failed: Int,
+    /** First failure verbatim — "1 failed" with no reason is useless when
+     *  the cause is a name collision the user can act on. */
+    val firstFailure: String?,
+    val reindexTriggered: Boolean,
+)
 
 // ---------------------------------------------------------------------------
 // Upload — content Uris → multipart into the current dir of an editable library.
@@ -154,6 +163,43 @@ internal suspend fun importFile(
     return ImportResult(
         copied = (obj["copied"] as? JsonArray)?.size ?: 0,
         skipped = (obj["skipped"] as? JsonArray)?.size ?: 0,
+        reindexTriggered = obj["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Move — relocate files/folders into another folder, within a library or
+// between two editable ones. The web does this by drag and drop; on a phone
+// it's a destination picker (FilesMoveSheet).
+//
+// Per-path outcome, not all-or-nothing: one colliding name must not abandon
+// the rest of the selection. `skipped` is for harmless no-ops (dropped into
+// the folder it was already in) so they don't read as errors.
+// ---------------------------------------------------------------------------
+
+internal suspend fun moveFiles(
+    app: AppContainer,
+    sourceLibraryId: String,
+    paths: List<String>,
+    targetLibraryId: String,
+    targetPath: String,
+): MoveResult {
+    val res = app.api.post(
+        "/api/files/move",
+        buildJsonObject {
+            put("source_library_id", sourceLibraryId)
+            put("paths", buildJsonArray { paths.forEach { add(it) } })
+            put("target_library_id", targetLibraryId)
+            put("target_path", targetPath)
+        },
+    )
+    val obj = res as? JsonObject ?: JsonObject(emptyMap())
+    val failed = obj["failed"] as? JsonArray
+    return MoveResult(
+        moved = (obj["moved"] as? JsonArray)?.size ?: 0,
+        skipped = (obj["skipped"] as? JsonArray)?.size ?: 0,
+        failed = failed?.size ?: 0,
+        firstFailure = failed?.firstOrNull()?.jsonPrimitive?.content,
         reindexTriggered = obj["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false,
     )
 }

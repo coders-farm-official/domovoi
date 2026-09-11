@@ -10,6 +10,19 @@ development** — see the note for developers at the bottom.
   (radio-browser.info) from the dashboard's Stations page, favorite
   stations, and play them by voice ("stream KEXP", "tune to the news
   station") in any room, or in the browser via the page's player.
+* **Play without favoriting.** Clicking any station — a search hit, a
+  favorite, a Recent entry — starts it. Favoriting is a separate act (the
+  star), because a favorite also puts the station on the background
+  detectors' poll schedule, and "I want to hear this once" shouldn't mean
+  that. A station played out of search is persisted only so the stream
+  proxy has a row to resolve; if it never gets starred, it's reclaimed
+  when it ages out of Recent.
+* **Recent.** The last 10 stations you actually played, newest first, on
+  the Stations page and in the app. Ten and no further, by design — the
+  server trims on every play rather than keeping history you'd then have
+  to page through. Favorites are paginated separately, and typing in the
+  search box shows matching favorites immediately, above the directory
+  results that take a network round trip.
 * **FM via RTL-SDR (optional hardware).** With a USB RTL-SDR dongle,
   "play 97.5 FM" tunes real over-the-air FM and streams it to the room —
   this works **fully offline**. The FCC FM catalog for your state loads
@@ -39,7 +52,9 @@ development** — see the note for developers at the bottom.
 | "stop the radio" / "stop streaming" | stop playback in the room |
 
 Station-name commands work on **favorited** stations — favorite them on
-the Stations page first.
+the Stations page first. (Clicking a station on the page plays it without
+favoriting, so voice by name and one-off listening are deliberately
+different things.)
 
 ## Hardware notes (FM / RTL-SDR)
 

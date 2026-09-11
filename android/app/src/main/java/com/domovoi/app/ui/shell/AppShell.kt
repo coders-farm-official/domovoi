@@ -56,6 +56,7 @@ import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.rememberCapabilities
 import com.domovoi.app.ui.components.DomovoiGlyph
@@ -142,6 +143,14 @@ private fun ShellContent() {
     val caps = capsState.data ?: Capabilities.EMPTY
     val connected by app.bus.connected.collectAsState()
     LaunchedEffect(connected) { if (connected) capsState.refresh() }
+    // Introduce this install to the server (id + a seeded name) so room
+    // queues can say "added by <device>". Idempotent; the server keeps any
+    // name the user has since chosen. Re-run on reconnect and on a server
+    // switch, because a different server has never heard of us.
+    val shellServerUrl by app.prefs.serverUrl.collectAsState()
+    LaunchedEffect(connected, shellServerUrl) {
+        if (connected && shellServerUrl.isNotBlank()) registerDevice(app)
+    }
     // If the active route lost its capability (plugin uninstalled,
     // different server), fall back home rather than rendering a stub.
     LaunchedEffect(caps, route) {

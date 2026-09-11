@@ -24,6 +24,7 @@
  *     * GET  /api/files/download    — file (attachment) or dir (zip).
  *     * POST /api/files/upload      — upload into the current dir.
  *     * POST /api/files/delete      — delete files / (recursive) folders.
+ *     * POST /api/files/move        — move files/folders (drag and drop).
  *     * POST /api/files/import      — copy from a removable drive into a library.
  *   Documents-library editing:
  *     * /api/documents/{text,sheet,raw,create,export} — homegrown editors.
@@ -226,7 +227,8 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
  *   download         → legacy office formats — Download is the action
  */
 const DocRow = ({ doc, selected, onToggleSelect,
-                  onOpenDoc, onOpenSheet, onOpenText, onOpenDrawing, onDelete }) => {
+                  onOpenDoc, onOpenSheet, onOpenText, onOpenDrawing, onDelete,
+                  onDragStartEntry }) => {
   const cat = doc.category || 'text';
   const icon = cat === 'newtab' ? (doc.ext === '.pdf' ? 'file-text' : 'image')
     : cat === 'drawing' ? 'pen-tool'
@@ -254,9 +256,14 @@ const DocRow = ({ doc, selected, onToggleSelect,
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
+    <div draggable={!!onDragStartEntry}
+         onDragStart={(e) => onDragStartEntry
+           && onDragStartEntry(e, { rel: doc.rel_path, name: doc.name + doc.ext,
+                                    is_dir: false })}
+         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
                   borderTop: '1px solid var(--border-soft)',
-                  background: selected ? 'var(--brand-soft)' : 'transparent' }}>
+                  background: selected ? 'var(--brand-soft)' : 'transparent',
+                  cursor: onDragStartEntry ? 'grab' : 'default' }}>
       <input type="checkbox" checked={selected} title="select"
              onChange={() => onToggleSelect(doc.rel_path)}
              style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
@@ -368,6 +375,68 @@ const entryIcon = (kind) => ({
 
 /* Per-KIND library glyph fallback (the registry supplies `icon`, but keep a
  * sane default per kind). */
+/* ---- Drag and drop -------------------------------------------------
+ * Moving things around is a drag: pick up a row (or a whole selection) and
+ * drop it on a folder, a breadcrumb crumb, or another library's chip.
+ *
+ * Internal drags are tagged with a private MIME type. Everything droppable
+ * checks for it before calling preventDefault, so a file dragged in from the
+ * desktop is NOT mistaken for a move — that case is handled once, at the
+ * browser card, as an upload into the current folder. Without that split, an
+ * OS file drop would fall through to the browser's default and navigate the
+ * dashboard away to the dropped file.
+ */
+const FILES_DRAG_MIME = 'application/x-domovoi-files';
+
+const isInternalDrag = (e) => {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  if (!types) return false;
+  // DataTransfer.types is a DOMStringList in some browsers, not an Array.
+  return Array.prototype.indexOf.call(types, FILES_DRAG_MIME) !== -1;
+};
+
+const hasOsFiles = (e) => {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  if (!types) return false;
+  return Array.prototype.indexOf.call(types, 'Files') !== -1;
+};
+
+/* Visual affordance for anything accepting a move. `active` comes from the
+ * dragenter/leave pair, which is counted rather than toggled — moving over a
+ * child element fires leave on the parent and would otherwise flicker. */
+const useDropTarget = (accepts, onDropMove) => {
+  const [active, setActive] = React.useState(false);
+  const depth = React.useRef(0);
+  const reset = () => { depth.current = 0; setActive(false); };
+  return {
+    active,
+    props: {
+      onDragEnter: (e) => {
+        if (!accepts || !isInternalDrag(e)) return;
+        depth.current += 1;
+        setActive(true);
+      },
+      onDragOver: (e) => {
+        if (!accepts || !isInternalDrag(e)) return;
+        e.preventDefault();                       // "yes, you may drop here"
+        e.dataTransfer.dropEffect = 'move';
+      },
+      onDragLeave: (e) => {
+        if (!accepts || !isInternalDrag(e)) return;
+        depth.current -= 1;
+        if (depth.current <= 0) reset();
+      },
+      onDrop: (e) => {
+        if (!accepts || !isInternalDrag(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        reset();
+        onDropMove();
+      },
+    },
+  };
+};
+
 const LIBRARY_KIND_GROUPS = [
   ['core', 'Core'],
   ['plugin', 'Plugins'],
@@ -415,20 +484,32 @@ const streamFileDownload = async (url, fallbackName, onProgress) => {
 };
 
 /* Library selector chip — per-library glyph + a small kind badge. */
-const LibChip = ({ lib, active, onClick }) => (
-  <button onClick={onClick} title={lib.owner ? `${lib.kind} · ${lib.owner}` : lib.kind}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px',
-                   border: `1px solid ${active ? 'var(--brand)' : 'var(--border)'}`,
-                   background: active ? 'var(--brand-soft)' : 'var(--card)',
-                   color: 'var(--fg)', borderRadius: 'var(--r-md)', cursor: 'pointer',
-                   font: 'inherit', fontSize: 13 }}>
-    <Icon name={lib.icon || 'folder'} size={16}/>
-    <span style={{ whiteSpace: 'nowrap' }}>{lib.label}</span>
-    <Icon name={lib.kind_icon || 'folder'} size={12}/>
-  </button>
-);
+/* A library chip is also a drop target: dropping on it moves into that
+ * library's ROOT. Only editable libraries accept — a move deletes from the
+ * source, so a read-only root can never be one, and a removable drive stays
+ * copy-only through Import. */
+const LibChip = ({ lib, active, onClick, onDropMove }) => {
+  const accepts = !!lib.editable && !!onDropMove;
+  const drop = useDropTarget(accepts, () => onDropMove(lib));
+  const highlight = drop.active ? 'var(--brand)' : (active ? 'var(--brand)' : 'var(--border)');
+  return (
+    <button onClick={onClick} {...drop.props}
+            title={lib.owner ? `${lib.kind} · ${lib.owner}` : lib.kind}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px',
+                     border: `1px solid ${highlight}`,
+                     background: (drop.active || active) ? 'var(--brand-soft)' : 'var(--card)',
+                     color: 'var(--fg)', borderRadius: 'var(--r-md)', cursor: 'pointer',
+                     font: 'inherit', fontSize: 13,
+                     outline: drop.active ? '2px solid var(--brand)' : 'none',
+                     outlineOffset: 1 }}>
+      <Icon name={lib.icon || 'folder'} size={16}/>
+      <span style={{ whiteSpace: 'nowrap' }}>{lib.label}</span>
+      <Icon name={lib.kind_icon || 'folder'} size={12}/>
+    </button>
+  );
+};
 
-const LibrarySelector = ({ libraries, activeId, onSelect, onRefresh }) => (
+const LibrarySelector = ({ libraries, activeId, onSelect, onRefresh, onDropMove }) => (
   <Card>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
                   borderBottom: '1px solid var(--border-soft)' }}>
@@ -446,7 +527,8 @@ const LibrarySelector = ({ libraries, activeId, onSelect, onRefresh }) => (
                           marginBottom: 6 }}>{label}</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {libs.map((l) => (
-                <LibChip key={l.id} lib={l} active={l.id === activeId} onClick={() => onSelect(l)}/>
+                <LibChip key={l.id} lib={l} active={l.id === activeId}
+                         onClick={() => onSelect(l)} onDropMove={onDropMove}/>
               ))}
             </div>
           </div>
@@ -462,28 +544,40 @@ const LibrarySelector = ({ libraries, activeId, onSelect, onRefresh }) => (
 );
 
 /* Breadcrumb trail — the library label is the root crumb. */
-const FilesBreadcrumb = ({ lib, segments, onNav }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-                fontSize: 12, color: 'var(--fg-muted)' }}>
-    <button onClick={() => onNav('')}
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer',
-                     color: segments.length ? 'var(--brand)' : 'var(--fg)', font: 'inherit',
-                     padding: 0, fontWeight: 600 }}>
-      {lib ? lib.label : '—'}
+/* One crumb. Also a drop target, which is how you move something UP a level
+ * — there's no ".." row, so without this the only way out of a folder would
+ * be to cut-and-paste, which this page doesn't have. */
+const Crumb = ({ label, path, bold, disabled, onNav, onDropMove }) => {
+  const drop = useDropTarget(!!onDropMove, () => onDropMove(path));
+  return (
+    <button onClick={() => onNav(path)} disabled={disabled} {...drop.props}
+            title={onDropMove ? `drop here to move into ${label}` : undefined}
+            style={{ border: drop.active ? '1px solid var(--brand)' : '1px solid transparent',
+                     borderRadius: 'var(--r-sm)', padding: drop.active ? '1px 5px' : '1px 5px',
+                     background: drop.active ? 'var(--brand-soft)' : 'transparent',
+                     cursor: disabled ? 'default' : 'pointer',
+                     color: bold ? 'var(--fg)' : 'var(--brand)', font: 'inherit',
+                     fontWeight: bold ? 600 : 400 }}>
+      {label}
     </button>
+  );
+};
+
+const FilesBreadcrumb = ({ lib, segments, onNav, onDropMove }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap',
+                fontSize: 12, color: 'var(--fg-muted)' }}>
+    <Crumb label={lib ? lib.label : '—'} path="" bold={!segments.length}
+           onNav={onNav} onDropMove={onDropMove}/>
     {segments.map((seg, i) => {
       const p = segments.slice(0, i + 1).join('/');
       const last = i === segments.length - 1;
       return (
         <React.Fragment key={p}>
           <span style={{ color: 'var(--fg-faint)' }}>/</span>
-          <button onClick={() => onNav(p)} disabled={last}
-                  style={{ background: 'transparent', border: 'none',
-                           cursor: last ? 'default' : 'pointer',
-                           color: last ? 'var(--fg)' : 'var(--brand)', font: 'inherit',
-                           padding: 0, fontWeight: last ? 600 : 400 }}>
-            {seg}
-          </button>
+          {/* The last crumb IS the folder on screen — dropping into it is a
+              no-op, so it isn't a target. */}
+          <Crumb label={seg} path={p} bold={last} disabled={last}
+                 onNav={onNav} onDropMove={last ? null : onDropMove}/>
         </React.Fragment>
       );
     })}
@@ -537,8 +631,11 @@ const ImportMenu = ({ importables, disabled, onPick }) => {
  * Download, Delete (editable), and Import (removable source). Documents-
  * library FILE rows use DocRow instead (editing affordance). */
 const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, removable,
-                      importables, onOpen, onDownload, onDelete, onImport }) => {
+                      importables, onOpen, onDownload, onDelete, onImport,
+                      onDragStartEntry, onDropMove }) => {
   const isDir = entry.is_dir;
+  // A folder accepts a drop; a file doesn't (there's nothing to drop it into).
+  const drop = useDropTarget(isDir && !!onDropMove, () => onDropMove(entry));
   const iso = entry.mtime ? new Date(entry.mtime * 1000).toISOString() : null;
   // Images in ANY library open inline in a new tab via the generic
   // library-image serve (the Files tab owns image browsing).
@@ -546,9 +643,16 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
     `${API_BASE}/api/images/raw?library_id=${encodeURIComponent(libraryId)}`
     + `&path=${encodeURIComponent(entry.rel)}`, '_blank', 'noopener');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
+    <div draggable={!!onDragStartEntry}
+         onDragStart={(e) => onDragStartEntry && onDragStartEntry(e, entry)}
+         {...drop.props}
+         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
                   borderTop: '1px solid var(--border-soft)',
-                  background: selected ? 'var(--brand-soft)' : 'transparent' }}>
+                  background: drop.active ? 'var(--brand-soft)'
+                    : (selected ? 'var(--brand-soft)' : 'transparent'),
+                  outline: drop.active ? '2px solid var(--brand)' : 'none',
+                  outlineOffset: -2,
+                  cursor: onDragStartEntry ? 'grab' : 'default' }}>
       <input type="checkbox" checked={selected} title="select"
              onChange={() => onToggleSelect(entry.rel)}
              style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
@@ -665,6 +769,10 @@ const FilesPage = () => {
   const [dlPct, setDlPct] = React.useState(null);       // 0..1 or null
   const [confirmState, setConfirmState] = React.useState(null);   // {entries}
   const fileInputRef = React.useRef(null);
+  // What's currently being dragged: {libraryId, paths, label}. A ref, not
+  // state — it's read inside drop handlers and must never trigger a render
+  // mid-drag (a re-render during a drag cancels it in some browsers).
+  const dragPayload = React.useRef(null);
   const [fire, toastNode] = useToast();
 
   const activeLib = libraries.find((l) => l.id === activeId) || null;
@@ -814,6 +922,81 @@ const FilesPage = () => {
     } finally { setBusy(null); }
   };
 
+  // ── Move (drag and drop) ──
+  /* Dragging a row that's part of the selection drags the WHOLE selection —
+   * that's the behavior every file manager has, and without it a multi-select
+   * plus drag silently moves one file. */
+  const onDragStartEntry = (e, entry) => {
+    const selectedPaths = selected.has(entry.rel)
+      ? Array.from(selected)
+      : [entry.rel];
+    dragPayload.current = {
+      libraryId: activeId,
+      paths: selectedPaths,
+      label: selectedPaths.length === 1
+        ? entry.name
+        : `${selectedPaths.length} items`,
+    };
+    try {
+      // The payload itself stays in the ref; this only TAGS the drag so drop
+      // targets can tell an internal move from a file dragged off the desktop.
+      e.dataTransfer.setData(FILES_DRAG_MIME, '1');
+      e.dataTransfer.effectAllowed = 'move';
+    } catch { /* older browsers: the ref is still authoritative */ }
+  };
+
+  const performMove = async (targetLibraryId, targetPath) => {
+    const payload = dragPayload.current;
+    dragPayload.current = null;
+    if (!payload || !payload.paths.length) return;
+    // Dropping a folder onto itself. The server refuses this too; catching it
+    // here keeps the obvious mistake from reading like an error.
+    if (payload.libraryId === targetLibraryId
+        && payload.paths.some((rel) => rel === targetPath)) return;
+
+    setBusy('moving');
+    try {
+      const res = await apiPost('/api/files/move', {
+        source_library_id: payload.libraryId,
+        paths: payload.paths,
+        target_library_id: targetLibraryId,
+        target_path: targetPath || '',
+      });
+      const okN = (res.moved || []).length;
+      const skipN = (res.skipped || []).length;
+      const failN = (res.failed || []).length;
+      const parts = [];
+      if (okN) parts.push(`moved ${okN} item${okN === 1 ? '' : 's'}`);
+      if (skipN) parts.push(`${skipN} already there`);
+      if (failN) parts.push(`${failN} failed`);
+      if (res.reindex_triggered) parts.push('reindexing');
+      fire(parts.join(' · ') || 'nothing to move');
+      // Name the first real failure — "1 failed" with no reason is useless
+      // when the cause is a collision the user can act on.
+      if (failN) fire(String(res.failed[0]).slice(0, 120));
+      clearSelection();
+      refresh();
+    } catch (e) {
+      fire(`move failed: ${apiErrorText(e, 100)}`);
+    } finally { setBusy(null); }
+  };
+
+  const onDropIntoEntry = (entry) => performMove(activeId, entry.rel);
+  const onDropIntoPath = (p) => performMove(activeId, p);
+  const onDropIntoLibrary = (targetLib) => performMove(targetLib.id, '');
+
+  /* Files dragged in from the desktop are an UPLOAD, not a move. Internal
+   * drags carry the private MIME type and are ignored here — folder rows,
+   * crumbs and library chips handle those. */
+  const onOsFileDrop = (e) => {
+    if (isInternalDrag(e) || !hasOsFiles(e)) return;
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+    if (!files || !files.length) return;
+    if (!activeLib?.editable) { fire('this library is read-only'); return; }
+    onUpload(files);
+  };
+
   // ── Import (removable source → an importable library) ──
   const doImport = async (entry, targetId) => {
     const target = libraries.find((l) => l.id === targetId);
@@ -840,9 +1023,16 @@ const FilesPage = () => {
   const canUpload = !!activeLib?.editable;
 
   return (
-    <div className="page">
+    /* The desktop-file drop is handled ONCE, here on the page root: without
+       it the browser's default would navigate the dashboard away to the
+       dropped file. (Card renders a fixed <section> and forwards no extra
+       props, so it can't carry these.) */
+    <div className="page"
+         onDragOver={(e) => { if (!isInternalDrag(e) && hasOsFiles(e)) e.preventDefault(); }}
+         onDrop={onOsFileDrop}>
       <PageHeader title="Files"
-        sub="Browse every library — core media, plugins & removable drives"
+        sub={"Browse every library — core media, plugins & removable drives."
+             + " Drag rows onto a folder, a breadcrumb, or another library to move them."}
         actions={<>
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
                  onChange={(e) => onUpload(e.target.files)}/>
@@ -856,7 +1046,8 @@ const FilesPage = () => {
         </>}/>
 
       <LibrarySelector libraries={libraries} activeId={activeId}
-                       onSelect={onSelectLibrary} onRefresh={loadLibraries}/>
+                       onSelect={onSelectLibrary} onRefresh={loadLibraries}
+                       onDropMove={onDropIntoLibrary}/>
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px',
@@ -868,11 +1059,14 @@ const FilesPage = () => {
                    style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
           )}
           <FilesBreadcrumb lib={activeLib}
-                           segments={view?.breadcrumb || []} onNav={navigate}/>
+                           segments={view?.breadcrumb || []} onNav={navigate}
+                           onDropMove={view?.editable ? onDropIntoPath : null}/>
           <span style={{ flex: 1 }}/>
           {nSel > 0 ? (
             <>
-              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{nSel} selected</span>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {nSel} selected{busy === 'moving' ? ' · moving…' : ''}
+              </span>
               <Button icon="download" disabled={busy != null} onClick={downloadSelected}>
                 {busy === 'downloading' ? 'Downloading…' : 'Download'}
               </Button>
@@ -914,6 +1108,7 @@ const FilesPage = () => {
                         onOpenDoc={setDocRel} onOpenSheet={setSheetRel}
                         onOpenText={setTextRel}
                         onOpenDrawing={(d) => setDrawing(d)}
+                        onDragStartEntry={view.editable ? onDragStartEntry : null}
                         onDelete={(d) => requestDelete([entries.find((e) => e.rel === d.rel_path)])}/>
               );
             }
@@ -925,7 +1120,9 @@ const FilesPage = () => {
                           onOpen={() => navigate(entry.rel)}
                           onDownload={() => downloadEntry(entry)}
                           onDelete={() => requestDelete([entry])}
-                          onImport={doImport}/>
+                          onImport={doImport}
+                          onDragStartEntry={view.editable ? onDragStartEntry : null}
+                          onDropMove={view.editable ? onDropIntoEntry : null}/>
             );
           })
         )}

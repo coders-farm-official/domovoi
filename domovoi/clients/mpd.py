@@ -42,6 +42,21 @@ class MPDClient(Protocol):
     # ``prepare_*`` variants so the streaming layer's music_ready handshake
     # applies unchanged.
     async def prepare_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]: ...
+    # ── Queue editing (the dashboard/app room-queue surface) ──────────────
+    # These operate on the EXISTING queue rather than replacing it, which is
+    # what separates them from every `play_*`/`prepare_*` method above (all
+    # of which clear first). Entries are addressed by MPD **songid**, not
+    # position: a songid is stable for the life of a queue entry, so a
+    # concurrent move or insert can't turn "remove item 3" into "remove the
+    # wrong song". Every dict carries at least ``id`` and ``pos``.
+    async def queue_list(self) -> list[dict[str, Any]]: ...
+    # Append without clearing; returns the songs actually queued, each with
+    # the ``id`` MPD assigned.
+    async def queue_add_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]: ...
+    # Returns the songids actually removed (a stale id is skipped, not fatal).
+    async def queue_remove(self, song_ids: list[int]) -> list[int]: ...
+    async def queue_move(self, song_id: int, to_position: int) -> bool: ...
+    async def queue_clear(self) -> None: ...
     async def pause(self) -> None: ...
     async def resume(self) -> None: ...
     async def stop(self) -> None: ...
@@ -64,6 +79,20 @@ class MPDStubClient:
         self._state = "stop"
         self._song: dict[str, Any] | None = None
         self._volume = 50
+        # Queue model: entries carry a monotonically-increasing ``id`` that is
+        # never reused, exactly like MPD's songid. ``pos`` is derived from list
+        # order on read, so a move can't leave the two inconsistent.
+        self._queue: list[dict[str, Any]] = []
+        self._next_song_id = 1
+
+    def _assign_ids(self, songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for song in songs:
+            entry = dict(song)
+            entry["id"] = self._next_song_id
+            self._next_song_id += 1
+            out.append(entry)
+        return out
 
     async def play_search(self, query: dict[str, str]) -> dict[str, Any] | None:
         # Fake match from the first query value.
@@ -108,18 +137,58 @@ class MPDStubClient:
             self._state = "pause"
         return ok
 
+    def _songs_for(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "file": f"stub/{spec.get('title') or spec.get('file_path') or 'unknown'}.mp3",
+                "title": spec.get("title"),
+                "artist": spec.get("artist"),
+            }
+            for spec in specs
+        ]
+
     async def prepare_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
-        queued: list[dict[str, Any]] = []
-        for spec in specs:
-            title = spec.get("title") or spec.get("file_path") or "unknown"
-            queued.append(
-                {"file": f"stub/{title}.mp3", "title": spec.get("title"),
-                 "artist": spec.get("artist")}
-            )
+        # Replaces the queue (the cast hand-off), so ids restart from wherever
+        # the counter is — never reused, matching MPD.
+        queued = self._assign_ids(self._songs_for(specs))
+        self._queue = list(queued)
         if queued:
             self._song = queued[0]
             self._state = "pause"
         return queued
+
+    # ── Queue editing ──────────────────────────────────────────────────
+
+    async def queue_list(self) -> list[dict[str, Any]]:
+        return [dict(e, pos=i) for i, e in enumerate(self._queue)]
+
+    async def queue_add_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
+        queued = self._assign_ids(self._songs_for(specs))
+        self._queue.extend(queued)
+        return queued
+
+    async def queue_remove(self, song_ids: list[int]) -> list[int]:
+        wanted = set(song_ids)
+        present = {int(e["id"]) for e in self._queue} & wanted
+        self._queue = [e for e in self._queue if int(e["id"]) not in present]
+        # Preserve the caller's order in the report so a partial removal is
+        # readable against the request.
+        return [sid for sid in song_ids if sid in present]
+
+    async def queue_move(self, song_id: int, to_position: int) -> bool:
+        idx = next(
+            (i for i, e in enumerate(self._queue) if int(e["id"]) == song_id), None
+        )
+        if idx is None:
+            return False
+        entry = self._queue.pop(idx)
+        self._queue.insert(max(0, min(to_position, len(self._queue))), entry)
+        return True
+
+    async def queue_clear(self) -> None:
+        self._queue = []
+        self._state = "stop"
+        self._song = None
 
     async def pause(self) -> None:
         if self._state == "play":
@@ -416,6 +485,101 @@ class RealMPDClient:
                 await c.play()
                 await c.pause(1)
             return queued
+
+    # ── Queue editing ──────────────────────────────────────────────────
+
+    async def queue_list(self) -> list[dict[str, Any]]:
+        """The room's current queue, in order. MPD's ``playlistinfo`` already
+        carries ``Id`` (songid) and ``Pos``; both are normalized to the lower-
+        case ``id``/``pos`` the callers use, so a caller never has to know
+        which of MPD's two capitalizations a given build returns."""
+        async with self._connect() as c:
+            try:
+                entries = await c.playlistinfo()
+            except Exception as e:
+                log.warning("MPD playlistinfo failed: %s", e)
+                return []
+        out: list[dict[str, Any]] = []
+        for i, raw in enumerate(entries):
+            entry = dict(raw)
+            song_id = entry.get("id") or entry.get("Id")
+            pos = entry.get("pos") or entry.get("Pos")
+            try:
+                entry["id"] = int(song_id) if song_id is not None else None
+            except (TypeError, ValueError):
+                entry["id"] = None
+            try:
+                entry["pos"] = int(pos) if pos is not None else i
+            except (TypeError, ValueError):
+                entry["pos"] = i
+            out.append(entry)
+        # An entry with no songid can't be addressed, so it can't be edited —
+        # drop it rather than handing the UI a row whose buttons would 404.
+        return [e for e in out if e["id"] is not None]
+
+    async def queue_add_tracks(
+        self, specs: list[dict[str, str]]
+    ) -> list[dict[str, Any]]:
+        """APPEND to the queue — deliberately no ``clear()``, which is the
+        whole difference from :meth:`prepare_tracks`. Uses ``addid`` so the
+        new songid comes back in the same round trip; a spec MPD can't resolve
+        is skipped (a renamed file shouldn't abort the whole add)."""
+        if not specs:
+            return []
+        async with self._connect() as c:
+            queued: list[dict[str, Any]] = []
+            for spec in specs:
+                song = await self._resolve_track(c, spec)
+                if song is None:
+                    continue
+                try:
+                    song_id = await c.addid(song["file"])
+                except Exception as e:
+                    log.warning(
+                        "MPD queue_add_tracks addid %r failed: %s",
+                        song.get("file"), e,
+                    )
+                    continue
+                entry = dict(song)
+                try:
+                    entry["id"] = int(song_id)
+                except (TypeError, ValueError):
+                    # No usable id ⇒ the caller can't address it later; the
+                    # song IS queued, it just won't carry provenance.
+                    entry["id"] = None
+                queued.append(entry)
+            return queued
+
+    async def queue_remove(self, song_ids: list[int]) -> list[int]:
+        """``deleteid`` each id. A stale id (already played off the queue, or
+        removed by someone else) raises and is skipped — two people pruning
+        the same queue shouldn't produce an error either of them can act on."""
+        if not song_ids:
+            return []
+        removed: list[int] = []
+        async with self._connect() as c:
+            for song_id in song_ids:
+                try:
+                    await c.deleteid(song_id)
+                    removed.append(song_id)
+                except Exception as e:
+                    log.debug("MPD deleteid %s failed (stale?): %s", song_id, e)
+        return removed
+
+    async def queue_move(self, song_id: int, to_position: int) -> bool:
+        """``moveid`` — move by songid, to an absolute position. False when
+        MPD refuses (unknown id, or a position past the end)."""
+        async with self._connect() as c:
+            try:
+                await c.moveid(song_id, max(0, to_position))
+                return True
+            except Exception as e:
+                log.debug("MPD moveid %s→%s failed: %s", song_id, to_position, e)
+                return False
+
+    async def queue_clear(self) -> None:
+        async with self._connect() as c:
+            await c.clear()
 
     async def pause(self) -> None:
         async with self._connect() as c:

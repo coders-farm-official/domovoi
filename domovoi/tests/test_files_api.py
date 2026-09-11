@@ -449,3 +449,296 @@ def test_import_ejected_source_410(registry, roots):
             },
         )
     assert r.status_code == 410
+
+
+# ═══ POST /move ════════════════════════════════════════════════════════════
+#
+# The containment rules are the whole risk surface here, and they need no
+# database — so they're exercised by calling the route function DIRECTLY,
+# outside the admin dependency, and therefore can't skip on a box without
+# Postgres. The HTTP-surface tests at the end carry @requires_db like the
+# rest of this file.
+
+
+@pytest.fixture
+def no_reindex(monkeypatch):
+    """Record reindex fanout without a core hop, so the move tests need
+    neither a request object nor a live Domovoi server."""
+    calls = []
+
+    async def _trigger(kind, request):
+        calls.append(kind)
+        return True
+
+    monkeypatch.setattr(files_api, "_trigger_reindex", _trigger)
+    return calls
+
+
+def _move(**kw):
+    """Call the move endpoint directly (no admin dependency, no DB)."""
+    import asyncio
+
+    req = files_api.MoveRequest(**kw)
+    return asyncio.run(files_api.move(None, req))
+
+
+def test_move_relocates_a_file_within_a_library(registry, roots, no_reindex):
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+
+    res = _move(source_library_id="core:music", paths=["song.flac"],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == ["Beatles/song.flac"]
+    assert res.failed == [] and res.skipped == []
+    assert not (roots["music"] / "song.flac").exists()
+    assert (roots["music"] / "Beatles" / "song.flac").read_bytes() == b"aa"
+    # An indexed library on either side gets a rescan.
+    assert no_reindex == ["music"]
+
+
+def test_move_relocates_a_folder_with_its_contents(registry, roots, no_reindex):
+    src = roots["music"] / "Album"
+    (src / "disc1").mkdir(parents=True)
+    (src / "disc1" / "a.flac").write_bytes(b"a")
+    (roots["music"] / "Archive").mkdir()
+
+    res = _move(source_library_id="core:music", paths=["Album"],
+                target_library_id="core:music", target_path="Archive")
+    assert res.moved == ["Archive/Album"]
+    assert (roots["music"] / "Archive" / "Album" / "disc1" / "a.flac").read_bytes() == b"a"
+    assert not src.exists()
+
+
+def test_move_across_libraries_when_both_are_editable(registry, roots, no_reindex):
+    (roots["docs"] / "liner-notes.txt").write_text("hi", encoding="utf-8")
+
+    res = _move(source_library_id="core:documents", paths=["liner-notes.txt"],
+                target_library_id="core:music", target_path="")
+    assert res.moved == ["liner-notes.txt"]
+    assert (roots["music"] / "liner-notes.txt").exists()
+    assert not (roots["docs"] / "liner-notes.txt").exists()
+    # Only INDEXED_KINDS get a rescan, and documents isn't one of them (it's
+    # read live off disk) — so the music side is told and the docs side isn't.
+    assert no_reindex == ["music"]
+
+
+def test_move_up_a_level_via_an_empty_target_path(registry, roots, no_reindex):
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "Beatles" / "song.flac").write_bytes(b"aa")
+
+    res = _move(source_library_id="core:music", paths=["Beatles/song.flac"],
+                target_library_id="core:music", target_path="")
+    assert res.moved == ["song.flac"]
+    assert (roots["music"] / "song.flac").exists()
+
+
+def test_move_refuses_to_put_a_folder_inside_itself(registry, roots, no_reindex):
+    """shutil.move would happily start recursing into the copy it's creating.
+    Both the folder itself and any descendant of it must be refused."""
+    (roots["music"] / "Album" / "disc1").mkdir(parents=True)
+
+    into_self = _move(source_library_id="core:music", paths=["Album"],
+                      target_library_id="core:music", target_path="Album")
+    assert into_self.moved == []
+    assert "itself" in into_self.failed[0]
+
+    into_child = _move(source_library_id="core:music", paths=["Album"],
+                       target_library_id="core:music", target_path="Album/disc1")
+    assert into_child.moved == []
+    assert "itself" in into_child.failed[0]
+    # Nothing was touched.
+    assert (roots["music"] / "Album" / "disc1").is_dir()
+
+
+def test_move_refuses_to_overwrite_an_existing_name(registry, roots, no_reindex):
+    """The one unrecoverable operation on this page would be a silent
+    overwrite, so a collision fails loudly and leaves both files alone."""
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "song.flac").write_bytes(b"new")
+    (roots["music"] / "Beatles" / "song.flac").write_bytes(b"old")
+
+    res = _move(source_library_id="core:music", paths=["song.flac"],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == []
+    assert "already exists" in res.failed[0]
+    assert (roots["music"] / "song.flac").read_bytes() == b"new"
+    assert (roots["music"] / "Beatles" / "song.flac").read_bytes() == b"old"
+
+
+def test_dropping_into_the_folder_it_is_already_in_is_a_no_op(registry, roots, no_reindex):
+    """Reported as `skipped`, not `failed` — an idle drag must not read as an
+    error in the UI."""
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+
+    res = _move(source_library_id="core:music", paths=["song.flac"],
+                target_library_id="core:music", target_path="")
+    assert res.moved == [] and res.failed == []
+    assert "already in that folder" in res.skipped[0]
+    assert (roots["music"] / "song.flac").exists()
+    # No move ⇒ no rescan.
+    assert no_reindex == []
+
+
+def test_move_rejects_traversal_and_absolute_paths(registry, roots, no_reindex):
+    (roots["music"] / "Beatles").mkdir()
+    for bad in ("../docs/escape.txt", "/etc/passwd", "C:/Windows/win.ini"):
+        res = _move(source_library_id="core:music", paths=[bad],
+                    target_library_id="core:music", target_path="Beatles")
+        assert res.moved == [], bad
+        assert res.failed, bad
+
+
+def test_move_rejects_a_traversing_target_path(registry, roots, no_reindex):
+    import fastapi
+
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException):
+        _move(source_library_id="core:music", paths=["song.flac"],
+              target_library_id="core:music", target_path="../docs")
+    assert (roots["music"] / "song.flac").exists()
+
+
+def test_move_refuses_the_library_root(registry, roots, no_reindex):
+    (roots["music"] / "Beatles").mkdir()
+    res = _move(source_library_id="core:music", paths=[""],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == [] and res.failed
+
+
+def test_move_out_of_a_read_only_library_is_refused(registry, roots, no_reindex):
+    """A move DELETES from the source, so a read-only root can only ever be a
+    destination — which is why removables stay copy-only through /import."""
+    import fastapi
+
+    (roots["ro"] / "clip.mkv").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException) as e:
+        _move(source_library_id="plugin:jelly:videos", paths=["clip.mkv"],
+              target_library_id="core:music", target_path="")
+    assert e.value.status_code == 403
+    assert (roots["ro"] / "clip.mkv").exists()
+
+    (roots["usb"] / "track.mp3").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException) as e2:
+        _move(source_library_id="removable:E", paths=["track.mp3"],
+              target_library_id="core:music", target_path="")
+    assert e2.value.status_code == 403
+    assert (roots["usb"] / "track.mp3").exists()
+
+
+def test_move_into_a_read_only_library_is_refused(registry, roots, no_reindex):
+    import fastapi
+
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException) as e:
+        _move(source_library_id="core:music", paths=["song.flac"],
+              target_library_id="plugin:jelly:videos", target_path="")
+    assert e.value.status_code == 403
+    assert (roots["music"] / "song.flac").exists()
+
+
+def test_move_404s_for_a_missing_target_directory(registry, roots, no_reindex):
+    import fastapi
+
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException) as e:
+        _move(source_library_id="core:music", paths=["song.flac"],
+              target_library_id="core:music", target_path="NoSuchFolder")
+    assert e.value.status_code == 404
+
+
+def test_move_404s_when_the_target_is_a_file_not_a_folder(registry, roots, no_reindex):
+    import fastapi
+
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    (roots["music"] / "cover.jpg").write_bytes(b"aa")
+    with pytest.raises(fastapi.HTTPException) as e:
+        _move(source_library_id="core:music", paths=["song.flac"],
+              target_library_id="core:music", target_path="cover.jpg")
+    assert e.value.status_code == 404
+
+
+def test_move_refuses_a_secret_shaped_name(registry, roots, no_reindex):
+    """Same guard upload and import use — a dotfile-shaped secret must not be
+    relocatable into a library the dashboard serves."""
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / ".env").write_text("SECRET=1", encoding="utf-8")
+
+    res = _move(source_library_id="core:music", paths=[".env"],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == []
+    assert "bad name" in res.failed[0]
+    assert (roots["music"] / ".env").exists()
+
+
+def test_move_is_per_path_not_all_or_nothing(registry, roots, no_reindex):
+    """One collision must not abandon the rest of the drag."""
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "a.flac").write_bytes(b"a")
+    (roots["music"] / "b.flac").write_bytes(b"b")
+    (roots["music"] / "Beatles" / "b.flac").write_bytes(b"old")
+
+    res = _move(source_library_id="core:music",
+                paths=["a.flac", "b.flac", "gone.flac"],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == ["Beatles/a.flac"]
+    assert len(res.failed) == 2
+    assert any("already exists" in f for f in res.failed)
+    assert any("not found" in f for f in res.failed)
+
+
+def test_move_does_not_follow_a_symlink_out_of_the_library(registry, roots, no_reindex):
+    """safe_join resolves before checking containment, so a symlinked path
+    pointing outside the root is rejected rather than followed."""
+    outside = roots["docs"] / "secret.txt"
+    outside.write_text("nope", encoding="utf-8")
+    (roots["music"] / "Beatles").mkdir()
+    link = roots["music"] / "escape.txt"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted on this host")
+
+    res = _move(source_library_id="core:music", paths=["escape.txt"],
+                target_library_id="core:music", target_path="Beatles")
+    assert res.moved == []
+    assert res.failed
+    assert outside.read_text(encoding="utf-8") == "nope"
+
+
+# ─── HTTP surface (admin gate + request validation) ────────────────────────
+
+
+@requires_db
+def test_move_endpoint_moves_over_http(registry, roots, reindex_spy):
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    with _client() as c:
+        r = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": ["song.flac"],
+            "target_library_id": "core:music", "target_path": "Beatles",
+        })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["moved"] == ["Beatles/song.flac"]
+    assert body["reindex_triggered"] is True
+    assert reindex_spy == ["/v1/admin/library/reindex"]
+
+
+@requires_db
+def test_move_endpoint_requires_at_least_one_path(registry, roots):
+    with _client() as c:
+        r = c.post("/api/files/move", json={
+            "source_library_id": "core:music", "paths": [],
+            "target_library_id": "core:music", "target_path": "",
+        })
+    assert r.status_code == 422
+
+
+@requires_db
+def test_move_endpoint_404s_for_an_unknown_library(registry, roots):
+    with _client() as c:
+        r = c.post("/api/files/move", json={
+            "source_library_id": "core:nope", "paths": ["x"],
+            "target_library_id": "core:music", "target_path": "",
+        })
+    assert r.status_code == 404

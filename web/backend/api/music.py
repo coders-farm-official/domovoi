@@ -646,7 +646,54 @@ async def now_playing() -> list[NowPlaying]:
     idle MPD.
     """
     rooms = await _list_provisioned_rooms()
-    return [await _now_playing_for(r) for r in rooms]
+    cards = [await _now_playing_for(r) for r in rooms]
+    await _attach_queue_provenance(cards)
+    return cards
+
+
+async def _attach_queue_provenance(cards: list[NowPlaying]) -> None:
+    """Fill ``added_by`` for whatever each room is playing — the "added by
+    <device>" tag on the now-playing card.
+
+    ONE query for every room rather than one per room: this endpoint is on
+    the dashboard's 1.5 s poll loop, and a per-room round trip here is how
+    a cheap readout turns into a query flood. Silently leaves ``added_by``
+    null on any failure; it's a nicety, never a reason to fail the readout.
+    """
+    wanted = {(c.room_id, c.song_id) for c in cards if c.song_id is not None}
+    if not wanted:
+        return
+    rooms = sorted({room for room, _ in wanted})
+    try:
+        async with session_scope() as s:
+            # Filter by ROOM in SQL (the proven ``= ANY(:list)`` binding) and
+            # match the songid in Python. A composite-tuple IN would save a few
+            # rows, but each room's provenance is bounded by its own queue and
+            # there are a handful of rooms — not worth a clever array join on
+            # the dashboard's 1.5 s poll path.
+            result = await s.execute(
+                text(
+                    """
+                    SELECT q.room_id, q.song_id,
+                           COALESCE(d.name, q.device_name)
+                    FROM room_queue_items q
+                    LEFT JOIN devices d ON d.device_id = q.device_id
+                    WHERE q.room_id = ANY(:rooms)
+                    """
+                ),
+                {"rooms": rooms},
+            )
+            by_key = {
+                (r[0], int(r[1])): r[2]
+                for r in result.all()
+                if (r[0], int(r[1])) in wanted
+            }
+    except Exception as e:  # noqa: BLE001 — decoration only
+        log.debug("now-playing provenance lookup failed: %s", e)
+        return
+    for card in cards:
+        if card.song_id is not None:
+            card.added_by = by_key.get((card.room_id, card.song_id))
 
 
 @router.post(
@@ -1212,7 +1259,15 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
     source: str | None = None
     source_url: str | None = None
     source_ref: str | None = None
+    song_id: int | None = None
     if song_dict:
+        # MPD's tag capitalization varies by build; the songid is how the
+        # room-queue provenance table is keyed, so take either spelling.
+        raw_song_id = song_dict.get("id") or song_dict.get("Id")
+        try:
+            song_id = int(raw_song_id) if raw_song_id is not None else None
+        except (TypeError, ValueError):
+            song_id = None
         duration_raw = song_dict.get("duration") or song_dict.get("Time")
         try:
             duration_sec: int | None = int(float(duration_raw)) if duration_raw else None
@@ -1239,6 +1294,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         source=source,
         source_url=source_url,
         source_ref=source_ref,
+        song_id=song_id,
     )
 
 

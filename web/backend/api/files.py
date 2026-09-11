@@ -185,6 +185,25 @@ class ImportResponse(BaseModel):
     reindex_triggered: bool
 
 
+class MoveRequest(BaseModel):
+    source_library_id: str
+    paths: list[str] = Field(..., min_length=1, max_length=1000)
+    # Destination LIBRARY + DIRECTORY. Same library is the common case (drag a
+    # file into a subfolder); a different one is allowed when both are
+    # editable, which is what makes "drag from Downloads into Music" work.
+    target_library_id: str
+    target_path: str = ""
+
+
+class MoveResponse(BaseModel):
+    moved: list[str]
+    # Harmless no-ops, kept apart from `failed` so dropping something into the
+    # folder it's already in doesn't read as an error.
+    skipped: list[str]
+    failed: list[str]
+    reindex_triggered: bool
+
+
 # ─── GET /libraries ──────────────────────────────────────────────────────────
 @router.get("/libraries", dependencies=[Depends(require_admin_read)])
 async def list_libraries() -> dict[str, Any]:
@@ -516,6 +535,132 @@ async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
     if target.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(target.reindex_kind, request)
     return ImportResponse(copied=copied, skipped=skipped, reindex_triggered=reindex_triggered)
+
+
+# ─── POST /move ──────────────────────────────────────────────────────────────
+@router.post(
+    "/move", response_model=MoveResponse, dependencies=[Depends(require_admin_mutation)]
+)
+async def move(request: Request, req: MoveRequest) -> MoveResponse:
+    """Move files and folders into another folder — the drag-and-drop verb.
+
+    Within one library or between two, as long as BOTH are editable: a move
+    deletes from the source, so a read-only root (a removable drive, a
+    read-only plugin library) can only ever be a destination. Removables stay
+    copy-only through ``/import``.
+
+    Per-path outcome rather than all-or-nothing, like ``/delete``: one
+    colliding name shouldn't abandon the other forty files in the drag.
+
+    The guards, in the order they matter:
+
+    * ``safe_join`` on every source path AND the destination — containment is
+      never re-implemented here (see files_security).
+    * A library ROOT can't be moved.
+    * A directory can't be moved into itself or into its own descendant.
+      ``shutil.move`` would happily start recursing into the copy it is
+      creating; the check is a realpath prefix test, so a symlinked path that
+      resolves back inside the source is caught too.
+    * An existing destination name FAILS rather than being overwritten or
+      silently renamed. A move that quietly replaced a file would be the one
+      unrecoverable operation on this page.
+    * Secret-shaped names are refused the same way upload/import refuse them.
+    """
+    source = await _resolve_library(req.source_library_id)
+    target = await _resolve_library(req.target_library_id)
+    if not source.editable:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{source.label} is read-only — nothing can be moved out of it",
+        )
+    if not target.editable:
+        raise HTTPException(
+            status_code=403, detail=f"{target.label} is read-only"
+        )
+
+    dst_dir = safe_join(target.root_path, req.target_path)
+    if not dst_dir.exists() or not dst_dir.is_dir():
+        raise HTTPException(status_code=404, detail="target directory not found")
+
+    moved: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+
+    for rel in req.paths:
+        if not rel or not rel.strip():
+            failed.append(f"{rel}: empty path")
+            continue
+        try:
+            src = safe_join(source.root_path, rel)
+        except HTTPException:
+            failed.append(f"{rel}: rejected")
+            continue
+        if src == source.root_path:
+            failed.append(f"{rel}: refusing to move a library root")
+            continue
+        if not src.exists() and not src.is_symlink():
+            failed.append(f"{rel}: not found")
+            continue
+
+        name = _safe_basename(src.name)
+        if not name or name in (".", "..") or is_sensitive_name(name):
+            failed.append(f"{rel}: bad name")
+            continue
+
+        # Already where it's being dropped — a no-op, not a failure.
+        if src.parent == dst_dir:
+            skipped.append(f"{rel}: already in that folder")
+            continue
+
+        # Into itself / into a descendant. Resolve both sides so a symlinked
+        # destination that lands back inside the source is caught as well.
+        if src.is_dir():
+            real_src = src.resolve(strict=False)
+            real_dst = dst_dir.resolve(strict=False)
+            if real_dst == real_src or _is_under(real_dst, real_src):
+                failed.append(f"{rel}: can't move a folder into itself")
+                continue
+
+        dest = dst_dir / name
+        if dest.exists() or dest.is_symlink():
+            failed.append(f"{rel}: “{name}” already exists there")
+            continue
+        # Belt-and-braces: the joined destination must still be inside the
+        # target root after resolution.
+        try:
+            dest.resolve(strict=False).relative_to(target.root_path)
+        except ValueError:
+            failed.append(f"{rel}: destination escapes the target library")
+            continue
+
+        try:
+            # shutil.move handles the cross-filesystem case (copy + unlink),
+            # which a plain rename can't — libraries can live on different
+            # drives, and on Windows that's the common case.
+            shutil.move(str(src), str(dest))
+            moved.append(dest.relative_to(target.root_path).as_posix())
+        except OSError as e:
+            failed.append(f"{rel}: {e}")
+
+    # Both sides can be indexed libraries, and a move changes both.
+    reindex_triggered = False
+    if moved:
+        for kind in {source.reindex_kind, target.reindex_kind}:
+            if kind in INDEXED_KINDS:
+                reindex_triggered = await _trigger_reindex(kind, request) or reindex_triggered
+    return MoveResponse(
+        moved=moved, skipped=skipped, failed=failed,
+        reindex_triggered=reindex_triggered,
+    )
+
+
+def _is_under(candidate: Path, ancestor: Path) -> bool:
+    """True when ``candidate`` is inside ``ancestor`` (both already resolved)."""
+    try:
+        candidate.relative_to(ancestor)
+        return True
+    except ValueError:
+        return False
 
 
 def _escapes(p: Path, root: Path) -> bool:

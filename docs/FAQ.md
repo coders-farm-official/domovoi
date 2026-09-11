@@ -139,11 +139,50 @@ They coexist happily — Domovoi doesn't replace Home Assistant (it doesn't do l
 
 Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile and voice data outright. Matching thresholds are tunable per household if siblings' voices collide.
 
+## Who added that song, and can I stop someone adding more?
+
+Every room has one queue — MPD's, the thing its speaker actually plays from —
+and anyone on the network can add to it, reorder it, or drop a track from the
+dashboard's **Music → Room queue** tab or the app's **room queue** tab. Each
+entry carries a quiet "added by *<device>*" note, so "who put this on?" has an
+answer. Entries Domovoi has no record of — a voice request, or a cast from
+before this existed — simply show nothing rather than a guess.
+
+Devices name themselves. A browser or phone introduces itself the first time
+it loads, with a name guessed from the platform ("Chrome on Windows", "Pixel
+8"); you can rename it in **Settings → Devices** (dashboard) or **Settings →
+Connection** (app). Renaming relabels that device's existing queue entries.
+
+An admin can take queue editing away from a named device — one room, or every
+room — in **Settings → Devices → Queue access**. A blocked device can still
+*see* the queue and still plays its own music; it just can't change what the
+room plays. Be aware of what this is: a device tells the server who it is, and
+nothing on a trusted LAN forces it to be honest, so this reliably settles a
+household argument but is not a defence against someone determined. Changing
+blocks needs the admin password, which is why it can't be undone from the
+device it was applied to.
+
+## Can I move files around without the command line?
+
+Yes — the dashboard's **Files** tab moves things by drag and drop. Pick up a
+row (or select several first) and drop it on a folder, on a breadcrumb crumb to
+move it up a level, or on another library's chip to move it into that library.
+Dragging files in from your desktop uploads them into the folder you're looking
+at. On the phone, each row has a **move** button that opens a destination
+picker, since dragging inside a scrolling list isn't a real gesture.
+
+A few things it refuses on purpose: moving a folder into itself, moving
+anything onto a name that already exists (nothing is ever silently
+overwritten), and moving *out of* a read-only library — a removable drive or a
+read-only plugin library can only be a destination. Copying *off* a removable
+drive is still the separate **import** action. If one item in a multi-item drag
+fails, the rest still move and the toast says what went wrong.
+
 ## What music sources exist out of the box?
 
 - **Your local library** — files in your music folder (`MUSIC_DIR`, default `~/Music`), indexed and playable by voice per room, with playlists, album art in the browser player, and optional automatic metadata cleanup.
 - **Browser uploads** — drag files into the dashboard; they land in `MUSIC_DIR/uploads/` and join the library.
-- **Internet radio + FM** — the bundled radio plugin: station search, favorites, live tuning (FM needs an optional RTL-SDR dongle), and passive song detection on stations you favorite.
+- **Internet radio + FM** — the bundled radio plugin: station search, live tuning (FM needs an optional RTL-SDR dongle), a Recent strip of the last ten stations you played, and passive song detection on stations you favorite. Clicking a station plays it; favoriting is a separate act, because a favorite is also what puts a station on the detectors' poll schedule.
 - **Podcasts and audiobooks** — RSS podcast subscriptions and local audiobook files, streamed per room like music.
 
 Anything beyond that — pulling music from external sources — is the job of **provider plugins**: separately installed plugins that act as acquisition fulfillers and streaming search providers. Core deliberately speaks only a generic "media acquisition" vocabulary; a request like "add this song" is queued as a structured request, and whatever provider plugin you've installed fulfills it. No fulfiller installed? Requests wait in the queue (visibly, on the dashboard) and Domovoi tells you a provider is needed — installing one later drains the backlog.

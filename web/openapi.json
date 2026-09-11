@@ -1736,6 +1736,510 @@
         }
       }
     },
+    "/api/music/queue/{room_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Read Queue",
+        "description": "The room's live queue with provenance joined on.\n\n``device_id`` is optional and only affects ``editable``/``blocked_reason``\n\u2014 reading a queue is never blocked, so a blocked device can still SEE\nwhat's playing and why it can't change it.",
+        "operationId": "read_queue_api_music_queue__room_id__get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomQueue"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/add": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Add To Queue",
+        "description": "Append library tracks to the room's queue and stamp provenance.",
+        "operationId": "add_to_queue_api_music_queue__room_id__add_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueAddRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/remove": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Remove From Queue",
+        "operationId": "remove_from_queue_api_music_queue__room_id__remove_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueRemoveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/move": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Move In Queue",
+        "description": "Reorder. Provenance is keyed by songid, so a move needs no DB write \u2014\nthat's the reason for keying it that way.",
+        "operationId": "move_in_queue_api_music_queue__room_id__move_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueMoveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/clear": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Clear Queue",
+        "operationId": "clear_queue_api_music_queue__room_id__clear_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueClearRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue-blocks": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Blocks",
+        "operationId": "list_blocks_api_music_queue_blocks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QueueBlock"
+                  },
+                  "type": "array",
+                  "title": "Response List Blocks Api Music Queue Blocks Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Create Block",
+        "description": "Block a device from editing one room's queue, or every room's\n(``room_id`` omitted). Needs a device id, a name, or both \u2014 a block\nnaming neither would match nothing, and the schema refuses it.",
+        "operationId": "create_block_api_music_queue_blocks_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueBlockCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueBlock"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue-blocks/{block_id}": {
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete Block",
+        "operationId": "delete_block_api_music_queue_blocks__block_id__delete",
+        "parameters": [
+          {
+            "name": "block_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Block Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/register": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Register Device",
+        "description": "Upsert this client's row and bump ``last_seen_at``.\n\nIdempotent and cheap \u2014 clients call it on every boot. ``name`` is only\napplied when the row is NEW (``COALESCE`` on the existing value), so a\nclient that always sends its platform default never overwrites a name a\nperson chose.",
+        "operationId": "register_device_api_devices_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}": {
+      "patch": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Rename Device",
+        "description": "Rename a device. Open under LAN trust, like registration \u2014 and\nharmless for the blocklist, which matches ids too.",
+        "operationId": "rename_device_api_devices__device_id__patch",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRename"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List Devices",
+        "description": "The device roster, most-recently-seen first. Admin-gated: it's an\ninventory of what's on the network. Feeds the blocklist editor, so an\nadmin picks a device from a list instead of typing an id.",
+        "operationId": "list_devices_api_devices_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Device"
+                  },
+                  "title": "Response List Devices Api Devices Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/people": {
       "get": {
         "tags": [
@@ -2766,6 +3270,51 @@
         }
       }
     },
+    "/api/satellites/media/jobs/{job_id}/credentials": {
+      "get": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Job Credentials",
+        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. The\ncard always has them, so the message says where to look rather than\npretending they're gone for good.",
+        "operationId": "media_job_credentials_api_satellites_media_jobs__job_id__credentials_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Media Job Credentials Api Satellites Media Jobs  Job Id  Credentials Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/media/jobs/{job_id}/cancel": {
       "post": {
         "tags": [
@@ -2977,13 +3526,115 @@
         }
       }
     },
+    "/api/satellites/approvals": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "List Approvals",
+        "description": "Satellites waiting on a human. Declared BEFORE /{room_id} so the\npath parameter can't shadow it.",
+        "operationId": "list_approvals_api_satellites_approvals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/approvals/{room_id}/approve": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Approve Satellite",
+        "description": "Approve a pending satellite \u2014 writes the pairing that binds this room\nto this device. Admin-gated at both hops.",
+        "operationId": "approve_satellite_api_satellites_approvals__room_id__approve_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/approvals/{room_id}/reject": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Reject Satellite",
+        "description": "Drop a pending request. The device keeps retrying until it is\napproved or powered off.",
+        "operationId": "reject_satellite_api_satellites_approvals__room_id__reject_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}": {
       "delete": {
         "tags": [
           "satellites"
         ],
         "summary": "Delete Satellite",
-        "description": "Remove a never-connected (`waiting`) satellite \u2014 inventory row +\npreseeded pairing. Proxies to the core, which 409s for provisioned\nrooms.",
+        "description": "Remove a satellite and release its room name.\n\nDefault: a never-connected (`waiting`) room - inventory row + preseeded\npairing; the core 409s once the room has actually connected.\n``purge=true``: retire a room that DID connect, dropping its pairing,\nany pending approval, and its MPD instance, which is what frees the name\nfor reuse. The core refuses to purge a room whose satellite is connected\nright now.",
         "operationId": "delete_satellite_api_satellites__room_id__delete",
         "parameters": [
           {
@@ -2993,6 +3644,16 @@
             "schema": {
               "type": "string",
               "title": "Room Id"
+            }
+          },
+          {
+            "name": "purge",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Purge"
             }
           }
         ],
@@ -3921,6 +4582,59 @@
         }
       }
     },
+    "/api/satellites/{room_id}/logs": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Satellite Logs",
+        "description": "Tail of the satellite's in-RAM log ring, pulled live over its WS.\n\nDefaults to the most recent 1 MB (what the drawer's Logs tab renders);\npass ``max_bytes`` up to 10 MB for the whole ring. 404 when the room\nisn't connected \u2014 the buffer lives in the Pi's process.\n\nThe timeout outlasts the core's own 60 s WS wait on purpose, so a slow\nsatellite surfaces the core's 504 (\"stopped answering\") instead of this\nhop timing out first and reporting a less specific 502.",
+        "operationId": "get_satellite_logs_api_satellites__room_id__logs_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "max_bytes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10485760,
+              "minimum": 1024,
+              "default": 1048576,
+              "title": "Max Bytes"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}/pairing/reset": {
       "post": {
         "tags": [
@@ -4296,7 +5010,7 @@
           "config"
         ],
         "summary": "Get Version",
-        "description": "The Domovoi server's current version label (short HEAD SHA, +\"-dirty\"\nwhen the working tree is dirty). Read-only proxy to the Domovoi server,\nwhich owns the git working tree \u2014 the web process can't see it.",
+        "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. Read-only proxy to the Domovoi server, which\nowns the git working tree; the web process can't see it.",
         "operationId": "get_version_api_config_version_get",
         "responses": {
           "200": {
@@ -4318,6 +5032,26 @@
         "summary": "Check Version",
         "description": "Fetch upstream and report how far the Domovoi server's HEAD is\nbehind/ahead. Best-effort: offline / no tracking branch comes back with\nupstream=False rather than an error status. Read-only \u2014 never pulls.",
         "operationId": "check_version_api_config_version_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/version/restart": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Restart Version",
+        "description": "Bounce the Domovoi services so pulled code actually loads.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
+        "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -6702,6 +7436,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/move": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Move",
+        "description": "Move files and folders into another folder \u2014 the drag-and-drop verb.\n\nWithin one library or between two, as long as BOTH are editable: a move\ndeletes from the source, so a read-only root (a removable drive, a\nread-only plugin library) can only ever be a destination. Removables stay\ncopy-only through ``/import``.\n\nPer-path outcome rather than all-or-nothing, like ``/delete``: one\ncolliding name shouldn't abandon the other forty files in the drag.\n\nThe guards, in the order they matter:\n\n* ``safe_join`` on every source path AND the destination \u2014 containment is\n  never re-implemented here (see files_security).\n* A library ROOT can't be moved.\n* A directory can't be moved into itself or into its own descendant.\n  ``shutil.move`` would happily start recursing into the copy it is\n  creating; the check is a realpath prefix test, so a symlinked path that\n  resolves back inside the source is caught too.\n* An existing destination name FAILS rather than being overwritten or\n  silently renamed. A move that quietly replaced a file would be the one\n  unrecoverable operation on this page.\n* Secret-shaped names are refused the same way upload/import refuse them.",
+        "operationId": "move_api_files_move_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveResponse"
                 }
               }
             }
@@ -10087,6 +10863,17 @@
               }
             ],
             "title": "Matched Path"
+          },
+          "utterance_trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Utterance Trigger"
           }
         },
         "type": "object",
@@ -10202,6 +10989,118 @@
           "denylisted_at"
         ],
         "title": "DenylistEntry"
+      },
+      "Device": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Agent"
+          },
+          "first_seen_at": {
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "title": "Last Seen At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "name"
+        ],
+        "title": "Device"
+      },
+      "DeviceRegistration": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "user_agent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "DeviceRegistration"
+      },
+      "DeviceRename": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DeviceRename"
       },
       "DisplayRequest": {
         "properties": {
@@ -10925,6 +11824,76 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MoveRequest": {
+        "properties": {
+          "source_library_id": {
+            "type": "string",
+            "title": "Source Library Id"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Paths"
+          },
+          "target_library_id": {
+            "type": "string",
+            "title": "Target Library Id"
+          },
+          "target_path": {
+            "type": "string",
+            "title": "Target Path",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_library_id",
+          "paths",
+          "target_library_id"
+        ],
+        "title": "MoveRequest"
+      },
+      "MoveResponse": {
+        "properties": {
+          "moved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Moved"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
+          },
+          "failed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failed"
+          },
+          "reindex_triggered": {
+            "type": "boolean",
+            "title": "Reindex Triggered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "moved",
+          "skipped",
+          "failed",
+          "reindex_triggered"
+        ],
+        "title": "MoveResponse"
+      },
       "MpdPorts": {
         "properties": {
           "control": {
@@ -11295,6 +12264,28 @@
               }
             ],
             "title": "Source Ref"
+          },
+          "song_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Song Id"
+          },
+          "added_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added By"
           }
         },
         "type": "object",
@@ -11878,6 +12869,16 @@
             "type": "boolean",
             "title": "Offline",
             "default": true
+          },
+          "setup_transport": {
+            "type": "string",
+            "title": "Setup Transport",
+            "default": "usb"
+          },
+          "wifi_country": {
+            "type": "string",
+            "title": "Wifi Country",
+            "default": "US"
           }
         },
         "type": "object",
@@ -11897,6 +12898,309 @@
           "model"
         ],
         "title": "PullBody"
+      },
+      "QueueAddRequest": {
+        "properties": {
+          "track_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Track Ids"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_ids",
+          "device_id"
+        ],
+        "title": "QueueAddRequest"
+      },
+      "QueueBlock": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "QueueBlock"
+      },
+      "QueueBlockCreate": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "title": "QueueBlockCreate"
+      },
+      "QueueClearRequest": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "QueueClearRequest"
+      },
+      "QueueItem": {
+        "properties": {
+          "song_id": {
+            "type": "integer",
+            "title": "Song Id"
+          },
+          "pos": {
+            "type": "integer",
+            "title": "Pos"
+          },
+          "file": {
+            "type": "string",
+            "title": "File"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "artist": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist"
+          },
+          "album": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Album"
+          },
+          "duration_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Sec"
+          },
+          "added_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added By"
+          },
+          "added_by_device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added By Device Id"
+          },
+          "added_at": {
+            "title": "Added At"
+          },
+          "playing": {
+            "type": "boolean",
+            "title": "Playing",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "song_id",
+          "pos",
+          "file"
+        ],
+        "title": "QueueItem"
+      },
+      "QueueMoveRequest": {
+        "properties": {
+          "song_id": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Song Id"
+          },
+          "to_position": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "To Position"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "song_id",
+          "to_position",
+          "device_id"
+        ],
+        "title": "QueueMoveRequest"
+      },
+      "QueueRemoveRequest": {
+        "properties": {
+          "song_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Song Ids"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "song_ids",
+          "device_id"
+        ],
+        "title": "QueueRemoveRequest"
       },
       "RecentlyPlayed": {
         "properties": {
@@ -12032,6 +13336,53 @@
         "type": "object",
         "title": "RoomLabelRequest",
         "description": "Set (or clear, with null) a satellite's display room label."
+      },
+      "RoomQueue": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "current_song_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Song Id"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable",
+            "default": true
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "RoomQueue"
       },
       "Satellite": {
         "properties": {

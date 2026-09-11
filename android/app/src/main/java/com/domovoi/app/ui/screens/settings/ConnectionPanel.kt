@@ -17,11 +17,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,12 +32,16 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.net.renameDevice
+import com.domovoi.app.net.suggestedDeviceName
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
+import kotlinx.coroutines.launch
 
 /**
  * Connection tab — Android-only. The browser gets the server URL for free
@@ -52,6 +59,16 @@ internal fun ConnectionPanel() {
     val connected by app.bus.connected.collectAsState()
 
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
+
+    // The server is the source of truth for this device's name (it may have
+    // been renamed from the dashboard), so read it back from the idempotent
+    // register rather than keeping a local copy.
+    val scope = rememberCoroutineScope()
+    var deviceName by remember { mutableStateOf("") }
+    var deviceNameDraft by remember { mutableStateOf("") }
+    LaunchedEffect(serverUrl) {
+        registerDevice(app)?.let { deviceName = it.name; deviceNameDraft = it.name }
+    }
 
     val peopleState = rememberApi(fetch = { it.api.get("/api/people").decode<List<SettingsPerson>>() })
     val people = peopleState.data ?: emptyList()
@@ -116,7 +133,48 @@ internal fun ConnectionPanel() {
         }
 
         item {
-            PanelCard("This device", "How this install identifies itself to the server.") {
+            PanelCard(
+                "This device",
+                "The name a room queue shows next to anything you add from this phone.",
+            ) {
+                SectionLabel("name")
+                Spacer(Modifier.height(2.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = deviceNameDraft,
+                        onValueChange = { deviceNameDraft = it.take(60) },
+                        singleLine = true,
+                        placeholder = {
+                            Text(suggestedDeviceName(), color = Domovoi.colors.fgSubtle)
+                        },
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            val next = deviceNameDraft.trim()
+                            if (next.isEmpty()) {
+                                toast("name can't be blank")
+                            } else {
+                                scope.launch {
+                                    runCatching { renameDevice(app, next) }
+                                        .onSuccess {
+                                            deviceName = it.name
+                                            deviceNameDraft = it.name
+                                            toast("this device is now \"${it.name}\"")
+                                        }
+                                        .onFailure { toast("rename failed: ${it.message}") }
+                                }
+                            }
+                        },
+                        enabled = deviceNameDraft.trim().isNotEmpty()
+                            && deviceNameDraft.trim() != deviceName,
+                    ) { Text("rename") }
+                }
+                Spacer(Modifier.height(8.dp))
                 SectionLabel("device id")
                 Spacer(Modifier.height(2.dp))
                 Text(

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.Album
@@ -66,6 +67,7 @@ import com.domovoi.app.net.decode
 import com.domovoi.app.net.deleteFiles
 import com.domovoi.app.net.filesBrowsePath
 import com.domovoi.app.net.importFile
+import com.domovoi.app.net.moveFiles
 import com.domovoi.app.net.openFileDownload
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.uploadFiles
@@ -141,6 +143,7 @@ fun FilesScreen() {
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<FileEntry?>(null) }
+    var moveEntry by remember { mutableStateOf<FileEntry?>(null) }
     var importEntry by remember { mutableStateOf<FileEntry?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing
 
@@ -226,6 +229,34 @@ fun FilesScreen() {
         }
     }
 
+    fun doMove(e: FileEntry, targetLibraryId: String, targetPath: String) {
+        val id = selectedId ?: return
+        busy = "moving"
+        scope.launch {
+            runCatching { moveFiles(app, id, listOf(e.rel), targetLibraryId, targetPath) }
+                .onSuccess { r ->
+                    val parts = StringBuilder()
+                    if (r.moved > 0) parts.append("moved ${r.moved} item${if (r.moved == 1) "" else "s"}")
+                    if (r.skipped > 0) {
+                        if (parts.isNotEmpty()) parts.append(" · ")
+                        parts.append("${r.skipped} already there")
+                    }
+                    if (r.failed > 0) {
+                        if (parts.isNotEmpty()) parts.append(" · ")
+                        parts.append("${r.failed} failed")
+                    }
+                    if (r.reindexTriggered) parts.append(" · indexing…")
+                    toast(parts.ifEmpty { StringBuilder("nothing to move") }.toString())
+                    // Name the reason — "1 failed" alone is useless when the
+                    // cause is a collision the user can act on.
+                    r.firstFailure?.let { toast(it.take(120)) }
+                    browse.refresh()
+                }
+                .onFailure { toast("move failed: ${it.message}") }
+            busy = null
+        }
+    }
+
     fun doImport(e: FileEntry, target: FileLibrary) {
         val id = selectedId ?: return
         busy = "importing"
@@ -307,6 +338,7 @@ fun FilesScreen() {
                                 onOpen = { onEntryPrimary(e) },
                                 onDownload = { onEntryDownload(e) },
                                 onDelete = { confirmDelete = e },
+                                onMove = { moveEntry = e },
                                 onImport = { importEntry = e },
                             )
                         }
@@ -342,6 +374,20 @@ fun FilesScreen() {
             destructive = true,
             onConfirm = { doDelete(e) },
             onDismiss = { confirmDelete = null },
+        )
+    }
+
+    moveEntry?.let { e ->
+        FilesMoveSheet(
+            entry = e,
+            sourceLibraryId = selectedId ?: "",
+            sourcePath = path,
+            libraries = libraries,
+            onMove = { targetLibraryId, targetPath ->
+                moveEntry = null
+                doMove(e, targetLibraryId, targetPath)
+            },
+            onDismiss = { moveEntry = null },
         )
     }
 
@@ -474,6 +520,7 @@ private fun FileRow(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit,
+    onMove: () -> Unit,
     onImport: () -> Unit,
 ) {
     Column {
@@ -523,6 +570,14 @@ private fun FileRow(
                 Icon(Icons.Outlined.Download, "download", tint = Domovoi.colors.fgMuted)
             }
             if (editable) {
+                // The web moves things by drag and drop; a phone gets a
+                // destination picker instead (FilesMoveSheet).
+                IconButton(onClick = onMove) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.DriveFileMove, "move to another folder",
+                        tint = Domovoi.colors.fgMuted,
+                    )
+                }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Outlined.Delete, "delete", tint = Domovoi.colors.fgMuted)
                 }

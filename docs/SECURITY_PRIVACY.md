@@ -65,6 +65,17 @@ and transport actions it uses) rides this same tier by design — the device
 renders it unattended, with no interactive login. Per-device read tokens
 for kiosk clients sit in the hardening backlog alongside TLS.
 
+**Device identity is self-asserted, and the room-queue blocklist depends on
+it.** A browser or phone introduces itself with an id it generates locally
+(`POST /api/devices/register`), and the server takes that at face value —
+there is no credential behind it, by the same LAN-trust reasoning as the rest
+of this tier. So the queue blocklist (see the table below) is *household
+policy*, not a security control: it reliably keeps a known device out of a
+room's queue, and someone determined can claim a different id. It is
+documented that way in the dashboard, too. Binding a device id to a
+per-device token belongs with the kiosk read tokens in the hardening
+backlog.
+
 ### Outbound-fetch tier
 
 One endpoint makes the server fetch a **caller-chosen URL**
@@ -96,6 +107,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite code push** (makes a Pi download and run fresh code) | Core: `POST /v1/admin/satellite/upgrade`. Dashboard: `POST /api/satellites/{room_id}/upgrade`. | Pre-setup grace. |
 | **Satellite pairing reset** (lets the next device re-pair as a room) | Core: `DELETE /v1/admin/satellites/{room_id}/pairing`. Dashboard: `POST /api/satellites/{room_id}/pairing/reset`. | Pre-setup grace. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
+| **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
 
 Everything else under `/v1/admin/...` — announce, drop-in, music playback,

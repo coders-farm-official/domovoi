@@ -81,3 +81,37 @@ data class NpFavoriteResponse(
     // Optional server-supplied toast copy — preferred when present.
     val message: String? = null,
 )
+
+// ─── Room queue (web/backend/api/music_queue.py) ──────────────────────────
+// The queue the ROOM plays from — MPD's, shared by every client — as opposed
+// to the per-device player queue. `addedBy` is the device that queued the
+// entry, null when there's no record (voice, or a cast from before devices
+// had names). `songId` is MPD's songid: stable across reorders, which is why
+// every edit addresses an entry by it rather than by position.
+
+@Serializable
+data class QueueItem(
+    @SerialName("song_id") val songId: Long = 0,
+    val pos: Int = 0,
+    val file: String = "",
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    @SerialName("duration_sec") val durationSec: Int? = null,
+    @SerialName("added_by") val addedBy: String? = null,
+    @SerialName("added_by_device_id") val addedByDeviceId: String? = null,
+    @SerialName("added_at") val addedAt: String? = null,
+    val playing: Boolean = false,
+)
+
+@Serializable
+data class RoomQueue(
+    @SerialName("room_id") val roomId: String = "",
+    val items: List<QueueItem> = emptyList(),
+    @SerialName("current_song_id") val currentSongId: Long? = null,
+    // Whether THIS device may edit the queue. The server re-checks every
+    // edit; this just lets the UI disable its own controls instead of
+    // discovering the 403 on first tap.
+    val editable: Boolean = true,
+    @SerialName("blocked_reason") val blockedReason: String? = null,
+)

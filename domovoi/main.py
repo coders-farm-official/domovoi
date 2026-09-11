@@ -2447,6 +2447,268 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     }
 
 
+# ─── Room queue editing (design: the dashboard/app queue surface) ─────────
+#
+# Every other admin music path REPLACES the room's queue; these edit it in
+# place. MPD stays the single source of truth for what a room will play —
+# these are just the operations the voice vocabulary never needed (append,
+# reorder, drop one entry) exposed over HTTP.
+#
+# Entries are addressed by MPD **songid**, never by position: a songid is
+# stable for the life of a queue entry, so "remove song 412" can't become
+# "remove whatever is third now" if someone else reorders first.
+#
+# Provenance ("added by <device>") and the device blocklist live in the WEB
+# process, which owns both tables and is the surface clients actually talk
+# to. These endpoints are the mechanics; they don't know about devices.
+
+
+class _AdminQueueAddBody(BaseModel):
+    # Same cap as play-tracks: a runaway client must not ask MPD to resolve
+    # an unbounded list in one request.
+    track_ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+class _AdminQueueRemoveBody(BaseModel):
+    song_ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+class _AdminQueueMoveBody(BaseModel):
+    song_id: int = Field(..., ge=0)
+    to_position: int = Field(..., ge=0)
+
+
+def _queue_entry_dict(entry: dict[str, Any]) -> dict[str, Any]:
+    """One MPD queue entry in the shape the web layer serializes. MPD's tag
+    capitalization varies by build, hence the paired lookups."""
+    duration_raw = entry.get("duration") or entry.get("Time")
+    try:
+        duration_sec: int | None = int(float(duration_raw)) if duration_raw else None
+    except (TypeError, ValueError):
+        duration_sec = None
+    return {
+        "song_id": int(entry["id"]),
+        "pos": int(entry.get("pos") or 0),
+        "file": str(entry.get("file", "")),
+        "title": entry.get("Title") or entry.get("title"),
+        "artist": entry.get("Artist") or entry.get("artist"),
+        "album": entry.get("Album") or entry.get("album"),
+        "duration_sec": duration_sec,
+    }
+
+
+async def _current_song_id(mpd: Any) -> int | None:
+    try:
+        song = await mpd.current_song()
+    except Exception as e:  # noqa: BLE001 — a missing currentsong isn't fatal
+        log.debug("admin queue: current_song failed: %s", e)
+        return None
+    if not song:
+        return None
+    raw = song.get("id") or song.get("Id")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _log_queue_edit(room_id: str, what: str) -> None:
+    """One ``intents_log`` row per queue edit, like every other UI-initiated
+    music path. No ``conversation_log`` row — a queue edit isn't conversation
+    (same call play-tracks makes)."""
+    from domovoi.db.repositories import IntentLogRepository
+
+    async with session_scope() as s:
+        await IntentLogRepository(s).log(
+            room_id=room_id,
+            transcript=f"[ui] {what}",
+            matched_handler="music",
+            matched_path=None,
+            online=True,
+            latency_ms=0,
+        )
+
+
+@app.get("/v1/admin/music/queue/{room_id}")
+async def admin_music_queue(room_id: str) -> dict[str, Any]:
+    """The room's live MPD queue, in order, plus which entry is playing."""
+    from domovoi.clients.mpd import get_mpd_client_for
+
+    await _ensure_room_mpd(room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        entries = await mpd.queue_list()
+    except Exception as e:
+        log.warning("admin queue list MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    return {
+        "room_id": room_id,
+        "items": [_queue_entry_dict(e) for e in entries],
+        "current_song_id": await _current_song_id(mpd),
+    }
+
+
+@app.post("/v1/admin/music/queue/{room_id}/add")
+async def admin_music_queue_add(
+    room_id: str, body: _AdminQueueAddBody
+) -> dict[str, Any]:
+    """APPEND library tracks to the room's queue without disturbing what's
+    playing. If the room was idle with an empty queue, playback starts (and
+    the satellite gets its music_start frame) — otherwise adding to a quiet
+    room would look like nothing happened."""
+    from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
+    from domovoi.handlers.shared.play_history import record_media_play
+
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(
+                """
+                SELECT id, file_path, title, artist
+                FROM library_tracks
+                WHERE id = ANY(:ids)
+                """
+            ),
+            {"ids": body.track_ids},
+        )
+        by_id = {int(r[0]): r for r in rows.all()}
+    if not by_id:
+        raise HTTPException(
+            status_code=404,
+            detail="none of the requested track_ids exist in library_tracks",
+        )
+    ordered = [by_id[tid] for tid in body.track_ids if tid in by_id]
+    specs = [
+        {"title": r[2] or "", "artist": r[3] or "", "file_path": r[1] or ""}
+        for r in ordered
+    ]
+
+    await _ensure_room_mpd(room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        was_empty = len(await mpd.queue_list()) == 0
+        state_before = await mpd.state()
+        queued = await mpd.queue_add_tracks(specs)
+    except Exception as e:
+        log.warning("admin queue add MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+
+    if not queued:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"MPD couldn't find any of the {len(ordered)} requested "
+                "tracks — try 'rescan my library'"
+            ),
+        )
+
+    started = False
+    if was_empty and state_before == "stop":
+        try:
+            await mpd.resume()
+            started = True
+        except Exception as e:  # noqa: BLE001 — the tracks ARE queued
+            log.warning("admin queue add: start failed: %s", e)
+
+    await _log_queue_edit(room_id, f"queue add {len(queued)} track(s)")
+    if started:
+        first = ordered[0]
+        async with session_scope() as s:
+            await record_media_play(
+                s,
+                room_id=room_id,
+                source="library",
+                title=first[2],
+                artist=first[3],
+                library_track_id=int(first[0]),
+            )
+        response = Response(
+            text="ok",
+            matched_handler="music",
+            music_action="start",
+            music_stream_url=mpd_stream_url_for(room_id),
+        )
+        await _admin_dispatch_music(response, room_id)
+
+    return {
+        "queued": [
+            {"song_id": e["id"], "file": e.get("file", "")}
+            for e in queued
+            if e.get("id") is not None
+        ],
+        "requested": len(body.track_ids),
+        "started": started,
+    }
+
+
+@app.post("/v1/admin/music/queue/{room_id}/remove")
+async def admin_music_queue_remove(
+    room_id: str, body: _AdminQueueRemoveBody
+) -> dict[str, Any]:
+    """Drop entries by songid. Ids MPD no longer has are reported as skipped
+    rather than failing the request — two people pruning the same queue
+    shouldn't hand either of them an error they can act on."""
+    from domovoi.clients.mpd import get_mpd_client_for
+
+    await _ensure_room_mpd(room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        removed = await mpd.queue_remove(body.song_ids)
+    except Exception as e:
+        log.warning("admin queue remove MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    await _log_queue_edit(room_id, f"queue remove {len(removed)} track(s)")
+    return {
+        "removed": removed,
+        "skipped": [sid for sid in body.song_ids if sid not in set(removed)],
+    }
+
+
+@app.post("/v1/admin/music/queue/{room_id}/move")
+async def admin_music_queue_move(
+    room_id: str, body: _AdminQueueMoveBody
+) -> dict[str, Any]:
+    """Reorder: move ``song_id`` to absolute position ``to_position``."""
+    from domovoi.clients.mpd import get_mpd_client_for
+
+    await _ensure_room_mpd(room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        moved = await mpd.queue_move(body.song_id, body.to_position)
+    except Exception as e:
+        log.warning("admin queue move MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    if not moved:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"song {body.song_id} isn't in {room_id}'s queue "
+                "(already played, or someone else removed it)"
+            ),
+        )
+    await _log_queue_edit(room_id, f"queue move {body.song_id}")
+    return {"moved": True, "song_id": body.song_id, "to_position": body.to_position}
+
+
+@app.post("/v1/admin/music/queue/{room_id}/clear")
+async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
+    """Empty the queue and stop the room. The satellite gets its music_stop
+    frame so mpg123 exits instead of sitting on a silent stream."""
+    from domovoi.clients.mpd import get_mpd_client_for
+
+    await _ensure_room_mpd(room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        await mpd.queue_clear()
+    except Exception as e:
+        log.warning("admin queue clear MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    await _log_queue_edit(room_id, "queue clear")
+    await _admin_dispatch_music(
+        Response(text="ok", matched_handler="music", music_action="stop"), room_id
+    )
+    return {"cleared": True, "room_id": room_id}
+
+
 class _AdminAddByQueryBody(BaseModel):
     room_id: str
     query: str = Field(..., min_length=1, max_length=500)

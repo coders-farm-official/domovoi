@@ -43,6 +43,11 @@ log = logging.getLogger(__name__)
 
 _STREAM_CHUNK = 64 * 1024
 
+# How many stations the Recent strip remembers. The product decision is
+# "10 and nothing beyond that", so this is a hard trim on every play, not
+# a display limit over a longer history — see ``_trim_recents``.
+_RECENT_LIMIT = 10
+
 # The full station column list, shared by every read endpoint AND the
 # snapshot so a schema change can't drift between them.
 _STATION_COLUMNS = """
@@ -51,7 +56,8 @@ _STATION_COLUMNS = """
     country_code, language, tags, favorited,
     sample_interval_sec, last_sampled_at,
     created_at, updated_at,
-    now_playing, now_playing_updated_at, icy_supported
+    now_playing, now_playing_updated_at, icy_supported,
+    last_played_at, created_by_play
 """
 
 
@@ -84,6 +90,11 @@ class RadioStation(BaseModel):
     now_playing: str | None = None
     now_playing_updated_at: datetime | None = None
     icy_supported: bool | None = None
+    # Recency (V002). ``last_played_at`` is the Recent strip's sort key;
+    # ``created_by_play`` marks a row that exists only because it was
+    # played — never favorited, reclaimable by the Recent trim.
+    last_played_at: datetime | None = None
+    created_by_play: bool = False
 
 
 class RadioStationCreate(BaseModel):
@@ -99,6 +110,21 @@ class RadioStationCreate(BaseModel):
     language: str | None = None
     tags: list[str] = Field(default_factory=list)
     sample_interval_sec: int = Field(default=180, ge=30, le=86400)
+
+
+class RadioStationPlay(BaseModel):
+    """"Play this" — either an existing row (``station_id``) or the
+    directory-hit shape the search surface already holds. Deliberately
+    NOT a favorite: see ``POST /play``."""
+
+    station_id: int | None = Field(default=None, ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    source: str = "online"
+    stream_url: str | None = None
+    external_id: str | None = None
+    country_code: str | None = None
+    language: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class RadioStationPatch(BaseModel):
@@ -217,13 +243,144 @@ def build_router(ctx: Any) -> APIRouter:
                     SELECT {_STATION_COLUMNS}
                     FROM radio_stations
                     {where_sql}
-                    ORDER BY favorited DESC, name ASC
+                    ORDER BY favorited DESC, name ASC, id ASC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
                 params,
             )
             return [_row_to_station(r) for r in rows.all()]
+
+    # ── Recent (the last few stations actually played) ────────────────
+
+    @router.get("/recent", response_model=list[RadioStation])
+    async def list_recent(
+        limit: int = Query(default=_RECENT_LIMIT, ge=1, le=_RECENT_LIMIT),
+    ) -> list[RadioStation]:
+        """The most recently played stations, newest first. Capped at
+        ``_RECENT_LIMIT`` by the trim itself, so this can't return more
+        than the strip holds however large a ``limit`` is asked for."""
+        async with session_scope() as s:
+            rows = await s.execute(
+                text(
+                    f"""
+                    SELECT {_STATION_COLUMNS}
+                    FROM radio_stations
+                    WHERE last_played_at IS NOT NULL
+                    ORDER BY last_played_at DESC, id DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            return [_row_to_station(r) for r in rows.all()]
+
+    # ── Play (without favoriting) ─────────────────────────────────────
+
+    @router.post("/play", response_model=RadioStation)
+    async def play_station(payload: RadioStationPlay) -> RadioStation:
+        """Stamp a station as played NOW and hand back the row to stream.
+
+        Favoriting is deliberately NOT implied. The stream proxy resolves
+        a row id rather than a URL (so the browser dodges CORS and the
+        server can refuse host-local URLs), which means a directory hit
+        has to exist in the table before it can play — it's persisted with
+        ``created_by_play`` set and ``favorited`` left FALSE, and the
+        Recent trim reclaims it once it ages out unfavorited.
+
+        Idempotent on ``external_id`` exactly like ``POST /stations``, so
+        replaying something already favorited just re-stamps that row and
+        never duplicates it."""
+        if payload.source not in ("online", "fm"):
+            raise HTTPException(
+                status_code=400, detail=f"invalid source {payload.source!r}"
+            )
+        async with session_scope() as s:
+            station_id: int | None = None
+
+            if payload.station_id is not None:
+                found = await s.execute(
+                    text("SELECT id FROM radio_stations WHERE id = :id"),
+                    {"id": payload.station_id},
+                )
+                row = found.first()
+                if row is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"station {payload.station_id} not found",
+                    )
+                station_id = int(row[0])
+            elif payload.external_id:
+                existing = await s.execute(
+                    text("SELECT id FROM radio_stations WHERE external_id = :eid"),
+                    {"eid": payload.external_id},
+                )
+                row = existing.first()
+                if row is not None:
+                    station_id = int(row[0])
+
+            if station_id is None:
+                # Nothing to resolve against — persist the hit. Needs at
+                # least a name and something to play.
+                if not payload.name or not payload.stream_url:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "need station_id, or a known external_id, or "
+                            "name + stream_url to play an unsaved station"
+                        ),
+                    )
+                inserted = await s.execute(
+                    text(
+                        """
+                        INSERT INTO radio_stations
+                            (name, source, stream_url, external_id,
+                             country_code, language, tags, favorited,
+                             created_by_play)
+                        VALUES
+                            (:name, :source, :stream_url, :external_id,
+                             :country_code, :language, :tags, FALSE, TRUE)
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "name": payload.name,
+                        "source": payload.source,
+                        "stream_url": payload.stream_url,
+                        "external_id": payload.external_id,
+                        "country_code": payload.country_code,
+                        "language": payload.language,
+                        "tags": payload.tags,
+                    },
+                )
+                new_row = inserted.first()
+                if new_row is None:
+                    raise HTTPException(
+                        status_code=500, detail="insert returned no row"
+                    )
+                station_id = int(new_row[0])
+
+            await s.execute(
+                text(
+                    "UPDATE radio_stations SET last_played_at = NOW() "
+                    "WHERE id = :id"
+                ),
+                {"id": station_id},
+            )
+            await _trim_recents(s)
+            await _notify_stations(s, "played")
+
+            fetched = await s.execute(
+                text(
+                    f"SELECT {_STATION_COLUMNS} FROM radio_stations "
+                    "WHERE id = :id"
+                ),
+                {"id": station_id},
+            )
+            result = fetched.first()
+        if result is None:
+            raise HTTPException(status_code=500, detail="lost row after play")
+        return _row_to_station(result)
 
     @router.get("/stations/{station_id}", response_model=RadioStation)
     async def get_station(station_id: int) -> RadioStation:
@@ -261,8 +418,12 @@ def build_router(ctx: Any) -> APIRouter:
                 if row is not None:
                     await s.execute(
                         text(
+                            # created_by_play goes FALSE: an explicit
+                            # favorite promotes a played-once row to a
+                            # keeper the Recent trim must never reclaim.
                             "UPDATE radio_stations SET favorited = TRUE, "
-                            "updated_at = NOW() WHERE id = :id"
+                            "created_by_play = FALSE, updated_at = NOW() "
+                            "WHERE id = :id"
                         ),
                         {"id": int(row[0])},
                     )
@@ -316,6 +477,10 @@ def build_router(ctx: Any) -> APIRouter:
             raise HTTPException(status_code=400, detail="no fields provided")
         set_fragments = [f"{k} = :{k}" for k in updates]
         set_fragments.append("updated_at = NOW()")
+        if updates.get("favorited") is True:
+            # Same promotion as the idempotent-favorite path in POST
+            # /stations: once starred, the Recent trim can't reclaim it.
+            set_fragments.append("created_by_play = FALSE")
         params: dict[str, Any] = {"id": station_id, **updates}
 
         async with session_scope() as s:
@@ -552,6 +717,55 @@ async def _notify_stations(s: AsyncSession, reason: str) -> None:
     )
 
 
+async def _trim_recents(s: AsyncSession) -> None:
+    """Hold the Recent strip at exactly ``_RECENT_LIMIT`` stamped rows.
+
+    Two steps, because "not in the recent list" and "safe to delete" are
+    different questions:
+
+    1. Everything outside the newest ``_RECENT_LIMIT`` loses its stamp.
+       That alone is enough for favorites, FCC-imported FM rows, and
+       since-unfavorited stations — they all keep their row (and their
+       detection history) and simply stop showing up under Recent.
+    2. A row that exists ONLY because it was played once
+       (``created_by_play``, still unfavorited, no detections) is deleted
+       when it ages out, so casual listening can't grow the table
+       without bound. The detection check is belt-and-braces: the sampler
+       only ever samples favorites, so such a row shouldn't have any.
+    """
+    await s.execute(
+        text(
+            """
+            WITH fallen AS (
+                SELECT id
+                FROM radio_stations
+                WHERE last_played_at IS NOT NULL
+                ORDER BY last_played_at DESC, id DESC
+                OFFSET :keep
+            )
+            UPDATE radio_stations
+            SET last_played_at = NULL
+            WHERE id IN (SELECT id FROM fallen)
+            """
+        ),
+        {"keep": _RECENT_LIMIT},
+    )
+    await s.execute(
+        text(
+            """
+            DELETE FROM radio_stations AS st
+            WHERE st.created_by_play
+              AND NOT st.favorited
+              AND st.last_played_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM radio_detections d
+                  WHERE d.station_id = st.id
+              )
+            """
+        )
+    )
+
+
 def _search_hit_to_station(
     hit: RadioBrowserStation,
     existing_by_external_id: dict[str, tuple[int, bool]],
@@ -593,6 +807,8 @@ def _row_to_station(r: Any) -> RadioStation:
         now_playing=r[17],
         now_playing_updated_at=r[18],
         icy_supported=r[19],
+        last_played_at=r[20],
+        created_by_play=bool(r[21]),
     )
 
 

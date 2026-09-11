@@ -138,6 +138,11 @@
     };
 
     const bootstrap = async () => {
+      // Introduce this browser to the server (id + a seeded name) so room
+      // queues can say "added by <device>". Not awaited and never fatal —
+      // the dashboard renders unnamed, queue entries just carry no tag.
+      DeviceIdentity.register();
+
       let manifest = { plugins: [], core_nav: {} };
       try {
         manifest = await apiGet('/api/plugins/manifest');

@@ -245,18 +245,13 @@ const OfflineCache = (() => {
  * feeds `person_id`; `device_id` is a stable per-client id.
  * ═══════════════════════════════════════════════════════════════════════ */
 const SpokenAudio = (() => {
-  const CLIENT_KEY = 'domovoi-client-id';
   const PERSON_KEY = 'domovoi-listener-person';
 
-  const clientId = () => {
-    let id = null;
-    try { id = localStorage.getItem(CLIENT_KEY); } catch {}
-    if (!id) {
-      id = 'browser-' + Math.random().toString(36).slice(2, 12);
-      try { localStorage.setItem(CLIENT_KEY, id); } catch {}
-    }
-    return id;
-  };
+  // One device id for the whole dashboard — DeviceIdentity (data.js) owns
+  // the same 'domovoi-client-id' key this used to mint itself. Keeping them
+  // unified is what makes "added by <device>" and the resume positions refer
+  // to the same thing, and what makes an admin device block cover both.
+  const clientId = () => DeviceIdentity.id();
   const getPerson = () => {
     try { const v = localStorage.getItem(PERSON_KEY); return v ? Number(v) : null; }
     catch { return null; }

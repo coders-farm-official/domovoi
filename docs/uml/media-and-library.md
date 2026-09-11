@@ -71,12 +71,35 @@ erDiagram
         text container_name UK "domovoi-mpd-room"
         timestamptz last_connected_at
     }
+    devices {
+        text device_id PK "client-minted: browser-xxxx | android-xxxx"
+        text name "human label; seeded from the platform, then editable"
+        text platform "advisory, no CHECK"
+        text user_agent
+        timestamptz last_seen_at
+    }
+    room_queue_items {
+        text room_id PK "with song_id"
+        int song_id PK "MPD songid — stable across reorders"
+        text device_id "soft ref to devices, NO FK"
+        text device_name "snapshot at add time"
+        timestamptz added_at
+    }
+    queue_device_blocks {
+        bigint id PK
+        text device_id "nullable — survives a rename"
+        text device_name "nullable — survives a reinstall"
+        text room_id "NULL = every room"
+        text note
+    }
 
     playlists ||--o{ playlist_tracks : "CASCADE"
     library_tracks ||--o{ playlist_tracks : "CASCADE"
     library_tracks ||--o{ media_plays : "SET NULL"
     media_acquisitions }o..o| playlists : "attach_to_playlist_id (soft ref)"
     media_acquisitions }o..o| library_tracks : "result.library_track_id"
+    room_queue_items }o..o| devices : "device_id (soft ref)"
+    queue_device_blocks }o..o| devices : "device_id OR device_name (soft)"
 ```
 
 Things the shapes encode deliberately:
@@ -91,6 +114,17 @@ Things the shapes encode deliberately:
 * **History survives deletion.** `media_plays.library_track_id` is
   `ON DELETE SET NULL`, so "what played in the kitchen last night" keeps
   answering after a track is removed.
+* **`room_queue_items` annotates MPD, it doesn't duplicate it.** There is no
+  DB copy of a room's queue — see "Editing a room's queue" below for why, and
+  why the key is a songid rather than a position. `device_id` has no FK:
+  forgetting a device must not delete queue history, and voice-added entries
+  have no device at all.
+* **A queue block is two keys, either of which matches.** `device_id` and
+  `device_name` are both nullable with a CHECK that at least one is set, so a
+  block can follow a rename (id) or a reinstall (name). Paired partial unique
+  indexes keep one block per target per scope — a plain UNIQUE would let
+  duplicate all-rooms blocks pile up, because Postgres treats NULL `room_id`
+  values as distinct.
 * **`mpd_rooms` is the provisioner's source of truth** — which room owns
   which host-port pair and container, surviving restarts. Port allocation is
   `max + 1` from the bases (control 6650, http-stream 8050), serialized by a
@@ -140,6 +174,72 @@ Around that happy path:
 * **The playback-state sweeper** (a core poll worker) clears now-playing
   stamps whose room's MPD no longer plays the stamped stream, so a stale
   card can't outlive reality.
+
+## Editing a room's queue
+
+A room's queue is **MPD's**, and deliberately stays that way: it is what the
+satellite's stream actually plays from, it survives a core restart, and voice
+commands mutate it directly. A second DB-backed queue would be a rival source
+of truth that drifts the first time anything touches MPD without going through
+us. So the queue stays in MPD, and Domovoi *annotates* it.
+
+That annotation is `room_queue_items` (core migration V010), keyed by
+`(room_id, MPD songid)` — **not** position. A songid is stable for the life of
+a queue entry: moving an entry, or inserting ahead of it, changes every `Pos`
+but no `Id`. Two consequences fall out of that choice:
+
+* a reorder needs no database write at all, and
+* "remove entry 3" can never become "remove the wrong song" because someone
+  else reordered first.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client (dashboard / app)
+    participant W as Web backend (:6369)
+    participant DB as Postgres
+    participant K as Core (:6370)
+    participant MPD as Room MPD container
+
+    Note over C: registers itself once per boot:<br/>POST /api/devices/register {device_id, name}
+    C->>W: POST /api/music/queue/kitchen/add<br/>{track_ids, device_id}
+    W->>DB: look up the device's name,<br/>then queue_device_blocks (id OR name, room OR all)
+    alt blocked
+        W-->>C: 403 "Kids iPad isn't allowed to edit the queue in kitchen"
+    else allowed
+        W->>K: POST /v1/admin/music/queue/kitchen/add
+        K->>MPD: addid each resolved file (NO clear)
+        MPD-->>K: new songids
+        K-->>W: {queued:[{song_id, file}], started}
+        W->>DB: INSERT room_queue_items (room, song_id, device_id, device_name)
+        W-->>C: 200
+    end
+
+    C->>W: GET /api/music/queue/kitchen?device_id=…
+    W->>K: GET /v1/admin/music/queue/kitchen
+    K->>MPD: playlistinfo + currentsong
+    W->>DB: join room_queue_items LEFT JOIN devices,<br/>reap rows whose songid has left the queue
+    W-->>C: items[] with added_by + playing, editable, blocked_reason
+```
+
+Around that path:
+
+* **The read is never blocked.** A blocked device still sees what's on; it
+  gets `editable:false` and a `blocked_reason` so the UI can disable its own
+  controls and explain, rather than discovering a 403 on first click. The
+  server re-checks every edit regardless — the flag is a courtesy, not the
+  gate.
+* **`added_by` prefers the live device name** (`COALESCE(devices.name,
+  room_queue_items.device_name)`), so renaming a device relabels its queue
+  entries; a device that has since been forgotten keeps the name it used.
+  Entries with no record at all — voice commands, casts from before devices
+  had names — render nothing rather than a guess.
+* **Provenance is reaped on read**, bounded by the room's own queue, so a
+  long-lived room can't accumulate rows for songs that played months ago.
+* **Blocks match id OR name.** The id survives a rename (the obvious way to
+  slip a block); the name survives a reinstall. Neither is a security
+  boundary — a device id is self-asserted on a trusted LAN. See
+  [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md).
 
 ## Acquiring media
 

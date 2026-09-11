@@ -322,6 +322,9 @@ fun MusicScreen() {
     val tabLabels = listOf(
         "library" + (libraryTotal?.let { " · $it" } ?: ""),
         "player",
+        // What the SPEAKERS play from, next to the player's own queue so the
+        // difference is visible rather than explained.
+        "room queue",
         "playlists" + (playlists.data.orEmpty().size.takeIf { it > 0 }?.let { " · $it" } ?: ""),
         "stats",
     )
@@ -422,12 +425,16 @@ fun MusicScreen() {
                 1 -> item(key = "player") {
                     PlayerPanel(rooms, onSaveQueue = { ui.saveQueueOpen = true })
                 }
-                2 -> playlistsTab(
+                2 -> queueTab(
+                    rooms = rooms,
+                    playingRoom = npList.firstOrNull { it.state == "play" }?.roomId,
+                )
+                3 -> playlistsTab(
                     playlists = playlists,
                     onSelect = { ui.openPlaylist = it },
                     onPlay = onPlayPlaylist,
                 )
-                3 -> statsTab(stats = stats)
+                4 -> statsTab(stats = stats)
             }
         }
 

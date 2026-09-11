@@ -1293,6 +1293,259 @@ const AboutPanel = () => (
   </Card>
 );
 
+/* ---- Devices + queue access -------------------------------------- */
+/*
+ * Two jobs on one panel because they're the same subject from both ends:
+ * what this browser calls itself, and which devices the household lets
+ * touch a room's play queue.
+ *
+ * The device name is what a room queue's "added by" tag shows. It's seeded
+ * from the user agent on first contact and editable here; renaming relabels
+ * this device's existing queue entries (the queue read prefers the live
+ * name), and can't be used to dodge a block, which matches the id too.
+ */
+const ThisDeviceCard = ({ fire }) => {
+  const deviceId = DeviceIdentity.id();
+  const [draft, setDraft] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [serverName, setServerName] = React.useState(DeviceIdentity.name());
+
+  // Register (idempotent) so the row exists even if this is the first page
+  // the user lands on, then show whatever name the server has.
+  React.useEffect(() => {
+    let alive = true;
+    DeviceIdentity.register().then((row) => {
+      if (alive && row && row.name) { setServerName(row.name); setDraft(row.name); }
+    });
+    return () => { alive = false; };
+  }, []);
+  React.useEffect(() => { if (serverName && !draft) setDraft(serverName); }, [serverName]);
+
+  const save = async () => {
+    const name = draft.trim();
+    if (!name) { fire('name can’t be blank'); return; }
+    setSaving(true);
+    try {
+      const row = await DeviceIdentity.rename(name);
+      setServerName(row?.name || name);
+      fire(`this device is now “${row?.name || name}”`);
+    } catch (e) {
+      fire(`rename failed: ${apiErrorText(e)}`);
+    } finally { setSaving(false); }
+  };
+
+  const dirty = draft.trim() && draft.trim() !== (serverName || '');
+  return (
+    <Card title="This device"
+          sub="The name a room queue shows next to anything you add from here.">
+      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
+                    gap: 10, flexWrap: 'wrap' }}>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)}
+               onKeyDown={(e) => { if (e.key === 'Enter' && dirty) save(); }}
+               placeholder={DeviceIdentity.suggestedName()} maxLength={60}
+               style={{ font: 'inherit', fontSize: 13, height: 30, flex: '1 1 240px',
+                        padding: '0 10px', borderRadius: 'var(--r-sm)',
+                        border: '1px solid var(--border)', background: 'var(--card)',
+                        color: 'var(--fg)' }}/>
+        <Button variant="primary" icon="check" disabled={!dirty || saving} onClick={save}>
+          {saving ? 'saving…' : 'rename'}
+        </Button>
+      </div>
+      <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
+        <span className="mono">{deviceId}</span>
+        {' — this browser’s id, also used for podcast and video resume positions.'}
+      </div>
+    </Card>
+  );
+};
+
+const QueueAccessCard = ({ fire }) => {
+  const { items: devices, loading: devicesLoading, refresh: refreshDevices } =
+    useApiList('/api/devices');
+  const { items: blocks, loading: blocksLoading, refresh: refreshBlocks } =
+    useApiList('/api/music/queue-blocks');
+  const { items: nowPlaying } = useApiList('/api/music/now-playing',
+                                           { eventTypes: ['music.now_playing.changed'] });
+  const rooms = nowPlaying.map((np) => np.room_id);
+
+  const [pick, setPick] = React.useState('');     // device_id
+  const [room, setRoom] = React.useState('');     // '' = every room
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const addBlock = async () => {
+    const device = devices.find((d) => d.device_id === pick);
+    if (!device) { fire('pick a device to block'); return; }
+    setBusy(true);
+    try {
+      // Send BOTH id and name: the id survives a rename, the name survives a
+      // reinstall. The server matches either.
+      await apiPost('/api/music/queue-blocks', {
+        device_id: device.device_id,
+        device_name: device.name,
+        room_id: room || null,
+        note: note.trim() || null,
+      });
+      fire(`blocked ${device.name} from ${room || 'every room'}`);
+      setPick(''); setNote('');
+      refreshBlocks();
+    } catch (e) {
+      fire(e.status === 409
+        ? 'that device is already blocked there'
+        : `block failed: ${apiErrorText(e)}`);
+    } finally { setBusy(false); }
+  };
+
+  const removeBlock = async (b) => {
+    try {
+      await apiDelete(`/api/music/queue-blocks/${b.id}`);
+      fire('block removed');
+      refreshBlocks();
+    } catch (e) {
+      fire(`remove failed: ${apiErrorText(e)}`);
+    }
+  };
+
+  const selectStyle = {
+    font: 'inherit', fontSize: 13, height: 30, padding: '0 8px',
+    borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+    background: 'var(--card)', color: 'var(--fg)',
+  };
+
+  return (
+    <>
+      <Card title="Queue access"
+            sub="Stop a device from editing a room's play queue — one room, or all of them.">
+        {/* Said plainly, because the control is easy to over-trust: device
+            ids are self-asserted on the LAN, like the rest of the daily
+            tier. This is household policy, not a security boundary. */}
+        <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'flex-start',
+                      borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+          <Icon name="info" size={13}/>
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            A device tells the server who it is, and nothing on a trusted LAN
+            forces it to be honest. This reliably keeps a known device out of a
+            queue; it isn’t a defence against someone determined to get in.
+            Changing blocks needs admin — so it can’t be undone from the
+            device it was applied to.
+          </span>
+        </div>
+
+        <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center',
+                      flexWrap: 'wrap' }}>
+          <select value={pick} onChange={(e) => setPick(e.target.value)} style={selectStyle}>
+            <option value="">
+              {devicesLoading ? 'loading devices…' : 'pick a device…'}
+            </option>
+            {devices.map((d) => (
+              <option key={d.device_id} value={d.device_id}>
+                {d.name} ({d.device_id})
+              </option>
+            ))}
+          </select>
+          <select value={room} onChange={(e) => setRoom(e.target.value)} style={selectStyle}>
+            <option value="">every room</option>
+            {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <input value={note} onChange={(e) => setNote(e.target.value)}
+                 placeholder="why (optional)" maxLength={200}
+                 style={{ ...selectStyle, flex: '1 1 160px' }}/>
+          <Button variant="primary" icon="lock" disabled={busy || !pick} onClick={addBlock}>
+            block
+          </Button>
+        </div>
+
+        {blocksLoading && blocks.length === 0 ? (
+          <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading blocks…</div>
+        ) : blocks.length === 0 ? (
+          <div style={{ padding: '4px 16px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+            No blocks — every device may edit every queue.
+          </div>
+        ) : (
+          <table className="tbl">
+            <thead><tr>
+              <th>device</th><th>scope</th><th>why</th><th>added</th><th className="actions"></th>
+            </tr></thead>
+            <tbody>
+              {blocks.map((b) => (
+                <tr key={b.id}>
+                  <td>
+                    <div style={{ fontWeight: 500 }}>{b.device_name || '—'}</div>
+                    {b.device_id && (
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>
+                        {b.device_id}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {b.room_id
+                      ? <Pill tone="idle">{b.room_id}</Pill>
+                      : <Pill tone="warn">every room</Pill>}
+                  </td>
+                  <td style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{b.note || '—'}</td>
+                  <td className="mono">{b.created_at ? relTime(b.created_at) : '—'}</td>
+                  <td className="actions">
+                    <Button icon="x" onClick={() => removeBlock(b)}>unblock</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title={`Known devices (${devices.length})`}
+            sub="Browsers and phones that have introduced themselves, most recent first.">
+        {devicesLoading && devices.length === 0 ? (
+          <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+        ) : devices.length === 0 ? (
+          <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+            Nothing yet. A browser or phone registers itself the first time it
+            loads the dashboard.
+          </div>
+        ) : (
+          <table className="tbl">
+            <thead><tr>
+              <th>name</th><th>id</th><th>platform</th><th>last seen</th>
+            </tr></thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.device_id}>
+                  <td style={{ fontWeight: 500 }}>
+                    {d.name}
+                    {d.device_id === DeviceIdentity.id() && (
+                      <span style={{ marginLeft: 6 }}><Pill tone="ok">this one</Pill></span>
+                    )}
+                  </td>
+                  <td className="mono" style={{ fontSize: 11 }}>{d.device_id}</td>
+                  <td className="mono" style={{ fontSize: 11 }}>{d.platform || '—'}</td>
+                  <td className="mono">{d.last_seen_at ? relTime(d.last_seen_at) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div style={{ padding: '10px 16px', display: 'flex', justifyContent: 'flex-end' }}>
+          <Button icon="refresh-cw" onClick={() => { refreshDevices(); refreshBlocks(); }}>
+            refresh
+          </Button>
+        </div>
+      </Card>
+    </>
+  );
+};
+
+const DevicesPanel = () => {
+  const [fire, toastNode] = useToast();
+  return (
+    <>
+      <ThisDeviceCard fire={fire}/>
+      <QueueAccessCard fire={fire}/>
+      {toastNode}
+    </>
+  );
+};
+
 /* ============================================================ */
 /* Settings shell                                               */
 /* ============================================================ */
@@ -1302,6 +1555,7 @@ const SETTINGS_TABS = [
   { id: 'greetings', label: 'Greetings' },
   { id: 'voices', label: 'Voices' },
   { id: 'wakewords', label: 'Wake Words' },
+  { id: 'devices', label: 'Devices' },        // device names + queue access
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'config', label: 'Configuration' },   // last tab, by request
 ];
@@ -1311,6 +1565,7 @@ const SETTINGS_SUB = {
   greetings: 'Lines a satellite plays the instant the wake word fires.',
   voices: 'The TTS voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
+  devices: 'Name this device, and choose who may edit a room’s play queue.',
   models: "What's active in each role, install more, and the host hardware readout.",
   config: 'Editable domovoi configuration.',
 };
@@ -1326,6 +1581,7 @@ const SettingsPage = () => {
       {tab === 'greetings' && <GreetingsPanel/>}
       {tab === 'voices' && <VoicesPanel/>}
       {tab === 'wakewords' && <WakeWordsPanel/>}
+      {tab === 'devices' && <DevicesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'config' && <ConfigPanel/>}
     </div>
