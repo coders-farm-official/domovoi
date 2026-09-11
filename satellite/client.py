@@ -909,21 +909,10 @@ class Satellite:
                 dev.capture_dtype, channels, select,
             )
 
-        def cb(indata, frames, time_info, status) -> None:  # noqa: ANN001
-            # Counted unconditionally, so the overflow warning can report
-            # the callback rate it was measured against. Seen on hardware:
-            # ~6500 "frames dropped in 30s" from a stream whose 30 ms
-            # blocks can only fire ~1000 times in 30 s. Either the stream
-            # really is firing 6x faster than PortAudio negotiated, or the
-            # count means something other than it says - and only a number
-            # from inside this callback can tell those apart.
-            self._raw_q_callbacks += 1
-            if status:
-                log.debug("mic status: %s", status)
-            if select is None:
-                data = bytes(indata)
-            else:
-                data = devices.select_channel_int16(indata, dev.capture_dtype, channels, select)
+        corrector = CaptureRateCorrector(SAMPLE_RATE, FRAME_SAMPLES)
+        self._capture_corrector = corrector
+
+        def _enqueue(data: bytes) -> None:
             try:
                 self.raw_q.put_nowait(data)
             except queue.Full:
@@ -945,8 +934,8 @@ class Satellite:
                     elapsed = now - self._raw_q_last_drop_log
                     log.warning(
                         "mic queue overflowing: %d of %d callbacks dropped "
-                        "in the last %.0fs (%.0f callbacks/s; %d frames "
-                        "each, %d queued). Wake-word predict is falling "
+                        "in the last %.0fs (%.0f callbacks/s; %d queued; "
+                        "capture ratio %.1fx). Wake-word predict is falling "
                         "behind realtime — likely thermal throttling, swap, "
                         "or another CPU hog. Wake-word will still fire on "
                         "recent audio (queue is bounded) but you may see "
@@ -954,11 +943,32 @@ class Satellite:
                         self._raw_q_drops, self._raw_q_callbacks,
                         elapsed if elapsed < 1e6 else 0.0,
                         self._raw_q_callbacks / elapsed if 0 < elapsed < 1e6 else 0.0,
-                        frames, self.raw_q.qsize(),
+                        self.raw_q.qsize(), corrector.ratio,
                     )
                     self._raw_q_drops = 0
                     self._raw_q_callbacks = 0
                     self._raw_q_last_drop_log = now
+
+        def cb(indata, frames, time_info, status) -> None:  # noqa: ANN001
+            # Counted unconditionally, so the overflow warning can report
+            # the callback rate it was measured against. Seen on hardware:
+            # ~6500 "frames dropped in 30s" from a stream whose 30 ms
+            # blocks can only fire ~1000 times in 30 s. Either the stream
+            # really is firing 6x faster than PortAudio negotiated, or the
+            # count means something other than it says - and only a number
+            # from inside this callback can tell those apart.
+            self._raw_q_callbacks += 1
+            if status:
+                log.debug("mic status: %s", status)
+            if select is None:
+                data = bytes(indata)
+            else:
+                data = devices.select_channel_int16(indata, dev.capture_dtype, channels, select)
+            # Everything the consumer sees goes through the corrector, which
+            # is a pass-through on a healthy stream and the only thing that
+            # makes an 8x-fast one usable.
+            for frame in corrector.feed(data):
+                _enqueue(frame)
 
         try:
             self._input_stream = sd.RawInputStream(
@@ -4468,6 +4478,102 @@ def _list_devices() -> None:
 # of a dead satellite is not left guessing.
 _UNREACHABLE_AFTER = 3
 
+
+
+class CaptureRateCorrector:
+    """Detect a mic stream running N× realtime and resample it back down.
+
+    Found on hardware, on both of the Pi Zero 2 Ws we own: the client's
+    capture callback fired ~259 times a second where 33 were negotiated -
+    the array delivering ~7.8× the audio it should. The mechanism is USB:
+    an audio device clocks its ADC off the host's start-of-frame rate,
+    which is 1 kHz at full speed and 8 kHz at high speed. Firmware that
+    assumes the former, enumerated at the latter, believes a millisecond
+    has passed every 125 µs and genuinely samples 8× fast. The result is
+    real audio at ~128 kHz - pitch-shifted, not stuttering - which no wake
+    model matches at any threshold, and a queue that overflows because
+    the consumer is being handed eight seconds of audio per second.
+
+    Every driver-side fix was tried and none held across a restart:
+    ``dtoverlay=dwc2,dr_mode=host`` worked on one board and not the next,
+    and ``dwc_otg.speed=1`` is a parameter of the driver that is NOT loaded.
+    The one thing that is true regardless of driver, batch, or how the
+    device happened to enumerate this boot is the callback rate itself -
+    so measure that, and correct for what it says.
+
+    Usage: feed every mono int16 block the callback produces; enqueue every
+    frame this returns. For the first ``MEASURE_SEC`` it passes blocks
+    straight through while it counts. After that it either keeps passing
+    through (rate nominal) or resamples from ``sample_rate × ratio`` down
+    to ``sample_rate`` and re-frames the output to ``frame_samples``.
+    """
+
+    MEASURE_SEC = 2.0
+    # Below this the stream is "nominal with jitter"; above it something is
+    # wrong with the clock. 1.5 sits well clear of both.
+    CORRECT_ABOVE = 1.5
+    MAX_RATIO = 16
+
+    def __init__(
+        self,
+        sample_rate: int,
+        frame_samples: int,
+        *,
+        now=time.monotonic,
+    ) -> None:
+        self._sample_rate = sample_rate
+        self._frame_bytes = frame_samples * 2      # int16 mono
+        self._expected_rate = sample_rate / frame_samples
+        self._now = now
+        self._t0: float | None = None
+        self._count = 0
+        self.measured = False
+        self.ratio = 1.0
+        self.resampler: StreamingResampler | None = None
+        self._pending = b""
+
+    def feed(self, mono_int16: bytes) -> list[bytes]:
+        if not self.measured:
+            if self._t0 is None:
+                self._t0 = self._now()
+            self._count += 1
+            elapsed = self._now() - self._t0
+            if elapsed >= self.MEASURE_SEC:
+                self._decide(self._count / elapsed)
+            # Pass through while measuring: two seconds of possibly-wrong
+            # audio at startup is harmless, and the mic thread's boot-time
+            # calibration wants frames flowing.
+            return [mono_int16]
+        if self.resampler is None:
+            return [mono_int16]
+        self._pending += self.resampler.process(mono_int16)
+        out: list[bytes] = []
+        while len(self._pending) >= self._frame_bytes:
+            out.append(self._pending[: self._frame_bytes])
+            self._pending = self._pending[self._frame_bytes :]
+        return out
+
+    def _decide(self, rate: float) -> None:
+        self.measured = True
+        ratio = rate / self._expected_rate
+        self.ratio = ratio
+        if ratio < self.CORRECT_ABOVE:
+            log.info(
+                "mic delivery nominal: %.1f callbacks/s (%.2fx expected)",
+                rate, ratio,
+            )
+            return
+        k = max(2, min(self.MAX_RATIO, int(round(ratio))))
+        src = self._sample_rate * k
+        self.resampler = StreamingResampler(src, self._sample_rate)
+        log.warning(
+            "mic delivers %.0f callbacks/s - %.1fx the negotiated rate. The "
+            "USB audio clock is running fast (high-speed enumeration on a "
+            "board whose controller mis-times isochronous audio). Treating "
+            "capture as %d Hz and resampling to %d Hz; the wake word cannot "
+            "work without this.",
+            rate, ratio, src, self._sample_rate,
+        )
 
 
 def _log_capture_environment(input_device: object) -> None:
