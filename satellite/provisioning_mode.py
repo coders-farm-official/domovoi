@@ -254,6 +254,50 @@ class GadgetBackend:
 # ─── Wi-Fi join (nmcli first, wpa_supplicant fallback) ────────────────────
 
 
+# How long to keep rescanning for the customer's network before trying to
+# join it anyway. A scan takes a few seconds; the interface has just come out
+# of AP mode and may need one or two.
+_WIFI_SCAN_WAIT_SEC = 12.0
+_WIFI_SCAN_POLL_SEC = 1.0
+# Between join attempts. Three back-to-back identical attempts fail
+# identically; a pause lets NetworkManager's state settle.
+_WIFI_RETRY_PAUSE_SEC = 2.0
+
+
+def _wait_for_ssid(
+    nmcli: str, ssid: str, run, timeout: float, sleep=time.sleep
+) -> bool:
+    """Rescan until NetworkManager can see ``ssid``, or give up.
+
+    Found on hardware, reliably: the first join ALWAYS failed and the second
+    always worked, same password pasted both times. The join ran the instant
+    the setup AP came down, while the interface was still leaving AP mode and
+    NetworkManager's scan cache held nothing - it had been hosting, not
+    scanning. `nmcli device wifi connect` refuses an SSID it cannot see, and
+    the retries that followed were back-to-back with no rescan, so all three
+    failed the same way. By the customer's second submission NM had scanned.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            r = run(
+                [nmcli, "-t", "-f", "SSID", "device", "wifi", "list", "--rescan", "yes"],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            r = None
+        if r is not None and r.returncode == 0:
+            seen = {
+                ln.replace("\\:", ":").strip()
+                for ln in (r.stdout or "").splitlines()
+            }
+            if ssid in seen:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        sleep(_WIFI_SCAN_POLL_SEC)
+
+
 def apply_wifi(
     ssid: str,
     psk: str,
@@ -269,6 +313,13 @@ def apply_wifi(
         run(["iw", "reg", "set", country], capture_output=True, timeout=15)
     nmcli = shutil.which("nmcli")
     if nmcli:
+        # A hidden network never appears in a scan; everything else must be
+        # visible before `connect` has any chance.
+        if not hidden and not _wait_for_ssid(nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC):
+            log.warning(
+                "%r not visible after %.0fs of scanning - trying to join anyway",
+                ssid, _WIFI_SCAN_WAIT_SEC,
+            )
         cmd = [nmcli, "device", "wifi", "connect", ssid, "password", psk]
         if hidden:
             cmd += ["hidden", "yes"]
@@ -276,7 +327,15 @@ def apply_wifi(
             r = run(cmd, capture_output=True, timeout=timeout)
             if r.returncode == 0:
                 return True, None
-            return False, f"wifi join failed for {ssid!r} (wrong password?)"
+            # Keep nmcli's own words. Reporting every failure as "wrong
+            # password?" hid a scan-cache problem behind a message that sent
+            # people re-typing a password that was right the first time.
+            detail = r.stderr or r.stdout or b""
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", "replace")
+            detail = detail.strip().splitlines()[-1].strip() if detail.strip() else ""
+            log.warning("nmcli connect %r failed (rc=%d): %s", ssid, r.returncode, detail)
+            return False, f"wifi join failed for {ssid!r}: {detail or 'wrong password?'}"
         except subprocess.TimeoutExpired:
             return False, f"wifi join timed out for {ssid!r}"
     # wpa_supplicant fallback: render a network block and reconfigure.
@@ -536,6 +595,8 @@ def apply_provision(
             return True, None
         last_err = err
         log.warning("wifi attempt %d/%d failed: %s", attempt, wifi_attempts, err)
+        if attempt < wifi_attempts:
+            time.sleep(_WIFI_RETRY_PAUSE_SEC)
     return False, last_err or "wifi join failed"
 
 

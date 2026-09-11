@@ -4735,6 +4735,31 @@ def _log_capture_environment(input_device: object) -> None:
     except OSError:
         pass
     try:
+        # The ALSA card IDs. The setup announcements and music play through
+        # `plughw:CARD=<id>`, and the id was taken from a doc that said
+        # "usually Array" - this is what it actually is on this unit.
+        cards = Path("/proc/asound/cards").read_text(encoding="utf-8", errors="replace")
+        ids = [ln.strip() for ln in cards.splitlines() if ln.strip() and ln.strip()[0].isdigit()]
+        log.info("alsa cards: %s", " | ".join(ids) or "(none)")
+    except OSError:
+        pass
+    try:
+        # Bridge the setup indicator's own log into this one. It records
+        # which clip was played on which device, or why it was not - and it
+        # is the only record of the announcements, on a device reachable
+        # only through THIS log. A customer reporting "it never spoke" has
+        # to be answerable from here.
+        slog = Path.home() / ".domovoi" / "setup-status.log"
+        if slog.is_file():
+            tail = slog.read_text(encoding="utf-8", errors="replace").splitlines()[-25:]
+            log.info("setup-status.log (last %d lines):", len(tail))
+            for ln in tail:
+                log.info("  %s", ln)
+        else:
+            log.info("setup-status.log: not present (no announcement was ever attempted)")
+    except OSError:
+        pass
+    try:
         info = sd.query_devices(input_device, "input")
         log.info(
             "portaudio input: %r (hostapi %s, default %s Hz, %s in ch)",
