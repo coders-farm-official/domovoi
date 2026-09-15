@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Domovoi satellite: take the clock and the time zone from the server.
+
+Installed to /usr/local/sbin/domovoi-sync-time (root:root 0755) by the
+media-prep bootstrap. Three callers, one script:
+
+  * provisioning mode (root), the moment Wi-Fi is up and the server found;
+  * stage 2 (root), before anything else that stamps a time on a log line;
+  * the client (satellite user) on every connect, through the sudoers entry
+
+        <user> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-sync-time
+
+Usage:  domovoi-sync-time <server-url> [--dry-run]
+
+    <server-url> is the core's address in either scheme - the config's
+    ws://host:6370 is accepted as-is and turned into http://host:6370.
+
+Why this exists: a Pi has no battery clock and boots with the date its
+image was built, and Pi OS ships in Europe/London. NTP repairs the clock
+only if the house has internet, and nothing repairs the zone - a room whose
+"what time is it" is five hours out, and whose logs are dated June. The
+server is the authority on both; it answers GET /v1/time with {tz, epoch}.
+
+Stdlib only, the OS's python3, and no imports from ~/domovoi: this runs as
+root on the satellite user's request, so it must not execute anything that
+user can edit. This file is root's.
+
+Exit 0 when the device is in sync (changed or not), 1 when the server could
+not be reached, 2 when something could not be applied. One line on stdout
+says what happened; the caller keeps the record in its own log.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+ZONEINFO = "/usr/share/zoneinfo"
+LOCALTIME = "/etc/localtime"
+ETC_TIMEZONE = "/etc/timezone"
+# A clock this close to the server's is left alone: every step is a
+# discontinuity for whatever is timing something, and half a round trip
+# of Wi-Fi jitter is not worth one.
+STEP_THRESHOLD_SEC = 2.0
+HTTP_TIMEOUT_SEC = 8.0
+
+
+def http_base(url: str) -> str:
+    """``ws://host:port/anything`` -> ``http://host:port``."""
+    base = (url or "").strip()
+    scheme = "http"
+    if base.startswith("wss://"):
+        scheme, base = "https", base[len("wss://"):]
+    elif base.startswith("ws://"):
+        scheme, base = "http", base[len("ws://"):]
+    elif "://" in base:
+        scheme, base = base.split("://", 1)
+    host = base.split("/", 1)[0]
+    return f"{scheme}://{host}"
+
+
+def fetch(server_url: str) -> tuple[dict, float]:
+    """GET /v1/time. Returns (document, round-trip seconds)."""
+    url = http_base(server_url) + "/v1/time"
+    t0 = time.monotonic()
+    with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT_SEC) as r:
+        doc = json.loads(r.read().decode("utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError("server time is not a JSON object")
+    return doc, time.monotonic() - t0
+
+
+def current_zone() -> str | None:
+    """What the device is set to now - the symlink first (what timedatectl
+    maintains), /etc/timezone as the fallback."""
+    try:
+        target = os.readlink(LOCALTIME)
+        if "zoneinfo/" in target:
+            return target.split("zoneinfo/", 1)[1] or None
+    except OSError:
+        pass
+    try:
+        with open(ETC_TIMEZONE, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def zone_is_installed(tz: str) -> bool:
+    """Only a name the device's own tzdata knows is ever applied. The
+    server may run on a host whose zone names differ, and a bogus symlink
+    is worse than the wrong zone."""
+    if not tz or tz.startswith("/") or ".." in tz:
+        return False
+    return os.path.isfile(f"{ZONEINFO}/{tz}")
+
+
+def set_zone(tz: str, run=subprocess.run) -> bool:
+    """timedatectl first - it also tells systemd - and the symlink it would
+    have made as the fallback, for a boot target with no D-Bus to reach
+    timedatated over (stage 1 runs in one)."""
+    try:
+        r = run(["timedatectl", "set-timezone", tz], capture_output=True, timeout=20)
+        if r.returncode == 0:
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        tmp = LOCALTIME + ".domovoi-tmp"
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        os.symlink(f"{ZONEINFO}/{tz}", tmp)
+        os.replace(tmp, LOCALTIME)
+        with open(ETC_TIMEZONE, "w", encoding="utf-8") as f:
+            f.write(tz + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def set_clock(epoch: float, run=subprocess.run) -> bool:
+    """Step the system clock. The syscall directly where python offers it
+    (needs root, which every caller has); GNU date as the fallback."""
+    settime = getattr(time, "clock_settime", None)
+    if settime is not None:
+        try:
+            settime(time.CLOCK_REALTIME, epoch)
+            return True
+        except (OSError, AttributeError, ValueError):
+            pass
+    try:
+        r = run(["date", "-u", "-s", "@%.3f" % epoch], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def save_hwclock(run=subprocess.run) -> None:
+    """A Pi has no RTC: fake-hwclock is what makes the NEXT boot start near
+    this time rather than at the image's build date. Best-effort, and a
+    real RTC gets written too where one exists."""
+    try:
+        run(["fake-hwclock", "save"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if os.path.exists("/dev/rtc0"):
+        try:
+            run(["hwclock", "--systohc"], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def plan(doc: dict, rtt: float, *, now: float | None = None,
+         current_tz: str | None = None) -> dict:
+    """Decide what the device should do about the server's answer. Pure.
+
+    The server stamped ``epoch`` somewhere inside the round trip; half of
+    it is the best guess at how stale the value is by the time it is read.
+    """
+    now = time.time() if now is None else now
+    tz = doc.get("tz")
+    tz = tz if isinstance(tz, str) and tz.strip() else None
+    epoch = doc.get("epoch")
+    target = None
+    if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+        target = float(epoch) + rtt / 2.0
+    drift = (target - now) if target is not None else None
+    return {
+        "tz": tz,
+        "tz_current": current_tz,
+        "tz_change": bool(tz) and tz != current_tz,
+        "now": now,
+        "target_epoch": target,
+        "drift": drift,
+        "step": drift is not None and abs(drift) >= STEP_THRESHOLD_SEC,
+    }
+
+
+def apply(p: dict, *, dry_run: bool = False, run=subprocess.run,
+          zone_ok=None, zone_setter=None, clock_setter=None,
+          saver=None) -> tuple[str, bool]:
+    """Carry out a plan. Returns (one-line summary, something_failed).
+
+    The privileged steps are seams, resolved at call time so a test can
+    replace them on the module."""
+    zone_ok = zone_is_installed if zone_ok is None else zone_ok
+    zone_setter = set_zone if zone_setter is None else zone_setter
+    clock_setter = set_clock if clock_setter is None else clock_setter
+    saver = save_hwclock if saver is None else saver
+    notes: list[str] = []
+    failed = False
+    was = p["tz_current"] or "unset"
+    if p["tz_change"]:
+        if not zone_ok(p["tz"]):
+            notes.append(f"tz {p['tz']} is unknown to this device's tzdata - left {was}")
+            failed = True
+        elif dry_run:
+            notes.append(f"tz would change {was} -> {p['tz']}")
+        elif zone_setter(p["tz"], run):
+            notes.append(f"tz {p['tz']} (was {was})")
+        else:
+            notes.append(f"tz {p['tz']} FAILED to apply - still {was}")
+            failed = True
+    elif p["tz"]:
+        notes.append(f"tz {p['tz']} (unchanged)")
+    else:
+        notes.append(f"tz: the server does not know its zone - left {was}")
+
+    drift = p["drift"]
+    if drift is None:
+        notes.append("clock: the server sent no epoch - left alone")
+    elif p["step"]:
+        before, after = _iso(p["now"]), _iso(p["target_epoch"])
+        if dry_run:
+            notes.append(f"clock would step {drift:+.1f}s ({before} -> {after})")
+        elif clock_setter(p["target_epoch"], run):
+            saver(run)
+            notes.append(f"clock stepped {drift:+.1f}s (was {before}, now {after})")
+        else:
+            notes.append(f"clock FAILED to step {drift:+.1f}s (still {before})")
+            failed = True
+    else:
+        notes.append(f"clock within {abs(drift):.2f}s of the server (left alone)")
+    return "; ".join(notes), failed
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    dry_run = "--dry-run" in argv
+    args = [a for a in argv if not a.startswith("--")]
+    if len(args) != 1:
+        print("usage: domovoi-sync-time <server-url> [--dry-run]", file=sys.stderr)
+        return 2
+    geteuid = getattr(os, "geteuid", None)
+    if not dry_run and geteuid is not None and geteuid() != 0:
+        print("domovoi-sync-time must run as root (sudo -n)", file=sys.stderr)
+        return 2
+    try:
+        doc, rtt = fetch(args[0])
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+        print(f"server unreachable at {http_base(args[0])}/v1/time: {e}")
+        return 1
+    summary, failed = apply(
+        plan(doc, rtt, current_tz=current_zone()), dry_run=dry_run
+    )
+    print(summary)
+    return 2 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

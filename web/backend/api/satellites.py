@@ -209,12 +209,18 @@ async def adopt_pending(pending_id: str, body: AdoptRequest, request: Request):
 
 
 def _server_tz() -> str | None:
-    """The server's IANA zone name for the device's timedatectl, when the
-    optional tzlocal package can supply one. Best-effort — null skips."""
-    try:
-        from tzlocal import get_localzone_name
+    """The server's IANA zone name for the device's timedatectl.
 
-        return get_localzone_name()
+    Used to depend on the optional tzlocal package, which nobody installs —
+    so every provision went out with ``tz: null`` and every satellite kept
+    Pi OS's Europe/London. The core's resolver reads the host directly and
+    never needs an extra. Best-effort — null skips the step on the device,
+    which then takes the zone from ``/v1/time`` once it is on the network.
+    """
+    try:
+        from domovoi.host_time import local_timezone_name
+
+        return local_timezone_name()
     except Exception:
         return None
 

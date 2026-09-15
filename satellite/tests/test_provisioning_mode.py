@@ -407,3 +407,132 @@ def test_a_hat_unit_is_left_alone_on_the_cmdline(tmp_path, monkeypatch):
     )
     pm.revert_usb_gadget_boot_config([boot])
     assert "dwc_otg.speed" not in (boot / "cmdline.txt").read_text()
+
+
+# ─── the clock and time zone, from the server ─────────────────────────────
+#
+# Found on hardware: a satellite's log stamped 2026-06-18T01:34:58+01:00 in
+# September, in a house in America/New_York. A Pi has no battery clock and
+# Pi OS ships in Europe/London; the payload's `tz` was always null (see
+# test_host_time.py) and nothing anywhere set the clock. Now the server is
+# the authority, and the first moment it is reachable is right here.
+
+
+class _Transport:
+    def __init__(self):
+        self.cleared = False
+
+    def clear_provision(self):
+        self.cleared = True
+
+
+def _payload(**overrides):
+    kw = dict(
+        nonce="n" * 16, room_id="den", domovoi_url="ws://192.168.1.50:6370",
+        sat_type="voice", device_profile="xvf3800_usb", pairing_token="c" * 64,
+        wifi_ssid="HomeNet", wifi_psk="hunter2hunter2",
+    )
+    kw.update(overrides)
+    return proto.build_provision(**kw)["payload"]
+
+
+def test_the_clock_is_taken_from_the_server_once_wifi_is_up(home, monkeypatch, tmp_path):
+    """Right after the join, with the resolved URL, through the root helper
+    stage 1 installed - and only then: before the join there is no server
+    to ask."""
+    helper = tmp_path / "domovoi-sync-time"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
+    calls: list[list[str]] = []
+
+    def run(cmd, **kw):
+        calls.append(list(cmd))
+        return type("R", (), {
+            "returncode": 0,
+            "stdout": "tz America/New_York (was Europe/London); clock stepped +7620331.4s\n",
+            "stderr": "",
+        })()
+
+    def join(*a, run=None, **k):
+        calls.append(["<wifi-join>"])
+        return True, None
+
+    monkeypatch.setattr(pm, "apply_wifi", join)
+    ok, err = pm.apply_provision(
+        _payload(), transport=_Transport(), wifi_attempts=1,
+        wifi_join_timeout=1.0, run=run,
+    )
+    assert (ok, err) == (True, None)
+    assert [str(helper), "ws://192.168.1.50:6370"] in calls
+    assert calls.index(["<wifi-join>"]) < calls.index([str(helper), "ws://192.168.1.50:6370"])
+
+
+def test_a_failed_join_never_asks_the_server_for_the_time(home, monkeypatch, tmp_path):
+    helper = tmp_path / "domovoi-sync-time"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
+    calls: list[list[str]] = []
+
+    def run(cmd, **kw):
+        calls.append(list(cmd))
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (False, "wifi join failed"))
+    ok, _ = pm.apply_provision(
+        _payload(), transport=_Transport(), wifi_attempts=1,
+        wifi_join_timeout=1.0, run=run,
+    )
+    assert ok is False
+    assert not any(c and c[0] == str(helper) for c in calls)
+
+
+def test_a_hand_built_unit_without_the_helper_provisions_as_before(home, monkeypatch, tmp_path):
+    monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(tmp_path / "missing"))
+    calls: list[list[str]] = []
+
+    def run(cmd, **kw):
+        calls.append(list(cmd))
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    ok, err = pm.apply_provision(
+        _payload(), transport=_Transport(), wifi_attempts=1,
+        wifi_join_timeout=1.0, run=run,
+    )
+    assert (ok, err) == (True, None)
+    assert calls == []
+
+
+def test_the_verdict_is_logged_and_a_broken_helper_never_strands_a_provision(monkeypatch, tmp_path, caplog):
+    helper = tmp_path / "domovoi-sync-time"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
+
+    def boom(cmd, **kw):
+        raise OSError("exec format error")
+
+    assert pm.sync_time_with_server("ws://x:6370", run=boom) is None
+    assert pm.sync_time_with_server("", run=boom) is None
+
+    def bad(cmd, **kw):
+        return type("R", (), {
+            "returncode": 2,
+            "stdout": "tz Mars/Olympus is unknown to this device's tzdata - left Europe/London\n",
+            "stderr": "",
+        })()
+
+    with caplog.at_level("WARNING", logger="provisioning"):
+        verdict = pm.sync_time_with_server("ws://x:6370", run=bad)
+    assert verdict.startswith("tz Mars/Olympus is unknown")
+    assert "time sync (rc=2)" in caplog.text
+
+    def good(cmd, **kw):
+        return type("R", (), {
+            "returncode": 0, "stdout": "tz America/New_York (unchanged); clock within 0.03s\n",
+            "stderr": "",
+        })()
+
+    with caplog.at_level("INFO", logger="provisioning"):
+        verdict = pm.sync_time_with_server("ws://x:6370", run=good)
+    assert verdict.startswith("tz America/New_York (unchanged)")
+    assert "time sync: tz America/New_York" in caplog.text

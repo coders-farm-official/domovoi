@@ -591,13 +591,57 @@ def apply_provision(
             bool(wifi.get("hidden")), wifi_join_timeout, run=run,
         )
         if ok:
-            resolve_auto_url(payload.get("domovoi_url", ""))
+            url = resolve_auto_url(payload.get("domovoi_url", ""))
+            # 6. The clock and the time zone, from the server we can now
+            #    reach. Step 3 applied what the server knew at adopt time
+            #    and nothing about the clock; this is the precise one.
+            sync_time_with_server(url or "", run=run)
             return True, None
         last_err = err
         log.warning("wifi attempt %d/%d failed: %s", attempt, wifi_attempts, err)
         if attempt < wifi_attempts:
             time.sleep(_WIFI_RETRY_PAUSE_SEC)
     return False, last_err or "wifi join failed"
+
+
+# Installed by stage 1 next to domovoi-status; absent on a hand-built unit.
+SYNC_TIME_HELPER = "/usr/local/sbin/domovoi-sync-time"
+
+
+def sync_time_with_server(url: str, run=subprocess.run) -> str | None:
+    """Take the clock and the time zone from the server.
+
+    A Pi has no battery clock: it boots with the date its image was built,
+    in Pi OS's Europe/London, and NTP repairs only the clock and only when
+    the house has internet. The server is the authority on both, and this
+    is the first moment it is reachable. The same helper stage 2 and the
+    client call, so a device converges on the server's time from three
+    directions and any one of them failing costs nothing.
+
+    Returns the helper's one-line verdict for the log, or None when it did
+    not run. Never raises - a satellite must provision with the wrong time
+    rather than not at all.
+    """
+    if not url:
+        return None
+    try:
+        if not os.access(SYNC_TIME_HELPER, os.X_OK):
+            log.info("no %s on this unit - clock and zone left to NTP", SYNC_TIME_HELPER)
+            return None
+        r = run([SYNC_TIME_HELPER, url], capture_output=True, text=True, timeout=45)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("time sync with the server did not run: %s", e)
+        return None
+    lines = (getattr(r, "stdout", "") or "").strip().splitlines()
+    verdict = lines[-1] if lines else ""
+    if getattr(r, "returncode", 1) == 0:
+        log.info("time sync: %s", verdict or "ok")
+    else:
+        log.warning(
+            "time sync (rc=%s): %s", getattr(r, "returncode", "?"),
+            verdict or (getattr(r, "stderr", "") or "").strip(),
+        )
+    return verdict or None
 
 
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"

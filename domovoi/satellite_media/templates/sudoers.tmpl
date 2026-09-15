@@ -10,6 +10,10 @@
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
+# The clock and the time zone come from the server, on every connect, and
+# setting either needs root. The helper only reads the server's /v1/time
+# and applies it - see satellite/scripts/domovoi-sync-time.
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-sync-time
 # The XVF3800's LED ring is driven over USB, which needs root. The client
 # tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
 @USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host

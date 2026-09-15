@@ -302,6 +302,49 @@ if ! skip keyboard; then
   done_step keyboard
 fi
 
+# 5ac. Time zone, and a floor under the clock - both from the server that
+#      prepared this card.
+#
+#      A Pi has no battery clock. It boots with the date its image was
+#      built (fake-hwclock), in Europe/London (Pi OS's default), and stays
+#      there until something says otherwise; offline, that something is
+#      this card. The zone is set outright. The clock is only ever moved
+#      FORWARD, to the moment the card was prepared - a lower bound that
+#      is never worse than the image date - and the server corrects both
+#      precisely once Wi-Fi is up: provisioning mode, stage 2 and the
+#      client on every connect all run domovoi-sync-time (step 7).
+#
+#      The symlink directly rather than timedatectl: this boot target has
+#      no D-Bus for timedatectl to reach timedated over. It is the same
+#      link timedatectl would have made.
+TZ_NAME="@TZ@"
+PREP_EPOCH="@PREP_EPOCH@"
+if ! skip timezone; then
+  info bootstrapping timezone
+  if [ -n "$TZ_NAME" ] && [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
+    if ln -sfn "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime && \
+       printf '%s\n' "$TZ_NAME" >/etc/timezone; then
+      echo "time zone set to $TZ_NAME"
+    else
+      echo "WARN: could not set the time zone to $TZ_NAME"
+    fi
+  elif [ -n "$TZ_NAME" ]; then
+    echo "WARN: this image has no tzdata entry for $TZ_NAME - zone left as shipped"
+  else
+    echo "WARN: the server did not know its own time zone - zone left as shipped"
+  fi
+  if [ -n "$PREP_EPOCH" ] && [ "$(date +%s)" -lt "$PREP_EPOCH" ] 2>/dev/null; then
+    if date -u -s "@$PREP_EPOCH" >/dev/null 2>&1; then
+      echo "clock moved forward to the card's prepare time ($(date -Is))"
+      # So the NEXT boot starts here too, not back at the image date.
+      command -v fake-hwclock >/dev/null 2>&1 && fake-hwclock save 2>/dev/null || true
+    else
+      echo "WARN: could not move the clock forward"
+    fi
+  fi
+  done_step timezone
+fi
+
 # 5b. Setup-portal DNS. NetworkManager's shared mode runs its own dnsmasq;
 #     without a catch-all the captive-portal probes resolve nowhere and the
 #     sign-in page never opens by itself.
@@ -346,6 +389,11 @@ fi
 if ! skip units; then
   info bootstrapping systemd-units
   install -m 0755 "$PAYDIR/system/domovoi-apply-payload" /usr/local/sbin/domovoi-apply-payload
+  # The clock/time-zone helper (step 5ac explains why it exists). Guarded:
+  # a payload from before it must still finish this step.
+  if [ -f "$PAYDIR/system/domovoi-sync-time" ]; then
+    install -m 0755 "$PAYDIR/system/domovoi-sync-time" /usr/local/sbin/domovoi-sync-time
+  fi
   # Re-install rather than assume step 3b ran: a card whose payload predates
   # the helper still gets it once the payload is refreshed.
   if [ -f "$PAYDIR/system/domovoi-status" ]; then

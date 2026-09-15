@@ -3816,6 +3816,30 @@ class Satellite:
         except ConnectionClosed:
             return
 
+    # Once per this many seconds per process: a reconnect storm must not
+    # become a sudo storm, and a clock does not drift that fast.
+    _TIME_SYNC_MIN_INTERVAL_SEC = 6 * 3600
+    _time_synced_at: float | None = None
+
+    def _sync_time_with_server(self) -> None:
+        """Ask the root helper to copy the server's clock and time zone.
+
+        Runs on a worker thread: it is a sudo plus an HTTP round trip, and
+        this is called from the receiver loop. Throttled per process so a
+        flapping link re-syncs at most every few hours.
+        """
+        now = time.monotonic()
+        last = self._time_synced_at
+        if last is not None and now - last < self._TIME_SYNC_MIN_INTERVAL_SEC:
+            return
+        self._time_synced_at = now
+        threading.Thread(
+            target=_sync_time_with_server,
+            args=(self.cfg.domovoi_url,),
+            daemon=True,
+            name="time-sync",
+        ).start()
+
     def _handle_text_frame(self, payload: dict[str, Any]) -> None:
         t = payload.get("type")
         if t == "ready":
@@ -3839,6 +3863,10 @@ class Satellite:
             # repaint. A satellite that was approved and connected must not
             # go on advertising that it is waiting for approval.
             self._leds.resync()
+            # The clock and the time zone, from the server we just proved
+            # we can reach. A Pi has no battery clock, NTP needs internet
+            # the house may not have, and nothing else ever sets the zone.
+            self._sync_time_with_server()
         elif t == "transcript":
             log.info("heard: %s", payload.get("text"))
         elif t == "response_start":
@@ -4768,6 +4796,45 @@ def _log_capture_environment(input_device: object) -> None:
         )
     except Exception as e:  # noqa: BLE001 - diagnostics must never fail startup
         log.info("portaudio input: could not query %r: %s", input_device, e)
+
+# Installed by stage 1 of a prepared card, root-owned, with a sudoers line
+# for exactly this path. See satellite/scripts/domovoi-sync-time.
+SYNC_TIME_HELPER = "/usr/local/sbin/domovoi-sync-time"
+
+
+def _sync_time_with_server(server_url: str) -> str | None:
+    """Take the clock and the time zone from the server, via the root
+    helper. Blocking - call it from a worker thread. Entirely best-effort:
+    a hand-built unit has neither the helper nor the sudoers line and must
+    connect exactly as it always has. Returns the helper's one-line verdict
+    (which is also logged), or None when it did not run."""
+    if sys.platform == "win32" or not os.access(SYNC_TIME_HELPER, os.X_OK):
+        return None
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", SYNC_TIME_HELPER, server_url],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("time sync with the server did not run: %s", e)
+        return None
+    lines = (r.stdout or "").strip().splitlines()
+    verdict = lines[-1] if lines else ""
+    if r.returncode == 0:
+        log.info("time sync: %s", verdict or "ok")
+    elif r.returncode == 1:
+        # The server answered the WebSocket a moment ago, so this is rare
+        # and transient; the next connect tries again.
+        log.info("time sync skipped: %s", verdict or "server unreachable")
+    else:
+        # rc 2: sudo refused (no sudoers line - a hand-built unit that
+        # gained the helper by hand) or the helper could not apply.
+        log.warning(
+            "time sync failed (rc=%d): %s", r.returncode,
+            verdict or (r.stderr or "").strip() or "no detail",
+        )
+    return verdict or None
+
 
 def _setup_status(state: str, *args: str) -> None:
     """Drive the setup indicator (LED ring + spoken line).

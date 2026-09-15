@@ -229,7 +229,7 @@ Three finishing moves, all from PROVISIONING.md:
    `domovoi-satellite.service` so the satellite starts at boot and
    restarts on failure. After this, recovery from any weirdness is
    "unplug it and plug it back in."
-2. **Two sudoers entries** — least-privilege single-command grants:
+2. **Three sudoers entries** — least-privilege single-command grants:
    - *Wi-Fi self-heal* ([§6.7](../satellite/PROVISIONING.md)): lets the
      client run exactly `wpa_cli -i wlan0 reassociate` to un-wedge a
      rate-stuck Wi-Fi link on its own.
@@ -237,7 +237,11 @@ Three finishing moves, all from PROVISIONING.md:
      client run exactly `systemctl --no-block restart
      domovoi-satellite.service`, which is how dashboard config pushes,
      the **Restart** button, and self-upgrades apply themselves.
-   - *(XVF3800 only)* a third entry for the `xvf_host` LED binary
+   - *Clock and time zone* ([§8.2](../satellite/PROVISIONING.md)): lets
+     the client run the root helper `domovoi-sync-time`, which copies the
+     server's zone and clock on every connect — a Pi has no battery clock
+     and Pi OS boots in Europe/London.
+   - *(XVF3800 only)* a further entry for the `xvf_host` LED binary
      ([Appendix §E](../satellite/PROVISIONING.md)).
 3. **DHCP reservation** ([§7](../satellite/PROVISIONING.md)) and a
    physical label (hostname, room, IP, board + HAT version). Future you

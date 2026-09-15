@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from domovoi import git_version
+from domovoi import git_version, host_time
 from domovoi.config import settings
 from domovoi.satellite_media import cache, fetchers, overlay, payload
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES
@@ -128,8 +129,12 @@ async def build(
         workspace, asm["dir"], stage2,
         overlay.render_status_helper(mic_profile),
     )
+    # The zone and the clock, as this host knows them right now: stage 1
+    # applies the zone offline and refuses to boot with a clock earlier
+    # than this moment.
     firstrun = overlay.render_firstrun(
-        SAT_USER, mic_profile, sat_type, setup_transport, wifi_country
+        SAT_USER, mic_profile, sat_type, setup_transport, wifi_country,
+        tz=host_time.local_timezone_name(), prep_epoch=time.time(),
     )
     core_sha = await git_version.current_sha()
     info = overlay.build_info(

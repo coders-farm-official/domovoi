@@ -29,6 +29,7 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 | Dashboard **Restart satellite** button reports failure | Missing self-restart sudoers entry on the Pi | Add the one-line entry from PROVISIONING.md §8.1 — exactly `<user> ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service` (sudo matches the whole argument list; `--no-block` is load-bearing) |
 | Voice "fix the wifi" / the Wi-Fi watcher does nothing | Missing `wpa_cli` sudoers entry | Add the entry from PROVISIONING.md §6.7 so the satellite can run `wpa_cli reassociate` without a password |
 | TTS chops mid-word for hours at a time | AP rate-control wedge (rx bitrate stuck at 1 Mbit/s) | The satellite's Wi-Fi watcher auto-reassociates below 5 Mbit/s; say "fix the wifi" to trigger it immediately, or tune `[wifi]` in the satellite config |
+| The satellite's clock or time zone differs from the server's (log lines in the wrong zone, or dated months ago) | A Pi has no battery clock and Pi OS ships in Europe/London; a hand-built unit has no `domovoi-sync-time` helper, or the sudoers line for it is missing | A prepared card syncs both from the server at stage 1, stage 2 and on every connect (look for `time sync:` in the satellite log). On a hand-built unit run `sudo timedatectl set-timezone <zone>` once, or install the helper per PROVISIONING.md §8.2 |
 
 ## No TTS audio / Domovoi is silent
 

@@ -231,14 +231,26 @@ def render_firstrun(
     setup_transport: str = "usb",
     wifi_country: str = "US",
     keyboard_layout: str = DEFAULT_KEYBOARD_LAYOUT,
+    tz: str | None = None,
+    prep_epoch: float | None = None,
 ) -> str:
+    """``tz`` is the server's IANA zone and ``prep_epoch`` the moment the
+    card is prepared; stage 1 applies the first and uses the second as a
+    floor under a clock that otherwise starts at the image's build date.
+    Either may be unknown, and renders empty - the script skips it."""
+    from domovoi.host_time import is_zone_name
+
     return render_template(
         "firstrun.sh.tmpl",
         {"SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
             "SETUP_TRANSPORT": setup_transport,
             "WIFI_COUNTRY": validate_wifi_country(wifi_country),
             "KEYBOARD_LAYOUT": validate_keyboard_layout(keyboard_layout),
-            "SDIST_ONLY": sdist_only_packages()},
+            "SDIST_ONLY": sdist_only_packages(),
+            # Shell-safe by construction: a zone name is letters, digits and
+            # / _ + - only, so it can sit inside the script's double quotes.
+            "TZ": tz if is_zone_name(tz) else "",
+            "PREP_EPOCH": str(int(prep_epoch)) if prep_epoch and prep_epoch > 0 else ""},
     )
 
 

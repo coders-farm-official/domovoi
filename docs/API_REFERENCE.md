@@ -80,6 +80,7 @@ gate, the web endpoint forwards `Authorization` and the real client address
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /v1/health` | Open | — | `{"status":"ok","bot_name","use_stubs"}`; `503` when the DB is unreachable or no handlers registered. Liveness probe. |
+| `GET /v1/time` | Open | — | `{tz, epoch, iso, utc_offset_sec}` — this host's IANA zone name (`null` if the host cannot name it) and its clock. Satellites copy both on every connect, and stage 2 of a prepared card calls it before anything else, through the root helper `domovoi-sync-time`; a Pi has no battery clock and Pi OS boots in Europe/London. |
 | `GET /v1/connectivity` | Open | — | `{online, last_checked_at, last_online_at, target}` — the internet-connectivity probe the offline-first router consults. |
 | `GET /v1/handlers` | Open | — | List of `HandlerInfo`: `{name, requires_network, tool_schema, fast_path_count, priority_band, origin, display, example_phrases}`. `origin` is `"core"` or a plugin slug. Powers the dashboard's manual page. |
 | `POST /v1/intent` | Open | `{transcript, room_id?, session_id?, synthesize?}` | Routes a text utterance through the full intent pipeline. Returns the `Response` JSON (`{text, session_id, matched_handler, matched_path, online, data, music_action, music_stream_url, ...}`); with `synthesize: true` returns `audio/wav` bytes instead, with the text and metadata in `X-Response-Text`, `X-Session-Id`, `X-Matched-Handler`, `X-Matched-Path`, `X-Online` headers. |

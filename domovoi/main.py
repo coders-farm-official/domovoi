@@ -588,6 +588,22 @@ async def health() -> dict[str, str]:
     }
 
 
+@app.get("/v1/time")
+async def server_time() -> dict[str, Any]:
+    """This host's clock and time zone, for the satellites to copy.
+
+    A Pi has no battery clock and Pi OS boots in Europe/London; NTP fixes
+    the clock only when the house has internet and nothing fixes the zone.
+    Every satellite calls this on connect (and stage 2 of a prepared card
+    calls it before anything else) and applies ``tz`` + ``epoch`` through
+    its root helper. Open like /v1/health: a device asks before it is
+    paired, and there is nothing here worth protecting.
+    """
+    from domovoi.host_time import server_time_document
+
+    return server_time_document()
+
+
 _EXAMPLE_PHRASE_RE = re.compile(r"[Ee]xamples?:\s*(.+)$")
 
 

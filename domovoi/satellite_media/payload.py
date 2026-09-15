@@ -167,6 +167,13 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-apply-payload",
         system / "domovoi-apply-payload",
     )
+    # The root helper that takes the clock and time zone from the server.
+    # Extensionless like apply-payload, so the code-snapshot allowlist above
+    # never carries it: it is installed by stage 1 as root's, on purpose.
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-sync-time",
+        system / "domovoi-sync-time",
+    )
     (system / "sudoers").write_text(
         overlay.render_template("sudoers.tmpl", {}), encoding="utf-8", newline="\n"
     )

@@ -66,6 +66,17 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
+# 1b. The clock and the time zone, from the server - before anything else
+#     here stamps a time on a log line or a file. Stage 1 set the zone
+#     offline and put a floor under the clock; this is the precise
+#     correction, now that the server is reachable. The helper's one-line
+#     verdict lands in this log; the client repeats the call on every
+#     connect, so a miss here is not final.
+if [ -x /usr/local/sbin/domovoi-sync-time ]; then
+  /usr/local/sbin/domovoi-sync-time "$SERVER_HTTP" \
+    || echo "WARN: could not sync the clock with the server (see above)"
+fi
+
 # 2. System packages.
 #
 #    Stage 1 installs these from the offline cache with a plain `dpkg -i`,

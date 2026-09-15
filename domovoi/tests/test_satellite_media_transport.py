@@ -740,7 +740,8 @@ def test_no_placeholder_survives_rendering():
     substituted = {
         "stage2.sh": ("SAT_USER", "CODE_EXT_ALLOW", "SDIST_ONLY"),
         "firstrun.sh": ("SAT_USER", "MIC_PROFILE", "SAT_TYPE",
-                        "SETUP_TRANSPORT", "WIFI_COUNTRY", "SDIST_ONLY"),
+                        "SETUP_TRANSPORT", "WIFI_COUNTRY", "SDIST_ONLY",
+                        "TZ", "PREP_EPOCH"),
     }
     rendered = _render_both()
     for name, keys in substituted.items():
@@ -1298,3 +1299,107 @@ def test_config_and_cmdline_agree_on_usb_host():
     src = inspect.getsource(overlay.write_overlay)
     assert "editor(original, usb_gadget=usb_gadget, usb_host=usb_host)" in src
     assert 'if name == "config.txt"' not in src
+
+
+# ─── the clock and time zone ──────────────────────────────────────────────
+#
+# Found on hardware: a satellite's log stamped 2026-06-18T01:34:58+01:00 in
+# September, in a house in America/New_York. A Pi has no battery clock - it
+# boots at the image's build date - and Pi OS ships in Europe/London. The
+# payload's `tz` came from the optional tzlocal package nobody installs, so
+# it was always null, and nothing anywhere set the clock. Now the server is
+# the authority on both, and the card carries what it knew at prepare time.
+
+
+def test_stage_one_sets_the_zone_offline_and_only_moves_the_clock_forward():
+    from domovoi.satellite_media import overlay
+
+    script = overlay.render_firstrun(
+        "domovoi", "xvf3800_usb", "voice", "portal", "US",
+        tz="America/New_York", prep_epoch=1_789_442_730,
+    )
+    assert 'TZ_NAME="America/New_York"' in script
+    assert 'PREP_EPOCH="1789442730"' in script
+    # The link timedatectl would make - there is no D-Bus in this target.
+    assert 'ln -sfn "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime' in script
+    assert ">/etc/timezone" in script
+    # A zone this image's tzdata lacks is skipped, not linked to nowhere.
+    assert '[ -f "/usr/share/zoneinfo/$TZ_NAME" ]' in script
+    # Only ever forward: a card prepared last week must not drag a unit
+    # NTP has already corrected back to last week.
+    assert '[ "$(date +%s)" -lt "$PREP_EPOCH" ]' in script
+    assert 'date -u -s "@$PREP_EPOCH"' in script
+    # ...and the next boot starts here too, not at the image date.
+    assert "fake-hwclock save" in script
+    # Its own idempotency marker, like every other step.
+    assert "skip timezone" in script and "done_step timezone" in script
+
+
+def test_an_unknown_zone_or_epoch_renders_empty_and_is_skipped():
+    from domovoi.satellite_media import overlay
+
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    assert 'TZ_NAME=""' in script and 'PREP_EPOCH=""' in script
+    assert '[ -n "$TZ_NAME" ]' in script and '[ -n "$PREP_EPOCH" ]' in script
+    # Nothing that is not a zone name reaches the shell.
+    script = overlay.render_firstrun(
+        "domovoi", "xvf3800_usb", "voice", "portal", "US",
+        tz="$(reboot)", prep_epoch=-5,
+    )
+    assert 'TZ_NAME=""' in script and 'PREP_EPOCH=""' in script
+
+
+def test_the_builder_bakes_this_hosts_zone_and_the_prepare_time():
+    import inspect
+
+    from domovoi.satellite_media import builder
+
+    src = inspect.getsource(builder.build)
+    assert "tz=host_time.local_timezone_name()" in src
+    assert "prep_epoch=time.time()" in src
+
+
+def test_stage_one_installs_the_helper_root_owned():
+    from domovoi.satellite_media import overlay
+
+    script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
+    assert (
+        'install -m 0755 "$PAYDIR/system/domovoi-sync-time" '
+        "/usr/local/sbin/domovoi-sync-time"
+    ) in script
+
+
+def test_stage_two_syncs_before_anything_else_stamps_a_time():
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_stage2("domovoi")
+    call = '/usr/local/sbin/domovoi-sync-time "$SERVER_HTTP"'
+    assert call in body
+    # After the server is reachable, before the apt work.
+    assert body.index("/v1/health") < body.index(call) < body.index("apt-get update")
+    # Guarded: a card whose stage 1 predates the helper still finishes.
+    assert "[ -x /usr/local/sbin/domovoi-sync-time ]" in body
+
+
+def test_the_client_may_run_the_helper_as_root():
+    from domovoi.satellite_media import overlay
+
+    sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
+    assert "domovoi ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-sync-time" in sudoers
+
+
+def test_the_payload_carries_the_helper_outside_the_code_snapshot():
+    """Root runs it on the satellite user's say-so, so it must not live
+    where that user's code sync can rewrite it: extensionless, so the
+    allowlist never picks it up, and copied into system/ explicitly."""
+    import inspect
+    from pathlib import Path
+
+    from domovoi.satellite_media import payload
+
+    src = inspect.getsource(payload.assemble)
+    assert 'system / "domovoi-sync-time"' in src
+    assert payload._allowed_code_file(Path("satellite/scripts/domovoi-sync-time")) is False
+    helper = Path(__file__).resolve().parents[2] / "satellite" / "scripts" / "domovoi-sync-time"
+    assert helper.is_file()
+    assert helper.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n")

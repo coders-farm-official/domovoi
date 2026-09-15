@@ -452,6 +452,37 @@ journalctl -u domovoi-satellite -f   # a fresh startup should appear within a co
 
 If you skip this step the satellite still runs — it just can't restart itself, so a restart-requiring config change needs a manual `sudo systemctl restart domovoi-satellite`, and the web **Restart** button reports a failure.
 
+### 8.2 Clock and time zone from the server
+
+A Pi has no battery-backed clock. It boots with the date its image was built and, on Pi OS, in **Europe/London** — and nothing on your LAN corrects the zone. NTP corrects the clock only if the house has internet. A prepared card takes both from the Domovoi server automatically (stage 1 sets the zone offline, stage 2 and the client's every connect call the server's `GET /v1/time`); a hand-built unit gets the same behaviour with one helper and one sudoers line.
+
+Copy the helper into place (root-owned — it runs as root on the client's request, so it must not live anywhere the satellite user can edit):
+
+```bash
+sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-sync-time /usr/local/sbin/domovoi-sync-time
+sudo /usr/local/sbin/domovoi-sync-time ws://<server-ip>:6370
+```
+
+The second command prints one line saying what it did, e.g. `tz America/New_York (was Europe/London); clock stepped +7620331.4s (...)`. Then the sudoers line, same pattern as §6.7 and §8.1:
+
+```bash
+sudo visudo -f /etc/sudoers.d/satellite-time
+```
+
+```
+<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-sync-time
+```
+
+Verify with no password prompt:
+
+```bash
+sudo -n /usr/local/sbin/domovoi-sync-time ws://<server-ip>:6370
+```
+
+- [ ] The line printed says `tz ... (unchanged)` and `clock within ...s` — the device now matches the server, and the client will keep it that way (look for `time sync:` in its log after each connect).
+
+If you skip this step the satellite still runs — with the wrong clock and zone until you `sudo timedatectl set-timezone <zone>` by hand.
+
 ## 9. Label the hardware
 
 - [ ] Stick a label on the Pi case with: hostname, room, IP, **HAT version (V1/V2.0)**. Future you will be grateful.
