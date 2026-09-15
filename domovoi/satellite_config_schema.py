@@ -37,16 +37,19 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Barge-in (interrupting the bot) ───────────────────────────────
     FieldSpec(
         "barge_in.enabled", "Barge-in", "Barge-in",
-        "Let you interrupt the bot mid-sentence by talking over it. Turn "
+        "Off by default: nothing interrupts the bot while it is talking. Turn "
+        "on to cut it off mid-sentence, with the wake word (the default) or, "
+        "with the wake-word requirement below off, by talking over it. Leave "
         "off if speaker echo on this Pi causes false interruptions.",
         "bool",
     ),
     FieldSpec(
         "barge_in.require_wake_word", "Require wake word to interrupt",
         "Barge-in",
-        "Only the wake word interrupts playback, not any speech. Immune to "
-        "speaker echo and background talk, but you must say the wake word "
-        "to cut the bot off. Best on Pis whose speaker leaks into the mic.",
+        "On by default: only the wake word interrupts playback, not any "
+        "speech, so speaker echo and background talk cannot cut the bot off. "
+        "Turn off for talk-over interruption. Reliable on the XVF3800; risky "
+        "on a HAT whose speaker leaks into the mic.",
         "bool",
     ),
     FieldSpec(
@@ -103,8 +106,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "noise_gate.auto_calibrate", "Auto-calibrate noise floor", "Noise gate",
         "Derive the floor from real room ambient instead of the fixed value. "
-        "On for the HAT; off for the XVF3800 (its chip already levels the "
-        "audio, so re-deriving a software gate fights its AGC).",
+        "On by default on every board; turn off only to hand-tune a room "
+        "with the fixed floor above.",
         "bool",
     ),
 

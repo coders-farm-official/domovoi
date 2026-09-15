@@ -9,35 +9,13 @@ path on the device that would ever have corrected it.
 from __future__ import annotations
 
 import inspect
-import sys
 import types
 
 import pytest
 
+from satellite.tests._client_import import import_client
 
-def _import_client():
-    """The client imports the audio stack at module level. On a dev box
-    without it, an empty stand-in is enough to read the code under test;
-    the stand-ins are removed again so a later ``importorskip`` elsewhere
-    still sees the truth."""
-    stubbed = []
-    for name in ("sounddevice", "webrtcvad"):
-        if name in sys.modules:
-            continue
-        try:
-            __import__(name)
-        except ImportError:
-            sys.modules[name] = types.ModuleType(name)
-            stubbed.append(name)
-    try:
-        from satellite import client
-    finally:
-        for name in stubbed:
-            sys.modules.pop(name, None)
-    return client
-
-
-client = _import_client()
+client = import_client()
 
 
 def test_ready_is_the_moment():

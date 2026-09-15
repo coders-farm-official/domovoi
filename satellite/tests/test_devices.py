@@ -38,9 +38,14 @@ def test_resolve_known_profiles():
     assert xvf.capture_channels == 2
     assert xvf.capture_select_channel == 1  # ASR beam
     assert xvf.playback_sample_rate == 16_000
-    # On-chip AGC + noise suppression → these are off.
+    # On-chip AGC → the mic-gain tune is off. The gate still auto-calibrates,
+    # like every board: a fixed floor is right in exactly one room.
     assert xvf.mic_gain_enabled is False
-    assert xvf.noise_gate_auto_calibrate is False
+    assert xvf.noise_gate_auto_calibrate is True
+    # And every board requires the wake word to interrupt, by default.
+    for prof in (hat, xvf, devices.resolve("radxa_zero3w_video")):
+        assert prof.barge_require_wake_word is True, prof.name
+        assert prof.noise_gate_auto_calibrate is True, prof.name
 
 
 def test_default_profile_is_hat():
@@ -186,7 +191,8 @@ def test_config_applies_profile_defaults(tmp_path):
     assert cfg.device.led_backend == "ws2812_xvf"
     # Knob defaults sourced from the profile, not the old hard-coded literals.
     assert cfg.mic_gain_enabled is False
-    assert cfg.noise_gate_auto_calibrate is False
+    assert cfg.noise_gate_auto_calibrate is True
+    assert cfg.barge_in_require_wake_word is True
     assert cfg.noise_gate_dbfs == -60.0
     assert cfg.vad_aggressiveness_during_tts == 2
     assert cfg.leds_num == 12

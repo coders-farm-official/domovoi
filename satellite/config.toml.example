@@ -205,8 +205,12 @@ max_record_seconds = 30
 followup_pre_speech_timeout = 8.0
 
 [barge_in]
-# Disable if speaker echo on this Pi causes false triggers.
-enabled = true
+# Off by default: nothing interrupts Domovoi while he is talking. Turn on to
+# cut him off mid-sentence - with the wake word (require_wake_word below, on
+# by default) or by just talking over him. Leave off if speaker echo on this
+# Pi causes false triggers (a HAT without AEC leaks its own speaker into the
+# mic; the XVF3800's on-chip AEC makes talk-over reliable).
+enabled = false
 
 # VAD aggressiveness during TTS playback. Keep higher than `listen` to resist echo.
 # Profile default: respeaker_2mic_hat = 3, xvf3800_usb = 2 (on-chip AEC already
@@ -222,10 +226,10 @@ min_speech_ms = 250
 # When true, only the wake word interrupts playback — VAD/noise-gate barge is
 # bypassed entirely. Immune to speaker echo and arbitrary background speech, at
 # the cost of having to say "hey jarvis stop" instead of just speaking over the
-# response. Recommended on Pis where the speaker leaks heavily into the mic.
-# Profile default false on both boards (the XVF's on-chip AEC makes plain VAD
-# barge-in reliable, so the wake-word gate isn't needed there).
-# require_wake_word = false
+# response. On by default on every board. Set false for talk-over
+# interruption: reliable on the XVF3800, whose on-chip AEC cancels the speaker
+# echo; risky on a HAT, whose speaker leaks straight into the mic.
+require_wake_word = true
 
 [noise_gate]
 # dBFS threshold; frames quieter than this are ignored even if VAD says speech.
@@ -266,9 +270,8 @@ min_speech_ms = 250
 #                     gate. Conversational speech sits at -25 to -35
 #                     dBFS so the default of -10 only fires for genuine
 #                     saturation.
-# Profile default: respeaker_2mic_hat = true, xvf3800_usb = false (re-deriving
-# a software threshold from the chip's already-processed output fights its AGC).
-# auto_calibrate = true
+# On by default on every board: a fixed floor is right in exactly one room.
+auto_calibrate = true
 calibration_sample_sec = 5.0
 calibration_margin_db = 5.0
 recalibrate_interval_sec = 600

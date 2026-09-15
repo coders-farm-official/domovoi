@@ -386,7 +386,7 @@ Don't declare victory at "it connected." Walk this list:
 | *"Set a timer for one minute"* | Spoken confirmation, timer on the dashboard, and it actually fires in the room |
 | *"Play [something in your library] in \<room\>"* | Music from that room's speaker |
 | *"Turn it up"* / *"Set the volume to 50"* | Volume changes, and the dashboard reflects the new level |
-| Talk over Domovoi mid-sentence | Barge-in — it stops. **XVF3800 only:** shouldn't false-trigger on its own voice. If it does, your speaker is on the wrong jack. |
+| Say the wake word while Domovoi is mid-sentence | Nothing, by default: **barge-in** ships off and he finishes the sentence. Turn it on in the satellite's Settings tab and he stops on the wake word; also turn off *Require wake word to interrupt* and just talking over him is enough. **XVF3800 only:** with talk-over on, it shouldn't false-trigger on its own voice. If it does, your speaker is on the wrong jack. |
 | `vcgencmd get_throttled` on the Pi | `0x0` |
 | Unplug the Pi, plug it back in | Boots, joins Wi-Fi, reconnects unattended — no SSH needed |
 

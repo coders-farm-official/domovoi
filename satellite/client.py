@@ -438,7 +438,12 @@ class Config:
             silence_timeout=float(listen.get("silence_timeout", 1.2)),
             max_record_seconds=float(listen.get("max_record_seconds", 30)),
             followup_pre_speech_timeout=float(listen.get("followup_pre_speech_timeout", 8.0)),
-            barge_in=bool(barge.get("enabled", True)),
+            # Off unless the config says otherwise: a satellite that listens
+            # during its own playback is a satellite that can interrupt
+            # itself on speaker echo, and a false interruption mid-answer
+            # is worse than waiting for the answer to finish. A room opts
+            # in, and gets the wake-word gate (below) first.
+            barge_in=bool(barge.get("enabled", False)),
             vad_aggressiveness_during_tts=int(barge.get("vad_aggressiveness_during_tts", profile.vad_during_tts)),
             barge_in_min_speech_ms=int(barge.get("min_speech_ms", 250)),
             barge_in_require_wake_word=bool(barge.get("require_wake_word", profile.barge_require_wake_word)),

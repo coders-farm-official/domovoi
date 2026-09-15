@@ -44,10 +44,12 @@ A profile carries two kinds of data:
     wins, but a fresh config on the right board gets sane defaults.
 
 On-chip AGC + noise suppression make the HAT's ALSA-PGA mic-gain tune a
-no-op and the software noise gate counterproductive on the XVF3800, so
-that profile disables both; on-chip AEC makes VAD barge-in reliable, so
-``require_wake_word`` stays off and the during-TTS VAD doesn't need to be
-cranked up to resist speaker echo.
+no-op on the XVF3800, so that profile disables it, and its on-chip AEC
+means the during-TTS VAD needs no cranking. Two knobs are deliberately the
+same on every board: the noise gate auto-calibrates (a fixed floor is right
+in exactly one room), and barge-in requires the wake word (a false
+interruption on speaker echo is worse than having to say the wake word to
+cut in; a room that wants talk-over interruption opts in).
 """
 
 from __future__ import annotations
@@ -168,7 +170,7 @@ _RESPEAKER_2MIC_HAT = DeviceProfile(
     mic_gain_card=0,
     noise_gate_auto_calibrate=True,
     noise_gate_dbfs=-45.0,
-    barge_require_wake_word=False,
+    barge_require_wake_word=True,
     vad_during_tts=3,
     music_alsa_device="plughw:0,0",
     leds_num=3,
@@ -198,15 +200,17 @@ _XVF3800_USB = DeviceProfile(
     # to walk and would just no-op; disable it so boot is quiet and fast.
     mic_gain_enabled=False,
     mic_gain_card=0,
-    # On-chip noise suppression already delivers clean, leveled audio; a
-    # software gate that re-derives a threshold from it fights the chip.
-    # Keep a permissive fixed floor so endpointing's VAD still runs but the
-    # gate never rejects real speech.
-    noise_gate_auto_calibrate=False,
+    # On-chip noise suppression already levels the audio, so the fallback
+    # floor is permissive - but the gate still auto-calibrates, like every
+    # board: a fixed floor is right in exactly one room, and the boot-time
+    # ambient sample costs nothing here.
+    noise_gate_auto_calibrate=True,
     noise_gate_dbfs=-60.0,
-    # On-chip AEC cancels the speaker echo, so VAD barge-in is reliable
-    # without the wake-word gate and without cranking the during-TTS VAD.
-    barge_require_wake_word=False,
+    # On-chip AEC cancels the speaker echo, which is what makes plain VAD
+    # barge-in viable on this board at all - so the during-TTS VAD is not
+    # cranked. The wake-word gate is still on by default, like every board;
+    # talk-over interruption is a per-room opt-in.
+    barge_require_wake_word=True,
     vad_during_tts=2,
     # USB card index varies per Pi — PROVISIONING pins this explicitly.
     # "default" routes to the ALSA default device as a last resort.
@@ -243,9 +247,9 @@ _RADXA_ZERO3W_VIDEO = DeviceProfile(
     supports_full_duplex=False,   # no AEC path on the bare board
     mic_gain_enabled=False,       # no ALSA-PGA to tune without a mic board
     mic_gain_card=0,
-    noise_gate_auto_calibrate=False,
+    noise_gate_auto_calibrate=True,
     noise_gate_dbfs=-45.0,
-    barge_require_wake_word=False,
+    barge_require_wake_word=True,
     vad_during_tts=3,
     # RK3566 HDMI/audio card naming varies by kernel; "default" routes via
     # the ALSA default device. VIDEO_SATELLITE.md documents pinning a

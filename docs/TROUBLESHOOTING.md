@@ -51,7 +51,7 @@ The TTS engine chain is **edge → piper → system**: a per-engine failure (net
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Never triggers, or only when shouting | Threshold too high, or mic level too low | Lower `[wake] threshold` (default 0.5; lower = more sensitive) in the Pi's config or via the dashboard's satellite Settings; check mic capture with `arecord` and let the boot-time mic-gain auto-tune run (HAT boards) |
-| Triggers on random speech/TV | Threshold too low | Raise the threshold; also consider `[barge_in] require_wake_word = true` if false triggers happen during playback |
+| Triggers on random speech/TV | Threshold too low | Raise the threshold; if false triggers happen during playback, check that `[barge_in] require_wake_word` is still `true` (the default) for that room |
 | Custom wake word never fires after "push to room" | Model/sidecar mismatch on the Pi | The push writes the slug to `~/.domovoi/wake` and the model must exist as `~/.domovoi/wake_models/<slug>.onnx` (synced from the server's `/v1/wake-models` channel). Check the satellite log for sync errors; delete the `~/.domovoi/wake` sidecar to revert to the configured word |
 | Custom word fires poorly vs. the built-in | Too few / low-quality training clips | Server refuses training below 15 clips, but good models want far more — record hundreds on the actual satellite mic (especially XVF3800), then retrain; use the clip-quality scores shown while recording |
 | Word sits in "training" forever | Trainer disabled or unconfigured | Training is Linux-only, so on the Windows server it shells out: set `WAKE_WORD_TRAINER_ENABLED=true` **and** `WAKE_WORD_TRAIN_COMMAND` to your WSL2/Docker pipeline (see `scripts/wake_word/README.md` and `DOCKER_TRAINER.md`). An empty command marks queued words failed with a runbook pointer |
@@ -73,7 +73,7 @@ but that is a net under the problem, not a fix for it.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| A turn's `user_text` is the previous turn's `assistant_text` | Barge-in firing on speaker echo | Set `[barge_in] require_wake_word = true` for the room (dashboard → satellite → Settings). Only the wake word then interrupts, and the echoed frames are not carried into the capture |
+| A turn's `user_text` is the previous turn's `assistant_text` | Barge-in firing on speaker echo | Set `[barge_in] require_wake_word` back to `true` for the room (dashboard → satellite → Settings); it is the default, so someone turned it off. Only the wake word then interrupts, and the echoed frames are not carried into the capture |
 | Same, but you want to keep talk-over interruption | Detector tuned below the residual echo floor | Raise `[barge_in] min_speech_ms` (250 → 500–700), raise `vad_aggressiveness_during_tts` (→ 3), raise `[noise_gate] dbfs` (the XVF3800 profile ships a deliberately permissive −60 dB) |
 | Turns tagged `barge-in` in the Conversations tab that you didn't start | Same root cause; the pill is the diagnostic | The Logs tab shows the matching `barge-in detected` line with its timestamp |
 | The wake greeting appears at the start of transcripts | Greeting playing through a device the array can't cancel | Check `[music] alsa_device` — on an XVF3800 it must be the array (`plughw:CARD=Array,DEV=0`), not `default`. TTS uses `[audio] output_device`; music, greetings and canned clips use `[music] alsa_device`, and pinning only the first is a silent half-fix |
