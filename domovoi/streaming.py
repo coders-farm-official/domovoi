@@ -1322,6 +1322,34 @@ class StreamSession:
                         self.room_id, transcript, cleaned,
                     )
                     transcript = cleaned
+            # Nothing to route. A capture that Whisper hears as silence -
+            # the user said the wake word and nothing else, the VAD
+            # endpointed on a noise burst, or the mic delivered nothing
+            # usable - must end HERE. Routed, an empty transcript reaches
+            # the LLM fallback, which answers "I didn't quite catch that";
+            # the double-check heuristic appends "Want me to check that
+            # online?" and arms a follow-up capture, the Pi reopens the mic
+            # without a wake word, hears nothing again, and the room loops
+            # apology after apology at one LLM call and one TTS per lap.
+            # Seen on hardware: every conversation_log row for the room
+            # had user_text "" and the same reply. End the turn with no
+            # speech and no DB row; interrupted=True releases the Pi's mic
+            # immediately (see the self-echo drop above for why).
+            if not transcript.strip():
+                log.warning(
+                    "blank capture in room=%s (trigger=%s, %.1fs of audio): "
+                    "nothing transcribed, not routing. If this repeats after "
+                    "every wake word the satellite's capture is silent - "
+                    "check its log for the 'capture ended' stats line.",
+                    self.room_id, trigger, len(pcm_bytes) / (16_000 * 2),
+                )
+                await self._safe_send_text({
+                    "type": "response_end",
+                    "interrupted": True,
+                    "expect_followup": False,
+                })
+                return
+
             await self._safe_send_text({"type": "transcript", "text": transcript})
 
             probe: ConnectivityProbe = self.ws.app.state.probe
