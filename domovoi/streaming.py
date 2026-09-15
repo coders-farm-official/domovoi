@@ -10,7 +10,15 @@ clients should resample if their playback device can't accept it directly.
 Client → Server
   text  hello              {"type":"hello","room_id":...,"wake_word":...,"synced_sha":...,"supports_full_duplex":bool,
                             "sat_type":"voice"|"video","mic_enabled":bool}
-                           — `supports_full_duplex` (optional) reports whether
+                           — MUST be the first frame. The server creates
+                           and sends NOTHING for the room (no MPD
+                           provisioning, no active_sessions entry, no
+                           `ready`) until a hello has passed the pairing
+                           check. A socket that sends no hello within
+                           `satellite_hello_timeout_sec` (default 5 s), or
+                           sends any other frame first, is closed (1008)
+                           with nothing left behind.
+                           `supports_full_duplex` (optional) reports whether
                            the board has on-chip AEC (XVF3800 true, 2-Mic HAT
                            false). The server caches it per room and refuses a
                            drop-in for any room that can't capture-while-playing
@@ -116,6 +124,9 @@ Client → Server
 
 Server → Client
   text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000}
+                           — sent only AFTER the client's hello was accepted
+                           (and the room's MPD daemon provisioned). A socket
+                           that never says hello never receives it.
   text  transcript         {"type":"transcript","text":...}
   text  set_volume         {"type":"set_volume","level":N} — set the Pi's
                            hardware output volume (0-100). Sent BEFORE
@@ -218,7 +229,11 @@ Server → Client
                            "we're done", "end the chat").
   text  chat_end           {"type":"chat_end","reason":...} — exit chat mode,
                            restore the wake-word loop. Mirrors dropin_end.
-  text  error              {"type":"error","message":...}
+  text  error              {"type":"error","message":...,"reason"?:...}
+                           — `reason:"pairing_rejected"` when the hello's
+                           pairing check refused the socket;
+                           `reason:"hello_required"` when the first frame
+                           was not a hello. Both are followed by a close.
   text  pong               {"type":"pong"}
   bytes                    raw PCM TTS audio at audio_sample_rate. During a
                            drop-in, inbound bytes are instead live 16 kHz relay
@@ -660,6 +675,20 @@ class StreamSession:
 
     async def run(self) -> None:
         await self.ws.accept()
+        # ── Hello gate ───────────────────────────────────────────────────
+        # NOTHING about this room exists until a `hello` frame has arrived
+        # and passed the pairing check: no MPD provisioning, no
+        # active_sessions entry, no `ready`. Before this gate the bare WS
+        # handshake alone did all three — any LAN device could connect to
+        # /v1/stream/<anything>, receive `ready`, and leave an mpd_rooms
+        # row + ports behind without ever being asked for a token (seen
+        # live on 2026-09-15 as a `probe-no-hello` room on the dashboard),
+        # and a probe for an EXISTING room evicted its real satellite from
+        # active_sessions. A socket that sends no hello within
+        # `satellite_hello_timeout_sec`, sends anything else first, or
+        # fails pairing is closed here with nothing created.
+        if not await self._await_hello():
+            return
         # Spin up the per-room MPD daemon before sending `ready` so the
         # first music command after connect doesn't race a slow first-boot
         # `docker run`. ensure_room is idempotent — known rooms hit the
@@ -841,6 +870,81 @@ class StreamSession:
             return
         self.audio_buf.extend(data)
 
+    async def _await_hello(self) -> bool:
+        """Block until the client's FIRST frame arrives and is an accepted
+        `hello`.
+
+        Returns True once the hello handler (``_on_control`` → pairing check
+        + per-room caches) has accepted it, so the caller may provision,
+        register and send `ready`. Returns False when the socket should be
+        dropped with nothing created: no frame within
+        ``settings.satellite_hello_timeout_sec``, a first frame that is not a
+        hello, a pairing refusal (the hello handler already sent the error
+        and closed), or a disconnect. Every False path leaves the socket
+        closed and touches no app.state.
+        """
+        timeout = float(settings.satellite_hello_timeout_sec)
+
+        async def _first_frame() -> dict[str, Any] | None:
+            msg = await self.ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                return None
+            text = msg.get("text")
+            if text is None:
+                # Binary before hello — nobody we know streams audio first.
+                return {"type": "<binary>"}
+            try:
+                ctrl = json.loads(text)
+            except json.JSONDecodeError:
+                return {"type": "<invalid json>"}
+            return ctrl if isinstance(ctrl, dict) else {"type": "<non-object>"}
+
+        try:
+            # One deadline around the whole wait (not per receive) so a
+            # cancelled receive can never swallow a frame we then act on.
+            ctrl = await asyncio.wait_for(_first_frame(), timeout)
+        except asyncio.TimeoutError:
+            log.warning(
+                "ws %s sent no hello within %.1fs; closing without "
+                "provisioning or registering the room",
+                self.room_id, timeout,
+            )
+            await self._close_quietly(1008)
+            return False
+        except WebSocketDisconnect:
+            return False
+        if ctrl is None:
+            log.info("ws %s disconnected before hello", self.room_id)
+            return False
+        if ctrl.get("type") != "hello":
+            log.warning(
+                "ws %s first frame was %r, not hello; closing",
+                self.room_id, ctrl.get("type"),
+            )
+            await self._safe_send_text({
+                "type": "error",
+                "reason": "hello_required",
+                "message": "first frame must be hello",
+            })
+            await self._close_quietly(1008)
+            return False
+        # The existing hello handler: pairing check (V002) + per-room
+        # caches. Its semantics are unchanged — tokenless legacy accept
+        # when strict pairing is off, approval parking, refusals — it just
+        # now runs BEFORE anything is provisioned or registered.
+        await self._on_control(ctrl)
+        if self._pairing_refused:
+            # The hello handler sent the error frame and closed the socket.
+            return False
+        return True
+
+    async def _close_quietly(self, code: int) -> None:
+        try:
+            await self.ws.close(code=code)
+        except Exception:
+            # Already gone; nothing useful to do.
+            pass
+
     async def _validate_pairing(self, ctrl: dict[str, Any]) -> bool:
         """Trust-on-first-use WS auth for the hello frame (V002).
 
@@ -1003,10 +1107,7 @@ class StreamSession:
             # provisioning/caching below — an impostor gets nothing.
             if not await self._validate_pairing(ctrl):
                 self._pairing_refused = True
-                try:
-                    await self.ws.close(code=1008)
-                except Exception:
-                    pass
+                await self._close_quietly(1008)
                 return
             # Cache whether this room's board has on-chip AEC (full duplex),
             # so drop-in / open-mic gating can refuse a no-AEC board rather

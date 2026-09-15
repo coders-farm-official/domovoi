@@ -398,6 +398,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", section="advanced", tier="restart",
     ),
     FieldSpec(
+        "satellite_hello_timeout_sec", "Satellite hello deadline", "Security",
+        "How long a newly connected satellite socket gets to send its hello "
+        "frame before the server drops it. Nothing is provisioned or listed "
+        "for a room until its hello has passed the pairing check, so a bare "
+        "connection from any device on the LAN never creates a room. Real "
+        "satellites say hello immediately; raise this only on a very slow "
+        "link. Takes effect after a restart.",
+        "float", section="advanced", tier="restart", min=1, max=60, unit="sec",
+    ),
+    FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
         "(the plug-in-and-adopt flow on the Satellites page). Turn off to "

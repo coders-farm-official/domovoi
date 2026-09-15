@@ -279,6 +279,16 @@ unpaired room can't be claimed tokenlessly), at the cost of breaking any
 older tokenless satellite. Turn it on only once every satellite in your
 fleet has paired.
 
+**The hello gate.** Pairing is checked on the `hello` frame, so the server
+does nothing for a room until an accepted `hello` has arrived: no MPD
+container or `mpd_rooms` row, no entry on the Satellites page, no `ready`.
+A socket that opens `/v1/stream/<room>` and then says nothing is closed
+after `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s) with nothing created; one
+that sends any other frame first is refused the same way. Without this,
+any LAN host could mint rooms (and their MPD ports) by opening a bare
+socket, or bump a live satellite out of its slot, without ever presenting
+a token.
+
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard

@@ -15,10 +15,12 @@ from contextlib import asynccontextmanager
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from domovoi.config import settings
 from domovoi.main import app
 from domovoi.models import Response
-from domovoi.streaming import _resample_pcm
+from domovoi.streaming import StreamSession, _resample_pcm
 
 
 def test_resample_pcm_converts_rate_and_is_noop_when_equal() -> None:
@@ -45,6 +47,29 @@ def test_resample_pcm_converts_rate_and_is_noop_when_equal() -> None:
 async def _fake_session_scope():
     """No-op replacement so streaming tests don't need a live Postgres."""
     yield None
+
+
+@pytest.fixture(autouse=True)
+def _accept_every_hello(monkeypatch: pytest.MonkeyPatch):
+    """Every socket here must say `hello` before it gets `ready` (the hello
+    gate), and the hello handler runs the pairing check. Pairing itself is
+    covered against a real DB in test_satellite_pairing; these protocol
+    tests just need the check to pass without Postgres, so accept every
+    hello. Individual tests override this to spy on / refuse the check."""
+
+    async def _accept(self, ctrl):
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
+
+
+def _hello(ws, room_id: str = "kitchen") -> dict:
+    """Complete the handshake: send the mandatory first `hello` frame and
+    return the `ready` the server answers with."""
+    ws.send_text(json.dumps({"type": "hello", "room_id": room_id}))
+    ready = ws.receive_json()
+    assert ready["type"] == "ready", ready
+    return ready
 
 
 def _make_wav(pcm: bytes = b"", sample_rate: int = 24_000) -> bytes:
@@ -125,7 +150,7 @@ def test_stream_happy_path_emits_full_frame_sequence(monkeypatch: pytest.MonkeyP
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ready = ws.receive_json()
+            ready = _hello(ws)
             assert ready["type"] == "ready"
             assert ready["protocol_version"] == "0.1"
             assert ready["room_id"] == "kitchen"
@@ -158,7 +183,7 @@ def test_stream_ping_pong(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/office") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "ping"}))
             pong = ws.receive_json()
             assert pong == {"type": "pong"}
@@ -169,7 +194,7 @@ def test_stream_unknown_control_returns_error(monkeypatch: pytest.MonkeyPatch) -
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/office") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "totally_made_up"}))
             err = ws.receive_json()
             assert err["type"] == "error"
@@ -181,7 +206,7 @@ def test_stream_invalid_json_returns_error(monkeypatch: pytest.MonkeyPatch) -> N
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/office") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text("{not json")
             err = ws.receive_json()
             assert err == {"type": "error", "message": "invalid json"}
@@ -197,7 +222,7 @@ def test_stream_barge_in_cancels_in_flight_response(monkeypatch: pytest.MonkeyPa
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
 
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
@@ -223,7 +248,7 @@ def test_stream_new_utterance_during_response_cancels_previous(
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
 
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
@@ -265,7 +290,7 @@ def test_stream_resume_music_when_response_has_no_action(
         # an earlier music_action="start" response in real use).
         app.state.resumable_music["kitchen"] = "http://test.local:8001"
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -306,7 +331,7 @@ def test_stream_records_resumable_url_on_music_start(
     with TestClient(app) as client:
         app.state.resumable_music.clear()  # start clean
         with client.websocket_connect("/v1/stream/garage") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -346,7 +371,7 @@ def test_stream_clears_resumable_url_on_music_stop(
     with TestClient(app) as client:
         app.state.resumable_music["garage"] = "http://test.local:8002"
         with client.websocket_connect("/v1/stream/garage") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -393,7 +418,7 @@ def test_stream_suppresses_music_resume_when_expect_followup(
         # Pre-seed: room had an external stream playing.
         app.state.resumable_music["kitchen"] = "http://test.local:8003"
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -448,7 +473,7 @@ def test_stream_records_resumable_but_skips_start_when_expect_followup(
     with TestClient(app) as client:
         app.state.resumable_music.clear()
         with client.websocket_connect("/v1/stream/garage") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -488,7 +513,7 @@ def test_response_task_failure_emits_error_then_response_end(
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -527,7 +552,7 @@ def test_stream_no_resume_when_resumable_empty(monkeypatch: pytest.MonkeyPatch) 
     with TestClient(app) as client:
         app.state.resumable_music.clear()
         with client.websocket_connect("/v1/stream/livingroom") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -562,7 +587,7 @@ def test_noisy_capture_triggers_static_apology(monkeypatch: pytest.MonkeyPatch) 
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "noisy_capture"}))
 
             start = ws.receive_json()
@@ -615,7 +640,7 @@ def test_response_end_carries_expect_followup_when_response_set_it(
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -653,7 +678,7 @@ def test_response_end_drops_expect_followup_on_interrupted(
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -681,7 +706,7 @@ def test_active_sessions_register_and_deregister(monkeypatch: pytest.MonkeyPatch
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             assert "kitchen" in app.state.active_sessions
             assert app.state.active_sessions["kitchen"].room_id == "kitchen"
         # Connection closed: the slot should have cleared.
@@ -714,11 +739,11 @@ def test_announce_triggers_fan_out_to_target_rooms(
         # the kitchen WS triggers the fan-out. Two contexts side by side
         # in the same TestClient share app.state.
         with client.websocket_connect("/v1/stream/garage") as garage_ws:
-            garage_ws.receive_json()  # ready
+            _hello(garage_ws)
             assert "garage" in app.state.active_sessions
 
             with client.websocket_connect("/v1/stream/kitchen") as kitchen_ws:
-                kitchen_ws.receive_json()  # ready
+                _hello(kitchen_ws)
                 kitchen_ws.send_text(
                     json.dumps({"type": "utterance_start", "trigger": "wake_word"})
                 )
@@ -765,7 +790,7 @@ def test_announce_skips_originating_room(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -804,7 +829,7 @@ def test_announce_to_offline_room_is_silent(monkeypatch: pytest.MonkeyPatch) -> 
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
             ws.send_bytes(b"\x00" * 1024)
             ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -841,7 +866,7 @@ def test_stream_audio_outside_utterance_is_ignored(monkeypatch: pytest.MonkeyPat
 
     with TestClient(app) as client:
         with client.websocket_connect("/v1/stream/kitchen") as ws:
-            ws.receive_json()  # ready
+            _hello(ws)
 
             ws.send_bytes(b"\xff" * 4096)  # before any utterance — should be discarded
             ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
@@ -912,7 +937,7 @@ def test_music_ready_resumes_mpd_and_cancels_fallback(
             app.state.resumable_music.clear()
             app.state.pending_music_start.clear()
             with client.websocket_connect("/v1/stream/kitchen") as ws:
-                ws.receive_json()  # ready
+                _hello(ws)
                 ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
                 ws.send_bytes(b"\x00" * 1024)
                 ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -980,7 +1005,7 @@ def test_music_prepare_falls_back_to_resume_when_no_ack(
             app.state.resumable_music.clear()
             app.state.pending_music_start.clear()
             with client.websocket_connect("/v1/stream/garage") as ws:
-                ws.receive_json()  # ready
+                _hello(ws)
                 ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
                 ws.send_bytes(b"\x00" * 1024)
                 ws.send_text(json.dumps({"type": "utterance_end"}))
@@ -1048,7 +1073,7 @@ def test_music_stop_cancels_pending_handshake(
             app.state.resumable_music.clear()
             app.state.pending_music_start.clear()
             with client.websocket_connect("/v1/stream/office") as ws:
-                ws.receive_json()  # ready
+                _hello(ws)
 
                 # Turn 1: start
                 ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
@@ -1079,3 +1104,153 @@ def test_music_stop_cancels_pending_handshake(
                 assert tracker.resume_calls == 0
     finally:
         mpd_module._clients.pop("office", None)
+
+
+# ─── The hello gate ───────────────────────────────────────────────────────
+#
+# Seen live on 2026-09-15: `websockets.connect(".../v1/stream/probe-no-hello")`
+# with NO frames sent got `ready` at once and the dashboard then listed a
+# `probe-no-hello` room with freshly allocated MPD ports. The bare WS
+# handshake was provisioning + registering + acknowledging a room before the
+# pairing check in the hello handler ever ran. These pin the fix: nothing
+# exists until a hello has been accepted.
+
+
+def _spy_provisioning(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every room the stream tries to provision. `use_stubs` is
+    flipped INSIDE the TestClient block by the caller (after startup, which
+    would otherwise try to warm real clients) — run() reads it per connect."""
+    provisioned: list[str] = []
+
+    async def fake_ensure_room(room_id: str) -> tuple[int, int]:
+        provisioned.append(room_id)
+        return (6600, 8000)
+
+    monkeypatch.setattr("domovoi.mpd_provisioner.ensure_room", fake_ensure_room)
+    return provisioned
+
+
+def test_stream_without_hello_gets_no_ready_and_leaves_no_room(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket that never says hello is closed after the deadline with NO
+    `ready`, NO active_sessions entry, NO provisioning, and the pairing
+    check never even runs — there is nothing for it to validate."""
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    monkeypatch.setattr(settings, "satellite_hello_timeout_sec", 0.3)
+    provisioned = _spy_provisioning(monkeypatch)
+    pairing_checks: list[dict] = []
+
+    async def spy(self, ctrl):
+        pairing_checks.append(ctrl)
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", spy)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "use_stubs", False)
+        with client.websocket_connect("/v1/stream/probe-no-hello") as ws:
+            # The only thing the server ever sends is the close.
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 1008
+        assert "probe-no-hello" not in app.state.active_sessions
+        assert provisioned == []
+        assert pairing_checks == []
+
+
+def test_stream_hello_then_ready_provisions_and_registers_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normal path still works, and in the right order: pairing check
+    on the hello FIRST, then provisioning, then the room is registered and
+    `ready` goes out."""
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    events: list[tuple[str, str | None]] = []
+
+    async def spy(self, ctrl):
+        events.append(("pairing", ctrl.get("pairing_token")))
+        assert "kitchen" not in app.state.active_sessions
+        return True
+
+    async def fake_ensure_room(room_id: str) -> tuple[int, int]:
+        events.append(("ensure_room", room_id))
+        assert "kitchen" not in app.state.active_sessions
+        return (6600, 8000)
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", spy)
+    monkeypatch.setattr("domovoi.mpd_provisioner.ensure_room", fake_ensure_room)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "use_stubs", False)
+        with client.websocket_connect("/v1/stream/kitchen") as ws:
+            ws.send_text(json.dumps({
+                "type": "hello", "room_id": "kitchen",
+                "pairing_token": "t" * 64, "supports_full_duplex": True,
+            }))
+            ready = ws.receive_json()
+            assert ready["type"] == "ready"
+            assert ready["room_id"] == "kitchen"
+            assert events == [("pairing", "t" * 64), ("ensure_room", "kitchen")]
+            assert app.state.active_sessions["kitchen"].room_id == "kitchen"
+            # The hello handler's own caching still ran (unchanged semantics).
+            assert app.state.satellite_full_duplex["kitchen"] is True
+            # And the session is live: a ping is answered.
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert ws.receive_json() == {"type": "pong"}
+        assert "kitchen" not in app.state.active_sessions
+
+
+def test_stream_pairing_refusal_happens_before_ready_or_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hello the pairing check refuses gets the error + close it always
+    got — but now BEFORE the room is provisioned or registered, so an
+    impostor (or a device parked awaiting approval) leaves nothing behind."""
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    provisioned = _spy_provisioning(monkeypatch)
+
+    async def refuse(self, ctrl):
+        await self._safe_send_text({
+            "type": "error", "reason": "pairing_rejected",
+            "message": "pairing rejected",
+        })
+        return False
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", refuse)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "use_stubs", False)
+        with client.websocket_connect("/v1/stream/kitchen") as ws:
+            ws.send_text(json.dumps({"type": "hello", "room_id": "kitchen"}))
+            err = ws.receive_json()
+            assert err["type"] == "error"
+            assert err["reason"] == "pairing_rejected"
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 1008
+        assert "kitchen" not in app.state.active_sessions
+        assert provisioned == []
+
+
+def test_stream_non_hello_first_frame_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """hello must be the FIRST frame. Anything else (here a ping) is
+    answered with error{reason:"hello_required"} and a close, and the room
+    is neither provisioned nor registered."""
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    provisioned = _spy_provisioning(monkeypatch)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "use_stubs", False)
+        with client.websocket_connect("/v1/stream/kitchen") as ws:
+            ws.send_text(json.dumps({"type": "ping"}))
+            err = ws.receive_json()
+            assert err["type"] == "error"
+            assert err["reason"] == "hello_required"
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 1008
+        assert "kitchen" not in app.state.active_sessions
+        assert provisioned == []

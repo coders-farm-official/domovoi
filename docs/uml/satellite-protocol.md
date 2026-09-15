@@ -23,10 +23,11 @@ sequenceDiagram
     participant S as Core (StreamSession)
 
     Pi->>S: (WS connect /v1/stream/kitchen)
-    Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container before ready
-    S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000}
+    Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives;<br/>no hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
     Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?}
     Note over S: pairing check (V002): claim the room on first token<br/>(trust-on-first-use), else require a matching token.<br/>Mismatch / missing-on-a-paired-room → error + close.
+    Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container, then registers the session
+    S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000}
     Pi->>S: config_status {config}          — cached per room
     Pi->>S: volume_status {level}           — cached per room
     Pi->>S: voice_status {voice}            — cached per room
@@ -49,7 +50,7 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | First frame after connect. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. |
+| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. |
 | `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. |
 | `utterance_end` | `greeting_played` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
@@ -69,7 +70,7 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `ready` | `protocol_version:"0.1"`, `room_id`, `bot_name`, `audio_sample_rate_in:16000` | Handshake complete. |
+| `ready` | `protocol_version:"0.1"`, `room_id`, `bot_name`, `audio_sample_rate_in:16000` | Handshake complete — sent only **after** the `hello` passed the pairing check and the room's MPD daemon was provisioned. A socket that never says `hello` never receives it. |
 | `transcript` | `text` | What Whisper heard, before routing. |
 | `response_start` | `text`, `matched_handler`, `matched_path`, `session_id`, `online`, `audio_sample_rate` | A spoken response begins; PCM follows at the announced rate. |
 | `response_end` | `interrupted`, `expect_followup`, `pi_action?`, `pi_action_arg?` | Response finished (or was cut off). `expect_followup` asks the Pi to capture the user's reply without a fresh wake word. `pi_action` requests a Pi-local side effect after playback drains: `reassociate_wifi`, `set_voice` (arg = voice name), or `restart`. |
@@ -89,7 +90,7 @@ sequenceDiagram
 | `dropin_end` | `reason` | Exit open-mic mode; restore the wake loop and any suppressed music. |
 | `chat_start` | — | Enter conversational chat mode: the Pi loops normal STT→reply turns **without re-waking** between them. No peer relay — each utterance routes to the Letta agent. Requires an AEC board; a non-AEC Pi must refuse (send `chat_end`). |
 | `chat_end` | `reason` | Exit chat mode; restore the wake loop. |
-| `error` | `message`, `reason?` | Something went wrong; paired with a terminal `response_end` when a response task fails so the Pi's mic never stays parked. Carries `reason:"pairing_rejected"` when the `hello` pairing check refuses the connection (the socket is then closed). |
+| `error` | `message`, `reason?` | Something went wrong; paired with a terminal `response_end` when a response task fails so the Pi's mic never stays parked. Carries `reason:"pairing_rejected"` when the `hello` pairing check refuses the connection, or `reason:"hello_required"` when the first frame was not a `hello` (the socket is then closed either way). |
 | `pong` | — | Reply to `ping`. |
 | *binary* | raw PCM | TTS audio at `audio_sample_rate`. During a drop-in: live 16 kHz relay audio from the peer room. |
 
@@ -133,9 +134,18 @@ sequenceDiagram
   connection receives broadcasts). Cached per-room state (wifi, volume,
   voice, config, AEC flag, synced SHA) is cleared on disconnect and
   re-reported on reconnect.
-* **MPD provisioning** happens before `ready` so the first music command
-  can't race a slow first-boot `docker run`. Failures are non-fatal — the
-  room just has no music until fixed.
+* **Hello gate:** the bare WebSocket handshake creates nothing. The
+  server waits for the client's first frame, which must be a `hello`, and
+  runs the pairing check on it before it provisions, registers, or
+  acknowledges the room. A socket that sends nothing within
+  `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), sends another frame
+  first, or fails pairing is closed (1008) without an `mpd_rooms` row,
+  an `active_sessions` entry, or a `ready` — so a LAN probe can neither
+  mint rooms nor evict a live satellite.
+* **MPD provisioning** happens after the accepted `hello` and before
+  `ready`, so the first music command can't race a slow first-boot
+  `docker run`. Failures are non-fatal — the room just has no music
+  until fixed.
 
 ## Pairing (WS auth)
 

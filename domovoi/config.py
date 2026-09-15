@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     # require pairing for EVERY room (a tokenless hello for an unpaired room
     # is then refused too) — a hardening posture for an all-paired fleet.
     satellite_pairing_strict: bool = False
+    # How long a freshly-connected /v1/stream socket gets to send its `hello`
+    # before the server closes it. NOTHING about a room exists until a hello
+    # has passed the pairing check — no MPD provisioning, no active_sessions
+    # entry, no `ready` — so a bare connect from any LAN host (a port scan,
+    # a probe with the wrong path, a client that hangs after the WS upgrade)
+    # never creates a room. Real satellites send hello immediately after
+    # the upgrade, so a few seconds is generous.
+    satellite_hello_timeout_sec: float = 5.0
     # USB satellite adoption: the web backend scans removable volumes for
     # unprovisioned satellites presenting a DOMOVOI-SET gadget drive and
     # surfaces them as pending on the Satellites page. Kill switch below;
