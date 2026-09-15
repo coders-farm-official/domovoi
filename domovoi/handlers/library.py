@@ -66,7 +66,13 @@ def _format_enrich_summary(counts: dict[str, int]) -> str:
 
 
 _FIND_RE = re.compile(r"^(?:find|search(?: for)?) (.+?) in my library$")
-_HAVE_RE = re.compile(r"^(?:do i have|is|have i got) (.+?)(?: in my library)?$")
+# A bare "is ..." is the opener of any yes/no question ("is it true
+# that...", "is the oven on") and must not be poached from band 310 —
+# it only means the library when "in my library" closes the sentence.
+# "do i have" / "have i got" keep the suffix optional.
+_HAVE_RE = re.compile(
+    r"^(?:do i have|have i got|is(?= .+ in my library$)) (.+?)(?: in my library)?$"
+)
 _ADDED_WHEN_RE = re.compile(r"^what did i add (today|yesterday|this week|recently)$")
 _COUNT_RE = re.compile(r"^(?:how many (?:songs|tracks|albums)(?: do i have)?|library count)$")
 # Voice trigger for the AcoustID/Shazam fingerprint enrichment pass.

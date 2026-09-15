@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # still loading, GPU wedged) must not pin a user-facing voice turn open
     # forever — this bounds the wait so the turn fails gracefully instead.
     ollama_timeout_sec: float = 120.0
+    # How long Ollama keeps a model loaded after its last request, sent as
+    # ``keep_alive`` on every chat call. Ollama's own default is 5 minutes,
+    # which on a CPU host (docs/CPU_HOST.md) means the tool router and QA
+    # model unload between sporadic household questions and the next one
+    # pays the full cold start — model load plus a ~3k-token tool-schema
+    # prefill. Measured 2026-09-15 on an all-CPU AMD mini PC: 54 s cold vs
+    # 4 s warm for the same question. Ollama duration syntax: "24h", "90m",
+    # a bare number of seconds, "-1" for forever (until Ollama restarts),
+    # "0" to unload right after each reply. Blank = don't send it, so the
+    # Ollama server's own default (or OLLAMA_KEEP_ALIVE in its systemd
+    # unit) governs. Same name and syntax as Ollama's server-side variable.
+    ollama_keep_alive: str = "24h"
     searxng_url: str = "http://localhost:6888"
 
     connectivity_probe_target: str = "1.1.1.1:443"

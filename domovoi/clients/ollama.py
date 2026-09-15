@@ -8,6 +8,10 @@ Three entry points:
   - qa(transcript, system_prompt?)   → full text response
   - stream_qa(...)                    → async generator yielding token chunks
                                          (for sentence-level TTS streaming)
+
+Every real chat call carries ``keep_alive`` (``settings.ollama_keep_alive``)
+so Ollama doesn't unload the models between sporadic turns — see
+``RealOllamaClient._chat`` for why that matters on a CPU host.
 """
 
 from __future__ import annotations
@@ -198,6 +202,41 @@ DEFAULT_SYSTEM_PROMPT = (
     "conversational — this is a voice interaction, so avoid markdown, bullet "
     "lists, code blocks, and long structured responses. Speak naturally, in "
     "short sentences."
+)
+
+
+# System prompt for the tool-routing call (``RealOllamaClient.route``).
+#
+# The router runs at temperature 0 with every handler's schema on offer,
+# and a small tool model on a CPU host will reach for the nearest tool
+# before it will answer "no tool" — measured 2026-09-15 on qwen3:8b:
+# "who wrote the odyssey" → calculator, "who painted the mona lisa" →
+# double_check (the question was "verified" as a claim); on qwen2.5:14b
+# the same questions go to news as a subject lookup. The knowledge-
+# question paragraph exists to name that failure explicitly. Keep the
+# action bias in the first paragraph: imperfect commands ("…play the
+# new TI song") must still route. Verify edits with
+# ``scripts/eval_routing.py`` before deploying — this prompt is only as
+# good as the model reading it.
+ROUTER_SYSTEM_PROMPT = (
+    "You are an intent router for a voice assistant. The transcript "
+    "is speech-to-text and may contain mis-heard or spurious words, "
+    "especially at the start (a garbled wake word or noise) — focus "
+    "on the actionable core of the utterance, not stray leading "
+    "words. If the user clearly wants an action (play/find/add music, "
+    "set a timer, control the home, etc.), pick the closest matching "
+    "tool even when the phrasing is imperfect.\n"
+    "General-knowledge questions are NOT actions and get NO tool call: "
+    "'who wrote the odyssey', 'who painted the mona lisa', 'what is "
+    "the capital of mongolia', 'why is the sky blue', 'when was the "
+    "declaration signed' are answered by a separate model. Never use "
+    "a tool to look up, compute, or verify the answer to a question: "
+    "a question is not a claim, and a fact is not news. Verification "
+    "is only an explicit request to check something the assistant "
+    "already said ('are you sure', 'double check that', 'is it true "
+    "that ...'); the calculator is only for numbers, quantities, "
+    "units or dates to compute with. When no tool clearly fits, "
+    "respond with plain text and no tool call."
 )
 
 
@@ -502,6 +541,20 @@ class OllamaStubClient:
         return []
 
 
+def _chat_accepts(param: str) -> bool:
+    """Whether the installed ollama-python's ``AsyncClient.chat`` takes
+    ``param`` as a keyword. Never raises — no ollama, odd signature: report
+    False and the caller simply omits the kwarg."""
+    try:
+        import inspect
+
+        from ollama import AsyncClient
+
+        return param in inspect.signature(AsyncClient.chat).parameters
+    except Exception:  # noqa: BLE001 — no ollama, odd signature: just don't send it
+        return False
+
+
 @lru_cache(maxsize=1)
 def _client_accepts_think() -> bool:
     """Whether the installed ollama-python accepts ``chat(think=...)``.
@@ -511,14 +564,42 @@ def _client_accepts_think() -> bool:
     degrade all routing to the QA fallthrough. Probe the signature once
     instead of discovering it per-turn.
     """
+    return _chat_accepts("think")
+
+
+@lru_cache(maxsize=1)
+def _client_accepts_keep_alive() -> bool:
+    """Whether the installed ollama-python accepts ``chat(keep_alive=...)``.
+
+    It has since long before the ``ollama>=0.3`` floor, so this is expected
+    to be True everywhere — the probe is the same cheap insurance as for
+    ``think``: an environment that can't take the kwarg must lose keep-alive,
+    not every chat call.
+    """
+    return _chat_accepts("keep_alive")
+
+
+def _normalize_keep_alive(value: str | None) -> str | int | float | None:
+    """Turn ``settings.ollama_keep_alive`` into what Ollama's API expects.
+
+    Ollama takes either a duration string ("24h", "90m") or a NUMBER of
+    seconds, where any negative number means "forever". A bare number typed
+    as a string ("-1", "3600") is NOT a valid duration to Ollama's parser
+    (Go's ``time.ParseDuration`` wants a unit), so those go out as JSON
+    numbers. Blank means "don't send it" — the Ollama server's own default,
+    or ``OLLAMA_KEEP_ALIVE`` in its unit file, governs instead.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
     try:
-        import inspect
-
-        from ollama import AsyncClient
-
-        return "think" in inspect.signature(AsyncClient.chat).parameters
-    except Exception:  # noqa: BLE001 — no ollama, odd signature: just don't send it
-        return False
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
 
 
 class RealOllamaClient:
@@ -530,6 +611,11 @@ class RealOllamaClient:
     """
 
     _THINK_UNSUPPORTED_HINTS = ("think", "reasoning")
+    # What a server or client complaint about `keep_alive` looks like: Ollama
+    # answers an unparseable value with Go's `time: invalid duration "..."`
+    # / `missing unit in duration`; a too-old client raises
+    # `unexpected keyword argument 'keep_alive'`.
+    _KEEP_ALIVE_UNSUPPORTED_HINTS = ("keep_alive", "keepalive", "duration")
 
     def __init__(
         self,
@@ -557,11 +643,15 @@ class RealOllamaClient:
         self._qa_model = qa_model
         self._tool_model = tool_model
         # Bound at construction like the model names (reset_ollama_client is
-        # the reapply hook for both). `_send_think` starts as "the installed
-        # client accepts the kwarg" and latches off if the server rejects it
-        # for this model — see `route`.
+        # the reapply hook for all of them). `_send_think` starts as "the
+        # installed client accepts the kwarg" and latches off if the server
+        # rejects it for this model — see `route`.
         self._tool_think = settings.ollama_tool_think
         self._send_think = _client_accepts_think()
+        # keep_alive is bound and degrades the same way — see `_chat`. A blank
+        # setting means never send it (the Ollama server's default governs).
+        self._keep_alive = _normalize_keep_alive(settings.ollama_keep_alive)
+        self._send_keep_alive = self._keep_alive is not None and _client_accepts_keep_alive()
 
     def _system_prompt(self, override: str | None) -> str:
         if override:
@@ -631,26 +721,58 @@ class RealOllamaClient:
         text = str(exc).lower()
         return any(h in text for h in cls._THINK_UNSUPPORTED_HINTS)
 
+    # ── keep_alive on every call ─────────────────────────────────────────
+
+    @classmethod
+    def _looks_like_keep_alive_rejection(cls, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(h in text for h in cls._KEEP_ALIVE_UNSUPPORTED_HINTS)
+
+    def _disable_keep_alive(self, exc: Exception) -> None:
+        log.warning(
+            "ollama rejected keep_alive=%r (%s) — retrying without it and "
+            "disabling it for this client; models will now unload on the "
+            "Ollama server's own schedule (5 min by default). Check the "
+            "ollama_keep_alive setting.",
+            self._keep_alive, exc,
+        )
+        self._send_keep_alive = False
+
+    async def _chat(self, **kwargs: Any) -> Any:
+        """Every Ollama chat call funnels through here so ``keep_alive`` rides
+        along on all of them — router, QA, streaming QA, uncertainty, subject
+        extraction, memory extraction. Without it Ollama falls back to its own
+        5-minute default and a CPU host pays a cold start after every quiet
+        spell between household questions: model load plus the tool-schema
+        prefill, measured at ~54 s cold against ~4 s warm for the same turn.
+
+        Degrades the way ``think`` does: the kwarg is omitted when the
+        installed client can't take it, and if the server rejects the value
+        (a duration it can't parse) the call is retried once without it and
+        the flag latches off for this client's lifetime. A streaming request
+        only raises once iterated, so ``stream_qa`` carries its own
+        first-chunk retry.
+        """
+        if not self._send_keep_alive:
+            return await self._client.chat(**kwargs)
+        try:
+            return await self._client.chat(keep_alive=self._keep_alive, **kwargs)
+        except Exception as e:
+            if not self._looks_like_keep_alive_rejection(e):
+                raise
+            self._disable_keep_alive(e)
+            return await self._client.chat(**kwargs)
+
     async def _chat_for_route(
         self, transcript: str, tools: list[dict[str, Any]], *, send_think: bool
     ) -> Any:
         extra: dict[str, Any] = {"think": self._tool_think} if send_think else {}
-        return await self._client.chat(
+        return await self._chat(
             model=self._tool_model,
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are an intent router for a voice assistant. The transcript "
-                        "is speech-to-text and may contain mis-heard or spurious words, "
-                        "especially at the start (a garbled wake word or noise) — focus "
-                        "on the actionable core of the utterance, not stray leading "
-                        "words. If the user clearly wants an action (play/find/add music, "
-                        "set a timer, control the home, etc.), pick the closest matching "
-                        "tool even when the phrasing is imperfect. Only respond with "
-                        "plain text and no tool call when the utterance is genuinely a "
-                        "question or has no actionable intent."
-                    ),
+                    "content": ROUTER_SYSTEM_PROMPT,
                 },
                 {"role": "user", "content": transcript},
             ],
@@ -694,16 +816,12 @@ class RealOllamaClient:
         system_prompt: str | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> str:
-        response = await self._client.chat(
+        response = await self._chat(
             model=self._qa_model,
             messages=self._build_messages(transcript, system_prompt, history),
             stream=False,
         )
-        message = response.get("message") if isinstance(response, dict) else getattr(response, "message", None)
-        if message is None:
-            return ""
-        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
-        return (content or "").strip()
+        return self._chunk_content(response).strip()
 
     async def stream_qa(
         self,
@@ -711,18 +829,38 @@ class RealOllamaClient:
         system_prompt: str | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
-        stream = await self._client.chat(
-            model=self._qa_model,
-            messages=self._build_messages(transcript, system_prompt, history),
-            stream=True,
-        )
-        async for chunk in stream:
-            message = chunk.get("message") if isinstance(chunk, dict) else getattr(chunk, "message", None)
-            if message is None:
-                continue
-            content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
-            if content:
-                yield content
+        messages = self._build_messages(transcript, system_prompt, history)
+        stream = await self._chat(model=self._qa_model, messages=messages, stream=True)
+        yielded = False
+        try:
+            async for chunk in stream:
+                content = self._chunk_content(chunk)
+                if content:
+                    yielded = True
+                    yield content
+        except Exception as e:
+            # ollama-python only opens the HTTP stream on first iteration, so
+            # a keep_alive rejection lands here, not in `_chat`. Retrying is
+            # safe only before the first chunk — after that the caller
+            # already holds partial text and a restart would duplicate it.
+            if yielded or not self._send_keep_alive or not self._looks_like_keep_alive_rejection(e):
+                raise
+            self._disable_keep_alive(e)
+            stream = await self._chat(model=self._qa_model, messages=messages, stream=True)
+            async for chunk in stream:
+                content = self._chunk_content(chunk)
+                if content:
+                    yield content
+
+    @staticmethod
+    def _chunk_content(chunk: Any) -> str:
+        """The text of one response / stream chunk, whether ollama-python hands
+        back a dict or a typed object; "" when there's none."""
+        message = chunk.get("message") if isinstance(chunk, dict) else getattr(chunk, "message", None)
+        if message is None:
+            return ""
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        return content or ""
 
     async def qa_with_uncertainty(
         self,
@@ -749,7 +887,7 @@ class RealOllamaClient:
             system_prompt = profile_prefix.rstrip() + "\n\n" + system_prompt
         messages = self._build_messages(transcript, system_prompt, history)
         try:
-            response = await self._client.chat(
+            response = await self._chat(
                 model=self._qa_model,
                 messages=messages,
                 stream=False,
@@ -791,7 +929,7 @@ class RealOllamaClient:
             transcript, _EXTRACT_SUBJECT_SYSTEM_PROMPT, history
         )
         try:
-            response = await self._client.chat(
+            response = await self._chat(
                 model=self._qa_model,
                 messages=messages,
                 stream=False,
@@ -827,7 +965,7 @@ class RealOllamaClient:
         """
         system_prompt = _EXTRACT_MEMORIES_SYSTEM_PROMPT
         try:
-            response = await self._client.chat(
+            response = await self._chat(
                 model=self._qa_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -873,7 +1011,8 @@ def get_ollama_client() -> OllamaClient:
 def reset_ollama_client() -> None:
     """Drop the cached client so the next ``get_ollama_client()`` rebuilds it
     from the current ``settings``. This is the 'reapply' hook for a live
-    ``ollama_model`` / ``ollama_tool_model`` switch from the web Models page:
+    ``ollama_model`` / ``ollama_tool_model`` switch from the web Models page
+    (and for ``ollama_tool_think`` / ``ollama_keep_alive``, bound alongside):
     the RealOllamaClient binds its qa/tool model names at construction, so a
     settings mutation alone wouldn't take — clearing the singleton makes every
     call site (all of which go through ``get_ollama_client()`` per-use) pick up

@@ -165,7 +165,12 @@ def _register_core_reapply_hooks() -> None:
 
     for field in ("tts_engine", "tts_speed"):
         reapply.on_reapply(field, reset_tts_client)
-    for field in ("ollama_model", "ollama_tool_model", "ollama_vision_model"):
+    # `ollama_tool_think` and `ollama_keep_alive` are bound at client
+    # construction like the model names, so they need the same reset.
+    for field in (
+        "ollama_model", "ollama_tool_model", "ollama_vision_model",
+        "ollama_tool_think", "ollama_keep_alive",
+    ):
         reapply.on_reapply(field, reset_ollama_client)
     reapply.on_reapply("log_level", _reapply_log_level)
 

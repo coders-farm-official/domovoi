@@ -62,3 +62,73 @@ def test_greeting_only_is_preserved():
 def test_empty_and_blankish():
     assert strip_leading_greeting("", _BANK) == ""
     assert strip_leading_greeting("   ", _BANK) == "   "
+
+
+# ─── Fuzzy matching: the greeting reaches Whisper as faint residual echo and
+#     a small model snaps it to the nearest real words ─────────────────────────
+
+_FUZZY_BANK = _BANK + ["Beep boop. How can I help?", "Shoot.", "Go on.", "I'm ready."]
+
+
+def test_mistranscribed_greeting_is_stripped():
+    # The real case from the office satellite on small.en/cpu/int8.
+    assert (
+        strip_leading_greeting("Big boob, how can I help? What time is it?", _FUZZY_BANK)
+        == "What time is it?"
+    )
+
+
+def test_fuzzy_absorbs_a_merged_word():
+    # Whisper fused the two nonsense syllables into one token, so the
+    # greeting spans one fewer transcript token than the bank phrase.
+    assert (
+        strip_leading_greeting("Bee-boop, how can I help? play jazz", _FUZZY_BANK)
+        == "play jazz"
+    )
+
+
+def test_fuzzy_prefers_exact_and_longer():
+    bank = ["Hi there.", "Hi there, friend."]
+    assert strip_leading_greeting("Hi there, friend. play jazz", bank) == "play jazz"
+    assert strip_leading_greeting("Hi there. play jazz", bank) == "play jazz"
+
+
+def test_fuzzy_still_requires_boundary():
+    s = "big boob how can i help what time is it"
+    assert strip_leading_greeting(s, _FUZZY_BANK) == s
+
+
+def test_fuzzy_greeting_only_is_preserved():
+    s = "Big boob, how can I help?"
+    assert strip_leading_greeting(s, _FUZZY_BANK) == s
+
+
+def test_dissimilar_sentence_sharing_filler_words_is_untouched():
+    # Shares "how" and "help"-ish shape but is a different sentence.
+    s = "Bob, how are you? what time is it"
+    assert strip_leading_greeting(s, _FUZZY_BANK) == s
+
+
+def test_short_greetings_never_match_fuzzily():
+    # One-word / short greetings resemble too many real words; they must
+    # match exactly or not at all.
+    assert strip_leading_greeting("Shot, play jazz", _FUZZY_BANK) == "Shot, play jazz"
+    assert strip_leading_greeting("Gone, play jazz", _FUZZY_BANK) == "Gone, play jazz"
+    assert strip_leading_greeting("Shoot. play jazz", _FUZZY_BANK) == "play jazz"
+
+
+def test_fuzzy_below_threshold_is_untouched():
+    s = "Beep, how can I? play jazz"
+    # Explicitly tightened threshold: this near-miss must not strip.
+    assert strip_leading_greeting(s, _FUZZY_BANK, min_ratio=0.95) == s
+
+
+def test_lookalike_command_keeps_its_verb():
+    # "make it quiet" is ~0.85 similar to the greeting "Make it quick." by
+    # characters, but shares only two whole words with it — a real command,
+    # not a mangled bleed. Must not become "please."
+    bank = _FUZZY_BANK + ["Make it quick."]
+    s = "Make it quiet, please."
+    assert strip_leading_greeting(s, bank) == s
+    # Same guard, two-word greeting: no fuzzy path at all.
+    assert strip_leading_greeting("I'm already, play jazz", _FUZZY_BANK) == "I'm already, play jazz"

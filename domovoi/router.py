@@ -20,7 +20,7 @@ from domovoi.db.repositories import (
     WebSearchPrefsRepository,
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
-from domovoi.handlers.base import as_fast_path
+from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.uncertainty import VOLATILE_CATEGORIES, categorize_question
@@ -193,6 +193,27 @@ def _no_speakers_yet(session_id: UUID | None, ctx: Context) -> Response:
     )
 
 
+def _has_tool_gate(handler: Handler) -> bool:
+    return type(handler).offers_tool is not Handler.offers_tool
+
+
+def offered_tool_schemas(transcript: str) -> list[dict]:
+    """The tool schemas the LLM router is offered for this (normalized)
+    transcript — every registered handler's ``tool_schema``, minus the
+    ones whose ``offers_tool`` says the utterance can't be theirs.
+
+    Handlers that gate their tool go LAST, in band order after the
+    ungated ones. The tool list is rendered into the prompt prefix that
+    Ollama's KV cache reuses between requests; keeping the part that
+    never changes at the front means a withheld tool only shortens the
+    tail, so a routed turn on a CPU host doesn't re-process three
+    thousand tokens of schema JSON every time the gate flips.
+    """
+    offered = [h for h in HANDLERS if h.offers_tool(transcript)]
+    offered.sort(key=_has_tool_gate)  # stable: band order within each group
+    return [h.tool_schema for h in offered]
+
+
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
@@ -363,10 +384,20 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             return response
 
     # 2. LLM tool-call fallback (the stub client returns None).
-    tool_schemas = [h.tool_schema for h in HANDLERS]
+    tool_schemas = offered_tool_schemas(transcript)
     tool_call = await ollama_client.route(intent.transcript, tool_schemas)
     if tool_call is not None:
         handler = HANDLER_BY_NAME.get(tool_call.get("handler", ""))
+        if handler is not None and not any(
+            s["name"] == handler.name for s in tool_schemas
+        ):
+            # The model named a tool it wasn't shown (withheld by its
+            # offers_tool gate) — that is the QA fallthrough, not a route.
+            log.info(
+                "tool model called withheld tool %r for %r — ignoring",
+                handler.name, intent.transcript,
+            )
+            handler = None
         if handler is not None:
             path = (
                 "llm_offline"

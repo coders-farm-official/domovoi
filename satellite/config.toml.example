@@ -408,7 +408,13 @@ enabled = true
 # fine; speech responses chop mid-word because 350 kbps of PCM TTS
 # can't fit through 1 Mbit/s. Recovery: `wpa_cli reassociate`.
 # This block tunes a watchdog that polls `iw dev wlan0 link` and
-# reassociates when the rate dips into pathological territory.
+# reassociates when the satellite has LOST the server AND the server
+# does not answer a TCP connect — i.e. when the path is what broke.
+# It never touches a link that is carrying a live session: `iw`
+# reports the rate of the last frame, and an idle link's last frame
+# is a 1 Mbit/s beacon, so a low rate on its own proves nothing
+# (2026-09-15: both satellites lost the server to their own
+# reassociates, with the server up the whole time).
 #
 # Requires a one-line sudoers entry on the Pi (see PROVISIONING.md
 # step 6.7) so the satellite process can run wpa_cli with no password
@@ -420,11 +426,10 @@ enabled = true
 # polling wastes CPU and journal noise for no benefit.
 poll_interval_sec = 60
 
-# Megabits/sec. Below this, reassociate. 5 Mbit/s is well above what
-# TTS needs (~0.5 Mbit/s) but well below normal operation
-# (20-70 Mbit/s on healthy 802.11n), so anything in the single digits
-# is unambiguously trouble. Lower to avoid false positives;
-# raise (e.g. to 10) to catch borderline cases earlier.
+# Megabits/sec. Below this the watcher logs the link as slow.
+# Informational only — the rate no longer decides a reassociate (see
+# above). 5 Mbit/s is well above what TTS needs (~0.5 Mbit/s) but well
+# below normal operation (20-70 Mbit/s on healthy 802.11n).
 min_healthy_mbits = 5.0
 
 # Don't reassociate again within this window. Defends against tight
@@ -437,7 +442,8 @@ cooldown_sec = 300
 # satellite arms its `network_degraded` flag — the next wake word
 # fires the canned MP3 ("Sorry, I'm having trouble reaching the
 # network...") instead of the usual streaming flow. Also armed when
-# a reassociate fails to recover the rate. Cleared on WS reconnect.
+# a reassociate fails to restore the path to the server. Cleared on
+# WS reconnect.
 degraded_after_disconnect_sec = 30
 
 [log]

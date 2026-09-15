@@ -160,6 +160,28 @@ requires_db = pytest.mark.skipif(
 )
 
 
+def fast_path_winner(transcript: str) -> str | None:
+    """Replicate the router's normalization + band-ordered fast-path scan
+    WITHOUT dispatching — the §13.2 collision-corpus dry run. Returns the
+    winning handler's name, or None when nothing fast-paths (the utterance
+    would fall through to LLM tool routing). DB-free by construction, so a
+    routing assertion built on it can never hide behind ``requires_db``.
+
+    Imports lazily so conftest doesn't load the whole handler registry
+    for every test module that never touches routing.
+    """
+    from domovoi.handlers import HANDLERS
+    from domovoi.router import _LEADING_FILLER_RE
+
+    t = transcript.lower().strip().rstrip(".,!?")
+    t = _LEADING_FILLER_RE.sub("", t)
+    for handler in HANDLERS:
+        for fp in handler.fast_paths:
+            if fp.pattern.match(t):
+                return handler.name
+    return None
+
+
 @pytest.fixture(autouse=True)
 def _isolate_admin_config_dir(tmp_path, monkeypatch):
     """Point the admin-auth config dir (setup-code.txt home) at a tmp

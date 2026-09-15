@@ -35,6 +35,7 @@ them here would be a silent no-op in normal operation.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -56,6 +57,18 @@ class FieldSpec:
     max: float | None = None
     choices: list[str] | None = None
     unit: str | None = None
+    pattern: str | None = None      # str fields: full-match regex the value must satisfy
+    pattern_help: str | None = None  # the user-facing "expected ..." when it doesn't
+
+
+# Ollama's ``keep_alive`` syntax: a Go duration ("24h", "90m", "1h30m",
+# "500ms"), a bare number of seconds, "-1" (any negative) for forever, "0"
+# to unload immediately. Blank is also valid — it means "don't send it".
+# Validated here because a value Ollama can't parse would fail EVERY chat
+# call, and pydantic doesn't validate on assignment (see coerce_and_validate).
+OLLAMA_KEEP_ALIVE_PATTERN = (
+    r"\s*(?:-?\d+(?:\.\d+)?|-?(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+)?\s*"
+)
 
 
 # Order here is the display order within each group.
@@ -109,6 +122,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "message carries images. Applies immediately; it must already be "
         "pulled.",
         "str", tier="reapply",
+    ),
+    FieldSpec(
+        "ollama_keep_alive", "Keep models loaded for", "Models",
+        "How long Ollama keeps a model in memory after its last request. "
+        "Ollama's own default is only 5 minutes, so on a CPU host the models "
+        "unload between sporadic questions and the next one pays a cold start "
+        "of up to a minute (model load plus the tool-schema prefill). Use an "
+        "Ollama duration: '24h', '90m', a bare number of seconds, '-1' to keep "
+        "them loaded until Ollama restarts, '0' to unload after every reply. "
+        "Leave blank to let the Ollama server's own setting govern. Applies "
+        "immediately.",
+        "str", tier="reapply",
+        pattern=OLLAMA_KEEP_ALIVE_PATTERN,
+        pattern_help="expected an Ollama duration such as 24h, 90m, -1 or 0",
     ),
 
     # ─── Voice & speech ────────────────────────────────────────────────
@@ -438,6 +465,8 @@ def coerce_and_validate(spec: FieldSpec, value: object) -> object:
 
     if t == "choice" and spec.choices and coerced not in spec.choices:
         raise ValueError(f"must be one of: {', '.join(spec.choices)}")
+    if t == "str" and spec.pattern and not re.fullmatch(spec.pattern, coerced):  # type: ignore[arg-type]
+        raise ValueError(spec.pattern_help or "does not match the expected format")
     if spec.min is not None and coerced < spec.min:  # type: ignore[operator]
         raise ValueError(f"must be at least {spec.min}")
     if spec.max is not None and coerced > spec.max:  # type: ignore[operator]

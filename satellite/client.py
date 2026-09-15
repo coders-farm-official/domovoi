@@ -27,6 +27,7 @@ import secrets
 import shutil
 import signal
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -869,15 +870,14 @@ class Satellite:
         ))
 
         # WiFi self-heal state. The watcher thread polls
-        # `iw dev wlan0 link` every `wifi_poll_interval_sec` and runs
-        # `sudo wpa_cli reassociate` when rx bitrate dips below the
-        # min-healthy threshold. `_network_degraded` arms when either
-        # the reassociate fails to recover OR the WS has been gone past
-        # `wifi_degraded_after_disconnect_sec` — the next wake word
-        # plays a canned local MP3 instead of trying to stream. Cleared
-        # on a healthy rate observation OR on successful WS connect.
-        # Defends against the rx-bitrate-stuck-at-1-Mbit/s incident
-        # described under [wifi] in config.toml.example.
+        # `iw dev wlan0 link` every `wifi_poll_interval_sec` and, ONLY
+        # while the WS is down and the core does not answer a TCP
+        # connect, runs the reassociate. `_network_degraded` arms when
+        # either the reassociate fails to restore the path OR the WS has
+        # been gone past `wifi_degraded_after_disconnect_sec` — the next
+        # wake word plays a canned local MP3 instead of trying to stream.
+        # Cleared as soon as the WS is up again. The rx rate is reported,
+        # never acted on: see `_wifi_watcher_thread_run` for why.
         self._network_degraded = threading.Event()
         self._ws_disconnected_since: float | None = None
         self._wifi_thread: threading.Thread | None = None
@@ -2151,22 +2151,63 @@ class Satellite:
         actual = self._read_output_volume()
         self._emit_volume_status(actual if actual is not None else level)
 
+    def _core_reachable(self, timeout: float = 3.0) -> bool:
+        """Can this device open a TCP connection to the core right now?
+
+        The question the Wi-Fi watcher actually needs answered. A rate read
+        off ``iw`` says what the LAST frame was sent at, and on an idle link
+        that is the 1 Mbit/s beacon rate - it looks "wedged" while working
+        perfectly. Whether the core answers a SYN is a fact about the path.
+
+        A URL that cannot be parsed (``auto`` before discovery ran) answers
+        True: with nothing to test against, the watcher must not start
+        tearing the link down on a guess.
+        """
+        try:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(self.cfg.domovoi_url)
+            host = parts.hostname
+            port = parts.port or (443 if parts.scheme in ("wss", "https") else 80)
+        except ValueError:
+            host = None
+            port = 0
+        if not host:
+            return True
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
     def _wifi_watcher_thread_run(self) -> None:
-        """Periodic rx-bitrate poll + reassociate-on-trouble.
+        """Periodic link poll + reassociate when the NETWORK is what broke.
 
         Loop:
           1. Wait one poll interval (interruptible by shutdown).
-          2. Sample link via `_check_wifi_link`.
-          3. Push the sample to the server (no-op if WS down).
-          4. If WS has been disconnected past the degraded threshold,
+          2. Sample link via `_check_wifi_link`; push it to the server
+             (no-op if WS down) so the dashboard shows the rates.
+          3. If WS has been disconnected past the degraded threshold,
              arm the local degraded flag so the next wake word plays
              the canned MP3 instead of trying to stream.
-          5. If rx bitrate is below `min_healthy_mbits`:
-             a. Honor cooldown — recently-reassociated, just arm the
-                degraded flag and move on.
-             b. Otherwise reassociate, settle for ~3 s, re-sample.
-                Healthy after → clear degraded; still bad → arm degraded.
-          6. If rx bitrate is healthy and WS is connected, clear degraded.
+          4. WS up -> the link is carrying a live session. Clear degraded
+             and LEAVE THE LINK ALONE, whatever the rate reads. A low rx
+             rate is logged, nothing more.
+          5. WS down and the link associated -> ask `_core_reachable`.
+             Core answers: the network is fine and the core is what is
+             down; nothing here can help, don't reassociate.
+             Core silent: the path is broken. Honor the cooldown, else
+             reassociate, settle ~3 s, probe again. Still silent -> arm
+             degraded.
+
+        Why not the rate: `iw dev wlan0 link` reports the rate of the last
+        frame, and an idle link's last frame is a beacon at 1 Mbit/s. The
+        old rule "reassociate below 5 Mbit/s" therefore tore down healthy,
+        idle links every cooldown - a self-inflicted disconnect that both
+        satellites showed on 2026-09-15, each going to the no-server ring
+        with the core up the whole time. The 2026-05-06 wedge this watcher
+        was built for still gets caught: a wedged link cannot reach the
+        core either, and reassociate is still the remedy.
 
         Disabled at runtime when `cfg.wifi_enabled = false` or when
         `iw` isn't installed (single warning logged, then thread exits).
@@ -2212,48 +2253,50 @@ class Satellite:
                 # through its own reconnect logic and we'd just fight it.
                 continue
 
-            if rx >= self.cfg.wifi_min_healthy_mbits:
-                # Healthy. Clear degraded *only* when WS is also up —
-                # otherwise the rate is fine but we still can't reach
-                # the server and the canned MP3 is still the
-                # right behavior on next wake.
-                if self._ws_disconnected_since is None and self._network_degraded.is_set():
-                    log.info("wifi healthy (rx=%.1f Mbit/s); clearing degraded flag", rx)
+            if ws_down_for is None:
+                # A live session is riding this link. Nothing the watcher
+                # could do beats that, so it does nothing - the rate is
+                # information for the dashboard, not a verdict.
+                if self._network_degraded.is_set():
+                    log.info(
+                        "WS is up (rx=%.1f Mbit/s); clearing degraded flag", rx
+                    )
                     self._network_degraded.clear()
+                if rx < self.cfg.wifi_min_healthy_mbits:
+                    log.debug(
+                        "wifi rx=%.1f Mbit/s below %.1f but WS is up; an idle "
+                        "link reports the beacon rate - leaving it alone",
+                        rx, self.cfg.wifi_min_healthy_mbits,
+                    )
+                continue
+
+            if self._core_reachable():
+                # The path works; the core itself is what's not talking.
+                # Reassociating would only add a real outage to a
+                # perceived one. The connect loop keeps retrying.
+                log.info(
+                    "WS down for %.0fs but the core answers on TCP; network "
+                    "is fine, not reassociating (rx=%.1f Mbit/s)",
+                    ws_down_for, rx,
+                )
                 continue
 
             now = time.monotonic()
             cooldown_remaining = self.cfg.wifi_cooldown_sec - (now - last_reassociate)
             if last_reassociate > 0 and cooldown_remaining > 0:
-                # Only arm degraded if WS is also down. A slow rate the
-                # user can still talk through (TTS may chop, but the bot
-                # still answers) doesn't merit the canned "I can't reach
-                # the network" message — that message is for genuine
-                # server unreachability, not "things are slow."
-                # Fixed 2026-05-07 after a user report of stuck-canned
-                # state surviving WS reconnect.
-                if self._ws_disconnected_since is not None:
-                    log.warning(
-                        "wifi rx=%.1f Mbit/s below %.1f and WS down for "
-                        "%.0fs; arming degraded mode (cooldown blocks "
-                        "reassociate for %.0fs more)",
-                        rx, self.cfg.wifi_min_healthy_mbits,
-                        now - self._ws_disconnected_since, cooldown_remaining,
-                    )
-                    self._network_degraded.set()
-                else:
-                    log.warning(
-                        "wifi rx=%.1f Mbit/s below %.1f, but WS is up — "
-                        "user can still talk to Domovoi; not "
-                        "arming degraded. Cooldown blocks reassociate "
-                        "for %.0fs more.",
-                        rx, self.cfg.wifi_min_healthy_mbits, cooldown_remaining,
-                    )
+                log.warning(
+                    "WS down for %.0fs and core unreachable (rx=%.1f Mbit/s); "
+                    "arming degraded mode (cooldown blocks reassociate for "
+                    "%.0fs more)",
+                    ws_down_for, rx, cooldown_remaining,
+                )
+                self._network_degraded.set()
                 continue
 
             log.warning(
-                "wifi rx=%.1f Mbit/s (ssid=%r) below threshold %.1f; reassociating",
-                rx, link.get("ssid"), self.cfg.wifi_min_healthy_mbits,
+                "WS down for %.0fs and core unreachable (rx=%.1f Mbit/s, "
+                "ssid=%r); reassociating",
+                ws_down_for, rx, link.get("ssid"),
             )
             ok = self._reassociate_wifi()
             last_reassociate = time.monotonic()
@@ -2261,44 +2304,29 @@ class Satellite:
                 self._network_degraded.set()
                 continue
 
-            # Settle for the AP/STA to renegotiate before re-sampling.
+            # Settle for the AP/STA to renegotiate before re-probing.
             # 3 s is empirically enough on the incident hardware (rate
             # jumped from 1 → 28+ Mbit/s within a second of reassociate).
             if self.shutdown_event.wait(3.0):
                 return
             link2 = self._check_wifi_link()
-            if link2 is None:
-                continue
-            self._emit_wifi_status(link2)
-            rx2 = link2.get("rx_mbits")
-            if rx2 is not None and rx2 >= self.cfg.wifi_min_healthy_mbits:
+            if link2 is not None:
+                self._emit_wifi_status(link2)
+            if self._core_reachable():
                 log.info(
-                    "wifi reassociate recovered: rx=%.1f Mbit/s (was %.1f)",
-                    rx2, rx,
+                    "wifi reassociate recovered: core reachable again "
+                    "(rx=%s Mbit/s)",
+                    (link2 or {}).get("rx_mbits"),
                 )
-                if self._ws_disconnected_since is None:
-                    self._network_degraded.clear()
+                # Degraded clears once the WS is actually back (step 4).
             else:
-                # Same WS-up guard as the cooldown branch — if the user
-                # can still talk to Domovoi (WS up), the
-                # canned message would deny them help even though the
-                # bot is reachable. Only arm degraded when WS is also
-                # genuinely down.
-                if self._ws_disconnected_since is not None:
-                    log.warning(
-                        "wifi reassociate did not recover rate (now "
-                        "rx=%s) and WS is down; arming degraded mode "
-                        "until next try after cooldown",
-                        rx2,
-                    )
-                    self._network_degraded.set()
-                else:
-                    log.warning(
-                        "wifi reassociate did not recover rate (now "
-                        "rx=%s) but WS is up — leaving degraded clear "
-                        "so user can still reach Domovoi",
-                        rx2,
-                    )
+                log.warning(
+                    "wifi reassociate did not restore the path to the core "
+                    "(rx=%s Mbit/s); arming degraded mode until next try "
+                    "after cooldown",
+                    (link2 or {}).get("rx_mbits"),
+                )
+                self._network_degraded.set()
 
     def _play_canned_mp3(self, mp3_path: Path, label: str) -> None:
         """Blocking play of a pre-rendered MP3 via mpg123 → ALSA.

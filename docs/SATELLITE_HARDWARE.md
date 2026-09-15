@@ -232,7 +232,8 @@ Three finishing moves, all from PROVISIONING.md:
 2. **Three sudoers entries** — least-privilege single-command grants:
    - *Wi-Fi self-heal* ([§6.7](../satellite/PROVISIONING.md)): lets the
      client run exactly `wpa_cli -i wlan0 reassociate` to un-wedge a
-     rate-stuck Wi-Fi link on its own.
+     Wi-Fi link on its own, once it has lost the server and the server
+     does not answer a TCP connect.
    - *Self-restart* ([§8.1](../satellite/PROVISIONING.md)): lets the
      client run exactly `systemctl --no-block restart
      domovoi-satellite.service`, which is how dashboard config pushes,

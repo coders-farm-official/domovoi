@@ -673,6 +673,7 @@ class Handler(ABC):
     async def execute_from_tool(self, args, ctx, session) -> Response: ...   # chat mode
     async def fallback_offline(self, intent, ctx, session) -> Response: ...  # required unless "no"
     async def handle_confirmation(self, kind, data, affirmative, ctx, session) -> Response: ...
+    def offers_tool(self, transcript) -> bool: ...   # default True; see below
 ```
 
 * **Dispatch order** is ascending band; ties break core-first, then plugin
@@ -688,6 +689,17 @@ class Handler(ABC):
   `handle_confirmation` with a kind guaranteed to be one you declared.
 * `Handler.name` lands in `intents_log` — treat it as a stable identifier and
   never rename it cosmetically.
+* **Tool-offer gate**: `offers_tool(transcript)` decides whether your
+  `tool_schema` is shown to the LLM router for this utterance (lowercased,
+  punctuation- and filler-stripped, as fast paths see it). Default `True`.
+  Override only to withhold on utterances that provably can't be yours — a
+  small tool model reaches for the nearest schema it is shown, so a "verify
+  a claim" or "look up a subject" tool gets picked for plain trivia
+  questions. Keep it a cheap regex and err generous: a false positive just
+  offers the tool as before; a false negative silently drops a real command
+  to the QA fallthrough. Core examples: `double_check` (needs a verification
+  word), `news` (needs a news word), `calculator` (withheld on who/why/where
+  questions with no digit). Check the effect with `scripts/eval_routing.py`.
 
 ### 4.3 Workers and startup hooks
 

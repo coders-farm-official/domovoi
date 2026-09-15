@@ -7,12 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
 from domovoi.models import Context, Intent, Response
 
-_UNIT_TO_SECONDS = {"second": 1, "minute": 60, "hour": 3600}
-
+# The duration grammar lives in handlers/shared/number_words: digits,
+# spelled numbers ("ten minutes", "forty-five minutes"), articles ("an
+# hour"), halves ("half an hour", "an hour and a half", "one and a half
+# hours") and two joined clauses ("1 hour and 30 minutes"). Whisper spells
+# small numbers out more often than not, and the digit-only pattern this
+# replaced sent "set a timer for one minute" through the ~4 s LLM tool
+# router. The fragment is a closed vocabulary with no capturing groups, so
+# the create path stays anchored on "timer for" and cannot poach a later
+# band.
 _CREATE_RE = re.compile(
-    r"^(?:set a |)timer for (\d+) (second|minute|hour)s?(?: (?:for|called|named) (.+))?$"
+    rf"^(?:set a |)timer for (?P<duration>{DURATION_PATTERN})"
+    r"(?: (?:for|called|named) (?P<label>.+))?$"
 )
 _CANCEL_RE = re.compile(r"^(?:cancel|stop) (?:the |)timer(?: (?:for|called|named) (.+))?$")
 _STATUS_RE = re.compile(r"^(?:how much time|how long) (?:left |)on (?:the |)timer$")
@@ -100,12 +109,19 @@ class TimerHandler(Handler):
     async def _create_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
-        amount = int(m.group(1))
-        unit = m.group(2)
-        label = (m.group(3) or None)
+        duration_sec = parse_duration_seconds(m.group("duration"))
+        if not duration_sec:
+            # "timer for 0 minutes" fits the grammar but means nothing —
+            # mirror the tool-call path's refusal rather than set a timer
+            # that fires immediately.
+            return Response(
+                text="I need a duration to set a timer.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        label = (m.group("label") or None)
         if label:
             label = label.strip()
-        duration_sec = amount * _UNIT_TO_SECONDS[unit]
         return await self._create(
             duration_sec=duration_sec, label=label, ctx=ctx, session=session
         )

@@ -72,6 +72,28 @@ _VERIFY_RE = re.compile(
     r")$"
 )
 
+# "is it true that <claim>" states the claim itself — verify THAT, not
+# the previous response. Anchored on the full opener so "is it true"
+# alone (a follow-up about what was just said) still takes _VERIFY_RE's
+# route via the LLM, and so no other yes/no question can match. Added
+# 2026-09-15: without it, qwen2.5:14b reads the utterance as a plain
+# question once the routing prompt says "a question is not a claim".
+_VERIFY_CLAIM_RE = re.compile(r"^is it (?:true|right|correct) that (.+)$")
+
+# Words a verification request carries. Used by ``offers_tool`` to keep
+# the double_check schema OUT of the LLM router's tool list for
+# utterances that can't be asking for a check (see the method). Generous
+# on purpose: "right"/"real"/"source" over-match harmlessly.
+_VERIFY_CUE_RE = re.compile(
+    r"\b(?:"
+    r"sure|check|verif\w*|fact|true|truth|correct|incorrect|right|wrong"
+    r"|accura\w*|really|confirm\w*|certain|legit\w*|actually|trust\w*"
+    r"|believ\w*|lie|lying|liar|prove|proof|source|look (?:that|this|it) up"
+    r"|mistake\w*|doubt\w*|kidding|serious\w*|real|positive|bet"
+    r"|made (?:that|this|it) up|hallucinat\w*"
+    r")\b"
+)
+
 
 # ─── Prompts ──────────────────────────────────────────────────────────────
 
@@ -247,10 +269,13 @@ class DoubleCheckHandler(Handler):
     tool_schema = {
         "name": "double_check",
         "description": (
-            "Verify a factual claim from the assistant's previous spoken "
-            "response by web search. Use when the user explicitly asks "
-            "for fact-checking ('are you sure?', 'double check that', "
-            "'verify that')."
+            "Web-verify something the assistant ITSELF said earlier, only "
+            "when the user explicitly asks for a check: 'are you sure', "
+            "'is that right', 'double check that', 'fact check that', "
+            "'is it true that <claim>'. A new question ('who painted the "
+            "mona lisa', 'what is the capital of mongolia') is NOT a "
+            "verification request even though it is about facts — never "
+            "use this tool to answer a question."
         ),
         "parameters": {
             "type": "object",
@@ -258,9 +283,12 @@ class DoubleCheckHandler(Handler):
                 "claim": {
                     "type": "string",
                     "description": (
-                        "The specific claim to verify. If absent, the "
-                        "handler pulls the assistant's last response from "
-                        "session context."
+                        "The claim the user is questioning, when they state "
+                        "one ('is it true that the great wall is visible "
+                        "from space' → 'the great wall is visible from "
+                        "space'). Omit for 'are you sure' / 'double check "
+                        "that': the handler then verifies the assistant's "
+                        "previous response."
                     ),
                 },
             },
@@ -270,7 +298,18 @@ class DoubleCheckHandler(Handler):
     def __init__(self) -> None:
         self.fast_paths = [
             FastPath(_VERIFY_RE, DoubleCheckHandler._from_match),
+            FastPath(_VERIFY_CLAIM_RE, DoubleCheckHandler._from_claim_match),
         ]
+
+    def offers_tool(self, transcript: str) -> bool:
+        # Verification is an explicit request, so an utterance with no
+        # verification word in it cannot be one. Withholding the schema
+        # matters because the tool model otherwise reads a bare factual
+        # question as a claim to check: "who painted the mona lisa" →
+        # double_check(claim=...) → "Yes, that checks out" (qwen3:8b,
+        # 2026-09-15 live). The cue list is deliberately generous — a
+        # false positive only means the tool is offered, as it always was.
+        return bool(_VERIFY_CUE_RE.search(transcript))
 
     async def execute(
         self, intent: Intent, ctx: Context, session: AsyncSession
@@ -299,11 +338,16 @@ class DoubleCheckHandler(Handler):
             matched_path="fast_offline",
         )
 
-    # ─── Fast-path adapter ────────────────────────────────────────────
+    # ─── Fast-path adapters ───────────────────────────────────────────
     async def _from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
         return await self._verify(ctx, session)
+
+    async def _from_claim_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await self._verify_claim_directly(m.group(1).strip(), ctx, session)
 
     # ─── Proactive offer (router QA fallthrough) ──────────────────────
     async def handle_confirmation(

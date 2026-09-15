@@ -179,6 +179,7 @@ room — the message is spoken aloud, not just logged.
 | "remind me to call mom in 10 minutes" | "I'll remind you to call mom in 10 minutes." |
 | "remind me to take the trash out in 1 hour" | "I'll remind you to take the trash out in 1 hour." |
 | "remind me to check the oven in 90 seconds" | "I'll remind you to check the oven in 90 seconds." |
+| "remind me to call mom in ten minutes" / "remind me to take the trash out in an hour" / "remind me to check the oven in an hour and a half" | Same duration grammar as timers: digits or words, "a minute" / "an hour", halves, and "1 hour and 30 minutes". |
 | "what reminders do I have" / "list my reminders" | Reads back the next reminder + count |
 | "cancel my reminder to call mom" | Substring-match cancel (Whisper rarely matches the original label exactly) |
 | "cancel my reminders" | Cancels every reminder in the current room |
@@ -246,7 +247,7 @@ table and watcher worker.
 
 | Ask | Behavior |
 |---|---|
-| "set a timer for 5 minutes" / "timer for 30 seconds" | Creates a timer; "Timer set for 5 minutes." |
+| "set a timer for 5 minutes" / "timer for 30 seconds" / "set a timer for ten minutes" / "timer for an hour and a half" / "timer for 1 hour and 30 minutes" | Creates a timer; "Timer set for 5 minutes." Amounts may be digits or words ("forty-five"), with "a minute", "an hour" and halves ("half an hour", "one and a half hours") understood. |
 | "set a timer for 1 hour for the laundry" / "timer for 10 minutes called pasta" / "timer for 2 hours named oven" | Labeled timer; the label round-trips into cancel + status. |
 | "cancel the timer" / "stop the timer" | Cancels the next-firing timer in the room. |
 | "cancel the timer for pasta" / "cancel the pasta timer" / "stop the timer named oven" | Substring-match cancel by label. |

@@ -140,6 +140,22 @@ class Handler(ABC):
             f"{self.name} does not implement execute_from_tool (LLM tool-call routing)"
         )
 
+    def offers_tool(self, transcript: str) -> bool:
+        """Should this handler's ``tool_schema`` be offered to the LLM
+        router for ``transcript`` (lowercased, punctuation- and
+        filler-stripped, exactly as fast paths see it)?
+
+        Default: always. Override ONLY to withhold the tool on utterances
+        that provably cannot be this handler's — the tool model treats
+        every schema it is shown as a candidate, and a small router on a
+        CPU host will reach for the nearest one rather than answer with
+        no tool. Withholding must be conservative: a wrongly withheld
+        tool silently degrades a real command to the QA fallthrough, and
+        no test will catch it without a live model. Keep the check to a
+        cheap regex; it runs on every non-fast-path turn.
+        """
+        return True
+
     async def fallback_offline(
         self, intent: Intent, ctx: Context, session: AsyncSession
     ) -> Response:

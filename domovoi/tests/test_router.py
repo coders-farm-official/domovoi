@@ -476,6 +476,10 @@ ORDERING_CORPUS: list[tuple[str, str]] = [
     # reminder before timer ("remind" collision)
     ("remind me to feed the cat in 10 minutes", "reminder"),
     ("set a timer for 5 minutes", "timer"),
+    # the shared spelled-number grammar widens only the duration slot:
+    # reminder stays on "remind me to", timer stays on "timer for"
+    ("remind me to feed the cat in ten minutes", "reminder"),
+    ("set a timer for ten minutes", "timer"),
     ("what's 5 plus 3", "calculator"),
     ("what time is it", "clock"),
     ("say that again", "repeat"),

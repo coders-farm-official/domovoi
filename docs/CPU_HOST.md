@@ -80,8 +80,24 @@ adherence is weaker but generally acceptable. Because the setting is hot,
 run both for a day and see whether routing actually degrades for the
 things your household says.
 
-If you notice the router picking wrong handlers, that's your signal to go
-back to 14B and accept the latency — or to add a fast path (see below).
+If you notice the router picking wrong handlers, measure before you
+guess: `scripts/eval_routing.py` replays a fixed corpus of commands and
+questions and reports which handler each one landed on —
+
+```bash
+python scripts/eval_routing.py --core http://localhost:6370 --room bench
+```
+
+or, to A/B tool models without touching the running core,
+`--ollama http://localhost:11434 --model qwen3:8b`. The classic CPU-host
+failure is a small router treating a plain question as a tool call ("who
+painted the mona lisa" → double_check, → calculator, → news, depending
+on the model family); the corpus's `qa` cases catch exactly that. On the
+reference all-CPU AMD box, `qwen3:8b` (with thinking off, below) has been
+the better router of the two small models — run the corpus on yours
+rather than taking that on faith. Your remaining options are the same
+as always: go back to 14B and accept the latency, or add a fast path
+(see below).
 
 ### Thinking models: keep thinking off
 
@@ -181,6 +197,11 @@ The gap between those lines is how long Whisper took to load. The *first*
 one also downloads the model from Hugging Face, so restart once and time
 the second for a true figure.
 
+Ollama's model loads are the exception: they are boot cost only if the
+models *stay* loaded, which is what [Memory budget](#memory-budget) is
+about. A first question that takes most of a minute after a quiet
+afternoon is that, not STT.
+
 **Per-turn latency is not logged.** It goes to the database — one row per
 routed turn in `intents_log`, where `latency_ms` covers the whole turn
 (STT → routing → handler), not STT in isolation:
@@ -199,8 +220,43 @@ above.
 
 ## Memory budget
 
-Ollama holds models resident between turns (`keep_alive`). On a 24 GB
-machine, a rough accounting:
+Ollama only holds a model resident for as long as the request's
+`keep_alive` says, and Ollama's own default is **5 minutes**. On a CPU host
+that is the difference between a quick answer and a painful one: after a
+quiet spell the next question pays a full cold start — reloading the
+model and re-prefilling the tool schema for every registered handler
+(~3k tokens with a couple of dozen handlers). Measured on an all-CPU AMD
+mini PC, same question both times:
+
+| "what is the capital of mongolia" | |
+|---|---:|
+| Cold — models unloaded | 53.6 s |
+| Warm — models resident | 3.7 s |
+| Any fast-path turn (regex, no LLM) | 0.02 s either way |
+
+Domovoi therefore sends its own `keep_alive` on every Ollama call.
+`ollama_keep_alive` (dashboard → **Models** → *Keep models loaded for*)
+controls it and defaults to `24h`. Use `-1` to keep the models loaded
+until Ollama itself restarts, or `0` to unload after every reply. It's a
+hot setting: the next turn uses the new value. On a box with a GPU that
+also does other work, a shorter value hands the VRAM back sooner.
+
+If you'd rather manage this on the Ollama side, blank out
+`ollama_keep_alive` so Domovoi sends nothing (a per-request value
+overrides the server's default, so the two would otherwise fight) and
+set the default in Ollama's systemd unit instead:
+
+```bash
+sudo systemctl edit ollama
+```
+
+```ini
+[Service]
+Environment="OLLAMA_KEEP_ALIVE=-1"
+```
+
+Either way, the budget below assumes the models stay resident — that is
+the point. On a 24 GB machine, a rough accounting:
 
 | | Approx. |
 |---|---:|

@@ -28,7 +28,8 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 | Room shows connected, then drops ~15 s after Wi-Fi blips | Working as intended | The server pings each WebSocket every 10 s (5 s timeout); a dead socket is evicted within ~15 s and the Pi's client reconnects with backoff — no action needed |
 | Dashboard **Restart satellite** button reports failure | Missing self-restart sudoers entry on the Pi | Add the one-line entry from PROVISIONING.md §8.1 — exactly `<user> ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service` (sudo matches the whole argument list; `--no-block` is load-bearing) |
 | Voice "fix the wifi" / the Wi-Fi watcher does nothing | Missing `wpa_cli` sudoers entry | Add the entry from PROVISIONING.md §6.7 so the satellite can run `wpa_cli reassociate` without a password |
-| TTS chops mid-word for hours at a time | AP rate-control wedge (rx bitrate stuck at 1 Mbit/s) | The satellite's Wi-Fi watcher auto-reassociates below 5 Mbit/s; say "fix the wifi" to trigger it immediately, or tune `[wifi]` in the satellite config |
+| TTS chops mid-word for hours at a time | AP rate-control wedge (rx bitrate stuck at 1 Mbit/s) | The satellite's Wi-Fi watcher auto-reassociates once it has lost the server and the server stops answering; say "fix the wifi" to trigger it immediately, or tune `[wifi]` in the satellite config |
+| Both satellites go to the orange "no server" ring together while the server is up | Before 2026-09-15 the watcher reassociated any link whose rx rate read under 5 Mbit/s, and an idle link reports the 1 Mbit/s beacon rate | Update the satellite code (dashboard upgrade); the watcher now leaves a link alone while a session is live and probes the server before blaming the Wi-Fi |
 | The satellite's clock or time zone differs from the server's (log lines in the wrong zone, or dated months ago) | A Pi has no battery clock and Pi OS ships in Europe/London; a hand-built unit has no `domovoi-sync-time` helper, or the sudoers line for it is missing | A prepared card syncs both from the server at stage 1, stage 2 and on every connect (look for `time sync:` in the satellite log). On a hand-built unit run `sudo timedatectl set-timezone <zone>` once, or install the helper per PROVISIONING.md §8.2 |
 
 ## No TTS audio / Domovoi is silent
@@ -132,6 +133,7 @@ The dashboard (port 6369) is a separate process that reads the shared Postgres a
 | Whisper model won't load / out of VRAM | Model too big for the GPU | Set a smaller `WHISPER_MODEL` (settings gear → advanced → Speech-to-text; default is `large-v3`), restart |
 | `cuda` configured on a machine with no NVIDIA GPU | — | `WHISPER_DEVICE=cpu` (settings gear → advanced), pick a small model, restart. Slower but functional — see the [FAQ](FAQ.md#can-it-run-without-a-gpu) |
 | Responses stall for up to two minutes then fail gracefully | Ollama wedged or still loading a model | The per-request timeout (`OLLAMA_TIMEOUT_SEC`, 120 s) bounds the turn. Check `ollama ps`, GPU memory pressure from Whisper + both Ollama models, and consider a smaller tool model |
+| The first question after a quiet spell takes most of a minute, the next ones are quick | Ollama unloaded the models (its own default is 5 min) and reloaded them cold | Domovoi sends `OLLAMA_KEEP_ALIVE` (default `24h`, settings gear → Models → *Keep models loaded for*) on every call; check it isn't blank or `0`, and that `ollama ps` shows the models between turns. See [CPU_HOST.md](CPU_HOST.md#memory-budget) |
 | Driver just updated, everything broke | Driver/toolkit mismatch | Reboot first (Windows driver updates half-apply until then); then verify `nvidia-smi` works before blaming Domovoi |
 
 ## Docker issues
@@ -147,6 +149,36 @@ Compose commands run from the `domovoi/` directory (where `docker-compose.yml` l
 | "Double-check" always says it can't search | SearXNG container not running | `docker compose up -d searxng` — it's localhost-only on port 6888, reachable solely from the server itself |
 | MPD containers won't start after changing `MUSIC_DIR` or Docker Desktop file-sharing | Stale mounts / unshared drive | Share the drive in Docker Desktop settings; remove the `domovoi-mpd-*` containers so the provisioner recreates them with current paths |
 | Chat mode won't start | Letta container not up | Chat mode is off by default; enabling `CHAT_MODE_ENABLED` assumes `docker compose up letta` and the required Ollama models (including the embedding model) are pulled |
+
+## Questions land on the wrong handler
+
+**Symptom:** a plain question gets a tool's answer — "who wrote the odyssey"
+comes back as "I'm not sure what to calculate", "who painted the mona lisa"
+gets "Yes, that checks out", or a trivia question turns into a news digest.
+
+**Cause:** the utterance missed every fast path and the LLM tool router
+picked a tool for it. Small tool models on a CPU host do this: shown a
+"verify a claim" or "look up a subject" schema, they read a factual
+question as that job. The router prompt, the handlers' tool descriptions
+and the per-handler tool-offer gate (`Handler.offers_tool`) all exist to
+prevent it, and they are only as good as the model reading them.
+
+**Check:** replay the routing corpus at the running core and read which
+handler each case landed on — every `qa` case must come back with no
+handler:
+
+```bash
+python scripts/eval_routing.py --core http://localhost:6370 --room bench
+```
+
+A single utterance is just `curl` at `/v1/intent` (see
+[SETUP_RUNBOOK.md](SETUP_RUNBOOK.md)) — look at `matched_handler` and
+`matched_path`, not the dashboard chat box, which never enters the router.
+
+**Fix:** try the other small tool model (`ollama_tool_model`, hot setting —
+see [CPU_HOST.md](CPU_HOST.md)); if one phrasing keeps misrouting, an
+anchored fast path or a tighter `offers_tool` gate on the handler that
+poaches it is the deterministic fix. Re-run the corpus after either.
 
 ## Which logs to check
 

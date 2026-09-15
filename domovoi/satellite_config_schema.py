@@ -246,16 +246,18 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "wifi.enabled", "WiFi self-heal", "WiFi",
-        "Autonomous watchdog that reassociates the WiFi when the link wedges "
-        "at a pathologically low rate (the 2026-05-06 TTS-chop cause). Needs "
-        "the wpa_cli sudoers entry (PROVISIONING §6.7).",
+        "Autonomous watchdog that reassociates the WiFi when the satellite "
+        "has lost the core AND the core does not answer a TCP connect (the "
+        "2026-05-06 wedged-link cause). It never touches a link that is "
+        "carrying a live session. Needs the wpa_cli sudoers entry "
+        "(PROVISIONING §6.7).",
         "bool", section="advanced",
     ),
     FieldSpec(
-        "wifi.min_healthy_mbits", "WiFi reassociate threshold", "WiFi",
-        "Reassociate when the rx rate drops below this (Mbit/s). 5 is well "
-        "above what TTS needs but below healthy operation. Raise to catch "
-        "borderline cases earlier; lower to avoid false positives.",
+        "wifi.min_healthy_mbits", "WiFi slow-link log threshold", "WiFi",
+        "Below this rx rate (Mbit/s) the watcher notes the link as slow in "
+        "its log. Informational only: an idle link reports the 1 Mbit/s "
+        "beacon rate, so the rate no longer decides a reassociate.",
         "float", section="advanced", min=1.0, max=50.0, unit="Mbit/s",
     ),
 ]

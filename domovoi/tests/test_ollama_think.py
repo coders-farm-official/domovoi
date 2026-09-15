@@ -46,6 +46,8 @@ def _client(monkeypatch, chat, *, send_think: bool, think: bool) -> RealOllamaCl
     c._qa_model = "llama3.2:3b"
     c._tool_think = think
     c._send_think = send_think
+    c._keep_alive = "24h"
+    c._send_keep_alive = True
     return c
 
 

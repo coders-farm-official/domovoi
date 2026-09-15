@@ -1,0 +1,200 @@
+{
+  "_doc": [
+    "Routing eval corpus for scripts/eval_routing.py and",
+    "domovoi/tests/test_routing_corpus.py. Each case pins what the router",
+    "must do with one utterance:",
+    "  utterance  - what the user said (as Whisper would hand it over)",
+    "  handler    - expected matched_handler; null means NO tool call, i.e.",
+    "               the QA fallthrough answers it",
+    "  path       - optional expected matched_path ('fast' / 'llm'); omit",
+    "               when either is acceptable",
+    "  tags       - subset selector for --only; 'qa' cases are the",
+    "               knowledge-question regressions, 'action' cases guard",
+    "               against over-tightening the router",
+    "  note       - why the case exists (dated when it came from a live bug)",
+    "Keep 'qa' utterances timeless: weather/prices/scores go through the",
+    "volatile-question gate and would not come back as plain qa."
+  ],
+  "cases": [
+    {
+      "utterance": "what is the capital of mongolia",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-01: qwen2.5:7b sent this to double_check; qwen3:8b answers it"
+    },
+    {
+      "utterance": "who wrote the odyssey",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-15 live: qwen3:8b routed to calculator -> 'I'm not sure what to calculate.'"
+    },
+    {
+      "utterance": "who painted the mona lisa",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-15 live: qwen3:8b routed to double_check and 'verified' the question as a claim"
+    },
+    {
+      "utterance": "who invented the telephone",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "who-question with no numbers: never a tool"
+    },
+    {
+      "utterance": "what is the tallest mountain in the world",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "superlative trivia: not a calculation"
+    },
+    {
+      "utterance": "where is the eiffel tower",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "where-question: no tool covers geography"
+    },
+    {
+      "utterance": "why is the sky blue",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "why-question: explanation, not verification"
+    },
+    {
+      "utterance": "how many legs does a spider have",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "'how many' is a fact lookup, not arithmetic - the calculator bait case"
+    },
+    {
+      "utterance": "when was the declaration of independence signed",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "'when was' is history, not date math"
+    },
+    {
+      "utterance": "tell me a joke",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-01: qwen2.5:7b sent this to intercom"
+    },
+    {
+      "utterance": "what is 47 times 89",
+      "handler": "calculator",
+      "tags": ["calculator"],
+      "note": "digit-anchored arithmetic must still reach the calculator"
+    },
+    {
+      "utterance": "can you work out what 15 percent of 60 dollars is",
+      "handler": "calculator",
+      "tags": ["calculator"],
+      "note": "conversational phrasing around real numbers: calculator via the LLM is fine"
+    },
+    {
+      "utterance": "how many days until christmas",
+      "handler": "calculator",
+      "tags": ["calculator"],
+      "note": "date math with no digits: the calculator gate must not drop this"
+    },
+    {
+      "utterance": "convert 5 miles to kilometers",
+      "handler": "calculator",
+      "tags": ["calculator"],
+      "note": "unit conversion"
+    },
+    {
+      "utterance": "are you sure about that",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "canonical verification request"
+    },
+    {
+      "utterance": "can you double check that",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "canonical verification request"
+    },
+    {
+      "utterance": "is it true that the great wall is visible from space",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "explicit 'is it true that' carries a claim: verification, not QA"
+    },
+    {
+      "utterance": "fact check what you just said",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "off-pattern phrasing must still reach double_check through the LLM"
+    },
+    {
+      "utterance": "set a timer for ten minutes",
+      "handler": "timer",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "play some jazz in the kitchen",
+      "handler": "music",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "could you put on something relaxing",
+      "handler": "music",
+      "tags": ["action"],
+      "note": "imperfect phrasing should still pick music via the LLM"
+    },
+    {
+      "utterance": "remind me to call mom at five",
+      "handler": "reminder",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "tell the kitchen dinner is ready",
+      "handler": "intercom",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "what time is it",
+      "handler": "clock",
+      "tags": ["action"],
+      "note": "a question that IS a tool: clock owns it"
+    },
+    {
+      "utterance": "what do you remember about me",
+      "handler": "memory",
+      "tags": ["action"],
+      "note": "a question that IS a tool: memory owns it"
+    },
+    {
+      "utterance": "repeat that",
+      "handler": "repeat",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "never mind",
+      "handler": "dismiss",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "what's the news",
+      "handler": "news",
+      "tags": ["action"],
+      "note": "a question that IS a tool: news owns it"
+    },
+    {
+      "utterance": "drop in on the kitchen",
+      "handler": "dropin",
+      "tags": ["action"],
+      "note": "action routing guard"
+    },
+    {
+      "utterance": "how is the wifi doing",
+      "handler": "wifi",
+      "tags": ["action"],
+      "note": "a 'how is' question that IS a tool: wifi status"
+    }
+  ]
+}

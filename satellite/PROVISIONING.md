@@ -359,7 +359,7 @@ If you see the WebSocket connect immediately drop, or never see `server ready`, 
 
 ### 6.7 Sudoers entry for the WiFi self-heal
 
-The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when it detects a wedged link. `wpa_cli` requires root, so we add a single locked-down sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
+The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single locked-down sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
 
 This is **least-privilege by design** — the satellite process gains the ability to reassociate the WiFi link, and nothing else.
 
@@ -384,7 +384,7 @@ sudo -n /usr/sbin/wpa_cli -i wlan0 reassociate
 - [ ] If it prints `OK`, you're set — the watcher will autonomously recover from rate-stuck WiFi without intervention.
 - [ ] If it prompts for a password or says `sudo: a password is required`, the username, path, or syntax is off. Re-check the line you pasted; `which wpa_cli` confirms the path (it's almost always `/usr/sbin/wpa_cli`).
 
-If you skip this step, the satellite still runs — the watcher will simply log a warning every time rx bitrate dips, and you'll be back to manually running `sudo wpa_cli -i wlan0 reassociate` when chop appears.
+If you skip this step, the satellite still runs — the watcher will simply log a warning every time it decides the path to the server is broken, and you'll be back to manually running `sudo wpa_cli -i wlan0 reassociate` when chop appears.
 
 ## 7. Networking — DHCP reservation
 

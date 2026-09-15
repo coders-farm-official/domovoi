@@ -100,6 +100,14 @@ _FETCH_NEW_RE = re.compile(
     r"(?:\s+(?:ones|stories|news|items))?$"
 )
 
+# Words a news request carries — the ``offers_tool`` gate. Generous on
+# purpose ("latest", "update", "report" over-match harmlessly): a false
+# positive only means the schema is offered, as it always was.
+_NEWS_CUE_RE = re.compile(
+    r"news|headline|briefing|digest|happening|going on|current events"
+    r"|latest|update|stor(?:y|ies)|report|topic|election|politic"
+)
+
 # ─── Ad-hoc subject (family A: explicit news noun before the preposition) ─
 _SUBJECT_A_RE = re.compile(
     r"^(?P<verb>fetch|go and get|go get|go fetch|get me|get|pull up|pull|grab|"
@@ -153,11 +161,14 @@ class NewsHandler(Handler):
     tool_schema = {
         "name": "news",
         "description": (
-            "Read the news — a general local/national/global briefing, the "
-            "user's personal topics-of-interest digest, or news about any "
-            "subject. Use for 'what's the news', 'what's my news', 'any news "
-            "about X'. A 'fetch'/'go get' verb pulls fresh from the internet "
-            "(with confirmation); 'give me'/'read me' reads what's cached."
+            "Read the news, only when the user asks for news, headlines or "
+            "a briefing: a general local/national/global briefing, the "
+            "user's personal topics-of-interest digest, or news about a "
+            "subject ('any news about X'). A factual question ('who wrote "
+            "the odyssey', 'what is the tallest mountain') is NOT a news "
+            "request — do not use this to look things up. A 'fetch'/'go "
+            "get' verb pulls fresh from the internet (with confirmation); "
+            "'give me'/'read me' reads what's cached."
         ),
         "parameters": {
             "type": "object",
@@ -180,6 +191,13 @@ class NewsHandler(Handler):
             "required": ["action"],
         },
     }
+
+    def offers_tool(self, transcript: str) -> bool:
+        # qwen2.5-family tool models read a bare trivia question as a
+        # subject lookup ("who wrote the odyssey" → news(subject="Odyssey
+        # author"), measured 2026-09-15 on qwen2.5:14b). A news request
+        # says so somewhere in the utterance; one that doesn't can't be one.
+        return bool(_NEWS_CUE_RE.search(transcript))
 
     def __init__(self) -> None:
         self.fast_paths = [

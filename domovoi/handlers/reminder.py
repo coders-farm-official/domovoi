@@ -30,18 +30,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
 from domovoi.handlers.timer import _format_duration
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
 
-_UNIT_TO_SECONDS = {"second": 1, "minute": 60, "hour": 3600}
-
 # "remind me to call mom in 10 minutes"
-# "remind me to take the trash out in an hour"  ← we don't yet support "an" / "a"
-# Greedy `.+?` for the message lets the duration capture stay anchored.
+# "remind me to take the trash out in an hour"
+# "remind me to check the oven in an hour and a half"
+# The duration grammar is the shared one in handlers/shared/number_words
+# (digits, spelled numbers, articles, halves, two joined clauses) — the
+# same closed vocabulary the timer handler embeds, so "in ten minutes" no
+# longer falls through to the LLM tool router. Lazy `.+?` for the message
+# keeps the duration capture anchored to the END of the utterance, so
+# "remind me to check in on grandma in ten minutes" still yields the
+# message "check in on grandma".
 _CREATE_RE = re.compile(
-    r"^remind me to (?P<message>.+?) in (?P<amount>\d+) (?P<unit>second|minute|hour)s?$"
+    rf"^remind me to (?P<message>.+?) in (?P<duration>{DURATION_PATTERN})$"
 )
 
 # "what reminders do I have" / "list my reminders" / "what are my reminders"
@@ -146,9 +152,16 @@ class ReminderHandler(Handler):
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
         message = m.group("message").strip()
-        amount = int(m.group("amount"))
-        unit = m.group("unit")
-        duration_sec = amount * _UNIT_TO_SECONDS[unit]
+        duration_sec = parse_duration_seconds(m.group("duration"))
+        if not duration_sec:
+            # "in 0 minutes" fits the grammar but means nothing — same
+            # refusal as the tool-call path rather than a reminder that
+            # fires immediately.
+            return Response(
+                text="When should I remind you?",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         return await self._create(message, duration_sec, ctx, session)
 
     async def _list_from_match(

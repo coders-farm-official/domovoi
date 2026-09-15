@@ -385,6 +385,18 @@ _SPLIT_TIP_RE = re.compile(
 )
 
 
+# ─── LLM tool-offer gate ─────────────────────────────────────────────
+
+_ANY_DIGIT_RE = re.compile(r"\d")
+# Question openers that are never arithmetic. Deliberately NOT "what",
+# "how", "when": those front real calculator turns ("what is a third of
+# ninety", "how many days until christmas", "when is thanksgiving").
+_KNOWLEDGE_QUESTION_RE = re.compile(
+    r"^(?:(?:tell me|do you know|do you happen to know|any idea|i wonder)[,\s]+)?"
+    r"(?:who|whose|whom|why|where)\b"
+)
+
+
 # ─── Handler ─────────────────────────────────────────────────────────
 
 
@@ -401,10 +413,13 @@ class CalculatorHandler(Handler):
     tool_schema = {
         "name": "calculator",
         "description": (
-            "Deterministic calculator: arithmetic, percentages, unit "
-            "conversion, date arithmetic, tip/split. Use this instead "
-            "of computing math yourself — your arithmetic is unreliable "
-            "above two-digit operands."
+            "Deterministic calculator for utterances that contain numbers, "
+            "quantities, units, percentages, money or dates to compute "
+            "with: arithmetic, percentages, unit conversion, date "
+            "arithmetic (days until a holiday or weekday), tip/split. Use "
+            "it instead of doing the math yourself. NOT for general-"
+            "knowledge questions ('who wrote ...', 'what is the capital "
+            "of ...') — they have nothing to compute and need no tool."
         ),
         "parameters": {
             "type": "object",
@@ -493,6 +508,18 @@ class CalculatorHandler(Handler):
             session_id=ctx.session_id,
             matched_handler=self.name,
         )
+
+    def offers_tool(self, transcript: str) -> bool:
+        # A who/whose/whom/why/where question with no digit in it has
+        # nothing to compute — but shown the schema, a small tool model
+        # picks the calculator for "who wrote the odyssey" (qwen3:8b,
+        # 2026-09-15 live) and answers "I'm not sure what to calculate."
+        # Any digit keeps the tool on offer; "what"/"how many"/"when" stay
+        # on offer too, because "what is the square root of pi" and "how
+        # many days until christmas" are real calculator turns.
+        if _ANY_DIGIT_RE.search(transcript):
+            return True
+        return not _KNOWLEDGE_QUESTION_RE.match(transcript)
 
     async def execute_from_tool(
         self, args: dict, ctx: Context, session: AsyncSession

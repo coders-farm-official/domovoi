@@ -152,10 +152,11 @@ class ClockHandler(Handler):
     tool_schema = {
         "name": "clock",
         "description": (
-            "Report the current time, date, day of the week, year, month, "
+            "Report the CURRENT time, date, day of the week, year, month, "
             "or the date of yesterday/tomorrow against the local wall clock. "
-            "No timezone arguments — pick the closest 'kind' to what the "
-            "user asked for."
+            "Not for historical or future dates ('when was X signed', 'when "
+            "is easter') — only what the clock says now. No timezone "
+            "arguments — pick the closest 'kind' to what the user asked for."
         ),
         "parameters": {
             "type": "object",

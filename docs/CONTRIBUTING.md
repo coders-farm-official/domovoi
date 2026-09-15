@@ -107,6 +107,14 @@ Facts about the suite you should know before touching it:
 * Stubs make Whisper/Ollama/TTS deterministic; workers marked
   `stub_suppressed` don't start under stubs. Don't write tests that need
   real network, GPU, or audio hardware.
+* The one opt-in exception is the routing corpus
+  (`scripts/routing_corpus.json`): `domovoi/tests/test_routing_corpus.py`
+  asserts everything around the model-driven router step without a DB or a
+  model, and additionally POSTs the corpus at a running core when
+  `DOMOVOI_EVAL_CORE_URL` is set (skipped otherwise). The same corpus runs
+  from the command line via `scripts/eval_routing.py --core URL` or
+  `--ollama URL --model NAME`; run it before and after any change to the
+  routing prompt, a `tool_schema` description, or an `offers_tool` gate.
 
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior
