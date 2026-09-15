@@ -28,7 +28,7 @@ ANNOUNCE="@ANNOUNCE@"
 # one boot and no longer.
 LAST=/run/domovoi-last-said
 VENVPY="@HOME@/satellite-venv/bin/python"
-# Setup runs before any of the client's audio config exists, so mpg123 would
+# Setup runs before any of the client's audio config exists, so aplay would
 # otherwise land on the ALSA default — the Pi's onboard jack or HDMI, not the
 # USB array the customer's speaker is actually plugged into. Empty means the
 # board shares card 0 and the default is right.
@@ -121,8 +121,14 @@ play() {
     note "MISSING $1"
     return 0
   fi
-  if ! command -v mpg123 >/dev/null 2>&1; then
-    note "no mpg123 — cannot play $1"
+  # aplay, from alsa-utils, which a stock Pi OS Lite already carries (it is
+  # where amixer above comes from too). NOT mpg123: its Trixie build needs
+  # six libraries the base image lacks and stage 1 installs only the debs
+  # named in the cache, so on a fresh card mpg123 is unusable until stage
+  # 2's online apt - which runs AFTER every line this script speaks. Found
+  # on hardware as a silent portal and "no mpg123" on every note here.
+  if ! command -v aplay >/dev/null 2>&1; then
+    note "no aplay — cannot play $1"
     return 0
   fi
   if [ -n "$ALSA_CARD" ]; then
@@ -132,7 +138,7 @@ play() {
     # up. Nothing else is competing for the output yet, and the client
     # takes the volume back the moment it starts.
     amixer -c "$ALSA_CARD" sset "$ALSA_CONTROL" 100% >/dev/null 2>&1       || note "amixer -c $ALSA_CARD sset $ALSA_CONTROL 100% failed"
-    if mpg123 -q -a "plughw:CARD=$ALSA_CARD" "$1" 2>>"$SLOG"; then
+    if aplay -q -D "plughw:CARD=$ALSA_CARD" "$1" 2>>"$SLOG"; then
       note "played $1 on plughw:CARD=$ALSA_CARD"
       return 0
     fi
@@ -142,7 +148,7 @@ play() {
   # HDMI on a Pi, which is silence with a monitor attached — hence the log
   # line above, which is the only way to tell that apart from a clip that
   # never existed.
-  if mpg123 -q "$1" 2>>"$SLOG"; then
+  if aplay -q "$1" 2>>"$SLOG"; then
     note "played $1 on the ALSA default"
   else
     note "FAILED to play $1 anywhere"
@@ -158,12 +164,12 @@ play() {
 if [ "$STATE" = "say-code" ]; then
   CODE="${2:-}"
   [ -n "$CODE" ] || exit 0
-  play "$CLIPS/your_code_is.mp3"
+  play "$CLIPS/your_code_is.wav"
   i=0
   while [ "$i" -lt "${#CODE}" ]; do
     D="${CODE:$i:1}"
     case "$D" in
-      [0-9]) play "$CLIPS/digit_$D.mp3" ;;
+      [0-9]) play "$CLIPS/digit_$D.wav" ;;
     esac
     i=$((i + 1))
   done
@@ -190,7 +196,7 @@ if [ -n "$CLIP" ]; then
   PREV="$(cat "$LAST" 2>/dev/null || true)"
   if [ "$PREV" != "$CLIP" ]; then
     printf '%s' "$CLIP" >"$LAST" 2>/dev/null || true
-    play "$CLIPS/$CLIP.mp3"
+    play "$CLIPS/$CLIP.wav"
   fi
 fi
 

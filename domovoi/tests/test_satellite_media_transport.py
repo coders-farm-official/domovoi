@@ -1184,7 +1184,7 @@ def test_the_web_asks_the_core_for_them():
 
 
 def test_the_helper_pins_the_boards_alsa_card():
-    """mpg123 on the ALSA default lands on the Pi's onboard jack or HDMI,
+    """A player on the ALSA default lands on the Pi's onboard jack or HDMI,
     not the USB array the customer's speaker is plugged into."""
     from domovoi.satellite_media import overlay
 
@@ -1201,8 +1201,43 @@ def test_an_unknown_board_falls_back_to_the_default():
 
     body = overlay.render_status_helper("nope")
     assert 'ALSA_CARD=""' in body
-    # The unpinned mpg123 call has to survive as the fallback.
-    assert body.count("mpg123") >= 2
+    # The unpinned aplay call has to survive as the fallback.
+    assert body.count("aplay -q") >= 2
+
+
+def test_the_helper_plays_with_aplay_not_mpg123():
+    """Found on hardware: a silent portal, and "no mpg123 — cannot play"
+    on every line of setup-status.log. The Trixie mpg123 deb needs six
+    libraries a stock Pi OS Lite lacks; `apt-get download` fetches none of
+    them, and stage 2's online apt - which would - runs AFTER every setup
+    announcement. aplay ships in alsa-utils, which the base image carries
+    (amixer, used right above it, comes from the same package). So the
+    clips are WAV and the player is aplay, and mpg123 is not mentioned
+    outside the comment that explains why."""
+    from domovoi.canned_sounds import SETUP_LINES
+    from domovoi.satellite_media import overlay
+
+    body = overlay.render_status_helper("xvf3800_usb")
+    code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    assert "mpg123" not in code
+    assert "command -v aplay" in code
+    assert 'aplay -q -D "plughw:CARD=$ALSA_CARD"' in code
+    assert ".mp3" not in code
+    # Every clip the helper can name is one the core renders, as WAV.
+    rendered = {name for name, _ in SETUP_LINES}
+    assert all(n.endswith(".wav") for n in rendered)
+    for clip in ("ready", "joining", "join_failed", "on_network", "no_microphone", "your_code_is"):
+        assert f"{clip}.wav" in rendered
+    assert all(f"digit_{d}.wav" in rendered for d in range(10))
+
+
+def test_the_payload_looks_for_wav_clips():
+    import inspect
+
+    from domovoi.satellite_media import payload
+
+    src = inspect.getsource(payload.assemble)
+    assert 'glob("*.wav")' in src and "*.mp3" not in src
 
 
 def test_the_helper_leaves_only_the_on_device_placeholder():

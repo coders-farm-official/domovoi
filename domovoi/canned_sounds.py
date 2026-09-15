@@ -11,6 +11,8 @@ domovoi-side:
   ``client_greetings`` table, managed from the web dashboard).
 - **sample.mp3** — a fixed "this is how I sound" line, used by the
   voice-sampling flow's fallback.
+- **Setup clips** (``sounds/setup/*.wav``) — the lines a satellite speaks
+  while it is being set up. WAV, not MP3: see ``SETUP_LINES``.
 
 Everything is rendered **per registered voice** (the ``voices`` registry)
 into ``<sounds_dir>/voices/<slug>/…`` (``settings.sounds_dir``, a
@@ -174,6 +176,28 @@ async def _synth_clip_mp3(text: str, engine: str, model_ref: str) -> bytes | Non
         log.warning("clip synth failed (engine=%s voice=%s): %s", engine, model_ref, e)
         return None
     return _wav_to_mp3(wav)
+
+
+async def _synth_clip_wav(text: str, engine: str, model_ref: str) -> bytes | None:
+    """Render ``text`` in a specific voice as the WAV the TTS client already
+    returns — no encode step. Validated as readable 16-bit WAV so a broken
+    render never lands on a card as a file `aplay` will refuse. None on
+    any failure."""
+    from domovoi.clients.tts import get_tts_client
+
+    try:
+        wav = await get_tts_client().synthesize(text, engine=engine, voice=model_ref)
+    except Exception as e:
+        log.warning("clip synth failed (engine=%s voice=%s): %s", engine, model_ref, e)
+        return None
+    try:
+        with wave.open(io.BytesIO(wav), "rb") as wf:
+            if wf.getsampwidth() != 2 or wf.getnframes() == 0:
+                return None
+    except (wave.Error, EOFError) as e:
+        log.warning("clip WAV unreadable (engine=%s): %s", engine, e)
+        return None
+    return wav
 
 
 def _marker(engine: str, model_ref: str) -> str:
@@ -346,22 +370,30 @@ _DIGIT_WORDS = (
     "five", "six", "seven", "eight", "nine",
 )
 
-# (mp3, text). Spoken at four moments only — ready, joining, joined, and the
+# (wav, text). Spoken at four moments only — ready, joining, joined, and the
 # code — plus the two failures a customer can actually act on. Anything more
 # and a device you set up three of becomes tiresome by the second.
+#
+# WAV, not MP3, on purpose: these play during setup, BEFORE stage 2's
+# online apt has run, and the only player a fresh card can be sure of is
+# `aplay` from alsa-utils (already there for `amixer`). mpg123's Trixie
+# build wants six libraries a stock Pi OS Lite lacks, none of which
+# `apt-get download` fetches — found on hardware as a silent portal and
+# "no mpg123" on every line of setup-status.log. Sixteen short clips of
+# 16-bit mono run to a couple of megabytes on the card; nobody will notice.
 SETUP_LINES: list[tuple[str, str]] = [
-    ("ready.mp3",
+    ("ready.wav",
      "I'm ready to set up. Connect to the Wi-Fi network named on the box."),
-    ("joining.mp3",
+    ("joining.wav",
      "Thanks. Joining your network now."),
-    ("join_failed.mp3",
+    ("join_failed.wav",
      "I couldn't join that network. Connect to my setup network and try again."),
-    ("on_network.mp3",
+    ("on_network.wav",
      "I'm on your network. One moment while I finish setting up."),
-    ("no_microphone.mp3",
+    ("no_microphone.wav",
      "I can't find my microphone. Check that it's plugged in."),
-    ("your_code_is.mp3", "Your setup code is"),
-    *[(f"digit_{d}.mp3", word) for d, word in enumerate(_DIGIT_WORDS)],
+    ("your_code_is.wav", "Your setup code is"),
+    *[(f"digit_{d}.wav", word) for d, word in enumerate(_DIGIT_WORDS)],
 ]
 
 
@@ -394,21 +426,28 @@ async def render_setup_clips() -> tuple[int, list[str]]:
     except OSError as e:
         return 0, [f"could not create {_SETUP_DIR}: {e}"]
 
-    for mp3_name, text in SETUP_LINES:
-        mp3_path = _SETUP_DIR / mp3_name
-        sidecar = _SETUP_DIR / f"{mp3_name.rsplit('.', 1)[0]}.voice"
-        if not _needs_regen(mp3_path, sidecar, marker, text):
+    for wav_name, text in SETUP_LINES:
+        wav_path = _SETUP_DIR / wav_name
+        sidecar = _SETUP_DIR / f"{wav_name.rsplit('.', 1)[0]}.voice"
+        if not _needs_regen(wav_path, sidecar, marker, text):
             continue
-        mp3_bytes = await _synth_clip_mp3(text, engine, model_ref)
-        if mp3_bytes is None:
-            problems.append(mp3_name)
+        wav_bytes = await _synth_clip_wav(text, engine, model_ref)
+        if wav_bytes is None:
+            problems.append(wav_name)
             continue
         try:
-            mp3_path.write_bytes(mp3_bytes)
+            wav_path.write_bytes(wav_bytes)
             sidecar.write_text(f"{marker}\n{_hash(text)}\n", encoding="utf-8")
             written += 1
         except OSError as e:
-            problems.append(f"{mp3_name}: {e}")
+            problems.append(f"{wav_name}: {e}")
+    # An earlier build wrote these as MP3; a stale one next to its WAV
+    # would ship both and confuse anyone reading the card.
+    for stale in _SETUP_DIR.glob("*.mp3"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     if written:
         log.info(
             "rendered %d setup clip(s) in the default voice (engine=%s)",

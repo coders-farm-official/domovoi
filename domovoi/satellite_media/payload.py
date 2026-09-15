@@ -118,7 +118,7 @@ async def assemble(
     # what matters here is simply whether the clips arrived. Checking the
     # artifact rather than the attempt is also what catches a render that
     # silently produced nothing.
-    if not list((pay / "sounds" / "setup").glob("*.mp3")):
+    if not list((pay / "sounds" / "setup").glob("*.wav")):
         warnings.append(
             "no setup clips in the payload - this satellite will set itself "
             "up silently (the ring still works)"
