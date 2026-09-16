@@ -134,6 +134,19 @@ def test_fast_paths_are_normalized_and_compiled() -> None:
             assert pattern is fp.pattern and method is fp.method
 
 
+def test_fast_path_methods_are_unbound() -> None:
+    """The router invokes ``fp.method(handler, m, ctx, session)``. A bound
+    method receives the handler as ``m`` and every matching turn 500s —
+    that was F-V002 (memory handler dead on the live Beelink). DB-free on
+    purpose so it can never skip."""
+    for h in HANDLERS:
+        for fp in h.fast_paths:
+            assert not inspect.ismethod(fp.method), (
+                f"{h.name}: fast path {fp.pattern.pattern!r} is a bound "
+                f"method; declare {type(h).__name__}.{fp.method.__name__}"
+            )
+
+
 def test_offline_ok_only_meaningful_on_degraded_handlers() -> None:
     # §4.3: offline_ok defaults True for degraded handlers and MUST be
     # unset (None) everywhere else.

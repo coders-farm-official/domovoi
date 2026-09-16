@@ -7,20 +7,20 @@
  * Data sources:
  *   * GET  /api/audiobooks              — indexed books
  *   * POST /api/audiobooks/reindex      — re-walk audiobooks_dir
- *   * /ws/state · podcasts.changed      — refetch on (re)index
- *   * /ws/state · podcast_positions.changed — refetch resume positions
+ *   * /ws/state · podcasts.changed      — refresh on (re)index
+ *   * /ws/state · podcast_positions.changed — refresh resume positions
  */
 
 const AudiobooksPage = () => {
   const p = usePlayback();
   const [fire, toastNode] = useToast();
-  const { items: books, refetch } = useApiList('/api/audiobooks', { eventTypes: ['podcasts.changed'] });
+  const { items: books, refresh } = useApiList('/api/audiobooks', { eventTypes: ['podcasts.changed'] });
   const [busy, setBusy] = React.useState(false);
   const [resumePrompt, setResumePrompt] = React.useState(null);
 
   const reindex = async () => {
     setBusy(true);
-    try { const r = await apiPost('/api/audiobooks/reindex', {}); fire(`Indexed ${r.scanned || 0} book(s)`); refetch(); }
+    try { const r = await apiPost('/api/audiobooks/reindex', {}); fire(`Indexed ${r.scanned || 0} book(s)`); refresh(); }
     catch { fire('Reindex failed'); }
     setBusy(false);
   };

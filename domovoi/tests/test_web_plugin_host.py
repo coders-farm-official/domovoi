@@ -59,6 +59,25 @@ def test_import_guard_blocks_core_modules_but_allows_webkit():
         importlib.import_module("domovoi.zz_guard_probe_never_exists")
 
 
+def test_import_guard_preloads_lazily_imported_request_modules():
+    """Request handlers import some core modules lazily, inside the
+    function body (audiobooks reindex, podcast poll, satellites tz). With
+    the guard installed those imports only resolve if the module is
+    already in ``sys.modules`` — otherwise every call 500s (web F-001).
+    Assert the exact spellings the handlers use import cleanly under the
+    guard."""
+    install_import_guard()
+    try:
+        for mod in (
+            "domovoi.workers.audiobook_indexer",
+            "domovoi.workers.podcast_feed_poller",
+            "domovoi.host_time",
+        ):
+            assert importlib.import_module(mod) is not None, mod
+    finally:
+        remove_import_guard()
+
+
 # ─── Fake plugin fixture ───────────────────────────────────────────────────
 
 _SLUG = "wdemo"

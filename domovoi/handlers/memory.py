@@ -183,13 +183,17 @@ class MemoryHandler(Handler):
     }
 
     def __init__(self) -> None:
+        # Unbound functions, not bound methods: the router calls
+        # ``fp.method(handler, m, ctx, session)`` and passes the handler
+        # itself. A bound method here receives the handler as ``m`` and
+        # blows up with a TypeError on every turn (F-V002).
         self.fast_paths = [
-            FastPath(_REMEMBER_RE, self._add_memory_from_match),
-            FastPath(_FORGET_MEMORY_RE, self._forget_memory_from_match),
-            FastPath(_FAVORITE_ADD_RE, self._add_favorite_from_match),
-            FastPath(_FAVORITE_FORGET_RE, self._forget_favorite_from_match),
-            FastPath(_LIST_MEMORIES_RE, self._list_memories_from_match),
-            FastPath(_LIST_FAVORITES_RE, self._list_favorites_from_match),
+            FastPath(_REMEMBER_RE, MemoryHandler._add_memory_from_match),
+            FastPath(_FORGET_MEMORY_RE, MemoryHandler._forget_memory_from_match),
+            FastPath(_FAVORITE_ADD_RE, MemoryHandler._add_favorite_from_match),
+            FastPath(_FAVORITE_FORGET_RE, MemoryHandler._forget_favorite_from_match),
+            FastPath(_LIST_MEMORIES_RE, MemoryHandler._list_memories_from_match),
+            FastPath(_LIST_FAVORITES_RE, MemoryHandler._list_favorites_from_match),
         ]
 
     async def execute(

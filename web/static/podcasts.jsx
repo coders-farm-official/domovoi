@@ -10,14 +10,14 @@
  *   * DELETE /api/podcasts/subscriptions/{id}
  *   * GET  /api/podcasts/discover?q=              — iTunes discovery (network)
  *   * POST /api/podcasts/poll                     — manual feed poll now
- *   * /ws/state · podcasts.changed                — refetch subs/episodes
- *   * /ws/state · podcast_positions.changed       — refetch resume positions
+ *   * /ws/state · podcasts.changed                — refresh subs/episodes
+ *   * /ws/state · podcast_positions.changed       — refresh resume positions
  */
 
 const PodcastsPage = () => {
   const p = usePlayback();
   const [fire, toastNode] = useToast();
-  const { items: subs, refetch } = useApiList('/api/podcasts/subscriptions', {
+  const { items: subs, refresh } = useApiList('/api/podcasts/subscriptions', {
     eventTypes: ['podcasts.changed'],
   });
   const [selected, setSelected] = React.useState(null);   // subscription row
@@ -30,7 +30,7 @@ const PodcastsPage = () => {
     try {
       const r = await apiPost('/api/podcasts/poll', {});
       fire(`Polled — ${r.downloaded || 0} downloaded, ${r.new || 0} new`);
-      refetch();
+      refresh();
     } catch { fire('Poll failed (offline?)'); }
     setPolling(false);
   };
@@ -75,10 +75,10 @@ const PodcastsPage = () => {
                        onPlay={(ep) => playEpisode(p, selected, ep, setResumePrompt)}
                        onUnsub={async () => {
                          await apiDelete(`/api/podcasts/subscriptions/${selected.id}`);
-                         setSelected(null); refetch();
+                         setSelected(null); refresh();
                        }}/>
       )}
-      {showAdd && <SubscribeModal onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); refetch(); }}/>}
+      {showAdd && <SubscribeModal onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); refresh(); }}/>}
       {resumePrompt && (
         <ResumePrompt prompt={resumePrompt} onClose={() => setResumePrompt(null)}
                       onResume={() => { p.playSpoken(resumePrompt.item, { resumeSec: resumePrompt.pos.position_sec, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}

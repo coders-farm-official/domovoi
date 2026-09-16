@@ -82,6 +82,12 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.db.repositories",
     "domovoi.admin_auth",
     "domovoi.handlers.shared.library_match",
+    # Lazily imported INSIDE request handlers (audiobooks reindex, podcast
+    # poll, satellites tz). Anything imported after the guard is installed
+    # must be preloaded here or the request 500s (web F-001).
+    "domovoi.workers.audiobook_indexer",
+    "domovoi.workers.podcast_feed_poller",
+    "domovoi.host_time",
 )
 
 

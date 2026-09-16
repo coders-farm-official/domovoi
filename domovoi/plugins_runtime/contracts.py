@@ -24,6 +24,7 @@ Checks:
 
 from __future__ import annotations
 
+import inspect
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -201,6 +202,13 @@ def check_handlers(
             )
         for entry in getattr(h, "fast_paths", []):
             fp = as_fast_path(entry)
+            if inspect.ismethod(fp.method):
+                report.errors.append(
+                    f"handler {name!r}: fast path {fp.pattern.pattern!r} is "
+                    f"bound to an instance — the router calls "
+                    f"method(handler, m, ctx, session), so declare it as "
+                    f"{type(h).__name__}.{fp.method.__name__} (F-V002)"
+                )
             if fp.offline_ok is not None and rn != "degraded":
                 report.errors.append(
                     f"handler {name!r}: fast path {fp.pattern.pattern!r} sets "
