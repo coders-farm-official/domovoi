@@ -33,6 +33,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // JVM unit tests: stub android.* so pure-Kotlin helpers that touch
+        // framework classes indirectly (icons, Log) don't throw.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -60,4 +65,6 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.coil.video)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
 }

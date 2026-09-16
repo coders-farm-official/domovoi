@@ -36,14 +36,17 @@ class ApiException(val status: Int, message: String) : IOException(message)
  * (apiGet/apiPost/apiPatch/apiDelete/apiUpload). Same error contract:
  * non-2xx throws with "{status} {reason}: {body}".
  */
-class ApiClient(private val prefs: Prefs) {
+class ApiClient(private val baseUrlProvider: () -> String) {
+    /** Production wiring: the base URL follows the saved server preference. */
+    constructor(prefs: Prefs) : this({ prefs.serverUrl.value })
+
     val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    val baseUrl: String get() = prefs.serverUrl.value
+    val baseUrl: String get() = baseUrlProvider()
 
     fun absolute(path: String): String {
         if (path.startsWith("http://") || path.startsWith("https://")) return path
