@@ -955,7 +955,9 @@ async def admin_snapshot() -> dict[str, Any]:
         "satellite_synced_sha": dict(app.state.satellite_synced_sha),
         # The core's own version label (short HEAD SHA, +"-dirty" when
         # the working tree is dirty). "unknown" if git isn't available.
-        "domovoi_version": await git_version.current_sha(),
+        # Cached: the dashboard polls this endpoint every 1.5 s and the
+        # tree only moves on a pull, which drops the cache.
+        "domovoi_version": await git_version.cached_current_sha(),
     }
 
 

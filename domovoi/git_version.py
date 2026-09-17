@@ -33,6 +33,19 @@ from domovoi.config import settings
 # error than pin the calling endpoint open.
 _GIT_TIMEOUT_SEC = 10.0
 
+# On Windows a console-less parent (pythonw, a service, uvicorn launched from
+# a detached shell) gets a fresh conhost window for EVERY console child it
+# spawns. The dashboard polls the snapshot every 1.5 s, which used to mean a
+# flicker of git.exe windows all day. CREATE_NO_WINDOW only exists on Windows;
+# 0 is a no-op elsewhere.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# How long the snapshot may reuse a SHA before asking git again. The tree only
+# moves on a pull (which invalidates the cache) or a manual edit, and the
+# version panel uses the uncached current_sha() anyway.
+_SHA_CACHE_TTL_SEC = 60.0
+_SHA_CACHE: tuple[str, float] | None = None
+
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     """Run a git command in the repo dir, capturing text output.
@@ -48,6 +61,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=_GIT_TIMEOUT_SEC,
         check=False,
+        creationflags=_NO_WINDOW,
     )
 
 
@@ -68,6 +82,25 @@ async def current_sha() -> str:
         return sha
     except Exception:  # noqa: BLE001 — no git / not a repo / timeout → "unknown"
         return "unknown"
+
+
+async def cached_current_sha(ttl_sec: float = _SHA_CACHE_TTL_SEC) -> str:
+    """`current_sha()` memoised for `ttl_sec`. For hot paths such as the admin
+    snapshot the dashboard polls every 1.5 s: two git launches per poll is
+    wasted work (and, on Windows, a console window each). `pull()` drops the
+    cache so a fresh checkout is reported immediately."""
+    global _SHA_CACHE
+    now = time.monotonic()
+    if _SHA_CACHE is not None and now - _SHA_CACHE[1] < ttl_sec:
+        return _SHA_CACHE[0]
+    sha = await current_sha()
+    _SHA_CACHE = (sha, now)
+    return sha
+
+
+def invalidate_sha_cache() -> None:
+    global _SHA_CACHE
+    _SHA_CACHE = None
 
 
 # ─── What's RUNNING vs what's CHECKED OUT ────────────────────────────────
@@ -230,4 +263,5 @@ async def pull() -> dict:
             "new_sha": None,
             "error": (proc.stderr or "git pull failed").strip(),
         }
+    invalidate_sha_cache()
     return {"pulled": True, "new_sha": await current_sha(), "error": None}

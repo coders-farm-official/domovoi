@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -68,6 +69,9 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
 _MAX_VIDEOS_PER_LIBRARY = 2000
 
 # ffmpeg poster extraction: frame size + subprocess wall-clock cap.
+# CREATE_NO_WINDOW keeps ffprobe/ffmpeg from opening a console window per
+# call when the backend runs without a console on Windows; 0 elsewhere.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _POSTER_WIDTH = 480
 _FFMPEG_TIMEOUT_SEC = 20.0
 
@@ -154,6 +158,7 @@ async def _ffprobe_duration(path: Path) -> float | None:
             "-of", "default=noprint_wrappers=1:nokey=1", str(path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=_NO_WINDOW,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFMPEG_TIMEOUT_SEC)
         return float(out.decode().strip())
@@ -174,6 +179,7 @@ async def _extract_poster(src: Path, dest: Path) -> bool:
                 "-q:v", "4", "-y", str(dest),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
             )
             await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_TIMEOUT_SEC)
         except (FileNotFoundError, asyncio.TimeoutError, OSError):
