@@ -49,6 +49,10 @@ TARBALL_URL = (
 # tens of megabytes the dashboard never requests.
 _MEMBER_PREFIX = "package/dist/"
 _SKIP_DIRS = ("excalidraw-assets-dev/",)
+# The dashboard loads only the production UMD (+ its LICENSE) and the
+# runtime assets; the development builds and the with-preact variants are
+# another ~20 MB the page never requests.
+_SKIP_FILES = ("excalidraw.development.js", "excalidraw-with-preact.")
 
 
 def _wanted(name: str) -> str | None:
@@ -56,7 +60,7 @@ def _wanted(name: str) -> str | None:
     if not name.startswith(_MEMBER_PREFIX):
         return None
     rel = name[len(_MEMBER_PREFIX):]
-    if not rel or rel.startswith(_SKIP_DIRS):
+    if not rel or rel.startswith(_SKIP_DIRS) or rel.startswith(_SKIP_FILES):
         return None
     # Refuse anything that would escape VENDOR_DIR (absolute, .., drive).
     parts = Path(rel).parts
