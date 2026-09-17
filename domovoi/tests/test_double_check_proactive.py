@@ -84,6 +84,45 @@ def test_categorize_question_negatives(transcript: str) -> None:
     assert categorize_question(transcript) is None
 
 
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        # F-V008: the reported LLM-08 case — a taste question, not a
+        # freshness-critical one. Must reach QA, not the volatile offer.
+        "what kind of music should i put on tonight",
+        "what should i cook tonight",
+        "can you recommend a movie for tonight",
+        "do you think i should go out this evening",
+        "what's a good podcast for this morning",
+        "any ideas for dinner today",
+    ],
+)
+def test_preference_questions_are_not_volatile(transcript: str) -> None:
+    """A time word inside an advice question says *when*, not "look it up".
+
+    Regression for F-V008: these all matched the general_recent catch-all,
+    so the router parked a core.self_doubt_offer ("I'd need the internet
+    to get you that…") instead of letting QA answer.
+    """
+    assert categorize_question(transcript) is None
+
+
+@pytest.mark.parametrize(
+    "transcript,expected",
+    [
+        # The advice guard must not disarm the narrow categories: these
+        # really do want fresh data even when asked as "should I ...".
+        ("should i bring a jacket, what's the weather tonight", CATEGORY_WEATHER),
+        ("should i buy bitcoin at this price", CATEGORY_PRICES_FINANCE),
+        ("should i watch the latest news tonight", CATEGORY_CURRENT_EVENTS),
+    ],
+)
+def test_advice_framing_keeps_narrow_categories(
+    transcript: str, expected: str
+) -> None:
+    assert categorize_question(transcript) == expected
+
+
 # ─── Helper parsers ──────────────────────────────────────────────────────
 
 

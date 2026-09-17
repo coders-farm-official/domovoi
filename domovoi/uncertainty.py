@@ -101,6 +101,23 @@ _GENERAL_RECENT_RE = re.compile(
     r")\b"
 )
 
+# Preference / advice framings. A question about what the speaker
+# *should* do is answered from taste, not from a fresh web page — so a
+# time word inside one ("what kind of music should I put on tonight")
+# is saying *when*, not "this may have changed since your training
+# cutoff". Only gates the broad general_recent catch-all: the narrow
+# categories stay volatile even when phrased as advice ("should I bring
+# a jacket, what's the weather tonight" still wants the real forecast).
+_SUBJECTIVE_RE = re.compile(
+    r"\b("
+    r"should (?:i|we|he|she|they)|"
+    r"what (?:kind|sort|type) of|"
+    r"recommend|recommendation|suggest|suggestion|"
+    r"any ideas|what(?:'s| is) a good|"
+    r"do you think"
+    r")\b"
+)
+
 
 def categorize_question(transcript: str) -> str | None:
     """Return the category for proactive web search, or None.
@@ -120,6 +137,6 @@ def categorize_question(transcript: str) -> str | None:
         return CATEGORY_CURRENT_EVENTS
     if _WEATHER_RE.search(t):
         return CATEGORY_WEATHER
-    if _GENERAL_RECENT_RE.search(t):
+    if _GENERAL_RECENT_RE.search(t) and not _SUBJECTIVE_RE.search(t):
         return CATEGORY_GENERAL_RECENT
     return None
