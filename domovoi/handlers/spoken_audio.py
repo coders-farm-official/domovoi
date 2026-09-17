@@ -39,6 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
+from domovoi.config import settings
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
@@ -99,6 +100,13 @@ _NOW_LISTENING_RE = re.compile(
 )
 # Keep any leading "the" — podcast names often include it ("The Daily").
 _SUBSCRIBE_RE = re.compile(r"^subscribe(?: me)? to (?P<show>.+?)(?: podcast)?$")
+# Subject-less "subscribe" / "subscribe to" / "subscribe to a podcast": claim
+# it here and ASK, rather than letting an incomplete command fall through to
+# QA (which happily invents a newsletter pitch). No network needed to ask, so
+# this one stays offline_ok.
+_SUBSCRIBE_BARE_RE = re.compile(
+    r"^subscribe(?: me)?(?: to)?(?: (?:a|an|the|another|new))*(?: (?:podcast|show))?$"
+)
 
 # Session-context key holding the currently-playing spoken item so chapter /
 # time-left / "what am I listening to" can resolve without re-querying MPD's
@@ -160,6 +168,9 @@ class SpokenAudioHandler(Handler):
             FastPath(_SET_SPEED_RE, SpokenAudioHandler._set_speed_from_match),
             FastPath(_TIME_LEFT_RE, SpokenAudioHandler._time_left_from_match),
             FastPath(_NOW_LISTENING_RE, SpokenAudioHandler._now_listening_from_match),
+            # Before the real subscribe path so "subscribe to podcast" asks
+            # which show instead of subscribing to a show named "podcast".
+            FastPath(_SUBSCRIBE_BARE_RE, SpokenAudioHandler._subscribe_bare_from_match),
             # Subscribe is the one network-only path on this degraded handler
             # (discovery + iTunes lookup). Mark it offline_ok=False so the
             # router auto-falls-back to fallback_offline while offline instead
@@ -222,6 +233,9 @@ class SpokenAudioHandler(Handler):
 
     async def _subscribe_from_match(self, m, ctx, session):
         return await self._subscribe(ctx, session, m.group("show").strip().rstrip(".,!?"))
+
+    async def _subscribe_bare_from_match(self, m, ctx, session):
+        return self._reply(ctx, "Which podcast should I subscribe to?")
 
     async def _resume_from_match(self, m, ctx, session):
         kind = (m.group("kind") or m.group("kind2") or "").lower()
@@ -301,6 +315,25 @@ class SpokenAudioHandler(Handler):
             return self._reply(ctx, "Which show?")
         ep = await sa.latest_episode_for_show(session, show)
         if ep is None:
+            # No EPISODE row — but the subscription may exist and simply not
+            # have been polled yet (poller cadence is 30 min, and it's off by
+            # default). Telling the user to subscribe to a show they just
+            # subscribed to is a lie; say what's actually true instead.
+            sub = await sa.subscription_for_show(session, show)
+            if sub is not None:
+                name = sub["title"] or show
+                if not settings.podcast_feed_poller_enabled:
+                    return self._reply(
+                        ctx,
+                        f"You're subscribed to {name}, but no episode has "
+                        "downloaded yet — podcast downloading is turned off "
+                        "in settings.",
+                    )
+                return self._reply(
+                    ctx,
+                    f"You're subscribed to {name}, but it hasn't downloaded "
+                    "an episode yet. I'll have one shortly.",
+                )
             return self._reply(
                 ctx,
                 f"I couldn't find a subscribed podcast matching {show}. "

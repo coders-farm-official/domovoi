@@ -245,3 +245,28 @@ async def latest_episode_for_show(session, query: str) -> dict[str, Any] | None:
         )
     ).mappings().first()
     return dict(row) if row else None
+
+
+async def subscription_for_show(session, query: str) -> dict[str, Any] | None:
+    """The subscription row matching ``query`` by title, episodes or not.
+
+    ``latest_episode_for_show`` JOINs through ``podcast_episodes``, so a
+    show subscribed seconds ago (poller hasn't run yet) looks identical to
+    one that was never subscribed. This lets the handler tell the two apart
+    and answer honestly instead of "try subscribing first"."""
+    like = f"%{query.lower().strip()}%"
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT id, title, feed_url
+                  FROM podcast_subscriptions
+                 WHERE LOWER(COALESCE(title,'')) LIKE :q
+                 ORDER BY (LOWER(COALESCE(title,'')) = :exact) DESC, id DESC
+                 LIMIT 1
+                """
+            ),
+            {"q": like, "exact": query.lower().strip()},
+        )
+    ).mappings().first()
+    return dict(row) if row else None

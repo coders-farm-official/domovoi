@@ -27,6 +27,7 @@ from domovoi.handlers.spoken_audio import (
     _RESUME_RE,
     _SET_SPEED_RE,
     _SKIP_RE,
+    _SUBSCRIBE_BARE_RE,
     _SUBSCRIBE_RE,
 )
 from domovoi.models import Context, Intent
@@ -276,3 +277,83 @@ async def test_router_falls_back_subscribe_when_offline(db_session) -> None:
     assert resp.matched_handler == "spoken_audio"
     assert resp.matched_path == "fast_offline"
     assert "internet" in resp.text.lower() or "connection" in resp.text.lower()
+
+
+# ─── F-V010: honest answers for a subscribed-but-empty show / bare verb ────
+def test_bare_subscribe_regex_claims_subjectless_phrasings() -> None:
+    """An incomplete "subscribe to" used to match no fast path and fall to
+    QA, which invented a newsletter pitch. It must be claimed here."""
+    for t in (
+        "subscribe",
+        "subscribe to",
+        "subscribe me to",
+        "subscribe to a podcast",
+        "subscribe to the podcast",
+        "subscribe to a new show",
+    ):
+        assert _SUBSCRIBE_BARE_RE.match(t), t
+    # ...but never a real subject — that's the network subscribe path.
+    for t in ("subscribe to the daily", "subscribe to radiolab podcast"):
+        assert not _SUBSCRIBE_BARE_RE.match(t), t
+
+
+@pytest.mark.asyncio
+async def test_bare_subscribe_asks_which_podcast() -> None:
+    """Dispatch order matters: the bare path must win over _SUBSCRIBE_RE for
+    "subscribe to podcast" (which otherwise subscribes to a show literally
+    named "podcast"). DB-free — the answer is a question, not a lookup."""
+    h = SpokenAudioHandler()
+    ctx = Context(session_id=None, room_id="kitchen")
+    for transcript in ("subscribe to", "subscribe to a podcast"):
+        for pattern, method in h.fast_paths:
+            m = pattern.match(transcript)
+            if m:
+                resp = await method(h, m, ctx, None)
+                break
+        else:
+            raise AssertionError(f"no fast path claimed {transcript!r}")
+        assert resp.text == "Which podcast should I subscribe to?"
+
+
+@pytest.mark.asyncio
+async def test_play_latest_subscribed_but_no_episode_yet(monkeypatch) -> None:
+    """Subscription exists, poller hasn't landed an episode: saying "try
+    subscribing first" is a lie. DB-free — both lookups are stubbed."""
+    async def _no_episode(session, query):
+        return None
+
+    async def _subscribed(session, query):
+        return {"id": 1, "title": "The Daily", "feed_url": "https://x/f.xml"}
+
+    monkeypatch.setattr(sa, "latest_episode_for_show", _no_episode)
+    monkeypatch.setattr(sa, "subscription_for_show", _subscribed)
+    monkeypatch.setattr(settings, "podcast_feed_poller_enabled", True)
+
+    h = SpokenAudioHandler()
+    ctx = Context(session_id=None, room_id="kitchen")
+    resp = await h._play_latest(ctx, None, "the daily")
+    low = resp.text.lower()
+    assert "the daily" in low
+    assert "hasn't downloaded" in low
+    assert "try 'subscribe to'" not in low
+    assert "couldn't find a subscribed podcast" not in low
+
+    # Poller off is a different truth — say so rather than promise "shortly".
+    monkeypatch.setattr(settings, "podcast_feed_poller_enabled", False)
+    resp_off = await h._play_latest(ctx, None, "the daily")
+    assert "turned off" in resp_off.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_play_latest_unsubscribed_still_says_subscribe_first(monkeypatch) -> None:
+    """The original message is still right when there IS no subscription."""
+    async def _none(session, query):
+        return None
+
+    monkeypatch.setattr(sa, "latest_episode_for_show", _none)
+    monkeypatch.setattr(sa, "subscription_for_show", _none)
+
+    h = SpokenAudioHandler()
+    resp = await h._play_latest(Context(room_id="kitchen"), None, "nope fm")
+    assert "subscribe" in resp.text.lower()
+    assert "couldn't find a subscribed podcast" in resp.text.lower()
