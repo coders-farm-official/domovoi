@@ -21,6 +21,25 @@ from functools import lru_cache
 dlls_registered: bool = False
 
 
+def preimport_torch() -> bool:
+    """Import `torch` first, when installed, so it binds its own CUDA DLLs.
+
+    Returns True if torch is importable (and now imported). Best effort: a
+    missing or broken torch is never a startup error — the core only needs it
+    for the optional `voice-profile` extra and for ctranslate2's model spec.
+    """
+    import importlib
+    import importlib.util
+
+    try:
+        if importlib.util.find_spec("torch") is None:
+            return False
+        importlib.import_module("torch")
+    except Exception:  # pragma: no cover - depends on the host's torch install
+        return False
+    return True
+
+
 @lru_cache(maxsize=1)
 def register_nvidia_dlls() -> tuple[str, ...]:
     """Register the NVIDIA pip-wheel DLL directories. Idempotent.
@@ -44,13 +63,25 @@ def register_nvidia_dlls() -> tuple[str, ...]:
             d = os.path.join(sp, sub)
             if os.path.isdir(d):
                 found.append(d)
-                try:
-                    os.add_dll_directory(d)
-                except (OSError, AttributeError):
-                    pass
 
     if not found:
         return ()
+
+    # Torch bundles its OWN cuBLAS/cuDNN under `torch/lib` and binds them at
+    # import time, and whichever cuDNN lands in the process first wins. The
+    # pip `nvidia-cudnn-cu12` wheel is routinely NEWER than the one torch
+    # ships, so preloading ours first makes a later `import torch` die with
+    # `OSError: [WinError 127] ... torch\lib\cudnn_cnn64_9.dll`. ctranslate2
+    # imports torch on the first Whisper load, which takes core startup down
+    # with it. Import torch BEFORE we register/preload anything: ctranslate2
+    # then reuses torch's cuDNN and the preloads below bind torch's copies.
+    preimport_torch()
+
+    for d in found:
+        try:
+            os.add_dll_directory(d)
+        except (OSError, AttributeError):
+            pass
 
     os.environ["PATH"] = os.pathsep.join(found) + os.pathsep + os.environ.get("PATH", "")
 
