@@ -10,6 +10,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -85,6 +86,35 @@ class ApiClientTest {
         } catch (e: ApiException) {
             assertEquals("500 Server Error: " + "x".repeat(200), e.message)
         }
+    }
+
+    // ---- failureText (F-A001) ----------------------------------------------
+
+    @Test fun failureText_reportsTheServerErrorNotOffline() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"detail":"boom"}"""))
+        try {
+            api.post("/api/podcasts/poll")
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            val msg = failureText("Poll", e)
+            assertEquals("""Poll failed: 500 Server Error: {"detail":"boom"}""", msg)
+            assertFalse(msg.contains("offline"))
+        }
+    }
+
+    @Test fun failureText_blamesTheConnectionOnlyForTransportFailures() {
+        assertEquals(
+            "Poll failed (offline?)",
+            failureText("Poll", IOException("Failed to connect to /10.0.0.9:6370")),
+        )
+    }
+
+    @Test fun failureText_fallsBackWhenThereIsNoMessage() {
+        assertEquals("Poll failed: HTTP 502", failureText("Poll", ApiException(502, "")))
+        assertEquals(
+            "Poll failed: IllegalStateException",
+            failureText("Poll", IllegalStateException()),
+        )
     }
 
     @Test fun noServerConfigured_failsBeforeAnyRequest() = runBlocking {

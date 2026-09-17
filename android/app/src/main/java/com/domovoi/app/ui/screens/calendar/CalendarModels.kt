@@ -44,6 +44,14 @@ internal enum class CalView(val label: String) {
     Agenda("agenda"), Month("month"), Week("week"), Day("day")
 }
 
+/**
+ * Views offered by the toggle. Compact widths lead with the agenda, but keep
+ * month / week / day so the phone has the same views as the web calendar.
+ */
+internal fun calViews(compact: Boolean): List<CalView> =
+    if (compact) listOf(CalView.Agenda, CalView.Month, CalView.Week, CalView.Day)
+    else listOf(CalView.Month, CalView.Week, CalView.Day)
+
 internal fun startOfWeekSun(d: LocalDate): LocalDate =
     d.minusDays((d.dayOfWeek.value % 7).toLong())
 

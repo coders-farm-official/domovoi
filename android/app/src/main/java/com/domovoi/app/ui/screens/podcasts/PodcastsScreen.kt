@@ -45,6 +45,7 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.PlayItem
@@ -90,7 +91,7 @@ fun PodcastsScreen() {
                     toast("Polled — $downloaded downloaded, $fresh new")
                     subs.refresh()
                 }
-                .onFailure { toast("Poll failed (offline?)") }
+                .onFailure { toast(failureText("Poll", it)) }
             polling = false
         }
     }

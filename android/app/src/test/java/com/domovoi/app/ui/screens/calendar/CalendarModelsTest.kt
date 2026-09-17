@@ -111,6 +111,18 @@ class CalendarModelsTest {
         assertEquals(LocalDateTime.of(2030, 1, 1, 10, 0), d.end)
     }
 
+    @Test fun calViews_compactKeepsWeek() {
+        // F-A002: the phone offered agenda/month/day only, unlike the web calendar.
+        assertEquals(
+            listOf(CalView.Agenda, CalView.Month, CalView.Week, CalView.Day),
+            calViews(compact = true),
+        )
+        assertEquals(
+            listOf(CalView.Month, CalView.Week, CalView.Day),
+            calViews(compact = false),
+        )
+    }
+
     @Test fun isGoogle_onlyForGoogleSource() {
         assertTrue(ev(1, "2026-09-15T09:00:00").copy(source = "google").isGoogle())
         assertFalse(ev(1, "2026-09-15T09:00:00").copy(source = "local").isGoogle())

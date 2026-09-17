@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
@@ -105,7 +106,7 @@ internal fun PersonNewsDetail(person: NewsPerson, categories: List<String>) {
                     items.refresh()
                     briefing.refresh()
                 }
-                .onFailure { toast("poll failed (offline?)") }
+                .onFailure { toast(failureText("poll", it)) }
             polling = false
         }
     }

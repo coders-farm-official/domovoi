@@ -28,6 +28,10 @@ Read these core files before writing a screen:
    rememberCoroutineScope()` then `scope.launch { runCatching {
    app.api.post(...) }.onSuccess { toast("..."); refresh() }.onFailure {
    toast("failed: ${it.message}") } }`. Every mutation toasts, like the web.
+   Never invent a cause the app cannot know: use `failureText("poll", it)`
+   (`net/ApiClient.kt`) when you want a one-word action prefix — it shows the
+   server's message for a non-2xx and only says "(offline?)" for a real
+   transport failure.
 5. **Destructive actions** get a `ConfirmDialog` (web `window.confirm`).
 6. **Design rules** (from the domovoi-design skill): one amber accent
    (`Domovoi.colors.brand`) — never introduce a second accent. No emoji. Live

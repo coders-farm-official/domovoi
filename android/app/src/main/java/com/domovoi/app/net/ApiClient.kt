@@ -32,6 +32,21 @@ val DomovoiJson = Json {
 class ApiException(val status: Int, message: String) : IOException(message)
 
 /**
+ * Toast text for a failed mutation (CONVENTIONS rule 4). A non-2xx response is
+ * the backend's fault, not the network's, so it reports the server's own
+ * "{status} {reason}: {body}" message; only a real transport failure is blamed
+ * on the connection.
+ */
+fun failureText(action: String, e: Throwable): String {
+    val detail = e.message?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        e is ApiException -> "$action failed: ${detail ?: "HTTP ${e.status}"}"
+        e is IOException -> "$action failed (offline?)"
+        else -> "$action failed: ${detail ?: e.javaClass.simpleName}"
+    }
+}
+
+/**
  * Thin JSON client over OkHttp — the Android analog of web/static/data.js
  * (apiGet/apiPost/apiPatch/apiDelete/apiUpload). Same error contract:
  * non-2xx throws with "{status} {reason}: {body}".

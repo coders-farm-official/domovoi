@@ -46,6 +46,7 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.PlayItem
@@ -141,7 +142,7 @@ fun AudiobooksScreen() {
                     toast("Indexed $scanned book(s)")
                     books.refresh()
                 }
-                .onFailure { toast("Reindex failed") }
+                .onFailure { toast(failureText("Reindex", it)) }
             busy = false
         }
     }

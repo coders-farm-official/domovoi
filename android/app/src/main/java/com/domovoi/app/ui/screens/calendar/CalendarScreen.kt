@@ -150,8 +150,7 @@ fun CalendarScreen() {
         Spacer(Modifier.height(12.dp))
         CalTopBar(
             view = view,
-            views = if (compact) listOf(CalView.Agenda, CalView.Month, CalView.Day)
-            else listOf(CalView.Month, CalView.Week, CalView.Day),
+            views = calViews(compact),
             anchor = anchor,
             onView = { view = it },
             onAnchor = { anchor = it },
