@@ -905,6 +905,21 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         log.info("forgot person id=%d name=%s", ctx.person_id, name)
+        # The `people` row is gone, but we're still inside the router's
+        # session_scope — `_persist_turn` has yet to write this turn's
+        # intents_log / conversation_log rows, and it stamps them from
+        # ctx.person_id. Leaving the stale id there inserts an audit row
+        # referencing a person that no longer exists, which raises a
+        # ForeignKeyViolationError and rolls the whole transaction back —
+        # un-deleting the profile the user just asked us to forget.
+        # (The FKs' ON DELETE SET NULL only rewrites rows that already
+        # existed at delete time; it can't save an insert made after it.)
+        # Clear the identity for the remainder of this turn so the audit
+        # rows are written with NULL, and drop to the anonymous presence
+        # tier that `voice_identifier.identify` uses for an unmatched
+        # speaker — which is exactly what this speaker now is.
+        ctx.person_id = None
+        ctx.presence_tier = "high"
         return Response(
             text=f"Okay, I've forgotten you, {name}.",
             session_id=ctx.session_id,

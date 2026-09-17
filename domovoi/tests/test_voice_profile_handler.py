@@ -283,6 +283,91 @@ async def test_forget_me_when_unknown(db_session) -> None:
     assert "don't have" in response.text.lower()
 
 
+# ─── Regression: F-V005 ────────────────────────────────────────────────────
+#
+# "forget me" deleted the `people` row but left ctx.person_id set, so the
+# router's `_persist_turn` then inserted an intents_log row referencing the
+# just-deleted person. The FK blew up, the shared session_scope rolled back,
+# and the profile came back — the user got an error frame instead of "Okay,
+# I've forgotten you". DB-free on purpose: the repository is stubbed so this
+# runs (and fails, pre-fix) with no Postgres.
+
+
+class _StubPeopleRepo:
+    """Minimal stand-in for PeopleRepository: records the delete and can be
+    told to blow up the way a real DB error would."""
+
+    deleted: list[int] = []
+    fail_delete = False
+
+    def __init__(self, session) -> None:
+        self.session = session
+
+    async def get(self, person_id: int):
+        return (person_id, "Guy", None)
+
+    async def delete(self, person_id: int) -> int:
+        if type(self).fail_delete:
+            raise RuntimeError("simulated DB failure")
+        type(self).deleted.append(person_id)
+        return 1
+
+
+@pytest.fixture
+def stub_people_repo(monkeypatch):
+    _StubPeopleRepo.deleted = []
+    _StubPeopleRepo.fail_delete = False
+    monkeypatch.setattr(
+        "domovoi.handlers.voice_profile.PeopleRepository", _StubPeopleRepo
+    )
+    return _StubPeopleRepo
+
+
+@pytest.mark.asyncio
+async def test_forget_me_clears_identity_from_context(stub_people_repo) -> None:
+    """After a successful delete the Context must no longer name the person,
+    or the audit write later in the same transaction violates the FK."""
+    handler = VoiceProfileHandler()
+    ctx = Context(
+        session_id=None,
+        room_id="kitchen",
+        online=True,
+        person_id=2,
+        presence_tier="low",
+    )
+
+    response = await handler._forget(ctx, object())
+
+    assert "forgotten" in response.text.lower()
+    assert "guy" in response.text.lower()
+    assert stub_people_repo.deleted == [2]
+    # The load-bearing assertions: nothing written after this point may
+    # reference the deleted person.
+    assert ctx.person_id is None
+    assert ctx.presence_tier == "high"
+
+
+@pytest.mark.asyncio
+async def test_forget_me_keeps_identity_when_delete_fails(stub_people_repo) -> None:
+    """The mirror case: the profile is still there, so the speaker is still
+    that person and the turn's audit rows should still say so."""
+    stub_people_repo.fail_delete = True
+    handler = VoiceProfileHandler()
+    ctx = Context(
+        session_id=None,
+        room_id="kitchen",
+        online=True,
+        person_id=2,
+        presence_tier="low",
+    )
+
+    response = await handler._forget(ctx, object())
+
+    assert "still there" in response.text.lower()
+    assert ctx.person_id == 2
+    assert ctx.presence_tier == "low"
+
+
 # ─── Edge cases ────────────────────────────────────────────────────────────
 
 
