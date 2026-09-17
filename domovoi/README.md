@@ -824,6 +824,13 @@ On a non-AEC board the server still enters chat mode but the satellite
 declines the open mic and emits a `chat_end`. See `[chat]` in
 `satellite/config.toml.example`.
 
+**Live-stream requirement + idle exit.** Chat mode is an open-MIC mode, so
+the entry handler only accepts it when a satellite is actually streaming
+this room (`app.state.active_sessions`) — a bare `POST /v1/intent` has no
+mic behind it and is declined. Once open, the silence watchdog auto-ends a
+chat that goes quiet for `chat_silence_timeout_sec` (30 s) with a
+`chat_end` frame, so a forgotten open mic can't run forever.
+
 ### LLM fallthrough (general Q&A)
 
 When no handler's fast-path regex matches and no tool-call dispatch

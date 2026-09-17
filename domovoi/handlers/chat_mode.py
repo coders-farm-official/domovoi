@@ -156,10 +156,26 @@ class ChatModeHandler(Handler):
         keeps the entry surface honest in tests (where stubs are forced) and on
         a deployment that hasn't brought Letta up yet.
         """
-        if ctx.session_id is None:
-            # No session (e.g. a direct /v1/intent call with no session) →
-            # there's no live mic to put into open-mic mode, and nowhere to
-            # persist the per-session flag for the next turn.
+        # Chat mode is an open-MIC mode: it only means anything when a
+        # satellite is live-streaming this room. ``ctx.session_id is None`` is
+        # NOT that test — the router mints a session id for EVERY turn,
+        # including a bare ``POST /v1/intent`` with no Pi behind it, so the old
+        # guard here was unreachable and an app/API caller could flip a session
+        # into conversational_mode with no mic to serve it. Ask the same live
+        # registry the drop-in feasibility check uses (``dropin_common``): only
+        # the streaming layer stamps ``ctx.app`` (it's None on /v1/intent), and
+        # ``app.state.active_sessions`` maps room_id → the connected Pi's
+        # StreamSession. The session-id check stays folded in, because with no
+        # session there's nowhere to persist the flag for the next turn.
+        app = ctx.app
+        live_rooms = (
+            getattr(getattr(app, "state", None), "active_sessions", None) or {}
+        )
+        if (
+            ctx.session_id is None
+            or ctx.room_id is None
+            or ctx.room_id not in live_rooms
+        ):
             return Response(
                 text="Chat mode only works from a satellite.",
                 session_id=ctx.session_id,
@@ -173,18 +189,16 @@ class ChatModeHandler(Handler):
         # stuck-mode case where a refusal desyncs the flag. Unknown rooms are
         # allowed (the Pi's own AEC gate + the inbound chat_end teardown are the
         # backstop).
-        app = ctx.app
-        if app is not None and ctx.room_id is not None:
-            full_duplex = getattr(app.state, "satellite_full_duplex", {}) or {}
-            if ctx.room_id in full_duplex and not full_duplex.get(ctx.room_id):
-                return Response(
-                    text=(
-                        "Chat mode needs a satellite with echo cancellation, and "
-                        "this room's mic can't do that yet."
-                    ),
-                    session_id=ctx.session_id,
-                    matched_handler=self.name,
-                )
+        full_duplex = getattr(app.state, "satellite_full_duplex", {}) or {}
+        if ctx.room_id in full_duplex and not full_duplex.get(ctx.room_id):
+            return Response(
+                text=(
+                    "Chat mode needs a satellite with echo cancellation, and "
+                    "this room's mic can't do that yet."
+                ),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
 
         repo = SessionRepository(session)
         try:

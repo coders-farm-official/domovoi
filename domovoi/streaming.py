@@ -1968,9 +1968,17 @@ class StreamSession:
         The single teardown path used by the exit phrase, the inbound
         ``chat_end`` frame, the silence watchdog, and an ensure_agent failure."""
         self.conversational_mode = False
-        if self._chat_silence_task is not None:
-            self._chat_silence_task.cancel()
-            self._chat_silence_task = None
+        sil = self._chat_silence_task
+        self._chat_silence_task = None
+        # The silence watchdog calls this from INSIDE its own task, so cancel
+        # it only when we're not it: cancelling the running task raises
+        # CancelledError at the very next await (the context write below, or
+        # the watchdog's own ``send_chat_end`` after we return), which swallows
+        # the ``chat_end`` frame and leaves the Pi's mic open forever — exactly
+        # the stuck-open-mic case chat_silence_timeout_sec exists to prevent.
+        # Same guard as ``_end_dropin``.
+        if sil is not None and not sil.done() and sil is not asyncio.current_task():
+            sil.cancel()
         if self.session_id is None:
             return
         try:

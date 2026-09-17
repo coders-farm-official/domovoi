@@ -14,6 +14,7 @@ so no full app lifespan is needed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import types
 
@@ -40,6 +41,73 @@ class _FakeWS:
 
     async def send_bytes(self, data: bytes) -> None:
         self.sent_bytes.append(data)
+
+
+class _SlowFakeWS(_FakeWS):
+    """Like ``_FakeWS`` but its sends actually SUSPEND, as a real socket write
+    does. That matters for the silence-watchdog tests: a pending cancellation
+    is only delivered at a true suspension point, so a send that never yields
+    would hide the self-cancel bug these tests pin down."""
+
+    async def send_text(self, data: str) -> None:
+        await asyncio.sleep(0)
+        await super().send_text(data)
+
+
+@pytest.mark.asyncio
+async def test_clear_chat_mode_does_not_cancel_its_own_watchdog() -> None:
+    """F-V009: ``_chat_silence_watchdog`` tears the mode down by calling
+    ``_clear_chat_mode``, which used to cancel ``self._chat_silence_task``
+    unconditionally — i.e. the very task it was running in. The CancelledError
+    landed at the next await and killed the teardown mid-way. Cancelling
+    another task is still fine; cancelling yourself is not (same guard as
+    ``_end_dropin``)."""
+    sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
+    sess.session_id = None  # keep the teardown DB-free
+    sess.conversational_mode = True
+
+    async def pretend_to_be_the_watchdog() -> str:
+        sess._chat_silence_task = asyncio.current_task()
+        await sess._clear_chat_mode()
+        # A cancellation scheduled by the call above would be delivered here.
+        await asyncio.sleep(0)
+        return "survived"
+
+    task = asyncio.create_task(pretend_to_be_the_watchdog())
+    try:
+        outcome = await task
+    except asyncio.CancelledError:
+        outcome = "cancelled itself"
+    assert outcome == "survived"
+    assert sess.conversational_mode is False
+    assert sess._chat_silence_task is None
+
+
+@pytest.mark.asyncio
+async def test_silence_watchdog_sends_chat_end_on_an_idle_chat() -> None:
+    """F-V009 (step 2): a satellite that goes quiet after "let's chat" must be
+    returned to command mode — the watchdog has to actually deliver the
+    ``chat_end`` frame that drops the Pi back to its wake loop, not die of its
+    own cancellation on the way there."""
+    ws = _SlowFakeWS()
+    sess = StreamSession(ws, "kitchen")  # type: ignore[arg-type]
+    sess.session_id = None  # keep the teardown DB-free
+    sess.conversational_mode = True
+    # Chat opened long ago and nobody said anything since.
+    sess._chat_last_activity = asyncio.get_running_loop().time() - 600.0
+
+    task = asyncio.create_task(sess._chat_silence_watchdog(1.0))
+    sess._chat_silence_task = task
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except asyncio.CancelledError:
+        pass  # the bug: the watchdog cancelled itself; assertions below fail
+
+    assert any(
+        f.get("type") == "chat_end" and f.get("reason") == "silence_timeout"
+        for f in ws.sent_text
+    ), "an idle chat must be closed with a chat_end frame"
+    assert sess.conversational_mode is False
 
 
 def test_response_accepts_chat_matched_path() -> None:
