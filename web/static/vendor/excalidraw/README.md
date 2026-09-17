@@ -29,3 +29,24 @@ git add web/static/vendor/excalidraw && git commit
 That downloads the pinned npm tarball once and unpacks `package/dist/`
 (minus the dev-only asset copy) here. It is a one-time step for the repo,
 not a build step for each box: once committed, a fresh clone is complete.
+
+## The "Google API Key" secret-scanning alert
+
+GitHub secret scanning flags a `google_api_key` inside
+`excalidraw.production.min.js`. That string is Excalidraw's own Firebase
+*client* config (`VITE_APP_FIREBASE_CONFIG`, Firebase project
+`excalidraw-room-persistence`), which the upstream 0.17.x build inlines
+into the npm package; the vendored file is byte-identical to the published
+tarball (compare `sha256sum` against `package/dist/` from the tarball). It
+is not a Domovoi credential, nothing in this repo owns or can rotate it,
+and the bundle never initializes Firebase: only the excalidraw.com app
+uses that config, for its collaboration rooms. Firebase web API keys are
+public identifiers by design; Google's own guidance is that keys
+restricted to Firebase services "do not need to be treated as secrets, and
+it's safe to include them in your code or configuration files".
+
+Close the alert as a false positive with a note pointing here, and do the
+same if a re-vendor reopens it. A `paths-ignore` entry for
+`web/static/vendor/**` in `.github/secret_scanning.yml` would stop GitHub
+raising it at all, at the cost of not scanning the vendor tree; that is a
+deliberate maintainer choice, not something this README assumes.
