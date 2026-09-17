@@ -29,6 +29,12 @@
       "note": "2026-09-15 live: qwen3:8b routed to calculator -> 'I'm not sure what to calculate.'"
     },
     {
+      "utterance": "who wrote pride and prejudice",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "F-V004 2026-09-11: qwen2.5:14b routed to library -> 'I didn't find Pride and Prejudice in your library.'"
+    },
+    {
       "utterance": "who painted the mona lisa",
       "handler": null,
       "tags": ["qa"],

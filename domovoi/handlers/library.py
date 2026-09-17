@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients.mpd import get_mpd_client_for
 from domovoi.db.repositories import utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,23 @@ _ENRICH_RE = re.compile(
 )
 
 
+# ─── LLM tool-offer gate ─────────────────────────────────────────────
+#
+# Anything that could make an utterance a question ABOUT THE COLLECTION
+# rather than about the world: a media noun, or an ownership/curation
+# verb. Generous on purpose — a false positive only means the schema is
+# offered to the tool model, exactly as it always was.
+_LIBRARY_CUE_RE = re.compile(
+    r"\b(?:"
+    r"librar\w*|collection|music|song|songs|track|tracks|album|albums"
+    r"|artist\w*|band|bands|record|records|recording\w*|playlist\w*"
+    r"|discograph\w*|mp3|vinyl|cover|covers|remix\w*"
+    r"|sing|sings|singer\w*|sang|sung|perform\w*|play\w*"
+    r"|have|got|own|owns|downloaded|saved|added|add"
+    r")\b"
+)
+
+
 class LibraryHandler(Handler):
     """Query the local music library — what's in it, what was added when, counts.
 
@@ -143,6 +161,20 @@ class LibraryHandler(Handler):
             FastPath(_COUNT_RE, LibraryHandler._count_from_match),
             FastPath(_ENRICH_RE, LibraryHandler._enrich_from_match),
         ]
+
+    def offers_tool(self, transcript: str) -> bool:
+        # The library holds MUSIC, but shown the schema a small tool
+        # model reads any "who wrote X" as a catalogue lookup: "who
+        # wrote pride and prejudice" -> library(action=search) -> "I
+        # didn't find Pride and Prejudice in your library."
+        # (qwen2.5:14b, the repo default, F-V004). A who/whose/whom/why/
+        # where question with nothing musical in it can't be a library
+        # turn, so withhold there and let the QA fallthrough answer.
+        # Every other opener stays on offer — "what did i add today" and
+        # "how many songs do i have" are real library turns.
+        if _LIBRARY_CUE_RE.search(transcript):
+            return True
+        return not KNOWLEDGE_QUESTION_RE.match(transcript)
 
     async def execute(self, intent, ctx, session):
         return Response(

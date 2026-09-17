@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients.holidays import next_occurrence
 from domovoi.clients.units import UNITS, convert as unit_convert, lookup as unit_lookup
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -388,13 +389,12 @@ _SPLIT_TIP_RE = re.compile(
 # ─── LLM tool-offer gate ─────────────────────────────────────────────
 
 _ANY_DIGIT_RE = re.compile(r"\d")
-# Question openers that are never arithmetic. Deliberately NOT "what",
-# "how", "when": those front real calculator turns ("what is a third of
-# ninety", "how many days until christmas", "when is thanksgiving").
-_KNOWLEDGE_QUESTION_RE = re.compile(
-    r"^(?:(?:tell me|do you know|do you happen to know|any idea|i wonder)[,\s]+)?"
-    r"(?:who|whose|whom|why|where)\b"
-)
+# Question openers that are never arithmetic — shared with the other
+# handlers that withhold on the same evidence (see shared/tool_gate.py).
+# Deliberately NOT "what", "how", "when": those front real calculator
+# turns ("what is a third of ninety", "how many days until christmas",
+# "when is thanksgiving").
+_KNOWLEDGE_QUESTION_RE = KNOWLEDGE_QUESTION_RE
 
 
 # ─── Handler ─────────────────────────────────────────────────────────

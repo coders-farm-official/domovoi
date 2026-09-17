@@ -40,7 +40,7 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news"}
+GATED = {"calculator", "double_check", "news", "library"}
 
 
 def _normalize(utterance: str) -> str:
@@ -142,6 +142,45 @@ def test_qa_cases_are_not_offered_the_verification_or_news_tools(case) -> None:
 )
 def test_calculator_withheld_from_who_why_where_questions(utterance: str) -> None:
     assert "calculator" not in _offered(utterance)
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        # F-V004: the measured misroute — a book question answered as a
+        # miss against the music library.
+        "who wrote pride and prejudice",
+        "who wrote the odyssey",
+        "who painted the mona lisa",
+        "who invented the telephone",
+        "where is the eiffel tower",
+        "why is the sky blue",
+        "tell me who wrote pride and prejudice",
+    ],
+)
+def test_library_withheld_from_bare_knowledge_questions(utterance: str) -> None:
+    assert "library" not in _offered(utterance)
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "who sings creep",
+        "whose album is ok computer",
+        "who is the artist on this track",
+        "where did i put that playlist",
+        "why is that song in my library twice",
+        "do i have ok computer",
+        "what did i add today",
+        "how many songs do i have",
+        "find creep in my library",
+    ],
+)
+def test_library_kept_for_its_real_uses(utterance: str) -> None:
+    """A musical cue anywhere in the utterance keeps the schema on
+    offer, and every opener other than who/whose/whom/why/where does
+    too — a wrongly withheld tool silently degrades a real command."""
+    assert "library" in _offered(utterance)
 
 
 @pytest.mark.parametrize(
