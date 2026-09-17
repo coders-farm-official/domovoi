@@ -42,6 +42,18 @@ _VOLATILE_SUBJECT_FALLBACK = {
 }
 
 
+# Spoken when the QA stage comes back with nothing to say. The only way
+# that happens is an Ollama failure — `qa_with_uncertainty` catches the
+# connection error, retries plain `qa`, and returns ``answer=""`` when
+# that fails too. Mirrors the plain wording of the volatile gate's
+# offline line: state what's broken, then what still works, so the user
+# can tell a dead language model from a dead satellite.
+_LLM_UNREACHABLE_TEXT = (
+    "My language model isn't answering right now — timers, music and "
+    "the clock still work."
+)
+
+
 # Yes/no detection for the multi-turn confirmation flow. Tight on
 # purpose — anything not clearly affirmative or negative falls through
 # to normal routing rather than getting accidentally wired into a
@@ -587,6 +599,39 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         profile_prefix=profile_prefix or None,
     )
     answer = qa.answer
+    if not answer.strip():
+        # Ollama is unreachable: `qa_with_uncertainty` degrades to an
+        # empty answer once its own plain-`qa` retry has failed too, and
+        # empty text synthesises to zero audio — the turn ends in total
+        # silence, which the user can't tell apart from a dead satellite
+        # (F-V011). Speak a fixed line instead, and stamp it
+        # ``matched_path="error"`` so the audit trail separates "the
+        # model was down" from a real answer. The fast paths named in the
+        # line are the ones that keep working without the LLM.
+        log.warning(
+            "qa returned an empty answer for %r — the LLM is unreachable; "
+            "speaking the fallback line instead of silence",
+            intent.transcript,
+        )
+        response = Response(
+            text=_LLM_UNREACHABLE_TEXT,
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="error",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="error",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
     should_offer = ctx.online and (
         category is not None or qa.needs_verification
     )

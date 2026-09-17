@@ -783,3 +783,106 @@ def test_matched_path_validation_replaces_the_db_check() -> None:
         registered_values.unregister_owner("test_plugin")
     with pytest.raises(ValueError):
         registered_values.require("matched_path", "test_path")
+
+
+# ─── F-V011: a dead Ollama must not end the turn in silence ───────────────
+
+
+class _FakeSessionRepo:
+    """Enough of SessionRepository for the QA fallthrough, no DB."""
+
+    def __init__(self, session) -> None:
+        self.exchanges: list[tuple[str, str]] = []
+
+    async def get_or_create(self, session_id, room_id):
+        from uuid import uuid4
+
+        return session_id or uuid4()
+
+    async def get_context(self, session_id):
+        return {}
+
+    async def set_context_key(self, session_id, key, value) -> None:
+        return None
+
+    async def record_exchange(self, session_id, user_text, assistant_text, cap):
+        self.exchanges.append((user_text, assistant_text))
+
+
+class _RecordingLogRepo:
+    """Stands in for IntentLogRepository / ConversationLogRepository."""
+
+    rows: list[dict] = []
+
+    def __init__(self, session) -> None:
+        pass
+
+    async def log(self, **kw) -> None:
+        type(self).rows.append(kw)
+
+    async def record_turn(self, **kw) -> None:
+        type(self).rows.append(kw)
+
+
+class _DeadOllamaClient:
+    """What the real client degrades to when Ollama is unreachable:
+    route() swallows the connection error and returns None, and
+    qa_with_uncertainty() returns answer="" after its plain-qa retry
+    fails too (domovoi/clients/ollama.py)."""
+
+    async def route(self, transcript, tool_schemas):
+        return None
+
+    async def qa_with_uncertainty(self, transcript, history=None, profile_prefix=None):
+        from domovoi.clients.ollama import QAWithUncertainty
+
+        return QAWithUncertainty(
+            answer="", needs_verification=False, candidate_claim=""
+        )
+
+
+@pytest.mark.asyncio
+async def test_dead_llm_speaks_a_line_instead_of_silence(monkeypatch) -> None:
+    """F-V011: with Ollama down a QA turn used to return text="" — the
+    Pi got response_start{text:""}, zero PCM bytes and no error frame, so
+    the user heard nothing at all. The router must speak a fixed line and
+    stamp matched_path="error" instead. DB-free: the repositories the QA
+    fallthrough touches are faked out."""
+    import domovoi.router as router_mod
+
+    transcript = "who wrote pride and prejudice"
+    # Guard the premise: this has to reach the QA fallthrough.
+    assert _dry_run_winner(transcript) is None
+
+    intent_rows: list[dict] = []
+    convo_rows: list[dict] = []
+
+    class _IntentRepo(_RecordingLogRepo):
+        rows = intent_rows
+
+    class _ConvoRepo(_RecordingLogRepo):
+        rows = convo_rows
+
+    monkeypatch.setattr(router_mod, "SessionRepository", _FakeSessionRepo)
+    monkeypatch.setattr(router_mod, "IntentLogRepository", _IntentRepo)
+    monkeypatch.setattr(router_mod, "ConversationLogRepository", _ConvoRepo)
+    monkeypatch.setattr(
+        router_mod, "get_ollama_client", lambda: _DeadOllamaClient()
+    )
+
+    response = await route(
+        Intent(transcript=transcript, room_id="kitchen"),
+        Context(room_id="kitchen", online=True),
+        None,
+    )
+
+    # The whole point: something audible comes back.
+    assert response.text.strip(), "a dead LLM must not produce an empty response"
+    assert response.matched_path == "error"
+    assert response.matched_handler is None
+    assert response.expect_followup is False
+    # No dangling "Want me to check that online?" bolted onto nothing.
+    assert "check that online" not in response.text
+    # And the turn is logged as an error, not as a successful qa answer.
+    assert intent_rows and intent_rows[-1]["matched_path"] == "error"
+    assert convo_rows and convo_rows[-1]["assistant_text"] == response.text
