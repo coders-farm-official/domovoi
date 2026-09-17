@@ -84,6 +84,8 @@ CORE_CORPUS: list[tuple[str, str]] = [
     ("play the latest episode of the daily", "spoken_audio"),
     ("resume my book", "spoken_audio"),
     ("next chapter", "spoken_audio"),
+    ("what am i listening to", "spoken_audio"),
+    ("what's this podcast", "spoken_audio"),
     ("play my favorites", "playlist"),
     ("play the chill playlist", "playlist"),
     ("shuffle the chill playlist", "playlist"),
@@ -93,6 +95,10 @@ CORE_CORPUS: list[tuple[str, str]] = [
     ("pause", "music"),
     ("stop the music", "music"),
     ("skip this", "music"),
+    # The headline now-playing phrase: spoken_audio (270) must not poach it
+    # from music (300) — see SpokenAudioHandler._NOW_LISTENING_RE.
+    ("what's playing", "music"),
+    ("what is playing", "music"),
     ("find creep in my library", "library"),
     ("how many songs do i have", "library"),
     ("what did i add today", "library"),

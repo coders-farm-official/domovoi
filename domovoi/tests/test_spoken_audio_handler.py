@@ -21,6 +21,7 @@ from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.spoken_audio import (
     SpokenAudioHandler,
     _NEXT_CHAPTER_RE,
+    _NOW_LISTENING_RE,
     _PLAY_BOOK_RE,
     _PLAY_LATEST_RE,
     _RESUME_RE,
@@ -29,6 +30,7 @@ from domovoi.handlers.spoken_audio import (
     _SUBSCRIBE_RE,
 )
 from domovoi.models import Context, Intent
+from domovoi.plugins_runtime.contracts import CORE_CORPUS, dry_run_winner
 from domovoi import spoken_audio as sa
 from domovoi.tests.conftest import requires_db
 
@@ -111,6 +113,34 @@ def test_ordering_before_music() -> None:
     # The bundled radio plugin declares band 280 — spoken_audio's anchored
     # phrasings must stay ahead of it too (design §4.2: 270 < 280).
     assert spoken.priority_band < 280
+
+
+def test_now_listening_regex_leaves_bare_now_playing_to_music() -> None:
+    """F-V003: "what's playing" must not be claimed here. Being ahead of
+    music in the band order, claiming it made a playing song answer
+    "Nothing spoken is playing right now.\""""
+    assert _NOW_LISTENING_RE.match("what am i listening to")
+    assert _NOW_LISTENING_RE.match("what's this podcast")
+    assert _NOW_LISTENING_RE.match("what is this chapter")
+    assert _NOW_LISTENING_RE.match("what's this book")
+    for phrase in ("what's playing", "what is playing", "what is this playing"):
+        assert _NOW_LISTENING_RE.match(phrase) is None, phrase
+
+
+def test_bare_now_playing_routes_to_music_through_the_band_order() -> None:
+    """Ownership through the real band-ordered registry, not just the regex
+    — the assertion the old regex-only test was missing."""
+    for phrase in ("what's playing", "what is playing"):
+        assert dry_run_winner(phrase, HANDLERS) == "music", phrase
+    for phrase in ("what am i listening to", "what's this podcast"):
+        assert dry_run_winner(phrase, HANDLERS) == "spoken_audio", phrase
+
+
+def test_core_corpus_pins_the_now_playing_owner() -> None:
+    """The §13.2 collision corpus must guard the phrase so a plugin can't
+    re-poach it (the finding's third fix step)."""
+    assert ("what's playing", "music") in CORE_CORPUS
+    assert ("what am i listening to", "spoken_audio") in CORE_CORPUS
 
 
 # ─── Behavior: play an audiobook + write a resume position ──────────────

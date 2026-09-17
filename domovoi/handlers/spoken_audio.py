@@ -88,8 +88,14 @@ _SET_SPEED_RE = re.compile(
 _TIME_LEFT_RE = re.compile(
     r"^how (?:long|much(?: time)?) (?:is )?(?:left|remaining) (?:in|on) (?:this |the )?chapter$"
 )
+# Deliberately does NOT claim the bare "what's playing" / "what is playing":
+# this handler sits at band 270, AHEAD of music (300), so claiming it meant
+# music never saw the house's headline now-playing phrase and a song playing
+# answered "Nothing spoken is playing right now." Every phrasing here needs a
+# spoken-audio noun (book/podcast/episode/chapter) or the "listening to" verb;
+# the generic one belongs to music's _NOW_PLAYING_RE.
 _NOW_LISTENING_RE = re.compile(
-    r"^(?:what am i listening to|what(?:'s| is) (?:this )?(?:playing|book|podcast|episode|chapter))$"
+    r"^(?:what am i listening to|what(?:'s| is) (?:this )?(?:book|podcast|episode|chapter))$"
 )
 # Keep any leading "the" — podcast names often include it ("The Daily").
 _SUBSCRIBE_RE = re.compile(r"^subscribe(?: me)? to (?P<show>.+?)(?: podcast)?$")
@@ -119,8 +125,9 @@ class SpokenAudioHandler(Handler):
             "Play and control podcasts and audiobooks: resume a book or "
             "podcast where you left off, play the latest episode of a show, "
             "navigate chapters, skip forward/back by seconds, set playback "
-            "speed, ask what's playing, or subscribe to a podcast. Different "
-            "from music (on-demand songs) and radio (live streams) — this is "
+            "speed, ask which podcast or book is playing, or subscribe to a "
+            "podcast. Different from music (on-demand songs) and radio "
+            "(live streams) — this is "
             "long-form spoken audio with resume + chapters."
         ),
         "parameters": {

@@ -500,6 +500,8 @@ ORDERING_CORPUS: list[tuple[str, str]] = [
     ("play the latest episode of the daily", "spoken_audio"),
     ("resume my book", "spoken_audio"),
     ("next chapter", "spoken_audio"),
+    ("what am i listening to", "spoken_audio"),
+    ("what's this podcast", "spoken_audio"),
     # playlist before music's ^play catch-all
     ("play my favorites", "playlist"),
     ("play the chill playlist", "playlist"),
@@ -511,6 +513,11 @@ ORDERING_CORPUS: list[tuple[str, str]] = [
     ("pause", "music"),
     ("stop the music", "music"),
     ("skip this", "music"),
+    # F-V003: spoken_audio (270) used to poach the bare now-playing phrase
+    # from music (300), so a playing song answered "Nothing spoken is
+    # playing right now."
+    ("what's playing", "music"),
+    ("what is playing", "music"),
     # library's anchored "find X in my library"
     ("find creep in my library", "library"),
     ("how many songs do i have", "library"),
