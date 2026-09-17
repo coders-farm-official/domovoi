@@ -228,3 +228,11 @@ android/local.properties
 
 # Local agent worktrees (never commit)
 .claude/worktrees/
+
+# Vendored browser bundles (web/static/vendor) are checked in on purpose:
+# the dashboard has no build step and makes zero external requests. The
+# packaging rules at the top of this file (`dist/`, `lib/`, `build/`, ...)
+# match at ANY depth, so without this negation they silently swallow a
+# vendored bundle — that is exactly how the pinned Excalidraw 0.17.6 build
+# never reached a single clone (F-003).
+!web/static/vendor/**

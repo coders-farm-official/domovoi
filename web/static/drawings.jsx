@@ -14,8 +14,12 @@
  *     1. window.EXCALIDRAW_ASSET_PATH — where its fonts/worker assets load.
  *     2. window.process = { env: {} } — the UMD bundle reads process.env.*
  *        and throws a ReferenceError in-browser without it.
- *   (Vendored locally under /vendor/excalidraw/dist — same as React/Babel/
- *   lucide in index.html — so the dashboard makes zero external requests.)
+ *   (Vendored locally under /vendor/excalidraw — same as React/Babel/
+ *   lucide in index.html — so the dashboard makes zero external requests.
+ *   NOT under a dist/ subdirectory: the packaging section of .gitignore
+ *   ignores `dist/` anywhere in the tree, which silently kept the bundle
+ *   out of every clone — F-003. Populate it with
+ *   `python scripts/vendor_excalidraw.py`, then commit the result.)
  *
  * Data sources:
  *   * GET  /api/documents?kind=drawing        — list .excalidraw/.svg.
@@ -25,16 +29,20 @@
  */
 
 const EXCALIDRAW_VERSION = '0.17.6';
-// Vendored locally (see web/static/vendor/excalidraw/dist) — served by the
-// web backend's "/" StaticFiles mount so the whole dist/ (incl.
+// Vendored locally (see web/static/vendor/excalidraw/) — served by the
+// web backend's "/" StaticFiles mount so the whole bundle (incl.
 // excalidraw-assets/ fonts + locales lazy-loaded via EXCALIDRAW_ASSET_PATH)
 // is reachable with zero external network requests. Trailing slash matters:
 // Excalidraw concatenates asset filenames onto EXCALIDRAW_ASSET_PATH.
-const EXCALIDRAW_ASSET_BASE = '/vendor/excalidraw/dist/';
+const EXCALIDRAW_ASSET_BASE = '/vendor/excalidraw/';
 const EXCALIDRAW_UMD = `${EXCALIDRAW_ASSET_BASE}excalidraw.production.min.js`;
 
 /* Load the Excalidraw UMD once, applying the two required shims first. */
 let _excalidrawPromise = null;
+// Set when the bundle cannot be fetched (typically: never vendored, so the
+// script 404s). Read by DrawingCanvas so the editor says so instead of
+// spinning on "Loading Excalidraw…" forever with only a console error.
+let _excalidrawError = null;
 const loadExcalidraw = () => {
   if (_excalidrawPromise) return _excalidrawPromise;
   // Shims MUST be set before the bundle evaluates.
@@ -49,17 +57,22 @@ const loadExcalidraw = () => {
         s.onload = () => resolve(); s.onerror = () => reject(new Error('excalidraw load failed'));
         document.head.appendChild(s);
       })
-  ).then(() => window.ExcalidrawLib);
+  ).then(() => window.ExcalidrawLib)
+   .catch(e => { _excalidrawError = e; throw e; });
   return _excalidrawPromise;
 };
 
 const useExcalidraw = () => {
   const [lib, setLib] = React.useState(window.ExcalidrawLib || null);
+  const [, setFailed] = React.useState(false);
   React.useEffect(() => {
     if (lib) return;
     let alive = true;
     loadExcalidraw().then(l => { if (alive) setLib(l); })
-      .catch(e => console.error('Excalidraw failed to load:', e));
+      .catch(e => {
+        console.error('Excalidraw failed to load:', e);
+        if (alive) setFailed(true);   // re-render so the canvas can explain
+      });
     return () => { alive = false; };
   }, []);
   return lib;
@@ -69,6 +82,21 @@ const useExcalidraw = () => {
  * page can pull scene data out at save time. */
 const DrawingCanvas = ({ lib, initialData, apiRef }) => {
   const Excalidraw = lib && lib.Excalidraw;
+  if (!Excalidraw && _excalidrawError) {
+    return (
+      <div style={{ padding: 24, maxWidth: 560, color: 'var(--fg-faint)', fontSize: 13 }}>
+        <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 6 }}>
+          Excalidraw isn’t vendored on this box.
+        </div>
+        <div>
+          The whiteboard engine is a third-party bundle fetched once and committed,
+          not built here. Run <span className="mono">python scripts/vendor_excalidraw.py</span> on
+          the host — it writes <span className="mono">web/static{EXCALIDRAW_ASSET_BASE}</span> —
+          then reload this page.
+        </div>
+      </div>
+    );
+  }
   if (!Excalidraw) {
     return <div style={{ padding: 24, color: 'var(--fg-faint)' }}>Loading Excalidraw…</div>;
   }
