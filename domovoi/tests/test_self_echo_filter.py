@@ -27,6 +27,11 @@ HEARD_AMBER = (
     "this custom hardware, or is it just like if you put together words?"
 )
 
+# F-V006, run 20260911-040042 (TURN-08). The reply was written with a digit
+# ordinal; Whisper large-v3 transcribed the echo of it as a cardinal.
+SPOKE_DATE = "It's Friday, September 11th, 2026."
+HEARD_DATE_CARDINAL = "It's Friday, September 11, 2026."
+
 
 # ─── is_self_echo ─────────────────────────────────────────────────────────
 
@@ -125,3 +130,42 @@ def test_never_returns_empty_for_a_nonempty_transcript() -> None:
 @pytest.mark.parametrize("ratio", [0.5, 0.8, 1.0])
 def test_ratio_is_tunable(ratio: float) -> None:
     assert is_self_echo(HEARD_STOPPED, SPOKE_STOPPED, min_ratio=ratio) is True
+
+
+# ─── number rendering (F-V006) ────────────────────────────────────────────
+
+
+def test_whisper_cardinal_echo_of_an_ordinal_reply_is_a_whole_echo() -> None:
+    """TURN-08: the reply said "September 11th", the echo came back as
+    "September 11". Same words, one token rendered differently — before the
+    number normalisation the contiguous compare missed and the turn was
+    routed as if the user had spoken it."""
+    assert is_self_echo(HEARD_DATE_CARDINAL, SPOKE_DATE) is True
+
+
+def test_strips_a_cardinalised_date_echo_off_a_real_command() -> None:
+    """The actual TURN-08 barge-in clip: echo of the date reply, then the
+    user's command. Nothing was stripped, and the turn only survived
+    because the tool router guessed right."""
+    heard = HEARD_DATE_CARDINAL + " set a timer for 2 minutes"
+    assert strip_leading_echo(heard, SPOKE_DATE) == "set a timer for 2 minutes"
+
+
+def test_number_normalisation_works_in_both_directions() -> None:
+    """Whisper may also add an ordinal the reply didn't have."""
+    assert is_self_echo("It's Friday, September 11th, 2026.",
+                        "It's Friday, September 11, 2026.") is True
+
+
+def test_spelled_out_numbers_match_their_digits() -> None:
+    heard = "It's Friday, September eleventh, 2026. play some jazz"
+    assert strip_leading_echo(heard, SPOKE_DATE) == "play some jazz"
+    assert is_self_echo("volume up to eighty percent",
+                        "Volume up to 80 percent.") is True
+
+
+def test_normalisation_does_not_manufacture_echoes() -> None:
+    """Numbers are canonicalised, not ignored: a different number is still
+    a different word."""
+    assert is_self_echo("It's Friday, September 12, 2026.", SPOKE_DATE) is False
+    assert is_self_echo("set a timer for 2 minutes", SPOKE_DATE) is False

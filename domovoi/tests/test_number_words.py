@@ -14,6 +14,9 @@ from domovoi.handlers.shared.number_words import (
     DURATION_PATTERN,
     NUMBER_PATTERN,
     NUMBER_WORD_PATTERN,
+    NUMBER_WORDS,
+    ORDINAL_WORDS,
+    normalize_number_token,
     parse_duration_seconds,
     parse_number,
 )
@@ -124,3 +127,36 @@ def test_parse_duration_seconds(text: str, expected: int) -> None:
 )
 def test_parse_duration_seconds_rejects_non_durations(text: str) -> None:
     assert parse_duration_seconds(text) is None
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        # digit ordinals — what our own _ordinal() helpers emit
+        ("11th", "11"), ("1st", "1"), ("2nd", "2"), ("3rd", "3"),
+        ("21st", "21"), ("12TH", "12"),
+        # spelled-out ordinals, regular and irregular
+        ("eleventh", "11"), ("first", "1"), ("second", "2"), ("third", "3"),
+        ("fifth", "5"), ("eighth", "8"), ("ninth", "9"), ("twelfth", "12"),
+        ("fourth", "4"), ("twentieth", "20"), ("eightieth", "80"),
+        # plain cardinals collapse onto the same digits
+        ("eleven", "11"), ("Eighty", "80"),
+        # already canonical
+        ("11", "11"), ("2026", "2026"),
+        # not numbers — returned untouched
+        ("september", "september"), ("", ""), ("th", "th"),
+        ("timer", "timer"), ("2026th", "2026"),
+    ],
+)
+def test_normalize_number_token(token: str, expected: str) -> None:
+    assert normalize_number_token(token) == expected
+
+
+def test_every_cardinal_has_a_distinct_ordinal() -> None:
+    """The ordinal table is derived from NUMBER_WORDS, so a typo in the
+    derivation would silently collapse two numbers onto one key."""
+    assert len(ORDINAL_WORDS) == len(NUMBER_WORDS)
+    assert set(ORDINAL_WORDS.values()) == set(NUMBER_WORDS.values())
+    # No cardinal accidentally doubles as an ordinal ("second" is a unit
+    # word, but it is genuinely the ordinal of two).
+    assert ORDINAL_WORDS["second"] == 2

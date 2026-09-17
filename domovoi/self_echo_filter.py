@@ -33,11 +33,21 @@ associated with the color A."). Paraphrases don't match contiguously, so a
 partial echo like that survives both checks. This is a net, not a fix. The
 fix is not letting a barge trigger on the satellite's own voice — see
 ``[barge_in] require_wake_word`` and the min_speech_ms / VAD thresholds.
+
+One class of near-miss IS repairable, and is handled here: Whisper rewriting
+a NUMBER rather than the words around it. The reply "It's Friday, September
+11th, 2026." came back as "...September 11, 2026." — every word right, one
+token spelled differently, and the contiguous compare missed the whole echo
+(F-V006, run 20260911-040042). So both sides go through
+:func:`~domovoi.handlers.shared.number_words.normalize_number_token`, which
+collapses "11th" / "eleventh" / "eleven" onto "11", before being compared.
 """
 
 from __future__ import annotations
 
 import re
+
+from domovoi.handlers.shared.number_words import normalize_number_token
 
 _NON_ALNUM = re.compile(r"[^a-z0-9\s]")
 
@@ -62,9 +72,17 @@ def _norm_words(text: str) -> list[str]:
     "what's" stays one token) while other punctuation becomes a boundary,
     which keeps the token count aligned with the original's whitespace
     split — the same contract :mod:`domovoi.greeting_filter` relies on to
-    reconstruct a prefix in the original casing."""
+    reconstruct a prefix in the original casing.
+
+    Number tokens are canonicalised to their digits ("11th" and "eleventh"
+    both become "11") so a reply and the echo of it compare equal even when
+    Whisper renders the number the other way round. One token in, one token
+    out, so the alignment contract above is untouched."""
     lowered = text.lower().replace("'", "").replace("’", "")
-    return _NON_ALNUM.sub(" ", lowered).split()
+    return [
+        normalize_number_token(word)
+        for word in _NON_ALNUM.sub(" ", lowered).split()
+    ]
 
 
 def _longest_contiguous_prefix(words: list[str], inside: list[str]) -> int:

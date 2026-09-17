@@ -87,6 +87,60 @@ def parse_number(text: str) -> int | None:
     return None
 
 
+# ─── Ordinals ───────────────────────────────────────────────────────────────
+
+# The cardinals whose ordinal isn't formed by the regular rules below.
+_IRREGULAR_ORDINALS: dict[str, str] = {
+    "one": "first", "two": "second", "three": "third", "five": "fifth",
+    "eight": "eighth", "nine": "ninth", "twelve": "twelfth",
+}
+
+
+def _ordinal_word(word: str) -> str:
+    """``"four"`` → ``"fourth"``, ``"twenty"`` → ``"twentieth"``,
+    ``"three"`` → ``"third"``."""
+    if word in _IRREGULAR_ORDINALS:
+        return _IRREGULAR_ORDINALS[word]
+    if word.endswith("y"):
+        return f"{word[:-1]}ieth"
+    return f"{word}th"
+
+
+#: Every single-word ordinal this module understands, mapped to its value.
+ORDINAL_WORDS: dict[str, int] = {
+    _ordinal_word(word): value for word, value in NUMBER_WORDS.items()
+}
+
+_DIGIT_ORDINAL_RE = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
+
+
+def normalize_number_token(token: str) -> str:
+    """Collapse one rendering of a number onto its digits.
+
+    ``"11th"`` → ``"11"``, ``"eleventh"`` → ``"11"``, ``"eleven"`` → ``"11"``,
+    ``"11"`` → ``"11"``. A token that isn't a number in this module's grammar
+    comes back unchanged, so this is safe to map over every word of a
+    transcript. Recognition is case-insensitive.
+
+    Why it exists: the same number reaches us written several ways in one
+    turn. Our own TTS writes a date as "September 11th" (``_ordinal`` in the
+    clock and calculator handlers) while Whisper transcribes the *echo* of
+    that speech as "September 11", which defeats any word-for-word compare
+    between what we said and what we heard (see
+    :mod:`domovoi.self_echo_filter`).
+
+    Single tokens only — a compound ordinal ("twenty-first") splits into two
+    words before it gets here and each half normalises on its own. The digit
+    form ("21st"), which is what our handlers actually emit, is covered.
+    """
+    t = token.lower()
+    m = _DIGIT_ORDINAL_RE.match(t)
+    if m:
+        return m.group(1)
+    value = ORDINAL_WORDS.get(t, NUMBER_WORDS.get(t))
+    return str(value) if value is not None else token
+
+
 # ─── Durations ──────────────────────────────────────────────────────────────
 
 #: Seconds per spoken unit (singular form; the grammar accepts an optional "s").
@@ -175,7 +229,9 @@ __all__ = [
     "NUMBER_PATTERN",
     "NUMBER_WORD_PATTERN",
     "NUMBER_WORDS",
+    "ORDINAL_WORDS",
     "UNIT_TO_SECONDS",
+    "normalize_number_token",
     "parse_duration_seconds",
     "parse_number",
 ]
