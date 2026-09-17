@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.clients.mpd import get_mpd_client_for
+from domovoi.clients.mpd import MPDNotProvisioned, get_mpd_client_for
 from domovoi.db.repositories import utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE
@@ -241,6 +241,74 @@ class LibraryHandler(Handler):
             return []
         return [song] if song else []
 
+    async def _db_search(
+        self, query: str, session: AsyncSession | None
+    ) -> list[dict[str, Any]]:
+        """Substring search over ``library_tracks`` — the MPD-free path.
+
+        The indexer fills this table from the same shared ``/music``
+        mount every per-room MPD indexes, so it answers the same
+        question when no daemon exists. ``%`` / ``_`` / ``\\`` in the
+        spoken query are escaped so a title containing an underscore
+        can't turn into a wildcard (same class of bug the trigram dedup
+        index was introduced to avoid).
+        """
+        if session is None:
+            return []
+        needle = (
+            query.lower()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT title, artist, album, file_path
+                    FROM library_tracks
+                    WHERE LOWER(title)  LIKE :q ESCAPE '\\'
+                       OR LOWER(artist) LIKE :q ESCAPE '\\'
+                       OR LOWER(album)  LIKE :q ESCAPE '\\'
+                    ORDER BY added_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"q": f"%{needle}%"},
+            )
+        except Exception as e:
+            log.warning("library search via library_tracks failed: %s", e)
+            return []
+        row = result.first()
+        if row is None:
+            return []
+        return [{
+            "title": row[0],
+            "artist": row[1],
+            "album": row[2],
+            "file": row[3],
+        }]
+
+    async def _library_hits(
+        self, query: str, ctx: Context, session: AsyncSession | None
+    ) -> list[dict[str, Any]]:
+        """Look up ``query``, preferring MPD but never requiring it.
+
+        "Do I have X?" is a metadata question, not playback: a room whose
+        satellite has never connected has no MPD daemon yet, and letting
+        ``MPDNotProvisioned`` reach the router makes it answer with the
+        no-speakers *playback* wording (F-V007). Fall back to
+        ``library_tracks`` instead, which holds the same catalogue.
+        """
+        try:
+            return await self.search_library(query, ctx.room_id)
+        except MPDNotProvisioned:
+            log.info(
+                "no MPD provisioned for room=%r; answering library "
+                "lookup from library_tracks", ctx.room_id,
+            )
+            return await self._db_search(query, session)
+
     async def _search(self, query: str, ctx: Context, session: AsyncSession) -> Response:
         if not query:
             return Response(
@@ -248,7 +316,7 @@ class LibraryHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        hits = await self.search_library(query, ctx.room_id)
+        hits = await self._library_hits(query, ctx, session)
         if not hits:
             return Response(
                 text=f"I didn't find {query} in your library.",
@@ -276,7 +344,7 @@ class LibraryHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        hits = await self.search_library(query, ctx.room_id)
+        hits = await self._library_hits(query, ctx, session)
         if hits:
             song = hits[0]
             detail = song.get("title") or song.get("file", "").split("/")[-1]
