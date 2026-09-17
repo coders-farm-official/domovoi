@@ -698,8 +698,10 @@ class Handler(ABC):
   questions. Keep it a cheap regex and err generous: a false positive just
   offers the tool as before; a false negative silently drops a real command
   to the QA fallthrough. Core examples: `double_check` (needs a verification
-  word), `news` (needs a news word), `calculator` (withheld on who/why/where
-  questions with no digit). Check the effect with `scripts/eval_routing.py`.
+  word), `news` (needs a news word), `calculator` and `library` (both withheld
+  on who/why/where questions with no digit / no library cue — the shared regex
+  lives in `handlers/shared/tool_gate.py`). Check the effect with
+  `scripts/eval_routing.py`.
 
 ### 4.3 Workers and startup hooks
 
