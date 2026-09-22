@@ -333,11 +333,46 @@ async def cancel_pull(job_id: int) -> dict[str, Any]:
 # ─── Pull task ───────────────────────────────────────────────────────────────
 
 
+def _normalize_model_name(name: str) -> str:
+    """Canonical form for comparing a requested pull name with ``/api/tags``:
+    Ollama lists ``llama3.2`` as ``llama3.2:latest`` and strips the default
+    registry/namespace, so do the same to both sides before comparing."""
+    n = name.strip().lower()
+    for prefix in ("registry.ollama.ai/library/", "registry.ollama.ai/", "library/"):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+    if ":" not in n.rsplit("/", 1)[-1]:
+        n = f"{n}:latest"
+    return n
+
+
+async def _confirm_installed(model: str) -> bool | None:
+    """After a pull stream ends: is ``model`` actually on disk? ``True`` /
+    ``False`` from Ollama's installed list; ``None`` when the list is empty
+    (Ollama unreachable — can't tell either way, same posture as
+    :func:`set_active`)."""
+    tags = await ollama_client.list_models()
+    raw = [m.get("name") or m.get("model") for m in tags if isinstance(m, dict)]
+    names = {_normalize_model_name(str(n)) for n in raw if n}
+    if not names:
+        return None
+    return _normalize_model_name(model) in names
+
+
 async def _run_pull(job_id: int, model: str) -> None:
     """Stream the Ollama pull and persist throttled progress to ``model_jobs``,
     pg_notify-ing each write so the browser's progress bar tracks live. Marks
     the job done / failed / cancelled at the end. Exceptions never escape —
-    they land on the row as ``error``."""
+    they land on the row as ``error``.
+
+    A failed pull is NOT an HTTP failure: Ollama answers ``POST /api/pull``
+    with 200 and reports the problem as an error LINE on the stream —
+    ``{"error": "pull model manifest: file does not exist"}`` for a model
+    that isn't in the registry. That line has to be read out here; before
+    it was, the loop ran off the end of a failed stream and the job landed
+    ``done / 100%`` for a model that was never installed (F-011). Belt and
+    braces, the model must also show up in Ollama's installed list once the
+    stream ends."""
     last_pct: int | None = None
     last_text: str | None = None
     try:
@@ -345,12 +380,19 @@ async def _run_pull(job_id: int, model: str) -> None:
         async for chunk in ollama_client.pull_model(model):
             if job_id in _cancelled:
                 raise asyncio.CancelledError()
+            err = chunk.get("error")
+            if err:
+                raise RuntimeError(str(err))
             status_text = str(chunk.get("status") or "")[:200]
             pct = ollama_client.pct_from_progress(chunk)
             # Throttle: only write when the visible state actually moved.
             if pct != last_pct or status_text != last_text:
                 last_pct, last_text = pct, status_text
                 await _update_progress(job_id, pct, status_text)
+        if await _confirm_installed(model) is False:
+            raise RuntimeError(
+                f"{model} is not in Ollama's installed list after the pull ended"
+            )
         await _finish(job_id, "done", pct=100)
     except asyncio.CancelledError:
         await _finish(job_id, "cancelled")
