@@ -134,11 +134,19 @@ class Settings(BaseSettings):
     # token for a room claims it (a `satellite_pairings` row is written with
     # the token's sha256); thereafter that room's WS `hello` must carry the
     # matching token or the connection is refused. A room that has never
-    # paired still accepts a tokenless `hello` (older/unpaired satellite) —
-    # DEFAULT FALSE keeps every existing tokenless satellite working while
-    # still fully protecting any room that HAS paired. Flip this to True to
-    # require pairing for EVERY room (a tokenless hello for an unpaired room
-    # is then refused too) — a hardening posture for an all-paired fleet.
+    # paired still accepts a tokenless `hello` (older/unpaired satellite).
+    #
+    # True requires pairing for EVERY room: a tokenless hello is refused,
+    # and the first pairing for an unpaired room is PARKED for a human to
+    # approve by the satellite's six-digit code, whether or not the device
+    # volunteers a token or a code (CORE-9).
+    #
+    # The FIELD default stays False and must: an install that upgrades into
+    # this code has satellites in the house already, and a default that
+    # flipped under them would refuse the fleet on the next restart. A
+    # FRESH install gets `SATELLITE_PAIRING_STRICT=true` written into its
+    # .env instead (domovoi/.env.example, copied by scripts/dev.sh), which
+    # is the one moment nothing is paired yet.
     satellite_pairing_strict: bool = False
     # How long a freshly-connected /v1/stream socket gets to send its `hello`
     # before the server closes it. NOTHING about a room exists until a hello

@@ -242,12 +242,82 @@ async def test_case5_no_token_no_row_refuses_when_strict(
 
 
 @pytest.mark.asyncio
-async def test_strict_still_pairs_a_token_bearing_first_connect(
+async def test_strict_parks_a_token_bearing_first_connect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Strict mode only refuses TOKENLESS unpaired rooms — a satellite that
-    presents a token still pairs (case 1), so an all-paired fleet bootstraps."""
+    """CORE-9: in strict mode a token is not a decision. Every first
+    pairing for an unpaired room parks for a human, and the core mints a
+    code for a device that brought none so there is something to match —
+    the device says it, the operator types it."""
     monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    sess = _session("den")
+    accepted = await sess._validate_pairing({"pairing_token": TOKEN})
+    assert accepted is False
+    frame = _frame(sess)
+    assert frame["reason"] == "awaiting_approval"
+    assert len(frame["code"]) == 6 and frame["code"].isdigit()
+    # Parked, not paired.
+    async with SessionLocal() as s:
+        assert await SatellitePairingRepository(s).get_pairing("den") is None
+        parked = await SatelliteApprovalRepository(s).get("den")
+    assert parked["token_hash"] == token_sha256(TOKEN)
+    assert parked["code"] == frame["code"]
+
+
+@pytest.mark.asyncio
+async def test_strict_parks_a_code_bearing_first_connect_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The portal path is unchanged by strict mode — it already parked."""
+    monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    sess = _session("den")
+    accepted = await sess._validate_pairing(
+        {"pairing_token": TOKEN, "approval_code": "481502"}
+    )
+    assert accepted is False
+    assert _frame(sess)["code"] == "481502"
+
+
+@pytest.mark.asyncio
+async def test_strict_refuses_a_tokenless_hello_rather_than_parking_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parking binds a request to a token hash. A hello with no token has
+    nothing to bind, so approving it later could not mean anything — it is
+    refused outright, and nothing is written."""
+    monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    sess = _session("den")
+    assert await sess._validate_pairing({}) is False
+    assert _frame(sess)["reason"] == "pairing_rejected"
+    async with SessionLocal() as s:
+        assert await SatelliteApprovalRepository(s).list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_strict_lets_an_approved_room_back_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of parking: once a human approves, the device's own
+    token gets it in, and a different token still does not."""
+    monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    first = _session("den")
+    await first._validate_pairing({"pairing_token": TOKEN})
+    code = _frame(first)["code"]
+
+    async with session_scope() as s:
+        assert await SatelliteApprovalRepository(s).approve("den", code) == "approved"
+
+    again = _session("den")
+    assert await again._validate_pairing({"pairing_token": TOKEN}) is True
+    impostor = _session("den")
+    assert await impostor._validate_pairing({"pairing_token": OTHER_TOKEN}) is False
+
+
+@pytest.mark.asyncio
+async def test_lenient_still_pairs_a_token_bearing_first_connect() -> None:
+    """With strict off, a hand-provisioned satellite that brings a token
+    and no code keeps the historical trust-on-first-use claim — upgrading
+    the server must not strand a fleet that predates approvals."""
     sess = _session("den")
     accepted = await sess._validate_pairing({"pairing_token": TOKEN})
     assert accepted is True

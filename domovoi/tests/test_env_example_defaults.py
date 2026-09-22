@@ -57,3 +57,42 @@ def test_env_example_does_not_default_to_a_cloud_engine() -> None:
     """Belt and braces: even if Settings changes, the shipped example must
     not send every spoken response off-box by default."""
     assert _example_values().get("TTS_ENGINE") != "edge"
+
+
+# ─── Where the example deliberately DISAGREES with Settings (CORE-9) ──────
+#
+# Strict satellite pairing is the one setting where "what a fresh box
+# runs" and "what the code defaults to" are meant to differ. A fresh box
+# has nothing paired, so it can start closed. A box that upgrades into
+# this code has satellites in the house already, and a field default that
+# flipped under it would park the whole fleet on the next restart.
+
+SCRIPTS = REPO_ROOT / "domovoi" / "scripts"
+
+
+def test_a_fresh_install_starts_with_strict_satellite_pairing() -> None:
+    env = _example_values()
+    assert env.get("SATELLITE_PAIRING_STRICT") == "true", (
+        ".env.example no longer starts a fresh install with strict pairing"
+    )
+
+
+def test_the_field_default_stays_lenient_for_installs_that_upgrade() -> None:
+    assert Settings.model_fields["satellite_pairing_strict"].default is False
+
+
+def test_the_dev_scripts_create_an_env_only_when_there_is_none() -> None:
+    """The scripts may bootstrap a missing .env from the example. They must
+    never rewrite one that exists — that file is the household's posture,
+    including the satellites it has already let in."""
+    sh = (SCRIPTS / "dev.sh").read_text(encoding="utf-8").splitlines()
+    guard = next(i for i, l in enumerate(sh) if "! -f" in l and ".env" in l)
+    copies = [i for i, l in enumerate(sh) if l.strip().startswith("cp ")]
+    assert copies == [guard + 1], "dev.sh copies .env outside the missing-file guard"
+
+    ps1 = (SCRIPTS / "dev.ps1").read_text(encoding="utf-8").splitlines()
+    guard = next(
+        i for i, l in enumerate(ps1) if "Test-Path" in l and "-not" in l
+    )
+    copies = [i for i, l in enumerate(ps1) if "Copy-Item" in l]
+    assert copies == [guard + 1], "dev.ps1 copies .env outside the missing-file guard"

@@ -4170,7 +4170,12 @@ class Satellite:
             # screen belongs to the unit in front of them.
             if payload.get("reason") == "awaiting_approval":
                 _setup_status("awaiting-approval")
-                code = _effective_approval_code()
+                # The server sends the code that is ON FILE for this
+                # request, which is what the operator will be asked for.
+                # It is authoritative over the sidecar: a device that
+                # never ran the setup portal has no code of its own, and
+                # a retry must not say a code the dashboard has replaced.
+                code = _remember_approval_code(payload.get("code"))
                 if code:
                     _setup_status("say-code", code)
                 log.info(
@@ -4983,6 +4988,27 @@ def _effective_approval_code() -> str | None:
     except OSError:
         return None
     return code or None
+
+
+def _remember_approval_code(offered: object) -> str | None:
+    """The code to say, given what the server just sent.
+
+    The server's code wins: it is the one on the pending request, and so
+    the one the operator will be asked to type. A device that never ran
+    the setup portal has no code of its own at all. Persisting it keeps
+    the device saying the same code across a reboot, and costs nothing if
+    the config dir is read-only — the code still gets said this time."""
+    code = offered.strip() if isinstance(offered, str) else ""
+    if not code:
+        return _effective_approval_code()
+    if code != _effective_approval_code():
+        try:
+            APPROVAL_CODE_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
+            APPROVAL_CODE_SIDECAR.write_text(code + "\n", encoding="utf-8")
+            APPROVAL_CODE_SIDECAR.chmod(0o600)
+        except OSError as e:
+            log.debug("could not persist the approval code: %s", e)
+    return code
 
 
 def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:

@@ -323,24 +323,35 @@ so it cannot listen in or speak into the room. A room that has never paired
 still accepts a tokenless connection, so **existing tokenless satellites keep
 working with zero changes** — the default is zero-breakage.
 
-**The first-connect race (the TOFU caveat).** Because the *first* token wins,
-there is a one-time window: for a room that has never paired, whoever
-connects first — your real satellite or an attacker already on your LAN who
-raced it — claims the room. This is the standard trust-on-first-use trade:
-after the legitimate device pairs, the impostor is locked out; but if an
-attacker pairs *first*, your real satellite is the one refused (and you'd
-notice — the room won't work — and reset the pairing). Pairing narrows the
-threat from "any LAN host, any time" to "an attacker who is already on your
-LAN at the exact moment a room first pairs." On a trusted home LAN that
-window is normally the moment you provision the Pi.
+**The first-connect race (the TOFU caveat).** With strict pairing OFF, the
+*first* token wins, so there is a one-time window: for a room that has never
+paired, whoever connects first — your real satellite or an attacker already
+on your LAN who raced it — claims the room. This is the standard
+trust-on-first-use trade: after the legitimate device pairs, the impostor is
+locked out; but if an attacker pairs *first*, your real satellite is the one
+refused (and you'd notice — the room won't work — and reset the pairing).
+Pairing narrows the threat from "any LAN host, any time" to "an attacker who
+is already on your LAN at the exact moment a room first pairs." On a trusted
+home LAN that window is normally the moment you provision the Pi.
 
-**Strict mode.** Set `SATELLITE_PAIRING_STRICT=true` (default `false`; also
-editable from the dashboard's satellite Settings → Security, restart-tier) to
-require a token for **every** room — a tokenless `hello` for an unpaired room
-is then refused too. This removes the first-connect race for *new* rooms (an
-unpaired room can't be claimed tokenlessly), at the cost of breaking any
-older tokenless satellite. Turn it on only once every satellite in your
-fleet has paired.
+**Strict mode (the default for a new install).** `SATELLITE_PAIRING_STRICT`
+is written as `true` into a FRESH `.env` (from `domovoi/.env.example`), and
+is also editable from the dashboard's satellite Settings → Security
+(restart-tier). It does two things:
+
+* a tokenless `hello` is refused, for every room;
+* **every** first pairing for an unpaired room is parked under *waiting for
+  approval* — with or without a token, with or without a setup code. A
+  device that brings no code is given one by the server and says it out
+  loud. That closes the first-connect race completely: connecting first
+  wins you a row on a dashboard, not a room.
+
+An install that UPGRADES into this keeps whatever it already had: the
+field default stays `false` and an existing `.env` is never rewritten,
+because a household running hand-provisioned satellites would otherwise
+find its fleet parked after a restart. Turn it on there once every
+satellite has paired (or approve them one at a time — the code is on the
+device).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD

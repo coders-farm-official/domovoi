@@ -1068,13 +1068,20 @@ class StreamSession:
         stored — reusing ``admin_auth.token_sha256`` — so the raw token never
         leaves the Pi's sidecar. The five cases:
 
-          1. token, no pairing row  -> PAIR (claim the room), accept
+          1. token, no pairing row  -> PARK for approval when the device
+                                       brings an approval code, or when
+                                       ``settings.satellite_pairing_strict``
+                                       is on (every first pairing is then a
+                                       decision someone makes); otherwise
+                                       PAIR (claim the room), accept
           2. token, row hash match  -> accept, bump last_seen_at
           3. token, row hash MISMATCH -> REFUSE (impostor / wrong token)
           4. no token, row EXISTS    -> REFUSE (a paired room requires its token)
           5. no token, no row        -> accept (older/unpaired satellite),
                                         UNLESS ``settings.satellite_pairing_strict``
-                                        is on, then REFUSE.
+                                        is on, then REFUSE. Parking needs a
+                                        token to bind to, so a tokenless
+                                        hello is refused rather than parked.
 
         On a REFUSE we send a text ``error`` frame ({reason:"pairing_rejected"})
         and provision/relay NOTHING — the caller closes the socket.
@@ -1111,9 +1118,19 @@ class StreamSession:
                         # keeps the historical trust-on-first-use behaviour —
                         # upgrading the server must not strand satellites that
                         # were provisioned by hand.
+                        #
+                        # CORE-9 — unless strict pairing is on, and then
+                        # EVERY first pairing for an unpaired room is a
+                        # decision a person makes: bringing a token proves
+                        # only that you have a token, not that you are the
+                        # device in that room. The core mints a code for a
+                        # device that brought none, and the device says it
+                        # out loud. Fresh installs bootstrap strict (see
+                        # domovoi/.env.example); existing ones keep the
+                        # value they already have.
                         code = ctrl.get("approval_code")
                         code = code.strip() if isinstance(code, str) else None
-                        if code:
+                        if code or settings.satellite_pairing_strict:
                             return await self._park_for_approval(
                                 s, ctrl, token_hash=token_hash, code=code
                             )
