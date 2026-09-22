@@ -85,6 +85,14 @@ with a reason.
 
 ### 1.3 Realtime WebSockets
 
+**Host and Origin.** Both processes answer only to a `Host` that names this
+box on the LAN — a private/loopback IP, a single-label name, anything under
+`.local` / `.lan` / `.home.arpa` / `.internal`, or a name listed in
+`TRUSTED_HOSTS`. Anything else gets `400` before routing (the DNS-rebinding
+guard). WebSocket upgrades are judged on `Origin` instead, against the same
+LAN pattern the dashboard's CORS policy uses; an absent `Origin` passes,
+which is how satellites and every non-browser client connect.
+
 | Socket | Process | Purpose |
 |---|---|---|
 | `WS /ws/state` | web :6369 | Dashboard state push. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...]}`; no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |

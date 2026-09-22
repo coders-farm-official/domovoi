@@ -64,6 +64,7 @@ from domovoi.capabilities import CAPABILITIES  # noqa: E402
 from domovoi.now_playing import NOW_PLAYING  # noqa: E402
 from domovoi.router import route  # noqa: E402
 from domovoi.streaming import StreamSession  # noqa: E402
+from domovoi.transport_guard import LanHostMiddleware, origin_allowed  # noqa: E402
 from domovoi.workers.timer_watcher import TimerWatcher  # noqa: E402
 from domovoi.workers.playback_state_sweeper import PlaybackStateSweeper  # noqa: E402
 from domovoi.workers.media_plays_pruner import MediaPlaysPruner  # noqa: E402
@@ -559,6 +560,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
+
+# CORE-8. The core has no browser UI of its own, which is exactly why it
+# was reachable: a page anywhere on the internet could point a name it
+# owns at this box (DNS rebinding) and then read /v1/admin/snapshot,
+# /v1/admin/hardware and the pre-setup config from the victim's browser as
+# same-origin. Answer only to names that mean this machine on this LAN.
+app.add_middleware(LanHostMiddleware)
 
 # Plugin management API (install/confirm/enable/disable/uninstall/upgrade)
 # — every mutation depends on domovoi.auth.require_admin (structurally
@@ -3761,16 +3769,6 @@ async def admin_library_enrich() -> dict[str, Any]:
 # ─── Streaming ────────────────────────────────────────────────────────────
 
 
-@app.websocket("/v1/stream/{room_id}")
-async def stream(ws: WebSocket, room_id: str) -> None:
-    """Bidirectional audio + control stream for Pi satellites.
-
-    See `domovoi/streaming.py` for the wire protocol.
-    """
-    session = StreamSession(ws, room_id)
-    await session.run()
-
-
 async def _refuse_ws(ws: WebSocket, code: str, detail: str) -> None:
     """Turn a WS upgrade away with nothing created.
 
@@ -3791,6 +3789,29 @@ async def _refuse_ws(ws: WebSocket, code: str, detail: str) -> None:
     except Exception:  # noqa: BLE001
         pass
     log.warning("ws upgrade refused (%s): %s", code, detail)
+
+
+@app.websocket("/v1/stream/{room_id}")
+async def stream(ws: WebSocket, room_id: str) -> None:
+    """Bidirectional audio + control stream for Pi satellites.
+
+    See `domovoi/streaming.py` for the wire protocol.
+
+    A browser page may open a WebSocket to any host — the same-origin
+    policy does not apply to upgrades — so ``Origin`` is checked here
+    against the LAN regex before a session exists. Satellites and every
+    other non-browser client send no ``Origin``, which passes; the
+    credential that actually authenticates a satellite is still the
+    pairing token in its ``hello`` frame.
+    """
+    if not origin_allowed(ws.headers.get("origin")):
+        await _refuse_ws(
+            ws, "cross_origin",
+            f"/v1/stream/{room_id} from Origin {ws.headers.get('origin')!r}",
+        )
+        return
+    session = StreamSession(ws, room_id)
+    await session.run()
 
 
 @app.websocket("/v1/dropin/{room_id}")
@@ -3814,6 +3835,12 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
+    if not origin_allowed(ws.headers.get("origin")):
+        await _refuse_ws(
+            ws, "cross_origin",
+            f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
+        )
+        return
     if not await admin_auth_mod.websocket_device_ok(ws):
         await _refuse_ws(
             ws, "unauthorized",

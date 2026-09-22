@@ -101,6 +101,33 @@ not the same as acting in a room. The web dashboard forwards whatever the
 browser presented on every hop to the core, so signing in is enough there;
 the Android app and the satellites carry the token itself.
 
+### Which names the server answers to
+
+Both processes refuse an HTTP request whose `Host` header is not a name
+that can only mean this box on this LAN, with `400`, before routing. This
+is the DNS-rebinding guard: a page on the public internet can point a name
+it owns at `127.0.0.1`, and from the browser's point of view the result is
+same-origin — so CORS never sees it, and nothing but the `Host` header can
+tell the difference.
+
+What passes: a private, loopback or link-local IP; a single-label name
+(`localhost`, `beelink`, a container name — a bare label cannot be bought,
+because public DNS names always contain a dot); anything under `.local`,
+`.lan`, `.home.arpa`, `.internal`; and anything the operator lists in
+`TRUSTED_HOSTS`. A request with no `Host` at all passes, because rebinding
+needs a name. Set `TRUSTED_HOSTS` if you reach Domovoi through a name of
+your own — a reverse proxy, a tailnet — or it will answer you with a 400.
+
+WebSocket upgrades are judged on `Origin` instead, in the route: a page may
+open a socket to any host it can reach, exempt from the same-origin policy,
+and `Origin` is the only thing that says which page did. Both
+`WS /v1/stream/{room_id}` and `WS /v1/dropin/{room_id}` refuse an `Origin`
+outside the LAN regex — the same regex the web process enforces for CORS,
+so a page that cannot call the REST API cannot open a socket either. An
+**absent** `Origin` passes, and must: the satellites, the Android app and
+every command-line client send none, and only a browser is bound by the
+rule this enforces.
+
 ### Daily tier (LAN-trust)
 
 The reads that tell a client what this Domovoi is and let a satellite sync

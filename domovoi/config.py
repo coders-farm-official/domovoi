@@ -13,6 +13,16 @@ _ENV_FILE = Path(__file__).resolve().parent / ".env"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
+    # Extra host names this server answers to, comma-separated (e.g.
+    # "domovoi.example.net,domovoi.tailnet.ts.net"). Both processes refuse
+    # a request whose Host header is not a LAN name — a private/loopback
+    # IP, a single-label name, or something under .local/.lan/.home.arpa/
+    # .internal — because a public name pointed at this box is how a
+    # remote page reads a LAN device through the victim's browser. Leave
+    # empty unless you reach Domovoi through a name of your own; a name
+    # listed here is also accepted as a browser Origin.
+    trusted_hosts: str = ""
+
     # Host port 6432, not 5432 — the compose file publishes the Domovoi
     # Postgres on 6432 so it can coexist with any other Postgres already
     # bound to the default port on the same machine.

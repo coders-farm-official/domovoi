@@ -281,3 +281,79 @@ async def test_stream_upgrade_is_not_device_gated(monkeypatch):
     await asyncio.wait_for(stream(up.ws, "kitchen"), timeout=5)
     assert up.accepted
     assert up.error_code() != "unauthorized"
+
+
+# ─── CORE-8: Origin on both upgrades ──────────────────────────────────────
+#
+# The same-origin policy does not apply to WebSocket upgrades: any page,
+# anywhere, may open one to any host it can reach. `Origin` is the only
+# thing that says which page did — so it is the whole check, and it has to
+# be made before a session exists on either route.
+
+
+def _cross_origin(up: Upgrade) -> bool:
+    return up.close_code == 1008 and up.error_code() == "cross_origin"
+
+
+@pytest.mark.parametrize("origin", ["https://attacker.example", "null"])
+async def test_dropin_upgrade_from_a_foreign_origin_is_refused(monkeypatch, origin):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    app = make_app_state()
+    # Even WITH a valid household token: a page that stole it still may
+    # not open the socket from off-LAN.
+    up = Upgrade(headers={**device(), "origin": origin}, app=app)
+    await _dropin(up)
+    assert _cross_origin(up)
+    assert app.state.active_dropins == {}
+
+
+@pytest.mark.parametrize("origin", ["https://attacker.example", "null"])
+async def test_stream_upgrade_from_a_foreign_origin_is_refused(monkeypatch, origin):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    app = make_app_state()
+    up = Upgrade(headers={"origin": origin}, app=app)
+    up.disconnect()
+    await asyncio.wait_for(stream(up.ws, "kitchen"), timeout=5)
+    assert _cross_origin(up)
+    assert app.state.active_sessions == {}
+
+
+@pytest.mark.parametrize(
+    "origin", ["http://192.168.0.117:6369", "http://localhost:6369", "https://domovoi.local"]
+)
+async def test_lan_origins_reach_the_next_gate(monkeypatch, origin):
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    up = Upgrade(headers={**device(), "origin": origin})
+    await _dropin(up)
+    assert up.error_code() == "target_offline"
+
+
+async def test_an_absent_origin_passes_on_both_routes(monkeypatch):
+    """Satellites send no Origin. If this ever fails, every Pi in the
+    house is off the air."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+
+    up = Upgrade(headers=device())
+    await _dropin(up)
+    assert up.error_code() == "target_offline"
+
+    up = Upgrade()
+    up.disconnect()
+    await asyncio.wait_for(stream(up.ws, "kitchen"), timeout=5)
+    assert up.accepted
+    assert up.error_code() != "cross_origin"
+
+
+async def test_the_origin_check_runs_before_the_token_check(monkeypatch):
+    """Order matters for what the refusal TELLS a caller: a page that
+    should not be talking to us at all learns nothing about whether the
+    token it presented was any good."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    up = Upgrade(headers={"origin": "https://attacker.example"})
+    await _dropin(up)
+    assert up.error_code() == "cross_origin"
