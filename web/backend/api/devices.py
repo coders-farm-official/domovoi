@@ -12,13 +12,16 @@ its row, seeding ``name`` from whatever the client can tell about itself
 is editable afterwards — by the device itself under LAN trust, or by an
 admin from the roster.
 
-**Trust posture.** Registration and rename are daily-tier (open on the LAN),
-matching resume positions and the voice denylist. A device id is
-SELF-ASSERTED: nothing stops a client claiming someone else's. That is why
-:mod:`web.backend.api.music_queue` describes its blocklist as household
-policy rather than a security boundary, and why renaming can't be used to
-escape a block (blocks match the id as well as the name). Listing the roster
-is admin-gated, because it's an inventory of who's on the network.
+**Trust posture.** Registration and rename are DEVICE tier (REV-1): a valid
+``X-Device-Token`` or an admin Bearer, with the pre-setup LAN grace kept so a
+fresh install can introduce itself before an admin password exists. WITHIN
+the household a device id is still SELF-ASSERTED: nothing stops one paired
+client claiming another's id. That is why :mod:`web.backend.api.music_queue`
+describes its blocklist as household policy rather than a security boundary,
+and why renaming can't be used to escape a block (blocks match the id as well
+as the name). What the credential changed is who gets as far as asserting an
+id at all. Listing the roster is admin-gated, because it's an inventory of
+who's on the network.
 """
 
 from __future__ import annotations
@@ -31,12 +34,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_read
+from domovoi.admin_auth import require_admin_read, require_device
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
+
+DEVICE = [Depends(require_device)]
 
 # Device ids are minted by clients, so the server decides what shape it will
 # store: a conservative slug charset keeps them safe to echo into toasts and
@@ -102,7 +107,7 @@ def _row_to_device(r: Any) -> Device:
 _COLUMNS = "device_id, name, platform, user_agent, first_seen_at, last_seen_at"
 
 
-@router.post("/register", response_model=Device)
+@router.post("/register", response_model=Device, dependencies=DEVICE)
 async def register_device(payload: DeviceRegistration) -> Device:
     """Upsert this client's row and bump ``last_seen_at``.
 
@@ -141,10 +146,10 @@ async def register_device(payload: DeviceRegistration) -> Device:
     return _row_to_device(result)
 
 
-@router.patch("/{device_id}", response_model=Device)
+@router.patch("/{device_id}", response_model=Device, dependencies=DEVICE)
 async def rename_device(device_id: str, payload: DeviceRename) -> Device:
-    """Rename a device. Open under LAN trust, like registration — and
-    harmless for the blocklist, which matches ids too."""
+    """Rename a device. Device tier, like registration — and harmless for
+    the blocklist, which matches ids too."""
     ident = _validate_id(device_id)
     name = _clean_name(payload.name)
     if not name:
