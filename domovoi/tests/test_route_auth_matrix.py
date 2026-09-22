@@ -93,7 +93,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/music/resume/{room_id}"): _KIOSK,
     ("web", "POST", "/api/music/stop/{room_id}"): _KIOSK,
     ("web", "POST", "/api/music/skip/{room_id}"): _KIOSK,
-    # ── web: daily tier — device tier in wave 2 (B2 / B4) ─────────────
+    # ── web: more proxies the core decides (auth forwarded) ───────────
     # CORE-2: the core routes behind these are gated now (start takes an
     # admin Bearer, end the household token) and this hop forwards the
     # caller's credentials, so an ungated proxy cannot open a call.
