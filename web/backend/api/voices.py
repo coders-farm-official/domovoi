@@ -22,11 +22,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
+from domovoi.admin_auth import require_admin_mutation
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
 from domovoi.db.repositories import VoicesRepository
@@ -123,7 +124,10 @@ async def sample_voice(voice_id: int) -> Response:
     )
 
 
-@router.post("/edge", response_model=Voice, status_code=201)
+@router.post(
+    "/edge", response_model=Voice, status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def register_edge_voice(payload: EdgeVoiceCreate) -> Voice:
     """Register a Microsoft Edge cloud voice by its voice id (e.g.
     ``en-US-AriaNeural``). No file — the engine downloads on demand."""
@@ -144,7 +148,10 @@ async def register_edge_voice(payload: EdgeVoiceCreate) -> Voice:
                              "model_ref": voice_id, "is_default": payload.set_default})
 
 
-@router.post("/piper", response_model=Voice, status_code=201)
+@router.post(
+    "/piper", response_model=Voice, status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def upload_piper_voice(
     name: str = Form(..., min_length=1, max_length=80),
     set_default: bool = Form(False),
@@ -196,7 +203,7 @@ async def upload_piper_voice(
     return Voice(id=new_id, name=name, engine="piper", model_ref=slug, is_default=set_default)
 
 
-@router.patch("/{voice_id}", response_model=Voice)
+@router.patch("/{voice_id}", response_model=Voice, dependencies=[Depends(require_admin_mutation)])
 async def patch_voice(voice_id: int, payload: VoicePatch) -> Voice:
     if payload.name is None and not payload.set_default:
         raise HTTPException(status_code=400, detail="no fields to patch")
@@ -219,7 +226,7 @@ async def patch_voice(voice_id: int, payload: VoicePatch) -> Voice:
     raise HTTPException(status_code=404, detail=f"voice {voice_id} not found")
 
 
-@router.delete("/{voice_id}", status_code=204)
+@router.delete("/{voice_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
 async def delete_voice(voice_id: int) -> None:
     async with session_scope() as s:
         removed = await VoicesRepository(s).delete(voice_id)

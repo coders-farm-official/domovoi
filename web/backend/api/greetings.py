@@ -14,10 +14,11 @@ render time, so name greetings track BOT_NAME.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
+from domovoi.admin_auth import require_admin_mutation
 from domovoi.db.repositories import ClientGreetingsRepository
 from web.backend.db import session_scope
 from web.backend.domovoi_client import post_admin
@@ -67,7 +68,10 @@ async def list_greetings() -> list[Greeting]:
     return [Greeting(id=i, text=t, category=c, enabled=e) for i, t, c, e in rows]
 
 
-@router.post("", response_model=Greeting, status_code=201)
+@router.post(
+    "", response_model=Greeting, status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def create_greeting(payload: GreetingCreate) -> Greeting:
     category = _check_category(payload.category)
     body = payload.text.strip()
@@ -86,7 +90,10 @@ async def create_greeting(payload: GreetingCreate) -> Greeting:
     return Greeting(id=new_id, text=body, category=category, enabled=True)
 
 
-@router.patch("/{greeting_id}", response_model=Greeting)
+@router.patch(
+    "/{greeting_id}", response_model=Greeting,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def patch_greeting(greeting_id: int, payload: GreetingPatch) -> Greeting:
     category = _check_category(payload.category) if payload.category is not None else None
     body = payload.text.strip() if payload.text is not None else None
@@ -117,7 +124,7 @@ async def patch_greeting(greeting_id: int, payload: GreetingPatch) -> Greeting:
     raise HTTPException(status_code=404, detail=f"greeting {greeting_id} not found")
 
 
-@router.delete("/{greeting_id}", status_code=204)
+@router.delete("/{greeting_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
 async def delete_greeting(greeting_id: int) -> None:
     async with session_scope() as s:
         deleted = await ClientGreetingsRepository(s).delete(greeting_id)

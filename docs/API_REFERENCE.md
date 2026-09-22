@@ -450,7 +450,10 @@ All **Open**.
 
 ### 3.11 Voices and greetings
 
-All **Open**. Mutations trigger the core's background clip re-render
+Reads are **Open**; every mutation (`POST` / `PATCH` / `DELETE`) is
+**Admin (Bearer)** via `require_admin_mutation` — these rows decide what
+every satellite says and in whose voice, and a Piper upload puts a model
+file on the server. Mutations trigger the core's background clip re-render
 (`/v1/admin/sounds/regenerate`) so satellites pick up new audio.
 
 | Method & path | Request | Purpose |
@@ -468,7 +471,10 @@ All **Open**. Mutations trigger the core's background clip re-render
 
 ### 3.12 Wake words
 
-All **Open**. Recording, scoring, and pushing proxy to the core (which owns
+Reads are **Open**; every mutation (`POST` / `PATCH` / `DELETE`, including
+clip selection and deletion and the record / score / push proxies) is
+**Admin (Bearer)** via `require_admin_mutation` — this surface decides what
+the house listens for. Recording, scoring, and pushing proxy to the core (which owns
 the satellite sessions, openWakeWord, and the model files); training is
 picked up by the core's background trainer. The default wake word is
 `hey_jarvis`; this surface is how you train a custom one (e.g. "Hey Domovoi").

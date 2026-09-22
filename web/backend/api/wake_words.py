@@ -39,12 +39,13 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from domovoi.admin_auth import require_admin_mutation
 from domovoi import wake_clip_quality as wq
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
@@ -218,7 +219,10 @@ async def list_wake_words() -> list[WakeWord]:
     return [_to_model(r) for r in rows]
 
 
-@router.post("", response_model=WakeWord, status_code=201)
+@router.post(
+    "", response_model=WakeWord, status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     """Register a new wake word in the ``recording`` status. The slug is
     derived from the name (``voice_slug``) and is the load-bearing runtime
@@ -252,7 +256,7 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     })
 
 
-@router.post("/{wake_word_id}/record/start")
+@router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_mutation)])
 async def record_start(wake_word_id: int, body: RoomBody):
     """Tell a connected satellite to start recording positive clips for
     this wake word. Proxies the Domovoi server, which owns the live Pi
@@ -265,7 +269,7 @@ async def record_start(wake_word_id: int, body: RoomBody):
     return bridge_response(status, payload)
 
 
-@router.post("/{wake_word_id}/record/stop")
+@router.post("/{wake_word_id}/record/stop", dependencies=[Depends(require_admin_mutation)])
 async def record_stop(wake_word_id: int, body: RoomBody):
     """Stop an in-progress recording on ``room_id`` so the Pi resumes its
     normal wake loop. Pass-through 404 when the room isn't connected."""
@@ -276,7 +280,10 @@ async def record_stop(wake_word_id: int, body: RoomBody):
     return bridge_response(status, payload)
 
 
-@router.post("/{wake_word_id}/train", response_model=WakeWord)
+@router.post(
+    "/{wake_word_id}/train", response_model=WakeWord,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def train_wake_word(wake_word_id: int) -> WakeWord:
     """Promote a ``recording`` wake word to ``training`` — picked up by the
     trainer worker (if enabled). Refuses (409) a row that's missing, past
@@ -375,7 +382,7 @@ async def clip_audio(
     return FileResponse(target, media_type="audio/wav", filename=target.name)
 
 
-@router.patch("/{wake_word_id}/clips/{name}")
+@router.patch("/{wake_word_id}/clips/{name}", dependencies=[Depends(require_admin_mutation)])
 async def set_clip_selected(wake_word_id: int, name: str, body: ClipSelectBody) -> dict:
     """Include/exclude a single clip from training (marks it user-set so a
     later re-analyze won't override the choice)."""
@@ -390,7 +397,7 @@ async def set_clip_selected(wake_word_id: int, name: str, body: ClipSelectBody) 
     return {"name": name, "selected": body.selected}
 
 
-@router.post("/{wake_word_id}/clips/selection")
+@router.post("/{wake_word_id}/clips/selection", dependencies=[Depends(require_admin_mutation)])
 async def bulk_select_clips(wake_word_id: int, body: ClipSelectionBody) -> dict:
     """Bulk include/exclude — all clips, an explicit ``names`` subset, and/or
     only those with a given ``only_verdict``. Returns the new selected count."""
@@ -415,7 +422,7 @@ async def bulk_select_clips(wake_word_id: int, body: ClipSelectionBody) -> dict:
     return {"changed": changed, "selected_count": sel}
 
 
-@router.post("/{wake_word_id}/clips/reanalyze")
+@router.post("/{wake_word_id}/clips/reanalyze", dependencies=[Depends(require_admin_mutation)])
 async def reanalyze_clips(wake_word_id: int) -> dict:
     """Force-recompute quality + trim for every clip (e.g. after tuning). User
     selections are preserved."""
@@ -430,7 +437,10 @@ async def reanalyze_clips(wake_word_id: int) -> dict:
     }
 
 
-@router.delete("/{wake_word_id}/clips/{name}", status_code=204)
+@router.delete(
+    "/{wake_word_id}/clips/{name}", status_code=204,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def delete_clip(wake_word_id: int, name: str) -> None:
     """Delete a single recorded clip (and its analysis artifacts), path-guarded
     to the wake word's clip dir so a crafted ``name`` can't unlink arbitrary
@@ -450,7 +460,10 @@ async def delete_clip(wake_word_id: int, name: str) -> None:
     wq.remove_analysis(target)
 
 
-@router.patch("/{wake_word_id}", response_model=WakeWord)
+@router.patch(
+    "/{wake_word_id}", response_model=WakeWord,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def patch_wake_word(wake_word_id: int, payload: WakeWordPatch) -> WakeWord:
     if payload.name is None and payload.threshold is None and not payload.set_default:
         raise HTTPException(status_code=400, detail="no fields to patch")
@@ -490,7 +503,7 @@ async def patch_wake_word(wake_word_id: int, payload: WakeWordPatch) -> WakeWord
     return _to_model(row)
 
 
-@router.post("/{wake_word_id}/score")
+@router.post("/{wake_word_id}/score", dependencies=[Depends(require_admin_mutation)])
 async def score_wake_word(wake_word_id: int):
     """Offline-score this word's clips against its trained model (raw + trimmed,
     max-over-clip) — the decisive real-vs-harness check. Proxies the
@@ -502,7 +515,7 @@ async def score_wake_word(wake_word_id: int):
     return bridge_response(status, payload)
 
 
-@router.post("/{wake_word_id}/push")
+@router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])
 async def push_wake_word(wake_word_id: int, body: RoomBody):
     """Push a trained wake model to a connected satellite. Proxies the
     Domovoi server (which sets the Pi's wake sidecar + tells it to sync and
@@ -515,7 +528,7 @@ async def push_wake_word(wake_word_id: int, body: RoomBody):
     return bridge_response(status, payload)
 
 
-@router.delete("/{wake_word_id}", status_code=204)
+@router.delete("/{wake_word_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
 async def delete_wake_word(wake_word_id: int) -> None:
     async with session_scope() as s:
         repo = WakeWordsRepository(s)
