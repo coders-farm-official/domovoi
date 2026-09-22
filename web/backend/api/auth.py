@@ -130,6 +130,7 @@ async def auth_login(body: LoginRequest, request: Request) -> JSONResponse:
                 status_code=409, detail="admin setup not completed yet"
             )
         if not admin_auth.verify_password(password_hash, body.password):
+            # Reserved before the verify (enforce_login_backoff); confirm.
             admin_auth.LOGIN_BACKOFF.record_failure(source)
             raise HTTPException(status_code=401, detail="wrong password")
         token = await admin_auth.create_session(s, label=body.label)

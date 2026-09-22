@@ -65,6 +65,16 @@ log = logging.getLogger(__name__)
 # ─── Tunables (module constants; tests monkeypatch these) ─────────────────
 
 SESSION_TTL_DAYS = 30
+# Absolute cap on a session's life: however often it is used, a token
+# minted more than this long ago is refused and its sliding expiry never
+# extends past ``created_at + SESSION_MAX_AGE_DAYS``.
+SESSION_MAX_AGE_DAYS = 90
+# The setup code is single-use AND time-boxed: a code file older than this
+# is refused by ``verify_setup_code`` and replaced (with a fresh console
+# banner) by the next core boot. Sized to the day the box was first booted —
+# regeneration happens only at boot, so a shorter window on a headless
+# server would just mean more restarts.
+SETUP_CODE_TTL_SEC = 24 * 3600.0
 # Failed-login backoff: 1 s doubling per failure, capped at 5 min (§7.3).
 BACKOFF_BASE_SEC = 1.0
 BACKOFF_CAP_SEC = 300.0
@@ -171,10 +181,9 @@ def generate_setup_code() -> str:
 
 
 def write_setup_code(code: str) -> Path:
-    path = setup_code_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(code + "\n", encoding="utf-8")
-    return path
+    """Persist the code owner-readable only; the file's mtime starts the
+    :data:`SETUP_CODE_TTL_SEC` window."""
+    return write_private_file(setup_code_path(), code + "\n")
 
 
 def read_setup_code() -> str | None:
@@ -183,6 +192,24 @@ def read_setup_code() -> str | None:
         return code or None
     except OSError:
         return None
+
+
+def setup_code_age_sec() -> float | None:
+    """Seconds since the code file was written, or None when there is no
+    file (the window is measured from the file's mtime, which every
+    writer here sets by rewriting the file)."""
+    try:
+        return max(0.0, time.time() - setup_code_path().stat().st_mtime)
+    except OSError:
+        return None
+
+
+def setup_code_expired() -> bool:
+    """True when a code file exists but is older than
+    :data:`SETUP_CODE_TTL_SEC`. A missing file is not "expired" — it is
+    absent, which the callers already treat as "no code, no setup"."""
+    age = setup_code_age_sec()
+    return age is not None and age > SETUP_CODE_TTL_SEC
 
 
 def delete_setup_code() -> None:
@@ -194,19 +221,26 @@ def delete_setup_code() -> None:
 
 def verify_setup_code(candidate: str) -> bool:
     """Constant-time compare of the presented code against the file. A
-    missing/empty file always fails — no code, no setup."""
+    missing/empty file always fails — no code, no setup — and so does a
+    file older than :data:`SETUP_CODE_TTL_SEC` (the next core boot writes
+    a fresh one)."""
     actual = read_setup_code()
     if actual is None:
         return False
-    return secrets.compare_digest(candidate.strip().encode(), actual.encode())
+    matched = secrets.compare_digest(candidate.strip().encode(), actual.encode())
+    if setup_code_expired():
+        log.info("setup code presented after its %.0f h window", SETUP_CODE_TTL_SEC / 3600)
+        return False
+    return matched
 
 
 async def ensure_setup_code_if_unclaimed() -> str | None:
     """Core-boot hook (§7.2): when no admin credential exists yet, make
     sure a setup code file exists and print the code to the console so
     the operator can complete first-run setup. Reuses an existing file's
-    code (a restart must not invalidate the code the operator already
-    read). Returns the active code, or None when setup is complete."""
+    code while it is inside its window (a restart must not invalidate the
+    code the operator already read); an expired file is replaced. Returns
+    the active code, or None when setup is complete."""
     try:
         async with session_scope() as s:
             if await has_admin_auth(s):
@@ -218,6 +252,9 @@ async def ensure_setup_code_if_unclaimed() -> str | None:
         log.warning("setup-code boot check skipped (DB unreachable): %s", e)
         return None
     code = read_setup_code()
+    if code is not None and setup_code_expired():
+        log.info("setup code file expired — issuing a fresh code")
+        code = None
     if code is None:
         code = generate_setup_code()
         write_setup_code(code)
@@ -317,15 +354,21 @@ async def create_session(session: AsyncSession, label: str | None = None) -> str
 
 async def validate_token(session: AsyncSession, token: str) -> bool:
     """True iff the token maps to a live session. SLIDES the expiry
-    (§7.3: 30-day sliding) and stamps ``last_used_at`` on success."""
+    (§7.3: 30-day sliding) and stamps ``last_used_at`` on success — but
+    never past ``created_at + SESSION_MAX_AGE_DAYS``: a session older than
+    the absolute cap is refused however recently it was used."""
     if not token:
         return False
     row = (
         await session.execute(
             text(
                 "UPDATE admin_sessions SET last_used_at = now(), "
-                f"expires_at = now() + interval '{SESSION_TTL_DAYS} days' "
-                "WHERE token_hash = :h AND expires_at > now() RETURNING 1"
+                "expires_at = LEAST("
+                f"now() + interval '{SESSION_TTL_DAYS} days', "
+                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
+                "WHERE token_hash = :h AND expires_at > now() "
+                f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days' "
+                "RETURNING 1"
             ),
             {"h": _sha256(token)},
         )
@@ -521,10 +564,11 @@ def request_source(request: Request) -> str:
     is in :data:`TRUSTED_PROXIES` — otherwise the header is client-supplied
     and spoofable, and trusting it would let a LAN attacker rotate XFF for
     an unbounded supply of fresh zero-failure throttle buckets (defeating
-    login backoff and the outbound-fetch limiter). With no trusted proxy
-    configured (the v1 default), throttling always keys on the real peer.
-    A legit reverse proxy is added to ``TRUSTED_PROXIES`` by the operator,
-    at which point its forwarded client becomes the key."""
+    login backoff and the outbound-fetch limiter). The default trusts
+    loopback only (the web process on the same box forwards each dashboard
+    caller's real address); every other peer keys on itself. A legit
+    reverse proxy is added to ``TRUSTED_PROXIES`` by the operator, at which
+    point its forwarded client becomes the key."""
     peer = request.client.host if request.client else "unknown"
     fwd = request.headers.get("x-forwarded-for")
     if fwd and peer in TRUSTED_PROXIES:
@@ -734,6 +778,8 @@ class LoginBackoff:
         # Monotonic timestamps of ALL recent failures (any source) for the
         # global ceiling. Pruned to the window on read/write.
         self._global: list[float] = []
+        # source -> the global timestamp of its outstanding reservation
+        self._reserved: dict[str, float] = {}
 
     def _prune_global(self, now: float) -> None:
         cutoff = now - GLOBAL_LOGIN_WINDOW_SEC
@@ -760,22 +806,47 @@ class LoginBackoff:
             wait = max(wait, (last + delay) - now)
         return max(0.0, wait)
 
-    def record_failure(self, source: str) -> None:
+    def _count(self, source: str) -> float:
         now = time.monotonic()
         failures, _ = self._failures.get(source, (0, 0.0))
         self._failures[source] = (failures + 1, now)
         self._global.append(now)
         self._prune_global(now)
+        return now
+
+    def record_failure(self, source: str) -> None:
+        """A confirmed failure. If the attempt was :meth:`reserve`d this
+        is a no-op on the counters — the reservation already counted it."""
+        if self._reserved.pop(source, None) is None:
+            self._count(source)
+
+    def reserve(self, source: str) -> None:
+        """Count the attempt BEFORE the expensive verify. The check in
+        :meth:`retry_after` and the record used to sit either side of an
+        ``await`` (the DB read + argon2), so several attempts from one
+        source could all pass the check before any of them was recorded.
+        Reserving up front closes that window: the attempt is a failure
+        until :meth:`record_success` says otherwise."""
+        self._reserved[source] = self._count(source)
 
     def record_success(self, source: str) -> None:
-        # Clears the source's OWN streak; the global ceiling is an
-        # aggregate-abuse backstop and drains only on its own window, so a
-        # single success can't reset it.
+        # Clears the source's OWN streak. A reservation this attempt made
+        # was not a failure after all, so it leaves the global window too;
+        # earlier CONFIRMED failures from this source stay there — that
+        # ceiling is an aggregate-abuse backstop and drains only on its
+        # own clock, so a single success can't reset it.
         self._failures.pop(source, None)
+        reserved = self._reserved.pop(source, None)
+        if reserved is not None:
+            try:
+                self._global.remove(reserved)
+            except ValueError:
+                pass
 
     def reset(self) -> None:
         self._failures.clear()
         self._global.clear()
+        self._reserved.clear()
 
 
 LOGIN_BACKOFF = LoginBackoff()
@@ -783,7 +854,10 @@ LOGIN_BACKOFF = LoginBackoff()
 
 def enforce_login_backoff(request: Request) -> str:
     """Raise 429 (with Retry-After) while the source is throttled;
-    return the source key for the subsequent record_* call."""
+    otherwise RESERVE the attempt (it counts as a failure from this
+    moment, before any ``await`` or argon2 work) and return the source
+    key. The caller reports the outcome with ``LOGIN_BACKOFF.record_success``
+    (releases the reservation) or ``record_failure`` (confirms it)."""
     source = request_source(request)
     wait = LOGIN_BACKOFF.retry_after(source)
     if wait > 0:
@@ -792,6 +866,7 @@ def enforce_login_backoff(request: Request) -> str:
             detail=f"too many failed attempts — retry in {wait:.0f}s",
             headers={"Retry-After": str(max(1, int(wait + 0.999)))},
         )
+    LOGIN_BACKOFF.reserve(source)
     return source
 
 

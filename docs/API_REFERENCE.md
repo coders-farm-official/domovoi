@@ -232,12 +232,14 @@ ranges, and `*.local` origins only.
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /api/auth/status` | Open | — | `{setup_complete, authenticated}` — the dashboard's setup-vs-login probe. `authenticated` reflects cookie or Bearer. |
-| `POST /api/auth/setup` | Open (requires setup code) | `{setup_code, password}` (password ≥10 chars) | First-run claim of the admin tier. `403` wrong/missing code, `409` already set up. Returns `{ok, token}` and sets the session cookie. Deletes the code file. |
+| `POST /api/auth/setup` | Open (requires setup code) | `{setup_code, password}` (password ≥10 chars) | First-run claim of the admin tier. `403` wrong/missing/expired code (the code is valid for 24 h from when it was written), `409` already set up. Returns `{ok, token}` and sets the session cookie. Deletes the code file and rotates the household device token. |
 | `POST /api/auth/login` | Open (backoff-throttled) | `{password, label?}` | Verify the password (per-source exponential backoff; `429` + `Retry-After` while throttled, `401` wrong password), mint a token, set the cookie. Returns `{ok, token}`. |
 | `POST /api/auth/logout` | Bearer only | — | Revoke the *calling* session and clear the cookie. `401` without a Bearer (a cross-site POST with just the cookie can't log you out). |
 | `GET /api/auth/sessions` | Bearer or cookie | — | `{"sessions": [{token_hash, label, created_at, expires_at, last_used_at, current}]}` for the revoke UI. |
 | `DELETE /api/auth/sessions/{token_hash}` | Bearer only | — | Revoke a session by hash. `404` unknown hash. |
-| `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). |
+| `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). Every other session is revoked; returns `{ok, revoked_sessions}`. |
+| `GET /api/auth/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, from the same table the core reads. `401` unauthenticated, `501` before setup. |
+| `POST /api/auth/device-token/rotate` | **Admin, security tier** | — | Rotate the household token (`{token, header, rotated}`); the core sees the new one immediately and the file mirror is rewritten. |
 
 ### 3.2 Plugins (management proxies + host)
 
