@@ -295,7 +295,7 @@ ranges, and `*.local` origins only.
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | Open | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
-| `DELETE /api/music/library/{track_id}` | Open | `?also_file=false` | Remove a track row (optionally the file too). `204`. |
+| `DELETE /api/music/library/{track_id}` | **Admin (Bearer)** | `?also_file=false` | Remove a track row (optionally the file too). `204`. `401` without an admin session, `403` for the dashboard cookie alone — the row and the file are left alone either way. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
 | `POST /api/music/library/upload` | Open | multipart audio file(s) | Upload straight into the library; triggers indexing. |
 | `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
@@ -363,18 +363,23 @@ it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### 3.6 People
 
-All **Open**. Person-centric views over the voice-profile / memory tables.
+Reads and the memory / favorite / preference edits are **Open**. The two
+deletes that lose identification data — forgetting a person and dropping a
+voice profile — are **Admin (Bearer)**: `401` without an admin session,
+`403` for the dashboard cookie alone.
+
+Person-centric views over the voice-profile / memory tables.
 
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/people` | — | Everyone Domovoi has voice-identified. |
 | `GET /api/people/{person_id}` | — | One person. |
-| `DELETE /api/people/{person_id}` | — | Forget a person (profiles, memories, links). |
+| `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
 | `GET /api/people/{person_id}/sessions` | `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | `?limit=50` | Recent conversation turns. |
 | `GET /api/people/{person_id}/notes` | — | Notes mentioning them. |
 | `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
-| `DELETE /api/people/{person_id}/profiles/{profile_id}` | — | Drop one voice profile. |
+| `DELETE /api/people/{person_id}/profiles/{profile_id}` | **Admin** | Drop one voice profile. |
 | `GET /api/people/{person_id}/memories` | `?status=` | Extracted memories. |
 | `POST /api/people/{person_id}/memories` | `MemoryCreate` | Add a memory manually. |
 | `PATCH /api/people/{person_id}/memories/{memory_id}` | `MemoryPatch` | Edit/confirm/reject a memory. |
@@ -385,8 +390,9 @@ All **Open**. Person-centric views over the voice-profile / memory tables.
 | `GET /api/people/{person_id}/preferences` | — | Per-person preferences. |
 | `PATCH /api/people/{person_id}/preferences` | `PreferencesPatch` | Update preferences. |
 
-Related: `GET /api/denylist` and `DELETE /api/denylist/{entry_id}` (Open) —
-the voice-identification denylist.
+Related: the voice-identification denylist — `GET /api/denylist` (Open) and
+`DELETE /api/denylist/{entry_id}` (**Admin (Bearer)**: removing an opt-out
+puts someone back in front of the matcher, so it answers to the operator).
 
 ### 3.7 Satellites
 

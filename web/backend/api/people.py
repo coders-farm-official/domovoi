@@ -16,9 +16,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_admin_mutation
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.schemas import (
@@ -231,7 +232,10 @@ async def list_profiles(person_id: int) -> list[VoiceProfile]:
 # ─── Destructive ───────────────────────────────────────────────────────────
 
 
-@router.delete("/{person_id}", status_code=204)
+@router.delete(
+    "/{person_id}", status_code=204,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def delete_person(person_id: int) -> None:
     """Same SQL as the voice "forget me" path.
 
@@ -248,7 +252,10 @@ async def delete_person(person_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"person {person_id} not found")
 
 
-@router.delete("/{person_id}/profiles/{profile_id}", status_code=204)
+@router.delete(
+    "/{person_id}/profiles/{profile_id}", status_code=204,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def delete_profile(person_id: int, profile_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(

@@ -23,11 +23,12 @@ import zipfile
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_admin_mutation
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -329,7 +330,12 @@ async def list_track_playlists(track_id: int) -> list[Playlist]:
     return out
 
 
-@router.delete("/library/{track_id}", status_code=204)
+@router.delete(
+    "/library/{track_id}", status_code=204,
+    # Admin tier: this is the one verb that can take a file off the
+    # disk (?also_file=true), and the row with it.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def delete_track(
     track_id: int,
     also_file: bool = Query(
