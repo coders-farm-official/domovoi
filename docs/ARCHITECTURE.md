@@ -238,16 +238,23 @@ ownership split:
   Flyway. The runner:
   * keeps a ledger at `plugin_<slug>.schema_history` (version, filename,
     checksum, applied_at);
-  * wraps each file in one transaction with
-    `SET LOCAL search_path = plugin_<slug>, public`;
+  * creates a `NOLOGIN` role `plugin_<slug>` (idempotent; the application's
+    DB user is a superuser or holds `CREATEROLE`) with `USAGE` on `public`
+    and `ALL` on the plugin schema, and wraps each file in one transaction
+    with `SET LOCAL search_path = "plugin_<slug>"` (the plugin schema
+    only) + `SET LOCAL ROLE plugin_<slug>` — an unqualified name cannot
+    reach `public`, and the role has no privilege on core tables, `COPY`,
+    `ALTER SYSTEM` or role creation;
   * applies to **both** databases — prod first, then `domovoi_test`; a fresh
     install is both-or-neither;
   * validates sha256 checksums — an already-applied file that changed on disk
     refuses to run (append-only, no down-migrations);
   * enforces an install-time **SQL lint**: no `CREATE SCHEMA`, no
-    `CREATE EXTENSION`, no DDL naming `public.` or a foreign `plugin_*`
-    schema, no cross-schema `REFERENCES`. (A tripwire, not a security
-    boundary — plugins are trusted code once installed.)
+    `CREATE EXTENSION`, no DDL or DML naming `public.` or a foreign
+    `plugin_*` schema, no cross-schema `REFERENCES`, no `SET/RESET ROLE`,
+    `DO`, `COPY`, `ALTER SYSTEM`, `CREATE ROLE` or `LOAD`. (A tripwire in
+    front of the role; plugins are trusted code once installed, but a
+    migration file is confined to its schema by Postgres, not by review.)
 
 Plugins never run DDL against core tables. Cross-schema references are **soft
 refs** (e.g. `media_acquisitions.attach_to_playlist_id` has no FK); consumers

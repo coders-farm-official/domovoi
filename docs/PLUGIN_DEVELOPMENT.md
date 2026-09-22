@@ -1260,7 +1260,8 @@ refs that no longer resolve. The bus is latency; the sweep is truth.
 Three tables in `plugin_radio` — `radio_stations`, `radio_detections`,
 `track_fingerprints` — plus targeted indexes. The rules V001 demonstrates:
 
-* Unqualified names (the runner sets `search_path = plugin_radio, public`).
+* Unqualified names (the runner pins `search_path = plugin_radio` and runs
+  the file as the `plugin_radio` role — see 6.3).
 * **No foreign keys into core tables**: `library_track_id` is a soft
   reference (bare `BIGINT`) cleaned up by events + the sweep. Intra-schema
   FKs are fine (`radio_detections → radio_stations ON DELETE CASCADE`).
@@ -1358,17 +1359,45 @@ never imports core runtime" split.
 
 ### 6.3 Per-schema DB only
 
-Your migrations run with `search_path = plugin_<slug>, public` and are
-SQL-linted at install and at every apply. The lint rejects:
+Each migration file runs **as its own Postgres role**, `plugin_<slug>`
+(`NOLOGIN`, created by the runner), with `search_path` pinned to
+`plugin_<slug>` **only**. Two consequences worth knowing before you write
+one:
+
+* An unqualified name that does not exist in your schema is an error —
+  it never falls through to `public`. Reference a core object or an
+  extension's operator class explicitly (`public.gin_trgm_ops`); reading
+  from a core table in a migration is not something a plugin does.
+* The role owns what your migration creates and has `USAGE` on `public`
+  and `ALL` on your schema — nothing else. It cannot read or write core
+  tables, `COPY` to a file or program, alter the server, or create roles,
+  whatever the SQL says. Your plugin's runtime sessions (`sdk.db`,
+  `ctx.db_session_scope`) still run as the application user and keep
+  `search_path = plugin_<slug>, public` — only migrations are confined.
+
+Migrations are also SQL-linted at install and at every apply. The lint
+rejects:
 
 * `CREATE SCHEMA` (the runner owns your schema) and `CREATE EXTENSION`
   (extensions are core-only; `pg_trgm` ships in core V001);
-* DDL naming `public.` anything;
+* DDL **or DML** naming `public.` anything;
 * references to a foreign `plugin_*` schema;
-* cross-schema `REFERENCES` — use soft refs + events + a sweep instead.
+* cross-schema `REFERENCES` — use soft refs + events + a sweep instead;
+* anything that would step outside the migration's role or path:
+  `SET`/`RESET ROLE`, `SET SESSION AUTHORIZATION`, `RESET ALL`,
+  `SET search_path` / `set_config(...)`, `DO` blocks, `COPY`,
+  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`.
 
-The lint is a tripwire, not a security boundary — the real contract is
-review and the migration runner. Migrations are **append-only**: files are
+`INSERT`/`UPDATE`/`DELETE` on your own tables (seed rows, backfills) are
+fine. The lint is a tripwire in front of the role — the role is what
+Postgres enforces. The application's database user must be a superuser
+or hold `CREATEROLE` (the docker-compose and harness users are the
+bootstrap superuser; a hardened deployment grants `CREATEROLE`), or the
+first plugin install fails with a message saying so. Objects an earlier
+runner created as the application user are re-owned to the plugin role
+before a catch-up, so upgrading an already-installed plugin keeps working.
+Uninstall-with-purge drops the role along with the schema. Migrations are
+**append-only**: files are
 checksummed into `plugin_<slug>.schema_history`, and an already-applied file
 that changed on disk refuses to load. No down-migrations, ever. Each apply
 targets both the prod DB and its `_test` sibling; on a fresh install a

@@ -188,10 +188,16 @@ What the install flow *does* do (verified in
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
-- **Database containment by convention:** each plugin gets its own Postgres
-  schema and runs its own migrations there; plugins never run DDL against
-  core tables. This is an architectural boundary against *accidents*, not
-  against malice — in-process code could ignore it.
+- **Database containment:** each plugin gets its own Postgres schema, and
+  its migration files run **as a per-plugin `NOLOGIN` role** with the
+  search path pinned to that schema — a migration cannot read or write
+  core tables (an unqualified name never falls through to `public`, and
+  the role holds no privilege there), cannot `COPY` to a file or program,
+  alter the server, or create roles, whatever it says; a lint refuses the
+  obvious attempts before Postgres has to. That confinement covers the
+  install/upgrade step. The plugin's *runtime* code is still in-process,
+  unsandboxed Python running as the application's database user — the
+  boundary against malice remains the publisher you trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule: every
