@@ -215,8 +215,15 @@ const apiHeaders = () => ({ ..._authHeaders(), ...REQUESTED_WITH });
 // can't carry a header, so the household device token rides in the query
 // for those reads (the server honours it there for reads only). Returns the
 // url unchanged when this browser holds no token yet.
+// Auth owns the storage and keys the token PER SERVER (`<key>@<base>`,
+// bare key for same-origin), so read through it rather than guessing the
+// key here: otherwise a dashboard pointed at another Domovoi would put no
+// token on these URLs at all. The bare key stays as the pre-Auth fallback.
 const DEVICE_TOKEN_KEY = 'domovoi-device-token';
 const deviceToken = () => {
+  try {
+    if (typeof Auth !== 'undefined' && Auth.deviceToken) return Auth.deviceToken() || null;
+  } catch { /* Auth not loaded yet - fall through */ }
   try { return localStorage.getItem(DEVICE_TOKEN_KEY) || null; } catch { return null; }
 };
 const withDeviceToken = (url) => {

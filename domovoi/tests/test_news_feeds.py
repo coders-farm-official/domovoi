@@ -166,10 +166,20 @@ class _Entry(dict):
 
 def _fake_feedparser(monkeypatch, entries: list[dict]) -> None:
     """Stand in for the optional feedparser dependency: ``parse`` returns an
-    object shaped like feedparser's result (``feed`` mapping + ``entries``)."""
-    def parse(_url: str):
+    object shaped like feedparser's result (``feed`` mapping + ``entries``).
+
+    ``_parse_feed_blocking`` fetches the document itself through
+    ``net_safety.fetch_bytes_sync`` (WEB-7) and hands feedparser the bytes,
+    so the fetch is stubbed here too — these tests are about what ingest
+    does with entry links, not about the network."""
+    def parse(_document):
         return types.SimpleNamespace(feed={"title": "Ex Feed"}, entries=[_Entry(e) for e in entries])
     monkeypatch.setitem(sys.modules, "feedparser", types.SimpleNamespace(parse=parse))
+
+    def fetch(url, **_kw):
+        return news_feeds.net_safety.FetchResult(
+            url=url, status_code=200, content=b"<rss/>", content_type="application/rss+xml")
+    monkeypatch.setattr(news_feeds.net_safety, "fetch_bytes_sync", fetch)
 
 
 def test_ingest_nulls_non_web_links_but_keeps_the_article(monkeypatch) -> None:

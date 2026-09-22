@@ -34,7 +34,7 @@ def music_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def stub_reindex_ok(monkeypatch):
-    async def _ok(path, body=None):
+    async def _ok(path, body=None, headers=None):
         return 200, {"queued": True, "worker": "library_indexer"}
 
     monkeypatch.setattr(music_api, "post_admin", _ok)
@@ -42,7 +42,7 @@ def stub_reindex_ok(monkeypatch):
 
 @pytest.fixture
 def stub_reindex_down(monkeypatch):
-    async def _down(path, body=None):
+    async def _down(path, body=None, headers=None):
         return 0, None  # 0 = domovoi unreachable
 
     monkeypatch.setattr(music_api, "post_admin", _down)

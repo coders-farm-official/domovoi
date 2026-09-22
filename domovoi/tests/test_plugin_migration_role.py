@@ -263,6 +263,15 @@ async def migdir(tmp_path: Path):
         await conn.execute(text("DELETE FROM admin_sessions WHERE label = 'migrole-probe'"))
     async with engine.connect() as conn:
         raw = await conn.get_raw_connection()
+        # The runner grants the role USAGE ON SCHEMA public; that grant is a
+        # dependent object, so DROP ROLE alone fails with
+        # DependentObjectsStillExist. DROP OWNED BY revokes it first (it
+        # needs the role to exist, hence the probe).
+        exists = await raw.driver_connection.fetchval(
+            "SELECT 1 FROM pg_roles WHERE rolname = $1", ROLE
+        )
+        if exists:
+            await raw.driver_connection.execute(f'DROP OWNED BY "{ROLE}"')
         await raw.driver_connection.execute(f'DROP ROLE IF EXISTS "{ROLE}"')
 
 

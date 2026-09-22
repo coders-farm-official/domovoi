@@ -478,7 +478,7 @@ def test_delete_clip_path_traversal_rejected(tmp_path, monkeypatch) -> None:
 def _stub_admin_down(monkeypatch) -> None:
     import web.backend.api.wake_words as wake_api
 
-    async def _down(path, body=None, timeout=30.0):
+    async def _down(path, body=None, timeout=30.0, headers=None):
         return 0, None
 
     monkeypatch.setattr(wake_api, "post_admin", _down)
@@ -519,7 +519,7 @@ def test_record_start_forwards_room_and_id_to_admin(monkeypatch) -> None:
 
     captured: dict = {}
 
-    async def _fake_post_admin(path, body=None, timeout=30.0):
+    async def _fake_post_admin(path, body=None, timeout=30.0, headers=None):
         captured["path"] = path
         captured["body"] = body
         return 200, {"announced_to": ["kitchen"]}
@@ -550,7 +550,7 @@ def test_score_forwards_wake_word_id_to_admin(monkeypatch) -> None:
 
     captured: dict = {}
 
-    async def _fake_post_admin(path, body=None, timeout=30.0):
+    async def _fake_post_admin(path, body=None, timeout=30.0, headers=None):
         captured["path"] = path
         captured["body"] = body
         return 200, {"available": True, "summary": {"raw_recall": 0.9}}

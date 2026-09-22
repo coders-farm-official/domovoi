@@ -183,7 +183,7 @@ def test_cover_no_embedded_art_404_and_negative_cache(tmp_path, monkeypatch):
 def test_play_tracks_proxies_to_domovoi(monkeypatch):
     captured = {}
 
-    async def _fake_post_admin(path, body=None):
+    async def _fake_post_admin(path, body=None, headers=None):
         captured["path"] = path
         captured["body"] = body
         return 200, {"played": True, "queued": 2, "requested": 2}
@@ -202,7 +202,7 @@ def test_play_tracks_proxies_to_domovoi(monkeypatch):
 
 @requires_db
 def test_play_tracks_domovoi_unreachable_502(monkeypatch):
-    async def _down(path, body=None):
+    async def _down(path, body=None, headers=None):
         return 0, None
 
     monkeypatch.setattr(music_api, "post_admin", _down)

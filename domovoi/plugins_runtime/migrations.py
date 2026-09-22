@@ -512,7 +512,7 @@ class PluginMigrationRunner:
         migration can ALTER what an earlier runner created as the
         application user. No-op once everything is owned by the role."""
         rels = await driver.fetch(
-            "SELECT c.relname, c.relkind FROM pg_class c "
+            "SELECT c.relname, c.relkind::text AS relkind FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') "
             "AND c.relname <> 'schema_history' "
@@ -537,7 +537,7 @@ class PluginMigrationRunner:
         for r in routines:
             await driver.execute(f'ALTER ROUTINE {r["sig"]} OWNER TO "{self.role}"')
         types = await driver.fetch(
-            "SELECT t.typname, t.typtype FROM pg_type t "
+            "SELECT t.typname, t.typtype::text AS typtype FROM pg_type t "
             "JOIN pg_namespace n ON n.oid = t.typnamespace "
             "LEFT JOIN pg_class c ON c.oid = t.typrelid "
             "WHERE n.nspname = $1 AND t.typtype IN ('e', 'd', 'r', 'c') "

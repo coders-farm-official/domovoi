@@ -133,30 +133,6 @@ route is loaded. Same-origin (the box that served the dashboard) is trusted
 by construction. Verifying a server's identity cryptographically (and TLS
 with pinning) stays on the hardening backlog.
 
-### What the server publishes to the LAN
-
-Only three kinds of port face the LAN: the core (`6370`), the dashboard
-(`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
-satellites fetch audio from. Everything else the stack runs — Postgres
-(`6432`), Letta (`6283`), SearXNG (`6888`) and each room's MPD **control**
-port (`6650`, `6651`, …) — is published on `127.0.0.1` only, so a device
-on your Wi-Fi cannot open the database, drive the chat agent or control a
-room's player directly; it has to go through the core or the dashboard
-and whatever tier those apply. A per-room MPD container created before the
-loopback bind existed is recreated on the core's next start (its data
-volume is kept; that room's playback stops once).
-
-### Uploads and dependencies
-
-Browser uploads into the library (`POST /api/music/library/upload`) accept
-zip archives; an archive is refused with `413` before anything is inflated
-when it declares more than 5000 members, a member over 1 GiB, or more than
-4 GiB in total. The third-party packages that parse what comes in over the
-network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
-one-way version floors in `pyproject.toml`, and `requirements.lock` pins
-the exact, hash-checked set a deployment installs — see
-[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
-
 ### Daily tier (LAN-trust)
 
 The reads that tell a client what this Domovoi is and let a satellite sync
@@ -249,6 +225,30 @@ declining to be your attacker's proxy.
 ### Admin tier
 
 Everything that executes code or rewrites configuration. Details next.
+
+### What the server publishes to the LAN
+
+Only three kinds of port face the LAN: the core (`6370`), the dashboard
+(`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
+satellites fetch audio from. Everything else the stack runs — Postgres
+(`6432`), Letta (`6283`), SearXNG (`6888`) and each room's MPD **control**
+port (`6650`, `6651`, …) — is published on `127.0.0.1` only, so a device
+on your Wi-Fi cannot open the database, drive the chat agent or control a
+room's player directly; it has to go through the core or the dashboard
+and whatever tier those apply. A per-room MPD container created before the
+loopback bind existed is recreated on the core's next start (its data
+volume is kept; that room's playback stops once).
+
+### Uploads and dependencies
+
+Browser uploads into the library (`POST /api/music/library/upload`) accept
+zip archives; an archive is refused with `413` before anything is inflated
+when it declares more than 5000 members, a member over 1 GiB, or more than
+4 GiB in total. The third-party packages that parse what comes in over the
+network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
+one-way version floors in `pyproject.toml`, and `requirements.lock` pins
+the exact, hash-checked set a deployment installs — see
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## What the admin password actually gates
 
