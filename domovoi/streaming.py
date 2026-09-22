@@ -397,6 +397,17 @@ class WakeRecordingState:
     clips_written: int = 0
 
 
+# ADD-2. How much more than the requested ``max_bytes`` a satellite's
+# answer may come to before the pull is abandoned. The Pi is asked for at
+# most N bytes of log; what comes back is that text inside JSON frames,
+# so it is legitimately somewhat larger — escaping, and the tail of a
+# chunk that straddled the boundary. Twice the ask plus 64 KiB covers a
+# worst case of every character escaping to six; anything beyond it is
+# not an answer to the question that was asked.
+LOG_REASSEMBLY_SLACK = 2.0
+LOG_REASSEMBLY_FLOOR = 64 * 1024
+
+
 @dataclass
 class _LogRequest:
     """One in-flight `get_logs` → `logs_chunk`… exchange.
@@ -405,12 +416,35 @@ class _LogRequest:
     protocol, so the correlation id, reassembly buffer and expected
     sequence live here rather than in a general mechanism with a single
     caller. ``future`` resolves on the chunk marked ``final``, or takes an
-    exception if the satellite disconnects or misorders the series.
+    exception if the satellite disconnects, misorders the series, or
+    sends more than ``max_chars`` in total.
+
+    ``max_chars`` is the point of the cap: the core asks for at most
+    ``max_bytes`` of log, and until this existed nothing enforced that on
+    the way back — a session could answer a single pull with frames for
+    as long as the timeout allowed, straight into core memory.
     """
 
     future: "asyncio.Future[dict[str, Any]]"
+    max_chars: int = 0
     chunks: list[str] = field(default_factory=list)
     next_seq: int = 0
+    total_chars: int = 0
+
+    def accept(self, data: str) -> bool:
+        """Take one chunk, or refuse the whole request. Refusing stops
+        the accumulation as well as failing the future — the buffer is
+        dropped, not kept around holding what arrived so far."""
+        if self.max_chars and self.total_chars + len(data) > self.max_chars:
+            self.chunks.clear()
+            self.future.set_exception(RuntimeError(
+                f"satellite log exceeded the {self.max_chars}-character cap "
+                f"for this request"
+            ))
+            return False
+        self.total_chars += len(data)
+        self.chunks.append(data)
+        return True
 
 
 async def _resume_mpd_for_room(room_id: str) -> None:
@@ -2741,7 +2775,12 @@ class StreamSession:
             ))
             return
         pending.next_seq += 1
-        pending.chunks.append(str(ctrl.get("data") or ""))
+        if not pending.accept(str(ctrl.get("data") or "")):
+            log.warning(
+                "log pull from room=%s abandoned: over the %d-character cap",
+                self.room_id, pending.max_chars,
+            )
+            return
         if ctrl.get("final"):
             stats = ctrl.get("stats")
             pending.future.set_result({
@@ -2759,10 +2798,18 @@ class StreamSession:
         and answers with a numbered series of `logs_chunk` frames, which
         this reassembles. Raises on a dead socket, `TimeoutError` if the
         satellite goes quiet mid-transfer, so the admin endpoint can tell
-        the difference between "offline" and "stopped answering".
+        the difference between "offline" and "stopped answering" — and
+        (ADD-2) if the answer comes to more than ``max_bytes`` allows for,
+        rather than letting the reassembly buffer follow whatever the
+        session decides to send.
         """
         request_id = secrets.token_hex(8)
-        pending = _LogRequest(future=asyncio.get_running_loop().create_future())
+        cap = max(
+            LOG_REASSEMBLY_FLOOR, int(int(max_bytes) * LOG_REASSEMBLY_SLACK)
+        )
+        pending = _LogRequest(
+            future=asyncio.get_running_loop().create_future(), max_chars=cap
+        )
         self._log_requests[request_id] = pending
         try:
             await self.ws.send_text(json.dumps({

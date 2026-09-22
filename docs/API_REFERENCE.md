@@ -193,7 +193,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/satellites/{room_id}/label` | **Device (`X-Device-Token` or Bearer)** | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
 | `POST /v1/admin/satellite/{room_id}/config` | **Admin (Bearer)** | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
-| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). Gated like a config read: the ring holds what the room said (the satellite logs each transcript). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering. |
+| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). Gated like a config read: the ring holds what the room said (the satellite logs each transcript). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering, `502` when the answer comes to more than `max_bytes` allows for (the reassembly buffer is capped per request, so a session cannot answer one pull with frames for as long as the timeout permits). |
 
 ### 2.6 Admin: version, config, chat, hardware
 
