@@ -98,11 +98,15 @@ internal fun PersonDetail(
             HorizontalDivider(color = Domovoi.colors.borderSoft)
         }
 
+        // F-A008: a list that failed to load counts as "?", not 0.
         val titles = listOf(
             "profile",
-            "memory (${detail.memories.size + detail.favorites.size})",
-            "sessions (${detail.sessions.size})",
-            "conversations (${detail.conversations.size})",
+            "memory (${countLabel(
+                detail.memories.size + detail.favorites.size,
+                detail.errors.memories ?: detail.errors.favorites,
+            )})",
+            "sessions (${countLabel(detail.sessions.size, detail.errors.sessions)})",
+            "conversations (${countLabel(detail.conversations.size, detail.errors.conversations)})",
         )
         ScrollableTabRow(
             selectedTabIndex = tab,

@@ -47,6 +47,7 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
+import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.DomovoiGlyph
@@ -211,7 +212,11 @@ internal fun MemoryTab(person: Person, detail: PersonDetailData) {
             item { HorizontalDivider(color = Domovoi.colors.borderSoft) }
         }
 
-        if (active.isEmpty() && pending.isEmpty()) {
+        val memoriesError = detail.errors.memories
+        if (memoriesError != null) {
+            // F-A008: the list failed to load — say so, do not claim "no memories yet".
+            item { ErrorState(memoriesError, detail.refresh) }
+        } else if (active.isEmpty() && pending.isEmpty()) {
             item {
                 CenterNote("no memories yet · say \"remember that ___\" or use the input above")
             }
@@ -288,7 +293,10 @@ internal fun MemoryTab(person: Person, detail: PersonDetailData) {
                 ) { Text("save") }
             }
         }
-        if (detail.favorites.isEmpty()) {
+        val favoritesError = detail.errors.favorites
+        if (favoritesError != null) {
+            item { ErrorState(favoritesError, detail.refresh) }
+        } else if (detail.favorites.isEmpty()) {
             item {
                 CenterNote("no favorites yet · say \"my favorite ___ is ___\" or use the inputs above")
             }
@@ -308,7 +316,10 @@ internal fun MemoryTab(person: Person, detail: PersonDetailData) {
                 "${detail.preferences.size} " + plural(detail.preferences.size, "key"),
             )
         }
-        if (detail.preferences.isEmpty()) {
+        val preferencesError = detail.errors.preferences
+        if (preferencesError != null) {
+            item { ErrorState(preferencesError, detail.refresh) }
+        } else if (detail.preferences.isEmpty()) {
             item { CenterNote("no preferences set yet") }
         } else {
             detail.preferences.forEach { (key, value) ->
@@ -445,6 +456,11 @@ private fun FavKindRow(
 internal fun SessionsTab(person: Person, detail: PersonDetailData) {
     if (detail.loading && detail.sessions.isEmpty()) {
         LoadingState()
+        return
+    }
+    // F-A008: a failed fetch is an error card with retry, never "no sessions yet".
+    detail.errors.sessions?.let { err ->
+        ErrorState(err, detail.refresh)
         return
     }
     if (detail.sessions.isEmpty()) {
@@ -596,6 +612,11 @@ internal fun ConversationsTab(person: Person, detail: PersonDetailData) {
 
     if (detail.loading && detail.conversations.isEmpty()) {
         LoadingState()
+        return
+    }
+    // F-A008: a failed fetch is an error card with retry, never "hasn't said anything yet".
+    detail.errors.conversations?.let { err ->
+        ErrorState(err, detail.refresh)
         return
     }
 

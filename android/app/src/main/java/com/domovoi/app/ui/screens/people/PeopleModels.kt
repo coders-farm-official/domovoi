@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
@@ -84,8 +85,78 @@ internal data class DenylistEntry(
 // ---------------------------------------------------------------------------
 // Per-person detail loader — the analog of the web page's per-selection
 // Promise.all fetch (sessions / conversations / memories / favorites /
-// preferences), with each source falling back to empty on failure.
+// preferences). Each source keeps its own failure (F-A008): a list that
+// could not be loaded is empty AND carries an error, so the tabs can show
+// an error card with retry instead of an innocent "nothing here yet".
 // ---------------------------------------------------------------------------
+
+/** Outcome of one sub-fetch: the rows, or why they could not be loaded. */
+internal sealed class Fetched<out T> {
+    data class Ok<T>(val value: T) : Fetched<T>()
+    data class Failed(val error: String) : Fetched<Nothing>()
+}
+
+internal fun <T> Fetched<T>.orElse(default: T): T = when (this) {
+    is Fetched.Ok -> value
+    is Fetched.Failed -> default
+}
+
+internal val Fetched<*>.errorOrNull: String? get() = (this as? Fetched.Failed)?.error
+
+/** Error-card text for a failed fetch — the rememberApi convention (ApiHooks.kt). */
+internal fun fetchErrorText(e: Throwable): String =
+    e.message?.trim()?.takeIf { it.isNotEmpty() } ?: "request failed"
+
+private suspend fun <T> fetched(block: suspend () -> T): Fetched<T> =
+    try {
+        Fetched.Ok(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Fetched.Failed(fetchErrorText(e))
+    }
+
+/** One nullable error per sub-list; null means that list loaded fine. */
+internal data class PersonDetailErrors(
+    val sessions: String? = null,
+    val conversations: String? = null,
+    val memories: String? = null,
+    val favorites: String? = null,
+    val preferences: String? = null,
+) {
+    /** Names of the lists that failed, in tab order. */
+    val failed: List<String>
+        get() = listOfNotNull(
+            sessions?.let { "sessions" },
+            conversations?.let { "conversations" },
+            memories?.let { "memories" },
+            favorites?.let { "favorites" },
+            preferences?.let { "preferences" },
+        )
+
+    val any: Boolean get() = failed.isNotEmpty()
+
+    companion object {
+        val NONE = PersonDetailErrors()
+    }
+}
+
+/**
+ * The once-per-load toast when any sub-fetch failed (null when all loaded):
+ * "couldn't load sessions, memories: 500 Server Error: …" — names every
+ * failed list and quotes the first failure so the user knows it was the
+ * server, not empty data.
+ */
+internal fun personDetailFailureToast(errors: PersonDetailErrors): String? {
+    if (!errors.any) return null
+    val first = listOfNotNull(
+        errors.sessions, errors.conversations, errors.memories, errors.favorites, errors.preferences,
+    ).first()
+    return "couldn't load ${errors.failed.joinToString(", ")}: $first"
+}
+
+/** Tab-title count: the number, or "?" when that list failed to load. */
+internal fun countLabel(n: Int, error: String?): String = if (error != null) "?" else n.toString()
 
 internal class PersonDetailData(
     val sessions: List<PersonSession>,
@@ -93,51 +164,67 @@ internal class PersonDetailData(
     val memories: List<PersonMemory>,
     val favorites: List<PersonFavorite>,
     val preferences: Map<String, JsonElement>,
+    val errors: PersonDetailErrors,
     val loading: Boolean,
     val refresh: () -> Unit,
 )
 
-private suspend fun <T> orDefault(default: T, block: suspend () -> T): T =
-    try {
-        block()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        default
-    }
-
 @Composable
 internal fun rememberPersonDetail(personId: Long): PersonDetailData {
     val app = LocalApp.current
+    val toast = LocalToast.current
     var tick by remember(personId) { mutableIntStateOf(0) }
-    var sessions by remember(personId) { mutableStateOf(emptyList<PersonSession>()) }
-    var conversations by remember(personId) { mutableStateOf(emptyList<PersonTurn>()) }
-    var memories by remember(personId) { mutableStateOf(emptyList<PersonMemory>()) }
-    var favorites by remember(personId) { mutableStateOf(emptyList<PersonFavorite>()) }
-    var preferences by remember(personId) { mutableStateOf<Map<String, JsonElement>>(emptyMap()) }
+    var sessions by remember(personId) { mutableStateOf<Fetched<List<PersonSession>>>(Fetched.Ok(emptyList())) }
+    var conversations by remember(personId) { mutableStateOf<Fetched<List<PersonTurn>>>(Fetched.Ok(emptyList())) }
+    var memories by remember(personId) { mutableStateOf<Fetched<List<PersonMemory>>>(Fetched.Ok(emptyList())) }
+    var favorites by remember(personId) { mutableStateOf<Fetched<List<PersonFavorite>>>(Fetched.Ok(emptyList())) }
+    var preferences by remember(personId) {
+        mutableStateOf<Fetched<Map<String, JsonElement>>>(Fetched.Ok(emptyMap()))
+    }
     var loading by remember(personId) { mutableStateOf(true) }
 
     LaunchedEffect(personId, tick) {
         loading = true
-        sessions = orDefault(emptyList()) {
+        sessions = fetched {
             app.api.get("/api/people/$personId/sessions?limit=50").decode<List<PersonSession>>()
         }
-        conversations = orDefault(emptyList()) {
+        conversations = fetched {
             app.api.get("/api/people/$personId/conversations?limit=200").decode<List<PersonTurn>>()
         }
-        memories = orDefault(emptyList()) {
+        memories = fetched {
             app.api.get("/api/people/$personId/memories").decode<List<PersonMemory>>()
         }
-        favorites = orDefault(emptyList()) {
+        favorites = fetched {
             app.api.get("/api/people/$personId/favorites").decode<List<PersonFavorite>>()
         }
-        preferences = orDefault(emptyMap()) {
+        preferences = fetched {
             (app.api.get("/api/people/$personId/preferences") as? JsonObject) ?: emptyMap()
         }
         loading = false
+        personDetailFailureToast(
+            PersonDetailErrors(
+                sessions.errorOrNull, conversations.errorOrNull, memories.errorOrNull,
+                favorites.errorOrNull, preferences.errorOrNull,
+            ),
+        )?.let { toast(it) }
     }
 
-    return PersonDetailData(sessions, conversations, memories, favorites, preferences, loading) { tick++ }
+    val errors = PersonDetailErrors(
+        sessions = sessions.errorOrNull,
+        conversations = conversations.errorOrNull,
+        memories = memories.errorOrNull,
+        favorites = favorites.errorOrNull,
+        preferences = preferences.errorOrNull,
+    )
+    return PersonDetailData(
+        sessions = sessions.orElse(emptyList()),
+        conversations = conversations.orElse(emptyList()),
+        memories = memories.orElse(emptyList()),
+        favorites = favorites.orElse(emptyList()),
+        preferences = preferences.orElse(emptyMap()),
+        errors = errors,
+        loading = loading,
+    ) { tick++ }
 }
 
 internal fun prettyPref(v: JsonElement): String = if (v is JsonPrimitive) v.content else v.toString()
