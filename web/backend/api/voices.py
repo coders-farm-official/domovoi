@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -32,7 +32,12 @@ from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
 from domovoi.db.repositories import VoicesRepository
 from web.backend.db import session_scope
-from web.backend.domovoi_client import domovoi_url, post_admin, post_admin_bytes
+from web.backend.domovoi_client import (
+    auth_forward_headers,
+    domovoi_url,
+    post_admin,
+    post_admin_bytes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,12 +72,17 @@ def _voices_dir() -> Path:
     return Path(settings.voice_models_dir)
 
 
-async def _trigger_rerender() -> None:
+async def _trigger_rerender(request: Request) -> None:
     """Best-effort: ask the Domovoi server to (background-) re-render clips and
     push them to satellites. Non-fatal — but surface an unreachable
     domovoi in the log so a missing render isn't silent (the DB change
-    persists and renders on the Domovoi server's next restart regardless)."""
-    status, _ = await post_admin("/v1/admin/sounds/regenerate")
+    persists and renders on the Domovoi server's next restart regardless).
+
+    The core route is admin-gated, so this carries the credentials of the
+    admin whose edit triggered the re-render."""
+    status, _ = await post_admin(
+        "/v1/admin/sounds/regenerate", headers=auth_forward_headers(request)
+    )
     if status == 0:
         log.warning(
             "clip re-render skipped: domovoi unreachable at %s — new clips "
@@ -96,7 +106,7 @@ async def list_voices() -> list[Voice]:
 
 
 @router.get("/{voice_id}/sample")
-async def sample_voice(voice_id: int) -> Response:
+async def sample_voice(voice_id: int, request: Request) -> Response:
     """Stream a freshly-synthesized sample (intro + random fun fact) for a
     voice, for the play button. Proxies the Domovoi server's TTS — the web
     process has none of its own. 502 if the Domovoi server is unreachable."""
@@ -107,7 +117,9 @@ async def sample_voice(voice_id: int) -> Response:
         raise HTTPException(status_code=404, detail=f"voice {voice_id} not found")
 
     status, audio, headers = await post_admin_bytes(
-        "/v1/admin/voices/sample", {"name": voice["name"]}
+        "/v1/admin/voices/sample",
+        {"name": voice["name"]},
+        headers=auth_forward_headers(request),
     )
     if status == 0:
         raise HTTPException(status_code=502, detail="domovoi unreachable")
@@ -128,7 +140,7 @@ async def sample_voice(voice_id: int) -> Response:
     "/edge", response_model=Voice, status_code=201,
     dependencies=[Depends(require_admin_mutation)],
 )
-async def register_edge_voice(payload: EdgeVoiceCreate) -> Voice:
+async def register_edge_voice(payload: EdgeVoiceCreate, request: Request) -> Voice:
     """Register a Microsoft Edge cloud voice by its voice id (e.g.
     ``en-US-AriaNeural``). No file — the engine downloads on demand."""
     name = payload.name.strip()
@@ -143,7 +155,7 @@ async def register_edge_voice(payload: EdgeVoiceCreate) -> Voice:
             row = await repo.get_by_name(name)
     except IntegrityError as e:
         raise HTTPException(status_code=409, detail="a voice with that name already exists") from e
-    await _trigger_rerender()
+    await _trigger_rerender(request)
     return _to_model(row or {"id": new_id, "name": name, "engine": "edge",
                              "model_ref": voice_id, "is_default": payload.set_default})
 
@@ -153,6 +165,7 @@ async def register_edge_voice(payload: EdgeVoiceCreate) -> Voice:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def upload_piper_voice(
+    request: Request,
     name: str = Form(..., min_length=1, max_length=80),
     set_default: bool = Form(False),
     onnx: UploadFile = File(...),
@@ -199,12 +212,12 @@ async def upload_piper_voice(
             await VoicesRepository(s).delete(new_id)
         raise HTTPException(status_code=500, detail=f"could not save model: {e}") from e
 
-    await _trigger_rerender()
+    await _trigger_rerender(request)
     return Voice(id=new_id, name=name, engine="piper", model_ref=slug, is_default=set_default)
 
 
 @router.patch("/{voice_id}", response_model=Voice, dependencies=[Depends(require_admin_mutation)])
-async def patch_voice(voice_id: int, payload: VoicePatch) -> Voice:
+async def patch_voice(voice_id: int, payload: VoicePatch, request: Request) -> Voice:
     if payload.name is None and not payload.set_default:
         raise HTTPException(status_code=400, detail="no fields to patch")
     try:
@@ -221,13 +234,13 @@ async def patch_voice(voice_id: int, payload: VoicePatch) -> Voice:
         raise HTTPException(status_code=409, detail="a voice with that name already exists") from e
     for r in rows:
         if r["id"] == voice_id:
-            await _trigger_rerender()
+            await _trigger_rerender(request)
             return _to_model(r)
     raise HTTPException(status_code=404, detail=f"voice {voice_id} not found")
 
 
 @router.delete("/{voice_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
-async def delete_voice(voice_id: int) -> None:
+async def delete_voice(voice_id: int, request: Request) -> None:
     async with session_scope() as s:
         removed = await VoicesRepository(s).delete(voice_id)
     if removed is None:
@@ -251,4 +264,4 @@ async def delete_voice(voice_id: int) -> None:
                     f.unlink()
                 except OSError:
                     pass
-    await _trigger_rerender()
+    await _trigger_rerender(request)

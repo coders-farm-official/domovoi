@@ -295,12 +295,14 @@ async def delete_satellite(room_id: str, request: Request, purge: bool = False):
 
 
 @router.patch("/{room_id}", response_model=dict)
-async def update_satellite(room_id: str, body: RoomLabelRequest):
+async def update_satellite(room_id: str, body: RoomLabelRequest, request: Request):
     """Update a satellite's display room label (grouping tag). Daily-tier
-    cosmetic metadata, like volume."""
+    cosmetic metadata, like volume. The core route is on the device tier,
+    so the caller's credentials ride along."""
     status, payload = await post_admin(
         f"/v1/admin/satellites/{room_id}/label",
         {"room_label": body.room_label},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -531,27 +533,29 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
 
 
 @router.post("/{room_id}/announce")
-async def announce(room_id: str, body: AnnounceRequest):
+async def announce(room_id: str, body: AnnounceRequest, request: Request):
     status, payload = await post_admin(
         "/v1/admin/announce",
         {"room_id": room_id, "message": body.message},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/announce-all")
-async def announce_all(body: AnnounceRequest):
+async def announce_all(body: AnnounceRequest, request: Request):
     """Broadcast: ``room_id=null`` to fan out to every connected
     satellite. The Domovoi server returns 503 when nothing's connected."""
     status, payload = await post_admin(
         "/v1/admin/announce",
         {"room_id": None, "message": body.message},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{room_id}/dropin/start")
-async def dropin_start(room_id: str, body: DropInStartRequest):
+async def dropin_start(room_id: str, body: DropInStartRequest, request: Request):
     """Open a live two-way drop-in from ``room_id`` (initiator) to
     ``body.target_room`` (Feature 4). Proxies to the Domovoi server, which owns
     the live session pairing. Pass-through status: 400 same room, 404 a room
@@ -559,16 +563,19 @@ async def dropin_start(room_id: str, body: DropInStartRequest):
     status, payload = await post_admin(
         "/v1/admin/dropin/start",
         {"initiator_room": room_id, "target_room": body.target_room},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{room_id}/dropin/end")
-async def dropin_end(room_id: str):
+async def dropin_end(room_id: str, request: Request):
     """Hang up whatever drop-in ``room_id`` is in (Feature 4). 404 when the
     room isn't in a call."""
     status, payload = await post_admin(
-        "/v1/admin/dropin/end", {"room_id": room_id}
+        "/v1/admin/dropin/end",
+        {"room_id": room_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -602,7 +609,7 @@ async def dropin_phone_info(room_id: str):
 
 
 @router.post("/{room_id}/volume")
-async def set_volume(room_id: str, body: VolumeRequest):
+async def set_volume(room_id: str, body: VolumeRequest, request: Request):
     """Set a satellite's master output volume (0-100) from the overview tab.
     Proxies to the Domovoi server, which sends the ``set_volume`` frame to the
     live session (scales TTS + music). 404 when the room isn't connected,
@@ -610,23 +617,27 @@ async def set_volume(room_id: str, body: VolumeRequest):
     status, payload = await post_admin(
         "/v1/admin/satellite/set-volume",
         {"room_id": room_id, "level": body.level},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{room_id}/restart")
-async def restart(room_id: str):
+async def restart(room_id: str, request: Request):
     """Ask a satellite to restart its own service. The Pi drains playback
     then runs a sudo'ed systemctl restart (needs the self-restart sudoers
-    entry from PROVISIONING.md). 404 if the room isn't connected."""
+    entry from PROVISIONING.md). 404 if the room isn't connected. The core
+    route is admin-gated, so the caller's credentials are forwarded."""
     status, payload = await post_admin(
-        "/v1/admin/satellite/restart", {"room_id": room_id}
+        "/v1/admin/satellite/restart",
+        {"room_id": room_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{room_id}/display")
-async def set_display(room_id: str, body: DisplayRequest):
+async def set_display(room_id: str, body: DisplayRequest, request: Request):
     """Drive a video satellite's screen from the drawer's Display block:
     panel on/off or a kiosk-browser restart. Daily-tier device control,
     like volume/restart. Proxies to the Domovoi server, which sends the
@@ -635,6 +646,7 @@ async def set_display(room_id: str, body: DisplayRequest):
     status, payload = await post_admin(
         "/v1/admin/satellite/display",
         {"room_id": room_id, "action": body.action},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -661,11 +673,14 @@ async def upgrade(room_id: str, request: Request):
 
 
 @router.get("/{room_id}/config")
-async def get_satellite_config(room_id: str):
+async def get_satellite_config(room_id: str, request: Request):
     """Editable config for this satellite (schema + the values the Pi
     reported). Passes through to the Domovoi server, which holds the live
     per-room config cache. 404 if the room isn't connected."""
-    status, payload = await get_admin(f"/v1/admin/satellite/{room_id}/config")
+    status, payload = await get_admin(
+        f"/v1/admin/satellite/{room_id}/config",
+        headers=auth_forward_headers(request),
+    )
     return bridge_response(status, payload)
 
 
@@ -678,6 +693,7 @@ async def get_satellite_config(room_id: str):
 )
 async def get_satellite_logs(
     room_id: str,
+    request: Request,
     max_bytes: int = Query(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024),
 ):
     """Tail of the satellite's in-RAM log ring, pulled live over its WS.
@@ -693,17 +709,22 @@ async def get_satellite_logs(
     status, payload = await get_admin(
         f"/v1/admin/satellite/{room_id}/logs?max_bytes={int(max_bytes)}",
         timeout=75.0,
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.patch("/{room_id}/config")
-async def patch_satellite_config(room_id: str, body: ConfigUpdateRequest):
+async def patch_satellite_config(
+    room_id: str, body: ConfigUpdateRequest, request: Request
+):
     """Push config edits to a satellite. The Domovoi server validates them and
     sends a set_config frame; the Pi rewrites its config.toml and restarts to
     apply. Returns {sent, rejected, restarting}."""
     status, payload = await post_admin(
-        f"/v1/admin/satellite/{room_id}/config", {"changes": body.changes}
+        f"/v1/admin/satellite/{room_id}/config",
+        {"changes": body.changes},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 

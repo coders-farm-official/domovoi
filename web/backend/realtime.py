@@ -71,6 +71,7 @@ from web.backend import satellite_adoption
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     fetch_admin_snapshot,
+    service_auth_headers,
     set_cached_snapshot,
 )
 
@@ -316,7 +317,10 @@ class StatePollLoop:
                 pass
 
     async def _tick(self) -> None:
-        snapshot = await fetch_admin_snapshot()
+        # The poll runs on a timer, so there is no caller credential to
+        # forward — the process presents the household device token
+        # instead (see domovoi_client.service_auth_headers).
+        snapshot = await fetch_admin_snapshot(headers=await service_auth_headers())
         set_cached_snapshot(snapshot)
 
         # Per-channel helpers run via emit_for_channel so they share

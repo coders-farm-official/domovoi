@@ -574,6 +574,12 @@ const ConfigField = ({ f, value, onChange }) => {
                    step={f.type === 'int' ? 1 : 'any'}
                    onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
                    style={{ ..._cfgInput, width: 110, textAlign: 'right' }}/>;
+  else if (f.masked)
+    // A secret the server would not read back to this caller (CORE-6).
+    // Read-only, so nobody saves the mask over the real value.
+    input = <input type="text" value={value ?? ''} readOnly
+                   title="sign in as admin to read or change this value"
+                   style={{ ..._cfgInput, minWidth: 240, color: 'var(--fg-faint)' }}/>;
   else
     input = <input type="text" value={value ?? ''} onChange={e => onChange(e.target.value)}
                    style={{ ..._cfgInput, minWidth: 240 }}/>;
@@ -585,6 +591,7 @@ const ConfigField = ({ f, value, onChange }) => {
           <Icon name="info" size={13}/>
         </span>
         {f.tier === 'restart' && <Pill tone="warn">restart</Pill>}
+        {f.masked && <Pill>hidden</Pill>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {input}

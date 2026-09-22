@@ -60,6 +60,42 @@ class FieldSpec:
     pattern: str | None = None      # str fields: full-match regex the value must satisfy
     pattern_help: str | None = None  # the user-facing "expected ..." when it doesn't
 
+    @property
+    def secret(self) -> bool:
+        """Whether this field's VALUE is a credential (see
+        :data:`SECRET_SETTING_NAMES`). Derived from the name rather than
+        declared per row, so a secret added to the registry later is
+        masked without anyone having to remember a flag."""
+        return is_secret_setting(self.name)
+
+
+# Settings whose VALUE is a credential, whether or not they are editable
+# from the dashboard: the config read masks these for every caller but a
+# live admin Bearer (the plugin config bridge masks its own
+# ``kind="secret"`` fields the same way). Listed by settings name so a
+# field that is not in the editable registry today is still recognized if
+# it is added later.
+SECRET_SETTING_NAMES: frozenset[str] = frozenset(
+    {
+        "database_url",      # carries the Postgres password
+        "acoustid_api_key",  # third-party API key
+        "letta_token",       # chat-agent server token
+    }
+)
+
+
+def is_secret_setting(name: str) -> bool:
+    """True when ``name`` names a settings value that must never be read
+    back to anything short of an admin Bearer."""
+    return name in SECRET_SETTING_NAMES
+
+
+def mask_secret(value: object) -> str:
+    """What a secret's value reads as when the caller may not see it.
+    Matches the plugin config bridge's wording so the settings page shows
+    one convention."""
+    return "•••• set" if value not in (None, "") else "not set"
+
 
 # Ollama's ``keep_alive`` syntax: a Go duration ("24h", "90m", "1h30m",
 # "500ms"), a bare number of seconds, "-1" (any negative) for forever, "0"

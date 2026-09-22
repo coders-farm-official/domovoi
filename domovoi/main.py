@@ -28,11 +28,14 @@ from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
+    check_admin_request,
     check_outbound_fetch,
     require_admin_mutation,
     require_admin_read,
     require_admin_security,
     require_admin_security_read,
+    require_chat_callback,
+    require_device,
     token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
@@ -556,7 +559,14 @@ from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 app.include_router(plugins_admin_router)
 
 
-@app.post("/v1/intent")
+@app.post(
+    "/v1/intent",
+    # Device tier: a turn here runs handlers as any room (it can play
+    # music, set timers, read back memory), so it takes the household
+    # token or an admin Bearer. Satellites present the token; the
+    # pre-setup LAN grace keeps a fresh install talking.
+    dependencies=[Depends(require_device)],
+)
 async def post_intent(intent: Intent):
     probe: ConnectivityProbe = app.state.probe
     ctx = Context(
@@ -972,7 +982,11 @@ async def admin_snapshot() -> dict[str, Any]:
     }
 
 
-@app.post("/v1/admin/announce")
+@app.post(
+    "/v1/admin/announce",
+    # Device tier: this speaks on every satellite in the house.
+    dependencies=[Depends(require_device)],
+)
 async def admin_announce(body: _AdminAnnounceBody) -> dict[str, Any]:
     """Speak `message` on one or all connected satellites.
 
@@ -1018,7 +1032,11 @@ class _AdminDropInEndBody(BaseModel):
     room_id: str
 
 
-@app.post("/v1/admin/dropin/start")
+@app.post(
+    "/v1/admin/dropin/start",
+    # Device tier: opens a live two-way mic bridge between rooms.
+    dependencies=[Depends(require_device)],
+)
 async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     """Open a live two-way drop-in between two connected satellite rooms
     (Feature 4). Web-initiated equivalent of the voice "drop in on X" path —
@@ -1062,7 +1080,11 @@ async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     }
 
 
-@app.post("/v1/admin/dropin/end")
+@app.post(
+    "/v1/admin/dropin/end",
+    # Device tier, like the start above.
+    dependencies=[Depends(require_device)],
+)
 async def admin_dropin_end(body: _AdminDropInEndBody) -> dict[str, Any]:
     """Hang up whatever drop-in ``room_id`` is in (Feature 4). 404 when the
     room isn't in a call."""
@@ -1079,7 +1101,12 @@ class _AdminSatelliteRestartBody(BaseModel):
     room_id: str
 
 
-@app.post("/v1/admin/satellite/restart")
+@app.post(
+    "/v1/admin/satellite/restart",
+    # Admin tier: bouncing a Pi's service is a host action, and a
+    # repeated one is a restart loop. Bearer-only; pre-setup grace.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str, Any]:
     """Ask a connected satellite to restart its own service. Used after a
     config edit that needs a fresh satellite process (Phase B) and as a
@@ -1125,7 +1152,11 @@ class _AdminSetVolumeBody(BaseModel):
     level: int = Field(..., ge=0, le=100)
 
 
-@app.post("/v1/admin/satellite/set-volume")
+@app.post(
+    "/v1/admin/satellite/set-volume",
+    # Device tier: everyday room control, like play/pause.
+    dependencies=[Depends(require_device)],
+)
 async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any]:
     """Set a connected satellite's master output volume (0-100). Drives the
     Pi's hardware mixer, which scales BOTH TTS playback and music — the same
@@ -1170,7 +1201,12 @@ class _AdminSatelliteDisplayBody(BaseModel):
     action: Literal["on", "off", "restart_kiosk"]
 
 
-@app.post("/v1/admin/satellite/display")
+@app.post(
+    "/v1/admin/satellite/display",
+    # Admin tier: drives the panel and restarts the kiosk browser —
+    # the same class of host action as the service restart above.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str, Any]:
     """Drive a video satellite's screen: switch the panel on/off or restart
     the kiosk browser service. 503 when nothing is connected, 404 when this
@@ -1236,7 +1272,12 @@ async def admin_version() -> dict[str, Any]:
     return await git_version.version_state()
 
 
-@app.post("/v1/admin/version/check")
+@app.post(
+    "/v1/admin/version/check",
+    # Device tier: read-shaped, but it still runs git fetch against
+    # the upstream on demand.
+    dependencies=[Depends(require_device)],
+)
 async def admin_version_check() -> dict[str, Any]:
     """Fetch the upstream and report how far behind/ahead HEAD is. Best-effort
     — offline / no tracking branch comes back with upstream=False and an error
@@ -1244,7 +1285,12 @@ async def admin_version_check() -> dict[str, Any]:
     return await git_version.commits_behind()
 
 
-@app.post("/v1/admin/version/pull")
+@app.post(
+    "/v1/admin/version/pull",
+    # Admin tier: this changes the code on disk that the core and
+    # /v1/satellite-code serve from. Bearer-only; pre-setup grace.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_version_pull() -> dict[str, Any]:
     """`git pull --ff-only` — a deliberate, separate action (never invoked by
     the check). A dirty or diverged tree returns pulled=False plus the git
@@ -1390,7 +1436,14 @@ async def admin_rotate_device_token() -> dict[str, Any]:
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
 
-@app.post("/v1/admin/chat-tool")
+@app.post(
+    "/v1/admin/chat-tool",
+    # Callback tier: the caller must present this boot's chat-callback
+    # secret, which only the proxy-tool source this core generated
+    # carries. Letta's sandbox holds no admin session, so neither the
+    # admin nor the device tier fits.
+    dependencies=[Depends(require_chat_callback)],
+)
 async def admin_chat_tool(body: _AdminChatToolBody) -> dict[str, str]:
     """Execute a chat-mode tool call on behalf of the Letta agent (#8).
 
@@ -1398,7 +1451,12 @@ async def admin_chat_tool(body: _AdminChatToolBody) -> dict[str, str]:
     domovoi's handlers/DB/MPD directly, so the generated proxy tool POSTs
     ``{tool, args}`` here instead. ``dispatch_tool`` gates to ``chat_exposed``
     handlers and degrades to a short apology on error, so this never 500s the
-    agent's tool round-trip. LAN-trusted like the other admin endpoints.
+    agent's tool round-trip.
+
+    The request must carry ``X-Chat-Callback`` with this boot's secret
+    (``admin_auth.chat_callback_secret``); the generated tool source is
+    written with it. A core restart mints a new one, so the tools have to
+    be regenerated — ``POST /v1/admin/chat/resync`` does that.
     """
     from domovoi.letta_tools import dispatch_tool
 
@@ -1425,7 +1483,12 @@ async def admin_chat_resync() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"resync failed: {e}") from e
 
 
-@app.post("/v1/admin/wake/record/start")
+@app.post(
+    "/v1/admin/wake/record/start",
+    # Admin tier: clears the word's clip dir and opens the mic for a
+    # long capture run. The dashboard hop is admin-gated too.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_wake_record_start(
     body: _AdminWakeRecordStartBody,
 ) -> dict[str, Any]:
@@ -1513,7 +1576,11 @@ async def admin_wake_record_start(
     }
 
 
-@app.post("/v1/admin/wake/record/stop")
+@app.post(
+    "/v1/admin/wake/record/stop",
+    # Admin tier, paired with record/start above.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_wake_record_stop(
     body: _AdminWakeRecordStopBody,
 ) -> dict[str, Any]:
@@ -1535,7 +1602,11 @@ async def admin_wake_record_stop(
     return {"recording": False, "room_id": body.room_id}
 
 
-@app.post("/v1/admin/wake/push")
+@app.post(
+    "/v1/admin/wake/push",
+    # Admin tier: the Pi syncs a model and self-restarts to load it.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     """Push a trained wake model to a connected satellite. The wake word must
     be ``ready`` with a ``model_ref`` (a trained ``<slug>.onnx`` exists). The
@@ -1583,7 +1654,12 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     }
 
 
-@app.post("/v1/admin/wake/score")
+@app.post(
+    "/v1/admin/wake/score",
+    # Admin tier: reads the recorded clips and rewrites their
+    # sidecars. Same tier as the rest of the wake surface.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
     """Offline-score a wake word's recorded clips against its trained model —
     the decisive real-vs-harness check. Feeds each clip (raw AND auto-trimmed)
@@ -1672,7 +1748,12 @@ class _AdminSatelliteConfigBody(BaseModel):
     changes: dict[str, Any]
 
 
-@app.post("/v1/admin/satellite/{room_id}/config")
+@app.post(
+    "/v1/admin/satellite/{room_id}/config",
+    # Admin tier: this rewrites the Pi's config.toml and restarts it to
+    # apply — it decides whether that room has a working microphone.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_update_satellite_config(
     room_id: str, body: _AdminSatelliteConfigBody
 ) -> dict[str, Any]:
@@ -1735,7 +1816,14 @@ async def admin_update_satellite_config(
 SATELLITE_LOG_MAX_BYTES = 10 * 1024 * 1024
 
 
-@app.get("/v1/admin/satellite/{room_id}/logs")
+@app.get(
+    "/v1/admin/satellite/{room_id}/logs",
+    # ADD-1 — admin-tier READ: a satellite logs every transcript it hears,
+    # so this returns room conversation, not just diagnostics. The
+    # dashboard hop has always been gated; this is the same gate on the
+    # route that actually holds the data. Bearer or the dashboard cookie.
+    dependencies=[Depends(require_admin_read)],
+)
 async def admin_get_satellite_logs(
     room_id: str,
     max_bytes: int = Query(
@@ -2023,7 +2111,11 @@ class _RoomLabelBody(BaseModel):
     room_label: str | None = Field(default=None, max_length=80)
 
 
-@app.post("/v1/admin/satellites/{room_id}/label")
+@app.post(
+    "/v1/admin/satellites/{room_id}/label",
+    # Device tier: cosmetic grouping label.
+    dependencies=[Depends(require_device)],
+)
 async def admin_set_satellite_label(
     room_id: str, body: _RoomLabelBody
 ) -> dict[str, Any]:
@@ -2061,7 +2153,12 @@ async def _run_sounds_regenerate() -> None:
         )
 
 
-@app.post("/v1/admin/sounds/regenerate")
+@app.post(
+    "/v1/admin/sounds/regenerate",
+    # Admin tier: re-renders every voice's clips (dozens of TTS
+    # calls) and pushes them to every satellite.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_sounds_regenerate() -> dict[str, Any]:
     """Kick off a re-render of the sound clips (greetings + per-voice clips)
     from the DB, then tell every connected satellite to re-sync. Called by the
@@ -2075,7 +2172,12 @@ async def admin_sounds_regenerate() -> dict[str, Any]:
     return {"started": True}
 
 
-@app.post("/v1/admin/sounds/setup-clips")
+@app.post(
+    "/v1/admin/sounds/setup-clips",
+    # Admin tier, like the regenerate above; the media-prep job
+    # forwards the operator's credentials when it calls this.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_render_setup_clips() -> dict[str, Any]:
     """Render the satellite's setup phrase set in the household's default
     voice. Synchronous, unlike the regenerate above.
@@ -2100,7 +2202,11 @@ class _VoiceSampleBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
 
 
-@app.post("/v1/admin/voices/sample")
+@app.post(
+    "/v1/admin/voices/sample",
+    # Device tier: synthesizes one sample line.
+    dependencies=[Depends(require_device)],
+)
 async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
     """Synthesize a sample line (intro + random fun fact) in a registered
     voice and return it as WAV. Powers the web Voices page play button — the
@@ -2223,7 +2329,11 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
             await sess._safe_send_text({"type": "music_stop"})
 
 
-@app.post("/v1/admin/music/play")
+@app.post(
+    "/v1/admin/music/play",
+    # Device tier: ordinary playback.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_play(body: _AdminPlayBody) -> dict[str, Any]:
     response = await _admin_route_intent(f"play {body.query}", body.room_id)
     await _admin_dispatch_music(response, body.room_id)
@@ -2235,7 +2345,11 @@ class _AdminPlayTrackBody(BaseModel):
     track_id: int = Field(..., ge=1)
 
 
-@app.post("/v1/admin/music/play-track")
+@app.post(
+    "/v1/admin/music/play-track",
+    # Device tier: ordinary playback.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
     """Play a specific library_tracks row by id, bypassing the router.
 
@@ -2412,7 +2526,11 @@ class _AdminPlayTracksBody(BaseModel):
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
 
 
-@app.post("/v1/admin/music/play-tracks")
+@app.post(
+    "/v1/admin/music/play-tracks",
+    # Device tier: ordinary playback.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     """Load an arbitrary ordered list of library tracks into ``room_id``'s
     MPD queue and start playback — the browser music player's "cast this
@@ -2618,7 +2736,13 @@ async def admin_music_queue(room_id: str) -> dict[str, Any]:
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/add")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/add",
+    # Device tier (ADD-3): the household device blocks are enforced
+    # on the dashboard hop, so the core route needs a credential of
+    # its own or a blocked device just calls :6370 instead.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_add(
     room_id: str, body: _AdminQueueAddBody
 ) -> dict[str, Any]:
@@ -2710,7 +2834,11 @@ async def admin_music_queue_add(
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/remove")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/remove",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_remove(
     room_id: str, body: _AdminQueueRemoveBody
 ) -> dict[str, Any]:
@@ -2733,7 +2861,11 @@ async def admin_music_queue_remove(
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/move")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/move",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_move(
     room_id: str, body: _AdminQueueMoveBody
 ) -> dict[str, Any]:
@@ -2759,7 +2891,11 @@ async def admin_music_queue_move(
     return {"moved": True, "song_id": body.song_id, "to_position": body.to_position}
 
 
-@app.post("/v1/admin/music/queue/{room_id}/clear")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/clear",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     """Empty the queue and stop the room. The satellite gets its music_stop
     frame so mpg123 exits instead of sitting on a silent stream."""
@@ -2786,7 +2922,12 @@ class _AdminAddByQueryBody(BaseModel):
     attach_to_playlist_id: int | None = Field(None, ge=1)
 
 
-@app.post("/v1/admin/music/add-by-query")
+@app.post(
+    "/v1/admin/music/add-by-query",
+    # Device tier: queues an acquisition the fulfiller will fetch.
+    # (The by-URL sibling keeps its own outbound-fetch tier.)
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_add_by_query(body: _AdminAddByQueryBody) -> dict[str, Any]:
     """Queue a *generic* media acquisition by free-text query (design
     §4.8/§4.11). This endpoint exists even with no media provider
@@ -3043,39 +3184,100 @@ async def plugin_status(slug: str) -> dict[str, Any]:
     "/v1/admin/config",
     # §7.3: config READS are gated too (plugin config carries secrets).
     # GETs may render via the dashboard cookie; Bearer also accepted.
+    # CORE-6: what the answer CONTAINS depends on which of the two the
+    # caller presented — see below.
     dependencies=[Depends(require_admin_read)],
 )
-async def admin_get_config() -> dict[str, Any]:
+async def admin_get_config(
+    request: Request,
+    section: str | None = Query(
+        default=None,
+        description=(
+            "Ask for one section only. 'advanced' is the infrastructure "
+            "block (database URL, ports, paths) and needs an admin Bearer."
+        ),
+    ),
+) -> dict[str, Any]:
     """Editable-config registry joined with the live settings values, for
     the web settings gear. The web backend passes this through rather than
-    reading its own (separate-process, stale) settings copy."""
-    from domovoi.config_schema import EDITABLE_FIELDS
+    reading its own (separate-process, stale) settings copy.
 
-    fields = [
-        {
-            "name": spec.name,
-            "label": spec.label,
-            "group": spec.group,
-            "section": spec.section,
-            "tier": spec.tier,
-            "type": spec.type,
-            "min": spec.min,
-            "max": spec.max,
-            "choices": spec.choices,
-            "unit": spec.unit,
-            "help": spec.help,
-            "value": getattr(settings, spec.name, None),
-        }
-        for spec in EDITABLE_FIELDS
-    ]
+    CORE-6 — two things depend on HOW the caller authenticated, because
+    cookies are host-scoped rather than port-scoped and the pre-setup
+    grace means "anyone on the LAN":
+
+    * secret values (``config_schema.SECRET_SETTING_NAMES``: the database
+      URL and the third-party keys) read back as a mask unless the caller
+      presented an admin Bearer;
+    * the ``advanced`` section — the infrastructure knobs — is included
+      only for a Bearer (or a pre-setup install, which has no credential
+      to present yet). ``?section=advanced`` from a cookie-only caller is
+      a 401 rather than a silently empty list, so the dashboard can say
+      "sign in to see these" instead of showing nothing.
+
+    ``advanced_available`` tells the page which of those it got.
+    """
+    from domovoi.config_schema import EDITABLE_FIELDS, mask_secret
+
+    wants = (section or "").strip().lower() or None
+    if wants not in (None, "common", "advanced"):
+        raise HTTPException(
+            status_code=422, detail="section must be 'common' or 'advanced'"
+        )
+
+    auth = await check_admin_request(request)
+    full_read = auth == "ok"            # a live admin Bearer
+    advanced_ok = full_read or auth == "pre-setup"
+    if wants == "advanced" and not advanced_ok:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "the advanced section needs an admin session — sign in "
+                "with Authorization: Bearer to read it"
+            ),
+        )
+
+    fields = []
+    for spec in EDITABLE_FIELDS:
+        if wants is not None and spec.section != wants:
+            continue
+        if spec.section == "advanced" and not advanced_ok:
+            continue
+        value = getattr(settings, spec.name, None)
+        fields.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "group": spec.group,
+                "section": spec.section,
+                "tier": spec.tier,
+                "type": spec.type,
+                "min": spec.min,
+                "max": spec.max,
+                "choices": spec.choices,
+                "unit": spec.unit,
+                "help": spec.help,
+                "secret": spec.secret,
+                # ``masked`` says the value in this row is the mask, not
+                # the setting — the page renders it read-only rather than
+                # letting someone save the mask back over the real value.
+                "masked": bool(spec.secret and not full_read),
+                "value": value if (full_read or not spec.secret) else mask_secret(value),
+            }
+        )
     # One group per plugin (design §4.6): FieldSpec rows joined with the
     # plugin's live settings; kind="secret" values arrive pre-masked.
     from domovoi.plugins_runtime.config_bridge import PLUGIN_CONFIG
 
     plugin_fields: list[dict[str, Any]] = []
-    for _slug in PLUGIN_CONFIG.slugs():
-        plugin_fields.extend(PLUGIN_CONFIG.dashboard_group(_slug))
-    return {"fields": fields, "plugin_fields": plugin_fields}
+    if wants != "advanced":
+        for _slug in PLUGIN_CONFIG.slugs():
+            plugin_fields.extend(PLUGIN_CONFIG.dashboard_group(_slug))
+    return {
+        "fields": fields,
+        "plugin_fields": plugin_fields,
+        "advanced_available": advanced_ok,
+    }
 
 
 class _AdminConfigUpdateBody(BaseModel):
@@ -3272,7 +3474,11 @@ class _AdminPlayPlaylistBody(BaseModel):
     shuffle: bool = False
 
 
-@app.post("/v1/admin/music/play-playlist")
+@app.post(
+    "/v1/admin/music/play-playlist",
+    # Device tier: ordinary playback.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_play_playlist(body: _AdminPlayPlaylistBody) -> dict[str, Any]:
     """Start a playlist (or the Favorites virtual playlist) in
     ``room_id``. Ordered mode (default) plays the first track and
@@ -3445,7 +3651,11 @@ _MUSIC_ACTIONS = {
 }
 
 
-@app.post("/v1/admin/music/{action}/{room_id}")
+@app.post(
+    "/v1/admin/music/{action}/{room_id}",
+    # Device tier: pause / resume / stop / skip in a room.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     transcript = _MUSIC_ACTIONS.get(action)
     if transcript is None:
@@ -3458,7 +3668,11 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     return _admin_response_dict(response)
 
 
-@app.post("/v1/admin/library/reindex")
+@app.post(
+    "/v1/admin/library/reindex",
+    # Admin tier: a full library sweep plus an MPD rescan per room.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_library_reindex() -> dict[str, Any]:
     """Kick the library indexer in the background, then tell every
     per-room MPD to rescan MUSIC_DIR.
@@ -3500,7 +3714,11 @@ async def admin_library_reindex() -> dict[str, Any]:
     return {"queued": True, "worker": "library_indexer"}
 
 
-@app.post("/v1/admin/library/enrich")
+@app.post(
+    "/v1/admin/library/enrich",
+    # Admin tier: a long rate-limited run against outside services.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def admin_library_enrich() -> dict[str, Any]:
     """Kick the library enricher in the background.
 

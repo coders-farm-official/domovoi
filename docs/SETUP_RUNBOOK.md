@@ -230,6 +230,14 @@ Post text straight at the core's **`/v1/intent`** endpoint. That is the
 same router the satellites drive — it runs fast paths, handlers, and the
 tool model, and writes an `intents_log` row per turn.
 
+Once you have claimed admin, the endpoint wants the household device
+token, so the examples below carry it. It lives in
+`~/.domovoi/device-token.txt` on the server (mode 0600) and the shell
+snippets read it straight from there; on a box where you are not the
+domovoi user, read it from the dashboard's Settings page instead, or
+pass `-H "Authorization: Bearer <admin token>"`. Before setup, drop the
+header — a fresh install answers without one.
+
 > **Not the dashboard's chat box.** That surface streams directly to
 > Ollama (`chat_stream`) and never enters the router, so it proves Ollama
 > is reachable and nothing else — no handler runs, no timer is created,
@@ -239,14 +247,15 @@ A fast path, no LLM involved — should return instantly and appear on the
 Timers screen:
 
 ```bash
-curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"set a timer for 2 minutes","room_id":"kitchen"}'
+TOKEN=$(cat ~/.domovoi/device-token.txt)
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -H "X-Device-Token: $TOKEN" -d '{"transcript":"set a timer for 2 minutes","room_id":"kitchen"}'
 ```
 
 A routed turn through the tool model and then the Q&A model — slower, and
 the one that proves your model settings are actually working:
 
 ```bash
-curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"what is the capital of Mongolia","room_id":"kitchen"}'
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -H "X-Device-Token: $TOKEN" -d '{"transcript":"what is the capital of Mongolia","room_id":"kitchen"}'
 ```
 
 **Test TTS too, while you're here.** Setting `synthesize` returns WAV
@@ -254,7 +263,7 @@ bytes, which exercises router → handler → TTS in one call — the best
 smoke test available before a satellite exists:
 
 ```bash
-curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -d '{"transcript":"what time is it","room_id":"kitchen","synthesize":true}' -o /tmp/tts-test.wav -D -
+curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -H "X-Device-Token: $TOKEN" -d '{"transcript":"what time is it","room_id":"kitchen","synthesize":true}' -o /tmp/tts-test.wav -D -
 ```
 
 The response headers carry `X-Response-Text` and `X-Matched-Handler`, and

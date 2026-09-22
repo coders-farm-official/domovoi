@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -27,7 +27,7 @@ from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
 
 from web.backend.api.files_security import detect_removable, drive_token
-from web.backend.domovoi_client import post_admin
+from web.backend.domovoi_client import auth_forward_headers, post_admin
 from web.backend.db import session_scope
 from web.backend.satellite_adoption import _volume_label  # label pre-filter reuse
 
@@ -165,7 +165,7 @@ async def media_targets() -> list[dict[str, Any]]:
 
 
 @router.post("/prepare", dependencies=[Depends(require_admin_mutation)])
-async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
+async def media_prepare(body: PrepareRequest, request: Request) -> dict[str, Any]:
     """Start (or attach to) a build. One live build per target."""
     board = BOARDS.get(body.board)
     if board is None or not board.supported:
@@ -230,13 +230,22 @@ async def media_prepare(body: PrepareRequest) -> dict[str, Any]:
         job_id = int(row[0])
         await s.execute(text(_NOTIFY), {"p": str(job_id)})
 
+    # The build runs after this response, so it can't read the request
+    # later: capture the operator's credentials NOW and hand them to the
+    # job, which needs them for its own hop to the core (below).
     asyncio.create_task(
-        _run_build(job_id, body, mount), name=f"media-build-{job_id}"
+        _run_build(job_id, body, mount, auth_forward_headers(request)),
+        name=f"media-build-{job_id}",
     )
     return {"job": _public(await _job_row(job_id) or {}), "attached": False}
 
 
-async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> None:
+async def _run_build(
+    job_id: int,
+    body: PrepareRequest,
+    mount: Path | None,
+    auth_headers: dict[str, str] | None = None,
+) -> None:
     async def progress(phase: str, pct: int, text_: str) -> None:
         await _update_job(job_id, phase=phase, pct=pct, status_text=text_)
 
@@ -252,7 +261,9 @@ async def _run_build(job_id: int, body: PrepareRequest, mount: Path | None) -> N
     # files rather than on a failure here.
     try:
         await progress("assemble", 45, "rendering setup announcements")
-        status, payload_ = await post_admin("/v1/admin/sounds/setup-clips", {})
+        status, payload_ = await post_admin(
+            "/v1/admin/sounds/setup-clips", {}, headers=auth_headers
+        )
         if status != 200:
             log.warning("setup clips: core returned %s (%s)", status, payload_)
     except Exception as e:  # noqa: BLE001

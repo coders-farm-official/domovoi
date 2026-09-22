@@ -18,7 +18,9 @@ Two halves:
     function signature + Google-style docstring, then runs the function
     inside its OWN container sandbox when the model calls it. Since that
     sandbox can't reach the core's handlers/DB/MPD directly, each
-    proxy just POSTs ``{tool, args}`` back to ``POST /v1/admin/chat-tool``.
+    proxy just POSTs ``{tool, args}`` back to ``POST /v1/admin/chat-tool``,
+    presenting this boot's chat-callback secret so the endpoint answers
+    only to tool source this core generated.
 
   - ``dispatch_tool(name, args, *, app)`` — the server side of that round
     trip. Routes the proxied call to the matching ``handler.execute_from_tool``
@@ -104,7 +106,15 @@ def _proxy_source(schema: dict[str, Any], callback_url: str) -> str:
     core, which runs the REAL handler (``dispatch_tool``) and returns text
     the agent folds back into the conversation. Letta derives the tool name +
     arg-schema from the function signature + a Google-style docstring, so EVERY
-    parameter needs an ``Args:`` description (Letta 400s otherwise)."""
+    parameter needs an ``Args:`` description (Letta 400s otherwise).
+
+    The generated request carries this boot's chat-callback secret
+    (``admin_auth.CHAT_CALLBACK_HEADER``): the callback endpoint accepts
+    only tool source this core generated. Because the secret is per-boot,
+    the sources must be regenerated after a core restart —
+    ``POST /v1/admin/chat/resync`` (which every plugin lifecycle change
+    already runs) does that."""
+    from domovoi.admin_auth import CHAT_CALLBACK_HEADER, chat_callback_secret
     name = schema["name"]
     desc = _sanitize_doc(schema.get("description") or f"Run the {name} action.")
     params = schema.get("parameters") or {}
@@ -138,7 +148,10 @@ def _proxy_source(schema: dict[str, Any], callback_url: str) -> str:
         f"    _req = _u.Request(\n"
         f"        {url!r},\n"
         f"        data=_json.dumps({{'tool': {name!r}, 'args': _a}}).encode(),\n"
-        f"        headers={{'Content-Type': 'application/json'}},\n"
+        f"        headers={{\n"
+        f"            'Content-Type': 'application/json',\n"
+        f"            {CHAT_CALLBACK_HEADER!r}: {chat_callback_secret()!r},\n"
+        f"        }},\n"
         f"    )\n"
         f"    try:\n"
         f"        with _u.urlopen(_req, timeout=25) as _r:\n"

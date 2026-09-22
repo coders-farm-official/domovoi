@@ -233,8 +233,13 @@ Say (or POST to `/v1/intent`): *"give me a compliment"*.
 ```bash
 curl -X POST http://localhost:6370/v1/intent \
   -H "Content-Type: application/json" \
+  -H "X-Device-Token: $(cat ~/.domovoi/device-token.txt)" \
   -d '{"transcript":"give me a compliment","room_id":"kitchen"}'
 ```
+
+> `/v1/intent` is on the device tier: pass the household token from
+> `~/.domovoi/device-token.txt` as `X-Device-Token` (an admin Bearer works
+> too). Before first-run setup the call needs no header at all.
 
 Iterate with `domovoi plugin dev ./compliments --watch` — it polls for file
 changes and re-validates, printing a reminder that code changes need a core

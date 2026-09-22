@@ -480,6 +480,7 @@ def _unique_path(dirpath: Path, name: str) -> Path:
 
 @router.post("/library/upload", response_model=LibraryUploadResult)
 async def upload_to_library(
+    request: Request,
     files: list[UploadFile] = File(...),
 ) -> LibraryUploadResult:
     """Upload audio into the library from the browser.
@@ -572,7 +573,9 @@ async def upload_to_library(
     # Index the new files into library_tracks and tell each room's MPD to
     # rescan (so they're playable). Best-effort: a saved-but-unindexed
     # file is recovered by the Domovoi server's startup sweep.
-    status_code, _ = await post_admin("/v1/admin/library/reindex")
+    status_code, _ = await post_admin(
+        "/v1/admin/library/reindex", headers=auth_forward_headers(request)
+    )
     reindex_triggered = status_code == 200
     if not reindex_triggered:
         log.warning(
@@ -707,7 +710,9 @@ async def _attach_queue_provenance(cards: list[NowPlaying]) -> None:
     "/now-playing/{room_id}/favorite",
     response_model=FavoriteNowPlayingResult,
 )
-async def favorite_now_playing(room_id: str) -> FavoriteNowPlayingResult:
+async def favorite_now_playing(
+    room_id: str, request: Request
+) -> FavoriteNowPlayingResult:
     """Favorite whatever is currently playing in ``room_id``.
 
     Behavior depends on what the room's MPD currentsong looks like:
@@ -748,7 +753,7 @@ async def favorite_now_playing(room_id: str) -> FavoriteNowPlayingResult:
     if not song_file.startswith("http"):
         return await _favorite_library_track(song_file, title, artist)
 
-    return await _favorite_external_stream(title, artist, room_id)
+    return await _favorite_external_stream(title, artist, room_id, request)
 
 
 # ─── Action endpoints (proxied to domovoi admin) ──────────────────────
@@ -760,16 +765,17 @@ async def favorite_now_playing(room_id: str) -> FavoriteNowPlayingResult:
 
 
 @router.post("/play")
-async def play(body: PlayRequest):
+async def play(body: PlayRequest, request: Request):
     status, payload = await post_admin(
         "/v1/admin/music/play",
         {"room_id": body.room_id, "query": body.query},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/play-playlist")
-async def play_playlist(body: PlayPlaylistRequest):
+async def play_playlist(body: PlayPlaylistRequest, request: Request):
     """Start a playlist (real or the Favorites virtual one) in a
     room. Proxies to the Domovoi server's
     ``/v1/admin/music/play-playlist`` which handles the SELECT,
@@ -783,12 +789,13 @@ async def play_playlist(body: PlayPlaylistRequest):
             "playlist_id": body.playlist_id,
             "shuffle": body.shuffle,
         },
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/add-by-query")
-async def add_by_query(body: AddByQueryRequest):
+async def add_by_query(body: AddByQueryRequest, request: Request):
     """Queue a generic media acquisition by free-text query (design
     §4.8). Proxies the core's ``/v1/admin/music/add-by-query`` — an
     open daily action (§7.3). Exists even with no provider installed:
@@ -802,6 +809,7 @@ async def add_by_query(body: AddByQueryRequest):
             "artist": body.artist,
             "attach_to_playlist_id": body.attach_to_playlist_id,
         },
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -832,7 +840,7 @@ async def add_by_url(body: AddByUrlRequest, request: Request):
 
 
 @router.post("/play-track")
-async def play_track(body: PlayTrackRequest):
+async def play_track(body: PlayTrackRequest, request: Request):
     """Direct play of a library track by id. Proxies to the
     Domovoi server's ``/v1/admin/music/play-track``, which hands the
     file straight to MPD without going through the router — so a UI
@@ -842,43 +850,56 @@ async def play_track(body: PlayTrackRequest):
     status, payload = await post_admin(
         "/v1/admin/music/play-track",
         {"room_id": body.room_id, "track_id": body.track_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/pause/{room_id}")
-async def pause(room_id: str):
-    status, payload = await post_admin(f"/v1/admin/music/pause/{room_id}")
+async def pause(room_id: str, request: Request):
+    status, payload = await post_admin(
+        f"/v1/admin/music/pause/{room_id}", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
 @router.post("/resume/{room_id}")
-async def resume(room_id: str):
-    status, payload = await post_admin(f"/v1/admin/music/resume/{room_id}")
+async def resume(room_id: str, request: Request):
+    status, payload = await post_admin(
+        f"/v1/admin/music/resume/{room_id}", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
 @router.post("/stop/{room_id}")
-async def stop(room_id: str):
-    status, payload = await post_admin(f"/v1/admin/music/stop/{room_id}")
+async def stop(room_id: str, request: Request):
+    status, payload = await post_admin(
+        f"/v1/admin/music/stop/{room_id}", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
 @router.post("/skip/{room_id}")
-async def skip(room_id: str):
-    status, payload = await post_admin(f"/v1/admin/music/skip/{room_id}")
+async def skip(room_id: str, request: Request):
+    status, payload = await post_admin(
+        f"/v1/admin/music/skip/{room_id}", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
 @router.post("/library/reindex")
-async def reindex():
-    status, payload = await post_admin("/v1/admin/library/reindex")
+async def reindex(request: Request):
+    status, payload = await post_admin(
+        "/v1/admin/library/reindex", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
 @router.post("/library/enrich")
-async def enrich():
-    status, payload = await post_admin("/v1/admin/library/enrich")
+async def enrich(request: Request):
+    status, payload = await post_admin(
+        "/v1/admin/library/enrich", headers=auth_forward_headers(request)
+    )
     return bridge_response(status, payload)
 
 
@@ -1207,7 +1228,7 @@ def _ext_to_mime(ext: str) -> str:
 
 
 @router.post("/play-tracks")
-async def play_tracks(body: CastTracksRequest):
+async def play_tracks(body: CastTracksRequest, request: Request):
     """Cast an arbitrary ordered queue of library tracks into a room's MPD
     (the browser player's Spotify-Connect-style hand-off). Proxies to the
     Domovoi server's ``/v1/admin/music/play-tracks``; from there, the existing
@@ -1215,6 +1236,7 @@ async def play_tracks(body: CastTracksRequest):
     status, payload = await post_admin(
         "/v1/admin/music/play-tracks",
         {"room_id": body.room_id, "track_ids": body.track_ids},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -1426,7 +1448,7 @@ async def _favorite_library_track(
 
 
 async def _favorite_external_stream(
-    title: str, artist: str, room_id: str
+    title: str, artist: str, room_id: str, request: Request
 ) -> FavoriteNowPlayingResult:
     """Enqueue a generic media acquisition for ``title artist`` via the
     core's add-by-query admin endpoint (design §4.8).
@@ -1447,6 +1469,7 @@ async def _favorite_external_stream(
     status_code, payload = await post_admin(
         "/v1/admin/music/add-by-query",
         {"room_id": room_id, "query": query, "artist": artist or None},
+        headers=auth_forward_headers(request),
     )
     if status_code == 0:
         raise HTTPException(
