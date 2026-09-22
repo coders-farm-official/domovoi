@@ -141,27 +141,47 @@ satellite restart and volume, wake-word clip recording, sound regeneration,
 library reindex — is **daily tier**. The `admin` in the path means "used by
 the dashboard," not "requires the admin password."
 
+The rows marked **fails closed** are the *security tier*
+(`require_admin_security`): the same posture plugin management has always
+had. Before setup the setup code protects *who becomes admin*; the security
+tier makes sure nothing that changes what the server runs or trusts can
+happen *meanwhile*. `python -m domovoi.main --reset-admin` returns the
+install to the pre-setup state and therefore reopens only the daily surface.
+`domovoi/tests/test_route_auth_matrix.py` walks every mutating route of both
+processes and fails when one has no gate and is not allowlisted with a
+reason, so a new route cannot quietly ship open.
+
 ### How the credential works
 
 - **First run: the setup code.** On boot with no admin credential, the core
   writes an **8-word code** (256-word list, 64 bits of entropy) to
-  `~/.domovoi/setup-code.txt` on the server **and prints it to the server
-  console**. `POST /api/auth/setup` requires that code before it will
-  accept your chosen admin password — this is **proof of possession of the
-  server machine**, and it closes the race where some other LAN host claims
-  the admin tier before you do. The code file is deleted the moment setup
-  completes; a restart before setup re-uses the same code rather than
-  invalidating the one you already wrote down.
+  `~/.domovoi/setup-code.txt` on the server (**mode 0600** — owner-readable
+  only) **and prints it to the server console**. `POST /api/auth/setup`
+  requires that code before it will accept your chosen admin password —
+  this is **proof of possession of the server machine**, and it closes the
+  race where some other LAN host claims the admin tier before you do. The
+  code is **valid for 24 hours** from when it was written: a restart inside
+  that window re-uses the same code rather than invalidating the one you
+  already wrote down; a restart after it prints a fresh one. The code file
+  is deleted the moment setup completes.
 - **The password** is hashed with **argon2id**; only the hash is stored (a
-  single row in Postgres). Minimum 10 characters.
+  single row in Postgres). Minimum 10 characters. **Changing it revokes
+  every other session** — only the session that made the change stays
+  logged in.
 - **Sessions** are 256-bit bearer tokens; the database stores **only the
   sha256** of each token, with a **30-day sliding expiry** (using it renews
-  it). You can list and revoke sessions from the dashboard settings.
+  it) under a **90-day absolute cap** (a session older than that is refused
+  however recently it was used). You can list and revoke sessions from the
+  dashboard settings.
 - **Login is throttled** per source IP: exponential backoff starting at 1 s
-  and doubling per consecutive failure, capped at 5 minutes. Failed setup
-  codes count against the same backoff. The throttle is in-memory (a server
-  restart resets it — accepted: argon2id keeps offline guessing expensive,
-  and the setup code is single-use).
+  and doubling per consecutive failure, capped at 5 minutes. The attempt is
+  counted **before** the password is verified, so concurrent attempts from
+  one source cannot slip through together. Failed setup codes count against
+  the same backoff. The throttle is in-memory (a server restart resets it —
+  accepted: argon2id keeps offline guessing expensive, and the setup code is
+  single-use). Dashboard callers are throttled by their own address: the
+  core trusts `X-Forwarded-For` only from loopback, where the web process
+  runs.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
   but the cookie can only *render* authenticated GET state. **Every
   mutation requires the `Authorization: Bearer` header** (the dashboard

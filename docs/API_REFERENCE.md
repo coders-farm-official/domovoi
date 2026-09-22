@@ -23,33 +23,51 @@ the satellite WebSocket frame contract.
 
 ### 1.1 Auth tiers
 
-Domovoi's v1 posture is LAN trust with a lightweight admin tier layered on
-top. First boot writes an 8-word **setup code** to `~/.domovoi/setup-code.txt`
-(and prints it on the core console); `POST /api/auth/setup` exchanges that
-code + a chosen password for the admin credential (argon2id hash) and a
-session token. Tokens are 256-bit bearer values — only their sha256 is stored
-— with a 30-day sliding expiry. Both processes validate against the same
-`admin_sessions` table, so a token minted by the dashboard works on the core
-too. See `domovoi/admin_auth.py`.
+Domovoi's v1 posture is LAN trust with two credentials layered on top: a
+per-household **device token** for ordinary actions and an **admin
+password** for destructive / code-adjacent ones. First boot writes an 8-word
+**setup code** to `~/.domovoi/setup-code.txt` (mode 0600, valid for 24 h —
+a restart after that prints a fresh one) and prints it on the core console;
+`POST /api/auth/setup` exchanges that code + a chosen password for the admin
+credential (argon2id hash) and a session token. Tokens are 256-bit bearer
+values — only their sha256 is stored — with a 30-day sliding expiry under a
+90-day absolute cap; changing the password revokes every other session. Both
+processes validate against the same `admin_sessions` table, so a token
+minted by the dashboard works on the core too. See `domovoi/admin_auth.py`.
+
+The **device token** is one 256-bit secret per install, minted at the first
+boot of either process into the `household_device_tokens` table and mirrored
+to `~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
+present it as the `X-Device-Token` header; an admin Bearer always passes the
+same gate. Admins read it from `GET /v1/admin/device-token` /
+`GET /api/auth/device-token` and rotate it from the `/rotate` siblings. It is
+rotated automatically when first-run setup completes, so a token read during
+the pre-setup window does not outlive it — read the file *after* claiming
+admin.
 
 Every endpoint below is labeled with one of these tiers:
 
 | Tier | Meaning |
 |---|---|
 | **Open** | No auth. Daily-use surface, LAN trust. |
+| **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. (No route wears it yet — the clients learn the token first; ordinary routes move onto it next.) |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
-| **Admin, fail-closed** | `domovoi.auth.require_admin`, used only for plugin management (it is code execution). No pre-setup grace: returns **501** until admin setup completes. Bearer-only for mutations. |
+| **Admin, security tier** | `require_admin_security` (mutations) / `require_admin_security_read` (the device-token read): Bearer-only for mutations, cookie may render the read. **No pre-setup grace — 501 until admin setup completes**, and `--reset-admin` closes them again. Config write, service restart, satellite code push, pairing preseed / reset, satellite delete, device-token rotation. |
+| **Admin, fail-closed** | `domovoi.auth.require_admin`, plugin management (it is code execution). Same posture as the security tier: **501** until admin setup completes, Bearer-only for mutations. |
 | **Outbound-fetch** | `check_outbound_fetch`: the server will fetch a caller-chosen URL. Passes with an admin Bearer session, **or** when the URL matches an installed media-provider plugin's `url_matcher` allowlist *and* the caller is within a per-source rate limit (10 requests / 60 s). |
 
-Failure codes across tiers: `401` missing/invalid/expired token, `403`
-cookie-only mutation attempt (or a rejected outbound fetch), `429` login
-backoff / rate limit (with a `Retry-After` header), `501` plugin management
-before setup.
+Failure codes across tiers: `401` missing/invalid/expired token (Bearer or
+device), `403` cookie-only mutation attempt (or a rejected outbound fetch),
+`429` login backoff / rate limit (with a `Retry-After` header), `501` a
+security-tier or plugin-management endpoint before setup.
 
 The web process proxies several calls to the core. Where the core applies the
-gate, the web endpoint forwards `Authorization` and the real client address
-(`X-Forwarded-For`) and returns the core's status + JSON verbatim.
+gate, the web endpoint forwards `Authorization`, `X-Device-Token` and the real
+client address (`X-Forwarded-For`) and returns the core's status + JSON
+verbatim. `domovoi/tests/test_route_auth_matrix.py` walks every mutating
+route of both apps and fails when one lacks a gate and is not allowlisted
+with a reason.
 
 ### 1.2 Error shapes
 
