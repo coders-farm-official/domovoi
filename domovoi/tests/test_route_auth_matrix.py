@@ -64,10 +64,6 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # the ordinary household actions take require_device, the
     # code-adjacent and physical-effect ones take require_admin_mutation,
     # and the chat agent's callback takes its per-boot secret.
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/add"): "daily tier — device tier with ADD-3",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/remove"): "daily tier — device tier with ADD-3",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/move"): "daily tier — device tier with ADD-3",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/clear"): "daily tier — device tier with ADD-3",
     ("core", "POST", "/v1/admin/music/add-by-url"): (
         "outbound-fetch tier — check_outbound_fetch inside the handler (admin "
         "OR provider allowlist + per-source rate limit)"

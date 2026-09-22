@@ -1,12 +1,12 @@
 """Which tier each core route sits on, and what it answers without a
-credential (CORE-4 / ADD-1).
+credential (CORE-4 / ADD-1 / ADD-3).
 
 The core used to answer every one of these to anyone who could reach port
 6370 once setup was done. Now:
 
 * the **device tier** (``require_device``) covers the ordinary household
-  actions — a turn, an announcement, playback — and takes the household
-  ``X-Device-Token`` or an admin Bearer;
+  actions — a turn, an announcement, playback, the room queue — and takes
+  the household ``X-Device-Token`` or an admin Bearer;
 * the **admin tier** (``require_admin_mutation``) covers the
   code-adjacent and physical-effect ones — the git pull, a Pi restart or
   config rewrite, wake recording/push, clip re-renders, library sweeps —
@@ -66,6 +66,11 @@ DEVICE_TIER = [
     ("POST", "/v1/admin/music/play-playlist"),
     ("POST", "/v1/admin/music/add-by-query"),
     ("POST", "/v1/admin/music/{action}/{room_id}"),
+    # ADD-3: the queue routes the device blocks are about.
+    ("POST", "/v1/admin/music/queue/{room_id}/add"),
+    ("POST", "/v1/admin/music/queue/{room_id}/remove"),
+    ("POST", "/v1/admin/music/queue/{room_id}/move"),
+    ("POST", "/v1/admin/music/queue/{room_id}/clear"),
 ]
 
 ADMIN_TIER = [
@@ -191,6 +196,9 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/music/play-tracks": {"room_id": "kitchen", "track_ids": [1]},
     "/v1/admin/music/play-playlist": {"room_id": "kitchen", "playlist_id": 1},
     "/v1/admin/music/add-by-query": {"room_id": "kitchen", "query": "jazz"},
+    "/v1/admin/music/queue/{room_id}/add": {"track_ids": [1]},
+    "/v1/admin/music/queue/{room_id}/remove": {"song_ids": [1]},
+    "/v1/admin/music/queue/{room_id}/move": {"song_id": 1, "to_position": 0},
 }
 
 GATED_POSTS = DEVICE_TIER + ADMIN_TIER

@@ -1480,18 +1480,23 @@ const QueueAccessCard = ({ fire, deviceList }) => {
     <>
       <Card title="Queue access"
             sub="Stop a device from editing a room's play queue — one room, or all of them.">
-        {/* Said plainly, because the control is easy to over-trust: device
-            ids are self-asserted on the LAN, like the rest of the daily
-            tier. This is household policy, not a security boundary. */}
+        {/* Said plainly, because the control is easy to over-trust: a
+            block is applied where the dashboard and the app ask — it is
+            household policy about those surfaces, not a boundary around
+            the room's queue. ADD-3: the core's own queue routes now want
+            a household credential, so a blocked device can no longer
+            simply talk past the dashboard; it still can't be called a
+            defence against someone determined on the LAN. */}
         <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'flex-start',
                       borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
           <Icon name="info" size={13}/>
           <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-            A device tells the server who it is, and nothing on a trusted LAN
-            forces it to be honest. This reliably keeps a known device out of a
-            queue; it isn’t a defence against someone determined to get in.
-            Changing blocks needs admin — so it can’t be undone from the
-            device it was applied to.
+            Blocks apply to the dashboard and the app: those are the surfaces
+            that ask who is editing, and a device tells the server who it is.
+            This reliably keeps a known device out of a queue; it isn’t a
+            defence against someone determined to get in. Changing blocks
+            needs admin — so it can’t be undone from the device it was
+            applied to.
           </span>
         </div>
 
@@ -1657,8 +1662,8 @@ const FilesAccessCard = ({ fire, deviceList }) => {
                     borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
         <Icon name="info" size={13}/>
         <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-          Same caveat as queue access: a device tells the server who it is, and
-          nothing on a trusted LAN forces it to be honest. This reliably keeps a
+          Same caveat as queue access: blocks apply to the dashboard and the
+          app, and a device tells the server who it is. This reliably keeps a
           known device from filling the libraries; it isn’t a defence against
           someone determined. Changing blocks needs admin.
         </span>

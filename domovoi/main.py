@@ -2736,7 +2736,13 @@ async def admin_music_queue(room_id: str) -> dict[str, Any]:
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/add")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/add",
+    # Device tier (ADD-3): the household device blocks are enforced
+    # on the dashboard hop, so the core route needs a credential of
+    # its own or a blocked device just calls :6370 instead.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_add(
     room_id: str, body: _AdminQueueAddBody
 ) -> dict[str, Any]:
@@ -2828,7 +2834,11 @@ async def admin_music_queue_add(
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/remove")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/remove",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_remove(
     room_id: str, body: _AdminQueueRemoveBody
 ) -> dict[str, Any]:
@@ -2851,7 +2861,11 @@ async def admin_music_queue_remove(
     }
 
 
-@app.post("/v1/admin/music/queue/{room_id}/move")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/move",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_move(
     room_id: str, body: _AdminQueueMoveBody
 ) -> dict[str, Any]:
@@ -2877,7 +2891,11 @@ async def admin_music_queue_move(
     return {"moved": True, "song_id": body.song_id, "to_position": body.to_position}
 
 
-@app.post("/v1/admin/music/queue/{room_id}/clear")
+@app.post(
+    "/v1/admin/music/queue/{room_id}/clear",
+    # Device tier (ADD-3), like queue add.
+    dependencies=[Depends(require_device)],
+)
 async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
     """Empty the queue and stop the room. The satellite gets its music_stop
     frame so mpg123 exits instead of sitting on a silent stream."""
