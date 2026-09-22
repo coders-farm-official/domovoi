@@ -394,6 +394,14 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-sync-time" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-sync-time" /usr/local/sbin/domovoi-sync-time
   fi
+  # The verifier that helper checks the server's signature with. Root's
+  # copy, not the satellite user's: the helper runs as root on that
+  # user's request and must import nothing that user can edit.
+  if [ -f "$PAYDIR/system/domovoi_ed25519.py" ]; then
+    mkdir -p /usr/local/lib/domovoi
+    install -m 0644 -o root -g root \
+      "$PAYDIR/system/domovoi_ed25519.py" /usr/local/lib/domovoi/domovoi_ed25519.py
+  fi
   # Re-install rather than assume step 3b ran: a card whose payload predates
   # the helper still gets it once the payload is refreshed.
   if [ -f "$PAYDIR/system/domovoi-status" ]; then

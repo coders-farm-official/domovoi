@@ -610,6 +610,11 @@ def apply_provision(
         )
         if ok:
             url = resolve_auto_url(payload.get("domovoi_url", ""))
+            # 5b. Root's own record of where this device's server is. The
+            #     clock helper runs as root on the satellite user's say-so
+            #     and reads this rather than trusting the address that
+            #     user hands it.
+            write_root_server_pin(url)
             # 6. The clock and the time zone, from the server we can now
             #    reach. Step 3 applied what the server knew at adopt time
             #    and nothing about the clock; this is the precise one.
@@ -620,6 +625,34 @@ def apply_provision(
         if attempt < wifi_attempts:
             time.sleep(_WIFI_RETRY_PAUSE_SEC)
     return False, last_err or "wifi join failed"
+
+
+# Root's record of this device's server. Written here, at adoption, while
+# we still have root; read by the clock helper, which is invoked BY the
+# satellite user and so must not take that user's word for where the time
+# comes from. 0644: the satellite user may read it, only root may write it.
+ROOT_CONFIG_DIR = Path("/etc/domovoi")
+ROOT_SERVER_URL_PIN = ROOT_CONFIG_DIR / "server.url"
+
+
+def write_root_server_pin(url: str | None) -> bool:
+    """Record the address this device's server lives at, as root.
+
+    Best-effort: a unit where /etc is not writable (a test host, a
+    hand-built device) simply has no pin, and the helper then behaves as
+    it did before pins existed."""
+    if not (url or "").strip():
+        return False
+    try:
+        ROOT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ROOT_SERVER_URL_PIN.write_text(
+            url.strip() + "\n", encoding="utf-8", newline="\n"
+        )
+        os.chmod(ROOT_SERVER_URL_PIN, 0o644)
+    except OSError as e:
+        log.warning("could not record the server address for root: %s", e)
+        return False
+    return True
 
 
 # Installed by stage 1 next to domovoi-status; absent on a hand-built unit.
