@@ -67,15 +67,19 @@ class BodyLimitMiddleware:
 
     Two checks, because a client may or may not announce the size:
 
-    * a declared ``Content-Length`` over the budget is refused on the spot,
-      with not one byte of the body read;
-    * otherwise the body is metered as it arrives and the request is
-      refused the moment the running total passes the budget — which is
-      well before the multipart parser (or an upload handler) has the whole
-      thing in hand.
+    * a declared ``Content-Length`` over the budget is answered ``413`` on
+      the spot, with not one byte of the body read. Browsers and HTTP
+      clients declare the length of an upload, so this is the live path;
+    * a body that arrives without one is metered as it comes and cut off
+      the moment the running total passes the budget — well before the
+      multipart parser has the whole thing in hand. What the caller then
+      sees depends on who was reading: a plain ASGI app gets the ``413``
+      below, while a FastAPI form route reports its own ``400`` ("error
+      parsing the body"), because its parser catches the interruption
+      first.
 
-    Either way the answer is ``413`` and the endpoint never runs, so no
-    partial file is written and no row is created.
+    Either way the endpoint never runs, so no partial file is written and
+    no row is created.
     """
 
     def __init__(self, app: Any) -> None:

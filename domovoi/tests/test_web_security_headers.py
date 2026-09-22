@@ -204,5 +204,42 @@ def test_the_install_route_has_an_asgi_budget_too() -> None:
     assert mw.body_limit_for("/api/plugins") is None
 
 
+def test_a_handler_s_own_policy_wins_over_the_site_one() -> None:
+    """A stored HTML or SVG file is served with
+    ``Content-Security-Policy: sandbox`` so it cannot run as a page (WEB-3).
+    The site policy must not overwrite that — the middleware only fills in
+    a header the response does not already carry."""
+    from starlette.datastructures import Headers
+
+    sent: list[dict] = []
+
+    async def app(scope, receive, send):
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-security-policy", b"sandbox")],
+        })
+        await send({"type": "http.response.body", "body": b""})
+
+    async def capture(message):
+        sent.append(message)
+
+    import asyncio
+
+    asyncio.run(
+        mw.SecurityHeadersMiddleware(app)(
+            {"type": "http", "method": "GET", "path": "/api/documents/raw/x.html",
+             "headers": []},
+            None,
+            capture,
+        )
+    )
+    headers = Headers(raw=sent[0]["headers"])
+    assert headers["content-security-policy"] == "sandbox"
+    # The rest still lands.
+    assert headers["x-frame-options"] == "DENY"
+    assert headers["referrer-policy"] == "no-referrer"
+
+
 def test_the_web_app_runs_the_header_middleware_outermost() -> None:
     assert web_app.user_middleware[0].cls is mw.SecurityHeadersMiddleware

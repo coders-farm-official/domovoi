@@ -60,7 +60,9 @@ Every endpoint below is labeled with one of these tiers:
 Failure codes across tiers: `401` missing/invalid/expired token (Bearer or
 device), `403` cookie-only mutation attempt (or a rejected outbound fetch),
 `403` a write that arrived without `X-Requested-With` (see 1.2),
-`413` a request body over its route's budget,
+`413` a request body whose declared `Content-Length` is over its route's
+budget (one that arrives without a declared length is cut off instead, and
+the route reports the interrupted read),
 `429` login backoff / rate limit (with a `Retry-After` header), `501` a
 security-tier or plugin-management endpoint before setup.
 

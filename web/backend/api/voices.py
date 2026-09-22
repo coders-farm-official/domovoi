@@ -77,6 +77,13 @@ async def _save_under_budget(upload: UploadFile, dest: Path, budget: int, what: 
                         detail=f"{what} too large (limit {budget} bytes)",
                     )
                 fh.write(chunk)
+    except OSError as e:
+        # Disk full, permission denied, path gone: the operator needs to
+        # read which one, not a bare 500.
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500, detail=f"could not save {what}: {e}"
+        ) from e
     except BaseException:
         dest.unlink(missing_ok=True)
         raise

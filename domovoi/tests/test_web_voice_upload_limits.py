@@ -122,6 +122,48 @@ async def test_a_model_inside_the_budget_is_written_whole(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_disk_error_says_which_one(tmp_path) -> None:
+    """Disk full, permission denied, path gone — the operator gets the
+    reason, not a bare 500, and the partial file is gone."""
+    # A voices dir that is not there is the cheapest real OSError to raise
+    # from the same line a full disk would.
+    dest = tmp_path / "gone" / "v.onnx.part"
+    with pytest.raises(Exception) as excinfo:
+        await voices_api._save_under_budget(
+            _upload(b"z" * 100), dest, 10_000, "model file"
+        )
+    assert getattr(excinfo.value, "status_code", None) == 500
+    assert "could not save model file" in excinfo.value.detail
+    assert not dest.exists()
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_oversize_never_reaches_the_handler(
+    tmp_path, monkeypatch
+) -> None:
+    """A body that does not declare its length is cut off mid-read by the
+    middleware. FastAPI's form parser reports the interruption as its own
+    400 rather than the 413 — either way the endpoint never runs and the
+    voices dir stays empty."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    monkeypatch.setattr(voices_api, "_voices_dir", lambda: tmp_path)
+    monkeypatch.setattr(mw, "BODY_LIMITS", (("/api/voices/piper", 4096),))
+
+    async def chunks():
+        for _ in range(20):
+            yield b"x" * 4096
+
+    async with _web() as c:
+        r = await c.post(
+            "/api/voices/piper",
+            headers={**bearer("admin-token"), "Content-Type": "multipart/form-data; boundary=zz"},
+            content=chunks(),
+        )
+    assert r.status_code in (400, 413), r.text
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_an_oversized_config_is_refused_and_the_model_is_not_kept(
     tmp_path, monkeypatch
 ) -> None:

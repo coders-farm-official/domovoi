@@ -114,7 +114,10 @@ def test_a_document_pdf_still_opens_in_the_tab(docs_dir):
     assert r.status_code == 200
     assert r.headers["content-disposition"].startswith("inline")
     assert r.headers["x-content-type-options"] == "nosniff"
-    assert "content-security-policy" not in r.headers
+    # It carries the SITE policy every response gets (WEB-8), not the
+    # sandbox that keeps a stored page from running — a PDF still opens.
+    assert "sandbox" not in r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
 def test_a_library_svg_comes_back_as_a_download(pictures):
