@@ -130,14 +130,29 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
                 python dependencies it will install ({(reqs.direct || []).length} direct
                 · {(reqs.transitive || []).length} resolved)
               </div>
+              {/* Every resolved dist names where pip would fetch it from; one
+                * that is not under the configured package index is flagged
+                * so the admin sees the source, not just a name and version. */}
+              {(reqs.transitive || []).some((t) => t.origin_ok === false) && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
+                              color: 'var(--warn)', padding: '3px 0 6px' }}>
+                  <Icon name="alert-triangle" size={13}/>
+                  {(reqs.transitive || []).filter((t) => t.origin_ok === false).length} dependenc
+                  {(reqs.transitive || []).filter((t) => t.origin_ok === false).length === 1 ? 'y comes' : 'ies come'}{' '}
+                  from outside the configured package index
+                </div>
+              )}
               <div style={{ maxHeight: 140, overflow: 'auto', border: '1px solid var(--border-soft)',
                             borderRadius: 'var(--r-sm)', padding: '6px 10px' }}>
                 {(reqs.direct || []).map((d, i) => (
                   <div key={`d${i}`} className="mono" style={{ fontSize: 11 }}>{d}</div>
                 ))}
                 {(reqs.transitive || []).map((t, i) => (
-                  <div key={`t${i}`} className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+                  <div key={`t${i}`} className="mono"
+                       style={{ fontSize: 11, color: t.origin_ok === false ? 'var(--warn)' : 'var(--fg-faint)' }}>
                     {t.name}=={t.version}{t.hashed === false ? '  (UNHASHED)' : ''}
+                    {t.origin ? `  · from ${String(t.origin).replace(/^https?:\/\//, '')}` : ''}
+                    {t.origin_ok === false ? '  (NOT the configured index)' : ''}
                   </div>
                 ))}
               </div>

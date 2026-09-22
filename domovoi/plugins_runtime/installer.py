@@ -39,6 +39,11 @@ from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
 from domovoi.plugins_runtime.loader import LOADER, installed_root
+from domovoi.plugins_runtime.lockfile import (
+    LockfileError,
+    LockRequirement,
+    parse_lockfile,
+)
 from domovoi.plugins_runtime.manifest import (
     ManifestError,
     PluginManifest,
@@ -183,24 +188,24 @@ def hash_tree(root: Path) -> str:
 
 # ─── pip (steps 7 + 9) ──────────────────────────────────────────────────────
 
-# Only ``--hash=…`` continuations are allowed to start with a dash inside a
-# plugin lockfile; every other option line is a global-option smuggle.
-_ALLOWED_LOCKFILE_OPTION_RE = re.compile(r"^--hash(?:=|\s)", re.I)
 
-
-def validate_lockfile(lockfile: Path) -> None:
+def validate_lockfile(lockfile: Path) -> list[LockRequirement]:
     """§7.4 — a plugin lockfile is a pinned+hashed requirements file and
-    NOTHING else.
+    NOTHING else. Every line is PARSED (:mod:`domovoi.plugins_runtime.
+    lockfile`) into an exact ``name[extras]==version`` pin plus its
+    ``--hash=`` options; anything else is refused before pip is invoked:
 
-    pip honors *requirement-file-level* global options (``--no-binary``,
-    ``--index-url``, ``--extra-index-url``, ``--find-links``,
-    ``--no-index``, ``-e``/``--editable``, ``-r``/``--requirement``, …).
-    Any of them overrides the installer's CLI safety flags — a lockfile
-    line like ``--no-binary :all:`` cancels ``--only-binary=:all:`` and
-    makes pip run an sdist build backend (attacker code) BEFORE the user
-    ever sees the §7.5 trust screen. Reject every option line except
-    ``--hash=`` continuations so a poisoned lockfile fails validation and
-    never reaches pip.
+    * global pip options (``--no-binary``, ``--index-url``,
+      ``--extra-index-url``, ``--find-links``, ``--no-index``, ``-e``,
+      ``-r``, …) — they override the installer's CLI safety flags
+      (``--only-binary=:all:``, the pinned index) → ``lockfile_option``;
+    * direct references (``name @ https://…``, ``file://``, VCS) and
+      local paths (``./vendor/x.whl``) — pip treats a hashed URL as
+      pinned, which would let a lockfile fetch from any host →
+      ``lockfile_requirement``;
+    * anything that is not an exact pin → ``lockfile_requirement``.
+
+    Returns the parsed requirements (the preview reports their origins).
     """
     try:
         content = lockfile.read_text(encoding="utf-8", errors="replace")
@@ -208,24 +213,54 @@ def validate_lockfile(lockfile: Path) -> None:
         raise InstallError(
             "lockfile_unreadable", f"cannot read lockfile {lockfile.name!r}: {e}"
         )
-    for lineno, raw in enumerate(content.splitlines(), 1):
-        line = raw.split("#", 1)[0].strip()
-        if not line or line == "\\":            # blank / bare continuation
-            continue
-        if line.startswith("-"):
-            if _ALLOWED_LOCKFILE_OPTION_RE.match(line):
-                continue
-            option = re.split(r"[=\s]", line, maxsplit=1)[0]
-            raise InstallError(
-                "lockfile_option",
-                f"lockfile line {lineno} carries the pip option {option!r} — "
-                f"plugin lockfiles may contain only pinned, hashed "
-                f"requirements plus --hash= continuations; global pip options "
-                f"are forbidden because they override the installer's "
-                f"--only-binary safety flag and can execute a build backend "
-                f"pre-confirm (design §7.4)",
-                {"line": lineno, "option": option},
-            )
+    try:
+        return parse_lockfile(content)
+    except LockfileError as e:
+        raise InstallError(e.code, str(e), e.details) from None
+
+
+def index_url() -> str:
+    """The one package index pip may talk to (``PIP_INDEX_URL`` or PyPI)."""
+    import os
+
+    return os.environ.get("PIP_INDEX_URL") or "https://pypi.org/simple"
+
+
+def index_file_origins(index: str | None = None) -> set[str]:
+    """``scheme://host[:port]`` origins a resolved distribution may be
+    downloaded from and still count as "under the configured index": the
+    index's own origin, PyPI's file host when the index is pypi.org, plus
+    any extra origins the operator lists in ``DOMOVOI_PIP_FILE_ORIGINS``
+    (comma-separated) for a mirror that serves files from a CDN host."""
+    import os
+    from urllib.parse import urlsplit
+
+    index = index or index_url()
+    origins: set[str] = set()
+    parts = urlsplit(index)
+    if parts.scheme and parts.netloc:
+        origins.add(f"{parts.scheme}://{parts.netloc}".lower())
+        if parts.hostname in ("pypi.org", "www.pypi.org"):
+            origins.add("https://files.pythonhosted.org")
+    for extra in (os.environ.get("DOMOVOI_PIP_FILE_ORIGINS") or "").split(","):
+        extra = extra.strip()
+        if extra:
+            p = urlsplit(extra)
+            if p.scheme and p.netloc:
+                origins.add(f"{p.scheme}://{p.netloc}".lower())
+    return origins
+
+
+def origin_of(url: str | None) -> str | None:
+    """``scheme://host[:port]`` of a download URL, or None."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return None
+    p = urlsplit(url)
+    if not p.scheme or not p.netloc:
+        return url
+    return f"{p.scheme}://{p.netloc}".lower()
 
 
 def _pip_run_env() -> dict[str, str]:
@@ -256,10 +291,7 @@ def _pip_base_args(lockfile: Path) -> list[str]:
         "-r", str(lockfile),
     ]
     # Pin the index (no implicit fallback — dependency-confusion door).
-    import os
-
-    index = os.environ.get("PIP_INDEX_URL") or "https://pypi.org/simple"
-    args += ["--index-url", index, "--no-input"]
+    args += ["--index-url", index_url(), "--no-input"]
     return args
 
 
@@ -297,13 +329,34 @@ def pip_dry_run(lockfile: Path) -> dict[str, Any]:
     conflicts = []
     from importlib import metadata as importlib_metadata
 
+    allowed_origins = index_file_origins()
     for item in report.get("install", []):
         meta = item.get("metadata", {})
         name, version = meta.get("name"), meta.get("version")
-        hashed = bool(
-            (item.get("download_info") or {}).get("archive_info", {}).get("hashes")
+        download_info = item.get("download_info") or {}
+        hashed = bool((download_info.get("archive_info") or {}).get("hashes"))
+        # Where pip would fetch this distribution from. The trust screen
+        # shows the origin of every resolved dist and flags one that is
+        # not under the configured index (§7.4 — the admin sees the
+        # source, not just a name and a version).
+        url = download_info.get("url")
+        origin = origin_of(url)
+        origin_ok = (origin in allowed_origins) if origin else None
+        if origin and not origin_ok:
+            log.warning(
+                "plugin dry-run: %s %s would be fetched from %s, which is "
+                "not under the configured index %s",
+                name, version, url, index_url(),
+            )
+        resolved.append(
+            {
+                "name": name,
+                "version": version,
+                "hashed": hashed,
+                "origin": origin,
+                "origin_ok": origin_ok,
+            }
         )
-        resolved.append({"name": name, "version": version, "hashed": hashed})
         if not name:
             continue
         try:
@@ -432,6 +485,16 @@ async def stage_zip(
             manifest = parse_manifest(manifest_path.read_text(encoding="utf-8"))
         except ManifestError as e:
             raise InstallError("manifest_invalid", str(e))
+        # Lockfile shape first (§7.4): a smuggled option or a non-pin
+        # requirement gets its precise code (lockfile_option /
+        # lockfile_requirement) before the generic layout check, which
+        # parses the same file for the direct-dependency cross-check,
+        # could fold it into layout_invalid. A MISSING lockfile stays a
+        # layout error.
+        if manifest.python_requirements:
+            lock = stage_dir / (manifest.lockfile or "requirements.lock")
+            if lock.is_file():
+                validate_lockfile(lock)
         dir_errors = validate_plugin_dir(stage_dir, manifest)
         if dir_errors:
             raise InstallError("layout_invalid", "; ".join(dir_errors))

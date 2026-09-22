@@ -114,7 +114,7 @@ upgrade are two-phase: stage → preview → confirm.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `POST /v1/plugins/install` | Admin, fail-closed | multipart zip in field `file`, **or** JSON `{"github_url": "..."}` | Phase A: stage + validate. Returns `{staged_id, preview}` (the preview lists permissions, migrations, open endpoints — the trust screen). |
+| `POST /v1/plugins/install` | Admin, fail-closed | multipart zip in field `file`, **or** JSON `{"github_url": "..."}` | Phase A: stage + validate. Returns `{staged_id, preview}` — the trust screen: `{slug, name, version, publisher, license, description, permissions, requirements: {direct, transitive: [{name, version, hashed, origin, origin_ok}]}, handlers, migration_count, capabilities, open_endpoints: [{method, path, module, function, process}], satellite: {apt_packages, post_install, pip_requirements, files_count, payload_mb} \| null, trust_statement}`. `422` with `detail.error.code` on rejection: `lockfile_option` (a global pip option in the lockfile), `lockfile_requirement` (a line that is not an exact `name==version` pin — direct URLs, local paths, ranges), plus the zip / manifest / layout / migration-lint codes. |
 | `POST /v1/plugins/install/{staged_id}/confirm` | Admin, fail-closed | — | Phase B: run pip + plugin migrations + hot-load. Also confirms staged *upgrades*. |
 | `POST /v1/plugins/{slug}/enable` | Admin, fail-closed | — | Enable and hot-load a disabled plugin. |
 | `POST /v1/plugins/{slug}/disable` | Admin, fail-closed | — | Disable: unload handlers/workers; the plugin's HTTP routes start returning `404`. |

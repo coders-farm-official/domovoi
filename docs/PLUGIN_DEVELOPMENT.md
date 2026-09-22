@@ -416,6 +416,28 @@ system = [
   sdist fails the staged dry-run with a "publish wheels or vendor it"
   message). The dry-run itself is inert and runs in a throwaway subprocess
   *before* the trust screen, so no build backend ever executes.
+
+  The lockfile is **parsed, line by line**, before pip ever sees it, and
+  the only shape a line may take is `name[extras]==version` followed by
+  `--hash=sha256:…` options (an environment marker after `;` is fine).
+  Everything else is refused at stage time with a `422`:
+
+  * global pip options (`--no-binary`, `--index-url`, `--extra-index-url`,
+    `--find-links`, `--no-index`, `-e`, `-r`, `--pre`, …) → `lockfile_option`;
+  * direct references (`name @ https://…`, `name @ file://…`, bare URLs,
+    `git+…`) and local paths (`./vendor/x.whl`, `../x`, `C:\…`) →
+    `lockfile_requirement`;
+  * ranges, bare names, anything that is not an exact pin →
+    `lockfile_requirement`.
+
+  Every requirement therefore resolves by name from the configured package
+  index (`PIP_INDEX_URL`, default PyPI). The trust screen shows the origin
+  of each resolved distribution and flags one that pip would fetch from
+  outside that index (PyPI's `files.pythonhosted.org` counts as inside;
+  an operator running a mirror that serves files from another host lists
+  it in `DOMOVOI_PIP_FILE_ORIGINS`, comma-separated). The direct pins in
+  `python` are cross-checked against the parsed lockfile by normalized
+  name and exact version.
 * `system` — external tools probed with `shutil.which` at load. A missing
   `required = true` tool never blocks install or crashes the load — the
   plugin loads **degraded** with your `help` text surfaced on the dashboard.

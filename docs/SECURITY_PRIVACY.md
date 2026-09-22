@@ -168,6 +168,12 @@ What the install flow *does* do (verified in
   transitive dependency set without installing anything) is separated from
   **confirm**, which is when code actually lands. Nothing executes until you
   confirm.
+- **The lockfile can only name distributions on the configured package
+  index.** Every line is parsed as an exact `name==version` pin plus
+  `--hash=` options; global pip options, direct URLs (`name @ https://…`,
+  `file://…`, VCS specs) and local paths are refused with a `422` before
+  pip runs. The trust screen shows where each resolved distribution would
+  be fetched from and flags any origin outside the configured index.
 - **The trust screen** shows: publisher, version, license, the manifest's
   declared permissions and warnings, direct **and transitive** Python
   dependencies, the handlers it registers, how many database migrations it
