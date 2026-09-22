@@ -55,6 +55,8 @@ AUTH_GATES: tuple[Any, ...] = (
     require_admin,
 )
 
+_KIOSK = "kiosk transport row — FE-3 keeps it open by design (display.jsx)"
+
 # (app, method, path) -> why it is open. Every entry is a route that has
 # NO gate today; the reason says which tier owns it and, where known,
 # which security batch is expected to close it.
@@ -82,26 +84,16 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/plugins/{slug}/uninstall"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/upgrade"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/music/add-by-url"): "proxy — core check_outbound_fetch gates it",
+    # ── web: the video satellite's kiosk transport row (FE-3) ─────────
+    # Kamron's decision: the kiosk renders unattended, with nobody in the
+    # room to hold a credential, so its four transport verbs stay open.
+    # Pinned from the other side by
+    # ``domovoi/tests/test_kiosk_surface_is_documented.py``.
+    ("web", "POST", "/api/music/pause/{room_id}"): _KIOSK,
+    ("web", "POST", "/api/music/resume/{room_id}"): _KIOSK,
+    ("web", "POST", "/api/music/stop/{room_id}"): _KIOSK,
+    ("web", "POST", "/api/music/skip/{room_id}"): _KIOSK,
     # ── web: daily tier — device tier in wave 2 (B2 / B4) ─────────────
-    ("web", "PATCH", "/api/music/library/{track_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/library/upload"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/music/acquisitions/{acq_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/now-playing/{room_id}/favorite"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/play"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/play-playlist"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/add-by-query"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/play-track"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/pause/{room_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/resume/{room_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/stop/{room_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/skip/{room_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/library/reindex"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/library/enrich"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/play-tracks"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/queue/{room_id}/add"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/queue/{room_id}/remove"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/queue/{room_id}/move"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/music/queue/{room_id}/clear"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/devices/register"): "daily tier — device tier in wave 2 (REV-1)",
     ("web", "PATCH", "/api/devices/{device_id}"): "daily tier — device tier in wave 2 (REV-1)",
     ("web", "POST", "/api/people/{person_id}/memories"): "daily tier — device tier in wave 2",

@@ -39,7 +39,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_device,
+)
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -51,6 +55,12 @@ from web.backend.domovoi_client import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/music/queue", tags=["music"])
+
+# Editing a room's queue is an ordinary household action (REV-1): the
+# household device token or an admin Bearer, matching the core routes
+# these proxy to. The per-device block below still applies on top — it is
+# household policy WITHIN the credential, not a substitute for it.
+DEVICE = [Depends(require_device)]
 
 
 # ─── Schemas ───────────────────────────────────────────────────────────────
@@ -300,7 +310,7 @@ async def read_queue(
 # ─── Edits ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/{room_id}/add")
+@router.post("/{room_id}/add", dependencies=DEVICE)
 async def add_to_queue(room_id: str, request: Request, body: QueueAddRequest):
     """Append library tracks to the room's queue and stamp provenance."""
     device_id, device_name = await _assert_can_edit(body.device_id, room_id)
@@ -349,7 +359,7 @@ async def _stamp_provenance(
             )
 
 
-@router.post("/{room_id}/remove")
+@router.post("/{room_id}/remove", dependencies=DEVICE)
 async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveRequest):
     await _assert_can_edit(body.device_id, room_id)
     status, payload = await post_admin(
@@ -371,7 +381,7 @@ async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveReq
     return bridge_response(status, payload)
 
 
-@router.post("/{room_id}/move")
+@router.post("/{room_id}/move", dependencies=DEVICE)
 async def move_in_queue(room_id: str, request: Request, body: QueueMoveRequest):
     """Reorder. Provenance is keyed by songid, so a move needs no DB write —
     that's the reason for keying it that way."""
@@ -384,7 +394,7 @@ async def move_in_queue(room_id: str, request: Request, body: QueueMoveRequest):
     return bridge_response(status, payload)
 
 
-@router.post("/{room_id}/clear")
+@router.post("/{room_id}/clear", dependencies=DEVICE)
 async def clear_queue(room_id: str, request: Request, body: QueueClearRequest):
     await _assert_can_edit(body.device_id, room_id)
     status, payload = await post_admin(

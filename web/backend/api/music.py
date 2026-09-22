@@ -28,7 +28,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_device
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -56,6 +56,24 @@ from web.backend.schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/music", tags=["music"])
+
+# ─── Auth tiers (REV-1) ────────────────────────────────────────────────────
+# Playing, queueing, tagging and uploading music are ORDINARY household
+# actions: a paired phone does them without the admin password, so they
+# take the household device token (``X-Device-Token``) or an admin Bearer,
+# and keep the pre-setup LAN grace so a fresh install still works.
+#
+# The two library-wide jobs take the ADMIN tier instead, because the core
+# routes they proxy to do (``/v1/admin/library/reindex`` and ``/enrich``).
+# Both hops have to name the same tier, or the refusal only moves one
+# process further in.
+#
+# ``pause`` / ``resume`` / ``stop`` / ``skip`` stay open on purpose: they
+# are the video satellite's kiosk transport row (FE-3), and that screen
+# renders unattended with nobody there to hold a credential. See
+# ``domovoi/tests/test_kiosk_surface_is_documented.py``.
+DEVICE = [Depends(require_device)]
+ADMIN = [Depends(require_admin_mutation)]
 
 
 # ─── Library ───────────────────────────────────────────────────────────────
@@ -223,7 +241,7 @@ async def get_track(track_id: int) -> Track:
 _TRACK_METADATA_FIELDS = ("title", "artist", "album")
 
 
-@router.patch("/library/{track_id}", response_model=Track)
+@router.patch("/library/{track_id}", response_model=Track, dependencies=DEVICE)
 async def patch_track(track_id: int, payload: TrackPatch) -> Track:
     """Partial update of a library_tracks row: ``favorited`` and, from
     the track drawer's edit mode (F-024), title / artist / album. Column
@@ -532,7 +550,9 @@ def _unique_path(dirpath: Path, name: str) -> Path:
         i += 1
 
 
-@router.post("/library/upload", response_model=LibraryUploadResult)
+@router.post(
+    "/library/upload", response_model=LibraryUploadResult, dependencies=DEVICE
+)
 async def upload_to_library(
     request: Request,
     files: list[UploadFile] = File(...),
@@ -646,7 +666,9 @@ async def upload_to_library(
 # readout on the Music page owns the affordance.
 
 
-@router.delete("/acquisitions/{acq_id}", status_code=204)
+@router.delete(
+    "/acquisitions/{acq_id}", status_code=204, dependencies=DEVICE
+)
 async def cancel_acquisition(acq_id: int) -> None:
     """Cancel a queued or claimed media acquisition (design §4.8).
 
@@ -757,6 +779,7 @@ async def _attach_queue_provenance(cards: list[NowPlaying]) -> None:
 @router.post(
     "/now-playing/{room_id}/favorite",
     response_model=FavoriteNowPlayingResult,
+    dependencies=DEVICE,
 )
 async def favorite_now_playing(
     room_id: str, request: Request
@@ -812,7 +835,7 @@ async def favorite_now_playing(
 # pipes status + body back. 502 when the Domovoi server can't be reached.
 
 
-@router.post("/play")
+@router.post("/play", dependencies=DEVICE)
 async def play(body: PlayRequest, request: Request):
     status, payload = await post_admin(
         "/v1/admin/music/play",
@@ -822,7 +845,7 @@ async def play(body: PlayRequest, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/play-playlist")
+@router.post("/play-playlist", dependencies=DEVICE)
 async def play_playlist(body: PlayPlaylistRequest, request: Request):
     """Start a playlist (real or the Favorites virtual one) in a
     room. Proxies to the Domovoi server's
@@ -842,7 +865,7 @@ async def play_playlist(body: PlayPlaylistRequest, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/add-by-query")
+@router.post("/add-by-query", dependencies=DEVICE)
 async def add_by_query(body: AddByQueryRequest, request: Request):
     """Queue a generic media acquisition by free-text query (design
     §4.8). Proxies the core's ``/v1/admin/music/add-by-query`` — an
@@ -887,7 +910,7 @@ async def add_by_url(body: AddByUrlRequest, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/play-track")
+@router.post("/play-track", dependencies=DEVICE)
 async def play_track(body: PlayTrackRequest, request: Request):
     """Direct play of a library track by id. Proxies to the
     Domovoi server's ``/v1/admin/music/play-track``, which hands the
@@ -935,16 +958,21 @@ async def skip(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/library/reindex")
+@router.post("/library/reindex", dependencies=ADMIN)
 async def reindex(request: Request):
+    """Re-walk the music library. Admin tier at both hops — the core
+    route this proxies to is admin-gated, so the web hop names the same
+    tier rather than forwarding a refusal from one process later."""
     status, payload = await post_admin(
         "/v1/admin/library/reindex", headers=auth_forward_headers(request)
     )
     return bridge_response(status, payload)
 
 
-@router.post("/library/enrich")
+@router.post("/library/enrich", dependencies=ADMIN)
 async def enrich(request: Request):
+    """Backfill library metadata from the tagging providers. Admin tier
+    at both hops, like the reindex it follows."""
     status, payload = await post_admin(
         "/v1/admin/library/enrich", headers=auth_forward_headers(request)
     )
@@ -1275,7 +1303,7 @@ def _ext_to_mime(ext: str) -> str:
     }.get(ext, "image/jpeg")
 
 
-@router.post("/play-tracks")
+@router.post("/play-tracks", dependencies=DEVICE)
 async def play_tracks(body: CastTracksRequest, request: Request):
     """Cast an arbitrary ordered queue of library tracks into a room's MPD
     (the browser player's Spotify-Connect-style hand-off). Proxies to the
