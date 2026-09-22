@@ -95,6 +95,26 @@ async def get_person(person_id: int) -> Person:
 
 # ─── Sessions / conversations / notes / profiles ──────────────────────────
 
+# F-A007: ``:pid`` must not be projected as a bare ``:pid AS person_id``.
+# asyncpg prepares every occurrence of a bind as the same ``$1`` and has to
+# deduce ONE type for it; the ``WHERE cl.person_id = :pid`` comparison says
+# integer while a bare projection says nothing, and the prepare fails with
+# AmbiguousParameterError ("inconsistent types deduced for parameter $1")
+# before any row is read. The person id is a function argument, so the
+# ``Session`` rows take it from there instead of round-tripping it.
+PERSON_SESSIONS_SQL = text(
+    """
+    SELECT s.id::text, s.room_id, s.started_at, s.last_activity,
+           COUNT(cl.id) AS intent_count
+    FROM sessions s
+    JOIN conversation_log cl ON cl.session_id = s.id
+    WHERE cl.person_id = :pid
+    GROUP BY s.id, s.room_id, s.started_at, s.last_activity
+    ORDER BY s.last_activity DESC
+    LIMIT :limit
+    """
+)
+
 
 @router.get("/{person_id}/sessions", response_model=list[Session])
 async def list_sessions(
@@ -108,29 +128,15 @@ async def list_sessions(
     contain at least one turn attributed to this person.
     """
     async with session_scope() as s:
-        rows = await s.execute(
-            text(
-                """
-                SELECT s.id::text, s.room_id, s.started_at, s.last_activity,
-                       :pid AS person_id, COUNT(cl.id) AS intent_count
-                FROM sessions s
-                JOIN conversation_log cl ON cl.session_id = s.id
-                WHERE cl.person_id = :pid
-                GROUP BY s.id, s.room_id, s.started_at, s.last_activity
-                ORDER BY s.last_activity DESC
-                LIMIT :limit
-                """
-            ),
-            {"pid": person_id, "limit": limit},
-        )
+        rows = await s.execute(PERSON_SESSIONS_SQL, {"pid": person_id, "limit": limit})
         return [
             Session(
                 id=r[0],
                 room_id=r[1],
                 started_at=r[2],
                 last_activity=r[3],
-                person_id=r[4],
-                intent_count=int(r[5]),
+                person_id=person_id,
+                intent_count=int(r[4]),
             )
             for r in rows.all()
         ]
