@@ -99,8 +99,6 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # caller's credentials, so an ungated proxy cannot open a call.
     ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_mutation gates it (auth forwarded)",
     ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "proxy — core require_device gates it (auth forwarded)",
-    ("web", "POST", "/api/config/version/check"): "read-shaped git fetch — device tier in wave 2",
-    ("web", "POST", "/api/config/version/pull"): "git pull --ff-only — device tier in wave 2",
     ("web", "DELETE", "/api/podcasts/subscriptions/{sub_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/podcasts/positions/{episode_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/audiobooks/reindex"): "daily tier — device tier in wave 2",

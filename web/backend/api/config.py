@@ -14,7 +14,12 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_read, require_admin_security
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_admin_security,
+    require_device,
+)
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -139,7 +144,12 @@ async def get_server_identity(request: Request):
     return bridge_response(200, payload.get("identity") or {})
 
 
-@router.post("/config/version/check")
+@router.post(
+    "/config/version/check",
+    # Device tier at both hops: the core's /v1/admin/version/check is on
+    # the household tier — it fetches and reports, it never moves HEAD.
+    dependencies=[Depends(require_device)],
+)
 async def check_version(request: Request):
     """Fetch upstream and report how far the Domovoi server's HEAD is
     behind/ahead. Best-effort: offline / no tracking branch comes back with
@@ -172,11 +182,17 @@ async def restart_version(request: Request):
     )
 
 
-@router.post("/config/version/pull")
+@router.post(
+    "/config/version/pull",
+    # Admin tier at both hops: this changes the code on disk, and the
+    # core's /v1/admin/version/pull is admin-gated.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def pull_version(request: Request):
     """`git pull --ff-only` on the Domovoi server — a deliberate, separate
-    action never triggered by the check. A dirty or diverged tree returns
-    pulled=False; the Domovoi server process is not restarted."""
+    action never triggered by the check. Admin tier, like the core route it
+    proxies to. A dirty or diverged tree returns pulled=False; the Domovoi
+    server process is not restarted."""
     return bridge_response(
         *await post_admin(
             "/v1/admin/version/pull", {}, headers=auth_forward_headers(request)
