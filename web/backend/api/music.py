@@ -219,15 +219,22 @@ async def get_track(track_id: int) -> Track:
     return _row_to_track(result)
 
 
+_TRACK_METADATA_FIELDS = ("title", "artist", "album")
+
+
 @router.patch("/library/{track_id}", response_model=Track)
 async def patch_track(track_id: int, payload: TrackPatch) -> Track:
-    """Partial update of a library_tracks row. Today only ``favorited``
-    is editable; the PATCH shape is general so future per-field edits
-    (title/artist tweaks, etc.) won't need a new endpoint."""
+    """Partial update of a library_tracks row: ``favorited`` and, from
+    the track drawer's edit mode (F-024), title / artist / album. Column
+    names come from the schema's fields only, values are bound. A
+    metadata edit stamps ``enriched_at`` so the enricher (unenriched
+    rows only) leaves the hand correction alone."""
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="no fields provided")
     set_fragments = [f"{k} = :{k}" for k in updates]
+    if any(k in updates for k in _TRACK_METADATA_FIELDS):
+        set_fragments.append("enriched_at = NOW()")
     params: dict[str, Any] = {"id": track_id, **updates}
     favorited_changed = "favorited" in updates
     async with session_scope() as s:

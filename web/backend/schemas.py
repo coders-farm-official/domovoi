@@ -77,11 +77,16 @@ class PlaylistTrackAdd(BaseModel):
 
 
 class TrackPatch(BaseModel):
-    """Partial update for a ``library_tracks`` row. Today only the
-    ``favorited`` flag is editable from the dashboard — exposed as a
-    PATCH so future per-field tweaks (manual title/artist edits etc.)
-    plug into the same surface without a new endpoint."""
+    """Partial update for a ``library_tracks`` row: the ``favorited``
+    flag, and the title / artist / album a person corrects from the
+    track drawer (F-024). Only fields actually sent are written; a
+    metadata edit also stamps ``enriched_at`` so the enricher's next
+    sweep (which touches unenriched rows only) can't overwrite a hand
+    correction."""
     favorited: bool | None = None
+    title: str | None = Field(default=None, max_length=300)
+    artist: str | None = Field(default=None, max_length=300)
+    album: str | None = Field(default=None, max_length=300)
 
 
 class LibraryPage(BaseModel):

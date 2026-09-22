@@ -203,14 +203,56 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
 };
 
 /* ---- Drawer (track detail) -------------------------------- */
-const Drawer = ({ track, rooms, onClose, onDelete, onPlayInRoom, onBrowserPlay, onQueueTrack }) => {
+const TRACK_TAG_FIELDS = ['title', 'artist', 'album'];
+const _trackFieldStyle = {
+  font: 'inherit', fontSize: 13, height: 28, padding: '0 8px', borderRadius: 'var(--r-sm)',
+  border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)', width: '100%',
+};
+
+/* The tag fields whose trimmed form value differs from the row — what a
+ * save PATCHes. An emptied field goes as null (clears the tag). */
+const trackTagChanges = (form, track) => {
+  const changes = {};
+  for (const k of TRACK_TAG_FIELDS) {
+    const next = (form[k] || '').trim() || null;
+    if (next !== (track[k] || null)) changes[k] = next;
+  }
+  return changes;
+};
+
+/* The track drawer. The header's title / artist / album flip into an
+ * edit form (F-024: a mistagged track could never be fixed from the
+ * dashboard); `onEdit(track, changes)` PATCHes only the changed tags. */
+const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrowserPlay, onQueueTrack }) => {
   const [alsoFile, setAlsoFile] = React.useState(false);
   const [room, setRoom] = React.useState(rooms[0] || null);
+  const [editing, setEditing] = React.useState(false);
+  const [form, setForm] = React.useState({ title: '', artist: '', album: '' });
+  const [saving, setSaving] = React.useState(false);
   React.useEffect(() => {
     setAlsoFile(false);
     setRoom(rooms[0] || null);
   }, [track?.id, rooms.join(',')]);
+  React.useEffect(() => { setEditing(false); }, [track?.id]);
   if (!track) return null;
+  const startEdit = () => {
+    setForm({ title: track.title || '', artist: track.artist || '', album: track.album || '' });
+    setEditing(true);
+  };
+  const changes = editing ? trackTagChanges(form, track) : {};
+  const dirty = Object.keys(changes).length > 0;
+  const saveEdit = async () => {
+    if (!dirty) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      if (await onEdit(track, changes)) setEditing(false);
+    } finally { setSaving(false); }
+  };
+  const tagInput = (k) => (
+    <input key={k} value={form[k]} placeholder={k} style={_trackFieldStyle}
+           onChange={e => setForm({ ...form, [k]: e.target.value })}
+           onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') setEditing(false); }}/>
+  );
   return (
     <>
       <div onClick={onClose}
@@ -227,11 +269,26 @@ const Drawer = ({ track, rooms, onClose, onDelete, onPlayInRoom, onBrowserPlay, 
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
           <div style={{ width: 72, height: 72, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                         background: 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))' }}/>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{track.title || 'unknown title'}</div>
-            <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>{track.artist || 'unknown artist'}</div>
-            <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{track.album || '—'}</div>
-          </div>
+          {editing ? (
+            <div style={{ minWidth: 0, flex: 1, display: 'grid', gap: 6 }}>
+              {TRACK_TAG_FIELDS.map(tagInput)}
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <Button icon="x" disabled={saving} onClick={() => setEditing(false)}>cancel</Button>
+                <Button variant="primary" icon="check" disabled={saving || !dirty} onClick={saveEdit}>
+                  {saving ? 'saving…' : 'save'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{track.title || 'unknown title'}</div>
+                <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>{track.artist || 'unknown artist'}</div>
+                <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{track.album || '—'}</div>
+              </div>
+              {onEdit && <IconButton name="pencil" title="edit tags" onClick={startEdit}/>}
+            </>
+          )}
         </div>
 
         <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8, fontSize: 12 }}>
@@ -1390,6 +1447,23 @@ const MusicPage = () => {
       if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
     }
   };
+  // Tag edits from the drawer: PATCH only what changed, keep the open
+  // drawer on the returned row, refresh the list (and now-playing, in
+  // case the edited track is what a room is playing).
+  const onEditTrack = async (track, changes) => {
+    try {
+      const updated = await apiPatch(`/api/music/library/${track.id}`, changes);
+      const next = { ...track, ...(updated || changes) };
+      fire(`updated "${next.title || 'track'}"`);
+      setSelected(next);
+      lib.refresh();
+      refreshNP();
+      return true;
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(`update failed: ${apiErrorText(e)}`);
+      return false;
+    }
+  };
   const onCancelAcquisition = async (a) => {
     try { await apiDelete(`/api/music/acquisitions/${a.id}`); fire(`cancel sent for #${a.id}`); refreshAcquisitions(); }
     catch (e) { fire(`cancel failed: ${e.message}`); }
@@ -1600,7 +1674,7 @@ const MusicPage = () => {
       </Card>
 
       <Drawer track={selected} rooms={rooms} onClose={() => setSelected(null)}
-              onDelete={onDelete} onPlayInRoom={onPlayInRoom}
+              onDelete={onDelete} onEdit={onEditTrack} onPlayInRoom={onPlayInRoom}
               onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
       <PlaylistDrawer playlist={openPlaylist} rooms={rooms}
                       onClose={() => setOpenPlaylist(null)}
