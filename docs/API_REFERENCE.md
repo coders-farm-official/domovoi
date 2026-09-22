@@ -666,7 +666,7 @@ Images screen.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/images/thumb` | `?library_id=&path=&size=s\|m\|l\|xl` | Pillow-resized WebP thumbnail from the size-bucketed cache; `204` for undecodable files. |
-| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). |
+| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin. |
 
 ### 3.18 Chat
 

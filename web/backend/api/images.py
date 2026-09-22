@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse, Response
 from domovoi.config import settings as core_settings
 from web.backend.api.documents import _IMAGE_EXTS
 from web.backend.api.files_security import MediaLibrary, build_libraries, safe_join
+from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
 
@@ -79,13 +80,23 @@ async def raw(
     library_id: str = Query(...),
     path: str = Query(...),
 ):
-    """The original image, served inline (the Files tab's Open target)."""
+    """The original image, served inline (the Files tab's Open target).
+
+    With one exception: an **SVG is a document a browser executes**, not a
+    picture it decodes, so it comes back as a download with the inert
+    headers rather than rendering on the dashboard's origin (WEB-3). Every
+    other image type renders inline as before."""
     lib = await _resolve_library(library_id)
     target = _resolve_image(lib, path)
     media_type = _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
     return FileResponse(
         target, media_type=media_type,
-        headers={"Cache-Control": "public, max-age=86400"},
+        filename=target.name,
+        content_disposition_type=disposition_for(media_type, target.name),
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            **inert_headers(media_type, target.name),
+        },
     )
 
 

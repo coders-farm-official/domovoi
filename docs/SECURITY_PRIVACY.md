@@ -255,6 +255,34 @@ The trust decision is about the **publisher**, full stop. The bundled
 where you can read every line — that's the standard to hold third-party
 plugins to.
 
+## Stored files are data, never pages of the dashboard
+
+A file in a media library is content the household put there — and the
+dashboard is served from the same origin as the routes that hand it back,
+with the operator's session alongside. Two rules keep one from becoming
+the other:
+
+- **A document the browser would execute is downloaded, not rendered.**
+  `GET /api/documents/raw/{path}` and `GET /api/images/raw` serve HTML,
+  XHTML and SVG as `Content-Disposition: attachment` with
+  `X-Content-Type-Options: nosniff` (believe the declared type, don't
+  guess from the bytes) and `Content-Security-Policy: sandbox` (if it is
+  rendered anyway, render it in an opaque origin). PDFs, pictures and
+  everything else still open inline — that's what "open in a new tab" is
+  for. The classifier is `web/backend/api/inline_serve.py`, and it looks
+  at the extension as well as the media type, because a host with a thin
+  mimetypes registry reports `application/octet-stream` for a `.html`.
+- **Rendered markdown is sanitised before it reaches the page.** The
+  document editor's preview runs `marked` output through
+  `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
+  markdown's own elements, drops every `on*` attribute, drops
+  `<script>`/`<style>`/`<iframe>` with their contents, and accepts only
+  relative, `http(s)`, `mailto` and inline raster-image URLs in `href` /
+  `src` (entity-decoded first, so `java&#115;cript:` is refused too).
+  Without the sanitiser loaded there is no preview at all.
+  `domovoi/tests/test_markdown_preview_sanitised.py` renders the real
+  pipeline and asserts on what the preview would put in the page.
+
 ## Data at rest
 
 All of it on hardware you own. Locations, verified against the code:

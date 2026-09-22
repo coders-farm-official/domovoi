@@ -58,6 +58,7 @@ from pydantic import BaseModel, Field
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
+from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
 
@@ -825,17 +826,25 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
 @router.get("/raw/{rel_path:path}", dependencies=DAILY)
 async def serve_raw(rel_path: str) -> FileResponse:
     """Serve a file's bytes to the BROWSER (plain ``window.open`` works)
-    with the right ``Content-Type`` and an inline ``Content-Disposition``.
+    with the right ``Content-Type``. PDFs and pictures render inline —
+    that is what the New-tab affordance is for — but a document that the
+    browser would treat as CODE comes back as a download instead, under
+    the headers in :mod:`web.backend.api.inline_serve`. A ``.html`` or
+    ``.svg`` saved in this folder is a document, not a page of the
+    dashboard, and must never run on the dashboard's origin.
+
     Read scope is bounded entirely by the containment check."""
     target = _safe_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     mime, _ = mimetypes.guess_type(target.name)
+    media_type = mime or "application/octet-stream"
     return FileResponse(
         str(target),
-        media_type=mime or "application/octet-stream",
+        media_type=media_type,
         filename=target.name,
-        content_disposition_type="inline",
+        content_disposition_type=disposition_for(media_type, target.name),
+        headers=inert_headers(media_type, target.name),
     )
 
 
