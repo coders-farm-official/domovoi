@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.domovoi.app.LocalApp
+import com.domovoi.app.net.CleartextPolicy
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.FoundDomovoi
 import com.domovoi.app.ui.components.DomovoiCard
@@ -57,6 +58,7 @@ import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Shared domovoi picker: wifi check, /24 auto-scan, saved servers,
@@ -108,6 +110,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
         if (!url.contains("://")) url = "http://$url"
         if (!Regex(":\\d+$").containsMatchIn(url.substringAfter("://"))) {
             url = "$url:${Discovery.DEFAULT_PORT}"
+        }
+        // Say why up front rather than reporting "couldn't reach" after the
+        // policy refuses a plain-http address outside the home network.
+        val parsed = url.toHttpUrlOrNull()
+        if (parsed != null && !CleartextPolicy.permits(parsed)) {
+            manualError = CleartextPolicy.refusalMessage(parsed.host)
+            return
         }
         manualBusy = true
         manualError = null

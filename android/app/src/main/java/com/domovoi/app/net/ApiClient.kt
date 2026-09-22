@@ -18,6 +18,7 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.net.UnknownServiceException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -41,6 +42,9 @@ fun failureText(action: String, e: Throwable): String {
     val detail = e.message?.trim()?.takeIf { it.isNotEmpty() }
     return when {
         e is ApiException -> "$action failed: ${detail ?: "HTTP ${e.status}"}"
+        // A cleartext refusal (CleartextPolicy or the platform) is not an
+        // outage: say why, so the address can be corrected.
+        e is UnknownServiceException -> "$action failed: ${detail ?: "not permitted"}"
         e is IOException -> "$action failed (offline?)"
         else -> "$action failed: ${detail ?: e.javaClass.simpleName}"
     }
@@ -55,7 +59,11 @@ class ApiClient(private val baseUrlProvider: () -> String) {
     /** Production wiring: the base URL follows the saved server preference. */
     constructor(prefs: Prefs) : this({ prefs.serverUrl.value })
 
+    /** The app's one OkHttpClient: every other network user (WebSockets,
+     *  media3, Coil, discovery) is built from it, so [CleartextPolicy] runs
+     *  ahead of every plain-http connection the app makes. */
     val http: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(CleartextPolicy.interceptor)
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)

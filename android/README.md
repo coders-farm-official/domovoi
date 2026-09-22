@@ -40,7 +40,17 @@ and a Videos tab, backed by the device's own media via MediaStore
 your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
 `/api/health` before accepting. Change it later under Settings →
 Connection. Traffic is plain HTTP on your LAN (same trust model as the
-web dashboard); cleartext is enabled in the manifest for that reason.
+web dashboard), and plain HTTP is accepted **only** towards the home
+network: RFC 1918 addresses, loopback, link-local, the emulator host
+`10.0.2.2`, and names under `.local` / `.home.arpa` / `.internal` /
+`.lan` / `.home`. Any other address must be `https://`. The platform
+half of that rule is `res/xml/network_security_config.xml` (referenced
+from the manifest, system trust store only); because Android cannot
+express an IP range there, `net/CleartextPolicy.kt` enforces the whole
+rule on the app's single `OkHttpClient`, which the API, both WebSockets,
+media3 and Coil share. Backups are off (`allowBackup="false"`), so the
+server address, device id and — once it lands — the pairing token never
+leave the device in a cloud or `adb` backup.
 
 ## Settings: device-local only
 

@@ -386,6 +386,20 @@ TLS is the top of the post-v1 hardening list. (Satellite pairing tokens,
 previously deferred alongside it, shipped — see "Satellite pairing (WS auth)"
 above.)
 
+**The Android app's side of this.** The app accepts plain HTTP (and `ws://`)
+only towards the home network — RFC 1918 addresses, loopback, link-local,
+the emulator host, and names under `.local`, `.home.arpa`, `.internal`,
+`.lan` and `.home`; any other server address must be `https://`, and a
+plain-http address outside that set is refused before a connection is
+attempted, with a message that says so. The platform half is
+`android/app/src/main/res/xml/network_security_config.xml` (system trust
+store only; the TOFU pin for the server certificate lands there when TLS
+does); since Android's config cannot express an IP range, the whole rule is
+enforced in `net/CleartextPolicy.kt` on the app's single HTTP client. The
+app also opts out of device backups (`allowBackup="false"`), so nothing it
+stores — server address, device id, and the pairing token once it exists —
+is copied to a cloud or `adb` backup.
+
 ---
 
 *If something here worries you, [FAQ.md](FAQ.md) has the shorter
