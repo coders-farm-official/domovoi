@@ -2,9 +2,10 @@
 
 The web process reaches out for a station in exactly one place (the
 browser stream proxy), and it stores a URL it will later reach out for in
-two (``POST /stations``, ``POST /play``). All three go through the shared
-outbound-URL check, so a station URL can never point the server at the
-house's own services.
+two (``POST /stations`` favorites one, ``POST /play`` persists a
+directory hit so the proxy has an id to resolve). All three go through
+the shared outbound-URL check, so a station URL can never point the
+server at the house's own services.
 
 DB-free: the router is mounted against a context whose session scope
 records that it was opened and refuses — so "no row was written" is an
@@ -132,6 +133,44 @@ def test_an_fm_station_without_a_stream_url_still_saves(no_db_client) -> None:
             "/api/plugins/radio/stations",
             json={"name": "WKAR", "source": "fm", "frequency_mhz": 90.5},
         )
+    assert no_db_client.ctx.opened is True
+
+
+# ─── POST /play — persisting a directory hit (ADD-4) ─────────────────────
+
+
+@pytest.mark.parametrize("url", REFUSED_STREAM_URLS)
+def test_playing_a_house_local_stream_is_refused(no_db_client, url) -> None:
+    """``/play`` writes a row the stream proxy fetches by id, so it is a
+    way into the same fetch — and refuses the same URLs."""
+    resp = no_db_client.post(
+        "/api/plugins/radio/play",
+        json={"name": "Nope", "source": "online", "stream_url": url},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "stream URL" in resp.json()["detail"]
+    assert no_db_client.ctx.opened is False
+
+
+def test_playing_a_public_stream_reaches_the_database(no_db_client) -> None:
+    with pytest.raises(_DBTouched):
+        no_db_client.post(
+            "/api/plugins/radio/play",
+            json={
+                "name": "KEXP",
+                "source": "online",
+                "stream_url": "http://kexp.example/stream.mp3",
+                "external_id": "uuid-kexp",
+            },
+        )
+    assert no_db_client.ctx.opened is True
+
+
+def test_playing_a_station_by_id_carries_no_url_to_check(no_db_client) -> None:
+    """Replaying a row that already exists sends no ``stream_url`` — the
+    check has nothing to say, and the request goes through to the row."""
+    with pytest.raises(_DBTouched):
+        no_db_client.post("/api/plugins/radio/play", json={"station_id": 3})
     assert no_db_client.ctx.opened is True
 
 

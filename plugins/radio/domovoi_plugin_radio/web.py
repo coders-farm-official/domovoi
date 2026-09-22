@@ -318,11 +318,17 @@ def build_router(ctx: Any) -> APIRouter:
 
         Idempotent on ``external_id`` exactly like ``POST /stations``, so
         replaying something already favorited just re-stamps that row and
-        never duplicates it."""
+        never duplicates it.
+
+        Because the row it writes is what the stream proxy later fetches
+        by id, ``stream_url`` goes through the same outbound-URL check as
+        ``POST /stations``: a URL the server would refuse to fetch never
+        becomes a row."""
         if payload.source not in ("online", "fm"):
             raise HTTPException(
                 status_code=400, detail=f"invalid source {payload.source!r}"
             )
+        await _check_stream_url(payload.stream_url)
         async with session_scope() as s:
             station_id: int | None = None
 
