@@ -31,6 +31,8 @@ from domovoi.admin_auth import (  # noqa: E402
     check_outbound_fetch,
     require_admin_mutation,
     require_admin_read,
+    require_admin_security,
+    require_admin_security_read,
     token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
@@ -210,6 +212,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth_mod.ensure_setup_code_if_unclaimed()
     except Exception as e:
         log.warning("setup-code boot hook raised: %s", e)
+
+    # Household device token (device tier): make sure the single row
+    # exists and mirror it to ~/.domovoi/device-token.txt (0600) next to
+    # the setup code. The web process runs the same hook; whichever boots
+    # first mints, the other reads it back.
+    try:
+        await admin_auth_mod.ensure_device_token()
+    except Exception as e:
+        log.warning("device-token boot hook raised: %s", e)
 
     # Enabled greeting texts, for stripping a bled-in wake greeting out of
     # transcripts (greeting_filter). Refreshed by the regenerate endpoint
@@ -1344,6 +1355,38 @@ class _AdminWakeScoreBody(BaseModel):
 class _AdminChatToolBody(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get(
+    "/v1/admin/device-token",
+    # Security-tier READ: the household token is a credential. Bearer or
+    # the dashboard cookie renders it; 501 before setup.
+    dependencies=[Depends(require_admin_security_read)],
+)
+async def admin_get_device_token() -> dict[str, Any]:
+    """The household device token (device tier, ``X-Device-Token``) for
+    the dashboard's settings page and for enrolling a new phone. Minted
+    at first boot; this read never mints a second one."""
+    async with session_scope() as s:
+        token = await admin_auth_mod.ensure_device_token_row(s)
+    return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER}
+
+
+@app.post(
+    "/v1/admin/device-token/rotate",
+    # Security tier: every household client has to be re-enrolled after
+    # this. Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_rotate_device_token() -> dict[str, Any]:
+    """Replace the household device token. The previous token is refused
+    from this moment on and ``~/.domovoi/device-token.txt`` is rewritten
+    with the new one."""
+    async with session_scope() as s:
+        token = await admin_auth_mod.rotate_device_token(s)
+    admin_auth_mod.write_device_token_file(token)
+    log.info("device token rotated by an admin")
+    return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
 
 @app.post("/v1/admin/chat-tool")

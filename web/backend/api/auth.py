@@ -17,13 +17,19 @@ render authenticated state — mutations everywhere accept ONLY
 
 v1 runs over plain LAN HTTP (TLS is on the documented hardening
 backlog), so the cookie is NOT marked ``Secure``.
+
+The household **device token** (device tier, ``X-Device-Token``) is
+served and rotated here too — ``GET/POST /api/auth/device-token[/rotate]``
+work against the same ``household_device_tokens`` table as the core's
+``/v1/admin/device-token`` endpoints, so either process answers
+identically.
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -88,20 +94,27 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
         if await admin_auth.has_admin_auth(s):
             raise HTTPException(status_code=409, detail="admin setup already completed")
         if not admin_auth.verify_setup_code(body.setup_code):
-            # A bad/missing code counts toward the source's backoff —
-            # the code is guessable-in-theory (64-bit) but never for free.
+            # A bad/missing/expired code counts toward the source's
+            # backoff — the attempt was reserved before the check, so the
+            # failure is already on the books; just confirm it. The code
+            # is guessable-in-theory (64-bit) but never for free.
             admin_auth.LOGIN_BACKOFF.record_failure(source)
             raise HTTPException(
                 status_code=403,
                 detail=(
                     "setup code required — read it from the Domovoi server "
-                    "console or ~/.domovoi/setup-code.txt"
+                    "console or ~/.domovoi/setup-code.txt (a code older than "
+                    "a day is replaced by restarting the core)"
                 ),
             )
         await admin_auth.set_password(s, body.password)
         token = await admin_auth.create_session(s, label="setup")
+        # The household device token was readable by anyone on the LAN
+        # during the pre-setup window; a fresh one starts with the admin.
+        device_token = await admin_auth.rotate_device_token(s)
     admin_auth.LOGIN_BACKOFF.record_success(source)
     admin_auth.delete_setup_code()
+    admin_auth.write_device_token_file(device_token)
     response = JSONResponse({"ok": True, "token": token})
     _set_session_cookie(response, token)
     return response
@@ -180,7 +193,9 @@ async def auth_change_password(
     body: PasswordChangeRequest, request: Request
 ) -> dict:
     """Change the admin password (old password re-verified, §7.2).
-    Mutation ⇒ Bearer-only."""
+    Mutation ⇒ Bearer-only. Every OTHER session is revoked: a token
+    minted under the old password does not survive it; the calling
+    session stays logged in."""
     result = await admin_auth.check_admin_request(request)
     if result == "cookie-only":
         raise HTTPException(
@@ -189,6 +204,8 @@ async def auth_change_password(
         )
     if result != "ok":
         raise HTTPException(status_code=401, detail="admin session required")
+    current = admin_auth.bearer_token(request)
+    keep = admin_auth.token_sha256(current) if current else None
     async with session_scope() as s:
         password_hash = await admin_auth.get_password_hash(s)
         if password_hash is None or not admin_auth.verify_password(
@@ -196,4 +213,37 @@ async def auth_change_password(
         ):
             raise HTTPException(status_code=401, detail="wrong password")
         await admin_auth.set_password(s, body.new_password)
-    return {"ok": True}
+        revoked = await admin_auth.revoke_other_sessions(s, keep)
+    return {"ok": True, "revoked_sessions": revoked}
+
+
+# ─── Household device token (device tier) ─────────────────────────────────
+
+
+@router.get(
+    "/device-token",
+    dependencies=[Depends(admin_auth.require_admin_security_read)],
+)
+async def auth_device_token() -> dict:
+    """The household device token for the settings page and for enrolling
+    a phone. Same table and same gate as the core's
+    ``GET /v1/admin/device-token``: Bearer or cookie renders it, 401
+    otherwise, 501 before setup."""
+    async with session_scope() as s:
+        token = await admin_auth.ensure_device_token_row(s)
+    return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER}
+
+
+@router.post(
+    "/device-token/rotate",
+    dependencies=[Depends(admin_auth.require_admin_security)],
+)
+async def auth_rotate_device_token() -> dict:
+    """Replace the household device token (Bearer-only, 501 before
+    setup). The previous token is refused from now on; the file mirror
+    is rewritten."""
+    async with session_scope() as s:
+        token = await admin_auth.rotate_device_token(s)
+    admin_auth.write_device_token_file(token)
+    log.info("device token rotated by an admin (web)")
+    return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}

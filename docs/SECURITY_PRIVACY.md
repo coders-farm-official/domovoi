@@ -21,14 +21,16 @@ page keeps being blunt about.
 Domovoi assumes **your LAN is your household**. Anyone who can reach the
 server over the network can use the daily features — talk to it, play
 music, announce to a room — the same way anyone in your house can talk to
-it. On top of that sits a single **admin tier** (one password, set on first
-run) that gates the dangerous stuff: anything that executes code or changes
-configuration. There are no per-user accounts, no roles, and — in v1 — no
-TLS. Domovoi is **not designed to be exposed to the internet**. Don't
-port-forward 6369 or 6370. If a hostile device is already inside your Wi-Fi,
-the honest answer is that it can use Domovoi's daily features and can
-listen to unencrypted LAN traffic; the admin tier is what keeps it from
-going further.
+it. On top of that sit two credentials: a per-household **device token**
+(one shared secret every household client presents; the mechanism exists
+today and ordinary routes move onto it next) and a single **admin tier**
+(one password, set on first run) that gates the dangerous stuff: anything
+that executes code or changes configuration. There are no per-user
+accounts, no roles, and — in v1 — no TLS. Domovoi is **not designed to be
+exposed to the internet**. Don't port-forward 6369 or 6370. If a hostile
+device is already inside your Wi-Fi, the honest answer is that it can use
+Domovoi's daily features and can listen to unencrypted LAN traffic; the
+admin tier is what keeps it from going further.
 
 ## The tiers
 
@@ -42,14 +44,33 @@ flowchart TB
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
     end
+    subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
+        v1["The household token every dashboard, phone<br/>and satellite presents (ordinary routes move<br/>onto it next; the mechanism ships now)"]
+    end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
         a3["Satellite code push (makes a Pi run new code)"]
         a4["Chat-tool resync, session management"]
     end
-    daily --> fetch --> admin
+    daily --> fetch --> device --> admin
 ```
+
+### Device tier (the household token)
+
+One 256-bit secret per install, minted at the first boot of either process
+into the `household_device_tokens` table and mirrored to
+`~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
+send it as the `X-Device-Token` header; an admin Bearer always passes the
+same gate, so an operator never needs both. An admin reads it from the
+dashboard (`GET /api/auth/device-token`, or `GET /v1/admin/device-token` on
+the core) to enrol a new phone, and rotates it from the `/rotate` sibling —
+after which every household client has to be re-enrolled. It is rotated
+automatically the moment first-run setup completes, so a token that was
+readable during the open pre-setup window does not survive it. The gate
+(`require_device`) keeps the pre-setup grace: a fresh install still works
+before setup. No route wears it yet — the clients learn the token first,
+then the ordinary routes (music, queue, announce, intent…) move onto it.
 
 ### Daily tier (LAN-trust)
 

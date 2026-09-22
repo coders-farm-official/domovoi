@@ -20,6 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from domovoi import admin_auth
 from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
 from web.backend.api import calendar as calendar_api
@@ -155,6 +156,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     contract. Start order: poll loop first (so emit_for_channel is
     operational), then listen task; reverse on shutdown.
     """
+    # Household device token (device tier): the web boots the same hook as
+    # the core so a web-only throwaway has a token row and
+    # ~/.domovoi/device-token.txt (0600) too. Whichever process boots first
+    # mints; the other reads the row back. Never fatal.
+    try:
+        await admin_auth.ensure_device_token()
+    except Exception as e:
+        log.warning("device-token boot hook raised: %s", e)
+
     broadcaster = StateBroadcaster()
     poll_loop = StatePollLoop(broadcaster, interval_sec=_POLL_INTERVAL)
     listen_task = ListenTask(poll_loop)

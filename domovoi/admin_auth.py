@@ -9,27 +9,45 @@ imports ``domovoi.plugins_runtime`` — the web process must stay outside
 the plugin runtime (design §5.1).
 
 The model, in one paragraph: first boot writes an 8-word **setup code**
-to ``~/.domovoi/setup-code.txt`` and prints it to the core console —
-proof of possession of the server. ``POST /api/auth/setup`` requires
-that code, hashes the chosen password with **argon2id**, and deletes
-the code file. ``POST /api/auth/login`` verifies the password (behind
-a per-source exponential backoff) and mints a 256-bit bearer token of
-which only the sha256 is stored, with a **30-day sliding expiry**.
-Mutating admin endpoints accept ONLY ``Authorization: Bearer`` — the
-``SameSite=Strict`` cookie set at login exists solely so plain GET page
-loads can render authenticated state (CSRF: a cross-site POST carries
-nothing that authorizes it). ``python -m domovoi.main --reset-admin``
-clears the credential + sessions and regenerates the setup code.
+to ``~/.domovoi/setup-code.txt`` (mode 0600, valid for
+:data:`SETUP_CODE_TTL_SEC`) and prints it to the core console — proof of
+possession of the server. ``POST /api/auth/setup`` requires that code,
+hashes the chosen password with **argon2id**, and deletes the code file.
+``POST /api/auth/login`` verifies the password (behind a per-source
+exponential backoff that counts the attempt BEFORE the verify) and mints
+a 256-bit bearer token of which only the sha256 is stored, with a
+**30-day sliding expiry** under a **90-day absolute cap**. Mutating admin
+endpoints accept ONLY ``Authorization: Bearer`` — the ``SameSite=Strict``
+cookie set at login exists solely so plain GET page loads can render
+authenticated state (CSRF: a cross-site POST carries nothing that
+authorizes it). Changing the password revokes every other session.
+``python -m domovoi.main --reset-admin`` clears the credential + sessions
+and regenerates the setup code.
+
+Three gates, from weakest to strongest:
+
+* :func:`require_device` — the **device tier**: a valid
+  ``X-Device-Token`` (the per-household token in
+  ``household_device_tokens``, mirrored to ``~/.domovoi/device-token.txt``
+  by :func:`ensure_device_token` at boot) OR an admin Bearer. Keeps the
+  pre-setup LAN grace so a fresh install still works before setup.
+* :func:`require_admin_mutation` / :func:`require_admin_read` — the
+  **admin tier**: Bearer (or cookie for reads). Keeps the pre-setup grace.
+* :func:`require_admin_security` — the **security tier** (config write,
+  service restart, satellite code push, pairing preseed/reset, satellite
+  delete, device-token rotation): Bearer-only and **fails closed** with
+  501 until an admin password exists, exactly like plugin management.
+  ``--reset-admin`` therefore reopens only the daily surface.
 
 DEFERRED (documented hardening backlog, scope amendment): TLS /
-fingerprint pinning and satellite pairing tokens. v1 admin flows run
-over plain LAN HTTP.
+fingerprint pinning. v1 admin flows run over plain LAN HTTP.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -56,13 +74,19 @@ URL_FETCH_WINDOW_SEC = 60.0
 URL_FETCH_MAX_PER_WINDOW = 10
 
 # Trusted immediate peers whose ``X-Forwarded-For`` we honor for the
-# throttle identity. EMPTY by default (v1 has no TLS/reverse proxy — see
-# the DEFERRED note above): with nothing trusted, a client-supplied XFF is
-# ignored and throttling keys on the real transport peer, so a LAN attacker
-# can't mint unlimited fresh zero-failure buckets by rotating the header.
-# An operator fronting the core with a real proxy adds that proxy's LAN
-# address here (e.g. {"127.0.0.1", "::1"}).
-TRUSTED_PROXIES: set[str] = set()
+# throttle identity. Only LOOPBACK by default: the web process runs on the
+# same box as the core and forwards every dashboard caller's real address,
+# so trusting it gives each dashboard user their own throttle bucket
+# instead of lumping them all under 127.0.0.1. A client-supplied XFF from
+# any other peer is ignored and throttling keys on the real transport peer,
+# so a LAN host can't mint unlimited fresh zero-failure buckets by rotating
+# the header. An operator fronting the core with a real proxy adds that
+# proxy's LAN address here.
+TRUSTED_PROXIES: set[str] = {"127.0.0.1", "::1"}
+
+# Header a household client presents on the device tier (design: two-tier
+# auth, 2026-09-22). Mirrored to ``device_token_path()`` at boot.
+DEVICE_TOKEN_HEADER = "X-Device-Token"
 
 # Global login-attempt ceiling — a v1 backstop that caps the endpoint AS A
 # WHOLE, independent of the per-source backoff. Even an attacker who rotates
@@ -82,6 +106,31 @@ CONFIG_DIR = Path.home() / ".domovoi"
 
 def setup_code_path() -> Path:
     return CONFIG_DIR / "setup-code.txt"
+
+
+def device_token_path() -> Path:
+    return CONFIG_DIR / "device-token.txt"
+
+
+def write_private_file(path: Path, content: str) -> Path:
+    """Write ``content`` to ``path`` readable by the owner only (0600).
+
+    The file is created with mode 0600 (so it never exists world-readable,
+    even for an instant under umask 022) and an existing file is chmod'ed
+    to 0600 before it is rewritten, so a file left over from an older
+    build is tightened too. On Windows the mode bits only carry the
+    read-only flag — best effort; the per-user profile directory is what
+    keeps ``~/.domovoi`` private there."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.exists():
+            os.chmod(path, 0o600)
+    except OSError as e:  # pragma: no cover — FS trouble
+        log.warning("could not chmod %s: %s", path, e)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    return path
 
 
 # ─── Setup code (proof of possession of the server, §7.2) ─────────────────
@@ -294,6 +343,127 @@ async def revoke_session(session: AsyncSession, token_hash: str) -> bool:
     return row is not None
 
 
+async def revoke_other_sessions(session: AsyncSession, keep_token_hash: str | None) -> int:
+    """Delete every session except ``keep_token_hash`` (the caller's own).
+    Used on password change: a token minted under the old password must
+    not survive it. Returns how many were revoked."""
+    if keep_token_hash is None:
+        result = await session.execute(text("DELETE FROM admin_sessions RETURNING 1"))
+    else:
+        result = await session.execute(
+            text("DELETE FROM admin_sessions WHERE token_hash <> :keep RETURNING 1"),
+            {"keep": keep_token_hash},
+        )
+    return len(result.all())
+
+
+# ─── Household device token (the device tier) ─────────────────────────────
+
+
+async def get_device_token(session: AsyncSession) -> str | None:
+    row = (
+        await session.execute(
+            text("SELECT token FROM household_device_tokens WHERE id = 1")
+        )
+    ).first()
+    return row.token if row else None
+
+
+async def _mint_device_token(session: AsyncSession, *, replace: bool) -> str:
+    token = secrets.token_hex(32)  # 256 bits
+    if replace:
+        await session.execute(
+            text(
+                "INSERT INTO household_device_tokens (id, token, token_hash) "
+                "VALUES (1, :t, :h) "
+                "ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, "
+                "token_hash = EXCLUDED.token_hash, rotated_at = now()"
+            ),
+            {"t": token, "h": _sha256(token)},
+        )
+        return token
+    # Two processes boot at once (core + web on one box): whichever INSERT
+    # lands first wins and the other reads it back — never two tokens.
+    await session.execute(
+        text(
+            "INSERT INTO household_device_tokens (id, token, token_hash) "
+            "VALUES (1, :t, :h) ON CONFLICT (id) DO NOTHING"
+        ),
+        {"t": token, "h": _sha256(token)},
+    )
+    current = await get_device_token(session)
+    return current if current is not None else token
+
+
+async def ensure_device_token_row(session: AsyncSession) -> str:
+    """Return the household token, minting the single row if absent."""
+    token = await get_device_token(session)
+    if token is not None:
+        return token
+    return await _mint_device_token(session, replace=False)
+
+
+async def rotate_device_token(session: AsyncSession) -> str:
+    """Replace the household token in place. The previous token is
+    refused from this moment; the file mirror is rewritten by the caller
+    (:func:`write_device_token_file`)."""
+    return await _mint_device_token(session, replace=True)
+
+
+async def validate_device_token(session: AsyncSession, candidate: str | None) -> bool:
+    """Constant-time hash compare of a presented token against the row."""
+    if not candidate:
+        return False
+    row = (
+        await session.execute(
+            text("SELECT token_hash FROM household_device_tokens WHERE id = 1")
+        )
+    ).first()
+    if row is None:
+        return False
+    return secrets.compare_digest(_sha256(candidate.strip()), row.token_hash)
+
+
+def write_device_token_file(token: str) -> Path:
+    """Mirror the token to ``~/.domovoi/device-token.txt`` (0600) so
+    clients on the server box — and the test harnesses — can present it
+    without an admin session. Idempotent; rewritten on rotation."""
+    return write_private_file(device_token_path(), token + "\n")
+
+
+def read_device_token_file() -> str | None:
+    try:
+        token = device_token_path().read_text(encoding="utf-8").strip()
+        return token or None
+    except OSError:
+        return None
+
+
+async def ensure_device_token() -> str | None:
+    """Boot hook shared by BOTH processes (core lifespan, next to the
+    setup-code hook; web lifespan): make sure the household token row
+    exists and that the file mirror carries it. Returns the token, or None
+    when the database is unreachable or behind migrations (logged, never
+    fatal — the gate then fails closed on its own)."""
+    try:
+        async with session_scope() as s:
+            token = await ensure_device_token_row(s)
+    except Exception as e:
+        log.warning("device-token boot hook skipped (DB unreachable or not migrated): %s", e)
+        return None
+    try:
+        if read_device_token_file() != token:
+            write_device_token_file(token)
+    except OSError as e:  # pragma: no cover — FS trouble
+        log.warning("could not write %s: %s", device_token_path(), e)
+    return token
+
+
+def device_token_from_request(request: Request) -> str | None:
+    value = request.headers.get(DEVICE_TOKEN_HEADER.lower()) or ""
+    return value.strip() or None
+
+
 async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
     rows = (
         await session.execute(
@@ -429,6 +599,115 @@ async def require_admin_read(request: Request) -> None:
     if result in ("ok", "pre-setup", "cookie-only"):
         return
     raise HTTPException(status_code=401, detail="admin session required")
+
+
+# ─── The security tier: admin, fail-closed before setup ───────────────────
+
+_SECURITY_TIER_PRE_SETUP_DETAIL = (
+    "auth not configured — complete the first-run admin setup before "
+    "using this endpoint (it changes what the server runs or trusts)"
+)
+
+
+async def require_admin_security(request: Request) -> None:
+    """Dependency for the SECURITY-TIER mutations: config write, service
+    restart, satellite code push, pairing preseed / reset, satellite
+    delete, device-token rotation. Bearer-only like
+    :func:`require_admin_mutation`, but with NO pre-setup grace: 501 until
+    an admin password exists, the posture plugin management has always
+    had (:mod:`domovoi.auth`). ``--reset-admin`` returns the install to
+    the pre-setup state, so it reopens only the daily surface."""
+    result = await check_admin_request(request)
+    if result == "ok":
+        return
+    if result == "pre-setup":
+        raise HTTPException(status_code=501, detail=_SECURITY_TIER_PRE_SETUP_DETAIL)
+    if result == "cookie-only":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "mutations require Authorization: Bearer — the dashboard "
+                "cookie only renders GET state"
+            ),
+        )
+    raise HTTPException(status_code=401, detail="admin session required")
+
+
+async def require_admin_security_read(request: Request) -> None:
+    """The read half of the security tier (today: showing the household
+    device token). Bearer OR cookie renders it; 501 before setup — the
+    token has no value while everything is open, and it is rotated the
+    moment setup completes, so nothing read earlier survives."""
+    result = await check_admin_request(request)
+    if result in ("ok", "cookie-only"):
+        return
+    if result == "pre-setup":
+        raise HTTPException(status_code=501, detail=_SECURITY_TIER_PRE_SETUP_DETAIL)
+    raise HTTPException(status_code=401, detail="admin session required")
+
+
+# ─── The device tier: household token OR admin Bearer ─────────────────────
+
+DeviceCheckResult = Literal["ok", "admin", "pre-setup", "no-auth", "cookie-only", "invalid"]
+
+
+async def check_device_request(
+    request: Request, session: AsyncSession | None = None
+) -> DeviceCheckResult:
+    """Classify a request against the device tier.
+
+    * ``ok`` — a valid ``X-Device-Token``.
+    * ``admin`` — no (valid) device token but a live admin Bearer.
+    * ``pre-setup`` — no admin credential exists yet (LAN grace).
+    * ``cookie-only`` — only the dashboard cookie: renders nothing on
+      this tier (the dashboard learns the token after login and sends
+      the header).
+    * ``no-auth`` / ``invalid`` — nothing usable / a stale token.
+    """
+
+    async def _check(s: AsyncSession) -> DeviceCheckResult:
+        presented = device_token_from_request(request)
+        if presented is not None and await validate_device_token(s, presented):
+            return "ok"
+        admin = await check_admin_request(request, s)
+        if admin == "ok":
+            return "admin"
+        if admin == "pre-setup":
+            return "pre-setup"
+        if presented is not None:
+            return "invalid"
+        return "cookie-only" if admin == "cookie-only" else admin
+
+    try:
+        if session is not None:
+            return await _check(session)
+        async with session_scope() as s:
+            return await _check(s)
+    except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+        log.warning("device check failed: %s", e)
+        return "invalid"
+
+
+async def require_device(request: Request) -> None:
+    """Dependency for the DEVICE TIER (ordinary household actions): a
+    valid ``X-Device-Token`` OR an admin Bearer passes; nothing, a stale
+    token or the cookie alone does not. Keeps the pre-setup LAN grace so
+    a fresh install (and a throwaway test instance) works before setup."""
+    result = await check_device_request(request)
+    if result in ("ok", "admin", "pre-setup"):
+        return
+    if result == "cookie-only":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{DEVICE_TOKEN_HEADER} required — the dashboard cookie "
+                "does not authorize device-tier actions"
+            ),
+        )
+    raise HTTPException(
+        status_code=401,
+        detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
+    )
 
 
 # ─── Per-source login backoff (in-memory, §7.3) ───────────────────────────

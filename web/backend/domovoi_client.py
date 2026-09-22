@@ -155,7 +155,9 @@ def auth_forward_headers(request: Any) -> dict[str, str]:
     admin-gated endpoints (design §7.3: both processes validate tokens
     against the same ``admin_sessions`` table, so forwarding the caller's
     ``Authorization``/``Cookie`` verbatim lets the core apply its own
-    gate). ``X-Forwarded-For`` carries the real client for the core's
+    gate). ``X-Device-Token`` (the household device tier) rides along the
+    same way so a core route on that tier sees the caller's token.
+    ``X-Forwarded-For`` carries the real client for the core's
     per-source rate limiting — otherwise every proxied request would
     look like localhost."""
     headers: dict[str, str] = {}
@@ -165,6 +167,9 @@ def auth_forward_headers(request: Any) -> dict[str, str]:
     cookie = request.headers.get("cookie")
     if cookie:
         headers["Cookie"] = cookie
+    device_token = request.headers.get("x-device-token")
+    if device_token:
+        headers["X-Device-Token"] = device_token
     if request.client is not None:
         headers["X-Forwarded-For"] = request.client.host
     return headers
