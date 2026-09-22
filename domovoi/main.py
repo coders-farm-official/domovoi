@@ -1816,7 +1816,14 @@ async def admin_update_satellite_config(
 SATELLITE_LOG_MAX_BYTES = 10 * 1024 * 1024
 
 
-@app.get("/v1/admin/satellite/{room_id}/logs")
+@app.get(
+    "/v1/admin/satellite/{room_id}/logs",
+    # ADD-1 — admin-tier READ: a satellite logs every transcript it hears,
+    # so this returns room conversation, not just diagnostics. The
+    # dashboard hop has always been gated; this is the same gate on the
+    # route that actually holds the data. Bearer or the dashboard cookie.
+    dependencies=[Depends(require_admin_read)],
+)
 async def admin_get_satellite_logs(
     room_id: str,
     max_bytes: int = Query(

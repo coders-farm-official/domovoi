@@ -1,4 +1,4 @@
-"""Every web→core hop carries a credential (CORE-4).
+"""Every web→core hop carries a credential (CORE-4 / ADD-1).
 
 The dashboard's routes are proxies: the web process holds the page, the
 core holds the room. Now that the core routes behind them are gated, a
@@ -192,6 +192,23 @@ async def test_a_proxied_action_puts_the_callers_credentials_on_the_wire(
     _path, headers = rec.calls[-1]
     assert headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
     assert headers.get(admin_auth.DEVICE_TOKEN_HEADER) == DEVICE_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_the_satellite_log_pull_forwards_the_session(monkeypatch) -> None:
+    """ADD-1: the core route is admin-gated now, so a signed-in operator
+    reading the Logs tab must still get their logs."""
+    import web.backend.api.satellites as satellites
+
+    install_fake_db(monkeypatch, admin=False)
+    rec = _Recorder()
+    monkeypatch.setattr(satellites, "get_admin", rec.get(200, {"text": "hi"}))
+    async with _web_client() as c:
+        r = await c.get("/api/satellites/kitchen/logs", headers=_caller_headers())
+    assert r.status_code == 200
+    path, headers = rec.calls[-1]
+    assert path.startswith("/v1/admin/satellite/kitchen/logs")
+    assert headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,18 @@
 """Which tier each core route sits on, and what it answers without a
-credential (CORE-4).
+credential (CORE-4 / ADD-1).
 
 The core used to answer every one of these to anyone who could reach port
 6370 once setup was done. Now:
 
 * the **device tier** (``require_device``) covers the ordinary household
-  actions — a turn, an announcement, playback, the room queue — and takes
-  the household ``X-Device-Token`` or an admin Bearer;
+  actions — a turn, an announcement, playback — and takes the household
+  ``X-Device-Token`` or an admin Bearer;
 * the **admin tier** (``require_admin_mutation``) covers the
   code-adjacent and physical-effect ones — the git pull, a Pi restart or
   config rewrite, wake recording/push, clip re-renders, library sweeps —
   and takes an admin Bearer;
+* the satellite log pull is an admin READ (``require_admin_read``): the
+  ring holds transcripts of what the room said;
 * the chat agent's callback takes its own per-boot secret, because
   Letta's sandbox can hold neither credential.
 
@@ -33,6 +35,7 @@ from domovoi import admin_auth
 from domovoi.db.session import session_scope
 from domovoi.main import app as core_app
 from domovoi.tests.auth_testkit import (
+    COOKIE,
     HEADER,
     _db,  # noqa: F401 — fixture
     bearer,
@@ -78,6 +81,11 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/sounds/setup-clips"),
     ("POST", "/v1/admin/library/reindex"),
     ("POST", "/v1/admin/library/enrich"),
+]
+
+# ADD-1 — an admin READ: the dashboard cookie may render it, nothing less.
+ADMIN_READ_TIER = [
+    ("GET", "/v1/admin/satellite/{room_id}/logs"),
 ]
 
 
@@ -127,6 +135,15 @@ def test_code_adjacent_actions_are_on_the_admin_tier(method, path) -> None:
     gates = _gates_for(method, path)
     assert admin_auth.require_admin_mutation in gates
     assert admin_auth.require_device not in gates
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), ADMIN_READ_TIER, ids=[f"{m} {p}" for m, p in ADMIN_READ_TIER]
+)
+def test_satellite_logs_are_an_admin_read(method, path) -> None:
+    """ADD-1: the log ring is a room transcript, so the route that holds
+    it wears the same gate the dashboard hop always had."""
+    assert admin_auth.require_admin_read in _gates_for(method, path)
 
 
 def test_the_chat_callback_wears_its_own_secret_gate() -> None:
@@ -278,6 +295,25 @@ async def test_the_whole_gated_surface_still_answers_before_setup(monkeypatch) -
         for _method, path in GATED_POSTS:
             r = await c.post(_sample_path(path), json=BODIES.get(path, {}))
             assert r.status_code not in (401, 403), f"{path}: {r.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_satellite_log_pull_refuses_a_caller_with_no_session(
+    monkeypatch,
+) -> None:
+    """ADD-1, from the outside: the transcript ring is not readable by
+    anything that merely reached the port; the dashboard cookie is."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client() as c:
+        assert (await c.get("/v1/admin/satellite/kitchen/logs")).status_code == 401
+        assert (
+            await c.get(
+                "/v1/admin/satellite/kitchen/logs", headers=bearer(ADMIN_TOKEN)
+            )
+        ).status_code != 401
+    async with _client() as c:
+        c.cookies.set(COOKIE, ADMIN_TOKEN)
+        assert (await c.get("/v1/admin/satellite/kitchen/logs")).status_code != 401
 
 
 # ─── The chat agent's callback ────────────────────────────────────────────

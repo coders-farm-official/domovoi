@@ -709,17 +709,22 @@ async def get_satellite_logs(
     status, payload = await get_admin(
         f"/v1/admin/satellite/{room_id}/logs?max_bytes={int(max_bytes)}",
         timeout=75.0,
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.patch("/{room_id}/config")
-async def patch_satellite_config(room_id: str, body: ConfigUpdateRequest):
+async def patch_satellite_config(
+    room_id: str, body: ConfigUpdateRequest, request: Request
+):
     """Push config edits to a satellite. The Domovoi server validates them and
     sends a set_config frame; the Pi rewrites its config.toml and restarts to
     apply. Returns {sent, rejected, restarting}."""
     status, payload = await post_admin(
-        f"/v1/admin/satellite/{room_id}/config", {"changes": body.changes}
+        f"/v1/admin/satellite/{room_id}/config",
+        {"changes": body.changes},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
