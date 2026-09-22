@@ -52,6 +52,8 @@ flowchart TB
         v3["Play/queue music, the room queue,<br/>volume, add-by-query"]
         v4["Documents, Files, Images and Videos:<br/>list, read, upload, move, import"]
         v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
+        v6["On the dashboard: the calendar, playlists,<br/>chat, news, podcasts and audiobooks,<br/>a person's memories and favorites"]
+        v7["Satellite room label, timer cancel,<br/>announce and volume"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -86,9 +88,21 @@ queue, per-room volume, add-by-query. So do the media surfaces: reading
 the Documents folder, and browsing / downloading / uploading / moving /
 importing across Files, Images and Videos. So do the routes that make
 the server go and fetch something a caller chose — podcast subscribe
-and poll, news feed attach and re-test. A client that presents nothing
-gets `401`; the dashboard cookie alone gets `403`, because rendering a page
-is not the same as acting in a room. The web dashboard forwards whatever
+and poll, news feed attach and re-test.
+
+The **dashboard's** ordinary mutations are on it too, which is what closed
+the last of them: playing, queueing, tagging and uploading music; the
+calendar; playlists; chat threads and messages; news topics, feeds and
+favorites; podcast and audiobook listening; a person's memories, favorites
+and preferences; a client registering or renaming itself; and the satellite
+verbs the core keeps on this tier — room label, cancelling a timer,
+announcing and setting the volume. The rest of the satellite drawer —
+restart, the screen, the config push — is admin tier, because the core route
+behind each of those is. Where the two hops disagreed, the call used to be
+accepted here and refused one process later; now the first hop answers.
+
+A client that presents nothing gets `401`; the dashboard cookie alone gets
+`403`, because rendering a page is not the same as acting in a room. The web dashboard forwards whatever
 the browser presented on every hop to the core, so signing in is enough
 there; the Android app and the satellites carry the token itself.
 
@@ -236,11 +250,13 @@ itself — health, time, handlers, capabilities, the sounds / satellite-code
 the LAN. So does everything on a fresh install, until first-run setup
 completes: the pre-setup grace is what lets you set the thing up.
 
-Acting in a room is one step up, on the device tier above: your household
-shouldn't log in to ask for a song, but the ask should come from a device
-the household enrolled. The accepted risk is now narrower and still real —
-one shared household secret, no per-device identity, and anything holding
-it can do everything on that tier. Keep your Wi-Fi password good; use a
+Acting in a room is one step up, on the device tier above, and so is every
+ordinary mutation the dashboard makes: your household shouldn't log in to
+ask for a song or add a calendar entry, but the ask should come from a
+device the household enrolled. What is left on this tier is reads, the
+pre-setup grace and the kiosk below. The accepted risk is now narrower and
+still real — one shared household secret, no per-device identity, and
+anything holding it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
 
 The video satellite's kiosk page rides this same tier **by design** — the
@@ -250,16 +266,18 @@ implied:
 
 | Open to any LAN client | What it gives away, or does |
 |---|---|
-| `GET /display.html?room=<room_id>` | The kiosk page itself. It is a page, not data — everything on it comes from the two calls below. |
+| `GET /display.html?room=<room_id>` | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
 | `GET /api/music/now-playing` | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
-| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` | Pauses or resumes that room's playback. The kiosk's tap-to-pause, usable by anything on the network. |
+| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Pauses, resumes, stops or skips that room's playback. The kiosk's transport row (play/pause, skip, stop), usable by anything on the network. |
 
 That is the whole kiosk surface, and it is the accepted risk of the daily
-tier: someone on your Wi-Fi can see what is playing and pause it. It is not
-a path to anything else — no write touches a file, a row or a setting, and
-the two verbs are the same ones a guest could reach from the dashboard.
+tier: someone on your Wi-Fi can see what is playing and work the transport
+controls. It is not a path to anything else — no write touches a file, a row
+or a setting, and the four verbs only move the playhead in a room. Every
+other dashboard mutation moved to the device tier; these stayed because the
+screen they belong to has nobody in front of it to pair.
 
-Two things narrow it even so. Both verbs are writes, so they need the
+Two things narrow it even so. All four are writes, so they need the
 `X-Requested-With` header like every other write, which keeps a page on
 another site from triggering them from a browser you happen to have open.
 And the kiosk's **live push** is not on this tier: `/ws/state` carries the
@@ -271,9 +289,10 @@ household client.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
-(`POST /api/devices/register`), and the server takes that at face value —
-one household token says the device belongs to the house, not which device
-it is. So the queue and files blocklists (see the table below) are
+(`POST /api/devices/register`, itself device tier now), and the server takes
+that at face value — one household token says the device belongs to the
+house, not which device it is. So the queue and files blocklists (see the
+table below) are
 *household policy*: they apply where the dashboard and the app ask, they
 reliably keep a known device out of a room's queue, and someone determined
 can claim a different id. What changed is that the core's own queue routes
@@ -389,12 +408,21 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
+| **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
+| **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD. | Pre-setup grace. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
 
-Everything else under `/v1/admin/...` — announce, drop-in, music playback,
-satellite restart and volume, wake-word clip recording, sound regeneration,
-library reindex — is **daily tier**. The `admin` in the path means "used by
-the dashboard," not "requires the admin password."
+The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
+"requires the admin password" — but none of those routes is open any more.
+They split across the two tiers: announce, a turn, playback and the room
+queue, per-room volume, the room label, a version check and a voice sample
+take the household **device token**; wake-word recording and model push,
+sound regeneration, the library sweeps, satellite restart / display / config,
+the approvals, drop-in start, chat resync and `git pull` take the **admin**
+tier; and the rows in the table above fail closed on top of that. The
+dashboard's `/api/...` twins name the same tier as the core route each one
+proxies to. `domovoi/tests/test_route_auth_matrix.py` walks both apps and
+keeps the short list of deliberately open mutations honest.
 
 ### Writes answer only to this dashboard's own kind of request
 

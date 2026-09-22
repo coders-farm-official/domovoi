@@ -61,7 +61,7 @@ Every endpoint below is labeled with one of these tiers:
 | Tier | Meaning |
 |---|---|
 | **Open** | No auth. Daily-use surface, LAN trust. |
-| **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. This is the tier for ordinary household actions: a turn, an announcement, playback, the room queue. |
+| **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. This is the tier for ordinary household actions on BOTH hops: a turn, an announcement, playback and the room queue, and on the dashboard also the calendar, playlists, chat, news, podcasts, audiobooks, a person's memories and favorites, device registration, and the satellite verbs the core puts on the same tier (label, timers, announce, volume). |
 | **Chat callback** | `require_chat_callback`: the per-boot secret the chat agent's generated proxy tools carry in `X-Chat-Callback`. One endpoint (`POST /v1/admin/chat-tool`) wears it, because Letta's sandbox holds no admin session. A core restart mints a new secret, so the tools must be regenerated (`POST /v1/admin/chat/resync`). |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
@@ -340,6 +340,12 @@ and `WS /ws/state`). The frontend itself is served statically from `/`.
 Unlabeled endpoints are **Open** (LAN trust). CORS allows localhost, RFC 1918
 ranges, and `*.local` origins only.
 
+**Device** in these tables is the tier from §1.1: a valid `X-Device-Token`
+header **or** an admin Bearer, `401` with neither, `403` with only the
+dashboard cookie, and the pre-setup grace kept so a fresh install works. The
+dashboard's ordinary mutations are on it — the reads beside them are not, and
+stay Open unless the row says otherwise.
+
 An **Open** label here describes this hop only. Every web route that forwards
 to the core passes the caller's `Authorization`, `Cookie`, `X-Device-Token`
 and real client address along with it, so the tier on the core route (§2) is
@@ -397,24 +403,24 @@ household device token instead of a caller's credential.
 | `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. |
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
-| `PATCH /api/music/library/{track_id}` | Open | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
+| `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
 | `DELETE /api/music/library/{track_id}` | **Admin (Bearer)** | `?also_file=false` | Remove a track row (optionally the file too). `204`. `401` without an admin session, `403` for the dashboard cookie alone — the row and the file are left alone either way. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
-| `POST /api/music/library/upload` | Open | multipart audio file(s) and/or `.zip` | Upload straight into the library; triggers indexing. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
+| `POST /api/music/library/upload` | **Device** | multipart audio file(s) and/or `.zip` | Upload straight into the library; triggers indexing. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
 | `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
 | `GET /api/music/library/{track_id}/cover` | Open | — | Cover art. |
-| `DELETE /api/music/acquisitions/{acq_id}` | Open | — | Cancel a pending acquisition. `204`. |
+| `DELETE /api/music/acquisitions/{acq_id}` | **Device** | — | Cancel a pending acquisition. `204`. |
 | `GET /api/music/now-playing` | Open | — | Per-room now-playing (from the cached core snapshot + MPD), with source attribution. |
-| `POST /api/music/now-playing/{room_id}/favorite` | Open | — | Heart whatever the room is playing (re-searches by title into the library/queue). |
-| `POST /api/music/play` | Open | `{room_id, query}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). |
-| `POST /api/music/play-track` | Open | `{room_id, track_id}` | Proxy → core direct-play (no conversation log, no external fallback). |
-| `POST /api/music/play-tracks` | Open | `{room_id, track_ids}` | Proxy → core queue cast. |
-| `POST /api/music/play-playlist` | Open | `{room_id, playlist_id, shuffle?}` | Proxy → core playlist start. |
-| `POST /api/music/add-by-query` | Open | `{room_id, query, artist?, attach_to_playlist_id?}` | Proxy → core acquisition enqueue. |
+| `POST /api/music/now-playing/{room_id}/favorite` | **Device** | — | Heart whatever the room is playing (re-searches by title into the library/queue). |
+| `POST /api/music/play` | **Device** | `{room_id, query}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). |
+| `POST /api/music/play-track` | **Device** | `{room_id, track_id}` | Proxy → core direct-play (no conversation log, no external fallback). |
+| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids}` | Proxy → core queue cast. |
+| `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?}` | Proxy → core playlist start. |
+| `POST /api/music/add-by-query` | **Device** | `{room_id, query, artist?, attach_to_playlist_id?}` | Proxy → core acquisition enqueue. |
 | `POST /api/music/add-by-url` | **Outbound-fetch (core decides)** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Proxy with credentials + source address forwarded; the core's verdict passes back verbatim. |
-| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`. |
-| `POST /api/music/library/reindex` | Open | — | Proxy → core background reindex. |
-| `POST /api/music/library/enrich` | Open | — | Proxy → core background enrichment. |
+| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open (FE-3) | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`. These four stay open by decision: they are the video satellite's kiosk transport row, and that screen renders unattended with nobody to hold a credential. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md). |
+| `POST /api/music/library/reindex` | **Admin (Bearer)** | — | Proxy → core background reindex. |
+| `POST /api/music/library/enrich` | **Admin (Bearer)** | — | Proxy → core background enrichment. |
 
 ### 3.5a Music: the room queue (editable) and device names
 
@@ -434,15 +440,15 @@ rather than guessing. `GET /api/music/now-playing` carries the same
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /api/music/queue/{room_id}` | Open | `?device_id=` | The queue with provenance joined: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec, added_by, added_by_device_id, added_at, playing}], current_song_id, editable, blocked_reason}`. Reading is **never** blocked — a blocked device still sees what's on, and `editable:false` + `blocked_reason` say why it can't change anything. Reaps provenance rows whose songid has left the queue. |
-| `POST /api/music/queue/{room_id}/add` | Open | `{track_ids:[..], device_id}` | Append, then stamp provenance. Proxy → core. `403` when the device is blocked here. |
-| `POST /api/music/queue/{room_id}/remove` | Open | `{song_ids:[..], device_id}` | Drop entries and their provenance rows. `403` when blocked. |
-| `POST /api/music/queue/{room_id}/move` | Open | `{song_id, to_position, device_id}` | Reorder. No DB write — provenance is keyed by songid, which is exactly why. `403` when blocked. |
-| `POST /api/music/queue/{room_id}/clear` | Open | `{device_id}` | Empty the queue and wipe the room's provenance. `403` when blocked. |
+| `POST /api/music/queue/{room_id}/add` | **Device** | `{track_ids:[..], device_id}` | Append, then stamp provenance. Proxy → core. `403` when the device is blocked here. |
+| `POST /api/music/queue/{room_id}/remove` | **Device** | `{song_ids:[..], device_id}` | Drop entries and their provenance rows. `403` when blocked. |
+| `POST /api/music/queue/{room_id}/move` | **Device** | `{song_id, to_position, device_id}` | Reorder. No DB write — provenance is keyed by songid, which is exactly why. `403` when blocked. |
+| `POST /api/music/queue/{room_id}/clear` | **Device** | `{device_id}` | Empty the queue and wipe the room's provenance. `403` when blocked. |
 | `GET /api/music/queue-blocks` | **Admin (read)** | — | Every block: `[{id, device_id, device_name, room_id, note, created_at}]`. `room_id: null` = every room. |
 | `POST /api/music/queue-blocks` | **Admin (mutation)** | `{device_id?, device_name?, room_id?, note?}` | Block a device from editing a queue. Needs at least one of id/name (`400` otherwise); `409` when that device is already blocked at that scope. |
 | `DELETE /api/music/queue-blocks/{id}` | **Admin (mutation)** | — | Unblock. `204`; `404` unknown id. |
-| `POST /api/devices/register` | Open | `{device_id, name?, platform?, user_agent?}` | Upsert this client's row and bump `last_seen_at`. Idempotent — clients call it every boot. `name` seeds the row only when it is NEW, so a client that always sends its platform default can't overwrite a chosen name. `400` malformed id. |
-| `PATCH /api/devices/{device_id}` | Open | `{name}` | Rename. Whitespace is collapsed so two names can't look identical yet block differently. `404` if the device has never registered. |
+| `POST /api/devices/register` | **Device** | `{device_id, name?, platform?, user_agent?}` | Upsert this client's row and bump `last_seen_at`. Idempotent — clients call it every boot. `name` seeds the row only when it is NEW, so a client that always sends its platform default can't overwrite a chosen name. `400` malformed id. |
+| `PATCH /api/devices/{device_id}` | **Device** | `{name}` | Rename. Whitespace is collapsed so two names can't look identical yet block differently. `404` if the device has never registered. |
 | `GET /api/devices` | **Admin (read)** | `?limit=200` | The device roster, most-recently-seen first. Admin-gated: it's an inventory of what's on the network. Feeds the blocklist editor, so an admin picks a device from a list instead of typing an id. |
 
 `device_id` is **required** on every edit and optional only on the read. Not
@@ -466,10 +472,11 @@ it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### 3.6 People
 
-Reads and the memory / favorite / preference edits are **Open**. The two
-deletes that lose identification data — forgetting a person and dropping a
-voice profile — are **Admin (Bearer)**: `401` without an admin session,
-`403` for the dashboard cookie alone.
+Reads are **Open**. The memory / favorite / preference edits are **Device**
+tier — a person's own content, written by whichever household client they are
+using. The two deletes that lose identification data — forgetting a person and
+dropping a voice profile — are **Admin (Bearer)**: `401` without an admin
+session, `403` for the dashboard cookie alone.
 
 Person-centric views over the voice-profile / memory tables.
 
@@ -499,8 +506,12 @@ puts someone back in front of the matcher, so it answers to the operator).
 
 ### 3.7 Satellites
 
-All **Open** except `upgrade`. Live state comes from the cached core snapshot;
-actions proxy to the core admin endpoints.
+Reads are **Open**. The action endpoints carry the tier the core route behind
+each one carries, so the two hops agree: room label, timer cancel, announce,
+announce-all and volume are **Device**; restart, display and the config push
+are **Admin (Bearer)**; code push, pairing reset, adopt and delete are the
+**security tier**. Live state comes from the cached core snapshot; actions
+proxy to the core admin endpoints with the caller's credentials forwarded.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
@@ -512,9 +523,9 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites/{room_id}/notes` | Open | — | Notes taken in this room. |
 | `GET /api/satellites/{room_id}/recently-played` | Open | `?limit=100` | Play history for the room. |
 | `GET /api/satellites/{room_id}/timers` | Open | — | Active timers/reminders. |
-| `DELETE /api/satellites/{room_id}/timers/{timer_id}` | Open | — | Cancel a timer. |
-| `POST /api/satellites/{room_id}/announce` | Open | `{message}` | Proxy → core announce (one room). |
-| `POST /api/satellites/announce-all` | Open | `{message}` | Proxy → core announce (broadcast). |
+| `DELETE /api/satellites/{room_id}/timers/{timer_id}` | **Device** | — | Cancel a timer. |
+| `POST /api/satellites/{room_id}/announce` | **Device** | `{message}` | Proxy → core announce (one room). |
+| `POST /api/satellites/announce-all` | **Device** | `{message}` | Proxy → core announce (broadcast). |
 | `POST /api/satellites/{room_id}/dropin/start` | Proxy — core requires an admin Bearer | `{target_room}` | Proxy → core drop-in start; the caller's credentials are forwarded. |
 | `POST /api/satellites/{room_id}/dropin/end` | Open | — | Proxy → core drop-in end. |
 | `GET /api/satellites/{room_id}/dropin/phone-info` | **Device (`X-Device-Token` or Bearer)** | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). The phone presents the same token again on the upgrade. |
@@ -531,18 +542,18 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off). |
 | `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
 | `DELETE /api/satellites/{room_id}` | **Admin, security tier** | — | Proxy → core delete (remove a `waiting` room). |
-| `PATCH /api/satellites/{room_id}` | Open | `{room_label}` | Proxy → core room-label update. |
-| `POST /api/satellites/{room_id}/volume` | Open | `{level}` | Proxy → core set-volume. |
-| `POST /api/satellites/{room_id}/display` | Open | `{action}` (`on` \| `off` \| `restart_kiosk`) | Proxy → core satellite display (video satellites only; `409` otherwise). |
-| `POST /api/satellites/{room_id}/restart` | Open | — | Proxy → core satellite restart. |
+| `PATCH /api/satellites/{room_id}` | **Device** | `{room_label}` | Proxy → core room-label update. |
+| `POST /api/satellites/{room_id}/volume` | **Device** | `{level}` | Proxy → core set-volume. |
+| `POST /api/satellites/{room_id}/display` | **Admin (Bearer)** | `{action}` (`on` \| `off` \| `restart_kiosk`) | Proxy → core satellite display (video satellites only; `409` otherwise). |
+| `POST /api/satellites/{room_id}/restart` | **Admin (Bearer)** | — | Proxy → core satellite restart. |
 | `POST /api/satellites/{room_id}/upgrade` | **Admin, security tier** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). |
 | `POST /api/satellites/{room_id}/pairing/reset` | **Admin, security tier** | — | Proxy → core `DELETE /v1/admin/satellites/{room_id}/pairing`; the core applies the same gate. |
 | `GET /api/satellites/{room_id}/config` | Open | — | Proxy → core per-satellite editable config. |
-| `PATCH /api/satellites/{room_id}/config` | Open | `{"changes": {...}}` | Proxy → core config push (Pi rewrites `config.toml`, restarts). |
+| `PATCH /api/satellites/{room_id}/config` | **Admin (Bearer)** | `{"changes": {...}}` | Proxy → core config push (Pi rewrites `config.toml`, restarts). |
 
 ### 3.8 Calendar
 
-All **Open**.
+Reads are **Open**; every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -561,8 +572,8 @@ All **Open**.
 | `PATCH /api/config/editable` | **Admin, security tier** | `{"changes": {...}}` | Proxy → core `POST /v1/admin/config`. Returns `{applied, restart_required, rejected}`. |
 | `GET /api/config/version` | Open | — | Proxy → core version label. |
 | `GET /api/config/server-identity` | Open | — | Proxy → the `identity` block of core `GET /v1/health`: `{algorithm, fingerprint, public_key}`. What Settings → About shows, so a person can compare this server's fingerprint with the one printed on a prepared satellite card. |
-| `POST /api/config/version/check` | Open | — | Proxy → core upstream check. |
-| `POST /api/config/version/pull` | Open | — | Proxy → core `git pull --ff-only`. |
+| `POST /api/config/version/check` | **Device** | — | Proxy → core upstream check. |
+| `POST /api/config/version/pull` | **Admin (Bearer)** | — | Proxy → core `git pull --ff-only`. |
 | `GET /api/satellites/approvals` | **Admin read** | — | Proxy → pending approvals. Declared before `/{room_id}` so the path parameter can't shadow it. |
 | `POST /api/satellites/approvals/{room_id}/approve` | **Admin (Bearer)** | `{code}` | Proxy → approve. `code` must be digits; the core compares it and counts the attempt. |
 | `POST /api/satellites/approvals/{room_id}/reject` | **Admin (Bearer)** | — | Proxy → reject. |
@@ -570,7 +581,7 @@ All **Open**.
 
 ### 3.10 Playlists
 
-All **Open**.
+Reads are **Open**; every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -728,10 +739,11 @@ row's `category` tells the UI how to open it
 
 ### 3.15 Podcasts and audiobooks
 
-**Open** except where noted: subscribing and polling make the server fetch a
-URL, so they are **Device** tier and the feed URL must pass the
-outbound-URL rules (§1.1). Feeds are polled by core background workers;
-audio is served by this process.
+Reads are **Open**; every write is **Device** tier — subscribing, unsubscribing,
+polling, saving a resume position and re-walking the audiobooks folder.
+Subscribing and polling also make the server fetch a URL, so the feed URL must
+pass the outbound-URL rules (§1.1). Feeds are polled by core background
+workers; audio is served by this process.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -810,6 +822,9 @@ carrying image uploads is answered by `ollama_vision_model` (the Vision
 role slot on the Models page) instead of the Q&A model. Mutations fire the
 `chat.changed` WS event.
 
+Reads are **Open**; every write — creating, renaming or deleting a thread,
+sending a message, staging an upload — is **Device** tier.
+
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
@@ -842,10 +857,11 @@ conversational one and the tool-routing one — switchable independently.
 
 ### 3.20 News
 
-**Open** except where noted: attaching or re-testing a feed makes the server
-fetch it, so both are **Device** tier and the URL must pass the
-outbound-URL rules (§1.1). Scheduled fetching runs in a core background
-worker.
+Reads are **Open**; every write is **Device** tier — following a topic,
+dropping a topic or a feed, hearting a story, attaching or re-testing a feed,
+and polling now. The ones that make the server fetch something (feed attach,
+re-test, poll) also have to pass the outbound-URL rules (§1.1). Scheduled
+fetching runs in a core background worker.
 
 | Method & path | Request | Purpose |
 |---|---|---|
