@@ -334,7 +334,7 @@ create outbound traffic:
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
-| **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. |
+| **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Approve on the dashboard only when the code matches what setup showed. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. The follow-up **restart** is local only (it bounces systemd units, reaches no network) and is admin-gated; it can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
@@ -427,7 +427,12 @@ success); the raw token appears once in the preseed HTTP response on the
 LAN (same exposure as every admin call until TLS lands); and neither secret
 is ever logged on either side. A force re-adopt **rotates** the token, so
 the previous device for that room stops matching — deliberate, and the UI
-warns before doing it.
+warns before doing it. The scanner treats a removable volume as a setup
+volume only when its label is `DOMOVOI-SET` **and** it carries a parseable
+`device-info.json` — on Linux the label is read from udev's `by-label`
+entry or `lsblk`, so a stick that merely carries the file is not offered
+for adoption (the `SATELLITE_ADOPTION_SCAN_DIRS` dev harness is the one
+path that skips the label).
 
 **Known limitation — connect-time disruption.** The pairing check runs on the
 `hello` frame, but the socket is accepted and the room's in-memory session
@@ -452,10 +457,46 @@ install-confirm time — and the trust screen itself lists the packages,
 the script and the payload size, not just the flag — transfer is
 sha256-manifest-verified, and only
 admin-enabled plugins' payloads flow — but there is **no sandbox**, by
-design and named honestly. Corollary: the satellite's service account is
-root-equivalent on its own device (it already executes server-synced code
-and holds the apply-payload sudoers line) — treat "installed a plugin with
-satellite_root" as "trusted its publisher with your satellites".
+design and named honestly. Treat "installed a plugin with
+`satellite_root`" as "trusted its publisher with your satellites".
+
+**The satellite service account — what it can and cannot do.** On a card
+from media prep, the account the client runs as (`domovoi`) is **not in the
+`sudo` group**, Pi OS's `010_pi-nopasswd` drop-in is masked by the
+bootstrap, and its root access is exactly the lines in
+`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli device
+connect wlan0`, `systemctl --no-block restart` of its own two units,
+`domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
+those targets is a root-owned path the account cannot edit, and every
+script root runs on the device (stage 1, stage 2 as
+`/usr/local/sbin/domovoi-stage2`, the two helpers, `domovoi-status`) lives
+outside the account's home. `domovoi-apply-payload` reads the request file
+only for *which* plugin slugs to apply; it copies each slug's files out of
+the account's mirror into a root-owned staging directory of its own,
+skipping anything that is not a regular file, runs the post-install script
+from there, and writes its log (`/var/log/domovoi-payload-apply.log`) and
+state (`/var/lib/domovoi/plugin_payload_state.json`) to root-owned paths
+it chose itself. `sudo -n true` as the service account fails. The client's
+unit runs under `ProtectSystem=strict`: the file system is read-only to it
+except `~/.domovoi`, `~/domovoi` and `/tmp` (`NoNewPrivileges` is
+deliberately not set, nor anything that implies it — sudo has to gain
+privileges for the helpers to work; `domovoi-apply-payload` re-runs itself
+as a transient unit to get out of the read-only view before it touches
+apt). The kiosk unit on a video satellite carries the same directive with
+the home directory writable.
+
+What that does **not** buy, stated plainly: a plugin with `satellite_root`
+still runs root code, because that is what the permission means — the
+account is prevented from *choosing* what root runs, not from *receiving*
+it from the server it trusts. And `domovoi-provisioning.service` (root,
+every boot until the unit is adopted, a no-op afterwards) still starts
+`python -m satellite.provisioning_mode` from the account's own venv and
+code tree; moving that onto a root-owned copy is the remaining item. The
+console login media prep prints on the label is this same account: it
+gives an operator a shell and the logs, not root. Root on a shipped unit
+means the card in another machine, or a re-flash — and these guarantees
+hold only for cards prepared after this change (an earlier Pi keeps its
+`sudo` membership until it is re-prepped and re-flashed).
 
 **This does not add encryption.** Pairing authenticates *which device is this
 room*; it does not encrypt the audio. Combined with the deferred TLS item

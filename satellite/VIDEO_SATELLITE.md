@@ -87,6 +87,13 @@ sudo systemctl enable --now domovoi-satellite domovoi-kiosk
 (If your checkout predates the in-repo `domovoi-satellite.service`, use
 the PROVISIONING.md §8 heredoc for that one.)
 
+Both units run under `ProtectSystem=strict`. The kiosk's writable set is
+the home directory (Chromium's profile under `~/.domovoi/kiosk-profile`
+and its caches), `/tmp`, and the seat's runtime directory under
+`/run/user`; if cage or the browser on your board needs to write
+somewhere else, extend `ReadWritePaths=` in `domovoi-kiosk.service`
+rather than removing the directive.
+
 Sudoers — the self-restart entry from PROVISIONING.md §8.1 **plus** one
 line so the dashboard's "restart kiosk" button works:
 

@@ -261,6 +261,42 @@ XVF_HOST_REPO = (
     "https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY.git"
 )
 XVF_HOST_SUBDIR = "host_control/rpi_64bit"
+# The one upstream commit this pipeline ships, and the digests of the two
+# files that matter at that commit: the binary that becomes a sudoers
+# target on every satellite, and the map it dlopens beside itself. The
+# fetch checks out exactly this commit and refuses the cache when either
+# file differs. Moving the pin is a deliberate act: update both values from
+# a clone you have inspected.
+XVF_HOST_COMMIT = "a652fe79da3a292b25decc0e1e7f267d29bb0284"   # 2026-08-14
+XVF_HOST_SHA256 = {
+    "xvf_host": "63f89c6672c0d89bc82d8182cb36013ac3619288780f315a2e0373fb3ed771f2",
+    "libcommand_map.so": "c1b424313e48cfe97c5cfce0530ac05fe47f818cc0fba15a9954198ef105282c",
+}
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_xvf_host_tree(src: Path) -> str | None:
+    """Why ``src`` is not the pinned tool, or None when it is."""
+    for name, want in XVF_HOST_SHA256.items():
+        p = src / name
+        if not p.is_file():
+            return f"{name} is missing from {XVF_HOST_SUBDIR}"
+        got = _sha256_file(p)
+        if got != want:
+            return (
+                f"{name} does not match the pinned digest "
+                f"(got {got[:12]}…, pinned {want[:12]}…)"
+            )
+    return None
 
 
 def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
@@ -269,6 +305,11 @@ def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
     NOT a single file: xvf_host loads ``libcommand_map.so`` from its OWN
     directory, so the whole folder has to travel together — a lone binary
     fails at runtime with "cannot open shared object file".
+
+    Fetched at XVF_HOST_COMMIT, exactly: an empty clone, one fetch of that
+    commit, a checkout of it, and a digest check on the files that matter
+    before anything reaches the cache. Upstream's branch tip is never
+    what ships.
     """
     dest = cache.bucket("xvf_host")
     git = shutil.which("git")
@@ -279,28 +320,56 @@ def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
         )
     with tempfile.TemporaryDirectory() as tmp:
         clone = Path(tmp) / "src"
+        clone.mkdir()
+        steps = (
+            ([git, "init", "-q", str(clone)], 60),
+            ([git, "-C", str(clone), "remote", "add", "origin", XVF_HOST_REPO], 60),
+            ([git, "-C", str(clone), "fetch", "-q", "--depth", "1", "origin",
+              XVF_HOST_COMMIT], 600),
+            ([git, "-C", str(clone), "checkout", "-q", XVF_HOST_COMMIT], 60),
+        )
+        for cmd, limit in steps:
+            try:
+                r = run(cmd, capture_output=True, text=True, timeout=limit)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                return False, f"xvf_host fetch unavailable: {e}"
+            if r.returncode != 0:
+                return False, (
+                    f"xvf_host fetch of {XVF_HOST_COMMIT[:12]} failed at "
+                    f"`git {cmd[1] if cmd[1] != '-C' else cmd[3]}`: "
+                    f"{(r.stderr or '')[-300:]}"
+                )
         try:
-            r = run(
-                [git, "clone", "--depth", "1", XVF_HOST_REPO, str(clone)],
-                capture_output=True, text=True, timeout=600,
+            head = run(
+                [git, "-C", str(clone), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=60,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             return False, f"xvf_host fetch unavailable: {e}"
-        if r.returncode != 0:
-            return False, f"xvf_host clone failed: {(r.stderr or '')[-300:]}"
+        if head.returncode != 0 or (head.stdout or "").strip() != XVF_HOST_COMMIT:
+            return False, (
+                f"xvf_host checkout is not {XVF_HOST_COMMIT[:12]} "
+                f"(got {(head.stdout or '').strip()[:12] or '?'})"
+            )
         src = clone / XVF_HOST_SUBDIR
         if not src.is_dir():
             return False, (
-                f"{XVF_HOST_SUBDIR} is not in the upstream repo any more — "
+                f"{XVF_HOST_SUBDIR} is not at the pinned commit — "
                 "the layout changed; see PROVISIONING.md §E"
             )
+        problem = verify_xvf_host_tree(src)
+        if problem:
+            return False, f"xvf_host refused: {problem}"
         # Replace rather than merge: a stale companion .so beside a newer
         # binary is exactly the failure this folder-not-file rule exists for.
         if dest.is_dir():
             shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(src, dest)
     cache.stamp("xvf_host")
-    return True, f"xvf_host cached in {dest} ({len(list(dest.iterdir()))} files)"
+    return True, (
+        f"xvf_host {XVF_HOST_COMMIT[:12]} cached in {dest} "
+        f"({len(list(dest.iterdir()))} files, digests verified)"
+    )
 
 
 def fetch_oww_models() -> tuple[bool, str]:

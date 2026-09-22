@@ -93,6 +93,7 @@ def register(ctx: Any) -> None:
             device_index=int(sdk.config.sdr_device_index),
             http_port=int(sdk.config.sdr_http_port),
             stream_base=str(sdk.config.sdr_stream_base),
+            bind_host=str(getattr(sdk.config, "sdr_bind_host", "") or ""),
         )
         sdk.state["sdr_tuner"] = tuner
 

@@ -157,7 +157,7 @@ async def media_targets() -> list[dict[str, Any]]:
         out.append({
             "kind": "drive",
             "token": drive_token(mount),
-            "label": _volume_label(mount),
+            "label": _volume_label(mount, rm.get("device")),
             "looks_like_pi_boot": looks,
             "free_bytes": free,
         })

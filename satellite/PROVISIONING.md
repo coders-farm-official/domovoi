@@ -359,9 +359,9 @@ If you see the WebSocket connect immediately drop, or never see `server ready`, 
 
 ### 6.7 Sudoers entry for the WiFi self-heal
 
-The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single locked-down sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
+The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
 
-This is **least-privilege by design** — the satellite process gains the ability to reassociate the WiFi link, and nothing else.
+> **What the sudoers lines are, and are not.** A card from media prep renders all of these lines into `/etc/sudoers.d/domovoi-satellite` (see `domovoi/satellite_media/templates/sudoers.tmpl`), keeps the service account **out of the `sudo` group**, and masks Pi OS's `010_pi-nopasswd`, so that file is the whole of the account's root access — `sudo -n true` fails. Each line names one root-owned helper the account cannot edit; what the helper does with root is bounded by the helper (the plugin-payload helper, for instance, runs whatever post-install script the server declared for an enabled plugin — see [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md), "The satellite service account"). On a hand-built satellite the user you created in the imager is normally in `sudo`; these entries then only remove the password prompt for the client's own calls. Remove the account from `sudo` (`sudo gpasswd -d <username> sudo`) and delete `/etc/sudoers.d/010_pi-nopasswd` if you want the prepared-card posture.
 
 ```bash
 sudo visudo -f /etc/sudoers.d/satellite-wifi
@@ -418,13 +418,15 @@ journalctl -u domovoi-satellite -f   # tail logs
 
 `Restart=on-failure` lets the Pi recover from a transient WiFi drop without intervention (the client also reconnects internally with exponential backoff, so you'll usually see the systemd restart only on hard failures).
 
+The unit runs under `ProtectSystem=strict`: the file system is read-only to the client except `~/.domovoi`, `~/domovoi` and `/tmp`. If you add something the client must write elsewhere, extend `ReadWritePaths=` in the unit rather than dropping the directive — and do not add `NoNewPrivileges=` or any directive that implies it (`ProtectKernelTunables=`, `PrivateDevices=`, `RestrictRealtime=`, …): the sudoers helpers are how the client restarts itself, and they need to gain privileges to do it.
+
 After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reconnects to the Domovoi server automatically. For the bulletproof path, also turn on overlayfs once the Pi's behavior is dialed in.
 
 > **Note on the `journalctl` line above** — `enable --now` already started the service in the background. The `journalctl -u domovoi-satellite -f` tail is just for watching the startup log. Ctrl+C to exit the tail; the service keeps running.
 
 ### 8.1 Sudoers entry for self-restart
 
-The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one locked-down, no-password, single-command sudoers line. Least-privilege: the satellite gains the ability to restart its own unit, and nothing else.
+The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
 
 > **Who can ask for it:** both buttons are admin actions on the server — the config push and the restart require an admin sign-in on the dashboard (`401` without one), as does pushing a wake model. Everyday room control — volume, playback, announcements — needs the household device token instead, which every satellite and app already carries. See [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#the-tiers).
 
@@ -608,7 +610,7 @@ Get the exact `CARD=` name from `arecord -L` (it's usually `Array`). The shippin
 
 The 12-LED ring is driven through Seeed's `xvf_host` CLI (it also configures the chip). Without it the satellite still runs — the ring just stays dark, which on a finished unit reads as a dead device rather than a plain one.
 
-> **A card from media prep has already done all of this.** The tool is fetched into the `xvf_host` cache bucket, travels in the payload, and stage 1 installs it to `/opt/xvf3800` with the sudoers entry and `libusb-1.0-0` alongside. The steps below are for a satellite you are building by hand.
+> **A card from media prep has already done all of this.** The tool is fetched into the `xvf_host` cache bucket at one pinned upstream commit (`XVF_HOST_COMMIT` in `domovoi/satellite_media/fetchers.py`, with the sha256 of `xvf_host` and `libcommand_map.so` checked before anything reaches the cache — a branch tip never ships), travels in the payload, and stage 1 installs it to `/opt/xvf3800` with the sudoers entry and `libusb-1.0-0` alongside. The steps below are for a satellite you are building by hand; check out that same commit rather than the branch.
 
 `xvf_host` is **not** a single file — it loads `libcommand_map.so` (and other companion files) from its *own* directory, so it must stay alongside them. Install the whole `rpi_64bit/` folder, don't copy just the binary (a lone binary fails with `libcommand_map.so: cannot open shared object file`).
 
@@ -621,7 +623,7 @@ sudo chmod +x /opt/xvf3800/xvf_host
 
 - [ ] Quick LED test (runs with no missing-lib error): `sudo /opt/xvf3800/xvf_host led_effect 3 && sudo /opt/xvf3800/xvf_host led_color 0x00ff50` turns the ring solid green; `sudo /opt/xvf3800/xvf_host led_effect 0` turns it off.
 
-`xvf_host` typically needs root for USB access. The satellite probes a plain call first and falls back to `sudo -n`, so add a passwordless sudoers entry (mirrors §6.7's wpa_cli pattern — least-privilege, one binary):
+`xvf_host` typically needs root for USB access. The satellite probes a plain call first and falls back to `sudo -n`, so add a passwordless sudoers entry (mirrors §6.7's wpa_cli pattern — one root-owned binary, and the posture note there applies):
 
 ```bash
 sudo visudo -f /etc/sudoers.d/satellite-xvf

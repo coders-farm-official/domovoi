@@ -1,11 +1,13 @@
 #!/bin/bash
 # Domovoi satellite — STAGE 2 bootstrap (root, runs AFTER Wi-Fi joins, via
-# domovoi-bootstrap.service). The USB adoption already wrote
-# ~/.domovoi/config.toml + pairing_token; this stage finishes what needed
-# the network or the server: fresh code/asset sync from the LAN server
-# (the payload snapshot may be days old — the server is authoritative),
-# online retries of anything stage 1 warned about, plugin root work, and
-# finally enabling the satellite unit.
+# domovoi-bootstrap.service; installed by stage 1 as
+# /usr/local/sbin/domovoi-stage2, root's, like every other script root runs
+# on this device). The adoption already wrote ~/.domovoi/config.toml +
+# pairing_token; this stage finishes what needed the network or the
+# server: fresh code/asset sync from the LAN server (the payload snapshot
+# may be days old — the server is authoritative), online retries of
+# anything stage 1 warned about, plugin root work, and finally enabling the
+# satellite unit.
 #
 # Idempotent + re-entrant (systemd Restart=on-failure): markers under
 # /var/lib/domovoi/bootstrap-steps/, done-flag at
@@ -30,6 +32,19 @@ echo "== domovoi stage-2 $(date -Is) =="
 
 as_user() { runuser -u "$SAT_USER" -- "$@"; }
 status() { [ -x /usr/local/sbin/domovoi-status ] && /usr/local/sbin/domovoi-status "$@" || true; }
+
+# Same as stage 1, repeated here on purpose: Pi OS's first-boot user setup
+# (userconf.txt) ran on boot 2, between the two, and it puts the account
+# it handles in the sudo group and writes /etc/sudoers.d/010_pi-nopasswd
+# for it. The service account's root access is the sudoers.d file stage 1
+# rendered, and nothing wider.
+harden_account() {
+  gpasswd -d "$SAT_USER" sudo >/dev/null 2>&1 || true
+  printf '# masked by the Domovoi bootstrap: the satellite account has no blanket sudo\n' \
+    >/etc/sudoers.d/010_pi-nopasswd
+  chmod 0440 /etc/sudoers.d/010_pi-nopasswd
+}
+harden_account
 
 status finishing
 
@@ -195,10 +210,12 @@ systemctl enable --now domovoi-satellite.service
 sleep 8
 if systemctl is-active --quiet domovoi-satellite.service; then
   touch "$DONE"
-  # Reflect 'active' in the boot partition's device-info for humans.
+  # Reflect 'active' in the boot partition's device-info for humans. The
+  # OS's python3, not the venv's: this runs as root, and the venv is the
+  # satellite account's to edit.
   for BOOT in /boot/firmware /boot; do
     [ -f "$BOOT/domovoi/device-info.json" ] || continue
-    "$VENVPY" - "$BOOT/domovoi/device-info.json" <<'EOF' || true
+    python3 - "$BOOT/domovoi/device-info.json" <<'EOF' || true
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p)); doc.update(status="active", step=None, error=None)

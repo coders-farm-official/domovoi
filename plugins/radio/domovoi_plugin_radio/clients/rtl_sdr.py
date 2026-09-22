@@ -35,12 +35,52 @@ listener wait.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import shutil
 import socket
 from typing import Optional
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
+
+# Where the listener falls back to when the configured host cannot be
+# resolved: reachable by nothing but this machine, which is the safe
+# direction to fail in. Never the wildcard.
+_LOOPBACK = "127.0.0.1"
+
+
+def listener_host(stream_base: str, bind_host: str = "",
+                  resolve=socket.gethostbyname) -> str:
+    """The one address ffmpeg's single-connection listener binds.
+
+    ``-listen 1`` serves exactly one client, so an open bind is a listener
+    anyone on the network can occupy ahead of the room's MPD. The listener
+    therefore binds the address MPD is told to dial: ``bind_host`` when
+    set, else the host of ``stream_base`` (a name is resolved once, here).
+    An unresolvable name falls back to loopback, and the wildcard is never
+    used - a configured ``0.0.0.0`` is treated as unset.
+    """
+    candidate = (bind_host or "").strip()
+    if not candidate:
+        base = (stream_base or "").strip()
+        parts = urlsplit(base if "://" in base else f"//{base}")
+        candidate = (parts.hostname or "").strip()
+    if not candidate or candidate in ("0.0.0.0", "::", "*"):
+        return _LOOPBACK
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        pass
+    try:
+        return resolve(candidate)
+    except OSError:
+        log.warning(
+            "sdr tuner: cannot resolve %r for the stream listener - binding "
+            "loopback instead (set RADIO_SDR_BIND_HOST to the LAN address)",
+            candidate,
+        )
+        return _LOOPBACK
 
 
 def _close_proc_transport(proc: asyncio.subprocess.Process | None) -> None:
@@ -76,11 +116,15 @@ class SdrTuner:
         device_index: int = 0,
         http_port: int = 6391,
         stream_base: str = "http://127.0.0.1",
+        bind_host: str = "",
     ) -> None:
         self._enabled = enabled
         self._device_index = device_index
         self._http_port = http_port
         self._stream_base = stream_base
+        self._bind_host = bind_host
+        # Resolved once, at tune time; None until then.
+        self._listen_host: str | None = None
         self._rtl: asyncio.subprocess.Process | None = None
         self._ffmpeg: asyncio.subprocess.Process | None = None
         # Byte shuttle rtl_fm.stdout → ffmpeg.stdin: chaining via
@@ -211,11 +255,12 @@ class SdrTuner:
         succeeds (port free → ffmpeg not ready, keep waiting) or fails
         with EADDRINUSE (ffmpeg is listening).
         """
+        host = self._listen_host or _LOOPBACK
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                test_sock.bind(("0.0.0.0", self._http_port))
+                test_sock.bind((host, self._http_port))
                 test_sock.close()
                 await asyncio.sleep(0.05)
                 continue
@@ -235,11 +280,18 @@ class SdrTuner:
             self._current_freq_mhz = None
 
     @property
+    def listen_host(self) -> str:
+        """The address the listener binds (see :func:`listener_host`)."""
+        if self._listen_host is None:
+            self._listen_host = listener_host(self._stream_base, self._bind_host)
+        return self._listen_host
+
+    @property
     def stream_url(self) -> str:
-        """URL ffmpeg's ``-listen 1`` instance serves. The bind is
-        always 0.0.0.0:<port>; the host part here is what MPD dials, so
-        it must resolve from MPD's network perspective (a LAN hostname
-        when MPD runs in Docker — see RADIO_SDR_STREAM_BASE help).
+        """URL ffmpeg's ``-listen 1`` instance serves. The host part is
+        what MPD dials, so it must resolve from MPD's network perspective
+        (a LAN hostname when MPD runs in Docker — see RADIO_SDR_STREAM_BASE
+        help); the listener binds that same address, never the wildcard.
 
         Deliberately no query string: ffmpeg's built-in HTTP server
         matches the literal path and silently rejects cache-buster
@@ -282,7 +334,7 @@ class SdrTuner:
             "-b:a", "128k",
             "-f", "mp3",
             "-listen", "1",
-            f"http://0.0.0.0:{self._http_port}/fm.mp3",
+            f"http://{self.listen_host}:{self._http_port}/fm.mp3",
         ]
 
         try:

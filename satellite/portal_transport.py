@@ -68,6 +68,12 @@ PROBE_PATHS = (
     "/canonical.html",               # Ubuntu / GNOME
 )
 
+# The most a credentials form can legitimately weigh: a 32-byte SSID, a
+# 63-byte passphrase, a room name and a server address, URL-encoded, is
+# well under a kilobyte. Anything larger is refused before it is read -
+# this server runs as root, and a body is memory.
+MAX_POST_BYTES = 8192
+
 _SCAN_TIMEOUT_SEC = 20.0
 # A wireless device that has only just appeared reports itself ready before
 # it can actually survey, and the first rescan comes back empty. Ask again
@@ -448,10 +454,8 @@ class PortalTransport:
         Raises :class:`proto.ProvisionInvalid` with a message safe to show a
         customer — it must never echo the password back.
         """
-        ssid = (fields.get("ssid") or "").strip()
+        ssid = proto.validate_wifi_ssid((fields.get("ssid") or "").strip())
         psk = fields.get("psk") or ""
-        if not ssid:
-            raise proto.ProvisionInvalid("Choose your Wi-Fi network.")
         if not psk:
             raise proto.ProvisionInvalid("Enter your Wi-Fi password.")
 
@@ -468,10 +472,11 @@ class PortalTransport:
         if profile not in self.profiles:
             raise proto.ProvisionInvalid("Unknown microphone board.")
 
-        # Blank means "find the server yourself at first start". The
-        # sentinel keeps validate_provision strict about non-empty strings
-        # rather than teaching it to accept blanks.
-        url = (fields.get("url") or "").strip() or proto.AUTO_DISCOVER_URL
+        # Blank means "find the server yourself at first start". Anything
+        # else has to be a ws:// address on the house LAN: this field is
+        # typed by whoever joined the setup network, and the satellite
+        # hands its pairing token to whatever it dials.
+        url = proto.normalize_server_url(fields.get("url") or "", lan_only=True)
 
         doc = proto.build_provision(
             nonce=self.nonce,
@@ -540,14 +545,14 @@ def _make_handler(transport: PortalTransport):
             self.wfile.write(body)
             self.wfile.flush()
 
-        def _form(self, error: str | None = None, **kw: Any) -> None:
+        def _form(self, error: str | None = None, status: int = 200, **kw: Any) -> None:
             self._send(portal_pages.render_form(
                 networks=transport.networks,
                 profiles=transport.profiles,
                 profile=transport.device_profile,
                 error=error,
                 **kw,
-            ))
+            ), status=status)
 
         # ── routes ──
         def do_GET(self) -> None:  # noqa: N802 — stdlib naming
@@ -579,6 +584,19 @@ def _make_handler(transport: PortalTransport):
                 # Every probe URL, and anything else wildcard DNS sent here.
                 self._redirect_to_portal()
 
+        def _too_large(self) -> None:
+            """413 without reading the body. The unread bytes are still on
+            the socket, so this connection cannot carry another request."""
+            self.close_connection = True
+            body = portal_pages.render_probe_redirect(portal_root).encode("utf-8")
+            self.send_response(413)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+
         def do_POST(self) -> None:  # noqa: N802 — stdlib naming
             path = urllib.parse.urlparse(self.path).path
             if path != "/provision":
@@ -588,6 +606,11 @@ def _make_handler(transport: PortalTransport):
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = 0
+            if length < 0:
+                length = 0
+            if length > MAX_POST_BYTES:
+                self._too_large()
+                return
             raw = self.rfile.read(length).decode("utf-8", "replace") if length else ""
             fields = {
                 k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()
@@ -595,16 +618,21 @@ def _make_handler(transport: PortalTransport):
             try:
                 payload = transport.build_payload(fields)
             except proto.ProvisionInvalid as e:
-                # Re-render with the reason. Never echo the password back.
-                self._form(error=str(e),
+                # Re-render with the reason, as a 400: the submission was
+                # refused, and a client reading the status can tell. Never
+                # echo the password back.
+                self._form(error=str(e), status=400,
                            room=fields.get("room") or None,
                            ssid=fields.get("ssid") or None)
                 return
 
             # Respond FIRST. Accepting drops the AP, and a phone that never
-            # got this page has no way to learn what happened.
+            # got this page has no way to learn what happened. The page
+            # names the server the satellite will dial, as resolved - the
+            # last chance to notice a typo before the AP is gone.
             self._send(portal_pages.render_accepted(
                 room_id=payload["room_id"], code=transport.approval_code,
+                server=payload["domovoi_url"],
             ))
             transport.accept(payload)
 

@@ -24,6 +24,18 @@ Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+# The file system is read-only to this unit except the trees the client
+# writes: its config dir, the code tree the server syncs, and /tmp (wpa_cli
+# creates its control socket there, and the supplicant answers on that
+# path, so it cannot be a private one). NoNewPrivileges is deliberately
+# NOT set, and nothing that implies it is: the sudoers.d helpers are how
+# the client restarts itself, re-joins Wi-Fi and applies plugin payloads,
+# and sudo has to gain privileges to do that. A sudo'd child inherits this
+# read-only view; the helpers that need more (domovoi-apply-payload) run
+# themselves as a transient unit outside it. See docs/SECURITY_PRIVACY.md,
+# "The satellite service account".
+ProtectSystem=strict
+ReadWritePaths=@HOME@/.domovoi @HOME@/domovoi /tmp
 
 [Install]
 WantedBy=multi-user.target

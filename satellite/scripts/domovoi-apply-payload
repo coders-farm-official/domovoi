@@ -6,24 +6,58 @@
 #   <user> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
 #
 # Reads ~/.domovoi/pending_payload.json (written by plugin_sync just before
-# the sudo call): per-slug apt packages + post-install script. Installs the
-# packages (offline deb cache first when present, apt online otherwise) and
-# runs each script AS ROOT with DOMOVOI_PLUGIN_SLUG/DOMOVOI_PLUGIN_DIR env,
-# logging everything to ~/.domovoi/payload_apply.log. On success it records
-# the applied state so plugin_sync stops flagging the slug.
+# the sudo call) for WHICH slugs to apply — and nothing else. Every path
+# this script writes to, reads packages from or executes a script out of is
+# fixed below, in this root-owned file; a "payloads_root" or "state_file"
+# key in the request is ignored. Per slug: apt packages (the offline deb
+# cache stage 1 unpacked first, apt online for the rest) and a post-install
+# script. The script is copied out of the satellite user's mirror
+# (~/.domovoi/plugin_payloads/<slug>/, regular files only, never through a
+# symlink) into a root-owned staging directory this script creates, and run
+# from THERE as root with DOMOVOI_PLUGIN_SLUG / DOMOVOI_PLUGIN_DIR set.
+# Everything is logged to /var/log/domovoi-payload-apply.log (0644, so the
+# client and the dashboard's upgrade report can read it). On success the
+# applied state lands in /var/lib/domovoi/plugin_payload_state.json so
+# plugin_sync stops flagging the slug.
 #
-# The security posture (plugins with satellite_root run arbitrary root code
-# on satellites) is documented in docs/SECURITY_PRIVACY.md and gated at
-# install-confirm time by the plugin's manifest permission + warnings.
+# The security posture (a plugin with satellite_root runs root code on
+# every satellite that carries it) is documented in docs/SECURITY_PRIVACY.md
+# and gated at install-confirm time by the plugin's manifest permission +
+# warnings. What this file guarantees is narrower and exact: the ONLY root
+# code path the satellite account can trigger is a script the SERVER served
+# under a slug the server declared, after the whole of it was copied into a
+# directory that account cannot touch.
 
 set -u
+
+# domovoi-satellite.service runs under ProtectSystem=strict: /usr, /var and
+# /etc are read-only for every process in that unit, sudo'd ones included,
+# so apt and dpkg cannot run in there. Re-run as a transient unit of our own,
+# outside that sandbox, whenever systemd is around to ask. The variable is
+# how the re-run knows not to do it again.
+if [ -z "${DOMOVOI_APPLY_UNSANDBOXED:-}" ] && [ -d /run/systemd/system ] \
+   && command -v systemd-run >/dev/null 2>&1; then
+  exec systemd-run --quiet --wait --pipe --collect \
+    --setenv=DOMOVOI_APPLY_UNSANDBOXED=1 \
+    --setenv="SUDO_USER=${SUDO_USER:-root}" \
+    "$0" "$@"
+fi
 
 # The invoking user's home (sudo preserves neither $HOME reliably nor cwd).
 INVOKER="${SUDO_USER:-root}"
 HOME_DIR="$(getent passwd "$INVOKER" | cut -d: -f6)"
-DOMOVOI_DIR="$HOME_DIR/.domovoi"
-PENDING="$DOMOVOI_DIR/pending_payload.json"
-LOGFILE="$DOMOVOI_DIR/payload_apply.log"
+[ -n "$HOME_DIR" ] || { echo "no home directory for $INVOKER" >&2; exit 1; }
+PENDING="$HOME_DIR/.domovoi/pending_payload.json"
+MIRROR="$HOME_DIR/.domovoi/plugin_payloads"
+
+# Root's, every one of them. NOT read from the request file.
+STATE_DIR=/var/lib/domovoi
+STATE_FILE=/var/lib/domovoi/plugin_payload_state.json
+STAGING=/var/lib/domovoi/payload-staging
+LOGFILE=/var/log/domovoi-payload-apply.log
+# Unpacked by stage 1 from the payload, root-owned; absent on a hand-built
+# satellite, which simply installs online.
+DEB_CACHE=/opt/domovoi-payload/debs
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOGFILE"; }
 
@@ -32,18 +66,123 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOGFILE"; }
 PY=python3
 command -v "$PY" >/dev/null 2>&1 || { echo "python3 missing" >&2; exit 1; }
 
+mkdir -p "$STATE_DIR"
+# A fresh staging tree per run, under a directory only root can write.
+# Whatever a previous run left behind is not to be trusted either.
+rm -rf "$STAGING"
+mkdir "$STAGING" || exit 1
+chmod 0700 "$STAGING" 2>/dev/null || true
+if [ ! -f "$LOGFILE" ]; then
+  : >"$LOGFILE"
+  chmod 0644 "$LOGFILE"
+fi
+
 log "apply-payload start (invoker=$INVOKER)"
 
-# Let python do the JSON walking; shell does the privileged calls.
-"$PY" - "$PENDING" <<'EOF' >"$DOMOVOI_DIR/pending_payload.steps" || exit 1
-import json, sys
-doc = json.load(open(sys.argv[1]))
-root = doc.get("payloads_root", "")
-for slug, m in sorted((doc.get("slugs") or {}).items()):
+# Python walks the request and STAGES the scripts; the shell does the
+# privileged calls. Only "slugs" is read out of the request. A slug, a
+# package name or a script path that fails its pattern is skipped with a
+# note - it never reaches the shell.
+"$PY" - "$PENDING" "$MIRROR" "$STAGING" <<'EOF' >"$STAGING/steps" 2>>"$LOGFILE" || exit 1
+import json, os, posixpath, re, stat, sys
+
+# The shell reads this back line by line: LF only, whatever the platform.
+sys.stdout.reconfigure(newline="\n")
+pending, mirror, staging = sys.argv[1], sys.argv[2], sys.argv[3]
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]{1,127}$")
+REL_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]{0,255}$")
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def note(msg):
+    print(f"SKIP\t-\t{msg}")
+
+
+def copy_regular(src, dest):
+    """Copy one regular file without ever following a symlink at the source."""
+    fd = os.open(src, os.O_RDONLY | O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        with os.fdopen(fd, "rb") as fin, open(dest, "wb") as fout:
+            fd = None
+            while True:
+                chunk = fin.read(1 << 16)
+                if not chunk:
+                    break
+                fout.write(chunk)
+    finally:
+        if fd is not None:
+            os.close(fd)
+    os.chmod(dest, 0o644)
+    return True
+
+
+def stage(slug, src_root, dest_root):
+    """Regular files only, directory by directory, never through a link."""
+    if os.path.islink(src_root) or not os.path.isdir(src_root):
+        return 0
+    copied = 0
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        dirnames[:] = [d for d in dirnames
+                       if not os.path.islink(os.path.join(dirpath, d))]
+        rel = os.path.relpath(dirpath, src_root)
+        out_dir = dest_root if rel == "." else os.path.join(dest_root, rel)
+        os.makedirs(out_dir, mode=0o755, exist_ok=True)
+        for name in filenames:
+            try:
+                if copy_regular(os.path.join(dirpath, name),
+                                os.path.join(out_dir, name)):
+                    copied += 1
+            except OSError as e:
+                note(f"{slug}: could not stage {name}: {e}")
+    return copied
+
+
+try:
+    doc = json.load(open(pending))
+except (OSError, ValueError) as e:
+    note(f"request unreadable: {e}")
+    doc = {}
+slugs = doc.get("slugs") if isinstance(doc, dict) else None
+request = {}
+for slug, m in sorted((slugs or {}).items()):
+    if not isinstance(slug, str) or not SLUG_RE.match(slug) or not isinstance(m, dict):
+        note(f"ignoring slug {slug!r}")
+        continue
+    pkgs = []
     for pkg in m.get("apt_packages") or []:
-        print(f"APT\t{slug}\t{pkg}")
-    if m.get("post_install"):
-        print(f"RUN\t{slug}\t{root}/{slug}/{m['post_install']}")
+        if isinstance(pkg, str) and PKG_RE.match(pkg):
+            pkgs.append(pkg)
+            print(f"APT\t{slug}\t{pkg}")
+        else:
+            note(f"{slug}: ignoring apt package {pkg!r}")
+    entry = {"version": m.get("version") if isinstance(m.get("version"), str) else None,
+             "apt_packages": sorted(pkgs), "post_install": None, "script": None}
+    request[slug] = entry
+    post = m.get("post_install")
+    if not post:
+        continue
+    if (not isinstance(post, str) or not REL_RE.match(post)
+            or ".." in post.split("/")):
+        note(f"{slug}: ignoring post_install {post!r}")
+        continue
+    entry["post_install"] = post
+    # posixpath, not os.path: the shell below reads these paths back, and
+    # they must be spelled the way it spells them.
+    dest_root = posixpath.join(staging, slug)
+    n = stage(slug, posixpath.join(mirror, slug), dest_root)
+    script = posixpath.join(dest_root, post)
+    if n and os.path.isfile(script) and not os.path.islink(script):
+        os.chmod(script, 0o755)
+        entry["script"] = script
+        print(f"RUN\t{slug}\t{script}")
+    else:
+        print(f"MISSING\t{slug}\t{post}")
+with open(os.path.join(staging, "request.json"), "w") as f:
+    json.dump(request, f, indent=2)
 EOF
 
 FAIL=0
@@ -51,13 +190,12 @@ APT_PKGS=""
 while IFS="$(printf '\t')" read -r kind slug arg; do
   case "$kind" in
     APT) APT_PKGS="$APT_PKGS $arg" ;;
+    SKIP) log "skipped: $arg" ;;
   esac
-done <"$DOMOVOI_DIR/pending_payload.steps"
+done <"$STAGING/steps"
 
 if [ -n "$APT_PKGS" ]; then
   log "apt install:$APT_PKGS"
-  # Offline deb cache (media-prep payload) first; apt handles the rest.
-  DEB_CACHE="$DOMOVOI_DIR/deb_cache"
   if [ -d "$DEB_CACHE" ] && ls "$DEB_CACHE"/*.deb >/dev/null 2>&1; then
     dpkg -i --force-confold "$DEB_CACHE"/*.deb >>"$LOGFILE" 2>&1 || true
   fi
@@ -69,52 +207,56 @@ fi
 while IFS="$(printf '\t')" read -r kind slug arg; do
   case "$kind" in
     RUN)
-      if [ -f "$arg" ]; then
-        log "post_install $slug: $arg"
-        chmod +x "$arg" 2>/dev/null || true
-        DOMOVOI_PLUGIN_SLUG="$slug" \
-        DOMOVOI_PLUGIN_DIR="$(dirname "$arg")" \
-          "$arg" >>"$LOGFILE" 2>&1 || { log "post_install $slug FAILED"; FAIL=1; }
-      else
-        log "post_install $slug: missing $arg"; FAIL=1
-      fi
+      # $arg is the STAGED copy: under $STAGING, written by the step above.
+      log "post_install $slug: $arg"
+      DOMOVOI_PLUGIN_SLUG="$slug" \
+      DOMOVOI_PLUGIN_DIR="$(dirname "$arg")" \
+        "$arg" >>"$LOGFILE" 2>&1 || { log "post_install $slug FAILED"; FAIL=1; }
+      ;;
+    MISSING)
+      log "post_install $slug: $arg is not in the mirror"; FAIL=1
       ;;
   esac
-done <"$DOMOVOI_DIR/pending_payload.steps"
+done <"$STAGING/steps"
 
 if [ "$FAIL" -eq 0 ]; then
-  # Record applied state (per-slug apt set + post-install sha) so
-  # plugin_sync stops flagging these slugs.
-  "$PY" - "$PENDING" <<'EOF' >>"$LOGFILE" 2>&1 || true
-import hashlib, json, sys
-from pathlib import Path
-doc = json.load(open(sys.argv[1]))
-root = Path(doc.get("payloads_root", ""))
-state_file = Path(doc.get("state_file", ""))
+  # Record applied state (per-slug apt set + post-install sha, hashed from
+  # the STAGED bytes that actually ran) so plugin_sync stops flagging them.
+  "$PY" - "$STAGING/request.json" "$STATE_FILE" <<'EOF' >>"$LOGFILE" 2>&1 || true
+import hashlib, json, os, sys
+
+request = json.load(open(sys.argv[1]))
+state_path = sys.argv[2]
 state = {}
 try:
-    state = json.loads(state_file.read_text())
-except Exception:
+    state = json.load(open(state_path))
+    if not isinstance(state, dict):
+        state = {}
+except (OSError, ValueError):
     pass
-for slug, m in (doc.get("slugs") or {}).items():
+for slug, m in request.items():
     sha = None
-    if m.get("post_install"):
-        p = root / slug / m["post_install"]
-        if p.is_file():
-            sha = hashlib.sha256(p.read_bytes()).hexdigest()
+    if m.get("script"):
+        with open(m["script"], "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
     state[slug] = {
         "version": m.get("version"),
-        "apt_packages": sorted(m.get("apt_packages") or []),
+        "apt_packages": m.get("apt_packages") or [],
         "post_install_sha": sha,
     }
-state_file.write_text(json.dumps(state, indent=2))
+tmp = state_path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(state, f, indent=2)
+os.chmod(tmp, 0o644)
+os.replace(tmp, state_path)
 print("state recorded")
 EOF
-  rm -f "$PENDING" "$DOMOVOI_DIR/pending_payload.steps"
+  rm -f "$PENDING"
+  rm -rf "$STAGING"
   log "apply-payload done"
   exit 0
 fi
 
 log "apply-payload finished with failures (pending kept for retry)"
-rm -f "$DOMOVOI_DIR/pending_payload.steps"
+rm -rf "$STAGING"
 exit 1

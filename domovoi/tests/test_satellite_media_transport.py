@@ -609,17 +609,17 @@ def test_zip_and_drive_targets_write_the_same_things():
     assert src.count("usb_host=(") == 2
 
 
-def test_the_console_account_can_become_root():
+def test_the_service_account_gets_the_hardware_groups_and_not_sudo():
     """Media prep creates this user AND hands its password to the operator
-    via userconf.txt. Without sudo there is no route to root at all — the
-    root account is locked on Pi OS, and sudoers.d/domovoi-satellite grants
-    three specific commands. A unit nobody can get a shell on is a unit
-    nobody can support."""
+    via userconf.txt, so the console login is a shell as the service
+    account - and that account runs code the server syncs to it. Its root
+    access is the sudoers.d file stage 1 renders, not the sudo group; the
+    full posture is in test_satellite_account_hardening.py."""
     script = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", "US")
     line = next(l for l in script.splitlines() if "usermod -aG" in l)
     groups = line.split("usermod -aG ", 1)[1].split()[0]
-    assert "sudo" in groups.split(",")
-    # and the hardware groups it already needed
+    assert "sudo" not in groups.split(",")
+    # the hardware groups it needs
     for g in ("audio", "video", "gpio", "spi", "i2c"):
         assert g in groups.split(",")
 
@@ -1241,15 +1241,16 @@ def test_the_payload_looks_for_wav_clips():
     assert 'glob("*.wav")' in src and "*.mp3" not in src
 
 
-def test_the_helper_leaves_only_the_on_device_placeholder():
-    """@HOME@ is filled in by stage 1, where the satellite user's home is
-    actually known. Everything else must be resolved at prepare time."""
+def test_the_helper_leaves_only_the_on_device_placeholders():
+    """@HOME@ and @USER@ are filled in by stage 1, where the satellite
+    account and its home are actually known. Everything else must be
+    resolved at prepare time."""
     import re
 
     from domovoi.satellite_media import overlay
 
     body = overlay.render_status_helper("xvf3800_usb")
-    assert set(re.findall(r"@[A-Z_]+@", body)) == {"@HOME@"}
+    assert set(re.findall(r"@[A-Z_]+@", body)) == {"@HOME@", "@USER@"}
 
 
 # ─── the USB controller has to be pinned to full speed ────────────────────

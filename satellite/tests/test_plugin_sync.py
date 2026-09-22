@@ -40,6 +40,9 @@ def sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(
         plugin_sync, "STATE_SIDECAR", tmp_path / "plugin_payload_state.json"
     )
+    monkeypatch.setattr(
+        plugin_sync, "ROOT_STATE_FILE", tmp_path / "root" / "plugin_payload_state.json"
+    )
     monkeypatch.setattr(plugin_sync, "PENDING_FILE", tmp_path / "pending_payload.json")
     return tmp_path
 
@@ -152,3 +155,40 @@ def test_request_root_apply_stages_and_invokes(sidecars, tmp_path):
     assert calls[0][:2] == ["sudo", "-n"]
     staged = json.loads(plugin_sync.PENDING_FILE.read_text(encoding="utf-8"))
     assert staged["slugs"]["radio"]["apt_packages"] == ["libfoo2"]
+
+
+def test_the_request_names_slugs_and_no_paths(sidecars, tmp_path):
+    """The root helper reads and writes only paths fixed in itself; a
+    request that carried paths would be a request the helper had to
+    ignore, so none are sent."""
+    meta = {"radio": {"apt_packages": ["libfoo2"], "post_install": "post.sh", "version": "1.0.0"}}
+    plugin_sync.request_root_apply(
+        meta, ["radio"], tmp_path / "payloads",
+        run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0),
+    )
+    staged = json.loads(plugin_sync.PENDING_FILE.read_text(encoding="utf-8"))
+    assert set(staged) == {"schema", "slugs"}
+    assert staged["schema"] == 2
+    assert set(staged["slugs"]["radio"]) == {"apt_packages", "post_install", "version"}
+
+
+def test_the_applied_state_is_read_from_the_root_owned_file_first(sidecars, tmp_path):
+    root = tmp_path / "payloads"
+    (root / "radio").mkdir(parents=True)
+    (root / "radio" / "post.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    meta = {"radio": {"apt_packages": ["libfoo2"], "post_install": "post.sh"}}
+    applied = {"radio": {"apt_packages": ["libfoo2"],
+                         "post_install_sha": plugin_sync._sha256(root / "radio" / "post.sh")}}
+
+    # Only the legacy sidecar knows: still honoured (an older helper wrote it).
+    plugin_sync.STATE_SIDECAR.write_text(json.dumps(applied), encoding="utf-8")
+    assert plugin_sync._pending_root_work(meta, root) == []
+
+    # The root-owned file exists: it is the one that counts, even when the
+    # legacy sidecar says something else.
+    plugin_sync.ROOT_STATE_FILE.parent.mkdir(parents=True)
+    plugin_sync.ROOT_STATE_FILE.write_text("{}", encoding="utf-8")
+    assert plugin_sync._pending_root_work(meta, root) == ["radio"]
+    plugin_sync.ROOT_STATE_FILE.write_text(json.dumps(applied), encoding="utf-8")
+    plugin_sync.STATE_SIDECAR.write_text("{}", encoding="utf-8")
+    assert plugin_sync._pending_root_work(meta, root) == []

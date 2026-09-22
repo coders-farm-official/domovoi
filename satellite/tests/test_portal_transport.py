@@ -106,8 +106,11 @@ def _get(transport, path, redirects=True):
 def _post(transport, path, fields):
     data = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(_url(transport, path), data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return r.status, r.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
 
 
 # ─── room slug ────────────────────────────────────────────────────────────
@@ -255,10 +258,115 @@ def test_bad_room_redisplays_the_form_without_the_password(portal):
     status, body = _post(portal, "/provision", {
         "ssid": "HomeNet", "psk": PSK, "room": "", "room_custom": "!!!",
     })
-    assert status == 200
+    assert status == 400                         # refused, and says so
     assert "<form" in body
     assert PSK not in body
     assert portal._queue.empty()                 # nothing handed over
+
+
+# ─── the server address and the request size ──────────────────────────────
+#
+# The address field is typed by whoever joined the setup network, and the
+# satellite hands its pairing token to whatever it dials; the body is read
+# by a server running as root.
+
+
+@pytest.mark.parametrize("url", [
+    "http://192.168.0.117:6370",
+    "ws://8.8.8.8:6370",
+    "ws://example.com:6370",
+    "ws://127.0.0.1:6370",
+    "ws://user:pw@192.168.0.117:6370",
+])
+def test_an_address_off_the_lan_is_refused_with_a_400(portal, url):
+    status, body = _post(portal, "/provision", {
+        "ssid": "HomeNet", "psk": PSK, "room": "kitchen", "url": url,
+    })
+    assert status == 400
+    assert "<form" in body                       # the form comes back...
+    assert "ws://" in body and "your own" in body  # ...with the rule
+    assert PSK not in body
+    assert portal._queue.empty()                 # nothing handed over
+
+
+@pytest.mark.parametrize("url,resolved", [
+    ("ws://192.168.0.117:6370", "ws://192.168.0.117:6370"),
+    ("192.168.0.117", "ws://192.168.0.117:6370"),
+    ("domovoi.local", "ws://domovoi.local:6370"),
+])
+def test_the_accepted_page_shows_the_resolved_server(portal, url, resolved):
+    status, body = _post(portal, "/provision", {
+        "ssid": "HomeNet", "psk": PSK, "room": "kitchen", "url": url,
+    })
+    assert status == 200
+    assert resolved in body
+    payload = portal.wait_for_provision(NONCE)
+    assert payload["domovoi_url"] == resolved
+
+
+def test_the_accepted_page_says_when_the_server_will_be_discovered(portal):
+    status, body = _post(portal, "/provision", {
+        "ssid": "HomeNet", "psk": PSK, "room": "kitchen",
+    })
+    assert status == 200
+    assert "by itself" in body
+    assert portal.wait_for_provision(NONCE)["domovoi_url"] == proto.AUTO_DISCOVER_URL
+
+
+def _raw_post(transport, headers: dict[str, str], body: bytes | None) -> tuple[int, bytes]:
+    """A hand-rolled request, so the Content-Length can lie."""
+    import socket
+
+    host, port = transport._server.server_address[:2]
+    lines = ["POST /provision HTTP/1.1", f"Host: {host}:{port}",
+             "Content-Type: application/x-www-form-urlencoded"]
+    lines += [f"{k}: {v}" for k, v in headers.items()]
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode() + (body or b"")
+    with socket.create_connection((host, port), timeout=5) as s:
+        s.sendall(raw)
+        s.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            c = s.recv(65536)
+            if not c:
+                break
+            chunks.append(c)
+    response = b"".join(chunks)
+    status = int(response.split(b" ", 2)[1])
+    return status, response
+
+
+def test_a_body_over_the_cap_is_refused_without_being_read(portal):
+    """The Content-Length says megabytes; the server answers 413 at once,
+    reads none of it and closes the connection."""
+    declared = pt.MAX_POST_BYTES * 1000
+    status, response = _raw_post(portal, {"Content-Length": str(declared)}, b"ssid=x")
+    assert status == 413
+    assert b"Connection: close" in response
+    assert portal._queue.empty()
+
+
+def test_a_body_at_the_cap_is_still_read(portal):
+    fields = {"ssid": "HomeNet", "psk": PSK, "room": "kitchen"}
+    data = urllib.parse.urlencode(fields).encode()
+    padding = b"&pad=" + b"x" * (pt.MAX_POST_BYTES - len(data) - 5)
+    body = data + padding
+    assert len(body) == pt.MAX_POST_BYTES
+    status, _ = _raw_post(portal, {"Content-Length": str(len(body))}, body)
+    assert status == 200
+    assert portal.wait_for_provision(NONCE)["room_id"] == "kitchen"
+
+
+def test_the_cap_covers_a_credentials_form_with_room_to_spare():
+    """32-byte SSID, 63-byte passphrase, a room and a server address,
+    URL-encoded (every byte tripled) is well inside the cap."""
+    worst = urllib.parse.urlencode({
+        "ssid": "é" * 32, "psk": "é" * 63,
+        "room": "", "room_custom": "é" * 32,
+        "url": "wss://" + "a" * 63 + ".local:65535/",
+        "profile": "respeaker_2mic_hat_v2",
+    }).encode()
+    assert len(worst) < pt.MAX_POST_BYTES // 2
 
 
 def test_clear_provision_drops_the_payload(portal):

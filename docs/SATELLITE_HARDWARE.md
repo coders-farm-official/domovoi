@@ -86,7 +86,12 @@ Two details that are load-bearing rather than cosmetic:
 The server address is found automatically: the satellite sweeps its own /24
 for `/v1/health` at first start and saves what answers. Deliberately not
 mDNS — multicast over Wi-Fi is exactly what fails at 3 a.m. Type an address
-into the portal to skip discovery.
+into the portal to skip discovery: `ws://192.168.1.20:6370` or
+`ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
+portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
+or a `.local` name and nothing else, refuses a form body over 8 KB without
+reading it, and shows the address it resolved on the confirmation page so a
+typo is visible before the setup network closes.
 
 Choose the route when you prepare the card: **Satellites → prepare satellite
 media → wi-fi setup portal** (the default) or **usb adoption**.
@@ -229,7 +234,10 @@ Three finishing moves, all from PROVISIONING.md:
    `domovoi-satellite.service` so the satellite starts at boot and
    restarts on failure. After this, recovery from any weirdness is
    "unplug it and plug it back in."
-2. **Three sudoers entries** — least-privilege single-command grants:
+2. **The sudoers entries** — single-command grants for root-owned
+   helpers (what each helper may do is bounded by the helper; the
+   posture note in [§6.7](../satellite/PROVISIONING.md) says what
+   that does and does not mean):
    - *Wi-Fi self-heal* ([§6.7](../satellite/PROVISIONING.md)): lets the
      client run exactly `wpa_cli -i wlan0 reassociate` to un-wedge a
      Wi-Fi link on its own, once it has lost the server and the server

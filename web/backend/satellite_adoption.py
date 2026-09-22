@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -60,11 +61,18 @@ def _scan_dirs_override() -> list[Path] | None:
     return [Path(p) for p in raw.split(os.pathsep) if p.strip()]
 
 
-def _volume_label(mount: str) -> str | None:
-    """The FAT volume label for a Windows mount root, or None when it can't
-    be read (non-Windows, vanished drive, no-media reader)."""
+# udev keeps one symlink per labelled block device here; the name is the
+# label (with udev's \x escapes for anything unusual).
+_BY_LABEL_DIR = Path("/dev/disk/by-label")
+
+
+def _volume_label(mount: str, device: str | None = None) -> str | None:
+    """The volume label of a mount, or None when it can't be read (vanished
+    drive, no-media reader, no way to ask). Windows asks the volume by its
+    root; everywhere else the label belongs to the block device, so the
+    caller passes the one ``detect_removable()`` reported."""
     if sys.platform != "win32":
-        return None
+        return _volume_label_posix(device) if device else None
     buf = ctypes.create_unicode_buffer(261)
     root = mount if mount.endswith("\\") else mount + "\\"
     try:
@@ -76,13 +84,60 @@ def _volume_label(mount: str) -> str | None:
     return buf.value if ok else None
 
 
-def _candidate_mounts() -> list[tuple[Path, bool]]:
-    """(mount, label_checked) pairs to probe. SCAN_DIRS entries are the
-    dev harness and skip the label pre-filter."""
+def _udev_unescape(name: str) -> str:
+    """udev writes a label's awkward bytes as \\xNN in the symlink name."""
+    out = bytearray()
+    i = 0
+    while i < len(name):
+        if name[i] == "\\" and name[i + 1:i + 2] == "x" and len(name) >= i + 4:
+            try:
+                out.append(int(name[i + 2:i + 4], 16))
+                i += 4
+                continue
+            except ValueError:
+                pass
+        out += name[i].encode("utf-8")
+        i += 1
+    return out.decode("utf-8", "replace")
+
+
+def _volume_label_posix(device: str, run=None) -> str | None:
+    """The label of a block device: udev's by-label symlink first (no
+    process, no privileges), ``lsblk`` as the fallback. None only when
+    neither can answer - an unlabelled volume answers with an empty
+    string, which is a label, and the wrong one."""
+    # Resolved at call time, not bound as a default, so a test can stand
+    # in for lsblk.
+    run = subprocess.run if run is None else run
+    try:
+        real = os.path.realpath(device)
+        for entry in _BY_LABEL_DIR.iterdir():
+            try:
+                if os.path.realpath(entry) == real:
+                    return _udev_unescape(entry.name)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    try:
+        proc = run(
+            ["lsblk", "-no", "LABEL", device],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip().splitlines()[0].strip() if (proc.stdout or "").strip() else ""
+
+
+def _candidate_mounts() -> list[tuple[Path, bool, str | None]]:
+    """(mount, label_checked, device) triples to probe. SCAN_DIRS entries
+    are the dev harness and skip the label pre-filter."""
     override = _scan_dirs_override()
     if override is not None:
-        return [(p, False) for p in override]
-    out: list[tuple[Path, bool]] = []
+        return [(p, False, None) for p in override]
+    out: list[tuple[Path, bool, str | None]] = []
     for rm in detect_removable():
         mount = rm.get("mount")
         if not mount:
@@ -91,7 +146,7 @@ def _candidate_mounts() -> list[tuple[Path, bool]]:
         # block. Nothing real enumerates there.
         if mount.upper().rstrip("\\").rstrip(":") in ("A", "B"):
             continue
-        out.append((Path(mount), True))
+        out.append((Path(mount), True, rm.get("device")))
     return out
 
 
@@ -102,11 +157,20 @@ def scan_pending() -> list[dict[str, Any]]:
     tells the user WHY nothing is adoptable) rather than vanishing."""
     found: list[dict[str, Any]] = []
     mounts: dict[str, Path] = {}
-    for mount, label_checked in _candidate_mounts():
+    for mount, label_checked, device in _candidate_mounts():
         try:
             if label_checked:
-                label = _volume_label(str(mount))
+                # The label is the pre-filter on every platform: a stick
+                # that merely carries a device-info.json is not a setup
+                # volume. None means the label could not be read at all
+                # (the drive vanished, or there is no way to ask); the
+                # file check below then decides.
+                label = _volume_label(str(mount), device)
                 if label is not None and label != proto.VOLUME_LABEL:
+                    log.debug(
+                        "adoption: %s has label %r, not %s - skipping",
+                        mount, label, proto.VOLUME_LABEL,
+                    )
                     continue
             info_path = mount / proto.DEVICE_INFO_NAME
             if not info_path.is_file():

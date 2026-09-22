@@ -59,11 +59,16 @@ class RadioSettings(BaseSettings):
     # Port ffmpeg's single-connection HTTP listener binds for the demodulated
     # FM stream. Default deliberately avoids commonly-used local ports.
     sdr_http_port: int = 6391
-    # Scheme+host the room's MPD dials to reach that listener. ffmpeg
-    # binds 0.0.0.0, but MPD runs in a container: ITS localhost is not
-    # the Domovoi server's localhost — set this to a LAN hostname/IP that
-    # resolves from inside the MPD container.
+    # Scheme+host the room's MPD dials to reach that listener. MPD runs in
+    # a container: ITS localhost is not the Domovoi server's localhost —
+    # set this to a LAN hostname/IP that resolves from inside the MPD
+    # container. The listener binds that same host (never every
+    # interface); sdr_bind_host overrides the bind alone.
     sdr_stream_base: str = "http://127.0.0.1"
+    # The address ffmpeg's single-connection listener binds. Empty = the
+    # host of sdr_stream_base, resolved once. A name that does not resolve
+    # binds loopback; 0.0.0.0 is never used.
+    sdr_bind_host: str = ""
 
     # ── Local library fingerprinting (locked 8 — wholly in-plugin) ─────
     fingerprinter_enabled: bool = True
@@ -128,6 +133,12 @@ RADIO_FIELDSPECS: list[FieldSpec] = [
         name="sdr_http_port", label="SDR stream port",
         help="Port ffmpeg serves the demodulated FM stream on.",
         group="FM / SDR", kind="int", tier="restart",
+    ),
+    FieldSpec(
+        name="sdr_bind_host", label="SDR listener address",
+        help="Address the FM stream listener binds. Leave empty to use the stream base "
+             "URL's host (never every interface: the listener serves one client).",
+        group="FM / SDR", kind="text", tier="restart",
     ),
     FieldSpec(
         name="fingerprinter_enabled", label="Library fingerprinter",

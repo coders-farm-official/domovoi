@@ -9,9 +9,13 @@ disabled plugin's subtree converges away and nothing else is ever touched.
 
 Root work (apt packages / post-install scripts, gated by the plugin's
 ``satellite_root`` permission server-side) is NOT run here: this module
-stages a request file (``~/.domovoi/pending_payload.json``) and invokes the
-sudoers-allowlisted ``domovoi-apply-payload`` helper, which does the
-privileged part and logs to ``~/.domovoi/payload_apply.log``. Payload sync
+stages a request file (``~/.domovoi/pending_payload.json``) naming the
+slugs, and invokes the sudoers-allowlisted ``domovoi-apply-payload``
+helper, which does the privileged part from its own root-owned paths
+(it copies each slug's files into a staging directory of its own before
+running anything, logs to ``/var/log/domovoi-payload-apply.log`` and
+records what it applied in ``/var/lib/domovoi/plugin_payload_state.json``).
+The request names WHAT to apply, never WHERE from or WHERE to. Payload sync
 failure never blocks a code upgrade — plugins degrade, the satellite runs.
 
 UNTESTED on the dev host beyond unit tests — exercised on a real device
@@ -36,6 +40,10 @@ log = logging.getLogger("satellite.plugin_sync")
 CONFIG_DIR = Path("~/.domovoi").expanduser()
 PAYLOADS_DIR = CONFIG_DIR / "plugin_payloads"
 MANIFEST_SIDECAR = CONFIG_DIR / "plugin_payload_manifest.json"
+# What the root helper last applied. The helper writes ROOT_STATE_FILE
+# (root-owned, world-readable); STATE_SIDECAR is where an older helper
+# wrote it and is read only while the root-owned file does not exist.
+ROOT_STATE_FILE = Path("/var/lib/domovoi/plugin_payload_state.json")
 STATE_SIDECAR = CONFIG_DIR / "plugin_payload_state.json"
 PENDING_FILE = CONFIG_DIR / "pending_payload.json"
 APPLY_HELPER = "/usr/local/sbin/domovoi-apply-payload"
@@ -43,9 +51,18 @@ APPLY_HELPER = "/usr/local/sbin/domovoi-apply-payload"
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def applied_state() -> dict[str, Any]:
+    """The per-slug state the root helper recorded: the root-owned file when
+    it exists, else the legacy sidecar in the config dir."""
+    if ROOT_STATE_FILE.is_file():
+        return _read_json(ROOT_STATE_FILE)
+    return _read_json(STATE_SIDECAR)
 
 
 def sync_plugin_payloads(
@@ -123,7 +140,7 @@ def _pending_root_work(
 ) -> list[str]:
     """Slugs whose ROOT-side state (apt set / post-install content) differs
     from what was last applied (STATE_SIDECAR)."""
-    applied: dict[str, Any] = _read_json(STATE_SIDECAR)
+    applied: dict[str, Any] = applied_state()
     out: list[str] = []
     for slug, m in sorted(meta.items()):
         apt = sorted(m.get("apt_packages") or [])
@@ -150,8 +167,15 @@ def request_root_apply(
     """Stage ``pending_payload.json`` and invoke the sudoers-allowlisted
     root helper for the given slugs. Best-effort: False (with a log) when
     the helper is missing or refused — the satellite keeps running and the
-    dashboard's upgrade report shows the payload as pending."""
+    dashboard's upgrade report shows the payload as pending.
+
+    The request carries the slugs and their declared work only. The helper
+    reads the files from its own fixed mirror path and writes its state and
+    log to root-owned paths of its own; ``payloads_root`` is the sync's
+    concern and is deliberately not forwarded."""
+    del payloads_root
     payload = {
+        "schema": 2,
         "slugs": {
             slug: {
                 "apt_packages": sorted((meta.get(slug) or {}).get("apt_packages") or []),
@@ -160,8 +184,6 @@ def request_root_apply(
             }
             for slug in slugs
         },
-        "payloads_root": str(payloads_root),
-        "state_file": str(STATE_SIDECAR),
     }
     PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
     PENDING_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")

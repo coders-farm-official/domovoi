@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Music ────────────────────────────────────────────────────────────────
@@ -492,6 +492,19 @@ class AdoptRequest(BaseModel):
     # Re-provision an already-adopted device (wifi_failed retry / moving
     # it). Only honored when the device's MAC matches the existing row.
     force: bool = False
+
+    @field_validator("wifi_ssid")
+    @classmethod
+    def _ssid_the_device_can_carry(cls, v: str) -> str:
+        # The same rule the device applies before writing the name into
+        # its network configuration; refusing it here means a 422 with
+        # the reason instead of a silent stall on the device.
+        from satellite import provisioning_protocol as proto
+
+        try:
+            return proto.validate_wifi_ssid(v)
+        except proto.ProvisionInvalid as e:
+            raise ValueError(str(e)) from None
 
 
 class RoomLabelRequest(BaseModel):
