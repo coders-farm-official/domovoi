@@ -99,11 +99,6 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # caller's credentials, so an ungated proxy cannot open a call.
     ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_mutation gates it (auth forwarded)",
     ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "proxy — core require_device gates it (auth forwarded)",
-    ("web", "POST", "/api/chat/threads"): "daily tier — device tier in wave 2",
-    ("web", "PATCH", "/api/chat/threads/{thread_id}"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/chat/threads/{thread_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/chat/threads/{thread_id}/messages"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/chat/uploads"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/models/active"): (
         "proxy — the core's security tier gates the config write it forwards to"
     ),

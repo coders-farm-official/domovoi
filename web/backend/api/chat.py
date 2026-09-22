@@ -18,8 +18,11 @@ Uploads land in ``~/.domovoi/chat_uploads/<token><ext>`` (token = uuid hex,
 server-generated — the client never names files here) and are referenced
 from ``chat_messages.images`` as ``[{token, name}]``.
 
-Thread/message reads and writes are open like the podcasts surface; thread
-history contains only what the user typed here. Mutations fire
+Thread/message writes are DEVICE tier (REV-1): a valid ``X-Device-Token``
+or an admin Bearer, with the pre-setup LAN grace kept. Thread history
+contains only what the user typed here, but it is the household's
+conversation all the same, and the send verb spends the box's model time.
+Mutations fire
 ``chat_changed`` NOTIFY → the ``chat.changed`` WS event so a second open
 dashboard's thread list stays fresh.
 """
@@ -34,11 +37,12 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_device
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
@@ -46,6 +50,8 @@ from web.backend.db import session_scope
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+DEVICE = [Depends(require_device)]
 
 UPLOADS_DIR = Path.home() / ".domovoi" / "chat_uploads"
 _UPLOAD_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
@@ -99,7 +105,7 @@ async def list_threads(archived: bool = False) -> dict[str, Any]:
     } for r in rows]}
 
 
-@router.post("/threads")
+@router.post("/threads", dependencies=DEVICE)
 async def create_thread(body: ThreadCreate) -> dict[str, Any]:
     async with session_scope() as s:
         row = (
@@ -123,7 +129,7 @@ async def create_thread(body: ThreadCreate) -> dict[str, Any]:
     }
 
 
-@router.patch("/threads/{thread_id}")
+@router.patch("/threads/{thread_id}", dependencies=DEVICE)
 async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
     sets, params = [], {"id": thread_id}
     if body.title is not None:
@@ -146,7 +152,7 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
     return {"ok": True}
 
 
-@router.delete("/threads/{thread_id}")
+@router.delete("/threads/{thread_id}", dependencies=DEVICE)
 async def delete_thread(thread_id: int) -> dict[str, Any]:
     """Delete a thread and its messages (CASCADE). Upload files referenced by
     the thread are removed too when no other message references them."""
@@ -260,7 +266,7 @@ async def _history_for_model(thread_id: int) -> list[dict[str, Any]]:
     return out
 
 
-@router.post("/threads/{thread_id}/messages")
+@router.post("/threads/{thread_id}/messages", dependencies=DEVICE)
 async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
@@ -357,7 +363,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
 
 
 # ─── Uploads ────────────────────────────────────────────────────────────────
-@router.post("/uploads")
+@router.post("/uploads", dependencies=DEVICE)
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     """Stage one image for a chat message. Returns the server-generated
     token the send call references; files are capped and extension-checked."""
