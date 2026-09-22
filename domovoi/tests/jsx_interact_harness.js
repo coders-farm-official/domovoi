@@ -25,7 +25,7 @@
 //              whose return value is the scenario's result (JSON).
 // Helpers on h: render(), tree(), find(sel), findAll(sel), text(),
 //   click(sel), type(sel, value), change(sel, value), submit(sel),
-//   calls, api, settle().
+//   key(sel, key), plain(el), calls, hookCalls, api, settle().
 //   sel is {type?, text?, title?, placeholder?, icon?, value?, name?, nth?}
 //   or a predicate (el) => boolean; `text` and `title` match substrings.
 'use strict';
@@ -251,16 +251,27 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     Audio: function () { return { play: () => Promise.resolve(), pause: noop }; },
   };
   // The scripted hooks read the table synchronously, so the first render
-  // already sees the data (no loading flash to step through).
-  sandbox.useApiObject = (p) => {
-    const data = p ? api.clone(api.lookup('GET', p)) : null;
-    return { data, loading: false, error: null, refresh: () => Promise.resolve() };
-  };
-  sandbox.useApiList = (p, { pickItems = (x) => x } = {}) => {
+  // already sees the data (no loading flash to step through). A table
+  // entry of {__error: {status, message}} is what a failed fetch leaves
+  // in the hook: no data, `error` set. Every path a hook asked for is
+  // recorded on h.hookCalls (deduplicated), so a test can assert that a
+  // page never fetched something.
+  const hookCalls = [];
+  const hookLookup = (p) => {
+    if (!p) return { hit: null, error: null };
+    if (!hookCalls.includes(p)) hookCalls.push(p);
     const hit = api.clone(api.lookup('GET', p));
     const errored = hit && typeof hit === 'object' && !Array.isArray(hit) && hit.__error;
-    const items = errored ? [] : (pickItems(hit) || []);
-    const error = errored ? Object.assign(new Error(hit.__error.message || 'error'), hit.__error) : null;
+    if (!errored) return { hit, error: null };
+    return { hit: null, error: Object.assign(new Error(hit.__error.message || 'error'), hit.__error) };
+  };
+  sandbox.useApiObject = (p) => {
+    const { hit, error } = hookLookup(p);
+    return { data: hit, loading: false, error, refresh: () => Promise.resolve() };
+  };
+  sandbox.useApiList = (p, { pickItems = (x) => x } = {}) => {
+    const { hit, error } = hookLookup(p);
+    const items = error ? [] : (pickItems(hit) || []);
     return { items, loading: false, error, refresh: () => Promise.resolve(), setItems: noop };
   };
   sandbox.globalThis = sandbox;
@@ -292,6 +303,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   };
   const h = {
     calls: api.calls,
+    hookCalls,
     api: table,
     settle,
     render() { return rt.mount(React.createElement(Component, fullProps)); },

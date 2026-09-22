@@ -32,14 +32,37 @@ const fmtBigDur = (sec) => {
   return `${m}m`;
 };
 
-/* Knob the room set comes from the now-playing fetch — every room
- * with an mpd_rooms row shows up. Falls back to a minimal default
- * so the play-in-room chips and the download modal still render
- * when the API is briefly unreachable. */
-const useKnownRooms = (nowPlaying) => {
-  const fromNP = (nowPlaying || []).map(np => np.room_id);
-  if (fromNP.length) return fromNP;
-  return ['kitchen'];
+/* The room set comes from the now-playing fetch — every room with an
+ * mpd_rooms row shows up. Nothing is invented when that list is empty
+ * or unreachable: an empty set is a real state ("no rooms provisioned
+ * yet") that each consumer renders on its own, and a made-up default
+ * room had the Room queue tab fetching /api/music/queue/kitchen on a
+ * box with no rooms and reporting the 502 as an empty queue (F-020). */
+const useKnownRooms = (nowPlaying) => (nowPlaying || []).map(np => np.room_id);
+
+/* The play-in-room chip strip shared by the track and playlist drawers.
+ * With no rooms it says so instead of offering a room that does not
+ * exist; the caller disables its play button on `room == null`. */
+const RoomChips = ({ rooms, room, onPick }) => {
+  if (rooms.length === 0) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        no rooms provisioned yet — connect a satellite to play on a speaker
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {rooms.map(r => (
+        <button key={r} onClick={() => onPick(r)}
+          style={{ font: 'inherit', fontSize: 12, cursor: 'pointer',
+                   padding: '4px 10px', borderRadius: 'var(--r-full)',
+                   border: '1px solid var(--border)',
+                   background: room === r ? 'var(--brand-soft)' : 'var(--card)',
+                   color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
+      ))}
+    </div>
+  );
 };
 
 /* Server-paginated library page. Encapsulates q/source/sort/page
@@ -182,10 +205,10 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
 /* ---- Drawer (track detail) -------------------------------- */
 const Drawer = ({ track, rooms, onClose, onDelete, onPlayInRoom, onBrowserPlay, onQueueTrack }) => {
   const [alsoFile, setAlsoFile] = React.useState(false);
-  const [room, setRoom] = React.useState(rooms[0] || 'kitchen');
+  const [room, setRoom] = React.useState(rooms[0] || null);
   React.useEffect(() => {
     setAlsoFile(false);
-    setRoom(rooms[0] || 'kitchen');
+    setRoom(rooms[0] || null);
   }, [track?.id, rooms.join(',')]);
   if (!track) return null;
   return (
@@ -223,18 +246,10 @@ const Drawer = ({ track, rooms, onClose, onDelete, onPlayInRoom, onBrowserPlay, 
 
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }}>
           <div className="label" style={{ marginBottom: 6 }}>play in room</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {rooms.map(r => (
-              <button key={r} onClick={() => setRoom(r)}
-                style={{ font: 'inherit', fontSize: 12, cursor: 'pointer',
-                         padding: '4px 10px', borderRadius: 'var(--r-full)',
-                         border: '1px solid var(--border)',
-                         background: room === r ? 'var(--brand-soft)' : 'var(--card)',
-                         color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
-            ))}
-          </div>
+          <RoomChips rooms={rooms} room={room} onPick={setRoom}/>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <Button variant="primary" icon="play" onClick={() => onPlayInRoom(track, room)}>play in {room}</Button>
+            <Button variant="primary" icon="play" disabled={!room}
+                    onClick={() => room && onPlayInRoom(track, room)}>play in {room || 'a room'}</Button>
             <Button icon="headphones" onClick={() => { onBrowserPlay && onBrowserPlay(track); }}>play here</Button>
             <Button icon="list-plus" onClick={() => { onQueueTrack && onQueueTrack(track); }}>queue</Button>
             <Button icon="download" title="save to this device"
@@ -435,7 +450,9 @@ const AddMusicBar = ({ rooms, canFulfillQuery, fire, onQueued }) => {
   const [mode, setMode] = React.useState('query');    // 'query' | 'url'
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
-  const room = rooms[0] || 'kitchen';
+  // room_id only attributes the request in the intent log (nothing
+  // plays) — with no rooms it is the web itself, not an invented room.
+  const room = rooms[0] || 'web';
   const submit = async () => {
     const value = text.trim();
     if (!value) return;
@@ -546,7 +563,7 @@ const fmtQueueDur = (sec) => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
-const QueueTab = ({ rooms, nowPlaying, fire }) => {
+const QueueTab = ({ rooms, nowPlaying, npError, fire }) => {
   // Default to a room that's actually playing — that's the queue you came
   // here to look at.
   const playingRoom = (nowPlaying.find(np => np.state === 'play') || {}).room_id;
@@ -560,7 +577,7 @@ const QueueTab = ({ rooms, nowPlaying, fire }) => {
   const dragFrom = React.useRef(null);
 
   const deviceId = DeviceIdentity.id();
-  const { data: queue, loading, refresh } = useApiObject(
+  const { data: queue, loading, error, refresh } = useApiObject(
     room ? `/api/music/queue/${encodeURIComponent(room)}`
            + `?device_id=${encodeURIComponent(deviceId)}` : null,
     { eventTypes: ['music.now_playing.changed'] },
@@ -572,7 +589,13 @@ const QueueTab = ({ rooms, nowPlaying, fire }) => {
   const serverKey = (queue?.items || []).map(i => i.song_id).join(',');
   React.useEffect(() => { setOrder(null); }, [serverKey, room]);
 
+  // No rooms is two different states: the now-playing list came back
+  // empty (nothing provisioned) or it never came back at all.
   if (rooms.length === 0) {
+    if (npError) {
+      return <Empty glyph="headphones" title="rooms unavailable"
+                    sub={`couldn't load now-playing: ${apiErrorText(npError)}`}/>;
+    }
     return <Empty glyph="headphones" title="no rooms provisioned yet"
                   sub="connect a satellite to bring its room online"/>;
   }
@@ -658,8 +681,21 @@ const QueueTab = ({ rooms, nowPlaying, fire }) => {
         </div>
       )}
 
+      {error && queue && (
+        <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--err)',
+                      borderBottom: '1px solid var(--border-soft)' }}>
+          couldn't refresh the queue — showing the last one loaded: {apiErrorText(error)}
+        </div>
+      )}
+
       {loading && items.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading queue…</div>
+      ) : error && !queue ? (
+        /* A failed fetch is not an empty queue (F-020): say what failed
+           and offer a retry instead of "cast from the Player tab". */
+        <Empty glyph="headphones" title={`couldn't load ${room}'s queue`}
+               sub={apiErrorText(error)}
+               action={<Button icon="refresh-cw" onClick={refresh}>retry</Button>}/>
       ) : items.length === 0 ? (
         <Empty glyph="headphones" title="queue is empty"
                sub={`cast from the Player tab, or say "play something" in ${room}`}/>
@@ -761,7 +797,7 @@ const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, fire }) => {
             <td className="num mono">{p.track_count}</td>
             <td className="mono">{p.created_at ? relTime(p.created_at) : '—'}</td>
             <td className="actions" onClick={e => e.stopPropagation()}>
-              <IconButton name="play" onClick={() => onPlay(p)}/>
+              <IconButton name="play" title="play" onClick={() => onPlay(p)}/>
             </td>
           </tr>
         ))}
@@ -781,12 +817,12 @@ const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, fire }) => {
  * /v1/admin/music/play-playlist with shuffle=false/true), Rename,
  * and Delete — the last two are disabled for Favorites. */
 const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveTrack, onDelete, onEdit, onReorder, fire }) => {
-  const [room, setRoom] = React.useState(rooms[0] || 'kitchen');
+  const [room, setRoom] = React.useState(rooms[0] || null);
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState({ name: '', description: '', cover_color: '', cover_emoji: '' });
   const [order, setOrder] = React.useState(null);   // local drag order, or null
   const dragFrom = React.useRef(null);
-  React.useEffect(() => { setRoom(rooms[0] || 'kitchen'); }, [playlist?.id, rooms.join(',')]);
+  React.useEffect(() => { setRoom(rooms[0] || null); }, [playlist?.id, rooms.join(',')]);
   React.useEffect(() => { setEditing(false); setOrder(null); }, [playlist?.id]);
   const { data: tracks, loading, refresh } = useApiObject(
     playlist ? `/api/playlists/${playlist.id}/tracks` : null,
@@ -853,23 +889,14 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
 
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
           <div className="label" style={{ marginBottom: 6 }}>play in room</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {rooms.map(r => (
-              <button key={r} onClick={() => setRoom(r)}
-                style={{ font: 'inherit', fontSize: 12, cursor: 'pointer',
-                         padding: '4px 10px', borderRadius: 'var(--r-full)',
-                         border: '1px solid var(--border)',
-                         background: room === r ? 'var(--brand-soft)' : 'var(--card)',
-                         color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
-            ))}
-          </div>
+          <RoomChips rooms={rooms} room={room} onPick={setRoom}/>
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <Button variant="primary" icon="play"
-                    onClick={() => { onPlay(playlist, room); onClose(); }}>
+            <Button variant="primary" icon="play" disabled={!room}
+                    onClick={() => { if (room) { onPlay(playlist, room); onClose(); } }}>
               play
             </Button>
-            <Button icon="shuffle"
-                    onClick={() => { onShuffle(playlist, room); onClose(); }}>
+            <Button icon="shuffle" disabled={!room}
+                    onClick={() => { if (room) { onShuffle(playlist, room); onClose(); } }}>
               shuffle
             </Button>
             {!playlist.is_virtual && (
@@ -1162,7 +1189,7 @@ const MusicPage = () => {
   const { data: acqData, loading: acqLoading, refresh: refreshAcquisitions } =
     useApiObject('/api/acquisitions?limit=100', { eventTypes: ['acquisitions.changed'] });
   const acquisitions = acqData?.acquisitions || [];
-  const { items: nowPlaying, refresh: refreshNP } =
+  const { items: nowPlaying, error: npError, refresh: refreshNP } =
     useApiList('/api/music/now-playing', { eventTypes: ['music.now_playing.changed'] });
   // Playlists list — driven by /api/playlists which includes the
   // virtual Favorites row. Refetches on any playlists_changed event
@@ -1297,6 +1324,12 @@ const MusicPage = () => {
         { room_id, playlist_id: playlist.id, shuffle: false });
       refreshNP();
     } catch (e) { fire(`play failed: ${e.message}`); }
+  };
+  // The Playlists tab's row play button targets the first room; with none
+  // provisioned it says so rather than posting to a room that isn't there.
+  const onPlayPlaylistInFirstRoom = (playlist) => {
+    if (rooms.length === 0) { fire('no rooms provisioned yet — connect a satellite to play on a speaker'); return; }
+    return onPlayPlaylist(playlist, rooms[0]);
   };
   const onShufflePlaylist = async (playlist, room_id) => {
     fire(`shuffling ${playlist.name} in ${room_id}…`);
@@ -1440,9 +1473,18 @@ const MusicPage = () => {
       />
 
       {/* [1] Now Playing strip — one card per provisioned room.
-            Empty if no mpd_rooms have been registered yet (first boot). */}
+            Empty if no mpd_rooms have been registered yet (first boot);
+            a fetch failure says so instead of posing as first boot. */}
       {nowPlaying.length === 0 ? (
-        <Card><Empty glyph="headphones" title="no rooms provisioned yet" sub="connect a satellite to bring its room online"/></Card>
+        <Card>
+          {npError ? (
+            <Empty glyph="headphones" title="rooms unavailable"
+                   sub={`couldn't load now-playing: ${apiErrorText(npError)}`}
+                   action={<Button icon="refresh-cw" onClick={refreshNP}>retry</Button>}/>
+          ) : (
+            <Empty glyph="headphones" title="no rooms provisioned yet" sub="connect a satellite to bring its room online"/>
+          )}
+        </Card>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
           {nowPlaying.map(np => (
@@ -1460,8 +1502,8 @@ const MusicPage = () => {
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'player'    && <NowPlayingPanel/>}
-        {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} fire={fire}/>}
-        {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={(p) => onPlayPlaylist(p, rooms[0] || 'kitchen')} fire={fire}/>}
+        {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}/>}
+        {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} fire={fire}/>}
         {tab === 'stats'     && <StatsTab     stats={stats} loading={!stats}/>}
         {tab === 'jobs'      && <JobsTab jobs={acquisitions} availability={acqData} loading={acqLoading} rooms={rooms} onCancel={onCancelAcquisition} fire={fire} refresh={refreshAcquisitions}/>}
       </Card>
