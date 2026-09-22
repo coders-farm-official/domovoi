@@ -94,12 +94,6 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/music/stop/{room_id}"): _KIOSK,
     ("web", "POST", "/api/music/skip/{room_id}"): _KIOSK,
     # ── web: daily tier — device tier in wave 2 (B2 / B4) ─────────────
-    ("web", "POST", "/api/people/{person_id}/memories"): "daily tier — device tier in wave 2",
-    ("web", "PATCH", "/api/people/{person_id}/memories/{memory_id}"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/people/{person_id}/memories/{memory_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/people/{person_id}/favorites"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/people/{person_id}/favorites/{favorite_id}"): "daily tier — device tier in wave 2",
-    ("web", "PATCH", "/api/people/{person_id}/preferences"): "daily tier — device tier in wave 2",
     ("web", "PATCH", "/api/satellites/{room_id}"): "daily tier — cosmetic label",
     ("web", "DELETE", "/api/satellites/{room_id}/timers/{timer_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/satellites/{room_id}/announce"): "daily tier — device tier in wave 2",

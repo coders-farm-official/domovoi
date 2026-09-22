@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_device
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.schemas import (
@@ -37,6 +37,16 @@ from web.backend.schemas import (
 )
 
 router = APIRouter(prefix="/api/people", tags=["people"])
+
+# ─── Auth tiers (REV-1) ────────────────────────────────────────────────────
+# A person's memories, favorites and preferences are their own household
+# content: writing them is a DEVICE-tier action (household token or admin
+# Bearer, pre-setup LAN grace kept), including the per-item deletes, which
+# undo one thing somebody just typed.
+#
+# Deleting a PERSON or a voice PROFILE stays admin tier: those cascade
+# across the history and cannot be undone from the same screen.
+DEVICE = [Depends(require_device)]
 
 
 # ─── List + detail ─────────────────────────────────────────────────────────
@@ -328,7 +338,8 @@ async def list_memories(
 
 
 @router.post(
-    "/{person_id}/memories", response_model=Memory, status_code=201
+    "/{person_id}/memories", response_model=Memory, status_code=201,
+    dependencies=DEVICE,
 )
 async def create_memory(person_id: int, payload: MemoryCreate) -> Memory:
     """Manual memory entry from the web UI — always ``source='manual',
@@ -363,7 +374,10 @@ async def create_memory(person_id: int, payload: MemoryCreate) -> Memory:
     )
 
 
-@router.patch("/{person_id}/memories/{memory_id}", response_model=Memory)
+@router.patch(
+    "/{person_id}/memories/{memory_id}", response_model=Memory,
+    dependencies=DEVICE,
+)
 async def patch_memory(
     person_id: int, memory_id: int, payload: MemoryPatch
 ) -> Memory:
@@ -414,7 +428,9 @@ async def patch_memory(
     )
 
 
-@router.delete("/{person_id}/memories/{memory_id}", status_code=204)
+@router.delete(
+    "/{person_id}/memories/{memory_id}", status_code=204, dependencies=DEVICE
+)
 async def delete_memory(person_id: int, memory_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(
@@ -476,7 +492,8 @@ async def list_favorites(
 
 
 @router.post(
-    "/{person_id}/favorites", response_model=Favorite, status_code=201
+    "/{person_id}/favorites", response_model=Favorite, status_code=201,
+    dependencies=DEVICE,
 )
 async def create_favorite(person_id: int, payload: FavoriteCreate) -> Favorite:
     kind = (payload.kind or "").strip().lower()
@@ -515,7 +532,8 @@ async def create_favorite(person_id: int, payload: FavoriteCreate) -> Favorite:
 
 
 @router.delete(
-    "/{person_id}/favorites/{favorite_id}", status_code=204
+    "/{person_id}/favorites/{favorite_id}", status_code=204,
+    dependencies=DEVICE,
 )
 async def delete_favorite(person_id: int, favorite_id: int) -> None:
     async with session_scope() as s:
@@ -547,7 +565,7 @@ async def get_preferences(person_id: int) -> dict:
     return dict(result) if result else {}
 
 
-@router.patch("/{person_id}/preferences")
+@router.patch("/{person_id}/preferences", dependencies=DEVICE)
 async def patch_preferences(
     person_id: int, payload: PreferencesPatch
 ) -> dict:
