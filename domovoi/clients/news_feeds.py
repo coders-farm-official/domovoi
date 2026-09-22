@@ -131,6 +131,30 @@ def _entry_published(entry: Any) -> datetime | None:
         return None
 
 
+# Article links are stored only when they are web links. Feed content is
+# untrusted input, and every UI hands ``FeedArticle.url`` straight to a
+# browser (``<a href>`` on the dashboard, ACTION_VIEW on Android), so the
+# scheme allowlist is applied once, here at ingest; the UIs re-check.
+ARTICLE_LINK_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+
+def web_link_or_none(link: Any) -> str | None:
+    """``link`` as a stripped string when it is an absolute ``http(s)://``
+    URL with a host, otherwise ``None``. Case-insensitive on the scheme."""
+    if not link:
+        return None
+    text = str(link).strip()
+    if not text:
+        return None
+    try:
+        parts = urlparse(text)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ARTICLE_LINK_SCHEMES or not parts.netloc:
+        return None
+    return text
+
+
 def _parse_feed_blocking(url: str) -> tuple[str | None, list[FeedArticle]]:
     """Blocking fetch + parse — run via ``asyncio.to_thread``. Returns
     ``(feed_title, articles)``. Empty article list on any failure. The
@@ -168,7 +192,7 @@ def _parse_feed_blocking(url: str) -> tuple[str | None, list[FeedArticle]]:
         articles.append(
             FeedArticle(
                 guid=str(guid),
-                url=str(link) if link else None,
+                url=web_link_or_none(link),
                 title=str(title) if title else None,
                 source=str(source) if source else None,
                 summary=str(summary) if summary else None,

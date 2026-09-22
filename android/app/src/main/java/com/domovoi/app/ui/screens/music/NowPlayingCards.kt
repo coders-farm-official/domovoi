@@ -1,7 +1,5 @@
 package com.domovoi.app.ui.screens.music
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +38,9 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.RoomChip
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.components.openWebLink
 import com.domovoi.app.ui.components.toneForSlug
+import com.domovoi.app.ui.components.webLinkOrNull
 import com.domovoi.app.ui.theme.Domovoi
 
 /** One card per provisioned room — web NPCard grid. Single column on
@@ -113,20 +113,16 @@ private fun NPCard(
             if (playing) Pill("live", Tone.Brand, live = true)
             if (paused) Pill("paused", Tone.Idle)
             // Provider-agnostic "open externally" pill: rendered whenever
-            // the now-playing source supplied a source_url (design §10.2).
-            // Label + tone come from the server's handler_display metadata.
-            if ((playing || paused) && np.sourceUrl != null) {
+            // the now-playing source supplied an http(s) source_url (design
+            // §10.2); any other scheme shows no pill. Label + tone come from
+            // the server's handler_display metadata.
+            val sourceLink = webLinkOrNull(np.sourceUrl)
+            if ((playing || paused) && sourceLink != null) {
                 val caps = LocalCapabilities.current
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .clickable {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(np.sourceUrl)),
-                                )
-                            }
-                        },
+                        .clickable { openWebLink(context, sourceLink) },
                 ) {
                     Pill(
                         (caps.labelFor(np.source) ?: "source").lowercase() + " ↗",

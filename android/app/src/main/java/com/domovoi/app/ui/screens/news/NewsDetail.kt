@@ -1,7 +1,5 @@
 package com.domovoi.app.ui.screens.news
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,6 +58,8 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.Pill
+import com.domovoi.app.ui.components.openWebLink
+import com.domovoi.app.ui.components.webLinkOrNull
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
@@ -563,17 +563,11 @@ private fun SavedFeedCard(items: List<NewsItemRow>, onChanged: () -> Unit) {
                             story.title ?: "(untitled)",
                             style = MaterialTheme.typography.titleSmall,
                             color = Domovoi.colors.fg,
-                            modifier = if (story.url != null) {
-                                Modifier.clickable {
-                                    runCatching {
-                                        ctx.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(story.url)),
-                                        )
-                                    }
-                                }
-                            } else {
-                                Modifier
-                            },
+                            // A story is tappable only when its link is http(s);
+                            // any other scheme leaves the title as plain text.
+                            modifier = webLinkOrNull(story.url)?.let { link ->
+                                Modifier.clickable { openWebLink(ctx, link) }
+                            } ?: Modifier,
                         )
                         story.summary?.let { s ->
                             Text(

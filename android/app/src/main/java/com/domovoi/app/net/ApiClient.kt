@@ -20,6 +20,7 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.net.UnknownServiceException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -49,6 +50,9 @@ fun failureText(action: String, e: Throwable): String {
     val detail = e.message?.trim()?.takeIf { it.isNotEmpty() }
     return when {
         e is ApiException -> "$action failed: ${detail ?: "HTTP ${e.status}"}"
+        // A cleartext refusal (CleartextPolicy or the platform) is not an
+        // outage: say why, so the address can be corrected.
+        e is UnknownServiceException -> "$action failed: ${detail ?: "not permitted"}"
         e is IOException -> "$action failed (offline?)"
         else -> "$action failed: ${detail ?: e.javaClass.simpleName}"
     }
@@ -68,9 +72,12 @@ class ApiClient(
     constructor(prefs: Prefs) : this({ prefs.serverUrl.value }, { prefs.deviceToken.value })
 
     /** The ONE http client the app uses — JSON calls, media3 playback,
-     *  Coil images and both WebSockets — so the device token rides on
-     *  everything (DeviceAuthInterceptor). */
+     *  Coil images, discovery and both WebSockets. Every one of them gets
+     *  both interceptors: [CleartextPolicy] runs first, so a plain-http
+     *  connection the policy refuses never has the household token attached
+     *  to it, and DeviceAuthInterceptor puts that token on everything else. */
     val http: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(CleartextPolicy.interceptor)
         .addInterceptor(DeviceAuthInterceptor(deviceTokenProvider))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)

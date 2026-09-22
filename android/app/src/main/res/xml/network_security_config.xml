@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security config for the Domovoi app (referenced from the manifest;
+  it replaces the old usesCleartextTraffic="true").
+
+  The rule: plain http / ws is allowed only towards the home network - RFC 1918
+  addresses, loopback, link-local, the emulator host 10.0.2.2, and the reserved
+  home-network name suffixes (.local, .home.arpa, .internal, .lan, .home).
+  Every other host must use https.
+
+  Android matches <domain> entries by exact host or DNS suffix and cannot
+  express an IP range, while the usual server address is an RFC 1918 IP such
+  as http://192.168.0.117:6369. So the platform half below keeps cleartext
+  reachable and the whole rule - IP ranges and name suffixes alike - is
+  enforced by net/CleartextPolicy.kt on the app's single OkHttpClient, which
+  the API, both WebSockets, media3 and Coil all share. CleartextPolicyTest and
+  NetworkSecurityConfigTest pin both halves.
+
+  Trust anchors are the system store only (no user-installed CAs). The TOFU
+  pin-set for the server certificate lands in this file once TLS ships.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

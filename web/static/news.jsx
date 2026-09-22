@@ -196,7 +196,12 @@ const SavedFeed = ({ personId, items, onChanged, fire }) => {
       <div style={{ padding: items.length ? '4px 0' : 0 }}>
         {items.length === 0
           ? <div style={{ padding: 16 }}><Empty title="No stories yet" sub="Add topics, then poll now or wait for the morning fetch." glyph="sleeping"/></div>
-          : items.map(it => (
+          : items.map(it => {
+            // Only a web link becomes a hyperlink: the server already nulls
+            // any other scheme at ingest, and this re-check keeps the page
+            // safe on its own (FE-1).
+            const href = webHref(it.url);
+            return (
             <div key={it.id} style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border-soft)' }}>
               <button onClick={() => toggleFav(it)} title={it.favorited ? 'unfavorite' : 'favorite'}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer',
@@ -205,8 +210,8 @@ const SavedFeed = ({ personId, items, onChanged, fire }) => {
               </button>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>
-                  {it.url ? <a href={it.url} target="_blank" rel="noreferrer" style={{ color: 'var(--fg)', textDecoration: 'none' }}>{it.title || '(untitled)'}</a>
-                          : (it.title || '(untitled)')}
+                  {href ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--fg)', textDecoration: 'none' }}>{it.title || '(untitled)'}</a>
+                        : (it.title || '(untitled)')}
                 </div>
                 {it.summary && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.summary.replace(/<[^>]+>/g, '')}</div>}
                 <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginTop: 4 }}>
@@ -215,7 +220,8 @@ const SavedFeed = ({ personId, items, onChanged, fire }) => {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
       </div>
     </Card>
   );

@@ -25,13 +25,17 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- allowBackup=false: nothing the app stores (server address, device id,
+         and the pairing token once it lands) is ever copied into a cloud or
+         adb backup. networkSecurityConfig scopes cleartext to the home
+         network; see res/xml/network_security_config.xml. -->
     <application
         android:name=".DomovoiApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="domovoi"
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.Domovoi">
 
         <activity

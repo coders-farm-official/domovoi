@@ -16,11 +16,13 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
 
     /**
      * Cover art and thumbnails come from the same Domovoi as everything
-     * else, so Coil loads them through the app's own OkHttp client — the one
-     * that attaches the household device token (DeviceAuthInterceptor).
-     * Without this Coil would build a client of its own and its requests
-     * would be the only unauthenticated ones the app makes.
+     * else, so Coil fetches through the app's own OkHttpClient rather than a
+     * private one: its requests carry the household device token
+     * (DeviceAuthInterceptor) and follow the same cleartext policy as every
+     * other request (net/CleartextPolicy.kt). Without this Coil would build a
+     * client of its own and its requests would be the only unauthenticated —
+     * and unpoliced — ones the app makes.
      */
     override fun newImageLoader(): ImageLoader =
-        ImageLoader.Builder(this).okHttpClient(container.api.http).build()
+        ImageLoader.Builder(this).okHttpClient { container.api.http }.build()
 }
