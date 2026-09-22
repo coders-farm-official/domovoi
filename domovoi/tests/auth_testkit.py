@@ -162,8 +162,16 @@ def _db_sync(tmp_path, monkeypatch):
     asyncio.run(_truncate())
 
 
-def web_client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test")
+def web_client(**kw) -> AsyncClient:
+    """The web app, spoken to the way a browser speaks to it: every
+    write carries ``X-Requested-With`` (WEB-6 refuses one without it).
+    Pass ``headers={}`` to drop it deliberately."""
+    return AsyncClient(
+        transport=ASGITransport(app=web_app),
+        base_url="http://test",
+        headers={"X-Requested-With": "domovoi-tests"},
+        **kw,
+    )
 
 
 def core_client() -> AsyncClient:

@@ -74,7 +74,7 @@ def fake_track_file(tmp_path, monkeypatch):
 @requires_db
 def test_stream_audio_full_response(fake_track_file):
     f, data = fake_track_file
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/music/library/1/audio")
     assert r.status_code == 200
     assert r.headers["accept-ranges"] == "bytes"
@@ -85,7 +85,7 @@ def test_stream_audio_full_response(fake_track_file):
 @requires_db
 def test_stream_audio_range_206(fake_track_file):
     f, data = fake_track_file
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/music/library/1/audio", headers={"Range": "bytes=0-9"})
     assert r.status_code == 206
     assert r.headers["content-range"] == f"bytes 0-9/{len(data)}"
@@ -96,7 +96,7 @@ def test_stream_audio_range_206(fake_track_file):
 @requires_db
 def test_stream_audio_suffix_range(fake_track_file):
     f, data = fake_track_file
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/music/library/1/audio", headers={"Range": "bytes=-16"})
     assert r.status_code == 206
     start = len(data) - 16
@@ -141,7 +141,7 @@ def test_stream_audio_rejects_path_outside_music_dir(tmp_path, monkeypatch):
     outside.write_bytes(b"nope")
 
     track_id = asyncio.run(_insert_track(str(outside)))
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get(f"/api/music/library/{track_id}/audio")
     assert r.status_code == 400
     assert "MUSIC_DIR" in r.json()["detail"]
@@ -149,7 +149,7 @@ def test_stream_audio_rejects_path_outside_music_dir(tmp_path, monkeypatch):
 
 @requires_db
 def test_stream_audio_missing_row_404(monkeypatch):
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/music/library/999999/audio")
     assert r.status_code == 404
 
@@ -170,7 +170,7 @@ def test_cover_no_embedded_art_404_and_negative_cache(tmp_path, monkeypatch):
     audio.write_bytes(b"no id3 art here")  # not a valid tagged file
     track_id = asyncio.run(_insert_track(str(audio)))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get(f"/api/music/library/{track_id}/cover")
     assert r.status_code == 404
     assert (cover_dir / f"{track_id}.none").is_file()
@@ -189,7 +189,7 @@ def test_play_tracks_proxies_to_domovoi(monkeypatch):
         return 200, {"played": True, "queued": 2, "requested": 2}
 
     monkeypatch.setattr(music_api, "post_admin", _fake_post_admin)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/play-tracks",
             json={"room_id": "kitchen", "track_ids": [3, 7]},
@@ -206,7 +206,7 @@ def test_play_tracks_domovoi_unreachable_502(monkeypatch):
         return 0, None
 
     monkeypatch.setattr(music_api, "post_admin", _down)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/play-tracks",
             json={"room_id": "kitchen", "track_ids": [1]},

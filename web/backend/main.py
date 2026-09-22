@@ -51,7 +51,10 @@ from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend import plugin_host
 from web.backend import realtime as realtime_mod
-from web.backend.middleware import BodyLimitMiddleware
+from web.backend.middleware import (
+    BodyLimitMiddleware,
+    RequireRequestedWithMiddleware,
+)
 from web.backend.realtime import (
     DEFAULT_POLL_INTERVAL_SEC,
     ListenTask,
@@ -226,18 +229,28 @@ app = FastAPI(
 )
 
 
-# ─── CORS ─────────────────────────────────────────────────────────────────
-# LAN-trust: allow localhost + RFC 1918 ranges for cross-origin requests
-# from the browser when the user opens the UI by IP. Refuses public
-# origins as a basic defense against malicious websites trying to hit
-# the user's LAN device when they happen to have a tab open elsewhere.
-# This is belt-and-suspenders next to binding only to LAN interfaces.
+# ─── Write backstop (WEB-6) ───────────────────────────────────────────────
+# A write under /api/ without X-Requested-With is refused here, in front of
+# the router, so no endpoint runs and nothing reads the body. Registered
+# LAST and therefore innermost (Starlette wraps user_middleware[0]
+# outermost): CORS still answers its own preflight, and an oversized body
+# is still refused 413 by the limiter below whether or not it brought the
+# header.
+app.add_middleware(RequireRequestedWithMiddleware)
+
 
 # ─── Request-body budgets (WEB-4) ─────────────────────────────────────────
 # Outside CORS so an oversized upload is refused before anything reads
 # it. Only the routes named in middleware.BODY_LIMITS have a budget.
 app.add_middleware(BodyLimitMiddleware)
 
+
+# ─── CORS ─────────────────────────────────────────────────────────────────
+# LAN-trust: allow localhost + RFC 1918 ranges for cross-origin requests
+# from the browser when the user opens the UI by IP. Refuses public
+# origins as a basic defense against malicious websites trying to hit
+# the user's LAN device when they happen to have a tab open elsewhere.
+# This is belt-and-suspenders next to binding only to LAN interfaces.
 
 app.add_middleware(
     CORSMiddleware,

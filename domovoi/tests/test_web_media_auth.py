@@ -68,11 +68,17 @@ def docs_dir(monkeypatch, tmp_path):
     return tmp_path
 
 
+def _no_preflight_client() -> TestClient:
+    """A caller that did not send X-Requested-With — the shape of a
+    cross-origin form post."""
+    return TestClient(app)
+
+
 def _client() -> TestClient:
     """No lifespan — nothing here needs the poll loops, and entering them
     would open a database connection this module is proving it can do
     without."""
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 # ═══ WEB-2 · Documents ════════════════════════════════════════════════
@@ -112,7 +118,7 @@ def test_uploading_a_document_needs_an_admin_session_and_a_preflight(claimed, do
         "/api/documents/upload", files=files, headers={**DEVICE, **XRW}
     ).status_code == 401
     # Admin, but sent the way a cross-site form would — no preflight header.
-    assert c.post(
+    assert _no_preflight_client().post(
         "/api/documents/upload", files=files, headers=ADMIN
     ).status_code == 403
     assert not (docs_dir / "dropped.txt").exists()
@@ -326,7 +332,7 @@ def test_a_paired_device_uploads_moves_and_imports(claimed, libraries):
 def test_an_upload_without_the_preflight_header_is_refused(claimed, libraries):
     """Multipart is a CORS simple request; the header is what makes the
     browser ask first."""
-    r = _client().post(
+    r = _no_preflight_client().post(
         "/api/files/upload",
         data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
         files=[("files", ("u.mp3", b"u", "audio/mpeg"))],

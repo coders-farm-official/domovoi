@@ -59,6 +59,8 @@ Every endpoint below is labeled with one of these tiers:
 
 Failure codes across tiers: `401` missing/invalid/expired token (Bearer or
 device), `403` cookie-only mutation attempt (or a rejected outbound fetch),
+`403` a write that arrived without `X-Requested-With` (see 1.2),
+`413` a request body over its route's budget,
 `429` login backoff / rate limit (with a `Retry-After` header), `501` a
 security-tier or plugin-management endpoint before setup.
 
@@ -69,7 +71,40 @@ verbatim. `domovoi/tests/test_route_auth_matrix.py` walks every mutating
 route of both apps and fails when one lacks a gate and is not allowlisted
 with a reason.
 
-### 1.2 Error shapes
+### 1.2 `X-Requested-With` on every write
+
+Every `POST` / `PUT` / `PATCH` / `DELETE` under `/api/` must carry an
+`X-Requested-With` header. Any non-empty value does; the dashboard sends
+`XMLHttpRequest` and the Android app sends `DomovoiApp`. Without it the
+request is refused **403** by
+`web.backend.middleware.RequireRequestedWithMiddleware`, in front of the
+router — no endpoint runs, no body is read, nothing is written.
+
+The reason is the shape of the request rather than who sent it: a form
+post, a multipart upload and a body-less POST are "simple requests", which
+a browser sends to another origin without asking this server first. A
+header outside that set makes the browser preflight instead, and a
+preflight is something the server can refuse. `GET` and `HEAD` are
+untouched, and so is the CORS `OPTIONS` preflight itself.
+
+This is a backstop, not a gate: it answers "could a page on another origin
+have caused this", not "may this caller do it". The auth tiers above are
+what decide the second question.
+
+Any non-browser client — a script, a harness, `curl` — has to send the
+header too:
+
+```bash
+curl -X POST http://domovoi.local:6369/api/podcasts/poll \
+     -H 'X-Requested-With: curl'
+```
+
+Plugin routes mounted under `/api/plugins/<slug>/...` are covered by the
+same rule; a plugin page that uses the dashboard's `apiPost` / `apiPatch` /
+`apiDelete` helpers inherits the header, and one that builds its own
+`fetch` must add it.
+
+### 1.3 Error shapes
 
 * Standard errors are FastAPI-shaped: `{"detail": "<message>"}` with an
   appropriate 4xx/5xx status.
@@ -81,7 +116,7 @@ with a reason.
   unchanged. Plugin-management proxies return `503` when the core process
   itself is unreachable.
 
-### 1.3 Realtime WebSockets
+### 1.4 Realtime WebSockets
 
 | Socket | Process | Purpose |
 |---|---|---|

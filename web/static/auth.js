@@ -24,10 +24,13 @@ const Auth = (() => {
     try { return localStorage.getItem('domovoi-server') || ''; } catch { return ''; }
   };
 
+  // Login, setup and password change are writes like any other, so they
+  // carry the preflight-forcing header too (data.js REQUESTED_WITH; the
+  // value is spelled out here because auth.js loads first).
   const post = async (path, body) => {
     const r = await fetch(`${base()}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'include', // receive/carry the GET-state cookie
       body: JSON.stringify(body || {}),
     });
@@ -123,7 +126,7 @@ const Auth = (() => {
       try {
         await fetch(`${base()}/api/auth/logout`, {
           method: 'POST',
-          headers: this.headers(),
+          headers: { ...this.headers(), 'X-Requested-With': 'XMLHttpRequest' },
           credentials: 'include',
         });
       } catch { /* best-effort */ }

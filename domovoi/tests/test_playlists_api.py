@@ -240,7 +240,7 @@ def test_reorder_over_http_rewrites_positions() -> None:
     pid, tids = asyncio.run(_seed_playlist(3))
     try:
         new_order = [tids[2], tids[0], tids[1]]
-        with TestClient(app) as c:
+        with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as c:
             r = c.patch(f"/api/playlists/{pid}/order", json={"track_ids": new_order})
         assert r.status_code == 204, r.text
         assert asyncio.run(_positions(pid)) == new_order

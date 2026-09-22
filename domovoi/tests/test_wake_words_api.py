@@ -64,7 +64,7 @@ def _plant_clip(path, *, good: bool = True, seed: int = 0) -> None:
 
 @requires_db
 def test_list_empty_db_returns_empty_list() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/wake-words")
         assert r.status_code == 200
         assert r.json() == []
@@ -72,7 +72,7 @@ def test_list_empty_db_returns_empty_list() -> None:
 
 @requires_db
 def test_create_persists_and_returns_full_row() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = _create(client, name="Hey Domovoi", phrase="hey domovoi", threshold=0.6)
         assert r.status_code == 201, r.text
         payload = r.json()
@@ -94,7 +94,7 @@ def test_create_persists_and_returns_full_row() -> None:
 
 @requires_db
 def test_create_defaults_threshold_to_half() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = _create(client, name="Computer", phrase="computer")
         assert r.status_code == 201
         assert r.json()["threshold"] == pytest.approx(0.5)
@@ -102,7 +102,7 @@ def test_create_defaults_threshold_to_half() -> None:
 
 @requires_db
 def test_create_duplicate_name_slug_returns_409() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         assert _create(client, name="Hey Domovoi", phrase="hey domovoi").status_code == 201
         # Same name → same slug → collision.
         dup = _create(client, name="Hey Domovoi", phrase="different phrase")
@@ -114,7 +114,7 @@ def test_create_duplicate_name_slug_returns_409() -> None:
 
 @requires_db
 def test_patch_threshold_and_rename() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Athena", phrase="hey athena").json()["id"]
 
         r = client.patch(f"/api/wake-words/{wid}", json={"threshold": 0.8})
@@ -128,7 +128,7 @@ def test_patch_threshold_and_rename() -> None:
 
 @requires_db
 def test_patch_empty_body_returns_400() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Bishop", phrase="hey bishop").json()["id"]
         r = client.patch(f"/api/wake-words/{wid}", json={})
         assert r.status_code == 400
@@ -138,7 +138,7 @@ def test_patch_empty_body_returns_400() -> None:
 def test_patch_set_default_on_unready_returns_409() -> None:
     """A freshly-created wake word is in 'recording' with no model; it
     can't be made default until it's trained ('ready')."""
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Cortana", phrase="hey cortana").json()["id"]
         r = client.patch(f"/api/wake-words/{wid}", json={"set_default": True})
         assert r.status_code == 409
@@ -148,7 +148,7 @@ def test_patch_set_default_on_unready_returns_409() -> None:
 def test_train_with_too_few_clips_returns_409() -> None:
     """The Train button enqueues training, which the repo refuses below
     ``wake_word_min_clips`` — surfaced as a 409. A fresh row has 0 clips."""
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Vesper", phrase="hey vesper").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/train")
         assert r.status_code == 409
@@ -178,7 +178,7 @@ def test_train_after_enough_clips_promotes_to_training(tmp_path, monkeypatch) ->
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Sentinel", phrase="hey sentinel").json()
         wid, slug = created["id"], created["slug"]
         n = settings.wake_word_min_clips
@@ -203,7 +203,7 @@ def test_train_gated_on_selected_count(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Gatekeeper", phrase="hey gatekeeper").json()
         wid, slug = created["id"], created["slug"]
         n = settings.wake_word_min_clips
@@ -226,7 +226,7 @@ def test_train_gated_on_selected_count(tmp_path, monkeypatch) -> None:
 
 @requires_db
 def test_delete_recording_row_succeeds() -> None:
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Disposable", phrase="hey disposable").json()["id"]
         r = client.delete(f"/api/wake-words/{wid}")
         assert r.status_code == 204
@@ -239,7 +239,7 @@ def test_delete_recording_row_succeeds() -> None:
 def test_delete_unknown_returns_409() -> None:
     """delete returns None for a missing row → the router maps that to 409
     (same code as the default-protected case)."""
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.delete("/api/wake-words/999999")
         assert r.status_code == 409
 
@@ -250,7 +250,7 @@ def test_delete_default_returns_409() -> None:
     from domovoi.db.repositories import WakeWordsRepository
     from domovoi.db.session import session_scope
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="DefaultWord", phrase="hey default").json()["id"]
 
         async def _make_ready_default() -> None:
@@ -277,7 +277,7 @@ def test_clips_endpoint_returns_quality_objects(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Clipper", phrase="hey clipper").json()
         wid, slug = created["id"], created["slug"]
 
@@ -313,7 +313,7 @@ def test_clip_audio_raw_and_trimmed(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Audio", phrase="hey audio").json()
         wid, slug = created["id"], created["slug"]
         sub = clips_root / slug
@@ -344,7 +344,7 @@ def test_clip_selection_individual_and_bulk(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Selector", phrase="hey selector").json()
         wid, slug = created["id"], created["slug"]
         sub = clips_root / slug
@@ -383,7 +383,7 @@ def test_reanalyze_preserves_user_selection(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Reanalyze", phrase="hey reanalyze").json()
         wid, slug = created["id"], created["slug"]
         sub = clips_root / slug
@@ -405,7 +405,7 @@ def test_delete_clip_removes_analysis_artifacts(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         created = _create(client, name="Artifacts", phrase="hey artifacts").json()
         wid, slug = created["id"], created["slug"]
         sub = clips_root / slug
@@ -431,7 +431,7 @@ def test_delete_one_clip(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Snipper", phrase="hey snipper").json()["id"]
         sub = clips_root / "snipper"
         sub.mkdir(parents=True)
@@ -455,7 +455,7 @@ def test_delete_clip_path_traversal_rejected(tmp_path, monkeypatch) -> None:
     clips_root = tmp_path / "wake_clips"
     monkeypatch.setattr(core_settings, "wake_clips_dir", str(clips_root))
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Guarded", phrase="hey guarded").json()["id"]
         # A bare ".." segment gets collapsed by the HTTP client before it
         # reaches the route, so percent-encode it to keep the escaping
@@ -487,7 +487,7 @@ def _stub_admin_down(monkeypatch) -> None:
 @requires_db
 def test_record_start_proxies_502_when_domovoi_down(monkeypatch) -> None:
     _stub_admin_down(monkeypatch)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Proxy A", phrase="hey proxy a").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/record/start", json={"room_id": "kitchen"})
         assert r.status_code == 502
@@ -496,7 +496,7 @@ def test_record_start_proxies_502_when_domovoi_down(monkeypatch) -> None:
 @requires_db
 def test_record_stop_proxies_502_when_domovoi_down(monkeypatch) -> None:
     _stub_admin_down(monkeypatch)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Proxy B", phrase="hey proxy b").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/record/stop", json={"room_id": "kitchen"})
         assert r.status_code == 502
@@ -505,7 +505,7 @@ def test_record_stop_proxies_502_when_domovoi_down(monkeypatch) -> None:
 @requires_db
 def test_push_proxies_502_when_domovoi_down(monkeypatch) -> None:
     _stub_admin_down(monkeypatch)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Proxy C", phrase="hey proxy c").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/push", json={"room_id": "kitchen"})
         assert r.status_code == 502
@@ -526,7 +526,7 @@ def test_record_start_forwards_room_and_id_to_admin(monkeypatch) -> None:
 
     monkeypatch.setattr(wake_api, "post_admin", _fake_post_admin)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Forwarder", phrase="hey forwarder").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/record/start", json={"room_id": "garage"})
         assert r.status_code == 200
@@ -538,7 +538,7 @@ def test_record_start_forwards_room_and_id_to_admin(monkeypatch) -> None:
 @requires_db
 def test_score_proxies_502_when_domovoi_down(monkeypatch) -> None:
     _stub_admin_down(monkeypatch)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Scorer A", phrase="hey scorer a").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/score")
         assert r.status_code == 502
@@ -557,7 +557,7 @@ def test_score_forwards_wake_word_id_to_admin(monkeypatch) -> None:
 
     monkeypatch.setattr(wake_api, "post_admin", _fake_post_admin)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Scorer B", phrase="hey scorer b").json()["id"]
         r = client.post(f"/api/wake-words/{wid}/score")
         assert r.status_code == 200

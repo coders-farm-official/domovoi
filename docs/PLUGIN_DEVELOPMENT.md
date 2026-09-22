@@ -496,6 +496,12 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 Static assets under `web/static/` are served at
 `/plugins/<slug>/static/...` (containment-checked).
 
+Your page's writes go through the dashboard's `apiPost` / `apiPatch` /
+`apiDelete` helpers, which are in scope for a plugin script and carry the
+`X-Requested-With` header every write under `/api/` needs (API reference
+§1.2). A page that builds its own `fetch` must send the header itself, or
+the call is refused 403 before it reaches your router.
+
 ### `[[realtime]]`
 
 ```toml

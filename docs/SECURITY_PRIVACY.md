@@ -165,6 +165,24 @@ satellite restart and volume, wake-word clip recording, sound regeneration,
 library reindex — is **daily tier**. The `admin` in the path means "used by
 the dashboard," not "requires the admin password."
 
+### Writes answer only to this dashboard's own kind of request
+
+Independently of the tiers, every `POST` / `PUT` / `PATCH` / `DELETE` under
+`/api/` must carry an `X-Requested-With` header, or it is refused **403**
+before the router sees it. That closes a gap the tiers leave open: a form
+post, a multipart upload and a body-less POST are requests a browser will
+send to this server from *any* page you happen to have open elsewhere,
+without asking it first — so on a daily-tier route the side effect would
+land before the server had a say, and a cookie would not be involved either
+way. A header outside that set makes the browser ask first, and the asking
+is something this server can refuse.
+
+It is a backstop, not a gate — it answers "could a page on another origin
+have caused this", not "may this caller do it" — so it sits underneath the
+tiers above rather than replacing any of them. The dashboard, the Android
+app and every plugin page send the header; so must any script or harness
+that writes to this API (`docs/API_REFERENCE.md` §1.2).
+
 The rows marked **fails closed** are the *security tier*
 (`require_admin_security`): the same posture plugin management has always
 had. Before setup the setup code protects *who becomes admin*; the security

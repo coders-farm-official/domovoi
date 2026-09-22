@@ -67,7 +67,7 @@ def poster_dir(tmp_path, monkeypatch):
 
 
 def _client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 def _mkvideo(root: Path, rel: str, data: bytes = b"\x00" * 64) -> Path:

@@ -5,8 +5,9 @@ in front of streamed responses (audio ranges, SSE chat, zip downloads) and
 ``BaseHTTPMiddleware`` buffers those through an anyio stream. Each one
 passes non-``http`` scopes (``websocket``, ``lifespan``) straight through.
 
-``BodyLimitMiddleware`` is the only one here today; WEB-6 and WEB-8 add the
-preflight backstop and the response-header middleware alongside it.
+``BodyLimitMiddleware`` meters request bodies; ``RequireRequestedWithMiddleware``
+is the preflight backstop in front of every write. WEB-8 adds the
+response-header middleware alongside them.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from starlette.responses import JSONResponse
+
+from web.backend.api.csrf_guard import REQUESTED_WITH_HEADER
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +115,71 @@ class BodyLimitMiddleware:
                 # answered without reading the body). Nothing to add.
                 return
             await _too_large(limit, scope, receive, send)
+
+
+class RequireRequestedWithMiddleware:
+    """Every write under ``/api/`` must carry ``X-Requested-With``.
+
+    A browser sends a form post, a multipart upload or a body-less POST
+    cross-origin without asking the server first — they are "simple
+    requests" in fetch terms, so the side effect lands before the server
+    has a say, and the SameSite cookie is beside the point on a route that
+    needs no credential at all. A header outside the simple-request set
+    forces the browser to preflight instead, and the preflight is a request
+    this server can refuse.
+
+    So: no ``X-Requested-With`` on a POST / PUT / PATCH / DELETE under
+    ``/api/`` and the answer is 403, from here, before routing — the
+    endpoint never runs and nothing is written. The dashboard
+    (``web/static/data.js``, ``auth.js``) and the Android app
+    (``net/ApiClient.kt``) put it on every call they make.
+
+    GET and HEAD are untouched (they change nothing), and so is the CORS
+    preflight itself: refusing the OPTIONS would tell the browser nothing
+    and break the very negotiation this relies on.
+
+    This is a BACKSTOP, not the gate. It answers "could a page on another
+    origin have caused this", not "may this caller do it" — that is what
+    the auth tiers are for, and every route worth gating still wears one.
+    """
+
+    # Same header as the per-route dependency in api/csrf_guard.py, which
+    # stays on the multipart uploads: one spelling, two places to fail.
+    HEADER = REQUESTED_WITH_HEADER.lower()
+    GUARDED_PREFIX = "/api/"
+    GUARDED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self._needs_header(scope):
+            await self.app(scope, receive, send)
+            return
+        response = JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "X-Requested-With header required on writes — see "
+                    "docs/API_REFERENCE.md"
+                )
+            },
+        )
+        log.info(
+            "refused %s %s without X-Requested-With",
+            scope.get("method"), scope.get("path"),
+        )
+        await response(scope, receive, send)
+
+    def _needs_header(self, scope: Scope) -> bool:
+        if scope.get("method") not in self.GUARDED_METHODS:
+            return False
+        if not scope.get("path", "").startswith(self.GUARDED_PREFIX):
+            return False
+        wanted = self.HEADER.encode()
+        return not any(
+            key == wanted and value.strip() for key, value in scope.get("headers", ())
+        )
 
 
 def _content_length(scope: Scope) -> int | None:

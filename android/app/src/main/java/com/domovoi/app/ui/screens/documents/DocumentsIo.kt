@@ -64,6 +64,9 @@ internal suspend fun downloadDocsZip(
     }.toString().toRequestBody("application/json".toMediaType())
     val req = Request.Builder()
         .url(app.api.absolute("/api/documents/download-zip"))
+        // Streams the zip to a file, so it builds its own call instead of
+        // using ApiClient.raw() — same preflight-forcing header (WEB-6).
+        .header("X-Requested-With", "DomovoiApp")
         .post(payload)
         .build()
     app.api.http.newCall(req).execute().use { resp ->

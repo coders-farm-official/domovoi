@@ -95,7 +95,7 @@ def volume(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as c:
         yield c
 
 

@@ -50,7 +50,7 @@ def stub_reindex_down(monkeypatch):
 
 @requires_db
 def test_upload_single_audio_saves_and_triggers_reindex(music_dir, stub_reindex_ok):
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/library/upload",
             files=[("files", ("song.mp3", b"ID3fakeaudio", "audio/mpeg"))],
@@ -74,7 +74,7 @@ def test_upload_zip_extracts_audio_and_skips_non_audio(music_dir, stub_reindex_o
         zf.writestr("nested/c.wav", b"ccc")     # flattened into uploads/
     buf.seek(0)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/library/upload",
             files=[("files", ("album.zip", buf.read(), "application/zip"))],
@@ -91,7 +91,7 @@ def test_upload_zip_extracts_audio_and_skips_non_audio(music_dir, stub_reindex_o
 
 @requires_db
 def test_upload_unsupported_only_returns_400(music_dir, stub_reindex_ok):
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/library/upload",
             files=[("files", ("notes.txt", b"hello", "text/plain"))],
@@ -103,7 +103,7 @@ def test_upload_unsupported_only_returns_400(music_dir, stub_reindex_ok):
 
 @requires_db
 def test_upload_dedupes_colliding_filenames(music_dir, stub_reindex_ok):
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r1 = client.post(
             "/api/music/library/upload",
             files=[("files", ("dup.mp3", b"one", "audio/mpeg"))],
@@ -121,7 +121,7 @@ def test_upload_dedupes_colliding_filenames(music_dir, stub_reindex_ok):
 
 @requires_db
 def test_upload_saves_even_when_domovoi_unreachable(music_dir, stub_reindex_down):
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/library/upload",
             files=[("files", ("x.mp3", b"data", "audio/mpeg"))],
