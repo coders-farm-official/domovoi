@@ -11,9 +11,13 @@
 // for the given props — enough to assert on labels, values and text.
 //
 // Usage: node jsx_render_harness.js <repo-root> '<scenarios json>'
-//   scenario: { file, component, props, fnProps?, apiObject?, apiList? }
+//   scenario: { file, component, props, fnProps?, apiObject?, apiList?, preload? }
 //   fnProps  — prop names to supply as no-op functions
 //   apiObject/apiList — what useApiObject/useApiList return in this render
+//   preload  — page files evaluated before `file` (e.g. web/static/components.jsx
+//              when the component leans on a shared helper such as relTime or
+//              webHref); a preloaded file's real components take the place of
+//              the stubs below for that scenario
 // Output: { <scenario name>: [ { type, props, text }, ... ] }
 'use strict';
 const fs = require('fs');
@@ -38,7 +42,7 @@ const compile = (file) => {
 const STUBS = ['Stat', 'Empty', 'Card', 'Icon', 'Button', 'IconButton', 'Pill', 'Tabs',
                'PageHeader', 'StatusDot', 'Sidebar', 'Topbar', 'LoginModal'];
 
-const render = ({ file, component, props = {}, fnProps = [], apiObject = null, apiList = null }) => {
+const render = ({ file, component, props = {}, fnProps = [], apiObject = null, apiList = null, preload = [] }) => {
   const React = {
     createElement: (type, p, ...children) => ({ type, props: { ...(p || {}), children: children.flat(Infinity) } }),
     Fragment: 'Fragment',
@@ -59,6 +63,7 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
   sandbox.stateBus = { subscribe: () => () => {} };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  for (const pre of preload) vm.runInContext(compile(pre), sandbox, { filename: pre });
   vm.runInContext(compile(file) + `\n;window.__component = ${component};`, sandbox, { filename: file });
   const Component = sandbox.window.__component;
 

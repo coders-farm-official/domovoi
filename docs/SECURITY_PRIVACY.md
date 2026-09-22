@@ -76,6 +76,15 @@ documented that way in the dashboard, too. Binding a device id to a
 per-device token belongs with the kiosk read tokens in the hardening
 backlog.
 
+**Links that come from outside are opened only when they are web links.**
+Feed articles (News) and a provider plugin's now-playing `source_url` are
+data the household did not write. The core stores an article link only when
+it is an absolute `http(s)://` URL — anything else is dropped at ingest and
+the story is kept without a link — and both clients re-check the scheme on
+their own before acting: the dashboard renders a hyperlink only for
+`http(s)`, and the Android app hands a link to the system browser only when
+it is `http(s)`, never any other kind of intent.
+
 ### Outbound-fetch tier
 
 One endpoint makes the server fetch a **caller-chosen URL**

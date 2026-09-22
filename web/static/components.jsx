@@ -315,6 +315,11 @@ const relTime = (iso) => {
   if (s < 86400) return `${Math.round(s/3600)}h ago`;
   return `${Math.round(s/86400)}d ago`;
 };
+/* A server- or feed-supplied link that may be rendered as an <a href>:
+ * only http(s) qualifies, everything else (and a missing value) is null so
+ * the caller renders plain text instead. Pages re-check even though the
+ * server nulls other schemes at ingest — the page stays safe on its own. */
+const webHref = (url) => (typeof url === 'string' && /^https?:/i.test(url.trim()) ? url.trim() : null);
 /* Bytes → "1.2 MB". Lives HERE, in the shared kit, because every page script
  * shares one global scope under Babel-in-browser: two pages each declaring
  * their own top-level `const fmtBytes` is a SyntaxError that kills whichever
@@ -886,5 +891,5 @@ const AuthModalHost = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  relTime, fmtDur, LoginModal, AuthModalHost, DeleteConfirmDialog, useDeleteConfirm,
+  relTime, fmtDur, webHref, LoginModal, AuthModalHost, DeleteConfirmDialog, useDeleteConfirm,
 });

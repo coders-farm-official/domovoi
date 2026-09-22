@@ -693,7 +693,7 @@ All **Open**. Fetching runs in a core background worker.
 | `POST /api/news/topics/{topic_id}/feeds` | `NewsFeedCreate` | Attach a feed. |
 | `DELETE /api/news/topics/{topic_id}/feeds/{feed_id}` | — | Detach a feed. |
 | `POST /api/news/feeds/{feed_id}/validate` | — | Fetch-test a feed. |
-| `GET /api/news/people/{person_id}/items` | `?limit=50` | Fetched items for a person. |
+| `GET /api/news/people/{person_id}/items` | `?limit=50` | Fetched items for a person. An item's `url` is either an absolute `http(s)://` link or `null`: the core keeps only web links at ingest (any other scheme is dropped, the story itself is kept), and the dashboard and Android app re-check the scheme before rendering a hyperlink or opening the link. The same rule applies to a now-playing `source_url`. |
 | `POST /api/news/items/{item_id}/favorite` | `NewsItemFavorite` | Star an item. |
 | `GET /api/news/people/{person_id}/briefing` | — | The assembled spoken-style briefing. |
 | `POST /api/news/poll` | `?person_id=` | Fetch now. |

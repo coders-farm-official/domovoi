@@ -123,6 +123,7 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
   const songDur = np.song?.duration_sec ?? 0;
   const elapsed = (playing || paused) ? (np.elapsed_sec ?? 0) + (playing ? tick : 0) : 0;
   const progress = songDur > 0 ? Math.min(100, (elapsed / songDur) * 100) : 0;
+  const sourceHref = webHref(np.source_url);  // http(s) only, else no pill
   return (
     <div className="card" style={{ padding: 0 }}>
       <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: '52px 1fr', gap: 12, alignItems: 'center' }}>
@@ -136,8 +137,8 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
             {/* Generic now-playing source pill (design §4.7/§10.1): a
                 provider plugin's stamp supplies source + optional URL;
                 the label stays provider-agnostic. */}
-            {(playing || paused) && np.source_url && (
-              <a href={np.source_url} target="_blank" rel="noopener noreferrer"
+            {(playing || paused) && sourceHref && (
+              <a href={sourceHref} target="_blank" rel="noopener noreferrer"
                  title={`open source${np.source ? ` (${np.source})` : ''}`}
                  style={{
                    display: 'inline-flex', alignItems: 'center', gap: 4,
