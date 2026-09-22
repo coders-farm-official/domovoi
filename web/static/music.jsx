@@ -794,6 +794,11 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
   );
   if (!playlist) return null;
   const items = order || tracks || [];
+  // The header count follows the track list, not the playlist row
+  // captured when the drawer opened: removing a track refreshes the list
+  // (playlists.changed) but never that row, so it read "3 tracks" over
+  // two (F-023). The row's count only fills in until the fetch lands.
+  const trackCount = tracks ? items.length : playlist.track_count;
 
   const startEdit = () => {
     setForm({
@@ -841,7 +846,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 600 }}>{playlist.name}</div>
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{playlist.track_count} track{playlist.track_count === 1 ? '' : 's'}</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{trackCount} track{trackCount === 1 ? '' : 's'}</div>
             {playlist.description && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 2 }}>{playlist.description}</div>}
           </div>
         </div>
