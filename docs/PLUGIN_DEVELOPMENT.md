@@ -352,7 +352,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 
 | Field | Rules |
 |---|---|
-| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
+| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
 | `name` | Display name, ≤ 64 chars. |
 | `version` | **Strict semver `X.Y.Z`** (no pre-release/build tags). Upgrades must be version-monotonic; downgrading requires `force` and is refused outright across an applied migration. |
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
@@ -1502,8 +1502,11 @@ history) is why the default is keep.
   CUDA during import, fails the load. Lazy-load heavy libraries.
 * **Windows is a first-class host.** No emoji/arrows in console output
   (cp1252 consoles crash on them); zip entries with backslashes, absolute
-  paths, `..`, symlinks, case-collisions, or reserved device names
-  (`con`, `nul`, ...) are rejected at install.
+  paths, `..`, symlinks, case-collisions, reserved device names
+  (`con`, `nul`, ...), a `:` anywhere in the name (drive letters, NTFS
+  streams), or a path component ending with a dot or a space (Windows
+  would strip it and the file would land under another name) are rejected
+  at install.
 * **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries. The
   manifest must sit at the zip root or inside a single top-level directory
   (the GitHub archive shape — so `codeload` zips install as-is).

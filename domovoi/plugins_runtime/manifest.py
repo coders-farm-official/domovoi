@@ -50,7 +50,17 @@ _PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+
 _APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 _SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)$")
 
-RESERVED_SLUGS = frozenset({"core", "domovoi", "admin", "test", "public"})
+# Reserved slugs: core identities, the ``public`` schema, and the path
+# segments the plugin HTTP surfaces already own — ``/v1/plugins/install``,
+# ``/api/plugins/manifest``, ``/v1/plugins/{slug}/status``, ``/plugins/
+# {slug}/static``, and ``api`` — so a plugin can never mount a router at
+# the address of a core route.
+RESERVED_SLUGS = frozenset(
+    {
+        "core", "domovoi", "admin", "test", "public",
+        "install", "manifest", "status", "static", "api",
+    }
+)
 
 # Routes the dashboard shell owns: the keys of window.DomovoiCore.pages in
 # web/static/index.html (the sidebar's CORE_NAV plus the un-navigated

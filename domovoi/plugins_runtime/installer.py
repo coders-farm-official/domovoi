@@ -136,7 +136,19 @@ def validate_zip_safety(zf: zipfile.ZipFile) -> None:
             raise InstallError("zip_bad_path", f"absolute entry path: {name!r}")
         if ".." in p.parts:
             raise InstallError("zip_bad_path", f"'..' in entry path: {name!r}")
+        if ":" in name:
+            # A drive letter anywhere, or an NTFS alternate data stream
+            # (``file.txt:stream``) — neither is a plugin file.
+            raise InstallError("zip_bad_path", f"':' in entry path: {name!r}")
         for part in p.parts:
+            if part.endswith((".", " ")):
+                # Windows strips trailing dots and spaces, so the file
+                # would land under a different name than the one hashed
+                # and previewed.
+                raise InstallError(
+                    "zip_bad_path",
+                    f"path component ends with a dot or space: {name!r}",
+                )
             stem = part.split(".")[0].lower()
             if stem in _RESERVED_DEVICE_NAMES:
                 raise InstallError(
