@@ -143,7 +143,7 @@ const _maybeRequestLogin = (status) => {
 // web→core hop that forgets to forward credentials, say — and prompting
 // for it forever is a login-modal loop standing where a visible error
 // belongs.
-const _isAuthFailure = (status) => status === 401 || status === 403;
+const _isAuthStatus = (status) => status === 401 || status === 403;
 
 const _isMutation = (method) => {
   const m = (method || 'GET').toUpperCase();
@@ -178,7 +178,7 @@ const _sendWithAuthRetry = async (send, { method, body } = {}) => {
   let promptedHere = false;
   let signInDismissed = false;
 
-  if (_isAuthFailure(r.status) && _isMutation(method) && _replayableBody(body)) {
+  if (_isAuthStatus(r.status) && _isMutation(method) && _replayableBody(body)) {
     promptedHere = true;
     if (await _signInAgain(refusedToken)) r = await send();
     else signInDismissed = true;
@@ -193,6 +193,11 @@ const _sendWithAuthRetry = async (send, { method, body } = {}) => {
     // Lets a caller say "cancelled" instead of "failed": the operator
     // dismissed the sign-in, they did not hit a broken endpoint.
     if (signInDismissed) err.authCancelled = true;
+    // The login modal was shown for THIS refusal (and, on a mutation,
+    // dismissed) — see isAuthFailure. Deliberately false for a 401 that
+    // came back against the fresh bearer: no modal was re-opened for it,
+    // so the caller's error toast is the only thing the operator will see.
+    err.loginPrompted = signInDismissed || (!promptedHere && _isAuthStatus(r.status));
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
   }
@@ -229,6 +234,18 @@ const apiErrorText = (e, max = 160) => {
     || String(e);
   return String(text).slice(0, max);
 };
+
+/* True when the login modal already owns a rejected apiFetch: the request
+ * was refused for want of a sign-in and the modal was shown for it. A
+ * mutation's catch should stay quiet then — `delete failed: 401 Unauthorized:
+ * {"detail":"admin session required"}` sitting behind the password prompt
+ * reads as a crash, not as "please sign in" (F-006), and if the operator
+ * dismissed the prompt they already know the action did not happen.
+ *
+ * NOT true for a 401 that survived a fresh sign-in (the replay above was
+ * refused too): that is a real bug — a web→core hop dropping credentials,
+ * say — no modal was re-opened for it, and the visible error belongs. */
+const isAuthFailure = (e) => !!(e && e.loginPrompted);
 
 const apiGet = (path) => apiFetch(path);
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
@@ -672,7 +689,7 @@ const liveRelTime = (iso) => {
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
-  stateBus, ServerStore, DeviceIdentity, apiErrorText,
+  stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

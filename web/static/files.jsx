@@ -920,7 +920,9 @@ const FilesPage = () => {
       clearSelection();
       refresh();
     } catch (e) {
-      fire(`delete failed: ${String(e.message || e).slice(0, 80)}`);
+      // A 401 here already opened the login modal (data.js) — that prompt
+      // owns the story; a raw status line behind it reads as a crash (F-006).
+      if (!isAuthFailure(e)) fire(`delete failed: ${String(e.message || e).slice(0, 80)}`);
     } finally { setBusy(null); }
   };
 

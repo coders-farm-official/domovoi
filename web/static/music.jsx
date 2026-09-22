@@ -1255,7 +1255,8 @@ const MusicPage = () => {
       lib.refresh();
       refreshStats();
     } catch (e) {
-      fire(`delete failed: ${e.message}`);
+      // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
+      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
     }
   };
   const onCancelAcquisition = async (a) => {
@@ -1296,7 +1297,7 @@ const MusicPage = () => {
       setOpenPlaylist(null);
       refreshPlaylists();
     } catch (e) {
-      fire(`delete failed: ${e.message}`);
+      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
     }
   };
   const onEditPlaylist = async (playlist, fields) => {

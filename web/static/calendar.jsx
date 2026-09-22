@@ -528,7 +528,8 @@ const CalendarPage = () => {
       fire(`deleted "${e.title}"`);
       refreshEvents();
     } catch (err) {
-      fire(`delete failed: ${err.message}`);
+      // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
+      if (!isAuthFailure(err)) fire(`delete failed: ${err.message}`);
     }
   };
 

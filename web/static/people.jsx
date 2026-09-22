@@ -214,7 +214,10 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       await apiDelete(`/api/people/${person.id}/memories/${mem.id}`);
       fire('deleted');
       onRefresh();
-    } catch (e) { fire(`delete failed: ${e.message}`); }
+    } catch (e) {
+      // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
+      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+    }
   };
   const submitFavorite = async () => {
     const kind = newFavKind.trim().toLowerCase();
@@ -233,7 +236,9 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       await apiDelete(`/api/people/${person.id}/favorites/${fav.id}`);
       fire('deleted');
       onRefresh();
-    } catch (e) { fire(`delete failed: ${e.message}`); }
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+    }
   };
 
   const favsByKind = {};
