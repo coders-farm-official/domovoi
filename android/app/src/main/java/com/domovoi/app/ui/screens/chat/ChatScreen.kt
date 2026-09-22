@@ -54,7 +54,9 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PageHeader
@@ -205,7 +207,9 @@ fun ChatScreen() {
     val threads = rememberApi("chat-threads", eventTypes = setOf("chat.changed")) {
         it.api.get("/api/chat/threads").decode<ThreadList>().threads
     }
+    val toast = LocalToast.current
     var openThread by remember { mutableStateOf<ThreadRow?>(null) }
+    var deleteTarget by remember { mutableStateOf<ThreadRow?>(null) }
 
     val current = openThread
     if (current == null) {
@@ -219,13 +223,25 @@ fun ChatScreen() {
                     }.onSuccess { openThread = it; threads.refresh() }
                 }
             },
-            onDelete = { t ->
-                app.scope.launch {
-                    runCatching { app.api.delete("/api/chat/threads/${t.id}") }
-                    threads.refresh()
-                }
-            },
+            onDelete = { deleteTarget = it },
         )
+        // F-A010: destructive, so confirm first (web chat.jsx window.confirm parity).
+        deleteTarget?.let { t ->
+            ConfirmDialog(
+                title = "delete chat",
+                body = "Delete \"${t.title ?: "new chat"}\"? This can't be undone.",
+                confirmLabel = "delete",
+                destructive = true,
+                onConfirm = {
+                    app.scope.launch {
+                        runCatching { app.api.delete("/api/chat/threads/${t.id}") }
+                            .onFailure { toast(failureText("delete", it)) }
+                        threads.refresh()
+                    }
+                },
+                onDismiss = { deleteTarget = null },
+            )
+        }
     } else {
         val closeThread = { openThread = null; threads.refresh() }
         // F-A006: the system back key closes the conversation like the in-app
