@@ -39,6 +39,7 @@ import androidx.compose.ui.window.Dialog
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -68,7 +69,7 @@ internal fun SubscribeDialog(onClose: () -> Unit, onDone: () -> Unit) {
                     .decode<List<DiscoverRow>>()
             }
                 .onSuccess { results = it }
-                .onFailure { toast("Discovery needs internet") }
+                .onFailure { toast(failureText("Discovery", it)) }
             busy = false
         }
     }
@@ -88,7 +89,7 @@ internal fun SubscribeDialog(onClose: () -> Unit, onDone: () -> Unit) {
                     toast("Subscribed")
                     onDone()
                 }
-                .onFailure { toast("Subscribe failed") }
+                .onFailure { toast(failureText("Subscribe", it)) }
             busy = false
         }
     }

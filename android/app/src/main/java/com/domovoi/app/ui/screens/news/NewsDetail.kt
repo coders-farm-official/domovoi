@@ -203,7 +203,7 @@ private fun TopicsCard(
                 }
             }
                 .onSuccess { onChanged() }
-                .onFailure { toast("couldn't update category") }
+                .onFailure { toast(failureText("update category", it)) }
         }
     }
 
@@ -226,7 +226,7 @@ private fun TopicsCard(
                     toast("topic added — discovering feeds…")
                     onChanged()
                 }
-                .onFailure { toast("couldn't add topic") }
+                .onFailure { toast(failureText("add topic", it)) }
             busy = false
         }
     }
@@ -295,7 +295,7 @@ private fun TopicsCard(
                 scope.launch {
                     runCatching { app.api.delete("/api/news/topics/${t.id}") }
                         .onSuccess { onChanged() }
-                        .onFailure { toast("couldn't remove topic") }
+                        .onFailure { toast(failureText("remove topic", it)) }
                 }
             },
             onDismiss = { confirmRemove = null },
@@ -359,7 +359,7 @@ private fun TopicRow(topic: NewsTopic, onRemove: () -> Unit, onChanged: () -> Un
                     toast("feed added")
                     onChanged()
                 }
-                .onFailure { toast("couldn't add that feed") }
+                .onFailure { toast(failureText("add feed", it)) }
             busy = false
         }
     }
@@ -428,7 +428,7 @@ private fun TopicRow(topic: NewsTopic, onRemove: () -> Unit, onChanged: () -> Un
                                         app.api.post("/api/news/feeds/${f.id}/validate")
                                     }
                                         .onSuccess { loadFeeds() }
-                                        .onFailure { toast("couldn't validate") }
+                                        .onFailure { toast(failureText("validate", it)) }
                                 }
                             },
                             onRemove = {
@@ -440,7 +440,7 @@ private fun TopicRow(topic: NewsTopic, onRemove: () -> Unit, onChanged: () -> Un
                                             loadFeeds()
                                             onChanged()
                                         }
-                                        .onFailure { toast("couldn't remove feed") }
+                                        .onFailure { toast(failureText("remove feed", it)) }
                                 }
                             },
                         )
@@ -546,7 +546,7 @@ private fun SavedFeedCard(items: List<NewsItemRow>, onChanged: () -> Unit) {
                                     )
                                 }
                                     .onSuccess { onChanged() }
-                                    .onFailure { toast("couldn't update favorite") }
+                                    .onFailure { toast(failureText("update favorite", it)) }
                             }
                         },
                         modifier = Modifier.size(28.dp),

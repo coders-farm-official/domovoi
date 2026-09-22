@@ -109,6 +109,32 @@ class ApiClientTest {
         )
     }
 
+    // ---- F-A009: subscribe / discover / news mutations use the same shape ----
+
+    @Test fun failureText_namesTheServerReasonForSubscribeAndFeedFailures() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(422).setStatus("HTTP/1.1 422 Unprocessable Entity")
+                .setBody("""{"detail":"not a feed"}"""),
+        )
+        try {
+            api.post("/api/podcasts/subscriptions")
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            // POD-09: the toast carries the status and the server's own detail.
+            assertEquals("""Subscribe failed: 422 Unprocessable Entity: {"detail":"not a feed"}""", failureText("Subscribe", e))
+            // NEWS-08: same exception, news wording.
+            assertEquals("""add feed failed: 422 Unprocessable Entity: {"detail":"not a feed"}""", failureText("add feed", e))
+        }
+    }
+
+    @Test fun failureText_discoveryBlamesTheConnectionOnlyWhenTheRequestNeverArrived() {
+        assertEquals("Discovery failed (offline?)", failureText("Discovery", IOException("timeout")))
+        assertEquals(
+            "Discovery failed: 502 Bad Gateway: upstream itunes lookup failed",
+            failureText("Discovery", ApiException(502, "502 Bad Gateway: upstream itunes lookup failed")),
+        )
+    }
+
     @Test fun failureText_fallsBackWhenThereIsNoMessage() {
         assertEquals("Poll failed: HTTP 502", failureText("Poll", ApiException(502, "")))
         assertEquals(
