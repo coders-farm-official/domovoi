@@ -256,18 +256,44 @@ What the install flow *does* do (verified in
   transitive dependency set without installing anything) is separated from
   **confirm**, which is when code actually lands. Nothing executes until you
   confirm.
+- **The lockfile can only name distributions on the configured package
+  index.** Every line is parsed as an exact `name==version` pin plus
+  `--hash=` options; global pip options, direct URLs (`name @ https://…`,
+  `file://…`, VCS specs) and local paths are refused with a `422` before
+  pip runs. The trust screen shows where each resolved distribution would
+  be fetched from and flags any origin outside the configured index.
 - **The trust screen** shows: publisher, version, license, the manifest's
-  declared permissions and warnings, direct **and transitive** Python
-  dependencies, the handlers it registers, how many database migrations it
-  ships, any HTTP endpoints it exposes without auth, and the trust
-  statement above.
+  declared permissions and warnings, **the satellite payload in its own
+  panel** (the apt packages, the root post-install script by path, the
+  pinned pips, and the file count and size — what `apply-payload` will run
+  as root on every satellite), **every HTTP route the plugin opted out of
+  the admin gate** (found by scanning the staged source for
+  `@open_endpoint`, so the list does not depend on the publisher's
+  goodwill), direct **and transitive** Python dependencies with the origin
+  each resolves from, the handlers it registers, how many database
+  migrations it ships, and the trust statement above. A package the
+  scanner cannot parse is refused rather than previewed incompletely.
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
-- **Database containment by convention:** each plugin gets its own Postgres
-  schema and runs its own migrations there; plugins never run DDL against
-  core tables. This is an architectural boundary against *accidents*, not
-  against malice — in-process code could ignore it.
+- **Database containment:** each plugin gets its own Postgres schema, and
+  its migration files run **as a per-plugin `NOLOGIN` role** with the
+  search path pinned to that schema — a migration cannot read or write
+  core tables (an unqualified name never falls through to `public`, and
+  the role holds no privilege there), cannot `COPY` to a file or program,
+  alter the server, or create roles, whatever it says; a lint refuses the
+  obvious attempts before Postgres has to. That confinement covers the
+  install/upgrade step. The plugin's *runtime* code is still in-process,
+  unsandboxed Python running as the application's database user — the
+  boundary against malice remains the publisher you trust.
+- **Plugin HTTP routes are admin-gated by default in both processes.** A
+  plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
+  dashboard (`/api/plugins/<slug>/…`) sit behind the same rule: every
+  non-GET route requires an admin session (Bearer-only — the dashboard
+  cookie alone answers `403`, no credential answers `401`) unless the
+  plugin author decorated that route `@open_endpoint`, and every such
+  opt-out is listed on the trust screen. A plugin cannot ship a mutation
+  the LAN can call unnoticed. The bundled radio plugin opts nothing out.
 
 And the crucial caveat: **the manifest's permission flags and warnings are
 honesty devices, not enforcement.** A flag like `network = true` is the
@@ -422,7 +448,9 @@ your network.
 code on every satellite** (via the sudoers-allowlisted
 `domovoi-apply-payload` helper). This is gated by the plugin's
 `permissions.satellite_root` + a mandatory warnings entry surfaced at
-install-confirm time, transfer is sha256-manifest-verified, and only
+install-confirm time — and the trust screen itself lists the packages,
+the script and the payload size, not just the flag — transfer is
+sha256-manifest-verified, and only
 admin-enabled plugins' payloads flow — but there is **no sandbox**, by
 design and named honestly. Corollary: the satellite's service account is
 root-equivalent on its own device (it already executes server-synced code

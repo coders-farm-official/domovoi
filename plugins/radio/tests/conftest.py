@@ -210,12 +210,20 @@ class RecordingCoreClient:
         return self.responses.get(full, {})
 
     async def post_admin(
-        self, path: str, *, json: Any = None, forward_auth: bool = True
+        self,
+        path: str,
+        *,
+        json: Any = None,
+        forward_auth: bool = True,
+        request: Any | None = None,
     ) -> Any:
         full = self._resolve(path)
         self.calls.append(
             {"method": "POST_ADMIN", "path": full, "json": json,
-             "forward_auth": forward_auth}
+             "forward_auth": forward_auth,
+             # The proxies must hand the incoming request over so the
+             # caller's admin Bearer reaches the core's gate.
+             "forwarded_request": request is not None}
         )
         return self.responses.get(full, {})
 

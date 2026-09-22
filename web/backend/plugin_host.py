@@ -16,7 +16,10 @@ live here:
 * **Router + static hosting** — plugin routers mount at
   ``/api/plugins/<slug>`` behind a per-slug gate dependency that 404s
   while the slug is disabled (FastAPI can't remove routes; the gate is
-  the unmount). Static assets serve from ``<install_dir>/web/static``
+  the unmount) and that applies the same default-deny auth rule as the
+  core's ``domovoi.plugin_http``: every non-GET route requires an admin
+  session unless its function is decorated ``@domovoi.webkit.
+  open_endpoint``. Static assets serve from ``<install_dir>/web/static``
   via a single parameterized route with a containment check.
 * **Frontend manifest** (§5.2) — ``GET /api/plugins/manifest`` payload:
   scripts, pages, player sources, realtime channels, and the published
@@ -44,7 +47,7 @@ import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 
@@ -308,11 +311,25 @@ class PluginHost:
 
     # ── mounting ─────────────────────────────────────────────────────
     def _slug_gate(self, slug: str):
-        async def gate() -> None:
+        """The per-router dependency every plugin web route runs behind.
+        Mirrors ``domovoi.plugin_http._make_gate``: 404 while the plugin
+        is disabled; GET/HEAD/OPTIONS pass; any other method requires an
+        admin session (``webkit.admin_required`` — Bearer-only for
+        mutations, 401 with no credential, 403 cookie-only) unless the
+        route function carries the ``@webkit.open_endpoint`` marker."""
+        from domovoi.webkit import admin_required, is_open_endpoint
+
+        async def gate(request: Request) -> None:
             if not self.enabled(slug):
                 raise HTTPException(
                     status_code=404, detail=f"plugin {slug!r} is not enabled"
                 )
+            if request.method in ("GET", "HEAD", "OPTIONS"):
+                return
+            endpoint = request.scope.get("endpoint")
+            if endpoint is not None and is_open_endpoint(endpoint):
+                return
+            await admin_required(request)
 
         return gate
 

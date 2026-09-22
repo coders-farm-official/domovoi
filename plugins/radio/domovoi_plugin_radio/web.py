@@ -14,8 +14,12 @@ tripwired at install and enforced by the web process's import guard:
   ``ctx.core.post_admin`` — the web layer never imports core
   modules.
 
-Router mounts at ``/api/plugins/radio``; static JSX at
-``/plugins/radio/static``. ``SNAPSHOTS`` feeds the manifest-declared
+Router mounts at ``/api/plugins/radio`` behind the host's default-deny
+gate (design §5.1): every non-GET route here — station create / patch /
+delete, play, the FCC import and simulcast proxies — requires an admin
+session; the dashboard attaches its Bearer and signs the operator in on a
+401. GETs (search, lists, stream, badge) stay open for daily use. Static
+JSX at ``/plugins/radio/static``. ``SNAPSHOTS`` feeds the manifest-declared
 realtime wiring (design §5.3): snapshot functions are called by the web
 state poll loop AND on NOTIFY, and their return value is broadcast
 verbatim on the mapped realtime channel — keep them cheap (and never
@@ -28,7 +32,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -525,23 +529,28 @@ def build_router(ctx: Any) -> APIRouter:
     # ── Proxies to the plugin's CORE endpoints (no core imports) ─────
 
     @router.post("/stations/{station_id}/resolve-simulcast")
-    async def resolve_simulcast(station_id: int) -> dict[str, Any]:
+    async def resolve_simulcast(station_id: int, request: Request) -> dict[str, Any]:
         """Look up an FM station's call sign in the online directory and
         persist the best simulcast URL. Proxied to the plugin's core
-        endpoint (slug-relative path → /v1/plugins/radio/...)."""
+        endpoint (slug-relative path → /v1/plugins/radio/...) with the
+        caller's admin credential forwarded — the core gates this
+        mutation exactly like the web process does."""
         result = await ctx.core.post_admin(
-            f"stations/{station_id}/resolve-simulcast"
+            f"stations/{station_id}/resolve-simulcast", request=request
         )
         if isinstance(result, dict) and "not found" in str(result.get("message", "")):
             raise HTTPException(status_code=404, detail=result["message"])
         return result
 
     @router.post("/fcc-import")
-    async def fcc_import(state: str | None = Query(default=None)) -> dict[str, Any]:
+    async def fcc_import(
+        request: Request, state: str | None = Query(default=None)
+    ) -> dict[str, Any]:
         """Trigger the FCC FM bulk import as a background job on the
-        core and return immediately (poll GET /fcc-import for status)."""
+        core and return immediately (poll GET /fcc-import for status).
+        The caller's admin credential is forwarded to the core's gate."""
         path = "fcc-import" + (f"?state={state}" if state else "")
-        return await ctx.core.post_admin(path)
+        return await ctx.core.post_admin(path, request=request)
 
     @router.get("/fcc-import")
     async def fcc_import_status() -> dict[str, Any]:

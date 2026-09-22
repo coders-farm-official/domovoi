@@ -13,22 +13,31 @@ deliberately tiny surface:
   forwarding for gated endpoints.
 * :func:`paginate` — the offset/limit clamp helper most list endpoints
   want.
+* :func:`open_endpoint` / :func:`admin_required` — the auth surface for
+  plugin routers, shared with the core process (``domovoi.plugin_http``
+  re-exports these). Both processes mount plugin routers behind the same
+  default-deny gate: every non-GET route requires an admin session unless
+  its function is decorated ``@open_endpoint``; a GET that wants gating
+  adds ``Depends(admin_required)``.
 
 Everything else in ``domovoi.*`` is refused at runtime in the web
 process by a ``sys.meta_path`` guard (``web.backend.plugin_host``), so
 "imports only webkit" is an enforced invariant, not a convention. This
-module must therefore keep its own import footprint minimal: db.session
-plus stdlib/httpx only.
+module must therefore keep its own import footprint minimal: db.session,
+admin_auth (already part of the web backend's preloaded core set) plus
+stdlib/httpx/fastapi only.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 import httpx
+from fastapi import HTTPException, Request
 
+from domovoi.admin_auth import check_admin_request
 from domovoi.db.session import SessionLocal, engine, session_scope
 
 __all__ = [
@@ -39,9 +48,58 @@ __all__ = [
     "CoreDown",
     "core_url",
     "paginate",
+    "open_endpoint",
+    "is_open_endpoint",
+    "admin_required",
 ]
 
 log = logging.getLogger(__name__)
+
+# Attribute the gates look for on a route function. One marker for both
+# processes so a plugin author learns exactly one decorator.
+_OPEN_MARKER = "_domovoi_open_endpoint"
+
+
+def open_endpoint(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Opt a plugin route OUT of the default admin gate (design §4.11 core,
+    §5.1 web). For genuinely daily-use mutations (a tune / play action);
+    every opted-out route is listed on the install preview as part of the
+    plugin's open surface. Stack it directly on the route function::
+
+        @router.post("/tune")
+        @open_endpoint
+        async def tune(...): ...
+    """
+    setattr(fn, _OPEN_MARKER, True)
+    return fn
+
+
+def is_open_endpoint(fn: Callable[..., Any]) -> bool:
+    return bool(getattr(fn, _OPEN_MARKER, False))
+
+
+async def admin_required(request: Request) -> None:
+    """Shared admin-gate dependency (usable by plugin GETs that want
+    gating: ``Depends(admin_required)``). Mutations behind this gate are
+    Bearer-only — a cookie-only request is refused with 403 so the
+    dashboard cookie can never authorize a cross-site POST (§7.3). Keeps
+    the pre-setup LAN-trust grace (a fresh install works before the admin
+    password exists); afterwards a request with no usable credential is
+    refused with 401."""
+    result = await check_admin_request(request)
+    if result in ("ok", "pre-setup"):
+        return
+    if result == "cookie-only":
+        if request.method in ("GET", "HEAD"):
+            return  # cookies may render GET state (§7.3)
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "mutations require Authorization: Bearer — the dashboard "
+                "cookie only renders GET state"
+            ),
+        )
+    raise HTTPException(status_code=401, detail="admin session required")
 
 
 def core_url() -> str:

@@ -314,9 +314,13 @@ either upload the zip or paste a GitHub URL
 
 1. **Stage & preview** — the core validates everything (zip safety caps,
    manifest, layout, migration SQL lint, web-import hygiene, an *inert* pip
-   dry-run of the lockfile) and returns a preview: publisher, permissions and
-   warnings, direct + transitive requirements, handlers and bands, migration
-   count, and the trust statement.
+   dry-run of the lockfile, an AST scan of the package for `@open_endpoint`
+   routes) and returns a preview: publisher, permissions and warnings, the
+   satellite payload (apt packages, the root post-install script, pips,
+   file count and size) as its own warning panel, every route that opted out
+   of the admin gate, direct + transitive requirements with each resolved
+   distribution's origin, handlers and bands, migration count, and the
+   trust statement.
 2. **Confirm** — only after you accept the trust screen does anything
    execute: pip install (hash-verified, wheels only), migrations on both
    prod and test DBs, move into `~/.domovoi/plugins/installed/<slug>/`, a
@@ -353,7 +357,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 
 | Field | Rules |
 |---|---|
-| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
+| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
 | `name` | Display name, ≤ 64 chars. |
 | `version` | **Strict semver `X.Y.Z`** (no pre-release/build tags). Upgrades must be version-monotonic; downgrading requires `force` and is refused outright across an applied migration. |
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
@@ -421,6 +425,28 @@ system = [
   sdist fails the staged dry-run with a "publish wheels or vendor it"
   message). The dry-run itself is inert and runs in a throwaway subprocess
   *before* the trust screen, so no build backend ever executes.
+
+  The lockfile is **parsed, line by line**, before pip ever sees it, and
+  the only shape a line may take is `name[extras]==version` followed by
+  `--hash=sha256:…` options (an environment marker after `;` is fine).
+  Everything else is refused at stage time with a `422`:
+
+  * global pip options (`--no-binary`, `--index-url`, `--extra-index-url`,
+    `--find-links`, `--no-index`, `-e`, `-r`, `--pre`, …) → `lockfile_option`;
+  * direct references (`name @ https://…`, `name @ file://…`, bare URLs,
+    `git+…`) and local paths (`./vendor/x.whl`, `../x`, `C:\…`) →
+    `lockfile_requirement`;
+  * ranges, bare names, anything that is not an exact pin →
+    `lockfile_requirement`.
+
+  Every requirement therefore resolves by name from the configured package
+  index (`PIP_INDEX_URL`, default PyPI). The trust screen shows the origin
+  of each resolved distribution and flags one that pip would fetch from
+  outside that index (PyPI's `files.pythonhosted.org` counts as inside;
+  an operator running a mirror that serves files from another host lists
+  it in `DOMOVOI_PIP_FILE_ORIGINS`, comma-separated). The direct pins in
+  `python` are cross-checked against the parsed lockfile by normalized
+  name and exact version.
 * `system` — external tools probed with `shutil.which` at load. A missing
   `required = true` tool never blocks install or crashes the load — the
   plugin loads **degraded** with your `help` text surfaced on the dashboard.
@@ -598,8 +624,13 @@ max_payload_mb = 64                       # hard size cap on files_dir
 **The honesty contract:** `apt_packages` or `post_install` require
 `permissions.satellite_root = true` **and** at least one
 `permissions.warnings` entry — a plugin running root code on every
-satellite must say so, and the installer surfaces it at confirm time.
-`files_dir` alone (plain file sync) needs no permission. Directory
+satellite must say so, and the installer surfaces it at confirm time. The
+trust screen does not rely on your warning text alone: the preview's
+`satellite` section states the package list, the post-install script's
+path, the pinned pips, and the file count and size of the payload (counted
+exactly as the satellite channel serves it), in its own panel headed
+"runs as root on every satellite". `files_dir` alone (plain file sync)
+needs no permission and is still listed with its file count. Directory
 validation: `files_dir` exists, no symlinks, under the cap;
 `post_install` exists inside the plugin root and starts with a shebang.
 Scripts run with `DOMOVOI_PLUGIN_SLUG` / `DOMOVOI_PLUGIN_DIR` env via the
@@ -1037,20 +1068,57 @@ GETs are open by default (add `Depends(admin_required)` from
 core already serves `GET /v1/plugins/{slug}/status` and it would shadow
 yours (the radio plugin uses `/state` for exactly this reason).
 
+`open_endpoint` is applied to the route **function** — put it directly
+above the `def`, under the router decorator. The install preview finds every
+opted-out route by scanning the staged package's source for the decorator
+(`open_endpoints` in the preview; the trust screen lists them as the routes
+anyone on the network can call), so an opt-out is always visible to the
+admin before the plugin lands.
+
 ### 4.16 The web entry point — `register_web(ctx)`
 
 Runs in the separate dashboard process. Your `web.py` receives a
 `WebPluginContext`:
 
-* `ctx.add_router(router)` — mounts at `/api/plugins/<slug>/...` (404-gated
-  while disabled).
+* `ctx.add_router(router)` — mounts at `/api/plugins/<slug>/...` behind the
+  **same gate as the core**: 404 while disabled, and every non-GET route
+  requires an admin session unless its function is decorated
+  `@open_endpoint`. The decorator and the GET-gating dependency come from
+  the one module a web entry may import:
+
+  ```python
+  from fastapi import APIRouter, Depends
+  from domovoi.webkit import admin_required, open_endpoint
+
+  router = APIRouter()
+
+  @router.post("/stations")            # admin session required (default)
+  async def create_station(...): ...
+
+  @router.post("/tune")
+  @open_endpoint                       # daily-use; listed on the install preview
+  async def tune(...): ...
+
+  @router.get("/export", dependencies=[Depends(admin_required)])
+  async def export(...): ...           # a GET that wants gating
+  ```
+
+  Without a credential a gated mutation answers `401`; with only the
+  dashboard cookie it answers `403` (mutations are Bearer-only, so a
+  cross-site POST carries nothing that authorizes it). The dashboard's
+  `apiPost`/`apiPatch`/`apiDelete` helpers attach the operator's Bearer and
+  open the sign-in modal on a `401`, so a page built on them needs nothing
+  extra. Before first-run setup the gate allows everything, exactly like
+  the core.
 * `ctx.db_session_scope()` — async context manager yielding a session with
   `search_path` preset to your schema.
 * `ctx.core` — a typed `CoreClient` for calling the core service (`:6370`):
   `await ctx.core.get(path)`, `await ctx.core.post(path, json=...)`,
   `await ctx.core.post_admin(path, request=incoming_request)` (forwards the
   incoming request's admin credential — the web process holds no ambient
-  admin credential). Relative paths resolve to `/v1/plugins/<slug>/...`.
+  admin credential, so a proxy to one of your gated core mutations **must**
+  take `request: Request` and pass it along, or the core answers `401`).
+  Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory.
 * `ctx.log` — the `webplugin.<slug>` logger.
 
@@ -1207,7 +1275,8 @@ refs that no longer resolve. The bus is latency; the sweep is truth.
 Three tables in `plugin_radio` — `radio_stations`, `radio_detections`,
 `track_fingerprints` — plus targeted indexes. The rules V001 demonstrates:
 
-* Unqualified names (the runner sets `search_path = plugin_radio, public`).
+* Unqualified names (the runner pins `search_path = plugin_radio` and runs
+  the file as the `plugin_radio` role — see 6.3).
 * **No foreign keys into core tables**: `library_track_id` is a soft
   reference (bare `BIGINT`) cleaned up by events + the sweep. Intra-schema
   FKs are fine (`radio_detections → radio_stations ON DELETE CASCADE`).
@@ -1235,8 +1304,13 @@ favorites-pagination total, so there's no second count query), and a browser
 stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
 (FCC import, simulcast resolve) are **proxied to the plugin's own core
-endpoints** through the context's `CoreClient` — the web process never
-imports core code. Writes fire commit-coupled NOTIFYs on the
+endpoints** through the context's `CoreClient`, forwarding the caller's
+request so the core's admin gate sees the same Bearer — the web process
+never imports core code. None of the router's mutations opt out of the
+web gate: saving, editing, deleting and playing stations and the two
+proxies all require an admin session (the dashboard signs the operator in
+on the first `401`), while every GET stays open. Writes fire
+commit-coupled NOTIFYs on the
 `plugin_radio_stations_changed` channel; `SNAPSHOTS` exposes the two
 snapshot functions the manifest names. The JSX page registers itself only as
 `window.DomovoiPlugins.radio.pages.StationsPage` and builds its player queue
@@ -1286,7 +1360,10 @@ suite runs as part of the repo-wide `pytest` (see
 AST tripwire catches the honest mistakes; the web process's `sys.meta_path`
 import guard blocks the rest at runtime, however the import is spelled.
 Anything needing live core state gets proxied over HTTP to your own core
-endpoints.
+endpoints. `domovoi.webkit` carries everything a web router needs for
+auth — `open_endpoint` and `admin_required` are the same objects the core
+hands out from `domovoi.sdk` / `domovoi.plugin_http`, so a mutation is
+gated by one rule wherever it is mounted.
 
 Note this guard is an **architectural invariant, not a security boundary.**
 Plugin code is unsandboxed (see [Security & Privacy](SECURITY_PRIVACY.md)) —
@@ -1297,17 +1374,45 @@ never imports core runtime" split.
 
 ### 6.3 Per-schema DB only
 
-Your migrations run with `search_path = plugin_<slug>, public` and are
-SQL-linted at install and at every apply. The lint rejects:
+Each migration file runs **as its own Postgres role**, `plugin_<slug>`
+(`NOLOGIN`, created by the runner), with `search_path` pinned to
+`plugin_<slug>` **only**. Two consequences worth knowing before you write
+one:
+
+* An unqualified name that does not exist in your schema is an error —
+  it never falls through to `public`. Reference a core object or an
+  extension's operator class explicitly (`public.gin_trgm_ops`); reading
+  from a core table in a migration is not something a plugin does.
+* The role owns what your migration creates and has `USAGE` on `public`
+  and `ALL` on your schema — nothing else. It cannot read or write core
+  tables, `COPY` to a file or program, alter the server, or create roles,
+  whatever the SQL says. Your plugin's runtime sessions (`sdk.db`,
+  `ctx.db_session_scope`) still run as the application user and keep
+  `search_path = plugin_<slug>, public` — only migrations are confined.
+
+Migrations are also SQL-linted at install and at every apply. The lint
+rejects:
 
 * `CREATE SCHEMA` (the runner owns your schema) and `CREATE EXTENSION`
   (extensions are core-only; `pg_trgm` ships in core V001);
-* DDL naming `public.` anything;
+* DDL **or DML** naming `public.` anything;
 * references to a foreign `plugin_*` schema;
-* cross-schema `REFERENCES` — use soft refs + events + a sweep instead.
+* cross-schema `REFERENCES` — use soft refs + events + a sweep instead;
+* anything that would step outside the migration's role or path:
+  `SET`/`RESET ROLE`, `SET SESSION AUTHORIZATION`, `RESET ALL`,
+  `SET search_path` / `set_config(...)`, `DO` blocks, `COPY`,
+  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`.
 
-The lint is a tripwire, not a security boundary — the real contract is
-review and the migration runner. Migrations are **append-only**: files are
+`INSERT`/`UPDATE`/`DELETE` on your own tables (seed rows, backfills) are
+fine. The lint is a tripwire in front of the role — the role is what
+Postgres enforces. The application's database user must be a superuser
+or hold `CREATEROLE` (the docker-compose and harness users are the
+bootstrap superuser; a hardened deployment grants `CREATEROLE`), or the
+first plugin install fails with a message saying so. Objects an earlier
+runner created as the application user are re-owned to the plugin role
+before a catch-up, so upgrading an already-installed plugin keeps working.
+Uninstall-with-purge drops the role along with the schema. Migrations are
+**append-only**: files are
 checksummed into `plugin_<slug>.schema_history`, and an already-applied file
 that changed on disk refuses to load. No down-migrations, ever. Each apply
 targets both the prod DB and its `_test` sibling; on a fresh install a
@@ -1412,8 +1517,11 @@ history) is why the default is keep.
   CUDA during import, fails the load. Lazy-load heavy libraries.
 * **Windows is a first-class host.** No emoji/arrows in console output
   (cp1252 consoles crash on them); zip entries with backslashes, absolute
-  paths, `..`, symlinks, case-collisions, or reserved device names
-  (`con`, `nul`, ...) are rejected at install.
+  paths, `..`, symlinks, case-collisions, reserved device names
+  (`con`, `nul`, ...), a `:` anywhere in the name (drive letters, NTFS
+  streams), or a path component ending with a dot or a space (Windows
+  would strip it and the file would land under another name) are rejected
+  at install.
 * **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries. The
   manifest must sit at the zip root or inside a single top-level directory
   (the GitHub archive shape — so `codeload` zips install as-is).

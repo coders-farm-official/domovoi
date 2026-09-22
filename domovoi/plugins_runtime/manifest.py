@@ -33,6 +33,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from domovoi.plugins_runtime.lockfile import (
+    LockfileError,
+    normalize_name,
+    parse_lockfile,
+)
+
 # The core SDK semver the `domovoi_api` range is checked against.
 from domovoi.sdk import API_VERSION
 
@@ -44,7 +50,17 @@ _PINNED_REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\],-]*==[A-Za-z0-9.!+*]+
 _APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 _SPECIFIER_RE = re.compile(r"^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+)*)$")
 
-RESERVED_SLUGS = frozenset({"core", "domovoi", "admin", "test", "public"})
+# Reserved slugs: core identities, the ``public`` schema, and the path
+# segments the plugin HTTP surfaces already own — ``/v1/plugins/install``,
+# ``/api/plugins/manifest``, ``/v1/plugins/{slug}/status``, ``/plugins/
+# {slug}/static``, and ``api`` — so a plugin can never mount a router at
+# the address of a core route.
+RESERVED_SLUGS = frozenset(
+    {
+        "core", "domovoi", "admin", "test", "public",
+        "install", "manifest", "status", "static", "api",
+    }
+)
 
 # Routes the dashboard shell owns: the keys of window.DomovoiCore.pages in
 # web/static/index.html (the sidebar's CORE_NAV plus the un-navigated
@@ -780,16 +796,25 @@ def validate_plugin_dir(root: Path, manifest: PluginManifest) -> list[str]:
                     f"install runs pip with --require-hashes and would reject "
                     f"every dist"
                 )
-            # Every direct dep must appear in the lockfile at the same version.
-            lock_lower = lock_text.lower()
-            for req in manifest.python_requirements:
-                pin = req.split("[")[0].split("==")[0].lower() + "=="
-                ver = req.split("==", 1)[1].lower()
-                if f"{pin}{ver}" not in lock_lower.replace(" ", ""):
-                    errors.append(
-                        f"direct requirement {req!r} not found at that version "
-                        f"in {lock.name}"
-                    )
+            # Every direct dep must appear in the lockfile at the same
+            # version. The lockfile is PARSED (each line an exact pin, or
+            # the file is refused) — never substring-matched, so a name
+            # that merely appears inside another line cannot satisfy this.
+            try:
+                pinned = {
+                    (r.key, r.version.lower()) for r in parse_lockfile(lock_text)
+                }
+            except LockfileError as e:
+                errors.append(f"lockfile {lock.name!r}: {e}")
+            else:
+                for req in manifest.python_requirements:
+                    name = req.split("[")[0].split("==")[0]
+                    ver = req.split("==", 1)[1].lower()
+                    if (normalize_name(name), ver) not in pinned:
+                        errors.append(
+                            f"direct requirement {req!r} not found at that "
+                            f"version in {lock.name}"
+                        )
 
     sat = manifest.satellite
     if sat is not None:

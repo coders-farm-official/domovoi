@@ -39,6 +39,11 @@ from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
 from domovoi.plugins_runtime.loader import LOADER, installed_root
+from domovoi.plugins_runtime.lockfile import (
+    LockfileError,
+    LockRequirement,
+    parse_lockfile,
+)
 from domovoi.plugins_runtime.manifest import (
     ManifestError,
     PluginManifest,
@@ -51,6 +56,10 @@ from domovoi.plugins_runtime.migrations import (
     SqlLintError,
     discover_migrations,
     sql_lint,
+)
+from domovoi.plugins_runtime.open_endpoints import (
+    OpenEndpointScanError,
+    collect_open_endpoints,
 )
 
 log = logging.getLogger(__name__)
@@ -127,7 +136,19 @@ def validate_zip_safety(zf: zipfile.ZipFile) -> None:
             raise InstallError("zip_bad_path", f"absolute entry path: {name!r}")
         if ".." in p.parts:
             raise InstallError("zip_bad_path", f"'..' in entry path: {name!r}")
+        if ":" in name:
+            # A drive letter anywhere, or an NTFS alternate data stream
+            # (``file.txt:stream``) — neither is a plugin file.
+            raise InstallError("zip_bad_path", f"':' in entry path: {name!r}")
         for part in p.parts:
+            if part.endswith((".", " ")):
+                # Windows strips trailing dots and spaces, so the file
+                # would land under a different name than the one hashed
+                # and previewed.
+                raise InstallError(
+                    "zip_bad_path",
+                    f"path component ends with a dot or space: {name!r}",
+                )
             stem = part.split(".")[0].lower()
             if stem in _RESERVED_DEVICE_NAMES:
                 raise InstallError(
@@ -183,24 +204,24 @@ def hash_tree(root: Path) -> str:
 
 # ─── pip (steps 7 + 9) ──────────────────────────────────────────────────────
 
-# Only ``--hash=…`` continuations are allowed to start with a dash inside a
-# plugin lockfile; every other option line is a global-option smuggle.
-_ALLOWED_LOCKFILE_OPTION_RE = re.compile(r"^--hash(?:=|\s)", re.I)
 
-
-def validate_lockfile(lockfile: Path) -> None:
+def validate_lockfile(lockfile: Path) -> list[LockRequirement]:
     """§7.4 — a plugin lockfile is a pinned+hashed requirements file and
-    NOTHING else.
+    NOTHING else. Every line is PARSED (:mod:`domovoi.plugins_runtime.
+    lockfile`) into an exact ``name[extras]==version`` pin plus its
+    ``--hash=`` options; anything else is refused before pip is invoked:
 
-    pip honors *requirement-file-level* global options (``--no-binary``,
-    ``--index-url``, ``--extra-index-url``, ``--find-links``,
-    ``--no-index``, ``-e``/``--editable``, ``-r``/``--requirement``, …).
-    Any of them overrides the installer's CLI safety flags — a lockfile
-    line like ``--no-binary :all:`` cancels ``--only-binary=:all:`` and
-    makes pip run an sdist build backend (attacker code) BEFORE the user
-    ever sees the §7.5 trust screen. Reject every option line except
-    ``--hash=`` continuations so a poisoned lockfile fails validation and
-    never reaches pip.
+    * global pip options (``--no-binary``, ``--index-url``,
+      ``--extra-index-url``, ``--find-links``, ``--no-index``, ``-e``,
+      ``-r``, …) — they override the installer's CLI safety flags
+      (``--only-binary=:all:``, the pinned index) → ``lockfile_option``;
+    * direct references (``name @ https://…``, ``file://``, VCS) and
+      local paths (``./vendor/x.whl``) — pip treats a hashed URL as
+      pinned, which would let a lockfile fetch from any host →
+      ``lockfile_requirement``;
+    * anything that is not an exact pin → ``lockfile_requirement``.
+
+    Returns the parsed requirements (the preview reports their origins).
     """
     try:
         content = lockfile.read_text(encoding="utf-8", errors="replace")
@@ -208,24 +229,54 @@ def validate_lockfile(lockfile: Path) -> None:
         raise InstallError(
             "lockfile_unreadable", f"cannot read lockfile {lockfile.name!r}: {e}"
         )
-    for lineno, raw in enumerate(content.splitlines(), 1):
-        line = raw.split("#", 1)[0].strip()
-        if not line or line == "\\":            # blank / bare continuation
-            continue
-        if line.startswith("-"):
-            if _ALLOWED_LOCKFILE_OPTION_RE.match(line):
-                continue
-            option = re.split(r"[=\s]", line, maxsplit=1)[0]
-            raise InstallError(
-                "lockfile_option",
-                f"lockfile line {lineno} carries the pip option {option!r} — "
-                f"plugin lockfiles may contain only pinned, hashed "
-                f"requirements plus --hash= continuations; global pip options "
-                f"are forbidden because they override the installer's "
-                f"--only-binary safety flag and can execute a build backend "
-                f"pre-confirm (design §7.4)",
-                {"line": lineno, "option": option},
-            )
+    try:
+        return parse_lockfile(content)
+    except LockfileError as e:
+        raise InstallError(e.code, str(e), e.details) from None
+
+
+def index_url() -> str:
+    """The one package index pip may talk to (``PIP_INDEX_URL`` or PyPI)."""
+    import os
+
+    return os.environ.get("PIP_INDEX_URL") or "https://pypi.org/simple"
+
+
+def index_file_origins(index: str | None = None) -> set[str]:
+    """``scheme://host[:port]`` origins a resolved distribution may be
+    downloaded from and still count as "under the configured index": the
+    index's own origin, PyPI's file host when the index is pypi.org, plus
+    any extra origins the operator lists in ``DOMOVOI_PIP_FILE_ORIGINS``
+    (comma-separated) for a mirror that serves files from a CDN host."""
+    import os
+    from urllib.parse import urlsplit
+
+    index = index or index_url()
+    origins: set[str] = set()
+    parts = urlsplit(index)
+    if parts.scheme and parts.netloc:
+        origins.add(f"{parts.scheme}://{parts.netloc}".lower())
+        if parts.hostname in ("pypi.org", "www.pypi.org"):
+            origins.add("https://files.pythonhosted.org")
+    for extra in (os.environ.get("DOMOVOI_PIP_FILE_ORIGINS") or "").split(","):
+        extra = extra.strip()
+        if extra:
+            p = urlsplit(extra)
+            if p.scheme and p.netloc:
+                origins.add(f"{p.scheme}://{p.netloc}".lower())
+    return origins
+
+
+def origin_of(url: str | None) -> str | None:
+    """``scheme://host[:port]`` of a download URL, or None."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return None
+    p = urlsplit(url)
+    if not p.scheme or not p.netloc:
+        return url
+    return f"{p.scheme}://{p.netloc}".lower()
 
 
 def _pip_run_env() -> dict[str, str]:
@@ -256,10 +307,7 @@ def _pip_base_args(lockfile: Path) -> list[str]:
         "-r", str(lockfile),
     ]
     # Pin the index (no implicit fallback — dependency-confusion door).
-    import os
-
-    index = os.environ.get("PIP_INDEX_URL") or "https://pypi.org/simple"
-    args += ["--index-url", index, "--no-input"]
+    args += ["--index-url", index_url(), "--no-input"]
     return args
 
 
@@ -297,13 +345,34 @@ def pip_dry_run(lockfile: Path) -> dict[str, Any]:
     conflicts = []
     from importlib import metadata as importlib_metadata
 
+    allowed_origins = index_file_origins()
     for item in report.get("install", []):
         meta = item.get("metadata", {})
         name, version = meta.get("name"), meta.get("version")
-        hashed = bool(
-            (item.get("download_info") or {}).get("archive_info", {}).get("hashes")
+        download_info = item.get("download_info") or {}
+        hashed = bool((download_info.get("archive_info") or {}).get("hashes"))
+        # Where pip would fetch this distribution from. The trust screen
+        # shows the origin of every resolved dist and flags one that is
+        # not under the configured index (§7.4 — the admin sees the
+        # source, not just a name and a version).
+        url = download_info.get("url")
+        origin = origin_of(url)
+        origin_ok = (origin in allowed_origins) if origin else None
+        if origin and not origin_ok:
+            log.warning(
+                "plugin dry-run: %s %s would be fetched from %s, which is "
+                "not under the configured index %s",
+                name, version, url, index_url(),
+            )
+        resolved.append(
+            {
+                "name": name,
+                "version": version,
+                "hashed": hashed,
+                "origin": origin,
+                "origin_ok": origin_ok,
+            }
         )
-        resolved.append({"name": name, "version": version, "hashed": hashed})
         if not name:
             continue
         try:
@@ -432,6 +501,16 @@ async def stage_zip(
             manifest = parse_manifest(manifest_path.read_text(encoding="utf-8"))
         except ManifestError as e:
             raise InstallError("manifest_invalid", str(e))
+        # Lockfile shape first (§7.4): a smuggled option or a non-pin
+        # requirement gets its precise code (lockfile_option /
+        # lockfile_requirement) before the generic layout check, which
+        # parses the same file for the direct-dependency cross-check,
+        # could fold it into layout_invalid. A MISSING lockfile stays a
+        # layout error.
+        if manifest.python_requirements:
+            lock = stage_dir / (manifest.lockfile or "requirements.lock")
+            if lock.is_file():
+                validate_lockfile(lock)
         dir_errors = validate_plugin_dir(stage_dir, manifest)
         if dir_errors:
             raise InstallError("layout_invalid", "; ".join(dir_errors))
@@ -528,8 +607,9 @@ async def stage_zip(
 
         tree_hash = hash_tree(stage_dir)          # step 8
 
-        open_mutations = _collect_open_endpoints(manifest)
+        open_mutations = _collect_open_endpoints(stage_dir, manifest)
         preview = {
+            "slug": manifest.slug,
             "name": manifest.name,
             "version": manifest.version,
             "publisher": manifest.publisher,
@@ -553,6 +633,11 @@ async def stage_zip(
             ),
             "capabilities": list(manifest.provides),
             "open_endpoints": open_mutations,
+            # What lands on every satellite, as root, if the admin confirms
+            # (§7.5): the package list, the script, the pinned pips and the
+            # size of the file payload — its own panel on the trust screen,
+            # never folded into a permission flag.
+            "satellite": _satellite_preview(stage_dir, manifest),
             "trust_statement": TRUST_STATEMENT,
         }
         staged = StagedInstall(
@@ -585,10 +670,51 @@ async def stage_zip(
         raise
 
 
-def _collect_open_endpoints(manifest: PluginManifest) -> list[str]:
-    """The install preview lists opted-out mutating routes; static best
-    effort — the authoritative audit runs at load (§13.2 check 6)."""
-    return []  # populated at load time; kept in the preview shape for §4.11
+def _collect_open_endpoints(
+    stage_dir: Path, manifest: PluginManifest
+) -> list[dict[str, Any]]:
+    """The install preview lists every route the plugin opted out of the
+    default admin gate with ``@open_endpoint`` — found by an AST walk of
+    the staged package in a throwaway subprocess (nothing is imported;
+    :mod:`domovoi.plugins_runtime.open_endpoints`). Each record is
+    ``{method, path, module, function, process, line}``; ``process`` says
+    which mount prefix applies (``core`` → ``/v1/plugins/<slug>``, ``web``
+    → ``/api/plugins/<slug>``). A package the scanner cannot read refuses
+    the install (fail closed — the trust screen cannot describe it)."""
+    try:
+        return collect_open_endpoints(stage_dir / manifest.package_name)
+    except OpenEndpointScanError as e:
+        raise InstallError("open_endpoint_scan_failed", str(e))
+
+
+def _satellite_preview(
+    stage_dir: Path, manifest: PluginManifest
+) -> dict[str, Any] | None:
+    """The ``[satellite]`` payload as the trust screen states it, or None
+    when the manifest declares none. ``files_count`` / ``payload_mb`` are
+    computed with the same enumeration the satellite channel serves
+    (:func:`domovoi.satellite_payload.payload_files`), so the number the
+    admin confirms is the number the Pis receive."""
+    if manifest.satellite is None:
+        return None
+    from domovoi.satellite_payload import _decl_from_manifest, payload_files
+
+    decl = _decl_from_manifest(manifest.raw) or {}
+    files = payload_files(stage_dir, decl) if decl else {}
+    total = 0
+    for p in files.values():
+        try:
+            total += p.stat().st_size
+        except OSError:  # pragma: no cover — vanished mid-stage
+            pass
+    sat = manifest.satellite
+    return {
+        "apt_packages": list(sat.apt_packages),
+        "post_install": sat.post_install,
+        "pip_requirements": list(sat.pip_requirements),
+        "files_count": len(files),
+        "payload_mb": round(total / (1024 * 1024), 2),
+    }
 
 
 def _semver_cmp(a: str, b: str) -> int:
