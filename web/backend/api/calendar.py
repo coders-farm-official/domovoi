@@ -10,13 +10,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_device
 from web.backend.db import session_scope
 from web.backend.schemas import CalendarEvent, CalendarEventCreate, CalendarEventPatch
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
+
+# ─── Auth tier (REV-1) ─────────────────────────────────────────────────────
+# Keeping the household calendar is an ordinary household action, so every write here takes the
+# DEVICE tier: a valid ``X-Device-Token`` or an admin Bearer, with the
+# pre-setup LAN grace kept so a fresh install still works.
+DEVICE = [Depends(require_device)]
 
 
 @router.get("/events", response_model=list[CalendarEvent])
@@ -77,7 +84,10 @@ async def get_event(event_id: int) -> CalendarEvent:
     return _row_to_event(result)
 
 
-@router.post("/events", response_model=CalendarEvent, status_code=201)
+@router.post(
+    "/events", response_model=CalendarEvent, status_code=201,
+    dependencies=DEVICE,
+)
 async def create_event(payload: CalendarEventCreate) -> CalendarEvent:
     async with session_scope() as s:
         row = await s.execute(
@@ -112,7 +122,9 @@ async def create_event(payload: CalendarEventCreate) -> CalendarEvent:
     return _row_to_event(result)
 
 
-@router.patch("/events/{event_id}", response_model=CalendarEvent)
+@router.patch(
+    "/events/{event_id}", response_model=CalendarEvent, dependencies=DEVICE
+)
 async def patch_event(event_id: int, payload: CalendarEventPatch) -> CalendarEvent:
     """Partial update. Only fields explicitly set on the request body
     are written; anything left unset stays as-is."""
@@ -146,7 +158,7 @@ async def patch_event(event_id: int, payload: CalendarEventPatch) -> CalendarEve
     return _row_to_event(result)
 
 
-@router.delete("/events/{event_id}", status_code=204)
+@router.delete("/events/{event_id}", status_code=204, dependencies=DEVICE)
 async def delete_event(event_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(

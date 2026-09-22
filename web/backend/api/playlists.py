@@ -24,9 +24,10 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_device
 from web.backend.db import session_scope
 from web.backend.schemas import (
     Playlist,
@@ -40,6 +41,12 @@ from web.backend.schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/playlists", tags=["playlists"])
+
+# ─── Auth tier (REV-1) ─────────────────────────────────────────────────────
+# Keeping the household's playlists is an ordinary household action, so every write here takes the
+# DEVICE tier: a valid ``X-Device-Token`` or an admin Bearer, with the
+# pre-setup LAN grace kept so a fresh install still works.
+DEVICE = [Depends(require_device)]
 
 
 FAVORITES_VIRTUAL_ID = 0
@@ -169,7 +176,9 @@ async def list_playlist_tracks(playlist_id: int) -> list[Track]:
 # ─── Create / rename / delete ────────────────────────────────────────────
 
 
-@router.post("", response_model=Playlist, status_code=201)
+@router.post(
+    "", response_model=Playlist, status_code=201, dependencies=DEVICE
+)
 async def create_playlist(payload: PlaylistCreate) -> Playlist:
     """Create a new playlist — name plus the optional description /
     cover colour / emoji in one request (F-021). Case-insensitive
@@ -216,7 +225,9 @@ async def create_playlist(payload: PlaylistCreate) -> Playlist:
     return _playlist_from_row(result, track_count=0)
 
 
-@router.patch("/{playlist_id}", response_model=Playlist)
+@router.patch(
+    "/{playlist_id}", response_model=Playlist, dependencies=DEVICE
+)
 async def update_playlist(playlist_id: int, payload: PlaylistPatch) -> Playlist:
     """Edit a playlist's name and/or presentation (description, cover
     color/emoji). Any subset of the allowed fields may be sent."""
@@ -304,7 +315,7 @@ def _reorder_statement(track_ids: list[int]) -> tuple[str, dict[str, Any]]:
     return sql, params
 
 
-@router.patch("/{playlist_id}/order", status_code=204)
+@router.patch("/{playlist_id}/order", status_code=204, dependencies=DEVICE)
 async def reorder_playlist(playlist_id: int, payload: PlaylistReorder) -> None:
     """Full-order rewrite — ``track_ids`` is the playlist's tracks in the
     new order. The submitted set must equal the playlist's current set
@@ -345,7 +356,7 @@ async def reorder_playlist(playlist_id: int, payload: PlaylistReorder) -> None:
         await s.execute(text("SELECT pg_notify('playlists_changed', 'reordered')"))
 
 
-@router.delete("/{playlist_id}", status_code=204)
+@router.delete("/{playlist_id}", status_code=204, dependencies=DEVICE)
 async def delete_playlist(playlist_id: int) -> None:
     if playlist_id == FAVORITES_VIRTUAL_ID:
         raise HTTPException(
@@ -368,7 +379,7 @@ async def delete_playlist(playlist_id: int) -> None:
 # ─── Membership: add / remove ─────────────────────────────────────────────
 
 
-@router.post("/{playlist_id}/tracks", status_code=204)
+@router.post("/{playlist_id}/tracks", status_code=204, dependencies=DEVICE)
 async def add_track_to_playlist(
     playlist_id: int, payload: PlaylistTrackAdd
 ) -> None:
@@ -453,7 +464,9 @@ async def add_track_to_playlist(
         await s.execute(text("SELECT pg_notify('playlists_changed', 'added')"))
 
 
-@router.delete("/{playlist_id}/tracks/{track_id}", status_code=204)
+@router.delete(
+    "/{playlist_id}/tracks/{track_id}", status_code=204, dependencies=DEVICE
+)
 async def remove_track_from_playlist(playlist_id: int, track_id: int) -> None:
     """Remove a track from a playlist.
 
