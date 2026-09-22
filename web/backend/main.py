@@ -336,9 +336,18 @@ async def websocket_state(ws: WebSocket) -> None:
     events as they're emitted by the poll loop. Subscription frame
     format::
 
-        {"subscribe": ["music", "satellites", "downloads", ...]}
+        {"subscribe": ["music", "satellites", "downloads", ...],
+         "device_token": "<the household device token>"}
 
     Empty list / no frame = subscribed to all channels.
+
+    ``device_token`` is how a BROWSER presents the household credential
+    here: a browser WebSocket cannot set request headers, so the
+    dashboard puts the token that its fetches send as ``X-Device-Token``
+    into this first frame (web/static/data.js). Nothing validates it yet
+    — this socket is on the daily tier — and the field is ignored, so an
+    older client that omits it behaves exactly as before. Android and the
+    satellites use the header instead.
     """
     await ws.accept()
     broadcaster: StateBroadcaster = ws.app.state.broadcaster
