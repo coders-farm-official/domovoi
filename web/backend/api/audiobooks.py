@@ -18,12 +18,13 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from starlette.background import BackgroundTask
 
+from domovoi.admin_auth import require_device
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
 from web.backend.api.audio_serve import (
@@ -37,6 +38,14 @@ from web.backend.db import session_scope
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
+
+# Listening to audiobooks — and re-walking the folder they live in — is an
+# ordinary household action, so the writes here take the DEVICE tier: a
+# valid ``X-Device-Token`` or an admin Bearer, pre-setup LAN grace kept.
+# (The MUSIC library's reindex is admin tier instead, because the core
+# route it proxies to is; this one runs in the web process and touches
+# nothing outside ``audiobooks_dir``.)
+DEVICE = [Depends(require_device)]
 
 
 def _audiobooks_dir() -> Path:
@@ -115,7 +124,7 @@ async def get_book(book_id: int) -> dict[str, Any]:
     return _book_row(row)
 
 
-@router.post("/reindex")
+@router.post("/reindex", dependencies=DEVICE)
 async def reindex() -> dict[str, int]:
     """Re-walk ``audiobooks_dir``. Runs the indexer directly in the web
     process against the shared DB (best-effort — ffprobe/mutagen for
@@ -260,7 +269,7 @@ async def get_position(
     return pos or {"position_sec": 0, "speed": 1.0}
 
 
-@router.post("/{book_id}/position")
+@router.post("/{book_id}/position", dependencies=DEVICE)
 async def save_position(book_id: int, body: PositionSave) -> dict[str, bool]:
     async with session_scope() as s:
         await sa.upsert_position(

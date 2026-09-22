@@ -150,7 +150,11 @@ async def subscribe(req: SubscribeRequest) -> dict[str, Any]:
     return dict(row)
 
 
-@router.delete("/subscriptions/{sub_id}")
+@router.delete(
+    "/subscriptions/{sub_id}",
+    # Device tier, like the subscribe it undoes.
+    dependencies=[Depends(require_device)],
+)
 async def unsubscribe(sub_id: int) -> dict[str, bool]:
     async with session_scope() as s:
         result = await s.execute(
@@ -302,7 +306,12 @@ async def get_position(
     return pos or {"position_sec": 0, "speed": 1.0}
 
 
-@router.post("/positions/{episode_id}")
+@router.post(
+    "/positions/{episode_id}",
+    # Device tier: a resume position is written by whichever paired
+    # client is listening.
+    dependencies=[Depends(require_device)],
+)
 async def save_position(episode_id: int, body: PositionSave) -> dict[str, bool]:
     async with session_scope() as s:
         await sa.upsert_position(
