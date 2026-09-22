@@ -52,6 +52,7 @@ input:focus,select:focus{outline:2px solid #e8a33d;outline-offset:1px;
 button{width:100%;margin-top:26px;padding:14px;font-size:16px;font-weight:600;
   color:#3a2c12;background:#e8a33d;border:0;border-radius:8px}
 .hint{font-size:13px;color:#77746c;margin-top:6px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
 .err{background:#fdeceb;border:1px solid #f0c2be;color:#8c2018;
   padding:12px 14px;border-radius:8px;margin-bottom:20px;font-size:14px}
 .code{font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -161,19 +162,28 @@ def render_form(
     return _page("Domovoi setup", body)
 
 
-def render_accepted(*, room_id: str, code: str) -> str:
+def render_accepted(*, room_id: str, code: str, server: str | None = None) -> str:
     """Shown after credentials are accepted.
 
     This page is the LAST thing the phone can be told: accepting the
     credentials tears down the very network it is reading this over. So it
     promises nothing about the outcome and hands the customer off to the
     dashboard, which is the only place that can actually confirm.
+
+    ``server`` is the address the satellite will dial, as the portal
+    resolved it (the discovery sentinel means it will look for one). It is
+    shown so a mistyped address is visible before the network is gone.
     """
+    if server and server.lower() != "auto":
+        where = (f"It will connect to your Domovoi server at "
+                 f"<strong class=\"mono\">{html.escape(server)}</strong>.")
+    else:
+        where = "It will look for your Domovoi server on that network by itself."
     body = f"""
 <h1>Connecting…</h1>
 <p class="sub">This speaker is joining your Wi-Fi as
-  <strong>{html.escape(room_id)}</strong>. This setup network is closing now,
-  so your phone will drop back to your normal Wi-Fi on its own.</p>
+  <strong>{html.escape(room_id)}</strong>. {where} This setup network is
+  closing now, so your phone will drop back to your normal Wi-Fi on its own.</p>
 <div class="code">{html.escape(code)}</div>
 <p class="done">Open your Domovoi dashboard to finish. It will ask you to
   approve a new satellite showing this code. You can close this page.</p>

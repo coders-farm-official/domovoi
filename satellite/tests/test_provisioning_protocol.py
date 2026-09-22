@@ -95,3 +95,82 @@ def test_build_device_info_rejects_unknown_status() -> None:
         proto.build_device_info(
             nonce="1234abcd", mac=None, board=None, model=None, status="exploded"
         )
+
+
+# ─── the server address ───────────────────────────────────────────────────
+#
+# The setup portal's address field is typed by whoever joined the setup
+# network, and the satellite hands its pairing token to whatever it dials.
+# So the portal accepts a ws:// address on the house LAN and nothing else;
+# the device-side validation checks the shape on every path.
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("", "auto"),
+    ("   ", "auto"),
+    ("auto", "auto"),
+    ("AUTO", "auto"),
+    ("ws://192.168.0.117:6370", "ws://192.168.0.117:6370"),
+    ("ws://192.168.0.117:6370/", "ws://192.168.0.117:6370"),
+    ("wss://10.1.2.3:8443", "wss://10.1.2.3:8443"),
+    ("ws://172.31.255.254", "ws://172.31.255.254:6370"),
+    ("192.168.1.20", "ws://192.168.1.20:6370"),
+    ("192.168.1.20:6371", "ws://192.168.1.20:6371"),
+    ("domovoi.local", "ws://domovoi.local:6370"),
+    ("ws://Domovoi-Server.local:6370", "ws://domovoi-server.local:6370"),
+])
+def test_lan_server_addresses_are_normalised(raw, expected) -> None:
+    assert proto.normalize_server_url(raw, lan_only=True) == expected
+
+
+@pytest.mark.parametrize("raw", [
+    "http://192.168.0.117:6370",       # not a WebSocket address
+    "https://domovoi.local",
+    "ftp://192.168.0.117",
+    "ws://8.8.8.8:6370",               # public
+    "ws://1.1.1.1",
+    "ws://example.com:6370",           # a public name
+    "ws://domovoi.example.com:6370",
+    "ws://domovoi.local.example.com",  # .local somewhere other than the end
+    "ws://127.0.0.1:6370",             # the satellite itself
+    "ws://169.254.1.1:6370",           # link-local
+    "ws://100.64.0.1:6370",            # carrier-grade NAT
+    "ws://172.32.0.1:6370",            # just outside 172.16/12
+    "ws://[fd00::1]:6370",             # IPv6 is not what the LAN rule allows
+    "ws://user:pw@192.168.0.117:6370", # credentials
+    "ws://192.168.0.117:6370/v1/x",    # a path
+    "ws://192.168.0.117:6370?x=1",
+    "ws://192.168.0.117:0",
+    "ws://192.168.0.117:99999",
+    "ws://192.168.0.117:abc",
+    "ws://",
+    "ws:///v1",
+    "ws://192.168.0.\n117:6370",       # a newline inside is not a host
+    "ws://192.168.0.117:6370\tx",
+    "ws://" + "a" * 300 + ".local",
+])
+def test_the_portal_refuses_addresses_off_the_lan_or_off_shape(raw) -> None:
+    with pytest.raises(proto.ProvisionInvalid) as e:
+        proto.normalize_server_url(raw, lan_only=True)
+    # The reason is the form's help text, never an echo of what was typed.
+    assert str(e.value)
+    assert "pw@" not in str(e.value) and "example.com" not in str(e.value)
+
+
+def test_without_the_lan_rule_a_hostname_is_still_a_ws_address() -> None:
+    """The USB adoption flow may carry an admin-set hostname; the shape
+    rule still applies to it."""
+    assert proto.normalize_server_url("ws://beelink:6370") == "ws://beelink:6370"
+    assert proto.normalize_server_url("beelink") == "ws://beelink:6370"
+    with pytest.raises(proto.ProvisionInvalid):
+        proto.normalize_server_url("http://beelink:6370")
+
+
+def test_validate_provision_requires_a_websocket_address() -> None:
+    with pytest.raises(proto.ProvisionInvalid):
+        proto.validate_provision(_provision(domovoi_url="http://192.168.1.50:6370"), "ab" * 8)
+    with pytest.raises(proto.ProvisionInvalid):
+        proto.validate_provision(_provision(domovoi_url="ws://a:b@192.168.1.50"), "ab" * 8)
+    # ...and the discovery sentinel is still a valid answer.
+    payload = proto.validate_provision(_provision(domovoi_url="auto"), "ab" * 8)
+    assert payload["domovoi_url"] == "auto"

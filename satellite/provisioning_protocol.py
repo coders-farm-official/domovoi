@@ -50,11 +50,13 @@ PSK, re-presented so the dashboard can show the error) → ``active``.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 
 import hashlib
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 SETUP_VERSION = 1
 VOLUME_LABEL = "DOMOVOI-SET"          # FAT volume labels max out at 11 chars
@@ -83,6 +85,85 @@ AUTO_DISCOVER_URL = "auto"
 
 ROOM_ID_MAX_LEN = 32
 _ROOM_DISALLOWED = re.compile(r"[^a-z0-9-]")
+
+# The core's WebSocket port, defaulted onto a server address typed
+# without one.
+CORE_PORT = 6370
+SERVER_URL_MAX_LEN = 256
+# Where a satellite may be pointed from the setup portal: the house LAN.
+# RFC 1918, exactly - not loopback (the satellite would dial itself), not
+# link-local, not the CGNAT range.
+_LAN_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_HOSTNAME_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+SERVER_URL_HELP = (
+    "The server address must start with ws:// and point at your own "
+    "network, e.g. ws://192.168.1.20:6370 or ws://domovoi.local:6370."
+)
+
+
+def _lan_host(host: str) -> bool:
+    """An RFC 1918 IPv4 address, or a name under .local (mDNS never
+    resolves off the link)."""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        if len(labels) < 2 or labels[-1] != "local":
+            return False
+        return all(_HOSTNAME_LABEL.match(label) for label in labels)
+    return addr.version == 4 and any(addr in net for net in _LAN_NETWORKS)
+
+
+def normalize_server_url(raw: str, *, lan_only: bool = False) -> str:
+    """The server address a satellite may be pointed at, in the one shape
+    the client dials: ``ws://host:port`` (or ``wss://``), no credentials,
+    no path. A bare host gets ``ws://`` and the core port; blank or
+    ``auto`` is the discovery sentinel. Raises ProvisionInvalid with a
+    message fit for the portal form.
+
+    ``lan_only`` (the setup portal) additionally requires the host to be an
+    RFC 1918 address or a ``.local`` name: that field is typed by whoever
+    joined the setup network, and the satellite hands its pairing token to
+    whatever it dials.
+    """
+    value = (raw or "").strip()
+    if not value or value.lower() == AUTO_DISCOVER_URL:
+        return AUTO_DISCOVER_URL
+    if len(value) > SERVER_URL_MAX_LEN:
+        raise ProvisionInvalid("The server address is too long.")
+    # urlsplit silently drops tabs and newlines; an address that needs
+    # that treatment is not one anybody typed.
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if "://" not in value:
+        value = "ws://" + value
+    parts = urlsplit(value)
+    if parts.scheme not in ("ws", "wss"):
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if parts.username is not None or parts.password is not None:
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    try:
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        raise ProvisionInvalid(SERVER_URL_HELP) from None
+    if not host:
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if lan_only and not _lan_host(host):
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if port is None:
+        port = CORE_PORT
+    if not (1 <= port <= 65535):
+        raise ProvisionInvalid(SERVER_URL_HELP)
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parts.scheme}://{host}:{port}"
 
 
 def slugify_room(value: str) -> str:
@@ -243,6 +324,10 @@ def validate_provision(doc: Any, expected_nonce: str) -> dict[str, Any]:
         v = payload.get(key)
         if not isinstance(v, str) or not v:
             raise ProvisionInvalid(f"payload missing {key}")
+    # The address the client will dial: ws:// or wss://, a host, nothing
+    # else. The portal has already applied the LAN-only rule to what it
+    # accepts; here the shape is what matters.
+    normalize_server_url(payload["domovoi_url"])
     wifi = payload.get("wifi")
     if not isinstance(wifi, dict) or not wifi.get("ssid") or not wifi.get("psk"):
         raise ProvisionInvalid("payload missing wifi credentials")

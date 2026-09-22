@@ -86,7 +86,12 @@ Two details that are load-bearing rather than cosmetic:
 The server address is found automatically: the satellite sweeps its own /24
 for `/v1/health` at first start and saves what answers. Deliberately not
 mDNS — multicast over Wi-Fi is exactly what fails at 3 a.m. Type an address
-into the portal to skip discovery.
+into the portal to skip discovery: `ws://192.168.1.20:6370` or
+`ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
+portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
+or a `.local` name and nothing else, refuses a form body over 8 KB without
+reading it, and shows the address it resolved on the confirmation page so a
+typo is visible before the setup network closes.
 
 Choose the route when you prepare the card: **Satellites → prepare satellite
 media → wi-fi setup portal** (the default) or **usb adoption**.
