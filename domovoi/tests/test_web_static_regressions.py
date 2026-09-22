@@ -76,3 +76,30 @@ def test_rename_refreshes_the_shared_devices_list():
     assert "onRenamed()" in card[rename:catch], "rename success path does not refresh"
     panel = _component(src, "DevicesPanel")
     assert re.search(r"<ThisDeviceCard [^>]*onRenamed=\{deviceList\.refresh\}", panel)
+
+
+# ── F-012 · SET-07 ────────────────────────────────────────────────────
+# ConfigPanel never read `error` from useApiObject('/api/config/editable'),
+# so a 502 (core down) or a 401 fell through to an empty group list under
+# a live "no changes / Save" footer — "this Domovoi has no settings".
+
+def test_config_panel_names_a_failed_load_and_offers_retry():
+    src = _src("settings.jsx")
+    panel = _component(src, "ConfigPanel")
+    assert re.search(r"const \{[^}]*\berror\b[^}]*\} = useApiObject\('/api/config/editable'\)", panel)
+    assert "configLoadMessage(error)" in panel
+    # The retry goes through the hook's own refresh.
+    assert re.search(r"onClick=\{retry\}", panel)
+    assert re.search(r"const retry = async \(\) => \{\s*setRetrying\(true\);\s*try \{ await refresh\(\); \}", panel)
+    # No Save footer until something loaded.
+    assert re.search(r"\{fields\.length > 0 && \(\s*<div[^\n]*\n(?:.*\n)*?.*'Save'", panel)
+
+
+def test_config_load_message_keeps_login_and_unreachable_apart():
+    src = _src("settings.jsx")
+    fn = _component(src, "configLoadMessage")
+    assert "error.status === 401 || error.status === 403" in fn
+    assert "admin login required" in fn
+    assert "error.status === 502" in fn
+    assert "domovoi unreachable" in fn
+    assert "apiErrorText(error)" in fn      # the residual case shows the body

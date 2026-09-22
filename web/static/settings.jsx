@@ -663,13 +663,32 @@ const VersionSection = () => {
   );
 };
 
+// Why the configuration card has nothing in it. Same three states the
+// Models tab keeps apart (activeMessage): a 401 is not a connectivity
+// problem and must not send anyone hunting for a stopped service; a 502
+// from the web backend means the Domovoi server itself is down. Left
+// unsaid, an unreachable server read as "this Domovoi has no settings"
+// (F-012).
+const configLoadMessage = (error) => {
+  if (error.status === 401 || error.status === 403) {
+    return 'admin login required — sign in to view and edit configuration';
+  }
+  if (error.status === 502) return 'domovoi unreachable — configuration unavailable';
+  return `couldn't load configuration (${error.status || 'no response'}): ${apiErrorText(error)}`;
+};
+
 const ConfigPanel = () => {
-  const { data, loading, refresh } = useApiObject('/api/config/editable');
+  const { data, loading, error, refresh } = useApiObject('/api/config/editable');
   const fields = (data && data.fields) || [];
   const [edits, setEdits] = React.useState({});
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState(null);
   const [advOpen, setAdvOpen] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try { await refresh(); } finally { setRetrying(false); }
+  };
 
   const setEdit = (name, v) => setEdits(prev => ({ ...prev, [name]: v }));
   const valueOf = (f) => (f.name in edits ? edits[f.name] : f.value);
@@ -719,6 +738,15 @@ const ConfigPanel = () => {
       <div style={{ padding: '4px 14px 14px' }}>
         {loading && fields.length === 0
           ? <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading settings…</div>
+          : error && fields.length === 0
+          ? <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>
+              <div>{configLoadMessage(error)}</div>
+              <div style={{ marginTop: 10 }}>
+                <Button icon="refresh-cw" onClick={retry} disabled={retrying}>
+                  {retrying ? 'retrying…' : 'retry'}
+                </Button>
+              </div>
+            </div>
           : <>
               {renderGroups(common)}
               {advanced.length > 0 && (
@@ -744,6 +772,9 @@ const ConfigPanel = () => {
               )}
             </>}
 
+        {/* "no changes / Save" under an empty card read as a live editor
+            with nothing to edit; there is no footer until fields exist. */}
+        {fields.length > 0 && (
         <div style={{ marginTop: 8, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
           {result && result.error &&
             <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>save failed: {result.error}</div>}
@@ -769,6 +800,7 @@ const ConfigPanel = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
     </Card>
     </React.Fragment>
