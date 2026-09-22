@@ -1084,15 +1084,36 @@ const StatsTab = ({ stats, loading }) => {
   }
   const total    = stats.total_tracks;
   const totalDur = stats.total_duration_sec;
-  const byVia    = stats.by_added_via || {};
   const enriched = stats.enriched_count;
+  const minutes  = Math.round(totalDur / 60);
+  // Both maps are open enums from the endpoint: added_via is whatever
+  // stamped the row ('unknown' when nothing did, i.e. NULL) and source is
+  // whatever provider plugin filled the library. Render every bucket,
+  // biggest first — picking two keys by name hid an 11-track library
+  // behind "added via voice 0 / 0 manual" (F-025).
+  const buckets = (map) => Object.entries(map || {}).sort((a, b) => b[1] - a[1]);
+  const byVia    = buckets(stats.by_added_via);
+  const bySource = buckets(stats.by_source);
   return (
     <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
       <Stat label="total tracks"     value={total}                sub="across all sources"/>
-      <Stat label="total duration"   value={totalDur ? fmtBigDur(totalDur) : '—'}  sub={totalDur ? `${Math.round(totalDur/60)} minutes` : 'no durations indexed'}/>
-      <Stat label="added via voice"  value={byVia.voice || 0}     sub={`${byVia.manual || 0} manual`}/>
+      <Stat label="total duration"   value={totalDur ? fmtBigDur(totalDur) : '—'}
+            sub={totalDur ? `${minutes} minute${minutes === 1 ? '' : 's'}` : 'no durations indexed'}/>
       <Stat label="enriched"         value={total ? `${enriched} / ${total}` : '—'} sub={total ? `${total - enriched} pending` : ''}/>
+      <BucketStat label="added via" buckets={byVia}/>
+      <BucketStat label="by source" buckets={bySource}/>
     </div>
+  );
+};
+
+/* One tile per open-enum map: the largest bucket is the headline, the
+ * rest are listed underneath so no bucket is ever silently dropped. */
+const BucketStat = ({ label, buckets }) => {
+  if (buckets.length === 0) return <Stat label={label} value="—" sub="no tracks"/>;
+  const [[topKey, topN], ...rest] = buckets;
+  return (
+    <Stat label={`${label} ${topKey}`} value={topN}
+          sub={rest.length ? rest.map(([k, n]) => `${n} ${k}`).join(' · ') : 'all tracks'}/>
   );
 };
 

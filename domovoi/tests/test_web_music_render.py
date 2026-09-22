@@ -36,6 +36,14 @@ PLAYLIST = {"id": 2, "name": "W1b Mix", "track_count": 3, "is_virtual": False,
 TWO_TRACKS = [{"id": 5, "title": "a", "artist": "x"}, {"id": 9, "title": "b", "artist": "y"}]
 DRAWER_FNS = ["onClose", "onPlay", "onShuffle", "onRemoveTrack", "onDelete", "onEdit", "onReorder", "fire"]
 
+# MUS-11's seeded library, verbatim from GET /api/music/library/stats.
+SEEDED_STATS = {"total_tracks": 11, "total_duration_sec": 81,
+                "by_added_via": {"unknown": 11}, "by_source": {"library": 11},
+                "enriched_count": 0}
+MIXED_STATS = {"total_tracks": 12, "total_duration_sec": 7200,
+               "by_added_via": {"voice": 7, "manual": 2, "unknown": 3},
+               "by_source": {"library": 9, "ytdlp": 3}, "enriched_count": 12}
+
 SCENARIOS = {
     "drawer_after_remove": {
         "file": MUSIC, "component": "PlaylistDrawer",
@@ -47,6 +55,14 @@ SCENARIOS = {
         "props": {"playlist": PLAYLIST, "rooms": ["kitchen"]}, "fnProps": DRAWER_FNS,
         "apiObject": {"data": None, "loading": True},
     },
+    "stats_seeded": {"file": MUSIC, "component": "StatsTab",
+                     "props": {"stats": SEEDED_STATS, "loading": False}},
+    "stats_mixed": {"file": MUSIC, "component": "StatsTab",
+                    "props": {"stats": MIXED_STATS, "loading": False}},
+    "stats_empty": {"file": MUSIC, "component": "StatsTab",
+                    "props": {"stats": {"total_tracks": 0, "total_duration_sec": 0,
+                                        "by_added_via": {}, "by_source": {}, "enriched_count": 0},
+                              "loading": False}},
 }
 
 
@@ -66,6 +82,12 @@ def _texts(nodes: list[dict]) -> list[str]:
     return [n["text"] for n in nodes if n["text"]]
 
 
+def _stats(nodes: list[dict]) -> dict[str, tuple]:
+    """{label: (value, sub)} for every Stat tile in render order."""
+    return {n["props"]["label"]: (n["props"].get("value"), n["props"].get("sub"))
+            for n in nodes if n["type"] == "Stat"}
+
+
 # ── F-023 ─────────────────────────────────────────────────────────────
 
 def test_drawer_header_count_follows_the_fetched_tracks(rendered):
@@ -77,3 +99,33 @@ def test_drawer_header_count_follows_the_fetched_tracks(rendered):
 def test_drawer_header_uses_the_row_count_until_the_fetch_lands(rendered):
     texts = _texts(rendered["drawer_before_fetch"])
     assert "3 tracks" in texts
+
+
+# ── F-025 ─────────────────────────────────────────────────────────────
+
+def test_stats_show_the_unknown_added_via_bucket(rendered):
+    tiles = _stats(rendered["stats_seeded"])
+    assert tiles["added via unknown"] == (11, "all tracks")
+    assert not any(label.startswith("added via voice") for label in tiles)
+
+
+def test_stats_have_a_by_source_tile(rendered):
+    tiles = _stats(rendered["stats_seeded"])
+    assert tiles["by source library"] == (11, "all tracks")
+
+
+def test_stats_render_every_bucket_largest_first(rendered):
+    tiles = _stats(rendered["stats_mixed"])
+    assert tiles["added via voice"] == (7, "3 unknown · 2 manual")
+    assert tiles["by source library"] == (9, "3 ytdlp")
+
+
+def test_stats_pluralise_minutes(rendered):
+    assert _stats(rendered["stats_seeded"])["total duration"] == ("1m", "1 minute")
+    assert _stats(rendered["stats_mixed"])["total duration"] == ("2h 0m", "120 minutes")
+
+
+def test_stats_empty_library_has_no_phantom_buckets(rendered):
+    tiles = _stats(rendered["stats_empty"])
+    assert tiles["added via"] == ("—", "no tracks")
+    assert tiles["by source"] == ("—", "no tracks")
