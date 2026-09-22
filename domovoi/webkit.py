@@ -13,6 +13,10 @@ deliberately tiny surface:
   forwarding for gated endpoints.
 * :func:`paginate` — the offset/limit clamp helper most list endpoints
   want.
+* :mod:`domovoi.net_safety` (re-exported as ``webkit.net_safety``) — the
+  shared outbound-URL check and its safe fetchers, so a plugin web module
+  that fetches a caller-chosen URL goes through the same gate the core
+  does.
 
 Everything else in ``domovoi.*`` is refused at runtime in the web
 process by a ``sys.meta_path`` guard (``web.backend.plugin_host``), so
@@ -29,11 +33,13 @@ from typing import Any
 
 import httpx
 
+from domovoi import net_safety
 from domovoi.db.session import SessionLocal, engine, session_scope
 
 __all__ = [
     "SessionLocal",
     "engine",
+    "net_safety",
     "session_scope",
     "CoreClient",
     "CoreDown",

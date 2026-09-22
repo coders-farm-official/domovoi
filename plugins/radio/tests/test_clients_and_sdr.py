@@ -1,12 +1,16 @@
-"""Client scaffolding: stub determinism, ffmpeg-grab failure paths, the
-plugin UA, and SdrTuner's config gates + URL shape (subprocess plumbing
-is exercised only where it can fail fast without hardware)."""
+"""Client scaffolding: stub determinism, ffmpeg-grab failure paths, what
+ffmpeg is allowed to open, the plugin UA, and SdrTuner's config gates +
+URL shape (subprocess plumbing is exercised only where it can fail fast
+without hardware)."""
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 
 import pytest
+
+from domovoi.sdk import net_safety
 
 from domovoi_plugin_radio import USER_AGENT
 from domovoi_plugin_radio.clients import shazam_stream
@@ -52,7 +56,20 @@ async def test_shazam_stub_encodes_input() -> None:
 # ─── ffmpeg grab failure paths ──────────────────────────────────────────
 
 
-async def test_grab_missing_ffmpeg_returns_none(monkeypatch, tmp_path) -> None:
+@pytest.fixture
+def public_stream_host(monkeypatch):
+    """``x`` resolves to a public address, so the grab's outbound-URL
+    check passes and the ffmpeg paths below are what is under test."""
+    monkeypatch.setattr(
+        net_safety,
+        "resolve_host",
+        lambda host: [ipaddress.ip_address("93.184.216.34")],
+    )
+
+
+async def test_grab_missing_ffmpeg_returns_none(
+    monkeypatch, tmp_path, public_stream_host
+) -> None:
     async def boom(*args, **kwargs):
         raise FileNotFoundError("ffmpeg")
 
@@ -61,7 +78,7 @@ async def test_grab_missing_ffmpeg_returns_none(monkeypatch, tmp_path) -> None:
     assert out is None
 
 
-async def test_grab_nonzero_rc_returns_none(monkeypatch) -> None:
+async def test_grab_nonzero_rc_returns_none(monkeypatch, public_stream_host) -> None:
     class FakeProc:
         returncode = 1
 
@@ -75,7 +92,7 @@ async def test_grab_nonzero_rc_returns_none(monkeypatch) -> None:
     assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
 
 
-async def test_grab_tiny_output_rejected(monkeypatch) -> None:
+async def test_grab_tiny_output_rejected(monkeypatch, public_stream_host) -> None:
     class FakeProc:
         returncode = 0
 
@@ -88,6 +105,63 @@ async def test_grab_tiny_output_rejected(monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     # mkstemp creates a 0-byte file; the < 1 KB sanity check rejects it.
     assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
+
+
+# ─── What ffmpeg is allowed to open ─────────────────────────────────────
+
+
+async def test_the_grab_argv_lets_ffmpeg_open_only_http_streams(
+    monkeypatch, public_stream_host
+) -> None:
+    """ffmpeg reads local files, pipes and concat lists by default; the
+    sampler hands it a URL from a station row, so the argv says which
+    protocols that URL may use — and says it before -i, where it governs
+    the input."""
+    seen: list[list[str]] = []
+
+    class FakeProc:
+        returncode = 1
+
+        async def communicate(self):
+            return b"", b"err"
+
+    async def fake_exec(*args, **kwargs):
+        seen.append(list(args))
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await shazam_stream.grab_to_tempfile("http://x/stream", 15)
+
+    (argv,) = seen
+    assert "-protocol_whitelist" in argv
+    assert argv[argv.index("-protocol_whitelist") + 1] == "http,https,tcp,tls"
+    assert argv.index("-protocol_whitelist") < argv.index("-i")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "concat:one.mp3|two.mp3",
+        "http://127.0.0.1:6370/v1/admin/snapshot",
+        "http://127.1:6370/v1/admin/snapshot",
+        "http://[::1]:6370/x",
+        "http://10.0.0.5/stream",
+        "http://192.168.1.50/stream",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fc00::1]/stream",
+    ],
+)
+async def test_the_grab_never_spawns_ffmpeg_for_a_house_local_url(
+    monkeypatch, url
+) -> None:
+    monkeypatch.setattr(net_safety, "resolve_host", lambda host: [])
+
+    async def never(*args, **kwargs):  # pragma: no cover — spawning IS the failure
+        raise AssertionError(f"spawned ffmpeg for {url}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never)
+    assert await shazam_stream.grab_to_tempfile(url, 15) is None
 
 
 # ─── SdrTuner gates + URL shape ─────────────────────────────────────────

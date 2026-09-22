@@ -28,6 +28,13 @@ Where each thing comes from (respecting the two-process split):
 The pull task runs in THIS (web) process: Ollama is local, and keeping the
 transfer here means the Domovoi server's single-process voice pipeline is never
 tied up by a multi-GB download.
+
+Pulling, cancelling and deleting are admin-tier (``Authorization: Bearer``):
+a pull writes multi-GB files to the host from a registry named in the
+request, and a delete removes a model the household depends on. A model
+reference may carry its own registry host (``host/ns/model:tag``); that
+host goes through ``domovoi.net_safety`` so a pull can't be pointed at a
+service inside the house.
 """
 
 from __future__ import annotations
@@ -38,10 +45,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi import net_safety
+from domovoi.admin_auth import require_admin_mutation
 from domovoi.clients import ollama as ollama_client
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -215,9 +224,10 @@ async def get_hardware(request: Request):
 # ─── Delete ──────────────────────────────────────────────────────────────────
 
 
-@router.delete("/{name:path}")
+@router.delete("/{name:path}", dependencies=[Depends(require_admin_mutation)])
 async def delete_installed(name: str):
-    """Delete an installed Ollama model from disk (``/api/delete``)."""
+    """Delete an installed Ollama model from disk (``/api/delete``).
+    Admin tier: it removes a model the household is using."""
     try:
         await ollama_client.delete_model(name)
     except Exception as e:
@@ -253,13 +263,17 @@ class PullBody(BaseModel):
     model: str = Field(..., min_length=1, max_length=200)
 
 
-@router.post("/pull")
+@router.post("/pull", dependencies=[Depends(require_admin_mutation)])
 async def start_pull(body: PullBody) -> dict[str, Any]:
     """Start (or attach to) a background pull for ``model``. Idempotent per
     model: if a pull is already in flight the existing job is returned rather
     than starting a duplicate transfer (enforced by the partial unique
-    index)."""
+    index).
+
+    Admin tier, and a model reference that names its own registry host is
+    checked against the outbound-URL rules first."""
     model = body.model.strip()
+    await _check_registry_host(model)
     async with session_scope() as s:
         # Attach to an existing in-flight job for the same model.
         existing = (
@@ -302,11 +316,13 @@ async def start_pull(body: PullBody) -> dict[str, Any]:
     return {"job": job, "attached": False}
 
 
-@router.post("/pull/{job_id}/cancel")
+@router.post(
+    "/pull/{job_id}/cancel", dependencies=[Depends(require_admin_mutation)]
+)
 async def cancel_pull(job_id: int) -> dict[str, Any]:
     """Request cancellation of an in-flight pull. Cooperative: the streaming
     task checks the cancel flag between progress lines, aborts the transfer,
-    and marks the job ``cancelled``."""
+    and marks the job ``cancelled``. Admin tier, like the pull it stops."""
     _cancelled.add(job_id)
     task = _pull_tasks.get(job_id)
     if task is not None:
@@ -331,6 +347,35 @@ async def cancel_pull(job_id: int) -> dict[str, Any]:
 
 
 # ─── Pull task ───────────────────────────────────────────────────────────────
+
+
+def registry_host(model: str) -> str | None:
+    """The registry host a model reference names, or None when it uses the
+    default registry. ``example.com/ns/model:tag`` and ``host:5000/m`` name
+    one; ``llama3.2:3b`` and ``library/llama3.2`` do not — the first
+    segment is only a host if it looks like one (a dot or a port)."""
+    head = (model or "").strip().split("/")[0]
+    if "/" not in (model or "") or not head:
+        return None
+    if "." not in head and ":" not in head and head != "localhost":
+        return None
+    return head
+
+
+async def _check_registry_host(model: str) -> None:
+    """400 when the model reference points the pull at a host the server
+    must not fetch from."""
+    host = registry_host(model)
+    if host is None:
+        return
+    reason = await net_safety.acheck_outbound_url(
+        f"https://{host}/", require_resolution=False
+    )
+    if reason is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"refusing to pull from this registry — {reason}",
+        )
 
 
 def _normalize_model_name(name: str) -> str:

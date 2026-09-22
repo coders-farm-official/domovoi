@@ -14,6 +14,10 @@ tripwired at install and enforced by the web process's import guard:
   ``ctx.core.post_admin`` — the web layer never imports core
   modules.
 
+The stream proxy makes the web process fetch a station URL, so it goes
+through ``domovoi.webkit.net_safety`` — http(s) only, never an address
+inside the house or on the box, and every redirect hop re-checked.
+
 Router mounts at ``/api/plugins/radio``; static JSX at
 ``/plugins/radio/static``. ``SNAPSHOTS`` feeds the manifest-declared
 realtime wiring (design §5.3): snapshot functions are called by the web
@@ -33,6 +37,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from domovoi.webkit import net_safety
 
 from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
@@ -147,6 +153,28 @@ class RadioDetection(BaseModel):
 
 
 # ─── Registration ─────────────────────────────────────────────────────────
+
+
+async def _check_stream_url(stream_url: str | None) -> None:
+    """400 unless ``stream_url`` is something the server may later fetch.
+
+    A station row's URL is what the stream proxy opens by id, so it is
+    checked on the way IN as well as at fetch time: http(s) only, and
+    never an address inside the house or on the box. A row with no URL
+    (an FM station, which plays through a satellite's tuner) is fine.
+    Storing does not require the name to resolve right now — a station
+    whose DNS is momentarily down, or a household offline, can still be
+    saved, and the proxy resolves and re-checks before it fetches."""
+    if stream_url is None or not str(stream_url).strip():
+        return
+    reason = await net_safety.acheck_outbound_url(
+        str(stream_url), require_resolution=False
+    )
+    if reason is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"refusing this stream URL — {reason}",
+        )
 
 
 def register_web(ctx: Any) -> None:
@@ -408,6 +436,7 @@ def build_router(ctx: Any) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail=f"invalid source {payload.source!r}"
             )
+        await _check_stream_url(payload.stream_url)
         async with session_scope() as s:
             if payload.external_id:
                 existing = await s.execute(
@@ -475,6 +504,8 @@ def build_router(ctx: Any) -> APIRouter:
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             raise HTTPException(status_code=400, detail="no fields provided")
+        if "stream_url" in updates:
+            await _check_stream_url(updates["stream_url"])
         set_fragments = [f"{k} = :{k}" for k in updates]
         set_fragments.append("updated_at = NOW()")
         if updates.get("favorited") is True:
@@ -629,13 +660,16 @@ def build_router(ctx: Any) -> APIRouter:
                     "a satellite room, not the browser"
                 ),
             )
-        lowered = str(stream_url).lower()
-        if any(h in lowered for h in ("localhost", "127.0.0.1", "://0.0.0.0")):
+        # A row's URL is checked when it is written, and again here: the
+        # proxy is the thing that actually reaches out, rows predate the
+        # check, and a name's addresses can change between the two.
+        reason = await net_safety.acheck_outbound_url(str(stream_url))
+        if reason is not None:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"station {name!r} streams from a host-local URL "
-                    f"({stream_url}) the browser can't reach; play it "
+                    f"station {name!r} streams from a URL the server won't "
+                    f"fetch ({reason}); FM/SDR and house-local stations play "
                     "through a satellite room instead"
                 ),
             )
@@ -829,13 +863,18 @@ async def _proxy_stream(url: str) -> StreamingResponse:
     """Open ``url`` and relay its bytes. Keeps the upstream connection +
     client alive for the life of the response (closed in the
     generator's ``finally``); an unreachable upstream surfaces as 502
-    before any bytes are sent."""
+    before any bytes are sent. Redirects are followed one hop at a time
+    so each target is checked before it is opened."""
     import httpx
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None))
     try:
-        req = client.build_request("GET", url, headers={"Icy-MetaData": "0"})
-        resp = await client.send(req, stream=True)
+        resp = await net_safety.open_stream(
+            client, url, headers={"Icy-MetaData": "0"}
+        )
+    except net_safety.OutboundFetchError as e:
+        await client.aclose()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
         await client.aclose()
         raise HTTPException(

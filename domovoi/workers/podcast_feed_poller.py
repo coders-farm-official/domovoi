@@ -16,6 +16,14 @@ acquisition fulfillers own music downloads:
      beyond the window have their file deleted and row flipped to
      'skipped' (LRU by published_at).
 
+Every URL this worker fetches — the feed itself and each enclosure —
+comes from outside, so both go through ``domovoi.net_safety``: http(s)
+only, resolved, never an address inside the house or on the box, and
+re-checked on every redirect. The feed body is fetched here (capped at
+``MAX_FEED_BYTES``) and handed to feedparser as bytes rather than letting
+feedparser open the URL itself, and an enclosure download stops at
+``MAX_ENCLOSURE_BYTES``.
+
 ``requires network`` — the whole worker is gated OFF by default
 (``podcast_feed_poller_enabled``) and skipped under USE_STUBS, exactly like
 the radio sampler / wake-word trainer. Downloaded episodes still play fully
@@ -33,6 +41,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from domovoi import net_safety
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.workers.base import Worker
@@ -40,6 +49,14 @@ from domovoi.workers.base import Worker
 log = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# A podcast feed is XML in the low hundreds of KB; a show with a decade of
+# episodes and long show notes can reach a few MB. 8 MB is generous and
+# still bounded.
+MAX_FEED_BYTES = 8 * 1024 * 1024
+# One episode. Long-form shows run 100-200 MB; 512 MB is far above any real
+# episode and stops a "download" that is really a firehose.
+MAX_ENCLOSURE_BYTES = 512 * 1024 * 1024
 
 
 def _slug(text_: str) -> str:
@@ -107,14 +124,37 @@ def _entry_enclosure(entry: Any) -> str | None:
     return None
 
 
+def fetch_feed_bytes(feed_url: str) -> bytes:
+    """The feed document, fetched through the outbound-URL check (http(s)
+    only, public addresses only, redirects re-checked) and capped at
+    :data:`MAX_FEED_BYTES`. Blocking — call it in a thread."""
+    result = net_safety.fetch_bytes_sync(
+        feed_url,
+        max_bytes=MAX_FEED_BYTES,
+        timeout=30.0,
+        headers={"User-Agent": "Domovoi-podcasts/1.0"},
+    )
+    if result.status_code >= 400:
+        raise RuntimeError(f"feed returned {result.status_code}")
+    return result.content
+
+
+def _parse_feed_blocking(feed_url: str) -> Any:
+    """Fetch the feed ourselves, then parse the BYTES. feedparser would
+    otherwise open the URL itself, and it accepts local paths and
+    non-http schemes — this keeps every podcast fetch on the one checked
+    path."""
+    import feedparser  # local import — optional dep
+
+    return feedparser.parse(fetch_feed_bytes(feed_url))
+
+
 async def poll_subscription(session, sub: dict[str, Any]) -> int:
     """Fetch + parse one subscription's feed, upsert episodes. Returns the
     number of NEW episodes recorded. Network + parse happen off the event
     loop. Feed metadata (title/author/artwork) is refreshed on the sub."""
-    import feedparser  # local import — optional dep
-
     feed_url = sub["feed_url"]
-    parsed = await asyncio.to_thread(feedparser.parse, feed_url)
+    parsed = await asyncio.to_thread(_parse_feed_blocking, feed_url)
     feed = getattr(parsed, "feed", {}) or {}
 
     # Refresh subscription-level metadata.
@@ -284,7 +324,11 @@ async def download_episode(session, episode: dict[str, Any]) -> bool:
     """Download one episode's enclosure into ``podcasts_dir/<sub_slug>/``.
     Updates the row to 'downloaded' (file_path set) or 'failed'. Returns
     success. Chapters from the downloaded file's ID3 tags supersede any the
-    feed carried."""
+    feed carried.
+
+    The enclosure URL comes from the feed, so it goes through the same
+    outbound-URL check as the feed (redirects re-checked hop by hop) and
+    the download stops at :data:`MAX_ENCLOSURE_BYTES`."""
     import httpx
 
     ep_id = episode["id"]
@@ -311,14 +355,26 @@ async def download_episode(session, episode: dict[str, Any]) -> bool:
     await session.commit()
 
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            async with client.stream("GET", url) as r:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await net_safety.open_stream(client, url)
+            try:
                 r.raise_for_status()
                 with dest.open("wb") as fh:
-                    async for chunk in r.aiter_bytes(65536):
+                    async for chunk in net_safety.iter_capped(
+                        r, MAX_ENCLOSURE_BYTES
+                    ):
                         fh.write(chunk)
+            finally:
+                await r.aclose()
     except Exception as e:
         log.warning("podcast download failed ep=%s url=%s: %s", ep_id, url, e)
+        # A partial file from a refused or over-cap transfer must not be
+        # left behind looking like an episode.
+        try:
+            if dest.exists():
+                dest.unlink()
+        except OSError:
+            pass
         await session.execute(
             text("UPDATE podcast_episodes SET download_status='failed', error=:e WHERE id=:id"),
             {"id": ep_id, "e": str(e)[:2000]},

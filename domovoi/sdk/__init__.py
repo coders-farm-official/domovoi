@@ -17,7 +17,9 @@ from __future__ import annotations
 # API class it exposes, the Handler ABC, capability Protocols, the event
 # catalog payloads, the manifest schema, and the band ranges.
 # 1.1.0: added sdk.speech (out-of-turn room announcements for plugins).
-API_VERSION = "1.1.0"
+# 1.2.0: added net_safety (the shared outbound-URL check every fetcher
+#        of a caller-chosen URL goes through).
+API_VERSION = "1.2.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -29,6 +31,7 @@ from domovoi.handlers.base import (  # noqa: E402,F401
     Handler,
     HandlerDisplay,
 )
+from domovoi import net_safety  # noqa: E402,F401
 from domovoi.models import Context, Intent, Response  # noqa: E402,F401
 from domovoi.sdk.assets import AssetAPI, CannedSound  # noqa: E402,F401
 from domovoi.sdk.coreconfig import CoreConfigView  # noqa: E402,F401
@@ -80,6 +83,7 @@ __all__ = [
     "LibraryTrack",
     "MediaCandidate",
     "NowPlayingView",
+    "net_safety",
     "PlaybackAPI",
     "PluginDB",
     "PluginSDK",

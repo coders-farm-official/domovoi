@@ -14,6 +14,12 @@ so the sampler degrades to fingerprint-only matching instead of
 crashing. The ffmpeg invocation is minimal: URL → mono 16 kHz 16-bit
 PCM WAV (~480 KB for 15 s), the shape both the local fingerprinter and
 shazamio handle well.
+
+The URL is a station row's, so it goes through the shared outbound-URL
+check before ffmpeg is spawned, and the argv carries
+``-protocol_whitelist http,https,tcp,tls`` so ffmpeg itself will open
+nothing else (it otherwise reads local files, pipes and concat lists
+happily).
 """
 
 from __future__ import annotations
@@ -26,7 +32,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from domovoi.sdk import net_safety
+
 log = logging.getLogger(__name__)
+
+# The only protocols ffmpeg may open for a grab: the stream itself over
+# http(s) and the transports they ride on. Notably NOT file:, concat:,
+# pipe: or the other input protocols ffmpeg supports by default.
+FFMPEG_PROTOCOL_WHITELIST = "http,https,tcp,tls"
 
 
 @dataclass
@@ -114,7 +127,15 @@ async def grab_to_tempfile(
     16 kHz mono is enough for both identify tiers and produces a
     tempfile ~10× smaller than 44.1 kHz stereo — that matters when the
     sampler is grabbing several streams at once.
+
+    Returns None without spawning anything when ``url`` is not an
+    http(s) URL the server may fetch.
     """
+    reason = await net_safety.acheck_outbound_url(url)
+    if reason is not None:
+        log.warning("radio: refusing to sample %s — %s", url, reason)
+        return None
+
     # Close the fd immediately: ffmpeg writes by path, not fd, and a
     # lingering open handle confuses Windows.
     fd, path = tempfile.mkstemp(prefix="radio-sample-", suffix=".wav")
@@ -124,6 +145,8 @@ async def grab_to_tempfile(
         "ffmpeg",
         "-y",
         "-loglevel", "error",
+        # Before -i: it governs what the INPUT may be.
+        "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
         "-i", url,
         "-t", str(duration_sec),
         "-ac", "1",

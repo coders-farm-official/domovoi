@@ -98,6 +98,7 @@ def web_route_collision_message(route: str, page: str | None) -> str:
 _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.webkit",
     "domovoi.config",
+    "domovoi.net_safety",
     "domovoi.db.session",
     "domovoi.db.repositories",
     "domovoi.admin_auth",
