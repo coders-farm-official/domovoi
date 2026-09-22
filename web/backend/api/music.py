@@ -446,12 +446,60 @@ _UPLOAD_SUBDIR = "uploads"
 # can't fan out into an unbounded extract loop.
 _MAX_ZIP_MEMBERS = 5000
 
+# Decompressed-size caps, checked against each member's DECLARED size
+# (``ZipInfo.file_size``, from the central directory) BEFORE anything is
+# inflated — ``archive.read(m)`` materialises the whole member in memory.
+# zipfile stops reading at the declared size and fails the CRC on a
+# mismatch, so the declared size is a hard bound on what ``read`` returns.
+# 1 GiB per member covers any real audio file (an hour of 96 kHz/24-bit
+# WAV is ~1 GB); 4 GiB per archive covers a boxed set. An archive over
+# either cap is refused whole with 413 before a single byte is inflated.
+_MAX_ZIP_MEMBER_BYTES = 1 * 1024 ** 3
+_MAX_ZIP_TOTAL_BYTES = 4 * 1024 ** 3
+
 
 class LibraryUploadResult(BaseModel):
     saved: int
     files: list[str]            # basenames actually written, in upload order
     skipped: list[str]          # "<name>: <reason>" for anything not saved
     reindex_triggered: bool     # False when the Domovoi server was unreachable
+
+
+def _check_zip_budget(fname: str, members: list[zipfile.ZipInfo]) -> None:
+    """Refuse an archive whose declared decompressed sizes exceed the caps.
+
+    Raises ``HTTPException(413)`` naming the archive and the offending
+    member (or the total). Called before any member is read, so an
+    oversized archive costs the upload bytes and nothing more.
+    """
+    if len(members) > _MAX_ZIP_MEMBERS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{fname}: {len(members)} files exceeds the "
+                f"{_MAX_ZIP_MEMBERS}-file cap"
+            ),
+        )
+    total = 0
+    for m in members:
+        if m.file_size > _MAX_ZIP_MEMBER_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"{fname}: member {_safe_basename(m.filename) or m.filename} "
+                    f"declares {m.file_size} bytes, over the "
+                    f"{_MAX_ZIP_MEMBER_BYTES}-byte per-file cap"
+                ),
+            )
+        total += m.file_size
+        if total > _MAX_ZIP_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"{fname}: archive declares more than "
+                    f"{_MAX_ZIP_TOTAL_BYTES} bytes decompressed, over the cap"
+                ),
+            )
 
 
 def _safe_basename(name: str) -> str:
@@ -542,14 +590,8 @@ async def upload_to_library(
                 skipped.append(f"{fname}: not a valid zip")
                 continue
             members = [m for m in archive.infolist() if not m.is_dir()]
-            if len(members) > _MAX_ZIP_MEMBERS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=(
-                        f"{fname}: {len(members)} files exceeds the "
-                        f"{_MAX_ZIP_MEMBERS}-file cap"
-                    ),
-                )
+            # Member count + declared decompressed sizes, before any read.
+            _check_zip_budget(fname, members)
             for m in members:
                 # Silently skip non-audio zip members (album art, .nfo,
                 # .txt) — they're expected clutter in music archives, not

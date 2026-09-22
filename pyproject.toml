@@ -3,8 +3,16 @@ name = "domovoi"
 version = "1.0.0"
 description = "Domovoi — a local-first home voice assistant"
 requires-python = ">=3.11"
+# Floors are the lowest versions the code is known to work with AND, for
+# the packages that parse untrusted input (starlette, python-multipart,
+# requests, pillow), the first release of the fixed line — do not lower
+# them. The exact versions a deployment runs come from `requirements.lock`
+# (pip-compile, hashed; regenerate with the command in that file's header).
 dependencies = [
     "fastapi>=0.115",
+    # Direct floor on the ASGI toolkit fastapi builds on (fastapi's own
+    # floor is lower): multipart and form parsing live here.
+    "starlette>=0.40",
     "uvicorn[standard]>=0.32",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
@@ -16,7 +24,7 @@ dependencies = [
     "python-mpd2>=3.1",
     # Multipart form parsing for the web dashboard's file uploads (Voices
     # page uploads Piper .onnx models). Required by FastAPI's UploadFile.
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.18",
     # CalculatorHandler uses simpleeval for arithmetic — sandboxed AST
     # evaluation, never builtin eval/exec. Tiny pure-Python dep, kept
     # in core so the handler doesn't gate on an optional extra.
@@ -34,7 +42,7 @@ dependencies = [
     # domovoi/clients/tts.py uses requests for the edge-TTS reachability
     # probe; small and pure-Python, so it lives in core rather than an
     # extra (the TTS fallback chain must import without real-clients).
-    "requests>=2.31",
+    "requests>=2.32",
     # Admin-password hashing (argon2id) for the admin_auth table. Ships in
     # core from 1.0.0 even though the auth endpoints land after the DB
     # baseline — the dependency and the schema arrive together so no

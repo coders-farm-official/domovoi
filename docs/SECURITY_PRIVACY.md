@@ -64,6 +64,17 @@ and whatever tier those apply. A per-room MPD container created before the
 loopback bind existed is recreated on the core's next start (its data
 volume is kept; that room's playback stops once).
 
+### Uploads and dependencies
+
+Browser uploads into the library (`POST /api/music/library/upload`) accept
+zip archives; an archive is refused with `413` before anything is inflated
+when it declares more than 5000 members, a member over 1 GiB, or more than
+4 GiB in total. The third-party packages that parse what comes in over the
+network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
+one-way version floors in `pyproject.toml`, and `requirements.lock` pins
+the exact, hash-checked set a deployment installs — see
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
+
 ### Daily tier (LAN-trust)
 
 Voice, music control, intercom, announcements, timers, reminders, news —
