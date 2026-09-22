@@ -317,6 +317,14 @@ Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 ./domovoi/scripts/dev.sh
 ```
 
+The first thing it does on a fresh checkout is write `domovoi/.env` from
+`.env.example` with a **random Postgres password** (`python -m
+domovoi.env_bootstrap`; both `DATABASE_URL` and the `POSTGRES_PASSWORD`
+line that `docker-compose.yml` reads carry it). Run the stack by hand
+instead? Run that command first, before the first `docker compose up`, so
+the database is initialised with the password your `.env` holds. An
+existing `.env` is never touched.
+
 and in a second terminal, from the repo root:
 
 ```bash
@@ -455,8 +463,37 @@ appliance, and it's the thing Linux makes genuinely easy.
 sudo ufw allow from 192.168.0.0/16 to any port 6369,6370 proto tcp
 ```
 
-Leave Postgres (`6432`) closed to the LAN — nothing outside the server
-needs it. SearXNG already binds to `127.0.0.1` only.
+Postgres (`6432`), Letta (`6283`), SearXNG (`6888`) and every room's MPD
+*control* port (`6650`, `6651`, …) are published on `127.0.0.1` only, so
+no firewall rule is needed to keep them off the LAN — Docker never binds
+them to a LAN interface in the first place. The per-room MPD *stream*
+ports (`8050`, `8051`, …) are the exception: satellites pull the audio
+from them, so they stay LAN-published, and `ufw` must allow them alongside
+`6369`/`6370`:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 8050:8099 proto tcp
+```
+
+**Rotating the Postgres password.** Postgres reads `POSTGRES_PASSWORD`
+only when it initialises the `domovoi-pgdata` volume; after that the
+credential lives in the database, so rotating is three steps:
+
+```bash
+# 1. change it in Postgres (the container is running)
+docker exec -it domovoi-postgres psql -U domovoi -d domovoi \
+  -c "ALTER USER domovoi WITH PASSWORD 'new-secret-here';"
+# 2. put the same value in domovoi/.env, in BOTH lines:
+#      DATABASE_URL=postgresql+asyncpg://domovoi:new-secret-here@localhost:6432/domovoi
+#      POSTGRES_PASSWORD=new-secret-here
+# 3. restart the core and the web backend (systemctl restart domovoi-core domovoi-web)
+```
+
+Flyway picks the new value up from `.env` on its next run (the compose
+file interpolates it). Rotate right away if your install predates the
+random-password bootstrap — its `.env` carries the template default, and
+`python -m domovoi.env_bootstrap` deliberately leaves an existing `.env`
+alone.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:
