@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -226,7 +227,12 @@ fun ChatScreen() {
             },
         )
     } else {
-        ConversationPane(current, onBack = { openThread = null; threads.refresh() })
+        val closeThread = { openThread = null; threads.refresh() }
+        // F-A006: the system back key closes the conversation like the in-app
+        // chevron does (PeopleScreen shape); without this it fell through to app
+        // nav and landed on Music.
+        BackHandler(onBack = closeThread)
+        ConversationPane(current, onBack = closeThread)
     }
 }
 
