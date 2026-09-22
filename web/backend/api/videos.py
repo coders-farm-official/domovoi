@@ -24,10 +24,13 @@ Endpoints:
 Browse/serve security mirrors ``files.py``: the client only ever names a
 ``library_id`` + relative path, every path passes ``safe_join``, walked
 entries are realpath-checked inside their root, and secret-shaped names are
-filtered. Everything here is OPEN (daily tier): the file-content endpoints
-serve the same libraries the Files surface lets any LAN device browse and
-download, and the position store holds only rel paths and timestamps, like
-the podcasts one.
+filtered. Everything here is DEVICE tier (REV-1): the file-content
+endpoints serve the same libraries the Files surface lets a paired
+household client browse, and the position store holds only rel paths and
+timestamps, like the podcasts one. The reads take ``require_device_read``
+— a ``<video src>`` can't set a header, so that gate also accepts the
+dashboard cookie and a ``?device_token=`` query — while the position
+writes take ``require_device`` proper.
 """
 
 from __future__ import annotations
@@ -40,11 +43,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import anyio
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.audio_serve import (
     VIDEO_CONTENT_TYPES,
@@ -63,7 +67,13 @@ from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/videos", tags=["videos"])
+router = APIRouter(
+    prefix="/api/videos",
+    tags=["videos"],
+    # Reads at the device tier; the two position writes add the header-only
+    # gate on top (a cookie must never authorize a write).
+    dependencies=[Depends(require_device_read)],
+)
 
 # Walk bound — bounded fan-out per library (media_walk caps dirs too).
 _MAX_VIDEOS_PER_LIBRARY = 2000
@@ -266,7 +276,7 @@ async def get_position(
     return {"position_sec": row[0], "duration_sec": row[1]}
 
 
-@router.post("/position")
+@router.post("/position", dependencies=[Depends(require_device)])
 async def save_position(body: PositionSave) -> dict[str, bool]:
     """Upsert one resume row. The two ON CONFLICT targets mirror the partial
     unique indexes (person vs anon). Fires the NOTIFY that becomes the
@@ -305,7 +315,7 @@ async def save_position(body: PositionSave) -> dict[str, bool]:
     return {"saved": True}
 
 
-@router.delete("/position")
+@router.delete("/position", dependencies=[Depends(require_device)])
 async def clear_position(body: PositionClear) -> dict[str, bool]:
     """Drop one resume row ("remove from recently played")."""
     async with session_scope() as s:

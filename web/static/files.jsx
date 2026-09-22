@@ -54,10 +54,12 @@ window.OfficeSuite = { officeLoadScript, fmtBytes };
 /* ---- raw / text / download helpers ------------------------ */
 const docRawUrl = (rel) => `/api/documents/raw/${encodeURIComponent(rel)}`;
 const docTextUrl = (rel) => `/api/documents/text/${encodeURIComponent(rel)}`;
-const openDocInNewTab = (rel) => window.open(docRawUrl(rel), '_blank', 'noopener');
+/* Opened/downloaded by the BROWSER, which can't set a header — the daily
+ * read tier takes the household token in the query for exactly this. */
+const openDocInNewTab = (rel) => window.open(withDeviceToken(docRawUrl(rel)), '_blank', 'noopener');
 const downloadDoc = (rel) => {
   const a = document.createElement('a');
-  a.href = docRawUrl(rel);
+  a.href = withDeviceToken(docRawUrl(rel));
   a.download = rel;        // same-origin → forces a download despite inline C-D
   document.body.appendChild(a);
   a.click();
@@ -68,9 +70,13 @@ const downloadDoc = (rel) => {
  * real progress (download-zip sets Content-Length). `onProgress` gets a
  * 0..1 fraction, or null when the length is unknown. */
 const downloadDocsZip = async (relPaths, onProgress) => {
-  const r = await fetch('/api/documents/download-zip', {
+  const r = await fetch(`${API_BASE}/api/documents/download-zip`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    // Bulk-archiving the operator's Documents folder is the admin tier, so
+    // this raw fetch (streamed for the progress bar) sends what apiFetch
+    // would: the bearer plus the preflight-forcing header.
+    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
     body: JSON.stringify({ rel_paths: relPaths }),
   });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -115,7 +121,9 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
         // no-store: always read the file fresh. Without this a browser can
         // serve a cached (often empty, just-created) copy on reopen, making a
         // successful save look like it was lost.
-        const r = await fetch(docTextUrl(rel_path), { cache: 'no-store' });
+        const r = await fetch(`${API_BASE}${docTextUrl(rel_path)}`, {
+          cache: 'no-store', credentials: 'include', headers: apiHeaders(),
+        });
         if (r.status === 415) {
           const j = await r.json().catch(() => ({}));
           if (!cancelled) setState({ status: 'unpreviewable', reason: j.reason || 'binary' });
@@ -134,9 +142,10 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
   const onSave = async () => {
     setSaving(true);
     try {
-      const r = await fetch(docTextUrl(rel_path), {
+      const r = await fetch(`${API_BASE}${docTextUrl(rel_path)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
         body: JSON.stringify({ text }),
       });
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -445,9 +454,7 @@ const LIBRARY_KIND_GROUPS = [
  * the length is unknown. Falls back to the filename in Content-Disposition. */
 const streamFileDownload = async (url, fallbackName, onProgress) => {
   const full = url.startsWith('http') ? url : `${API_BASE}${url}`;
-  let hdrs = {};
-  try { hdrs = (typeof Auth !== 'undefined' && Auth.headers && Auth.headers()) || {}; } catch {}
-  const r = await fetch(full, { credentials: 'include', headers: hdrs });
+  const r = await fetch(full, { credentials: 'include', headers: apiHeaders() });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   const total = Number(r.headers.get('Content-Length')) || 0;
   let name = fallbackName;
@@ -635,9 +642,9 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
   const iso = entry.mtime ? new Date(entry.mtime * 1000).toISOString() : null;
   // Images in ANY library open inline in a new tab via the generic
   // library-image serve (the Files tab owns image browsing).
-  const openImage = () => window.open(
+  const openImage = () => window.open(withDeviceToken(
     `${API_BASE}/api/images/raw?library_id=${encodeURIComponent(libraryId)}`
-    + `&path=${encodeURIComponent(entry.rel)}`, '_blank', 'noopener');
+    + `&path=${encodeURIComponent(entry.rel)}`), '_blank', 'noopener');
   return (
     <div draggable={!!onDragStartEntry}
          onDragStart={(e) => onDragStartEntry && onDragStartEntry(e, entry)}

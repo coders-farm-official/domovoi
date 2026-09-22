@@ -26,6 +26,9 @@
   <script src="/vendor/xspreadsheet/xspreadsheet.js"></script>
 
   <script type="text/babel" data-presets="react" src="auth.js"></script>
+  <!-- Turns rendered markdown back into data before any page shows it.
+       Must load before doc_editor.jsx, which refuses to preview without it. -->
+  <script type="text/babel" data-presets="react" src="sanitize_html.js"></script>
   <script type="text/babel" data-presets="react" src="data.js"></script>
   <script type="text/babel" data-presets="react" src="components.jsx"></script>
   <script type="text/babel" data-presets="react" src="player.jsx"></script>

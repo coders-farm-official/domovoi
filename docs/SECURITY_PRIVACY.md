@@ -46,8 +46,10 @@ flowchart TB
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
-        v1["A turn (/v1/intent), announce, drop-in"]
-        v2["Play/queue music, the room queue,<br/>volume, add-by-query"]
+        v1["The household token every dashboard, phone<br/>and satellite presents"]
+        v2["A turn (/v1/intent), announce, drop-in"]
+        v3["Play/queue music, the room queue,<br/>volume, add-by-query"]
+        v4["Documents, Files, Images and Videos:<br/>list, read, upload, move, import"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -77,11 +79,29 @@ before setup.
 
 The ordinary actions now sit behind it: a text or voice turn
 (`POST /v1/intent`), announcements and drop-in, playback and the room
-queue, per-room volume, add-by-query. A client that presents nothing gets
-`401`; the dashboard cookie alone gets `403`, because rendering a page is
-not the same as acting in a room. The web dashboard forwards whatever the
-browser presented on every hop to the core, so signing in is enough there;
-the Android app and the satellites carry the token itself.
+queue, per-room volume, add-by-query. So do the media surfaces: reading
+the Documents folder, and browsing / downloading / uploading / moving /
+importing across Files, Images and Videos. A client that presents nothing
+gets `401`; the dashboard cookie alone gets `403`, because rendering a page
+is not the same as acting in a room. The web dashboard forwards whatever
+the browser presented on every hop to the core, so signing in is enough
+there; the Android app and the satellites carry the token itself.
+
+**Reads the browser fetches by URL.** An `<img src>`, a `<video src>` and a
+`window.open` cannot set a header, so the READ half of this tier
+(`require_device_read`) also accepts the dashboard's session cookie and the
+same token as a `?device_token=` query parameter. Nothing that writes looks
+at the query — a token in a URL lands in history and logs, which is a
+reasonable price for rendering a thumbnail and not for changing a file.
+
+**What a device id means now.** Files writes still name a `device_id`, and
+the admin block list (`files_device_blocks`) still matches on it or on the
+device's registered name — but only requests that already carry the
+household token (or an admin Bearer) reach that check at all. So an
+unpaired device can't write regardless of what it calls itself, while
+within the household the id stays self-asserted and the block stays
+*household policy* rather than a security boundary, exactly as the room
+queue's does.
 
 **How a client gets it.** The dashboard keeps the token in `localStorage`,
 per server, and sends it on every request; a refusal that names the header
@@ -173,10 +193,12 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Service restart** (bounces `domovoi-core` + `domovoi-web`) | Core: `POST /v1/admin/version/restart`. Dashboard: `POST /api/config/version/restart`. | **Fails closed** — 501 until setup. |
 | **Satellite code push** (makes a Pi download and run fresh code) | Core: `POST /v1/admin/satellite/upgrade`. Dashboard: `POST /api/satellites/{room_id}/upgrade`. | **Fails closed** — 501 until setup. |
 | **Satellite pairing reset / preseed / delete** (lets the next device re-pair as a room; mints a room's token; frees a room name) | Core: `DELETE /v1/admin/satellites/{room_id}/pairing`, `POST .../pairing/preseed`, `DELETE /v1/admin/satellites/{room_id}`. Dashboard: `POST /api/satellites/{room_id}/pairing/reset`, `POST /api/satellites/pending/{id}/adopt`, `DELETE /api/satellites/{room_id}`. | **Fails closed** — 501 until setup. |
+| **Satellite media preparation** (builds the code and the first-boot scripts a Pi will run as root) | Dashboard: the whole `/api/satellites/media/*` router. Reads (`/status`, `/targets`, `/jobs`, `/jobs/{id}/download`, `/jobs/{id}/credentials`) take an admin **read** — the artifact is the code a satellite will run, `/jobs` lists the ids that name it, and `/targets` enumerates the drives plugged into this server. Writes (`/prepare`, `/cancel`, `/cache/refresh`) stay Bearer-only. | Pre-setup grace. The **downloadable zip carries no plaintext passwords**: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard from process memory. A card written directly to a **drive** still carries `domovoi/ap.json` and `domovoi/console.json` — stage 1 reads the first to raise its setup network, and anyone holding the card can read either anyway. |
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token/rotate`. Dashboard: `GET/POST /api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
-| **File deletion** (the one Files verb that destroys something) | Dashboard: `POST /api/files/delete`. Everything else under `/api/files` — browse, download, upload, move, import — and the `/api/images` / `/api/videos` file serves are **daily tier**: a phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
+| **Documents** (the operator's own `~/Documents`, not a shared media library) | Dashboard: `POST /api/documents/create`, `/delete`, `/upload`, `/download-zip`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`, and the same writes through `/api/files` when the target library is `core:documents`. The **reads** (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`) are device tier. | Pre-setup grace. A folder of personal files is a tier above the music library: the household may read it, only the operator changes it or takes a zip of it. |
+| **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
@@ -303,6 +325,34 @@ The trust decision is about the **publisher**, full stop. The bundled
 `plugins/radio` plugin is published by Coders Farm and lives in this repo
 where you can read every line — that's the standard to hold third-party
 plugins to.
+
+## Stored files are data, never pages of the dashboard
+
+A file in a media library is content the household put there — and the
+dashboard is served from the same origin as the routes that hand it back,
+with the operator's session alongside. Two rules keep one from becoming
+the other:
+
+- **A document the browser would execute is downloaded, not rendered.**
+  `GET /api/documents/raw/{path}` and `GET /api/images/raw` serve HTML,
+  XHTML and SVG as `Content-Disposition: attachment` with
+  `X-Content-Type-Options: nosniff` (believe the declared type, don't
+  guess from the bytes) and `Content-Security-Policy: sandbox` (if it is
+  rendered anyway, render it in an opaque origin). PDFs, pictures and
+  everything else still open inline — that's what "open in a new tab" is
+  for. The classifier is `web/backend/api/inline_serve.py`, and it looks
+  at the extension as well as the media type, because a host with a thin
+  mimetypes registry reports `application/octet-stream` for a `.html`.
+- **Rendered markdown is sanitised before it reaches the page.** The
+  document editor's preview runs `marked` output through
+  `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
+  markdown's own elements, drops every `on*` attribute, drops
+  `<script>`/`<style>`/`<iframe>` with their contents, and accepts only
+  relative, `http(s)`, `mailto` and inline raster-image URLs in `href` /
+  `src` (entity-decoded first, so `java&#115;cript:` is refused too).
+  Without the sanitiser loaded there is no preview at all.
+  `domovoi/tests/test_markdown_preview_sanitised.py` renders the real
+  pipeline and asserts on what the preview would put in the page.
 
 ## Data at rest
 

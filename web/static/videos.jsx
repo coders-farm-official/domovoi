@@ -23,12 +23,17 @@ const vidFmtBytes = (n) => {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 };
 
+/* <video src> and <img src> can't carry a header, so these two URLs take
+ * the household device token in the query — the daily READ tier accepts
+ * it there (and nothing that writes does). */
 const vidStreamUrl = (v, download) =>
-  `${API_BASE}/api/videos/stream?library_id=${encodeURIComponent(v.library_id)}`
-  + `&path=${encodeURIComponent(v.rel)}` + (download ? '&download=1' : '');
+  withDeviceToken(
+    `${API_BASE}/api/videos/stream?library_id=${encodeURIComponent(v.library_id)}`
+    + `&path=${encodeURIComponent(v.rel)}` + (download ? '&download=1' : ''));
 const vidPosterUrl = (v) =>
-  `${API_BASE}/api/videos/poster?library_id=${encodeURIComponent(v.library_id)}`
-  + `&path=${encodeURIComponent(v.rel)}`;
+  withDeviceToken(
+    `${API_BASE}/api/videos/poster?library_id=${encodeURIComponent(v.library_id)}`
+    + `&path=${encodeURIComponent(v.rel)}`);
 
 const vidPositionBody = (v) => {
   const body = { library_id: v.library_id, path: v.rel, device_id: SpokenAudio.clientId() };

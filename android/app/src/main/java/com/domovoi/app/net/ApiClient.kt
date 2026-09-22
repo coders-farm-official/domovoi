@@ -122,6 +122,11 @@ class ApiClient(
             if (baseUrl.isBlank()) throw IOException("no server configured")
             val req = Request.Builder()
                 .url(absolute(path))
+                // Makes every call a preflighted one: a multipart or body-less
+                // POST would otherwise be a CORS simple request the server
+                // can't refuse before the side effect lands (WEB-6). The
+                // dashboard sends the same header.
+                .header("X-Requested-With", "DomovoiApp")
                 .method(method, body)
                 .build()
             http.newCall(req).await().use { resp ->

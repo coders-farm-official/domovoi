@@ -28,14 +28,19 @@ const smBytes = (n) => {
  *
  * What the person holding the card needs in order to connect to the
  * satellite they just prepared: the setup network's key, and the console
- * login. Both are already on the card in plaintext (domovoi/ap.json and
- * domovoi/console.json), so showing them here is convenience, not new
- * exposure — it saves pulling the card and mounting it somewhere.
+ * login.
+ *
+ * For a card written straight to a DRIVE both are also on the card
+ * (domovoi/ap.json and domovoi/console.json) — stage 1 reads the first,
+ * and anyone holding the card can read either. The downloadable ZIP
+ * carries NEITHER (WEB-1): an artifact that sits on the server and is
+ * fetched over HTTP is the wrong place for a plaintext password, so this
+ * modal is the only place they appear for a zip build. Its copy says so.
  *
  * They live in the web process's memory and nowhere else, so a restart
- * loses them. The copy says so, and says where to look instead.
+ * loses them.
  */
-const CredentialsModal = ({ creds, onClose }) => {
+const CredentialsModal = ({ creds, zip, onClose }) => {
   const ap = creds.ap;
   const con = creds.console;
   const row = (label, value) => (
@@ -70,9 +75,25 @@ const CredentialsModal = ({ creds, onClose }) => {
 
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 16,
                       paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
-          Write these down now. They are shown from memory and disappear when the
-          dashboard restarts — after that, read <span className="mono">domovoi/ap.json</span> and{' '}
-          <span className="mono">domovoi/console.json</span> from the card itself.
+          {zip ? (
+            <>
+              Write these down now — this is the only place they are shown. The
+              downloaded zip deliberately contains no passwords, and they are held
+              in memory here until the dashboard restarts.
+              {ap && (
+                <> To use the setup network, create{' '}
+                  <span className="mono">domovoi/ap.json</span> on the card's boot
+                  partition with this password (the zip's README has the exact
+                  line).</>
+              )}
+            </>
+          ) : (
+            <>
+              Write these down now. They are shown from memory and disappear when the
+              dashboard restarts — after that, read <span className="mono">domovoi/ap.json</span> and{' '}
+              <span className="mono">domovoi/console.json</span> from the card itself.
+            </>
+          )}
         </div>
         <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onClose}>done</Button>
@@ -152,7 +173,9 @@ const PrepareMediaCard = ({ fire }) => {
 
   const showCredentials = async (job) => {
     try {
-      setCreds(await apiGet(`/api/satellites/media/jobs/${job.id}/credentials`));
+      const c = await apiGet(`/api/satellites/media/jobs/${job.id}/credentials`);
+      // A zip build's passwords exist nowhere else, so the modal says so.
+      setCreds({ ...c, zip: job.target_kind === 'zip' });
     } catch (e) {
       // 404 is the normal case after a dashboard restart, not a fault.
       fire(e.status === 404
@@ -309,7 +332,9 @@ const PrepareMediaCard = ({ fire }) => {
           )}
         </div>
       )}
-      {creds && <CredentialsModal creds={creds} onClose={() => setCreds(null)}/>}
+      {creds && (
+        <CredentialsModal creds={creds} zip={!!creds.zip} onClose={() => setCreds(null)}/>
+      )}
     </div>
   );
 };

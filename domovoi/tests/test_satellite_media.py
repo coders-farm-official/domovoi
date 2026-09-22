@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -135,6 +136,70 @@ def test_builder_writes_overlay_to_fake_boot(fake_repo, tmp_path, monkeypatch):
     assert "dwc2" in cfg
     # Re-running against the same card stays idempotent on the text edits.
     assert overlay.edit_config_txt(cfg) == cfg
+
+
+def test_the_overlay_zip_carries_no_plaintext_passwords(tmp_path, monkeypatch):
+    """WEB-1: the zip lives on the server and is fetched over HTTP, so the
+    setup-AP key and the console password stay out of it — the dashboard
+    shows both once instead. userconf.txt (the password HASH) still ships,
+    so first boot is still unattended, and the README tells the operator
+    how to add the setup-AP file by hand for a portal card."""
+    # Payload assembly is someone else's test (and needs artifacts this box
+    # may not have) — fake it so this one is about the overlay decision
+    # alone, and stays DB-free.
+    async def _assemble(workspace, **kw):
+        payload_dir = Path(workspace) / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        return {"dir": payload_dir, "warnings": [], "plugins": []}
+
+    def _finalize(workspace, payload_dir, stage2, status_helper=None):
+        tar = Path(workspace) / "payload.tar.gz"
+        tar.write_bytes(b"not really a tar")
+        return {"tar": tar, "sha256": "0" * 64, "bytes": tar.stat().st_size}
+
+    monkeypatch.setattr(payload, "assemble", _assemble)
+    monkeypatch.setattr(payload, "finalize", _finalize)
+    monkeypatch.setattr(builder, "BUILDS_ROOT", tmp_path / "builds")
+
+    result = asyncio.run(
+        builder.build(
+            board_id="pi02w",
+            mic_profile="respeaker_2mic_hat_v2",
+            setup_transport="portal",       # the transport that bakes AP creds
+            target_kind="zip",
+            target_mount=None,
+            job_id="zipjob",
+            offline=False,
+        )
+    )
+    import zipfile
+
+    artifact = Path(result["artifact_path"])
+    with zipfile.ZipFile(artifact) as zf:
+        names = zf.namelist()
+        readme = zf.read("README.txt").decode("utf-8")
+        blob = b"".join(zf.read(n) for n in names if not n.endswith(".tar.gz"))
+
+    assert "domovoi/ap.json" not in names
+    assert "domovoi/console.json" not in names
+    assert "domovoi/payload.tar.gz" in names
+    # The password HASH still ships, so first boot stays unattended.
+    # (openssl makes it; a box without openssl ships no userconf at all,
+    # which is the pre-existing behaviour this change doesn't touch.)
+    if shutil.which("openssl"):
+        assert "userconf.txt" in names
+
+    # Neither password appears anywhere in the archive, under any name.
+    creds = result["credentials"]
+    assert creds["ap"]["psk"].encode() not in blob
+    assert creds["console"]["password"].encode() not in blob
+
+    # The operator is told where the passwords are, and how to make the
+    # portal work with a card built this way.
+    assert "no passwords" in readme
+    assert "domovoi/ap.json" in readme
+    assert creds["ap"]["ssid"] in readme
+    assert creds["ap"]["psk"] not in readme
 
 
 def test_builder_refuses_non_boot_target(tmp_path):

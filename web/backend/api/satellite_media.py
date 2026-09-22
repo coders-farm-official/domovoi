@@ -4,8 +4,15 @@ Long builds run as background tasks tracked in ``satellite_media_jobs``
 (V004, cloned from the model_jobs pattern): every progress write fires
 ``pg_notify('satellite_media_jobs_changed', ...)`` which the realtime layer
 maps to the ``satellites.media`` channel, so the card's progress bar is
-live. All mutations are admin-gated: preparing media writes bootstrap
-scripts that run as root on a future satellite.
+live.
+
+**The whole router is admin-gated** (WEB-1). The mutations always were —
+preparing media writes bootstrap scripts that run as root on a future
+satellite — but the reads matter just as much: the artifact a build
+produces is the code a Pi will run, ``/jobs`` lists the small integer ids
+that name it, and ``/targets`` enumerates the drives plugged into the
+server. Reads take ``require_admin_read`` (a Bearer or the dashboard
+cookie), writes keep ``require_admin_mutation``.
 """
 
 from __future__ import annotations
@@ -33,7 +40,13 @@ from web.backend.satellite_adoption import _volume_label  # label pre-filter reu
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/satellites/media", tags=["satellite-media"])
+router = APIRouter(
+    prefix="/api/satellites/media",
+    tags=["satellite-media"],
+    # Router-level, so a route added later is gated by default rather than
+    # by remembering. The mutations add require_admin_mutation on top.
+    dependencies=[Depends(require_admin_read)],
+)
 
 _NOTIFY = "SELECT pg_notify('satellite_media_jobs_changed', :p)"
 
@@ -373,6 +386,11 @@ async def media_cancel(job_id: int) -> dict[str, Any]:
 
 @router.get("/jobs/{job_id}/download")
 async def media_download(job_id: int) -> FileResponse:
+    """The built overlay, for the operator to unzip onto a flashed card.
+
+    Admin-gated with the rest of the router, and since WEB-1 the zip no
+    longer carries the setup-AP or console passwords — those are shown
+    once in the dashboard instead (see ``builder.build``)."""
     job = await _job_row(job_id)
     if job is None or not job.get("artifact_path"):
         raise HTTPException(status_code=404, detail="no artifact for this job")

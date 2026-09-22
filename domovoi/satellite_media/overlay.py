@@ -429,10 +429,22 @@ def write_overlay(
     console: dict | None = None,
     usb_gadget: bool = True,
     usb_host: bool = False,
+    include_credential_files: bool = True,
 ) -> list[str]:
     """Write the overlay onto a mounted boot partition (or any staging
     dir for the zip path). Returns the relative paths written. The tar is
-    COPIED (it may be hundreds of MB; caller pre-checked free space)."""
+    COPIED (it may be hundreds of MB; caller pre-checked free space).
+
+    ``include_credential_files`` writes the two PLAINTEXT sidecars —
+    ``domovoi/ap.json`` (the setup network's key, which stage 1 needs to
+    raise the portal) and ``domovoi/console.json`` (the console password,
+    for the label). They belong on a card the operator is holding: anyone
+    with the card can read it anyway, and stage 1 reads ap.json to decide
+    its transport. They do NOT belong in an artifact that lives on the
+    server and is fetched over HTTP, so the zip path passes False (WEB-1)
+    and the dashboard shows both once instead. ``userconf.txt`` is written
+    either way — it carries the password HASH, which is the point of it.
+    """
     written: list[str] = []
     ddir = boot_dir / "domovoi"
     ddir.mkdir(parents=True, exist_ok=True)
@@ -462,21 +474,22 @@ def write_overlay(
 
     if console is not None:
         # userconf.txt lives at the ROOT of the boot partition — Pi OS looks
-        # for it there, not under our directory.
+        # for it there, not under our directory. It carries the HASH.
         digest = hash_password(console["password"])
         if digest:
             (boot_dir / USERCONF_NAME).write_text(
                 f"{console['username']}:{digest}\n", encoding="utf-8", newline="\n"
             )
             written.append(USERCONF_NAME)
-            # The plaintext, for the label — same trust model as ap.json:
-            # anyone holding the card can read either.
-            (ddir / "console.json").write_text(
-                json.dumps(console, indent=2), encoding="utf-8"
-            )
-            written.append(CONSOLE_JSON_PATH)
+            if include_credential_files:
+                # The plaintext, for the label — same trust model as
+                # ap.json: anyone holding the card can read either.
+                (ddir / "console.json").write_text(
+                    json.dumps(console, indent=2), encoding="utf-8"
+                )
+                written.append(CONSOLE_JSON_PATH)
 
-    if ap is not None:
+    if ap is not None and include_credential_files:
         # Kept out of device-info.json, which is served to adopters.
         (ddir / "ap.json").write_text(json.dumps(ap, indent=2), encoding="utf-8")
         written.append("domovoi/ap.json")

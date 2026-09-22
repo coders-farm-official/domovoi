@@ -198,6 +198,33 @@ const _maybeRequestLogin = (status) => {
   try { if (typeof Auth !== 'undefined') Auth.requestLogin(); } catch {}
 };
 
+// The preflight-forcing header (WEB-6). A multipart or body-less POST is a
+// CORS "simple request" — a page on any other origin can submit one and the
+// side effect lands even though it can't read the answer. A header the
+// fetch spec doesn't allow on a simple request makes the browser preflight
+// the call instead, so the server gets to refuse it first. Every API call
+// from this dashboard carries it; the app sends the same one.
+const REQUESTED_WITH = { 'X-Requested-With': 'XMLHttpRequest' };
+
+// Every header an /api call carries. Exported because a handful of callers
+// need a RAW fetch (streamed downloads with progress, uploads that report
+// bytes) and must send the same set these helpers do.
+const apiHeaders = () => ({ ..._authHeaders(), ...REQUESTED_WITH });
+
+// Media the BROWSER fetches by URL — <img src>, <video src>, window.open —
+// can't carry a header, so the household device token rides in the query
+// for those reads (the server honours it there for reads only). Returns the
+// url unchanged when this browser holds no token yet.
+const DEVICE_TOKEN_KEY = 'domovoi-device-token';
+const deviceToken = () => {
+  try { return localStorage.getItem(DEVICE_TOKEN_KEY) || null; } catch { return null; }
+};
+const withDeviceToken = (url) => {
+  const token = deviceToken();
+  if (!token) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}device_token=${encodeURIComponent(token)}`;
+};
+
 // ─── Resuming an action across a sign-in ────────────────────────────
 //
 // A 401/403 on a mutation used to end the story: the login modal popped
@@ -326,7 +353,7 @@ const apiFetch = (path, opts = {}) => {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
-      ..._authHeaders(),
+      ...apiHeaders(),
       ...(opts.headers || {}),
     },
   });
@@ -393,7 +420,10 @@ const apiUpload = (path, formData) => {
     method: 'POST',
     body: formData,
     credentials: 'include',
-    headers: _authHeaders(),
+    // Deliberately no Content-Type (the browser writes the multipart
+    // boundary) — but the preflight-forcing header rides along, which is
+    // what stops a cross-site form posting here.
+    headers: apiHeaders(),
   });
   return _sendWithAuthRetry(send, { method: 'POST', body: formData });
 };
@@ -819,6 +849,7 @@ const liveRelTime = (iso) => {
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
+  apiHeaders, withDeviceToken,
   stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,

@@ -54,7 +54,7 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/api/documents/text/${encodeURIComponent(rel_path)}`,
-          { cache: 'no-store', credentials: 'include' });
+          { cache: 'no-store', credentials: 'include', headers: apiHeaders() });
         if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
         const j = await r.json();
         if (!cancelled) { setText(j.text || ''); setState({ status: 'ready' }); }
@@ -93,7 +93,10 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
   const onExport = async () => {
     if (dirty) await onSave();
     const a = document.createElement('a');
-    a.href = `${API_BASE}/api/documents/export/doc/${encodeURIComponent(rel_path)}?fmt=docx`;
+    // A browser-driven download, so no header — the daily read tier takes
+    // the household token in the query for exactly this shape of request.
+    a.href = withDeviceToken(
+      `${API_BASE}/api/documents/export/doc/${encodeURIComponent(rel_path)}?fmt=docx`);
     a.download = '';
     document.body.appendChild(a); a.click(); a.remove();
   };
@@ -109,10 +112,20 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'i') { e.preventDefault(); applyTool(DOC_TOOLBAR[1]); }
   };
 
+  /* Markdown may contain raw HTML, so `marked`'s output is whatever the
+   * note's author typed — and this preview renders inside the dashboard's
+   * own page. Everything goes through the sanitiser (sanitize_html.js)
+   * before it reaches the DOM: no script elements, no event handlers, no
+   * javascript: URLs. Without the sanitiser loaded there is no preview at
+   * all; showing the raw output "just this once" is the bug. */
   const previewHtml = React.useMemo(() => {
     if (!preview) return '';
-    try { return window.marked ? window.marked.parse(text) : '<p>preview unavailable</p>'; }
-    catch { return '<p>preview failed</p>'; }
+    if (!window.sanitizeHtml) return '<p>preview unavailable</p>';
+    try {
+      return window.marked
+        ? window.sanitizeHtml(window.marked.parse(text))
+        : '<p>preview unavailable</p>';
+    } catch { return '<p>preview failed</p>'; }
   }, [preview, text]);
 
   return (

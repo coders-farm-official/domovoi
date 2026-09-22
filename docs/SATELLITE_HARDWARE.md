@@ -108,6 +108,22 @@ plug it into the server's USB port, and adopt it from the Satellites page
 (name + Wi-Fi — done). Everything below remains the manual path — still
 the reference for custom setups and debugging.
 
+**Write down the passwords the dashboard shows you when the build
+finishes** — the console login, and for a Wi-Fi setup (portal) card the
+setup network's key. They are held in the web process's memory and
+nowhere else, so a dashboard restart loses them.
+
+- Built **onto a drive**: the card also carries them
+  (`domovoi/ap.json`, `domovoi/console.json`), so you can read them back
+  by mounting it.
+- Downloaded as a **zip**: it deliberately contains neither, because that
+  file sits on the server and is fetched over HTTP. The card still gets
+  `userconf.txt` (the console password's *hash*), so first boot is
+  unattended. For a portal card, create `domovoi/ap.json` on the boot
+  partition yourself with the key the dashboard showed — the zip's
+  README has the exact line. Without it the unit falls back to USB
+  adoption.
+
 ## Step 1 — Flash the SD card
 
 Use Raspberry Pi Imager with **Raspberry Pi OS Lite (64-bit)** (hidden

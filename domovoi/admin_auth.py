@@ -31,6 +31,9 @@ Three gates, from weakest to strongest:
   ``household_device_tokens``, mirrored to ``~/.domovoi/device-token.txt``
   by :func:`ensure_device_token` at boot) OR an admin Bearer. Keeps the
   pre-setup LAN grace so a fresh install still works before setup.
+  :func:`require_device_read` is its read-only half for media the browser
+  fetches by URL: it also takes the dashboard cookie and a
+  ``?device_token=`` query, neither of which may authorize a change.
 * :func:`require_admin_mutation` / :func:`require_admin_read` — the
   **admin tier**: Bearer (or cookie for reads). Keeps the pre-setup grace.
 * :func:`require_admin_security` — the **security tier** (config write,
@@ -762,6 +765,52 @@ async def require_device(request: Request) -> None:
                 "does not authorize device-tier actions"
             ),
         )
+    raise HTTPException(
+        status_code=401,
+        detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
+    )
+
+
+# Query parameter carrying the household token for the one class of caller
+# that cannot set a header: bytes the BROWSER fetches by URL (``<img src>``,
+# ``<video src>``, ``window.open``) and the Android media loaders. Honored
+# ONLY by :func:`require_device_read` — never by a gate that authorizes a
+# change.
+DEVICE_TOKEN_QUERY = "device_token"
+
+
+async def require_device_read(request: Request) -> None:
+    """Dependency for DEVICE-TIER READS — the media serves the dashboard
+    points at rather than fetches: thumbnails, posters, video streams,
+    image/document raw serves, file downloads.
+
+    Accepts everything :func:`require_device` does, plus two credentials a
+    read may safely take and a mutation may not:
+
+    * the **dashboard cookie** — a GET that only renders bytes carries no
+      CSRF risk (that is why ``require_admin_read`` accepts it too), and a
+      browser that has just reloaded holds the cookie and nothing else
+      until the operator signs in again;
+    * ``?device_token=`` — an ``<img>``/``<video>``/``window.open`` request
+      cannot carry a header at all, so the household token may ride in the
+      query for these reads. It is the same secret either way; putting it
+      in a URL costs referrer/-log exposure, which is why nothing that
+      writes will look at it.
+
+    Nothing here loosens :func:`require_device`: no credential at all is
+    still 401.
+    """
+    result = await check_device_request(request)
+    if result in ("ok", "admin", "pre-setup", "cookie-only"):
+        return
+    candidate = (request.query_params.get(DEVICE_TOKEN_QUERY) or "").strip()
+    if candidate:
+        try:
+            async with session_scope() as s:
+                if await validate_device_token(s, candidate):
+                    return
+        except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+            log.warning("device read check failed: %s", e)
     raise HTTPException(
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",

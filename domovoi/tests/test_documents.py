@@ -19,8 +19,20 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from domovoi.config import settings
+from domovoi.tests.auth_testkit import install_fake_db
 from web.backend.api import documents as docs
 from web.backend.main import app
+
+
+@pytest.fixture(autouse=True)
+def _pre_setup_install(monkeypatch):
+    """Every route here now wears an auth gate (WEB-2), and those gates
+    ask the database who the caller is. This module is about DOCUMENT
+    behaviour, not about auth, so the primitives are faked to a fresh
+    install (no admin password yet ⇒ the pre-setup grace) and the tests
+    stay DB-free rather than growing a ``requires_db`` skip. Who may call
+    what is proven in test_web_media_auth.py."""
+    install_fake_db(monkeypatch, admin=False)
 
 
 @pytest.fixture

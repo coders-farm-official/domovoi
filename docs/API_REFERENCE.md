@@ -434,12 +434,12 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites/{room_id}/dropin/phone-info` | Open | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). |
 | `GET /v1/satellite-plugins/manifest` (core) | Open | — | `{files: {"<slug>/<rel>": sha256}, meta: {slug: {...}}}` — enabled plugins' `[satellite]` payloads; satellites mirror it like the code channel. |
 | `GET /v1/satellite-plugins/{path}` (core) | Open | — | One payload file by its `<slug>/<rel>` channel path. |
-| `GET /api/satellites/media/status` | Open | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
-| `GET /api/satellites/media/targets` | Open | — | Removable drives that look like a flashed Pi boot partition. |
+| `GET /api/satellites/media/status` | **Admin (read)** | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
+| `GET /api/satellites/media/targets` | **Admin (read)** | — | Removable drives that look like a flashed Pi boot partition. |
 | `POST /api/satellites/media/prepare` | **Admin (Bearer)** | `{board, mic_profile, target: {kind: drive\|zip, token?}, offline?}` | Start (or attach to) a media build; progress rides the `satellites.media` realtime channel. |
-| `GET /api/satellites/media/jobs` | Open | `?limit` | Recent build jobs (no server paths; `has_artifact` flags downloadables). |
+| `GET /api/satellites/media/jobs` | **Admin (read)** | `?limit` | Recent build jobs (no server paths; `has_artifact` flags downloadables). |
 | `POST /api/satellites/media/jobs/{id}/cancel` | **Admin (Bearer)** | — | Mark a build cancelled (best-effort). |
-| `GET /api/satellites/media/jobs/{id}/download` | Open | — | The overlay zip for a `kind=zip` build. |
+| `GET /api/satellites/media/jobs/{id}/download` | **Admin (read)** | — | The overlay zip for a `kind=zip` build. Since WEB-1 it carries no plaintext passwords: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard (`/jobs/{id}/credentials`, memory only). A card written straight to a **drive** still gets `domovoi/ap.json` + `domovoi/console.json`, which stage 1 needs. |
 | `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). |
 | `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off). |
 | `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
@@ -546,18 +546,33 @@ picked up by the core's background trainer. The default wake word is
 
 ### 3.13 Files (multi-library browser)
 
-**Open** (daily tier) with one exception: `POST /delete` takes
-`require_admin_mutation` (Bearer only), because it is the one verb that
-destroys something. Browsing, downloading, uploading, moving and importing
-need no admin — the same posture as playing music or editing a room queue.
-What keeps the open writes governable is the device model the room queue
-uses (§3.6): every write names the calling `device_id` (**required** — a
-blocklist anyone evades by omitting the field is no blocklist), and an admin
-can take file writes away from a named device with the **device blocks**
-below. Reads are never blocked; `browse` reports `writable` /
+**Device tier** (`X-Device-Token` or an admin Bearer; the byte serves also
+take the dashboard cookie and a `?device_token=` query, because an `<img
+src>` can't set a header) with three exceptions that take **admin
+(mutation)**:
+
+- `POST /delete` — the one verb that destroys something;
+- `GET /download` when the path is a **directory** — the server builds the
+  zip in memory and hands back a whole tree in one request;
+- any write whose target library is **`core:documents`** (§3.14) or a
+  **removable drive**.
+
+Everything else — browsing, downloading a file, uploading, moving,
+importing — belongs to the household: a paired phone shouldn't need the
+admin password to drop a file into the music folder. The pre-setup grace is
+kept throughout.
+
+The device model the room queue uses (§3.6) still rides on top: every write
+names the calling `device_id` (**required** — a blocklist anyone evades by
+omitting the field is no blocklist), and an admin can take file writes away
+from a named device with the **device blocks** below. What the token
+changed is what that id means: only a caller already holding the household
+credential reaches the block check, so an unpaired device can't write
+whatever it calls itself. Within the household the id stays self-asserted,
+so the block is household policy rather than a security boundary — same as
+the queue's. Reads are never blocked; `browse` reports `writable` /
 `blocked_reason` for the calling device so a client can disable its own
-controls and say why. Like the queue blocklist this is household policy, not
-a security boundary — device ids are self-asserted.
+controls and say why.
 
 This is the generic surface behind the **Files** tab: one router browses/
 downloads/uploads/deletes/imports across every root the dashboard exposes —
@@ -576,8 +591,8 @@ every listing/serve/copy.
 |---|---|---|
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
 | `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
-| `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). `404` missing · `413` cap · `400` traversal. |
-| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `403` non-editable **or device blocked** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
+| `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
+| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or an admin-write library (Documents / removable) without an admin session · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
 | `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path, device_id }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only **or device blocked** · `404` missing target dir · `422` no `device_id`. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path, device_id }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `403` device blocked · `409` source not removable / target not importable · `410` ejected source · `404` missing · `422` no `device_id`. |
@@ -592,7 +607,12 @@ credentials forwarded; `audiobooks` runs the in-process indexer; `podcasts` /
 
 ### 3.14 Documents (homegrown editors)
 
-All **Open**. The former OnlyOffice/Collabora sidecars — and with them the
+**Reads are device tier** (`X-Device-Token`, an admin Bearer, the dashboard
+cookie, or `?device_token=` for the browser-fetched `/raw` and `/export`
+URLs); **writes and `/download-zip` are admin tier** (`Authorization:
+Bearer`). `documents_dir` is the operator's own `~/Documents`, so the
+household reads it and the operator changes it. Both keep the pre-setup
+grace. The former OnlyOffice/Collabora sidecars — and with them the
 open/close locks, JWT capability tokens, save callbacks, and WOPI routes —
 are retired. Editing is homegrown/in-page: a markdown doc editor
 (`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
@@ -603,20 +623,20 @@ row's `category` tells the UI how to open it
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/documents` | `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
-| `POST /api/documents/upload` | multipart | Upload documents. |
-| `POST /api/documents/delete` | `DeleteRequest` | Delete documents. |
-| `POST /api/documents/download-zip` | `ZipRequest` | Zip + download a selection. |
-| `GET /api/documents/text/{rel_path}` | — | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | `TextWriteRequest` | Write a text/markdown file. |
-| `GET /api/documents/sheet/{rel_path}` | — | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
-| `PUT /api/documents/sheet/{rel_path}` | `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
-| `GET /api/documents/export/doc/{rel_path}` | `?fmt=docx` | Export markdown/text as .docx (python-docx). |
-| `GET /api/documents/export/sheet/{rel_path}` | `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
-| `GET /api/documents/raw/{rel_path}` | — | Raw file bytes (inline). |
-| `POST /api/documents/drawings/read` | `DrawingReadRequest` | Read a drawing document. |
-| `POST /api/documents/drawings/write` | `DrawingWriteRequest` | Save a drawing. |
+| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
+| `POST /api/documents/create` | **Admin** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
+| `POST /api/documents/upload` | **Admin** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
+| `POST /api/documents/delete` | **Admin** · `DeleteRequest` | Delete documents. |
+| `POST /api/documents/download-zip` | **Admin** · `ZipRequest` | Zip + download a selection. |
+| `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
+| `PUT /api/documents/text/{rel_path}` | **Admin** · `TextWriteRequest` | Write a text/markdown file. |
+| `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
+| `PUT /api/documents/sheet/{rel_path}` | **Admin** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
+| `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
+| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
+| `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
+| `POST /api/documents/drawings/write` | **Admin** · `DrawingWriteRequest` | Save a drawing. |
 
 ### 3.15 Podcasts and audiobooks
 
@@ -648,11 +668,13 @@ Videos are discovered live from the same media-library registry the Files
 tab uses — any video file (`.mp4` `.m4v` `.mov` `.webm` `.mkv`) inside any
 core / plugin / removable library appears, keyed by `(library_id, rel_path)`.
 Nothing is indexed into the DB except resume positions (`video_positions`,
-per device × person, like the podcasts store). All **Open** (daily tier):
-the file-content endpoints serve the same libraries the Files surface
-(§3.13) lets any LAN device browse and download, and the position store is
-Open like the podcast one. Position saves fire the `video_positions.changed`
-WS event.
+per device × person, like the podcasts store). All **device tier**: the
+file-content endpoints serve the same libraries the Files surface (§3.13)
+lets a paired household client browse, so the reads take
+`X-Device-Token` / an admin Bearer / the dashboard cookie / a
+`?device_token=` query (a `<video src>` can't set a header), and the two
+position writes take the header-only form of the same gate. Position saves
+fire the `video_positions.changed` WS event.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -668,10 +690,12 @@ WS event.
 
 Two generic endpoints over the media-library registry, keyed by
 `(library_id, rel_path)` with the same containment as the Files surface.
-Both **Open** (daily tier) — they serve the same libraries any LAN device
-can browse in §3.13, and a phone that can list a folder should see its
-thumbnails. The Files tab's per-row **Open** action for images uses `/raw`;
-`/thumb` backs image tiles anywhere the dashboard needs one.
+Both **device tier** — they serve the same libraries a paired household
+client can browse in §3.13, and a phone that can list a folder should see
+its thumbnails. Because an `<img src>` can't set a header, both also take
+the dashboard cookie and a `?device_token=` query. The Files tab's per-row
+**Open** action for images uses `/raw`; `/thumb` backs image tiles anywhere
+the dashboard needs one.
 
 Image *generation* is not a core feature — it ships as the separately
 installed **Image Generation plugin** (Coders Farm,
@@ -684,7 +708,7 @@ Images screen.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/images/thumb` | `?library_id=&path=&size=s\|m\|l\|xl` | Pillow-resized WebP thumbnail from the size-bucketed cache; `204` for undecodable files. |
-| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). |
+| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin. |
 
 ### 3.18 Chat
 
