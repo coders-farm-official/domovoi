@@ -523,18 +523,33 @@ picked up by the core's background trainer. The default wake word is
 
 ### 3.13 Files (multi-library browser)
 
-**Open** (daily tier) with one exception: `POST /delete` takes
-`require_admin_mutation` (Bearer only), because it is the one verb that
-destroys something. Browsing, downloading, uploading, moving and importing
-need no admin — the same posture as playing music or editing a room queue.
-What keeps the open writes governable is the device model the room queue
-uses (§3.6): every write names the calling `device_id` (**required** — a
-blocklist anyone evades by omitting the field is no blocklist), and an admin
-can take file writes away from a named device with the **device blocks**
-below. Reads are never blocked; `browse` reports `writable` /
+**Device tier** (`X-Device-Token` or an admin Bearer; the byte serves also
+take the dashboard cookie and a `?device_token=` query, because an `<img
+src>` can't set a header) with three exceptions that take **admin
+(mutation)**:
+
+- `POST /delete` — the one verb that destroys something;
+- `GET /download` when the path is a **directory** — the server builds the
+  zip in memory and hands back a whole tree in one request;
+- any write whose target library is **`core:documents`** (§3.14) or a
+  **removable drive**.
+
+Everything else — browsing, downloading a file, uploading, moving,
+importing — belongs to the household: a paired phone shouldn't need the
+admin password to drop a file into the music folder. The pre-setup grace is
+kept throughout.
+
+The device model the room queue uses (§3.6) still rides on top: every write
+names the calling `device_id` (**required** — a blocklist anyone evades by
+omitting the field is no blocklist), and an admin can take file writes away
+from a named device with the **device blocks** below. What the token
+changed is what that id means: only a caller already holding the household
+credential reaches the block check, so an unpaired device can't write
+whatever it calls itself. Within the household the id stays self-asserted,
+so the block is household policy rather than a security boundary — same as
+the queue's. Reads are never blocked; `browse` reports `writable` /
 `blocked_reason` for the calling device so a client can disable its own
-controls and say why. Like the queue blocklist this is household policy, not
-a security boundary — device ids are self-asserted.
+controls and say why.
 
 This is the generic surface behind the **Files** tab: one router browses/
 downloads/uploads/deletes/imports across every root the dashboard exposes —
@@ -553,8 +568,8 @@ every listing/serve/copy.
 |---|---|---|
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
 | `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
-| `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). `404` missing · `413` cap · `400` traversal. |
-| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `403` non-editable **or device blocked** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
+| `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
+| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or an admin-write library (Documents / removable) without an admin session · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
 | `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path, device_id }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only **or device blocked** · `404` missing target dir · `422` no `device_id`. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path, device_id }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `403` device blocked · `409` source not removable / target not importable · `410` ejected source · `404` missing · `422` no `device_id`. |
@@ -630,11 +645,13 @@ Videos are discovered live from the same media-library registry the Files
 tab uses — any video file (`.mp4` `.m4v` `.mov` `.webm` `.mkv`) inside any
 core / plugin / removable library appears, keyed by `(library_id, rel_path)`.
 Nothing is indexed into the DB except resume positions (`video_positions`,
-per device × person, like the podcasts store). All **Open** (daily tier):
-the file-content endpoints serve the same libraries the Files surface
-(§3.13) lets any LAN device browse and download, and the position store is
-Open like the podcast one. Position saves fire the `video_positions.changed`
-WS event.
+per device × person, like the podcasts store). All **device tier**: the
+file-content endpoints serve the same libraries the Files surface (§3.13)
+lets a paired household client browse, so the reads take
+`X-Device-Token` / an admin Bearer / the dashboard cookie / a
+`?device_token=` query (a `<video src>` can't set a header), and the two
+position writes take the header-only form of the same gate. Position saves
+fire the `video_positions.changed` WS event.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -650,10 +667,12 @@ WS event.
 
 Two generic endpoints over the media-library registry, keyed by
 `(library_id, rel_path)` with the same containment as the Files surface.
-Both **Open** (daily tier) — they serve the same libraries any LAN device
-can browse in §3.13, and a phone that can list a folder should see its
-thumbnails. The Files tab's per-row **Open** action for images uses `/raw`;
-`/thumb` backs image tiles anywhere the dashboard needs one.
+Both **device tier** — they serve the same libraries a paired household
+client can browse in §3.13, and a phone that can list a folder should see
+its thumbnails. Because an `<img src>` can't set a header, both also take
+the dashboard cookie and a `?device_token=` query. The Files tab's per-row
+**Open** action for images uses `/raw`; `/thumb` backs image tiles anywhere
+the dashboard needs one.
 
 Image *generation* is not a core feature — it ships as the separately
 installed **Image Generation plugin** (Coders Farm,

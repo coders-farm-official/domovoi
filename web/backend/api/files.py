@@ -7,21 +7,40 @@ removable drives), all resolved server-side by :mod:`files_security`. The
 client only ever sends a ``library_id`` + a **relative** path; the absolute
 ``root_path`` is never serialized.
 
-**Trust posture (daily tier, one exception).** Browsing, downloading,
-uploading, moving and importing are OPEN on the LAN — the same posture as
-playing music or editing a room queue; a household's phones shouldn't need
-the admin password to drop a file into the music folder. Only ``/delete``
-takes ``require_admin_mutation``: it's the one verb that destroys something.
+**Trust posture (device tier, with three exceptions).** Browsing,
+downloading a file, uploading, moving and importing belong to the
+HOUSEHOLD: a paired phone shouldn't need the admin password to drop a
+file into the music folder. They take ``require_device`` — a valid
+``X-Device-Token`` or an admin Bearer — and the byte serves take its read
+half (``require_device_read``), which also accepts the dashboard cookie
+and a ``?device_token=`` query because an ``<img src>`` cannot set a
+header. The pre-setup grace is kept throughout, so a fresh install still
+works before an admin password exists.
 
-What keeps the open writes governable is the same device model the room
-queue uses (:mod:`web.backend.api.music_queue`): every write names the
-calling ``device_id`` (required — a blocklist anyone evades by omitting the
-field is no blocklist), and an admin can take file writes away from a named
-device with ``files_device_blocks`` (V012). Reads are never blocked; the
-browse response carries ``writable`` / ``blocked_reason`` for the calling
-device so a client can disable its own controls and say why. Like the queue
-blocklist this is household policy, not a security boundary — device ids
-are self-asserted.
+Three things sit a tier above that (REV-1, resolved 2026-09-22):
+
+* ``/delete`` — the one verb that destroys something;
+* a ``/download`` whose path is a **directory** — the server builds the
+  zip in memory, and handing a whole tree to anything on the LAN is not
+  an ordinary daily action;
+* any write whose target library is **``core:documents``** (the
+  operator's own ``~/Documents``, see :mod:`web.backend.api.documents`)
+  or a **removable drive**.
+
+Each of those takes the admin tier instead.
+
+The device model the room queue uses (:mod:`web.backend.api.music_queue`)
+still rides on top: every write names the calling ``device_id`` (required
+— a blocklist anyone evades by omitting the field is no blocklist), and an
+admin can take file writes away from a named device with
+``files_device_blocks`` (V012). What changed with the token is what that
+id means: only a caller who already holds the household credential gets
+as far as the block check, so an unpaired device cannot write whatever it
+calls itself. WITHIN the household the id is still self-asserted, so the
+block remains household policy rather than a security boundary — same as
+the queue's. Reads are never blocked; the browse response carries
+``writable`` / ``blocked_reason`` for the calling device so a client can
+disable its own controls and say why.
 
 This module is **additive** — it does NOT touch ``/api/documents`` (design's
 load-bearing decision): the homegrown editors keep their own surface, and the
@@ -50,7 +69,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_device,
+    require_device_read,
+)
 from web.backend.api.audio_serve import (
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
@@ -72,6 +96,7 @@ from web.backend.api.files_security import (
     is_sensitive_name,
     safe_join,
 )
+from web.backend.api.csrf_guard import require_requested_with
 from web.backend.api.music import _safe_basename, _unique_path
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, post_admin
@@ -84,6 +109,23 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 # delete / a dir zip / an import copytree against unbounded work.
 _MAX_TREE_MEMBERS = 5000
 _MAX_IMPORT_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB total per import
+
+# Libraries a household device may READ but not write into: the operator's
+# personal Documents folder, and every removable drive. A write here needs
+# the admin tier even from a paired device (REV-1).
+ADMIN_WRITE_LIBRARY_IDS: frozenset[str] = frozenset({"core:documents"})
+
+
+def _needs_admin_write(lib: MediaLibrary) -> bool:
+    return lib.id in ADMIN_WRITE_LIBRARY_IDS or lib.kind == "removable"
+
+
+async def _assert_admin_for(lib: MediaLibrary, request: Request) -> None:
+    """Raise 401/403 when this library's writes are admin-only and the
+    caller isn't one. Called with the RESOLVED target library, so the
+    answer never depends on a client-supplied name for it."""
+    if _needs_admin_write(lib):
+        await require_admin_mutation(request)
 
 
 # ─── Registry resolution ─────────────────────────────────────────────────────
@@ -326,7 +368,7 @@ async def _assert_can_write(device_id: str) -> None:
 
 
 # ─── GET /libraries ──────────────────────────────────────────────────────────
-@router.get("/libraries")
+@router.get("/libraries", dependencies=[Depends(require_device_read)])
 async def list_libraries() -> dict[str, Any]:
     """Rebuild the registry fresh and return the public records (root_path
     stripped), ordered core, plugin, removable."""
@@ -335,7 +377,7 @@ async def list_libraries() -> dict[str, Any]:
 
 
 # ─── GET /browse ─────────────────────────────────────────────────────────────
-@router.get("/browse")
+@router.get("/browse", dependencies=[Depends(require_device_read)])
 async def browse(
     library_id: str = Query(...),
     path: str = Query(""),
@@ -407,7 +449,7 @@ async def browse(
 
 
 # ─── GET /download ───────────────────────────────────────────────────────────
-@router.get("/download")
+@router.get("/download", dependencies=[Depends(require_device_read)])
 async def download(
     request: Request,
     library_id: str = Query(...),
@@ -415,7 +457,11 @@ async def download(
 ):
     """Download a file (as an attachment) or a directory (server-built zip with
     a member cap). Audio uses ``serve_audio_range`` (Range/206); everything else
-    is a plain attachment ``FileResponse``."""
+    is a plain attachment ``FileResponse``.
+
+    A FILE is device tier. A DIRECTORY is not: the zip is built in memory
+    and hands back a whole tree in one request, so it asks for an admin
+    session (REV-1)."""
     lib = await _resolve_library(library_id)
     root = lib.root_path
     target = safe_join(root, path)
@@ -425,6 +471,7 @@ async def download(
         raise HTTPException(status_code=404, detail="not found")
 
     if target.is_dir():
+        await require_admin_read(request)
         return _zip_directory(target, root)
 
     if target.suffix.lower() in AUDIO_EXTENSIONS:
@@ -477,7 +524,13 @@ def _zip_directory(target: Path, root: Path) -> Response:
 
 
 # ─── POST /upload ────────────────────────────────────────────────────────────
-@router.post("/upload", response_model=UploadResponse)
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    # Multipart, so also the preflight-forcing header (WEB-6): without it a
+    # page on any origin could auto-submit this form.
+    dependencies=[Depends(require_device), Depends(require_requested_with)],
+)
 async def upload(
     request: Request,
     library_id: str = Form(...),
@@ -491,6 +544,7 @@ async def upload(
     deduped target re-containment-checked before write."""
     await _assert_can_write(device_id)
     lib = await _resolve_library(library_id)
+    await _assert_admin_for(lib, request)
     if not lib.editable:
         raise HTTPException(status_code=403, detail="library is not editable")
     root = lib.root_path
@@ -610,7 +664,7 @@ def _confined_rmtree(directory: Path, root: Path, budget: list[int]) -> None:
 
 
 # ─── POST /import ────────────────────────────────────────────────────────────
-@router.post("/import", response_model=ImportResponse)
+@router.post("/import", response_model=ImportResponse, dependencies=[Depends(require_device)])
 async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
     """Copy a file/dir from a removable source into an importable library.
     Open (daily tier); ``403`` when the calling device is blocked. Server-side
@@ -619,6 +673,7 @@ async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
     await _assert_can_write(req.device_id)
     source = await _resolve_library(req.source_library_id)
     target = await _resolve_library(req.target_library_id)
+    await _assert_admin_for(target, request)
     if source.kind != "removable":
         raise HTTPException(status_code=409, detail="source must be a removable drive")
     if not target.importable:
@@ -668,7 +723,7 @@ async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
 
 
 # ─── POST /move ──────────────────────────────────────────────────────────────
-@router.post("/move", response_model=MoveResponse)
+@router.post("/move", response_model=MoveResponse, dependencies=[Depends(require_device)])
 async def move(request: Request, req: MoveRequest) -> MoveResponse:
     """Move files and folders into another folder — the drag-and-drop verb.
     Open (daily tier); ``403`` when the calling device is blocked.
@@ -701,6 +756,10 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
     await _assert_can_write(req.device_id)
     source = await _resolve_library(req.source_library_id)
     target = await _resolve_library(req.target_library_id)
+    # A move both writes the target and REMOVES from the source, so either
+    # side being an admin-write library makes the whole move one.
+    await _assert_admin_for(target, request)
+    await _assert_admin_for(source, request)
     if not source.editable:
         raise HTTPException(
             status_code=403,

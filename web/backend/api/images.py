@@ -14,9 +14,11 @@ installed Image Generation plugin (Coders Farm), which manages a local
 ComfyUI engine and serves its own pages/routes under
 ``/api/plugins/imagegen``.
 
-Both endpoints are OPEN (daily tier) — they serve the same libraries the
-Files surface lets any device on the LAN browse and download, and a phone
-that can list a folder should be able to see the thumbnails in it. Every
+Both endpoints are DEVICE tier (``require_device_read``, REV-1): they
+serve the same libraries the Files surface lets a paired household client
+browse, and a phone that can list a folder should be able to see the
+thumbnails in it. Because an ``<img src>`` cannot set a header, that gate
+also takes the dashboard cookie and a ``?device_token=`` query. Every
 path passes the same containment the Files surface uses: the client only
 ever names a ``library_id`` + relative path.
 """
@@ -28,9 +30,10 @@ import logging
 from pathlib import Path
 
 import anyio
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
+from domovoi.admin_auth import require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.documents import _IMAGE_EXTS
 from web.backend.api.files_security import MediaLibrary, build_libraries, safe_join
@@ -38,7 +41,11 @@ from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/images", tags=["images"])
+router = APIRouter(
+    prefix="/api/images",
+    tags=["images"],
+    dependencies=[Depends(require_device_read)],
+)
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset(_IMAGE_EXTS)
 

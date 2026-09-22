@@ -25,8 +25,12 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import web.backend.api.files as files_api
+import web.backend.api.images as images_api
+import web.backend.api.videos as videos_api
 from domovoi.config import settings
 from domovoi.tests.auth_testkit import HEADER, bearer, install_fake_db
+from web.backend.api.files_security import MediaLibrary
 from web.backend.main import app
 
 ADMIN_TOKEN = "admin-token"
@@ -185,3 +189,235 @@ def test_a_fresh_install_can_still_use_documents_before_setup(unclaimed, docs_di
     assert c.get("/api/documents").status_code == 200
     r = c.put("/api/documents/text/notes.md", json={"text": "owned"})
     assert r.status_code == 200, r.text
+
+
+# ═══ REV-1 · Files, Images, Videos ════════════════════════════════════
+
+
+@pytest.fixture
+def libraries(monkeypatch, tmp_path):
+    """A music library (ordinary), the Documents library (admin writes)
+    and a removable drive, each rooted in a tmp dir. The device-block
+    lookup is stubbed to "not blocked" — whose writes are blocked is
+    test_files_api.py's subject, not this module's."""
+    roots = {}
+    for name in ("music", "documents", "usb"):
+        root = tmp_path / name
+        root.mkdir()
+        roots[name] = root
+    (roots["music"] / "song.mp3").write_bytes(b"aa")
+    (roots["music"] / "Beatles").mkdir()
+    (roots["music"] / "clip.mp4").write_bytes(b"vv")
+    (roots["music"] / "cat.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (roots["usb"] / "x.mp3").write_bytes(b"x")
+
+    def _lib(lib_id, label, root, **kw):
+        base = dict(
+            id=lib_id, label=label, kind="core", icon="music", kind_icon="folder",
+            owner=None, root_path=root, editable=True, importable=True,
+            doc_editing=False, reindex_kind=None, present=True,
+        )
+        base.update(kw)
+        return MediaLibrary(**base)
+
+    libs = [
+        _lib("core:music", "Music", roots["music"]),
+        _lib("core:documents", "Documents", roots["documents"], doc_editing=True),
+        _lib("removable:E", "USB (E:)", roots["usb"], kind="removable",
+             editable=False, importable=False),
+    ]
+
+    async def _build():
+        return list(libs)
+
+    async def _not_blocked(_device_id):
+        return None
+
+    async def _no_reindex(_kind, _request):
+        return False
+
+    for module in (files_api, images_api, videos_api):
+        monkeypatch.setattr(module, "build_libraries", _build)
+    monkeypatch.setattr(files_api, "_block_status", _not_blocked)
+    monkeypatch.setattr(files_api, "_trigger_reindex", _no_reindex)
+    return roots
+
+
+FILE_READS = [
+    ("/api/files/libraries", {}),
+    ("/api/files/browse", {"library_id": "core:music", "path": ""}),
+    ("/api/files/download", {"library_id": "core:music", "path": "song.mp3"}),
+    ("/api/images/raw", {"library_id": "core:music", "path": "cat.png"}),
+    ("/api/videos/list", {}),
+    ("/api/videos/stream", {"library_id": "core:music", "path": "clip.mp4"}),
+]
+FILE_READ_IDS = [p for p, _ in FILE_READS]
+
+
+@pytest.mark.parametrize(("path", "params"), FILE_READS, ids=FILE_READ_IDS)
+def test_browsing_and_downloading_needs_a_device_token_or_a_session(
+    claimed, libraries, path, params
+):
+    c = _client()
+    assert c.get(path, params=params).status_code == 401
+    assert c.get(path, params=params, headers={HEADER: "stale"}).status_code == 401
+
+
+@pytest.mark.parametrize(("path", "params"), FILE_READS, ids=FILE_READ_IDS)
+def test_a_paired_device_browses_and_downloads(claimed, libraries, path, params):
+    c = _client()
+    assert c.get(path, params=params, headers=DEVICE).status_code in (200, 206)
+    assert c.get(path, params=params, headers=ADMIN).status_code in (200, 206)
+    # And by URL, for the <img>/<video>/window.open shapes.
+    assert c.get(
+        path, params={**params, "device_token": DEVICE_TOKEN}
+    ).status_code in (200, 206)
+
+
+def test_uploading_moving_and_importing_need_a_device_token(claimed, libraries):
+    c = _client()
+    up = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
+        files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        headers=XRW,
+    )
+    assert up.status_code == 401
+    mv = c.post("/api/files/move", json={
+        "source_library_id": "core:music", "paths": ["song.mp3"],
+        "target_library_id": "core:music", "target_path": "Beatles",
+        "device_id": "browser-test",
+    })
+    assert mv.status_code == 401
+    im = c.post("/api/files/import", json={
+        "source_library_id": "removable:E", "source_path": "x.mp3",
+        "target_library_id": "core:music", "target_path": "",
+        "device_id": "browser-test",
+    })
+    assert im.status_code == 401
+    assert (libraries["music"] / "song.mp3").exists()
+    assert not (libraries["music"] / "u.mp3").exists()
+
+
+def test_a_paired_device_uploads_moves_and_imports(claimed, libraries):
+    c = _client()
+    up = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
+        files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        headers={**DEVICE, **XRW},
+    )
+    assert up.status_code == 200, up.text
+    mv = c.post("/api/files/move", json={
+        "source_library_id": "core:music", "paths": ["song.mp3"],
+        "target_library_id": "core:music", "target_path": "Beatles",
+        "device_id": "browser-test",
+    }, headers=DEVICE)
+    assert mv.status_code == 200, mv.text
+    im = c.post("/api/files/import", json={
+        "source_library_id": "removable:E", "source_path": "x.mp3",
+        "target_library_id": "core:music", "target_path": "",
+        "device_id": "browser-test",
+    }, headers=DEVICE)
+    assert im.status_code == 200, im.text
+    assert (libraries["music"] / "Beatles" / "song.mp3").exists()
+
+
+def test_an_upload_without_the_preflight_header_is_refused(claimed, libraries):
+    """Multipart is a CORS simple request; the header is what makes the
+    browser ask first."""
+    r = _client().post(
+        "/api/files/upload",
+        data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
+        files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        headers=DEVICE,
+    )
+    assert r.status_code == 403
+    assert not (libraries["music"] / "u.mp3").exists()
+
+
+def test_deleting_needs_an_admin_session(claimed, libraries):
+    c = _client()
+    body = {"library_id": "core:music", "paths": ["song.mp3"]}
+    assert c.post("/api/files/delete", json=body).status_code == 401
+    assert c.post("/api/files/delete", json=body, headers=DEVICE).status_code == 401
+    assert (libraries["music"] / "song.mp3").exists()
+    assert c.post("/api/files/delete", json=body, headers=ADMIN).status_code == 200
+    assert not (libraries["music"] / "song.mp3").exists()
+
+
+def test_downloading_a_whole_directory_needs_an_admin_session(claimed, libraries):
+    """A single file is a daily action. A directory is a server-built zip
+    of a whole tree, which is not."""
+    c = _client()
+    params = {"library_id": "core:music", "path": "Beatles"}
+    (libraries["music"] / "Beatles" / "b.mp3").write_bytes(b"b")
+    assert c.get("/api/files/download", params=params, headers=DEVICE).status_code == 401
+    ok = c.get("/api/files/download", params=params, headers=ADMIN)
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == "application/zip"
+
+
+def test_writing_into_documents_through_files_needs_an_admin_session(claimed, libraries):
+    """The Documents library is the operator's own folder wherever it is
+    reached from — the Files page included."""
+    c = _client()
+    up = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:documents", "path": "", "device_id": "browser-test"},
+        files=[("files", ("n.txt", b"hi", "text/plain"))],
+        headers={**DEVICE, **XRW},
+    )
+    assert up.status_code == 401
+    assert not (libraries["documents"] / "n.txt").exists()
+    mv = c.post("/api/files/move", json={
+        "source_library_id": "core:music", "paths": ["song.mp3"],
+        "target_library_id": "core:documents", "target_path": "",
+        "device_id": "browser-test",
+    }, headers=DEVICE)
+    assert mv.status_code == 401
+    ok = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:documents", "path": "", "device_id": "browser-test"},
+        files=[("files", ("n.txt", b"hi", "text/plain"))],
+        headers={**ADMIN, **XRW},
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_a_paired_device_still_reads_documents_through_files(claimed, libraries):
+    (libraries["documents"] / "n.txt").write_bytes(b"hi")
+    c = _client()
+    assert c.get(
+        "/api/files/browse",
+        params={"library_id": "core:documents", "path": ""},
+        headers=DEVICE,
+    ).status_code == 200
+    assert c.get(
+        "/api/files/download",
+        params={"library_id": "core:documents", "path": "n.txt"},
+        headers=DEVICE,
+    ).status_code == 200
+
+
+def test_saving_a_video_position_needs_a_device_token_not_just_a_cookie(claimed, libraries):
+    body = {
+        "library_id": "core:music", "path": "clip.mp4",
+        "device_id": "browser-test", "position_sec": 12,
+    }
+    c = _client()
+    assert c.post("/api/videos/position", json=body).status_code == 401
+    # A cookie renders the page; it does not write a row.
+    assert c.post("/api/videos/position", json=body, headers=COOKIE_ONLY).status_code == 403
+
+
+def test_a_fresh_install_can_still_use_the_files_surface(unclaimed, libraries):
+    c = _client()
+    assert c.get("/api/files/libraries").status_code == 200
+    up = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
+        files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        headers=XRW,
+    )
+    assert up.status_code == 200, up.text

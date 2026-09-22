@@ -6,12 +6,15 @@ controlled set of libraries rooted in tmp dirs so each endpoint's behavior —
 editable/importable rejection, ejected-drive 410, reindex fanout, upload
 dedupe, recursive-delete confinement, import containment — is deterministic.
 
-Trust posture under test: reads and the open writes (upload / move / import)
-need no admin at all; only ``/delete`` is admin-gated, and passes here via the
-pre-setup grace (fresh test DB has no admin credential) except in the tests
-that deliberately claim the admin tier to prove the split. Every open write
-names a ``device_id`` — the ``files_device_blocks`` tests at the bottom are
-what that field is for.
+Trust posture under test: browsing, downloading a file and the household
+writes (upload / move / import) are device tier; ``/delete``, a
+DIRECTORY download and any write into Documents or a removable drive are
+admin tier. Every gate here passes via the pre-setup grace (a fresh test
+DB has no admin credential, and the DB-free tests fake the same state)
+except in the tests that deliberately claim the admin tier to prove the
+split. Every household write names a ``device_id`` — the
+``files_device_blocks`` tests at the bottom are what that field is for.
+Who may call what is covered end to end in test_web_media_auth.py.
 """
 
 from __future__ import annotations
@@ -25,9 +28,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 import web.backend.api.files as files_api
+from domovoi.tests.auth_testkit import install_fake_db, make_request
 from domovoi.tests.conftest import requires_db
 from web.backend.api.files_security import MediaLibrary
 from web.backend.main import app
+
+
+def _fake_pre_setup_install(monkeypatch) -> None:
+    """Every route here wears an auth gate now (REV-1), and those gates ask
+    the database who the caller is. The DB-FREE tests below fake the
+    primitives to a fresh install (no admin password yet ⇒ the pre-setup
+    grace) so they stay DB-free instead of growing a ``requires_db`` skip —
+    the skip is exactly how a missing block check shipped once already."""
+    install_fake_db(monkeypatch, admin=False)
 
 
 @pytest.fixture
@@ -242,11 +255,13 @@ def test_upload_saves_dedupes_and_reindexes(registry, roots, reindex_spy):
             "/api/files/upload",
             data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
             files=[("files", ("t.mp3", b"one", "audio/mpeg"))],
+            headers=XRW,
         )
         r2 = c.post(
             "/api/files/upload",
             data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
             files=[("files", ("t.mp3", b"two", "audio/mpeg"))],
+            headers=XRW,
         )
     assert r1.status_code == 200
     assert r1.json()["saved"] == ["t.mp3"]
@@ -264,6 +279,7 @@ def test_upload_rejected_on_non_editable(registry, reindex_spy):
             "/api/files/upload",
             data={"library_id": "removable:E", "path": "", "device_id": "browser-test"},
             files=[("files", ("x.mp3", b"x", "audio/mpeg"))],
+            headers=XRW,
         )
     assert r.status_code == 403
     assert reindex_spy == []
@@ -277,6 +293,7 @@ def test_upload_no_reindex_for_documents(registry, roots, reindex_spy):
             "/api/files/upload",
             data={"library_id": "core:documents", "path": "", "device_id": "browser-test"},
             files=[("files", ("n.txt", b"hi", "text/plain"))],
+            headers=XRW,
         )
     assert r.status_code == 200
     assert r.json()["reindex_triggered"] is False
@@ -489,16 +506,18 @@ def no_reindex(monkeypatch):
         return None
 
     monkeypatch.setattr(files_api, "_assert_can_write", _allow)
+    _fake_pre_setup_install(monkeypatch)
     return calls
 
 
 def _move(**kw):
-    """Call the move endpoint directly (no admin dependency, no DB)."""
+    """Call the move endpoint directly, with a request the tier checks can
+    read (they answer from the faked pre-setup state, no DB)."""
     import asyncio
 
     kw.setdefault("device_id", "browser-test")
     req = files_api.MoveRequest(**kw)
-    return asyncio.run(files_api.move(None, req))
+    return asyncio.run(files_api.move(make_request(), req))
 
 
 def test_move_relocates_a_file_within_a_library(registry, roots, no_reindex):
@@ -745,7 +764,13 @@ def blocked_kid(monkeypatch):
         return reason if device_id == "android-kid" else None
 
     monkeypatch.setattr(files_api, "_block_status", _status)
+    _fake_pre_setup_install(monkeypatch)
     return reason
+
+
+# Uploads are multipart, so they carry the preflight-forcing header the
+# dashboard and the app send (WEB-6).
+XRW = {"X-Requested-With": "XMLHttpRequest"}
 
 
 def _bare_client() -> TestClient:
@@ -802,6 +827,7 @@ def test_upload_and_import_over_http_are_refused_for_a_blocked_device(
         "/api/files/upload",
         data={"library_id": "core:music", "path": "", "device_id": "android-kid"},
         files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+        headers=XRW,
     )
     assert up.status_code == 403
     assert up.json()["detail"] == blocked_kid
@@ -881,11 +907,22 @@ def test_move_endpoint_404s_for_an_unknown_library(registry, roots):
 # tier first and prove the split from the OTHER side: no credential sent.
 
 
+def _household_token() -> str:
+    """The install's device token, minted the way either process does at
+    boot — what a paired phone or browser presents."""
+    import asyncio
+
+    from domovoi import admin_auth
+
+    return asyncio.run(admin_auth.ensure_device_token())
+
+
 @pytest.fixture
 def admin_claimed():
     """Set an admin credential (so the pre-setup grace no longer applies) and
-    clear it afterwards. The token is never sent — these tests are about what
-    an UNAUTHENTICATED device may do once an admin exists."""
+    clear it afterwards. The admin bearer is never sent — these tests are
+    about what an unauthenticated caller, and a merely PAIRED one, may do
+    once an admin exists."""
     import asyncio
 
     from sqlalchemy import text as sql
@@ -899,7 +936,9 @@ def admin_claimed():
 
     async def _clear():
         async with session_scope() as s:
-            await s.execute(sql("TRUNCATE admin_auth, admin_sessions CASCADE"))
+            await s.execute(sql(
+                "TRUNCATE admin_auth, admin_sessions, household_device_tokens CASCADE"
+            ))
 
     asyncio.run(_clear())
     asyncio.run(_claim())
@@ -908,30 +947,39 @@ def admin_claimed():
 
 
 @requires_db
-def test_reads_and_open_writes_need_no_admin_once_one_exists(
+def test_reads_and_household_writes_need_the_device_token_once_an_admin_exists(
     registry, roots, reindex_spy, admin_claimed
 ):
+    """Once an admin password exists the pre-setup grace is over, and an
+    uncredentialed caller gets nothing — but a PAIRED household device
+    still browses, downloads, uploads and moves without the admin
+    password (REV-1, option A)."""
     (roots["music"] / "a.mp3").write_bytes(b"a")
     (roots["music"] / "Beatles").mkdir()
+    device = {"X-Device-Token": _household_token()}
     with _client() as c:
-        assert c.get("/api/files/libraries").status_code == 200
+        assert c.get("/api/files/libraries").status_code == 401
+        assert c.get("/api/files/libraries", headers=device).status_code == 200
         assert c.get(
-            "/api/files/browse", params={"library_id": "core:music", "path": ""}
+            "/api/files/browse", params={"library_id": "core:music", "path": ""},
+            headers=device,
         ).status_code == 200
         assert c.get(
-            "/api/files/download", params={"library_id": "core:music", "path": "a.mp3"}
+            "/api/files/download", params={"library_id": "core:music", "path": "a.mp3"},
+            headers=device,
         ).status_code == 200
         up = c.post(
             "/api/files/upload",
             data={"library_id": "core:music", "path": "", "device_id": "browser-test"},
             files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+            headers={**XRW, **device},
         )
         assert up.status_code == 200, up.text
         mv = c.post("/api/files/move", json={
             "source_library_id": "core:music", "paths": ["a.mp3"],
             "target_library_id": "core:music", "target_path": "Beatles",
             "device_id": "browser-test",
-        })
+        }, headers=device)
         assert mv.status_code == 200, mv.text
 
 
@@ -960,6 +1008,7 @@ def test_open_writes_must_name_a_device(registry, roots):
             "/api/files/upload",
             data={"library_id": "core:music", "path": ""},
             files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+            headers=XRW,
         )
         assert up.status_code == 422
         mv = c.post("/api/files/move", json={
@@ -1066,6 +1115,7 @@ def test_a_blocked_device_can_read_but_not_write(
             "/api/files/upload",
             data={"library_id": "core:music", "path": "", "device_id": "android-kid"},
             files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+            headers=XRW,
         )
         assert up.status_code == 403
         assert "Kids iPad" in up.json()["detail"]
