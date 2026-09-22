@@ -412,12 +412,29 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-sync-time" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-sync-time" /usr/local/sbin/domovoi-sync-time
   fi
+  # The verifier that helper checks the server's signature with. Root's
+  # copy, not the satellite user's: the helper runs as root on that
+  # user's request and must import nothing that user can edit.
+  if [ -f "$PAYDIR/system/domovoi_ed25519.py" ]; then
+    mkdir -p /usr/local/lib/domovoi
+    install -m 0644 -o root -g root \
+      "$PAYDIR/system/domovoi_ed25519.py" /usr/local/lib/domovoi/domovoi_ed25519.py
+  fi
   # Re-install rather than assume step 3b ran: a card whose payload predates
   # the helper still gets it once the payload is refreshed.
   if [ -f "$PAYDIR/system/domovoi-status" ]; then
     sed -e "s|@HOME@|$HOME_DIR|g" -e "s|@USER@|$SAT_USER|g" \
       "$PAYDIR/system/domovoi-status" >/usr/local/sbin/domovoi-status
     chmod 0755 /usr/local/sbin/domovoi-status
+  fi
+  # The identity of the core that prepared this card, root-owned so the
+  # satellite user can read it and cannot rewrite it. Everything the
+  # device does about "which server is ours" compares against this.
+  # Guarded: a card prepared before server identities simply has none.
+  if [ -f "$BOOT/domovoi/server-identity.json" ]; then
+    mkdir -p /etc/domovoi
+    install -m 0644 -o root -g root \
+      "$BOOT/domovoi/server-identity.json" /etc/domovoi/server-identity.json
   fi
   # Stage 2 runs as root (domovoi-bootstrap.service), so it lives with the
   # other root helpers - never in the code tree the satellite account owns

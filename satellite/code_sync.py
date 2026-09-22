@@ -40,10 +40,64 @@ __all__ = [
     "_safe_rel",
     "_sha256",
     "http_base_from_ws",
+    "fetch_manifest",
     "sync_code",
     "backup_tree",
     "restore_tree",
 ]
+
+
+def fetch_manifest(
+    base: str,
+    timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
+) -> dict[str, str]:
+    """The code channel's file list, authenticated when this device knows
+    who to expect.
+
+    With a fingerprint pinned we ask for ``manifest.sig`` — an envelope
+    carrying the list and the server's signature over it — and refuse
+    anything that does not verify, BEFORE a single body is downloaded.
+    Checking the list rather than each file is what makes this worth
+    doing: the per-file sha256 below only ever proved that the bodies
+    matched the list the same host handed us.
+
+    With nothing pinned (an image prepared before server identities) we
+    fetch the plain manifest exactly as before and say so once, at
+    warning level, so an unverified upgrade is at least visible in the
+    journal.
+    """
+    from satellite import server_identity
+
+    if not expected_fingerprint:
+        log.warning(
+            "code sync: this device has no server fingerprint, so the code "
+            "manifest is taken on trust (see satellite/PROVISIONING.md)"
+        )
+        r = requests.get(f"{base}/v1/satellite-code/manifest", timeout=timeout)
+        r.raise_for_status()
+        manifest = r.json()
+    else:
+        r = requests.get(f"{base}/v1/satellite-code/manifest.sig", timeout=timeout)
+        if r.status_code == 404:
+            raise RuntimeError(
+                "code sync: this device expects a signed manifest and the "
+                "server serves none; upgrade the Domovoi server first"
+            )
+        r.raise_for_status()
+        try:
+            manifest = server_identity.verify_manifest_envelope(
+                r.json(),
+                channel=server_identity.CODE_CHANNEL,
+                expected_fingerprint=expected_fingerprint,
+            )
+        except server_identity.IdentityError as e:
+            raise RuntimeError(f"code sync: {e}; nothing was written") from e
+    if not isinstance(manifest, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in manifest.items()
+    ):
+        raise RuntimeError("code sync: the manifest is not a path -> sha256 map")
+    return manifest
 
 
 def sync_code(
@@ -52,23 +106,23 @@ def sync_code(
     ext_allow: frozenset[str],
     prev_manifest: dict[str, str],
     timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
 ) -> dict:
     """Fetch the code manifest, download missing/changed files into
     ``satellite_root`` (verifying each body's sha256 against the manifest),
     and prune files that were in ``prev_manifest`` but are gone from the new
     one. Returns ``{"manifest", "downloaded", "pruned"}``.
 
-    Raises on a network/HTTP error OR on a sha256 mismatch — a mismatch
-    aborts the whole sync so a corrupt/tampered body never lands on disk
-    (the caller restores from the pre-write tarball backup).
+    Raises on a network/HTTP error, on a manifest this device's server did
+    not sign (``expected_fingerprint``), OR on a sha256 mismatch — any of
+    them aborts the whole sync so a corrupt/tampered body never lands on
+    disk (the caller restores from the pre-write tarball backup).
 
     ``ext_allow`` is the allowlist of file extensions the code channel
     carries; a manifest entry with any other suffix is skipped with a
     warning (defence-in-depth — the server already filters)."""
     base = http_base.rstrip("/")
-    r = requests.get(f"{base}/v1/satellite-code/manifest", timeout=timeout)
-    r.raise_for_status()
-    manifest: dict[str, str] = r.json()
+    manifest: dict[str, str] = fetch_manifest(base, timeout, expected_fingerprint)
 
     satellite_root.mkdir(parents=True, exist_ok=True)
     downloaded = 0

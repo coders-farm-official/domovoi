@@ -557,6 +557,65 @@ create outbound traffic:
 Turn off Edge TTS, news, and the enricher, skip provider plugins, and
 Domovoi's steady-state outbound traffic is **zero**.
 
+## Server identity (which core a satellite belongs to)
+
+Pairing, above, protects the **server** from a device pretending to be one
+of your rooms. Server identity is the other direction: it protects the
+**device** from a host pretending to be your core.
+
+It matters because the satellite runs that core's code. A satellite whose
+address is the `auto` sentinel sweeps its own /24 and keeps whatever
+answers `GET /v1/health` like Domovoi; the core it settles on can then push
+a self-upgrade, and a plugin payload whose `post_install` runs as root. The
+per-file sha256 in the code manifest proves the bytes arrived intact — it
+says nothing about who sent them, because the same host served the
+manifest.
+
+**The install has a key.** The core generates an Ed25519 key pair the first
+time it needs one and keeps it at `~/.domovoi/server-identity.json`
+(mode 0600). Its **fingerprint** — `SHA256:<base64 of sha256(public key)>`,
+the shape ssh prints — is shown under **Settings → About** and is the
+string you can compare by eye.
+
+**A prepared card is baked with it.** Preparing satellite media writes the
+public half to `domovoi/server-identity.json` on the boot partition and
+records the fingerprint in `build-info.json`. First boot installs it
+root-owned at `/etc/domovoi/server-identity.json`, and adoption copies the
+fingerprint into `[satellite] server_fingerprint` in the device's
+`config.toml`. The satellite user can read all of that and cannot forge the
+root-owned copy.
+
+**What the fingerprint then buys, on every boot and every reconnect:**
+
+| Moment | Check |
+|---|---|
+| discovery sweep | a host is only a candidate if it signs a nonce this probe just invented, with the key that hashes to the pinned fingerprint |
+| before each connect | the same challenge, again — an address written down months ago can be answered by something else today |
+| code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing |
+| plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root |
+| clock and zone | the root helper takes its time source from the root-owned pin, not from an argument the satellite user chose |
+
+**A discovered address is not configuration.** It waits in
+`~/.domovoi/pending-server.json` and is written into `config.toml` only once
+the core answers `ready` — which happens only after someone approved the
+device on the dashboard. A wrong answer during a sweep is no longer
+permanent.
+
+**Verify if known, not verify always.** A device prepared before any of
+this has no fingerprint. It keeps working: it records the first identity it
+meets in `~/.domovoi/server-identity.json` and is held to that one
+afterwards, and its code sync falls back to the unsigned manifest with a
+warning in the journal. The core serves both the signed and the unsigned
+manifest for exactly this reason. Baking the fingerprint in at prepare time
+is what turns trust-on-first-use into real authentication from boot one —
+so a satellite that matters should be prepared from the dashboard rather
+than built by hand.
+
+**What this is not.** Without TLS the channel is still plain HTTP on the
+LAN: the identity proves *who* answered and that the code manifest is the
+one your core published, not that nothing in between could read the
+traffic. See the hardening backlog.
+
 ## Satellite pairing (WS auth)
 
 The satellite WebSocket (`/v1/stream/{room_id}`) authenticates each device

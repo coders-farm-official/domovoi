@@ -70,9 +70,20 @@ strip_sdist_only() {
 
 # 1. Reach the server (config.toml carries domovoi_url).
 SERVER_HTTP="$(as_user "$VENVPY" - <<'EOF'
-import tomllib, pathlib
-cfg = tomllib.load(open(pathlib.Path.home() / ".domovoi/config.toml", "rb"))
+import json, pathlib, tomllib
+home = pathlib.Path.home()
+cfg = tomllib.load(open(home / ".domovoi/config.toml", "rb"))
 url = cfg["satellite"]["domovoi_url"]
+# A discovered address is not written into config.toml until the dashboard
+# approves this device, so the sentinel can still be here. The candidate
+# lives in the sidecar provisioning left; using it is only a health curl.
+if (url or "").strip().lower() == "auto":
+    try:
+        url = json.loads(
+            (home / ".domovoi/pending-server.json").read_text(encoding="utf-8")
+        )["domovoi_url"]
+    except Exception:
+        url = ""
 print(url.replace("ws://", "http://").replace("wss://", "https://").rstrip("/"))
 EOF
 )"
@@ -186,15 +197,27 @@ fi
 #    the sync silently never happened on any device.
 if [ ! -f "$STEPS/server-sync" ]; then
   if as_user env PYTHONPATH="$HOME_DIR/domovoi" "$VENVPY" - <<'EOF'
-import pathlib, tomllib
-cfg = tomllib.load(open(pathlib.Path.home() / ".domovoi/config.toml", "rb"))
+import json, pathlib, tomllib
+home = pathlib.Path.home()
+cfg = tomllib.load(open(home / ".domovoi/config.toml", "rb"))
 from satellite.sound_sync import http_base_from_ws
-from satellite import code_sync, plugin_sync
-base = http_base_from_ws(cfg["satellite"]["domovoi_url"])
-root = pathlib.Path.home() / "domovoi" / "satellite"
+from satellite import code_sync, plugin_sync, server_identity
+url = cfg["satellite"]["domovoi_url"]
+if (url or "").strip().lower() == "auto":
+    url = json.loads(
+        (home / ".domovoi/pending-server.json").read_text(encoding="utf-8")
+    )["domovoi_url"]
+base = http_base_from_ws(url)
+# The card was prepared by one particular core; only that core's signed
+# manifests are installed here. Empty on a pre-identity card, which keeps
+# the old unsigned behaviour.
+fingerprint, _source = server_identity.pinned_fingerprint(
+    cfg["satellite"].get("server_fingerprint")
+)
+root = home / "domovoi" / "satellite"
 allow = frozenset(@CODE_EXT_ALLOW@)
-code_sync.sync_code(base, root, allow, {})
-res = plugin_sync.sync_plugin_payloads(base)
+code_sync.sync_code(base, root, allow, {}, expected_fingerprint=fingerprint)
+res = plugin_sync.sync_plugin_payloads(base, expected_fingerprint=fingerprint)
 if res["root_work"]:
     plugin_sync.request_root_apply(res["meta"], res["root_work"])
 EOF

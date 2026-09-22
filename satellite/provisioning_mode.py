@@ -507,25 +507,33 @@ def resolve_auto_url(configured: str) -> str | None:
     """
     if (configured or "").strip().lower() != proto.AUTO_DISCOVER_URL:
         return configured or None
-    from satellite import discovery      # stdlib-only, like this module
+    # stdlib-only, like this module
+    from satellite import discovery, server_identity
 
-    url = discovery.resolve_url(proto.AUTO_DISCOVER_URL)
+    expected, source = server_identity.pinned_fingerprint()
+    url = discovery.resolve_url(
+        proto.AUTO_DISCOVER_URL, expected_fingerprint=expected
+    )
     if url is None:
         log.error(
-            "joined Wi-Fi but found no Domovoi server on this network. "
-            "Set [satellite] domovoi_url in %s by hand.", CONFIG_PATH,
+            "joined Wi-Fi but found no Domovoi server on this network%s. "
+            "Set [satellite] domovoi_url in %s by hand.",
+            f" answering for {expected} ({source})" if expected else "",
+            CONFIG_PATH,
         )
         return None
-    try:
-        current = CONFIG_PATH.read_text(encoding="utf-8")
-        CONFIG_PATH.write_text(
-            config_writer.apply_changes(current, {"satellite.domovoi_url": url}),
-            encoding="utf-8", newline="\n",
-        )
-    except OSError as e:
-        log.error("discovered %s but could not save it: %s", url, e)
+    # Not into config.toml. The address is a candidate until the server
+    # says this device is paired — that is, until a person approves it on
+    # the dashboard — and the client promotes it then. Writing it here is
+    # what used to make the first host that answered permanent.
+    if not server_identity.write_pending_server(url, expected):
+        log.error("discovered %s but could not save it", url)
         return None
-    log.info("discovered the Domovoi server at %s", url)
+    give_to_satellite_user(server_identity.PENDING_SERVER_SIDECAR)
+    log.info(
+        "discovered the Domovoi server at %s — pending approval on the "
+        "dashboard", url,
+    )
     return url
 
 
@@ -548,6 +556,16 @@ def apply_provision(
         "satellite.sat_type": payload.get("sat_type", "voice"),
         "device.profile": payload["device_profile"],
     }
+    # The identity of the core that prepared this card, copied out of the
+    # root-owned pin first boot installed, so the client compares against
+    # a value it cannot itself have invented. Absent on a card prepared
+    # before server identities — the client then falls back to recording
+    # the first core it meets.
+    from satellite import server_identity
+
+    baked, _source = server_identity.pinned_fingerprint()
+    if baked:
+        changes["satellite.server_fingerprint"] = baked
     # Pin capture AND playback to the array on boards that need it. Without
     # this the client runs on the system default: capture lands on device
     # -1, and playback leaves the array entirely, so its on-chip AEC has no
@@ -602,6 +620,11 @@ def apply_provision(
         )
         if ok:
             url = resolve_auto_url(payload.get("domovoi_url", ""))
+            # 5b. Root's own record of where this device's server is. The
+            #     clock helper runs as root on the satellite user's say-so
+            #     and reads this rather than trusting the address that
+            #     user hands it.
+            write_root_server_pin(url)
             # 6. The clock and the time zone, from the server we can now
             #    reach. Step 3 applied what the server knew at adopt time
             #    and nothing about the clock; this is the precise one.
@@ -612,6 +635,34 @@ def apply_provision(
         if attempt < wifi_attempts:
             time.sleep(_WIFI_RETRY_PAUSE_SEC)
     return False, last_err or "wifi join failed"
+
+
+# Root's record of this device's server. Written here, at adoption, while
+# we still have root; read by the clock helper, which is invoked BY the
+# satellite user and so must not take that user's word for where the time
+# comes from. 0644: the satellite user may read it, only root may write it.
+ROOT_CONFIG_DIR = Path("/etc/domovoi")
+ROOT_SERVER_URL_PIN = ROOT_CONFIG_DIR / "server.url"
+
+
+def write_root_server_pin(url: str | None) -> bool:
+    """Record the address this device's server lives at, as root.
+
+    Best-effort: a unit where /etc is not writable (a test host, a
+    hand-built device) simply has no pin, and the helper then behaves as
+    it did before pins existed."""
+    if not (url or "").strip():
+        return False
+    try:
+        ROOT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ROOT_SERVER_URL_PIN.write_text(
+            url.strip() + "\n", encoding="utf-8", newline="\n"
+        )
+        os.chmod(ROOT_SERVER_URL_PIN, 0o644)
+    except OSError as e:
+        log.warning("could not record the server address for root: %s", e)
+        return False
+    return True
 
 
 # Installed by stage 1 next to domovoi-status; absent on a hand-built unit.

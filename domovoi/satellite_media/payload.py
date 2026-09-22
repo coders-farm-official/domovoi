@@ -174,6 +174,11 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-sync-time",
         system / "domovoi-sync-time",
     )
+    # The verifier that helper uses to make the server prove who it is.
+    # Shipped separately from the copy under satellite/ because first boot
+    # installs THIS one root-owned: the helper runs as root on the
+    # satellite user's request and must not execute that user's files.
+    shutil.copy2(sat_dir / "_ed25519.py", system / "domovoi_ed25519.py")
     (system / "sudoers").write_text(
         overlay.render_template("sudoers.tmpl", {}), encoding="utf-8", newline="\n"
     )

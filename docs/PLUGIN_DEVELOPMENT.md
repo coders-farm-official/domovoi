@@ -642,6 +642,14 @@ script from there (so `DOMOVOI_PLUGIN_DIR` is that staged copy, not
 `/var/log/domovoi-payload-apply.log`. Security posture:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
+**The device checks who sent the payload list.** A satellite prepared from
+the dashboard is baked with that server's fingerprint and fetches
+`GET /v1/satellite-plugins/manifest.sig` — the file list inside an envelope
+the server signed — refusing to write anything if the signature does not
+verify. Nothing changes for you as a plugin author: the core signs the
+manifest it already built. It does mean a payload only ever reaches a
+device from the core that prepared it.
+
 ### `[android]`
 
 `capabilities = ["stations"]` — free-form strings the Android app gates

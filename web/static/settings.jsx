@@ -1330,6 +1330,27 @@ const WakeWordsPanel = () => {
  * no data fetch. Version / build identifiers live under Configuration → Version.
  */
 
+const ServerFingerprint = () => {
+  const { data } = useApiObject('/api/config/server-identity');
+  const fp = data && data.fingerprint;
+  if (!fp) return null;
+  return (
+    <div style={{ marginTop: 4, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 12, color: 'var(--fg)', marginBottom: 4 }}>
+        This server's fingerprint
+      </div>
+      <div className="mono" style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--fg)' }}>
+        {fp}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>
+        Satellites prepared from this dashboard are built with this string and
+        will talk to no other server. It is printed on the card &mdash; if the two
+        ever disagree, the satellite is being answered by something else.
+      </div>
+    </div>
+  );
+};
+
 const AboutPanel = () => (
   <Card title="About Domovoi"
         sub="The local-first home voice assistant that runs entirely on your own hardware.">
@@ -1353,6 +1374,7 @@ const AboutPanel = () => (
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
         Build / version identifiers live under Configuration → Version.
       </div>
+      <ServerFingerprint/>
       <div style={{ marginTop: 4 }}>
         <Button variant="primary" icon="book-open"
                 onClick={() => { window.location.hash = 'manual'; }}>

@@ -9,8 +9,11 @@ touches the clock, /etc, or the network.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.machinery
 import importlib.util
+import json
 import types
 import urllib.error
 from pathlib import Path
@@ -27,6 +30,18 @@ def helper():
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
     return mod
+
+
+@pytest.fixture(autouse=True)
+def _pins_in_tmp(helper, tmp_path, monkeypatch):
+    """Point the root-owned pins at this test's own directory. Absent by
+    default, which is exactly the unpinned unit the older tests describe."""
+    monkeypatch.setattr(helper, "SERVER_URL_PIN", str(tmp_path / "server.url"))
+    monkeypatch.setattr(
+        helper, "SERVER_IDENTITY_PIN", str(tmp_path / "server-identity.json")
+    )
+    monkeypatch.setattr(helper, "VERIFIER_DIR", str(tmp_path / "lib"))
+    return tmp_path
 
 
 def test_it_is_a_self_contained_python3_script():
@@ -276,3 +291,226 @@ def test_the_verdict_is_one_line_and_the_exit_code_says_whether_it_applied(helpe
     monkeypatch.setattr(helper, "zone_is_installed", lambda tz: False)
     assert helper.main(["ws://x:6370"]) == 2
     assert "unknown to this device" in capsys.readouterr().out
+
+
+# --- whose clock this is -------------------------------------------------
+#
+# The address arrives on a command line from a process running as the
+# satellite user, and this script sets the clock as root. On a card
+# prepared from the dashboard, root wrote the answer down at adoption and
+# that is the answer used.
+
+
+def _keypair(seed_byte=1):
+    from satellite import _ed25519
+
+    seed = bytes([seed_byte]) * 32
+    public = _ed25519.public_key(seed)
+    digest = hashlib.sha256(public).digest()
+    return seed, public, "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+
+
+class _R:
+    def __init__(self, body):
+        self._body, self.status = body, 200
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _signing_opener(seed, public, *, sign=True, fingerprint=None):
+    """Answers /v1/health the way a core does, signing whatever nonce the
+    helper actually sent."""
+    from satellite import _ed25519
+
+    def opener(url, timeout=None):
+        challenge = url.split("challenge=", 1)[1]
+        digest = hashlib.sha256(public).digest()
+        block = {
+            "algorithm": "ed25519",
+            "fingerprint": fingerprint or (
+                "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+            ),
+            "public_key": base64.b64encode(public).decode(),
+            "challenge": challenge,
+        }
+        if sign:
+            block["signature"] = base64.b64encode(
+                _ed25519.sign(
+                    seed, b"domovoi-health-v1\n" + challenge.encode("utf-8")
+                )
+            ).decode()
+        return _R(json.dumps({"status": "ok", "identity": block}).encode("utf-8"))
+
+    return opener
+
+
+def test_without_a_pin_the_argument_stands(helper):
+    """A hand-built unit, and every Pi flashed before pins existed."""
+    assert helper.authorized_url("ws://192.168.0.117:6370", None) == (
+        "ws://192.168.0.117:6370", "unpinned",
+    )
+
+
+def test_the_pinned_address_is_the_one_used(helper):
+    assert helper.authorized_url(
+        "ws://192.168.0.117:6370", "ws://192.168.0.117:6370"
+    ) == ("ws://192.168.0.117:6370", "pinned")
+
+
+def test_a_different_address_is_refused_by_name(helper):
+    url, why = helper.authorized_url(
+        "ws://192.168.0.9:6370", "ws://192.168.0.117:6370"
+    )
+    assert url is None
+    assert "192.168.0.9" in why and "192.168.0.117" in why
+
+
+def test_a_refused_address_leaves_the_clock_and_the_zone_alone(
+    helper, monkeypatch, capsys, _pins_in_tmp,
+):
+    (_pins_in_tmp / "server.url").write_text(
+        "ws://192.168.0.117:6370\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(helper, "fetch", lambda url: pytest.fail("must not fetch"))
+    monkeypatch.setattr(
+        helper, "set_zone", lambda *a, **k: pytest.fail("must not set the zone")
+    )
+    monkeypatch.setattr(
+        helper, "set_clock", lambda *a, **k: pytest.fail("must not step the clock")
+    )
+    assert helper.main(["ws://192.168.0.9:6370"]) == 2
+    assert "this device's time source is" in capsys.readouterr().out
+
+
+def test_the_pinned_address_is_still_synced(helper, monkeypatch, _pins_in_tmp):
+    (_pins_in_tmp / "server.url").write_text(
+        "ws://192.168.0.117:6370\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(
+        helper, "fetch",
+        lambda url: ({"tz": "America/New_York", "epoch": 1000.0}, 0.0),
+    )
+    monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
+    monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
+    assert helper.main(["ws://192.168.0.117:6370"]) == 0
+
+
+# --- and whether that address is still our server ------------------------
+
+
+def test_the_server_that_signs_our_nonce_passes(helper):
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    assert helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public), verifier=_ed25519,
+    ) == ""
+
+
+def test_a_different_server_on_the_pinned_address_is_named(helper):
+    from satellite import _ed25519
+
+    _seed_a, _public_a, ours = _keypair(1)
+    seed_b, public_b, _theirs = _keypair(2)
+    assert "a different server" in helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": ours},
+        opener=_signing_opener(seed_b, public_b), verifier=_ed25519,
+    )
+
+
+def test_claiming_our_fingerprint_without_the_key_does_not_pass(helper):
+    from satellite import _ed25519
+
+    _seed_a, _public_a, ours = _keypair(1)
+    seed_b, public_b, _ = _keypair(2)
+    assert helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": ours},
+        opener=_signing_opener(seed_b, public_b, fingerprint=ours),
+        verifier=_ed25519,
+    )
+
+
+def test_an_answer_with_no_signature_does_not_pass(helper):
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    assert helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, sign=False), verifier=_ed25519,
+    )
+
+
+def test_a_unit_with_no_verifier_installed_carries_on(helper):
+    """The compatibility promise: a payload older than the verifier still
+    syncs its clock. The client proved the same server before calling us."""
+    _seed, _public, fingerprint = _keypair()
+    assert helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": fingerprint}, verifier=None,
+        opener=lambda *a, **k: pytest.fail("must not ask"),
+    ) == ""
+
+
+def test_a_server_that_cannot_prove_itself_changes_nothing(
+    helper, monkeypatch, capsys, _pins_in_tmp,
+):
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(
+        helper, "verify_identity",
+        lambda url, pin, **k: "the server's signature did not verify",
+    )
+    monkeypatch.setattr(helper, "fetch", lambda url: pytest.fail("must not fetch"))
+    monkeypatch.setattr(
+        helper, "set_zone", lambda *a, **k: pytest.fail("must not set the zone")
+    )
+    monkeypatch.setattr(
+        helper, "set_clock", lambda *a, **k: pytest.fail("must not step the clock")
+    )
+    assert helper.main(["ws://192.168.0.117:6370"]) == 2
+    assert "refusing the time from" in capsys.readouterr().out
+
+
+def test_a_server_that_proves_itself_is_synced(
+    helper, monkeypatch, _pins_in_tmp,
+):
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(helper, "verify_identity", lambda url, pin, **k: "")
+    monkeypatch.setattr(
+        helper, "fetch",
+        lambda url: ({"tz": "America/New_York", "epoch": 1000.0}, 0.0),
+    )
+    monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
+    monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
+    assert helper.main(["ws://192.168.0.117:6370"]) == 0
+
+
+def test_a_malformed_identity_pin_is_treated_as_no_pin(helper, _pins_in_tmp):
+    (_pins_in_tmp / "server-identity.json").write_text("{", encoding="utf-8")
+    assert helper.read_identity_pin(helper.SERVER_IDENTITY_PIN) is None
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "not-a-fingerprint"}), encoding="utf-8"
+    )
+    assert helper.read_identity_pin(helper.SERVER_IDENTITY_PIN) is None
+
+
+def test_the_zone_is_still_checked_against_this_devices_tzdata(helper):
+    """A name the device's own tzdata does not know is never applied, pin
+    or no pin: a bogus symlink is worse than the wrong zone."""
+    assert helper.zone_is_installed("../../etc/shadow") is False
+    assert helper.zone_is_installed("/etc/localtime") is False
+    assert helper.zone_is_installed("") is False

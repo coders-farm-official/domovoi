@@ -50,6 +50,19 @@ room_id = "kitchen"
 # LAN; revisit when adding remote / phone-as-satellite clients.
 domovoi_url = "ws://domovoi.local:6370"
 
+# Fingerprint of the server this satellite belongs to — "SHA256:…", as the
+# dashboard shows it under Settings → About. A prepared card gets this
+# written in at adoption from the copy first boot installed under
+# /etc/domovoi, and you should not need to touch it.
+#
+# When it is set, the satellite makes the server sign a fresh nonce before
+# every connect and refuses to talk to anything that cannot, and it only
+# installs code and plugin payloads from a manifest that server signed.
+# When it is empty, the satellite records the first server it meets and
+# holds itself to that one from then on — safe for a hand-built unit on a
+# network you trust, but a card prepared from the dashboard is better.
+# server_fingerprint = ""
+
 # Satellite kind: "voice" (the default — a speaker/mic puck) or "video"
 # (a screen-bearing kiosk build that renders the now-playing display; see
 # VIDEO_SATELLITE.md). Drives which controls the dashboard offers for

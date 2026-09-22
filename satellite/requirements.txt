@@ -37,3 +37,15 @@ tqdm>=4.0,<5.0
 scipy>=1.3,<2
 scikit-learn>=1,<2
 requests>=2.0,<3
+
+# Ed25519, for checking that the server answering us is the one this card
+# was prepared for (satellite/server_identity.py) and that a code or
+# plugin-payload manifest carries that server's signature.
+#
+# 64-bit Pi OS (aarch64, the supported build) gets a cp39-abi3
+# manylinux_2_28_aarch64 wheel — no Rust toolchain, no compiler. A 32-bit
+# armv7l image has NO wheel and would try to build Rust, so this install is
+# allowed to fail there: satellite/_ed25519.py is a vendored pure-Python
+# implementation of the same thing and the code falls back to it
+# automatically. Install with `|| true` in a 32-bit bootstrap.
+cryptography>=42.0

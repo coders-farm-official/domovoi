@@ -317,13 +317,38 @@ Edit `~/.domovoi/config.toml`:
 [satellite]
 room_id = "<room>"                                   # match the hostname suffix
 domovoi_url = "ws://<server-ip-or-hostname>:6370"
+# server_fingerprint = "SHA256:..."                  # see below — optional here
+```
 
+```toml
 [wake]
 wake_word = "hey_jarvis"                             # dev wake word for now
 threshold = 0.5
 ```
 
 The example file ships with sensible defaults for everything else (barge-in, noise gate, music ALSA device, etc.).
+
+**`server_fingerprint`** is your server's identity, shown on the dashboard
+under **Settings → About**. Set it and this satellite makes the server sign
+a fresh nonce before every connect, refuses anything that cannot, and only
+installs code and plugin payloads from a manifest that server signed.
+Leave it out and the satellite records the first server it meets and holds
+itself to that one from then on — fine for a hand-built unit on a network
+you trust, but a card prepared from the dashboard gets the fingerprint
+baked in and is better. See
+[SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md) § Server identity.
+
+A prepared card carries the public half at
+`domovoi/server-identity.json` on the boot partition; first boot installs
+it root-owned at `/etc/domovoi/server-identity.json` and adoption copies
+the fingerprint into `config.toml`. Nothing secret rides the card.
+
+Checking the signatures needs the `cryptography` package, which
+`requirements.txt` lists. 64-bit Pi OS (the supported build) gets an
+`aarch64` wheel with no compiler; on a 32-bit `armv7l` image there is no
+wheel and the install may fail — let it, because `satellite/_ed25519.py` is
+a pure-Python implementation of the same thing and the client falls back to
+it automatically.
 
 ### 6.5 Verify audio devices
 
@@ -485,6 +510,31 @@ sudo -n /usr/local/sbin/domovoi-sync-time ws://<server-ip>:6370
 
 - [ ] The line printed says `tz ... (unchanged)` and `clock within ...s` — the device now matches the server, and the client will keep it that way (look for `time sync:` in its log after each connect).
 
+**Pinning the time source (optional here, automatic on a prepared card).**
+The sudoers line above lets the satellite user run this helper as root with
+an address of its choosing. On a card prepared from the dashboard, root
+writes the answer down at adoption and the helper uses that instead:
+
+```bash
+sudo mkdir -p /etc/domovoi
+echo "ws://<server-ip>:6370" | sudo tee /etc/domovoi/server.url
+```
+
+With that file present the helper refuses an argument naming a different
+host, exits 2, and leaves the clock and the zone alone. Add
+`/etc/domovoi/server-identity.json` (the `{fingerprint, public_key}` your
+dashboard shows under Settings > About) and the root-owned verifier, and
+the helper also makes the server sign a fresh nonce before copying its
+clock:
+
+```bash
+sudo mkdir -p /usr/local/lib/domovoi
+sudo install -m 0644 ~/domovoi/satellite/_ed25519.py   /usr/local/lib/domovoi/domovoi_ed25519.py
+```
+
+Neither file is required: without them the helper behaves exactly as it
+did before, which is what keeps units flashed before this working.
+
 If you skip this step the satellite still runs — with the wrong clock and zone until you `sudo timedatectl set-timezone <zone>` by hand.
 
 ## 9. Label the hardware
@@ -501,7 +551,7 @@ You should have:
 1. A Pi at `domovoi-<room>.local` (or the reserved IP) with SSH access from your laptop
 2. Working mic capture + speaker playback through the ReSpeaker HAT, at audible volume
 3. A Python venv with all satellite deps installed and the wake-word ONNX models downloaded
-4. `~/.domovoi/config.toml` populated with the right `room_id` and `domovoi_url`
+4. `~/.domovoi/config.toml` populated with the right `room_id` and `domovoi_url` (and, on a prepared card, `server_fingerprint`)
 5. The satellite client running under systemd as `domovoi-satellite.service` and auto-starting on boot
 6. Network reachability confirmed both directions between the Pi and the Domovoi server
 7. Both sudoers entries in place: WiFi self-heal (§6.7) and self-restart (§8.1)

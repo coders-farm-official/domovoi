@@ -141,8 +141,8 @@ which is how satellites and every non-browser client connect.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/health` | Open | — | `{"status":"ok","bot_name","use_stubs"}`; `503` when the DB is unreachable or no handlers registered. Liveness probe. |
-| `GET /v1/time` | Open | — | `{tz, epoch, iso, utc_offset_sec}` — this host's IANA zone name (`null` if the host cannot name it) and its clock. Satellites copy both on every connect, and stage 2 of a prepared card calls it before anything else, through the root helper `domovoi-sync-time`; a Pi has no battery clock and Pi OS boots in Europe/London. |
+| `GET /v1/health` | Open | `challenge` (optional) | `{"status":"ok","bot_name","use_stubs","identity"}`; `503` when the DB is unreachable or no handlers registered. Liveness probe. `identity` is `{algorithm:"ed25519", fingerprint:"SHA256:…", public_key}` — this install's server identity. Pass `?challenge=<nonce>` (≤128 chars, `400` beyond) and the block also carries that `challenge` back plus a `signature` over it, which is how a satellite tells this household's core from anything else listening on 6370. The pre-identity fields are unchanged. |
+| `GET /v1/time` | Open | — | `{tz, epoch, iso, utc_offset_sec}` — this host's IANA zone name (`null` if the host cannot name it) and its clock. Satellites copy both on every connect, and stage 2 of a prepared card calls it before anything else, through the root helper `domovoi-sync-time`; a Pi has no battery clock and Pi OS boots in Europe/London. The helper takes the address from its root-owned pin (`/etc/domovoi/server.url`) rather than from the unprivileged caller, and where a fingerprint is pinned it makes the server sign a nonce first. |
 | `GET /v1/connectivity` | Open | — | `{online, last_checked_at, last_online_at, target}` — the internet-connectivity probe the offline-first router consults. |
 | `GET /v1/handlers` | Open | — | List of `HandlerInfo`: `{name, requires_network, tool_schema, fast_path_count, priority_band, origin, display, example_phrases}`. `origin` is `"core"` or a plugin slug. Powers the dashboard's manual page. |
 | `POST /v1/intent` | **Device (`X-Device-Token` or Bearer)** | `{transcript, room_id?, session_id?, synthesize?}` | Routes a text utterance through the full intent pipeline. Returns the `Response` JSON (`{text, session_id, matched_handler, matched_path, online, data, music_action, music_stream_url, ...}`); with `synthesize: true` returns `audio/wav` bytes instead, with the text and metadata in `X-Response-Text`, `X-Session-Id`, `X-Matched-Handler`, `X-Matched-Path`, `X-Online` headers. |
@@ -158,6 +158,7 @@ body's sha256 against the manifest.
 | `GET /v1/sounds/manifest` | Open | `?voice=<name>` (optional; defaults to the registry default voice) | `{relative_path: sha256}` for every rendered MP3 in that voice's subtree (greetings, `network_issues.mp3`, `sample.mp3`). |
 | `GET /v1/sounds/{path}` | Open | `?voice=` optional | Serves one rendered clip (`audio/mpeg`). Locked to `.mp3` files strictly inside the voice subtree (no traversal). |
 | `GET /v1/satellite-code/manifest` | Open | — | `{relative_path: sha256}` for allowlisted files under `satellite/` (`.py .toml .txt .md .service .sh .json`; never `__pycache__`, `.pyc`, `.bak`, `.env*`). Basis for in-field satellite upgrades. |
+| `GET /v1/satellite-code/manifest.sig` | Open | — | The same list inside a signed envelope: `{algorithm, fingerprint, public_key, channel:"satellite-code", manifest, signature}`. A satellite prepared with this server's fingerprint asks for this instead and installs nothing if the signature does not verify. The manifest travels INSIDE the envelope so the list that was signed and the list that is used are the same object. The unsigned `manifest` above keeps serving devices prepared before server identities. |
 | `GET /v1/satellite-code/{path}` | Open | — | Serves one allowlisted satellite source file (`application/octet-stream`). Traversal-guarded. |
 | `GET /v1/wake-models/manifest` | Open | — | `{relative_path: sha256}` for trained wake-word models (`.onnx` / `.onnx.json`) under the server's wake-models dir. |
 | `GET /v1/wake-models/{path}` | Open | — | Serves one wake-model file. Extension-allowlisted and traversal-guarded. |
@@ -464,6 +465,7 @@ actions proxy to the core admin endpoints.
 | `POST /api/satellites/{room_id}/dropin/end` | Open | — | Proxy → core drop-in end. |
 | `GET /api/satellites/{room_id}/dropin/phone-info` | **Device (`X-Device-Token` or Bearer)** | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). The phone presents the same token again on the upgrade. |
 | `GET /v1/satellite-plugins/manifest` (core) | Open | — | `{files: {"<slug>/<rel>": sha256}, meta: {slug: {...}}}` — enabled plugins' `[satellite]` payloads; satellites mirror it like the code channel. |
+| `GET /v1/satellite-plugins/manifest.sig` (core) | Open | — | The payload list inside the same signed envelope shape, with `channel: "satellite-plugins"`. These are the files whose `post_install` runs as root on the device, so a pinned satellite refuses an unsigned or wrongly-signed list before it downloads anything. |
 | `GET /v1/satellite-plugins/{path}` (core) | Open | — | One payload file by its `<slug>/<rel>` channel path. |
 | `GET /api/satellites/media/status` | **Admin (read)** | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
 | `GET /api/satellites/media/targets` | **Admin (read)** | — | Removable drives that look like a flashed Pi boot partition. |
@@ -504,6 +506,7 @@ All **Open**.
 | `GET /api/config/editable` | **Admin read (Bearer or cookie)** | — | Proxy → core `GET /v1/admin/config` (live values; plugin secrets pre-masked). |
 | `PATCH /api/config/editable` | **Admin, security tier** | `{"changes": {...}}` | Proxy → core `POST /v1/admin/config`. Returns `{applied, restart_required, rejected}`. |
 | `GET /api/config/version` | Open | — | Proxy → core version label. |
+| `GET /api/config/server-identity` | Open | — | Proxy → the `identity` block of core `GET /v1/health`: `{algorithm, fingerprint, public_key}`. What Settings → About shows, so a person can compare this server's fingerprint with the one printed on a prepared satellite card. |
 | `POST /api/config/version/check` | Open | — | Proxy → core upstream check. |
 | `POST /api/config/version/pull` | Open | — | Proxy → core `git pull --ff-only`. |
 | `GET /api/satellites/approvals` | **Admin read** | — | Proxy → pending approvals. Declared before `/{room_id}` so the path parameter can't shadow it. |

@@ -121,6 +121,24 @@ async def get_version(request: Request):
     )
 
 
+@router.get("/config/server-identity")
+async def get_server_identity(request: Request):
+    """This server's fingerprint — the string a satellite is prepared with.
+
+    Shown under Settings → About so a person can read it off the screen
+    and compare it with the one printed on a prepared card, which is the
+    whole point of a fingerprint: it turns "is this the right server?"
+    into something a human can answer. Read-only proxy of the core's
+    ``/v1/health`` identity block; the public key never implies anything
+    the core did not already publish there."""
+    status, payload = await get_admin(
+        "/v1/health", headers=auth_forward_headers(request)
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return bridge_response(status, payload)
+    return bridge_response(200, payload.get("identity") or {})
+
+
 @router.post("/config/version/check")
 async def check_version(request: Request):
     """Fetch upstream and report how far the Domovoi server's HEAD is

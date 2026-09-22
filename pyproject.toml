@@ -55,6 +55,14 @@ dependencies = [
     # Direct dependency for the chat-stream helper (clients/ollama.py) and
     # other httpx call sites (was already transitive via the ollama client).
     "httpx>=0.27",
+    # Ed25519 for the per-install server identity satellites pin
+    # (domovoi/server_identity.py): the signed /v1/health challenge and the
+    # signed code / plugin-payload manifests. Declared because that is where
+    # signing belongs, but deliberately NOT a hard import — the module falls
+    # back to the vendored pure implementation in domovoi/_ed25519.py, which
+    # is what a 32-bit Pi OS (no aarch64 wheel, no Rust toolchain) and a test
+    # environment without this package get. Same keys, same signatures.
+    "cryptography>=42.0",
 ]
 
 [project.urls]

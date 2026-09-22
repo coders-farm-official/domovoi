@@ -15,6 +15,24 @@ Usage:  domovoi-sync-time <server-url> [--dry-run]
     <server-url> is the core's address in either scheme - the config's
     ws://host:6370 is accepted as-is and turned into http://host:6370.
 
+**The caller does not choose the time source.** The address on the command
+line comes from a process running as the satellite user, and this script
+sets the clock and the zone as root. So when the root-owned pins written at
+adoption exist, they decide:
+
+  * /etc/domovoi/server.url - the address. An argument naming a different
+    host is refused (exit 2) and nothing is applied.
+  * /etc/domovoi/server-identity.json - the server's Ed25519 fingerprint.
+    The host has to sign a nonce this run invents before its clock is
+    copied, checked with the root-owned verifier installed beside this
+    script at /usr/local/lib/domovoi. A host that cannot is refused and
+    nothing is applied.
+
+Neither pin exists on a unit built by hand or flashed before server
+identities: those keep the old behaviour, because breaking a satellite in
+the field to add a check it has no way to satisfy would be worse than the
+check is worth. A card prepared from the dashboard has both.
+
 Why this exists: a Pi has no battery clock and boots with the date its
 image was built, and Pi OS ships in Europe/London. NTP repairs the clock
 only if the house has internet, and nothing repairs the zone - a room whose
@@ -32,8 +50,11 @@ says what happened; the caller keeps the record in its own log.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -44,6 +65,18 @@ from datetime import datetime, timezone
 ZONEINFO = "/usr/share/zoneinfo"
 LOCALTIME = "/etc/localtime"
 ETC_TIMEZONE = "/etc/timezone"
+# Written at adoption by provisioning mode, which runs as root. The
+# satellite user can read these and cannot rewrite them - which is the
+# whole point, since the satellite user is who invokes this script.
+ROOT_CONFIG_DIR = "/etc/domovoi"
+SERVER_URL_PIN = ROOT_CONFIG_DIR + "/server.url"
+SERVER_IDENTITY_PIN = ROOT_CONFIG_DIR + "/server-identity.json"
+# The verifier, installed root-owned beside this script by first boot. NOT
+# imported from ~/domovoi: that tree is the satellite user's, and this runs
+# as root on that user's say-so.
+VERIFIER_DIR = "/usr/local/lib/domovoi"
+HEALTH_CONTEXT = b"domovoi-health-v1"
+FINGERPRINT_PREFIX = "SHA256:"
 # A clock this close to the server's is left alone: every step is a
 # discontinuity for whatever is timing something, and half a round trip
 # of Wi-Fi jitter is not worth one.
@@ -63,6 +96,119 @@ def http_base(url: str) -> str:
         scheme, base = base.split("://", 1)
     host = base.split("/", 1)[0]
     return f"{scheme}://{host}"
+
+
+def read_url_pin(path: str | None = None) -> str | None:
+    """The address root recorded at adoption, or None on a unit that has
+    no such record.
+
+    Resolved at CALL time: as a default argument the constant binds once
+    at import, and a test that thinks it redirected the pin would read the
+    real /etc instead."""
+    path = SERVER_URL_PIN if path is None else path
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def read_identity_pin(path: str | None = None) -> dict | None:
+    """The server fingerprint root recorded at adoption, with its public
+    key, or None. Resolved at call time, like ``read_url_pin``."""
+    path = SERVER_IDENTITY_PIN if path is None else path
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    fp = doc.get("fingerprint")
+    if not (isinstance(fp, str) and fp.startswith(FINGERPRINT_PREFIX)):
+        return None
+    return doc
+
+
+def authorized_url(requested: str, pin: str | None) -> tuple[str | None, str]:
+    """Which address this run may talk to, and why.
+
+    With a pin, the pin wins and an argument naming a different host is
+    refused outright rather than quietly ignored - a caller asking for
+    somewhere else is worth a line in the log. Without one, the argument
+    stands, as it always did."""
+    if pin is None:
+        return requested, "unpinned"
+    if http_base(requested) != http_base(pin):
+        return None, (
+            f"refusing {http_base(requested)}: this device's time source is "
+            f"{http_base(pin)}"
+        )
+    return pin, "pinned"
+
+
+def _verifier(directory: str | None = None):
+    """The root-owned Ed25519 module, or None when this unit has none.
+    Resolved at call time, like the pins."""
+    directory = VERIFIER_DIR if directory is None else directory
+    path = os.path.join(directory, "domovoi_ed25519.py")
+    if not os.path.isfile(path):
+        return None
+    import importlib.machinery
+    import importlib.util
+
+    try:
+        loader = importlib.machinery.SourceFileLoader("domovoi_ed25519", path)
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+    except Exception:      # noqa: BLE001 - a broken verifier is "no verifier"
+        return None
+
+
+def verify_identity(server_url: str, pin: dict, *, opener=None,
+                    verifier=None) -> str:
+    """Empty string when the host at ``server_url`` proved it is the server
+    this device was prepared for; otherwise the reason it did not.
+
+    The proof is a signature over a nonce invented here, so an answer
+    recorded from an earlier run is not one."""
+    verifier = _verifier() if verifier is None else verifier
+    if verifier is None:
+        # Nothing to check with. The satellite client has already proved
+        # the same server over the same LAN before it called us, and a
+        # unit whose payload predates the verifier must still sync.
+        return ""
+    opener = opener or urllib.request.urlopen
+    challenge = secrets.token_hex(16)
+    url = http_base(server_url) + "/v1/health?challenge=" + challenge
+    try:
+        with opener(url, timeout=HTTP_TIMEOUT_SEC) as r:
+            doc = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as e:      # noqa: BLE001
+        return f"could not ask {http_base(server_url)} who it is: {e}"
+    identity = doc.get("identity") if isinstance(doc, dict) else None
+    if not isinstance(identity, dict):
+        return "the server offered no identity to check"
+    try:
+        public = base64.b64decode(identity.get("public_key") or "", validate=True)
+        signature = base64.b64decode(identity.get("signature") or "", validate=True)
+    except Exception:      # noqa: BLE001
+        return "the server's identity is malformed"
+    if identity.get("challenge") != challenge:
+        return "the server answered a different challenge"
+    if not verifier.verify(public, HEALTH_CONTEXT + b"\n" + challenge.encode(),
+                           signature):
+        return "the server's signature did not verify"
+    digest = hashlib.sha256(public).digest()
+    actual = FINGERPRINT_PREFIX + base64.b64encode(digest).decode("ascii").rstrip("=")
+    if actual != pin["fingerprint"]:
+        return (
+            f"this is a different server: {actual} is not the "
+            f"{pin['fingerprint']} this device was prepared for"
+        )
+    return ""
 
 
 def fetch(server_url: str) -> tuple[dict, float]:
@@ -247,10 +393,23 @@ def main(argv: list[str] | None = None) -> int:
     if not dry_run and geteuid is not None and geteuid() != 0:
         print("domovoi-sync-time must run as root (sudo -n)", file=sys.stderr)
         return 2
+    # Whose clock we are allowed to copy is root's decision, not the
+    # caller's. Both refusals happen before anything is fetched, so a
+    # refused run leaves the clock and the zone exactly as they were.
+    server_url, why = authorized_url(args[0], read_url_pin())
+    if server_url is None:
+        print(why)
+        return 2
+    identity_pin = read_identity_pin()
+    if identity_pin is not None:
+        problem = verify_identity(server_url, identity_pin)
+        if problem:
+            print(f"refusing the time from {http_base(server_url)}: {problem}")
+            return 2
     try:
-        doc, rtt = fetch(args[0])
+        doc, rtt = fetch(server_url)
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
-        print(f"server unreachable at {http_base(args[0])}/v1/time: {e}")
+        print(f"server unreachable at {http_base(server_url)}/v1/time: {e}")
         return 1
     summary, failed = apply(
         plan(doc, rtt, current_tz=current_zone()), dry_run=dry_run
