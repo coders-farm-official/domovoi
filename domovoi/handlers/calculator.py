@@ -397,6 +397,70 @@ _ANY_DIGIT_RE = re.compile(r"\d")
 _KNOWLEDGE_QUESTION_RE = KNOWLEDGE_QUESTION_RE
 
 
+# ─── Tool-call argument contract ─────────────────────────────────────
+
+# Which args each action needs. Rendered into the tool schema's `action`
+# description AND enforced by execute_from_tool, so the two can't drift.
+# Function-calling JSON has one flat `required` list that can't vary by
+# action, and a small tool model reads descriptions, not JSON-Schema
+# conditionals — so the contract lives in prose the model actually sees.
+_ACTION_REQUIRED: dict[str, str] = {
+    "arithmetic": "expression",
+    "percentage": "kind, percent, value (kind=inverse: value=the total, part)",
+    "unit_convert": "value, src_unit, dst_unit",
+    "date_math": (
+        "kind, plus n for days_forward/days_back/hours_forward/hours_back "
+        "or label for holiday/next_weekday"
+    ),
+    "tip_split": "amount, plus tip_percent and/or people",
+}
+
+# Numeric slot aliases, per action: the schema name first, then the other
+# numeric names a tool model has been seen using for the same quantity.
+# F-V012 (2026-09-22, qwen2.5:14b): with `value` undescribed, 4/4 unit
+# conversions arrived as {"amount": 100, "src_unit": "grams", ...} — the
+# model filed the quantity under the one numeric field whose name fit.
+_NUMERIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "value": ("value", "amount", "quantity", "number"),
+    "amount": ("amount", "value", "total"),
+    "percent": ("percent", "percentage", "tip_percent"),
+    "tip_percent": ("tip_percent", "percent", "percentage"),
+    "part": ("part",),
+    "people": ("people", "n", "ways"),
+    "n": ("n", "value", "amount", "count"),
+}
+
+
+def _number_arg(args: dict, slot: str) -> float | None:
+    """The numeric value the tool model supplied for ``slot``, or None.
+
+    Accepts a number or a numeric string (tool models emit "100", "$45",
+    "1,000" and "20%" now and then) under the slot's own name or one of
+    its aliases. Returns None when the slot is absent, blank or not a
+    number — NEVER 0. A missing quantity is a question to ask, not a
+    zero to compute with: "That's 0.00 ounces." was a confident wrong
+    answer to "how many ounces are in one hundred grams" (F-V012).
+    """
+    for key in _NUMERIC_ALIASES.get(slot, (slot,)):
+        raw = args.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        text = str(raw).strip().lstrip("$").rstrip("%").replace(",", "").strip()
+        if not text:
+            continue
+        try:
+            return float(text)
+        except ValueError:
+            continue
+    return None
+
+
+def _text_arg(args: dict, key: str) -> str:
+    return str(args.get(key) or "").strip()
+
+
 # ─── Handler ─────────────────────────────────────────────────────────
 
 
@@ -433,14 +497,47 @@ class CalculatorHandler(Handler):
                         "date_math",
                         "tip_split",
                     ],
+                    "description": (
+                        "What to compute. Required arguments per action — "
+                        + "; ".join(
+                            f"{action}: {needs}"
+                            for action, needs in _ACTION_REQUIRED.items()
+                        )
+                        + ". Fill every required argument from the "
+                        "utterance; numbers as digits ('one hundred' → 100)."
+                    ),
                 },
                 "expression": {
                     "type": "string",
-                    "description": "Arithmetic expression for action=arithmetic.",
+                    "description": (
+                        "Arithmetic expression for action=arithmetic, "
+                        "e.g. '47 times 89' or 'sqrt(144)'."
+                    ),
                 },
-                "percent": {"type": "number"},
-                "value": {"type": "number"},
-                "part": {"type": "number"},
+                "percent": {
+                    "type": "number",
+                    "description": (
+                        "The percentage figure for action=percentage, as a "
+                        "number: '8 percent tax' → 8, '20% off' → 20."
+                    ),
+                },
+                "value": {
+                    "type": "number",
+                    "description": (
+                        "The quantity to convert for action=unit_convert "
+                        "('one hundred grams in ounces' → 100), or the base "
+                        "amount for action=percentage ('15 percent of 60 "
+                        "dollars' → 60; kind=inverse: the total). Always a "
+                        "plain number taken from the utterance."
+                    ),
+                },
+                "part": {
+                    "type": "number",
+                    "description": (
+                        "For percentage kind=inverse ('what percent of 89 "
+                        "is 47'): the part, 47. value is the total, 89."
+                    ),
+                },
                 "kind": {
                     "type": "string",
                     "description": (
@@ -450,12 +547,50 @@ class CalculatorHandler(Handler):
                         "'next_weekday'."
                     ),
                 },
-                "src_unit": {"type": "string"},
-                "dst_unit": {"type": "string"},
-                "amount": {"type": "number"},
-                "people": {"type": "integer"},
-                "tip_percent": {"type": "number"},
-                "n": {"type": "integer"},
+                "src_unit": {
+                    "type": "string",
+                    "description": (
+                        "Unit to convert FROM for action=unit_convert, "
+                        "e.g. 'grams'."
+                    ),
+                },
+                "dst_unit": {
+                    "type": "string",
+                    "description": (
+                        "Unit to convert TO for action=unit_convert, "
+                        "e.g. 'ounces'."
+                    ),
+                },
+                "amount": {
+                    "type": "number",
+                    "description": (
+                        "The bill amount in dollars for action=tip_split "
+                        "('twenty percent tip on a forty five dollar bill' "
+                        "→ 45). Not for unit_convert — that is value."
+                    ),
+                },
+                "people": {
+                    "type": "integer",
+                    "description": (
+                        "How many people share the bill for action=tip_split "
+                        "('split it 4 ways' → 4)."
+                    ),
+                },
+                "tip_percent": {
+                    "type": "number",
+                    "description": (
+                        "Tip percentage for action=tip_split, as a number: "
+                        "'20 percent tip' → 20."
+                    ),
+                },
+                "n": {
+                    "type": "integer",
+                    "description": (
+                        "Number of days or hours for date_math kinds "
+                        "days_forward/days_back/hours_forward/hours_back "
+                        "('in 4 hours' → 4)."
+                    ),
+                },
                 "label": {
                     "type": "string",
                     "description": "Holiday or weekday name for date_math.",
@@ -524,69 +659,140 @@ class CalculatorHandler(Handler):
     async def execute_from_tool(
         self, args: dict, ctx: Context, session: AsyncSession
     ) -> Response:
+        """Dispatch a tool-router call. Every required argument (see
+        ``_ACTION_REQUIRED``) is checked before anything is computed: a
+        missing one is a question back to the user, never a default. The
+        old ``float(args.get("value") or 0)`` turned "how many ounces are
+        in one hundred grams" into a confident "That's 0.00 ounces."
+        whenever the tool model left ``value`` out (F-V012)."""
         action = args.get("action")
         if action == "arithmetic":
-            expr = (args.get("expression") or "").strip()
+            expr = _text_arg(args, "expression")
+            if not expr:
+                return self._ask(
+                    "What would you like me to calculate?", ctx, missing="expression",
+                )
             return self._respond_arithmetic(expr, ctx)
         if action == "percentage":
             kind = args.get("kind")
-            if kind == "of":
-                return self._respond_percent_of(
-                    float(args.get("percent") or 0),
-                    float(args.get("value") or 0),
-                    money=False,
-                    ctx=ctx,
-                )
             if kind == "inverse":
-                return self._respond_percent_inverse(
-                    float(args.get("value") or 0),
-                    float(args.get("part") or 0),
-                    ctx=ctx,
-                )
-            if kind in ("tax", "off"):
+                total = _number_arg(args, "value")
+                part = _number_arg(args, "part")
+                if total is None:
+                    return self._ask(
+                        "What's the total you want the percentage of?",
+                        ctx, missing="value",
+                    )
+                if part is None:
+                    return self._ask(
+                        "What's the part you want as a percentage of "
+                        f"{_format_number(total)}?",
+                        ctx, missing="part",
+                    )
+                return self._respond_percent_inverse(total, part, ctx=ctx)
+            if kind in ("of", "tax", "off"):
+                pct = _number_arg(args, "percent")
+                value = _number_arg(args, "value")
+                if pct is None:
+                    return self._ask("What percentage did you want?", ctx, missing="percent")
+                if value is None:
+                    question = {
+                        "of": f"{_format_number(pct)} percent of what?",
+                        "tax": "What amount is the tax on?",
+                        "off": "What's the original price?",
+                    }[kind]
+                    return self._ask(question, ctx, missing="value")
+                if kind == "of":
+                    return self._respond_percent_of(pct, value, money=False, ctx=ctx)
                 return self._respond_percent_adjust(
-                    float(args.get("percent") or 0),
-                    float(args.get("value") or 0),
-                    is_tax=(kind == "tax"),
-                    ctx=ctx,
+                    pct, value, is_tax=(kind == "tax"), ctx=ctx,
                 )
         if action == "unit_convert":
-            return self._respond_unit_convert(
-                float(args.get("value") or 0),
-                str(args.get("src_unit") or ""),
-                str(args.get("dst_unit") or ""),
-                ctx=ctx,
-            )
+            value = _number_arg(args, "value")
+            src = _text_arg(args, "src_unit")
+            dst = _text_arg(args, "dst_unit")
+            if value is None:
+                return self._ask("How much did you want to convert?", ctx, missing="value")
+            if not src and not dst:
+                return self._ask(
+                    "What units did you want to convert between?", ctx, missing="src_unit",
+                )
+            if not src:
+                return self._ask(
+                    "What unit did you want to convert from?", ctx, missing="src_unit",
+                )
+            if not dst:
+                return self._ask(
+                    f"What did you want {_format_number(value)} {src} in?",
+                    ctx, missing="dst_unit",
+                )
+            return self._respond_unit_convert(value, src, dst, ctx=ctx)
         if action == "date_math":
             kind = args.get("kind")
-            n = int(args.get("n") or 0)
-            label = (args.get("label") or "").strip()
-            if kind == "days_forward":
-                return self._respond_days_offset(n, ctx)
-            if kind == "days_back":
-                return self._respond_days_offset(-n, ctx)
-            if kind == "hours_forward":
-                return self._respond_hours_offset(n, ctx)
-            if kind == "hours_back":
-                return self._respond_hours_offset(-n, ctx)
+            label = _text_arg(args, "label")
+            if kind in ("days_forward", "days_back", "hours_forward", "hours_back"):
+                n = _number_arg(args, "n")
+                if n is None:
+                    unit = "days" if kind.startswith("days") else "hours"
+                    return self._ask(f"How many {unit}?", ctx, missing="n")
+                count = int(n)
+                if kind == "days_forward":
+                    return self._respond_days_offset(count, ctx)
+                if kind == "days_back":
+                    return self._respond_days_offset(-count, ctx)
+                if kind == "hours_forward":
+                    return self._respond_hours_offset(count, ctx)
+                return self._respond_hours_offset(-count, ctx)
             if kind == "holiday":
+                if not label:
+                    return self._ask("Which holiday?", ctx, missing="label")
                 return self._respond_holiday(label, ctx)
             if kind == "next_weekday":
+                if not label:
+                    return self._ask("Which day of the week?", ctx, missing="label")
+                if label.lower() not in _WEEKDAY_TO_INT:
+                    # A bare KeyError here used to end the turn as a 500.
+                    return Response(
+                        text=f"I don't know which day of the week '{label}' is.",
+                        session_id=ctx.session_id,
+                        matched_handler=self.name,
+                    )
                 return self._respond_next_weekday(label, ctx)
         if action == "tip_split":
-            amount = float(args.get("amount") or 0)
-            tip_pct = float(args.get("tip_percent") or 0)
-            people = int(args.get("people") or 0)
+            amount = _number_arg(args, "amount")
+            tip_pct = _number_arg(args, "tip_percent")
+            people_raw = _number_arg(args, "people")
+            people = int(people_raw) if people_raw is not None else 0
+            if amount is None:
+                return self._ask("What's the bill amount?", ctx, missing="amount")
             if people and tip_pct:
                 return self._respond_split_with_tip(amount, people, tip_pct, ctx)
             if people:
                 return self._respond_split(amount, people, ctx)
             if tip_pct:
                 return self._respond_tip(amount, tip_pct, ctx)
+            return self._ask(
+                f"Split {_format_money(amount)} how many ways, or what tip percentage?",
+                ctx, missing="people",
+            )
         return Response(
             text="I'm not sure what to calculate.",
             session_id=ctx.session_id,
             matched_handler=self.name,
+        )
+
+    def _ask(self, question: str, ctx: Context, *, missing: str) -> Response:
+        """A clarifying question for a tool call that arrived without a
+        required argument. ``expect_followup`` opens the satellite mic for
+        the answer, like every other handler that asks the user something;
+        the answer routes as a fresh turn (a full re-ask such as "convert
+        100 grams to ounces" lands on the fast path)."""
+        return Response(
+            text=question,
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            data={"missing": missing},
+            expect_followup=True,
         )
 
     # ─── Fast-path adapters ──────────────────────────────────────────

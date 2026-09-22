@@ -107,6 +107,34 @@
       "note": "unit conversion"
     },
     {
+      "utterance": "i'd like to know how many ounces one hundred grams is",
+      "handler": "calculator",
+      "path": "llm",
+      "tags": ["calculator", "F-V012"],
+      "note": "F-V012 2026-09-16: routed right but answered 'That's 0.00 ounces.' — qwen2.5:14b filed the quantity under `amount`, not the undescribed `value`; the --ollama detail must show value (or amount) = 100"
+    },
+    {
+      "utterance": "i'd like to know how many ounces 100 grams is",
+      "handler": "calculator",
+      "path": "llm",
+      "tags": ["calculator", "F-V012"],
+      "note": "F-V012 phrasing with digits: same 0.00 answer, so it was never the number words"
+    },
+    {
+      "utterance": "could you tell me what one hundred grams is in ounces",
+      "handler": "calculator",
+      "path": "llm",
+      "tags": ["calculator", "F-V012"],
+      "note": "F-V012 phrasing 3"
+    },
+    {
+      "utterance": "how many ounces are in one hundred grams",
+      "handler": "calculator",
+      "path": "llm",
+      "tags": ["calculator", "F-V012"],
+      "note": "F-V012 phrasing 4: 'one hundred' keeps it off the digit-anchored fast path; 'how many ounces are in 100 grams' is the UTIL-04 fast-path twin"
+    },
+    {
       "utterance": "are you sure about that",
       "handler": "double_check",
       "tags": ["double_check"],

@@ -702,6 +702,16 @@ class Handler(ABC):
   on who/why/where questions with no digit / no library cue — the shared regex
   lives in `handlers/shared/tool_gate.py`). Check the effect with
   `scripts/eval_routing.py`.
+* **Tool arguments**: describe every parameter in `tool_schema` — a small
+  tool model files a number under the best-named field it is shown, so an
+  undescribed `value` next to a self-explanatory `amount` gets the quantity
+  under `amount` (F-V012: four unit conversions answered "That's 0.00
+  ounces."). Function-calling JSON has one flat `required` list, so state
+  per-action requirements in the `action` description. In
+  `execute_from_tool`, treat a missing required argument as a question back
+  to the user (`expect_followup=True`), never as a default: `float(args.get(
+  "value") or 0)` computes a confident wrong answer. The core calculator's
+  `_ACTION_REQUIRED` / `_number_arg` pair is the reference shape.
 
 ### 4.3 Workers and startup hooks
 

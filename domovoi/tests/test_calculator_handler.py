@@ -8,6 +8,7 @@ they short-circuit when Postgres isn't reachable.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from unittest.mock import patch
 
@@ -745,3 +746,279 @@ def test_article_stripping_does_not_eat_real_tokens():
     # "the" inside the expression isn't a prefix and has no business being
     # removed — the expression should be left alone to fail loudly instead.
     assert _normalize_math("12 times the 9") == "12 * the 9"
+
+
+# ─── F-V012: tool-call args — a missing number is a question, never 0 ──────
+# Voice runs 20260915-215003 and 20260916-231946: every unit conversion that
+# reached the calculator through the LLM tool-call path answered "That's
+# 0.00 ounces." The tool model (qwen2.5:14b) extracted the quantity fine but
+# filed it under `amount` — the only numeric field whose name said what it
+# was, `value` had no description — and execute_from_tool did
+# `float(args.get("value") or 0)`. Two contracts below: the schema tells the
+# model which arguments each action needs and what `value` is, and the
+# handler never computes on a number it wasn't given.
+
+_CTX = Context(session_id=None, room_id="kitchen", online=True)
+
+
+def test_tool_schema_describes_every_argument() -> None:
+    """Every parameter carries a description a small tool model can act on,
+    and `value` in particular says it is the unit_convert quantity."""
+    from domovoi.handlers.calculator import _ACTION_REQUIRED
+
+    props = CalculatorHandler.tool_schema["parameters"]["properties"]
+    undescribed = [k for k, v in props.items() if not v.get("description")]
+    assert not undescribed, f"undescribed tool args: {undescribed}"
+    assert "unit_convert" in props["value"]["description"]
+    assert "unit_convert" in props["src_unit"]["description"]
+    assert "unit_convert" in props["dst_unit"]["description"]
+    # `amount` is the field the model reached for; it now says it is not
+    # the unit_convert quantity.
+    assert "unit_convert" in props["amount"]["description"]
+    # The per-action contract is rendered where the model reads it.
+    action_desc = props["action"]["description"]
+    for action in props["action"]["enum"]:
+        assert action in _ACTION_REQUIRED, f"no arg contract for {action}"
+        assert f"{action}: {_ACTION_REQUIRED[action]}" in action_desc
+    assert "unit_convert: value, src_unit, dst_unit" in action_desc
+
+
+@pytest.mark.parametrize(
+    ("args", "missing"),
+    [
+        # The measured F-V012 shape minus the mis-filed number.
+        ({"action": "unit_convert", "src_unit": "grams", "dst_unit": "ounces"}, "value"),
+        ({"action": "unit_convert", "value": None, "src_unit": "g", "dst_unit": "oz"}, "value"),
+        ({"action": "unit_convert", "value": "", "src_unit": "g", "dst_unit": "oz"}, "value"),
+        ({"action": "unit_convert", "value": "one hundred", "src_unit": "g", "dst_unit": "oz"}, "value"),
+        ({"action": "unit_convert", "value": 100, "dst_unit": "oz"}, "src_unit"),
+        ({"action": "unit_convert", "value": 100, "src_unit": "grams"}, "dst_unit"),
+        ({"action": "unit_convert", "value": 100}, "src_unit"),
+        ({"action": "percentage", "kind": "of", "value": 60}, "percent"),
+        ({"action": "percentage", "kind": "of", "percent": 15}, "value"),
+        ({"action": "percentage", "kind": "tax", "percent": 8}, "value"),
+        ({"action": "percentage", "kind": "off", "percent": 20}, "value"),
+        ({"action": "percentage", "kind": "inverse", "part": 47}, "value"),
+        ({"action": "percentage", "kind": "inverse", "value": 89}, "part"),
+        ({"action": "date_math", "kind": "days_forward"}, "n"),
+        ({"action": "date_math", "kind": "hours_back"}, "n"),
+        ({"action": "date_math", "kind": "holiday"}, "label"),
+        ({"action": "date_math", "kind": "next_weekday"}, "label"),
+        ({"action": "tip_split", "tip_percent": 20}, "amount"),
+        ({"action": "tip_split", "people": 4}, "amount"),
+        ({"action": "tip_split", "amount": 50}, "people"),
+        ({"action": "arithmetic"}, "expression"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else v["action"] + ":" + ",".join(sorted(v)),
+)
+@pytest.mark.asyncio
+async def test_execute_from_tool_missing_arg_asks_never_computes(args, missing) -> None:
+    resp = await CalculatorHandler().execute_from_tool(dict(args), _CTX, session=None)
+    assert resp.matched_handler == "calculator"
+    assert resp.data.get("missing") == missing, resp.text
+    assert resp.text.endswith("?"), f"expected a question, got {resp.text!r}"
+    assert resp.expect_followup is True
+    # And nothing was computed on a phantom zero ("$50.00" in a question
+    # that echoes a real amount is fine; a bare "0.00" result is not).
+    assert not re.search(r"\b0\.00\b", resp.text), resp.text
+    assert not resp.text.startswith("That's")
+
+
+@pytest.mark.asyncio
+async def test_execute_from_tool_unit_convert_missing_value_wording() -> None:
+    resp = await CalculatorHandler().execute_from_tool(
+        {"action": "unit_convert", "src_unit": "grams", "dst_unit": "ounces"},
+        _CTX, session=None,
+    )
+    assert resp.text == "How much did you want to convert?"
+
+
+@pytest.mark.asyncio
+async def test_execute_from_tool_unit_convert_quantity_under_amount() -> None:
+    """The exact args qwen2.5:14b produced for all four F-V012 phrasings
+    (2026-09-22 A/B): the quantity is there, just not under `value`."""
+    resp = await CalculatorHandler().execute_from_tool(
+        {"action": "unit_convert", "src_unit": "grams", "dst_unit": "ounces", "amount": 100},
+        _CTX, session=None,
+    )
+    assert resp.text == "That's 3.53 ounces."
+    assert resp.data["value"] == 100
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ({"action": "unit_convert", "value": "100", "src_unit": "grams", "dst_unit": "ounces"}, "That's 3.53 ounces."),
+        ({"action": "unit_convert", "value": "1,000", "src_unit": "m", "dst_unit": "km"}, "That's 1.00 km."),
+        ({"action": "percentage", "kind": "tax", "percent": "8%", "value": "$45"}, "$48.60"),
+        ({"action": "tip_split", "amount": "$50", "tip_percent": "20"}, "$10.00 tip on $50.00"),
+        ({"action": "tip_split", "amount": 200, "people": "4"}, "Each person owes $50.00."),
+        ({"action": "date_math", "kind": "days_forward", "n": "3"}, "3 days from now is"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execute_from_tool_numeric_strings_are_numbers(args, expected) -> None:
+    """Tool models emit "100", "$45" and "20%" as strings now and then; a
+    parseable string is a number, not a missing argument."""
+    resp = await CalculatorHandler().execute_from_tool(args, _CTX, session=None)
+    assert expected in resp.text, resp.text
+    assert resp.expect_followup is False
+
+
+@pytest.mark.asyncio
+async def test_execute_from_tool_zero_is_a_real_value() -> None:
+    """A genuine 0 must still compute — only ABSENCE is a question."""
+    resp = await CalculatorHandler().execute_from_tool(
+        {"action": "unit_convert", "value": 0, "src_unit": "grams", "dst_unit": "ounces"},
+        _CTX, session=None,
+    )
+    assert resp.text == "That's 0.00 ounces."
+    assert resp.expect_followup is False
+
+
+@pytest.mark.asyncio
+async def test_execute_from_tool_next_weekday_unknown_label_does_not_crash() -> None:
+    """kind=next_weekday with a label that is not a weekday used to raise
+    KeyError out of the router — a 500 for the whole turn."""
+    resp = await CalculatorHandler().execute_from_tool(
+        {"action": "date_math", "kind": "next_weekday", "label": "christmas"},
+        _CTX, session=None,
+    )
+    assert "christmas" in resp.text
+    assert resp.matched_handler == "calculator"
+
+
+# ─── F-V012 routed: tool-call path and fast path agree (DB-free) ──────────
+
+
+class _FakeSessionRepo:
+    """Enough of SessionRepository for a routed tool-call turn, no DB."""
+
+    def __init__(self, session) -> None:
+        pass
+
+    async def get_or_create(self, session_id, room_id):
+        from uuid import uuid4
+
+        return session_id or uuid4()
+
+    async def get_context(self, session_id):
+        return {}
+
+    async def set_context_key(self, session_id, key, value) -> None:
+        return None
+
+    async def record_exchange(self, session_id, user_text, assistant_text, cap):
+        return None
+
+
+class _RecordingLogRepo:
+    rows: list[dict] = []
+
+    def __init__(self, session) -> None:
+        pass
+
+    async def log(self, **kw) -> None:
+        type(self).rows.append(kw)
+
+    async def record_turn(self, **kw) -> None:
+        type(self).rows.append(kw)
+
+
+class _StubToolRouter:
+    """An Ollama client whose tool router returns a fixed call — the
+    shape RealOllamaClient.route() hands back: {handler, args}."""
+
+    def __init__(self, call: dict | None) -> None:
+        self.call = call
+        self.seen: list[tuple[str, list[str]]] = []
+
+    async def route(self, transcript, tool_schemas):
+        self.seen.append((transcript, [s["name"] for s in tool_schemas]))
+        return self.call
+
+
+def _route_db_free(monkeypatch, transcript: str, call: dict | None):
+    """route() with the repositories and the tool model faked out."""
+    import domovoi.router as router_mod
+    from domovoi.router import route
+
+    intent_rows: list[dict] = []
+
+    class _IntentRepo(_RecordingLogRepo):
+        rows = intent_rows
+
+    class _ConvoRepo(_RecordingLogRepo):
+        rows = []
+
+    client = _StubToolRouter(call)
+    monkeypatch.setattr(router_mod, "SessionRepository", _FakeSessionRepo)
+    monkeypatch.setattr(router_mod, "IntentLogRepository", _IntentRepo)
+    monkeypatch.setattr(router_mod, "ConversationLogRepository", _ConvoRepo)
+    monkeypatch.setattr(router_mod, "get_ollama_client", lambda: client)
+    return (
+        route(Intent(transcript=transcript, room_id="kitchen"), Context(room_id="kitchen", online=True), None),
+        client,
+        intent_rows,
+    )
+
+
+# The four phrasings from the runs; none of them hits a calculator regex.
+_FV012_PHRASINGS = [
+    "i'd like to know how many ounces one hundred grams is",
+    "i'd like to know how many ounces 100 grams is",
+    "could you tell me what one hundred grams is in ounces",
+    "how many ounces are in one hundred grams",
+]
+
+
+@pytest.mark.parametrize("transcript", _FV012_PHRASINGS)
+@pytest.mark.asyncio
+async def test_routed_tool_call_without_value_asks(monkeypatch, transcript) -> None:
+    """The tool router names the calculator with the units but no
+    quantity: the turn must come back as a question on the llm path,
+    not as "That's 0.00 ounces."."""
+    coro, client, intent_rows = _route_db_free(
+        monkeypatch, transcript,
+        {"handler": "calculator", "args": {"action": "unit_convert", "src_unit": "grams", "dst_unit": "ounces"}},
+    )
+    response = await coro
+    assert client.seen and "calculator" in client.seen[0][1], "calculator was not offered"
+    assert response.matched_handler == "calculator"
+    assert response.matched_path == "llm"
+    assert response.text == "How much did you want to convert?"
+    assert response.expect_followup is True
+    assert intent_rows and intent_rows[-1]["matched_path"] == "llm"
+
+
+@pytest.mark.asyncio
+async def test_routed_tool_call_with_value_matches_fast_path(monkeypatch) -> None:
+    """With the quantity supplied, the tool-call path says exactly what
+    the fast path says for the regex-shaped phrasing (UTIL-04)."""
+    coro, _, _ = _route_db_free(
+        monkeypatch, "i'd like to know how many ounces one hundred grams is",
+        {"handler": "calculator", "args": {"action": "unit_convert", "value": 100, "src_unit": "grams", "dst_unit": "ounces"}},
+    )
+    via_tool = await coro
+    assert via_tool.matched_path == "llm"
+    assert via_tool.text == "That's 3.53 ounces."
+
+    coro, client, _ = _route_db_free(monkeypatch, "how many ounces are in 100 grams", None)
+    via_fast = await coro
+    assert via_fast.matched_handler == "calculator"
+    assert via_fast.matched_path == "fast"
+    assert client.seen == [], "a fast-path turn must never reach the tool model"
+    assert via_fast.text == via_tool.text
+
+
+@pytest.mark.asyncio
+async def test_routed_tool_call_quantity_under_amount_answers(monkeypatch) -> None:
+    """The args the tool model actually produced on 2026-09-22 route to
+    the right number instead of 0."""
+    coro, _, _ = _route_db_free(
+        monkeypatch, "how many ounces are in one hundred grams",
+        {"handler": "calculator", "args": {"action": "unit_convert", "src_unit": "grams", "dst_unit": "ounces", "amount": 100}},
+    )
+    response = await coro
+    assert response.matched_path == "llm"
+    assert response.text == "That's 3.53 ounces."
