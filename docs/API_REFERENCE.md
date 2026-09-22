@@ -536,7 +536,7 @@ picked up by the core's background trainer. The default wake word is
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/wake-words` | — | Registry: slug, status (`recording`/`training`/`ready`/`failed`), clip counts, threshold. |
-| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. |
+| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. `phrase` must match `^[A-Za-z0-9 ,.'-]+$` (letters, digits, spaces and spoken punctuation, ≤ 120 chars) — it becomes an argument to the operator's `WAKE_WORD_TRAIN_COMMAND`, so `422` for anything else. |
 | `POST /api/wake-words/{id}/record/start` | `{room_id}` | Proxy → core: satellite starts capturing positive clips. |
 | `POST /api/wake-words/{id}/record/stop` | `{room_id}` | Proxy → core: stop capturing. |
 | `POST /api/wake-words/{id}/train` | — | Queue training (the background trainer picks it up). |

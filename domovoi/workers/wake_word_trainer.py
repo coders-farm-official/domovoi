@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -47,7 +48,48 @@ from sqlalchemy import text
 from domovoi import wake_clip_quality
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.models import WAKE_PHRASE_PATTERN
 from domovoi.workers.base import Worker
+
+# Compiled once; every queued row is checked against it before its
+# phrase becomes an argument to the operator's training command.
+_PHRASE_RE = re.compile(WAKE_PHRASE_PATTERN)
+
+
+def phrase_is_speakable(phrase: str | None) -> bool:
+    """Is this a phrase someone could say out loud — letters, digits,
+    spaces and the punctuation that appears inside a spoken name?
+
+    The bound exists because the phrase becomes an ARGUMENT to
+    ``wake_word_train_command``, which the README suggests writing as a
+    ``docker run …`` / ``wsl …`` wrapper.
+    """
+    return bool(_PHRASE_RE.match(phrase or ""))
+
+
+def build_train_argv(cmd_template: str, **values: str) -> list[str]:
+    """Turn the operator's command TEMPLATE into an argv list.
+
+    The template is split into tokens FIRST and each placeholder is then
+    substituted inside a single token, so a value is always exactly one
+    element of argv. Formatting the whole string and splitting afterwards
+    — which is what this used to do — let a value containing a quote or a
+    space decide how many arguments the command received, and where they
+    landed relative to, say, an image name.
+
+    posix=False on Windows so the substituted Windows paths (the clips /
+    out dirs live under ~/.domovoi) keep their backslashes: POSIX mode
+    treats "\\" as an escape and would mangle "C:\\Users\\…" into
+    "C:UsersKamron…". Domovoi is the Windows host that shells out (e.g.
+    to a ``wsl …`` / ``docker …`` wrapper), so Windows-style tokenizing
+    is correct here.
+
+    Raises ``ValueError`` for an unparseable template and
+    ``KeyError`` / ``IndexError`` / ``ValueError`` for an unknown or
+    malformed placeholder — the caller turns those into a failed row.
+    """
+    tokens = shlex.split(cmd_template, posix=(os.name != "nt"))
+    return [token.format(**values) for token in tokens]
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +151,19 @@ class WakeWordTrainer(Worker):
         slug = row["slug"]
         phrase = row["phrase"]
 
+        # CORE-10. The web route bounds the phrase on the way in; this is
+        # the same check where it matters, because a row may predate that
+        # bound or have arrived another way, and the next thing that
+        # happens to `phrase` is that it becomes an argument to a command
+        # the operator configured.
+        if not phrase_is_speakable(phrase):
+            await self._mark_failed(
+                wake_word_id,
+                "wake-word phrase must be letters, digits, spaces, "
+                "or the punctuation , . ' -",
+            )
+            return 1
+
         cmd_template = (settings.wake_word_train_command or "").strip()
         if not cmd_template:
             # Training is gated/unconfigured — fail loudly with the runbook so
@@ -141,22 +196,21 @@ class WakeWordTrainer(Worker):
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            cmd = cmd_template.format(
+            argv = build_train_argv(
+                cmd_template,
                 clips_dir=str(clips_dir),
                 phrase=phrase,
                 slug=slug,
                 out=str(out_path),
             )
-            # posix=False on Windows so the substituted Windows paths (the
-            # clips/out dirs live under ~/.domovoi) keep their backslashes —
-            # POSIX mode treats "\" as an escape and would mangle "C:\Users\…"
-            # into "C:UsersKamron…". Domovoi is the Windows host that shells out
-            # (e.g. to a `wsl …` / `docker …` wrapper), so Windows-style
-            # tokenizing is correct here.
-            argv = shlex.split(cmd, posix=(os.name != "nt"))
         except (KeyError, IndexError, ValueError) as e:
             await self._mark_failed(
                 wake_word_id, f"bad wake_word_train_command template: {e}"
+            )
+            return 1
+        if not argv:
+            await self._mark_failed(
+                wake_word_id, "wake_word_train_command is empty after splitting"
             )
             return 1
 

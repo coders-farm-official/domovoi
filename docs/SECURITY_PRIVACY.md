@@ -128,6 +128,26 @@ so a page that cannot call the REST API cannot open a socket either. An
 every command-line client send none, and only a browser is bound by the
 rule this enforces.
 
+### The wake-word phrase never reaches a shell
+
+Automatic wake-word training shells out to a command the operator writes
+(`WAKE_WORD_TRAIN_COMMAND` — on Windows typically a `wsl …` or
+`docker run …` wrapper), with the phrase substituted in. Two rules keep
+the phrase an argument and nothing more:
+
+* the template is split into tokens FIRST and each value is substituted
+  inside a single token, so **a substituted value is always exactly one
+  element of argv** — it cannot become several arguments, and cannot land
+  ahead of an image name. The command is run with a list, never through a
+  shell;
+* a phrase must match `^[A-Za-z0-9 ,.'-]+$` — letters, digits, spaces and
+  the punctuation that appears inside a spoken name. The dashboard route
+  answers `422` for anything else, and the trainer re-checks every queued
+  row before it runs, for rows that predate the bound.
+
+Training stays off by default: it needs both `WAKE_WORD_TRAINER_ENABLED`
+and a non-empty `WAKE_WORD_TRAIN_COMMAND`.
+
 ### How much a request may weigh
 
 Both processes refuse a request body over 1 MiB with `413`, before it is

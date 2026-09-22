@@ -20,6 +20,15 @@ MAX_ROOM_ID_CHARS = 120
 # edits more than a screenful at a time.
 MAX_CONFIG_CHANGES = 500
 
+# What a wake-word phrase may contain. A phrase is words a person says
+# out loud — letters, digits, spaces, and the punctuation that shows up
+# inside a spoken name ("hey, jarvis", "o'brien", "wake-up"). Nothing
+# else, because the phrase is handed to the operator's configured
+# training command (wake_word_train_command), and a value that can carry
+# quotes or shell metacharacters into that is not a phrase.
+WAKE_PHRASE_PATTERN = r"^[A-Za-z0-9 ,.'-]+$"
+MAX_WAKE_PHRASE_CHARS = 120
+
 
 class Intent(BaseModel):
     transcript: str = Field(..., max_length=MAX_TRANSCRIPT_CHARS)
