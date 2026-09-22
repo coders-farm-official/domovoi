@@ -705,7 +705,24 @@ class Satellite:
         self._raw_q_callbacks = 0
         self._raw_q_last_drop_log = 0.0
         self.playback_q: queue.Queue[tuple[int, bytes]] = queue.Queue()
-        self.send_q: asyncio.Queue[tuple[str, Any]] | None = None  # set in run()
+        # The thread → asyncio bridge to the core. Non-None ONLY while a
+        # session is up: created at the top of `_run_session`, nulled in
+        # `_on_session_ended`. While it is None, `_emit_text` /
+        # `_emit_audio` drop at the source. An earlier draft left the old
+        # queue in place across an outage: the mic thread kept running the
+        # wake → capture path (the canned-clip branch only arms after
+        # `wifi.degraded_after_disconnect_sec`), every frame landed in a
+        # queue nothing drained, and the next session replaced it wholesale
+        # — up to `max_record_seconds` of PCM per wake, held for the whole
+        # outage and then lost silently.
+        self.send_q: asyncio.Queue[tuple[str, Any]] | None = None
+        # Counter + last-log timestamp for the rate-limited "capture dropped,
+        # core unreachable" warning — same shape as the raw_q overflow
+        # warning above, for the same reason: `_emit_audio` runs at frame
+        # rate during a capture. Both reset when a session comes up, so the
+        # first drop of each outage logs at once.
+        self._offline_drops = 0
+        self._offline_drop_last_log = 0.0
 
         self.shutdown_event = threading.Event()
         # Set when a startup step fails unrecoverably. main() turns this into
@@ -1045,15 +1062,52 @@ class Satellite:
 
     # ── Sender bridge (thread → asyncio) ──────────────────────────────
 
-    def _emit_text(self, payload: dict[str, Any]) -> None:
-        if self.loop is None or self.send_q is None:
-            return
-        self.loop.call_soon_threadsafe(self.send_q.put_nowait, ("text", json.dumps(payload)))
+    # Both emitters return True when the frame was handed to a live session's
+    # queue and False when it was dropped because no session is up. Callers
+    # that go on to wait for the core's reply (`_stream_capture`) use that to
+    # skip a wait nothing will satisfy. The queue is read into a local first:
+    # `_on_session_ended` nulls it from the loop thread while these run on
+    # the mic / wifi threads, so the None check and the use must see the
+    # same object. A frame that slips into the outgoing session's queue in
+    # that window is harmless — the queue is unreferenced once nulled.
 
-    def _emit_audio(self, frame: bytes) -> None:
-        if self.loop is None or self.send_q is None:
-            return
-        self.loop.call_soon_threadsafe(self.send_q.put_nowait, ("bytes", frame))
+    def _emit_text(self, payload: dict[str, Any]) -> bool:
+        loop, q = self.loop, self.send_q
+        if loop is None or q is None:
+            # Status frames (wifi / volume / voice / config / display) are
+            # dropped silently: `_run_session` re-emits every one of them on
+            # reconnect, so nothing is lost and nothing is worth a log line.
+            return False
+        loop.call_soon_threadsafe(q.put_nowait, ("text", json.dumps(payload)))
+        return True
+
+    def _emit_audio(self, frame: bytes) -> bool:
+        loop, q = self.loop, self.send_q
+        if loop is None or q is None:
+            self._note_offline_drop()
+            return False
+        loop.call_soon_threadsafe(q.put_nowait, ("bytes", frame))
+        return True
+
+    def _note_offline_drop(self) -> None:
+        """Count an audio frame dropped for want of a session; warn, rate-limited.
+
+        Runs at frame rate from the mic thread during a capture, so the
+        warning is held to one per 30 s the way the raw_q overflow warning
+        is. The count is the running total for this outage (reset when a
+        session comes up), so the latest line always carries the size of
+        what the user said into the void.
+        """
+        self._offline_drops += 1
+        now = time.monotonic()
+        if now - self._offline_drop_last_log > 30.0:
+            log.warning(
+                "core unreachable: dropping captured audio at the source "
+                "(%d frames so far this outage). The utterance is lost, not "
+                "queued — it will not be delivered on reconnect.",
+                self._offline_drops,
+            )
+            self._offline_drop_last_log = now
 
     async def _send_logs(self, request_id: str, max_bytes: int | None) -> None:
         """Answer a `get_logs` frame: stream the log ring back in chunks.
@@ -2880,7 +2934,14 @@ class Satellite:
         is set and the user didn't start speaking within that window —
         used by the follow-up flow so a "did I get that right?" prompt
         that gets ignored doesn't hold the mic open for the full 30 s
-        ``max_record_seconds``.
+        ``max_record_seconds`` — OR if the closing control frame could not
+        be handed to a live session. In every case False means "no reply is
+        coming; do not wait for one." The last case matters when the wake
+        fires during a reconnect backoff: the frames are dropped at the
+        source, and `_on_session_ended` (which normally releases
+        `response_done`) has already run, so a caller that waited anyway
+        would sit in `_await_response_with_barge` until the NEXT session
+        ended — hours, if the reconnect right after the wake succeeds.
 
         Tracks frame dBFS during capture and, if the median ends up
         meaningfully above the calibrated noise gate, emits a
@@ -3017,17 +3078,26 @@ class Satellite:
                     )
                     self._maybe_recalibrate(capture_dbfs)
                     self._leds.set_state("error")
-                    self._emit_text({"type": "noisy_capture"})
-                    return True  # successful exit, just via the noisy path
+                    # Successful exit, just via the noisy path — unless the
+                    # frame went nowhere, in which case the apology TTS the
+                    # caller would wait for is not coming either.
+                    return self._emit_text({"type": "noisy_capture"})
 
         self._leds.set_state("thinking")
-        self._emit_text({
+        delivered = self._emit_text({
             "type": "utterance_end",
             "greeting_played": self._greeting_played_this_turn,
         })
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False
-        return True
+        if not delivered:
+            log.info(
+                "capture ended with no session up; the utterance was dropped "
+                "at the source, returning to wake-word listen without "
+                "waiting for a reply"
+            )
+            self._leds.set_state("idle")
+        return delivered
 
     def _await_response_with_barge(self, oww) -> str:
         """Wait for response_end, monitoring for barge-in during playback.
@@ -3751,8 +3821,10 @@ class Satellite:
                 if not self._stream_capture(prefix, pre_speech_timeout_sec=pre_speech_timeout):
                     if self.shutdown_event.is_set():
                         return
-                    # Follow-up timeout — user didn't reply. Drop back
-                    # to wake-word listen instead of exiting the thread.
+                    # Follow-up timeout (user didn't reply), or the core was
+                    # unreachable and the utterance was dropped at the source.
+                    # Either way no reply is coming: drop back to wake-word
+                    # listen instead of exiting the thread.
                     break
 
                 outcome = self._await_response_with_barge(oww)
@@ -3799,8 +3871,12 @@ class Satellite:
 
     async def _sender_loop(self) -> None:
         assert self.ws is not None and self.send_q is not None
+        # Bind the queue once: this task drains the queue of the session it
+        # was started for, and `_on_session_ended` nulls the attribute while
+        # the cancel is still in flight.
+        q = self.send_q
         while True:
-            kind, data = await self.send_q.get()
+            kind, data = await q.get()
             try:
                 if kind == "text":
                     await self.ws.send(data)
@@ -4237,6 +4313,12 @@ class Satellite:
             async with websockets.connect(url, max_size=2**24) as ws:
                 self.ws = ws
                 self.send_q = asyncio.Queue()
+                # A session is up, so the outage is over: re-arm the
+                # dropped-capture warning so the first drop of the NEXT
+                # outage logs at once instead of waiting out a 30 s window
+                # that started during this one.
+                self._offline_drops = 0
+                self._offline_drop_last_log = 0.0
                 await ws.send(json.dumps({
                     "type": "hello",
                     "room_id": self.cfg.room_id,
@@ -4337,8 +4419,16 @@ class Satellite:
         Also drains pending TTS playback (a half-cut response is worse
         than silence) and resets the LED to idle (otherwise it'd stay
         "speaking" or "thinking" indefinitely).
+
+        And it nulls `send_q`, so everything the other threads emit until
+        the next session is dropped at the source (see the field's comment
+        in `__init__`) rather than piling into a queue nothing drains.
         """
         log.info("session ended; signaling mic thread to drop back to wake-word listen")
+        # First, so a frame the mic thread emits while the rest of this
+        # runs is dropped rather than queued. Idempotent: on a failed
+        # reconnect this runs with the queue already gone.
+        self.send_q = None
         self.response_done.set()
         self.playback_active.clear()
         self.stop_playback.set()
