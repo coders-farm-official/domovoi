@@ -54,6 +54,8 @@ from web.backend import realtime as realtime_mod
 from web.backend.middleware import (
     BodyLimitMiddleware,
     RequireRequestedWithMiddleware,
+    SecurityHeadersMiddleware,
+    cors_origin_regex,
 )
 from web.backend.realtime import (
     DEFAULT_POLL_INTERVAL_SEC,
@@ -232,10 +234,10 @@ app = FastAPI(
 # ─── Write backstop (WEB-6) ───────────────────────────────────────────────
 # A write under /api/ without X-Requested-With is refused here, in front of
 # the router, so no endpoint runs and nothing reads the body. Registered
-# LAST and therefore innermost (Starlette wraps user_middleware[0]
-# outermost): CORS still answers its own preflight, and an oversized body
-# is still refused 413 by the limiter below whether or not it brought the
-# header.
+# FIRST and therefore INNERMOST (add_middleware inserts at the front of
+# user_middleware and the front is the outer wrapper), so CORS still
+# answers its own preflight and an oversized body is still refused 413 by
+# the limiter below whether or not it brought the header.
 app.add_middleware(RequireRequestedWithMiddleware)
 
 
@@ -245,29 +247,29 @@ app.add_middleware(RequireRequestedWithMiddleware)
 app.add_middleware(BodyLimitMiddleware)
 
 
-# ─── CORS ─────────────────────────────────────────────────────────────────
-# LAN-trust: allow localhost + RFC 1918 ranges for cross-origin requests
-# from the browser when the user opens the UI by IP. Refuses public
-# origins as a basic defense against malicious websites trying to hit
-# the user's LAN device when they happen to have a tab open elsewhere.
-# This is belt-and-suspenders next to binding only to LAN interfaces.
+# ─── CORS (WEB-8) ─────────────────────────────────────────────────────────
+# LAN-trust, narrowed to THIS PORT: a browser opening the dashboard by IP
+# works, and so does the server switcher pointing one dashboard at another
+# Domovoi — both are this port on a LAN host. Every other service on the
+# same machine is a different origin but the same site, and the old
+# any-port regex let a page served by one of them read this API with the
+# dashboard's cookie attached.
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=(
-        r"^https?://("
-        r"localhost(:\d+)?"
-        r"|127\.0\.0\.1(:\d+)?"
-        r"|192\.168\.\d+\.\d+(:\d+)?"
-        r"|10\.\d+\.\d+\.\d+(:\d+)?"
-        r"|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+(:\d+)?"
-        r"|[\w-]+\.local(:\d+)?"
-        r")$"
-    ),
+    allow_origin_regex=cors_origin_regex(_PORT),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Response headers (WEB-8) ─────────────────────────────────────────────
+# Registered last, so it wraps everything above and stamps CSP,
+# X-Frame-Options, nosniff and Referrer-Policy onto every response this
+# process makes — including a CORS preflight and the refusals from the two
+# middlewares above.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ─── API routes ───────────────────────────────────────────────────────────

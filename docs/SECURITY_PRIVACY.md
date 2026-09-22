@@ -462,6 +462,43 @@ sniffer could capture a token in transit. Pairing raises the bar from "walk
 up and impersonate any room" to "already-on-the-wire at pairing time or
 sniffing the token," but the LAN is still the trust boundary.
 
+## Response headers and cross-origin rules
+
+Every response this process makes — the dashboard shell, the static
+bundle, plugin assets, API JSON, and the refusals above — carries:
+
+| Header | Value | What it buys |
+|---|---|---|
+| `Content-Security-Policy` | see below | Nothing may frame this page; no plugin or object embeds; no `<base>` rewriting every relative URL on it. |
+| `X-Frame-Options` | `DENY` | The same, for anything that predates `frame-ancestors`. |
+| `X-Content-Type-Options` | `nosniff` | A stored file served back from `/api/files/raw` is treated as the type the server declared, never guessed into a page. |
+| `Referrer-Policy` | `no-referrer` | Media reads may carry the household token in the query string (`?device_token=`), and a referrer would hand that URL to whatever you click through to. |
+
+The policy is `default-src 'self'` with `object-src`, `base-uri` and
+`frame-ancestors` set to `'none'`, and three deliberate loosenings:
+
+* `script-src` allows `'unsafe-inline'` and `'unsafe-eval'`. The dashboard
+  compiles its own JSX in the browser (`@babel/standalone`) and runs a
+  plugin's page code through `new Function`; without both, the bundle is a
+  blank page. This is the cost of the zero-build frontend, and it is why
+  the other directives are worth having.
+* `connect-src` is open. The server switcher points one dashboard at
+  *another* Domovoi on the LAN, and CSP cannot express "any RFC 1918 host"
+  the way the CORS regex can.
+* `img-src` / `media-src` are open, because a plugin page renders artwork
+  from whatever service it fronts.
+
+**CORS is pinned to this process's own port.** A LAN host (or `localhost`,
+or an mDNS `.local` name) *on the web port* may make credentialed
+cross-origin calls — that is the server switcher, and nothing else. The
+previous rule allowed any port on a LAN host, and a port is not a site: a
+page served by some other service on the same machine sat inside the
+allowance and could read this API with the dashboard's cookie attached.
+
+The plugin-install proxy also refuses a body over 64 MB (`413`) rather than
+buffering it, since the core — not this process — is what decides whether
+the caller may install anything.
+
 ## HARDENING BACKLOG — deferred in v1, on purpose
 
 These are not oversights; they're documented scope decisions. Plain

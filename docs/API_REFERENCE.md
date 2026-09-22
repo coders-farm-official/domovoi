@@ -104,7 +104,18 @@ same rule; a plugin page that uses the dashboard's `apiPost` / `apiPatch` /
 `apiDelete` helpers inherits the header, and one that builds its own
 `fetch` must add it.
 
-### 1.3 Error shapes
+### 1.3 Response headers
+
+Every response carries `Content-Security-Policy`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The
+CSP allows inline and `eval`'d script (the dashboard compiles JSX in the
+browser) but forbids framing, objects and `<base>`; see
+`docs/SECURITY_PRIVACY.md`.
+
+Credentialed cross-origin requests are allowed only from a LAN host on
+**this process's own port** — the server switcher, and nothing else.
+
+### 1.4 Error shapes
 
 * Standard errors are FastAPI-shaped: `{"detail": "<message>"}` with an
   appropriate 4xx/5xx status.
@@ -116,7 +127,7 @@ same rule; a plugin page that uses the dashboard's `apiPost` / `apiPatch` /
   unchanged. Plugin-management proxies return `503` when the core process
   itself is unreachable.
 
-### 1.4 Realtime WebSockets
+### 1.5 Realtime WebSockets
 
 | Socket | Process | Purpose |
 |---|---|---|
@@ -302,7 +313,7 @@ ranges, and `*.local` origins only.
 | `GET /plugins/{slug}/static/{path}` | Open | — | A plugin's `web/static` assets. Containment-checked; `404` when the plugin is disabled. |
 | `GET /api/plugins` | Open | — | Installed plugins with the fields the admin list renders: manifest metadata, permissions, capabilities, handlers, pages, `web_load_error`. |
 | `GET /api/plugins/{slug}/purge-preview` | Open | — | What uninstall-with-purge would drop: `{schema: "plugin_<slug>", tables: [{table, rows}]}`. |
-| `POST /api/plugins/install` | Admin, fail-closed (core gates) | zip upload or `{"github_url"}` | Proxy to core `POST /v1/plugins/install`, auth forwarded, response verbatim. `503` when the core is down. |
+| `POST /api/plugins/install` | Admin, fail-closed (core gates) | zip upload or `{"github_url"}` | Proxy to core `POST /v1/plugins/install`, auth forwarded, response verbatim. `503` when the core is down; `413` for a body over 64 MB, refused here rather than buffered (`WEB_PLUGIN_MAX_UPLOAD_BYTES`). |
 | `POST /api/plugins/install/{staged_id}/confirm` | Admin, fail-closed (core) | — | Proxy of the confirm phase. |
 | `POST /api/plugins/{slug}/enable` | Admin, fail-closed (core) | — | Proxy. |
 | `POST /api/plugins/{slug}/disable` | Admin, fail-closed (core) | — | Proxy. |

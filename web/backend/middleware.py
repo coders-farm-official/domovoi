@@ -5,9 +5,14 @@ in front of streamed responses (audio ranges, SSE chat, zip downloads) and
 ``BaseHTTPMiddleware`` buffers those through an anyio stream. Each one
 passes non-``http`` scopes (``websocket``, ``lifespan``) straight through.
 
-``BodyLimitMiddleware`` meters request bodies; ``RequireRequestedWithMiddleware``
-is the preflight backstop in front of every write. WEB-8 adds the
-response-header middleware alongside them.
+``BodyLimitMiddleware`` meters request bodies, ``RequireRequestedWithMiddleware``
+is the preflight backstop in front of every write, and
+``SecurityHeadersMiddleware`` stamps the response headers on everything this
+process serves.
+
+Registration order in ``main.py`` decides nesting: ``add_middleware`` puts
+each new one at the FRONT of ``user_middleware``, and the front is the
+outermost wrapper. So the last one registered sees a request first.
 """
 
 from __future__ import annotations
@@ -39,6 +44,10 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # A Piper voice: the .onnx (voices.py caps the model itself at 200 MB)
     # plus its .onnx.json and two form fields.
     ("/api/voices/piper", 210 * MB),
+    # A plugin zip on its way to the core, which is what actually decides
+    # whether this caller may install anything (api/plugins.py keeps the
+    # same ceiling for a body that arrives without a Content-Length).
+    ("/api/plugins/install", 66 * MB),
 )
 
 
@@ -180,6 +189,107 @@ class RequireRequestedWithMiddleware:
         return not any(
             key == wanted and value.strip() for key, value in scope.get("headers", ())
         )
+
+
+# ─── Response headers (WEB-8) ─────────────────────────────────────────────
+
+# The dashboard compiles its own JSX in the browser (@babel/standalone) and
+# runs a plugin's page code through `new Function`, so 'unsafe-eval' and
+# 'unsafe-inline' are the price of the zero-build bundle — see
+# web/static/index.html. What is worth having anyway is the rest: nothing
+# may frame this page, no plugin or object embeds, no <base> rewrite of
+# every relative URL on it.
+#
+# Two directives stay wide on purpose:
+#   * connect-src — the server switcher points the dashboard at ANOTHER
+#     Domovoi on the LAN (data.js API_BASE), and a CSP cannot express "any
+#     RFC 1918 host" the way the CORS regex can;
+#   * img-src / media-src — plugin pages render artwork from whatever
+#     service they front (a Jellyfin poster, a RomM box art).
+CSP = "; ".join((
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src * data: blob:",
+    "media-src * data: blob:",
+    "font-src 'self' data:",
+    "connect-src * ws: wss: data: blob:",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "frame-src 'self' http: https:",
+    "form-action 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+))
+
+SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
+    (b"content-security-policy", CSP.encode()),
+    # For anything that predates frame-ancestors.
+    (b"x-frame-options", b"DENY"),
+    # A stored file served from /api/files/raw is data, never a page.
+    (b"x-content-type-options", b"nosniff"),
+    # Media reads may carry the household token in the query
+    # (require_device_read's ?device_token=), so send no referrer anywhere.
+    (b"referrer-policy", b"no-referrer"),
+)
+
+
+class SecurityHeadersMiddleware:
+    """Stamp the response headers on everything this process serves — the
+    dashboard shell, the static bundle, plugin assets, API JSON and the
+    refusals from the middleware above it.
+
+    Registered last in main.py, which makes it outermost (Starlette wraps
+    ``user_middleware[0]``, the most recently added, around everything
+    else), so a CORS preflight and a 403 from the write backstop carry the
+    headers too. An endpoint that sets one of these itself keeps its own
+    value.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                present = {k.lower() for k, _ in headers}
+                for key, value in SECURITY_HEADERS:
+                    if key not in present:
+                        headers.append((key, value))
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+def cors_origin_regex(port: int) -> str:
+    """Origins allowed to make credentialed cross-origin calls: a LAN host
+    (or localhost, or an mDNS name) **on this process's own port**.
+
+    The port matters. Every other service on the same machine — a media
+    server, a printer's web UI, anything a household runs — is a different
+    origin but the *same site*, so a page served by one of them sat inside
+    the old any-port regex and could read this API with the dashboard's
+    cookie attached. The only cross-origin caller that legitimately exists
+    is another Domovoi dashboard reached through the server switcher, and
+    that one answers on this same port.
+    """
+    return (
+        r"^https?://("
+        r"localhost"
+        r"|127\.0\.0\.1"
+        r"|\[::1\]"
+        r"|192\.168\.\d{1,3}\.\d{1,3}"
+        r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+        r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+        r"|[\w-]+\.local"
+        r"):" + str(int(port)) + r"$"
+    )
 
 
 def _content_length(scope: Scope) -> int | None:
