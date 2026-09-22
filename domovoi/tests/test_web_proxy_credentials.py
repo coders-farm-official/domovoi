@@ -126,6 +126,11 @@ def _caller_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {ADMIN_TOKEN}",
         admin_auth.DEVICE_TOKEN_HEADER: DEVICE_TOKEN,
+        # WEB-6: a write under /api/ without this is refused 403 in front
+        # of the router, so a caller that omits it never reaches the hop
+        # this module is about. Every real client sends one (the dashboard
+        # `XMLHttpRequest`, the app `DomovoiApp`).
+        "X-Requested-With": "domovoi-tests",
     }
 
 

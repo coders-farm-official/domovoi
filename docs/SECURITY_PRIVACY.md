@@ -150,8 +150,12 @@ address it found and asks *trust this server?* before anything is stored.
 Until that confirmation nothing is persisted, no plugin JS is fetched or
 executed, no credential is sent, and on Android no capability or plugin
 route is loaded. Same-origin (the box that served the dashboard) is trusted
-by construction. Verifying a server's identity cryptographically (and TLS
-with pinning) stays on the hardening backlog.
+by construction. A **satellite** does verify its server cryptographically
+— see "Server identity (which core a satellite belongs to)" below — but the
+browser and the phone do not pin a key here yet: **Settings → About** shows
+this install's fingerprint so a person can compare it by eye against the
+one printed on a prepared card, and pinning it in the picker (with TLS)
+stays on the hardening backlog.
 
 ### Which names the server answers to
 
