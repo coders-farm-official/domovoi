@@ -420,13 +420,17 @@ const ModelsPanel = () => {
   const cancel = (j) =>
     guard(async () => { await apiPost(`/api/models/pull/${j.id}/cancel`, {}); }, 'pull cancelled');
 
-  const del = (m) => {
-    if (!window.confirm(`Delete ${m.name} from disk? It can be re-pulled later.`)) return;
-    return guard(async () => {
+  // The shared delete confirm (F-009) instead of window.confirm, so every
+  // Settings delete asks the same way.
+  const delConfirm = useDeleteConfirm((m) =>
+    guard(async () => {
       await apiDelete(`/api/models/${encodeURIComponent(m.name)}`);
       await refreshInstalled();
-    }, `deleted ${m.name}`);
-  };
+    }, `deleted ${m.name}`));
+  const del = (m) => delConfirm.request(m, {
+    title: `Delete ${m.name} from disk?`,
+    body: <div>The model files are removed from this machine. It can be pulled again from the catalog later.</div>,
+  });
 
   const [pullName, setPullName] = React.useState('');
   const submitPull = (e) => {
@@ -506,6 +510,7 @@ const ModelsPanel = () => {
           sub="Custom openWakeWord models — record clips on a satellite, train, push." tab="wakewords"/>
       </Card>
 
+      {delConfirm.node}
       {node}
     </React.Fragment>
   );

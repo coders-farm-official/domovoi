@@ -120,8 +120,13 @@ const GreetingsPanel = () => {
     guard(() => apiPatch(`/api/greetings/${g.id}`, patch), 'greeting updated');
   const toggle = (g) =>
     guard(() => apiPatch(`/api/greetings/${g.id}`, { enabled: !g.enabled }));
-  const remove = (g) =>
-    guard(() => apiDelete(`/api/greetings/${g.id}`), 'greeting removed');
+  // Deletes confirm first (F-009) — the trash icon used to be the delete.
+  const del = useDeleteConfirm((g) =>
+    guard(() => apiDelete(`/api/greetings/${g.id}`), 'greeting removed'));
+  const remove = (g) => del.request(g, {
+    title: 'Delete this greeting?',
+    body: <div>“{g.text}” leaves the {g.category} bank and satellites stop playing it. This can’t be undone.</div>,
+  });
 
   const generic = items.filter((g) => g.category === 'generic');
   const funny = items.filter((g) => g.category === 'funny');
@@ -149,6 +154,7 @@ const GreetingsPanel = () => {
           </Card>
         </React.Fragment>
       )}
+      {del.node}
       {node}
     </React.Fragment>
   );
@@ -341,8 +347,15 @@ const VoicesPanel = () => {
     guard(() => apiPatch(`/api/voices/${v.id}`, { name }), 'voice renamed');
   const setDefault = (v) =>
     guard(() => apiPatch(`/api/voices/${v.id}`, { set_default: true }), `${v.name} is now the default`);
-  const remove = (v) =>
-    guard(() => apiDelete(`/api/voices/${v.id}`), 'voice removed');
+  // Deletes confirm first (F-009): a Piper voice is an uploaded model file.
+  const del = useDeleteConfirm((v) =>
+    guard(() => apiDelete(`/api/voices/${v.id}`), 'voice removed'));
+  const remove = (v) => del.request(v, {
+    title: `Delete the voice “${v.name}”?`,
+    body: v.engine === 'piper'
+      ? <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>
+      : <div>Satellites using it fall back to the default voice. Register the id again to bring it back.</div>,
+  });
 
   return (
     <React.Fragment>
@@ -367,6 +380,7 @@ const VoicesPanel = () => {
           ))}
         </Card>
       )}
+      {del.node}
       {node}
     </React.Fragment>
   );
@@ -973,8 +987,13 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
         'poor clips deselected');
   const reanalyze = () =>
     act(() => apiPost(`/api/wake-words/${wid}/clips/reanalyze`, {}), 're-analyzed clips');
-  const del = (c) =>
-    act(() => apiDelete(`/api/wake-words/${wid}/clips/${encodeURIComponent(c.name)}`), `deleted ${c.name}`);
+  // Deletes confirm first (F-009): a clip is a recording that can't be re-taken.
+  const delConfirm = useDeleteConfirm((c) =>
+    act(() => apiDelete(`/api/wake-words/${wid}/clips/${encodeURIComponent(c.name)}`), `deleted ${c.name}`));
+  const del = (c) => delConfirm.request(c, {
+    title: `Delete clip ${c.name}?`,
+    body: <div>The recording is removed from disk and no longer counts toward training. Record another one on a room to replace it.</div>,
+  });
   const score = () =>
     act(async () => {
       const res = await apiPost(`/api/wake-words/${wid}/score`, {});
@@ -1007,6 +1026,7 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
                         onPlay={play} onToggle={toggle} onDelete={del}/>
         ))}
       </div>
+      {delConfirm.node}
     </div>
   );
 };
@@ -1246,8 +1266,14 @@ const WakeWordsPanel = () => {
     return guard(() => apiPost(`/api/wake-words/${w.id}/push`, { room_id: room }),
       `pushed “${w.name}” to ${room}`);
   };
-  const remove = (w) =>
-    guard(() => apiDelete(`/api/wake-words/${w.id}`), 'wake word removed');
+  // Deletes confirm first (F-009): a wake word is recorded clips plus a
+  // trained model — the most expensive thing on this page to lose.
+  const del = useDeleteConfirm((w) =>
+    guard(() => apiDelete(`/api/wake-words/${w.id}`), 'wake word removed'));
+  const remove = (w) => del.request(w, {
+    title: `Delete the wake word “${w.name}”?`,
+    body: <div>Its recorded clips and trained model are deleted with it — they can’t be recovered. Satellites keep the model already pushed to them until another one is pushed.</div>,
+  });
 
   return (
     <React.Fragment>
@@ -1276,6 +1302,7 @@ const WakeWordsPanel = () => {
           ))}
         </Card>
       )}
+      {del.node}
       {node}
     </React.Fragment>
   );

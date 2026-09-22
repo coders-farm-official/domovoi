@@ -680,64 +680,39 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
   );
 };
 
-/* Delete confirmation dialog. A recursive (folder) delete gets a loud
- * warning; a files-only delete is a plain confirm. */
-const DeleteConfirmDialog = ({ state, busy, onCancel, onConfirm }) => {
+/* Files' delete confirmation: the shared DeleteConfirmDialog
+ * (components.jsx) with the entry list in the body and a loud warning
+ * when a folder — a recursive delete — is among them. */
+const FilesDeleteConfirm = ({ state, busy, onCancel, onConfirm }) => {
   if (!state) return null;
   const { entries } = state;
   const folders = entries.filter((e) => e.is_dir);
   const recursive = folders.length > 0;
   const n = entries.length;
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.45)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-         onClick={onCancel}>
-      <div onClick={(e) => e.stopPropagation()}
-           style={{ width: 'min(460px, 100%)', background: 'var(--card)',
-                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
-                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
-                      borderBottom: '1px solid var(--border-soft)' }}>
-          <Icon name="trash-2" size={16}/>
-          <strong style={{ fontSize: 14 }}>
-            Delete {n} item{n === 1 ? '' : 's'}?
-          </strong>
+    <DeleteConfirmDialog title={`Delete ${n} item${n === 1 ? '' : 's'}?`} busy={busy}
+                         confirmLabel={recursive ? 'Delete everything' : 'Delete'}
+                         onCancel={onCancel} onConfirm={() => onConfirm(entries)}>
+      {recursive ? (
+        <div style={{ padding: '9px 11px', borderRadius: 'var(--r-md)',
+                      background: 'var(--danger-soft, rgba(220,80,60,0.12))',
+                      border: '1px solid var(--danger, #d8503c)', color: 'var(--fg)' }}>
+          <strong>{folders.length} folder{folders.length === 1 ? '' : 's'}</strong>{' '}
+          and everything inside {folders.length === 1 ? 'it' : 'them'} will be permanently
+          deleted. This can’t be undone.
         </div>
-        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10,
-                      fontSize: 13, color: 'var(--fg-muted)' }}>
-          {recursive && (
-            <div style={{ padding: '9px 11px', borderRadius: 'var(--r-md)',
-                          background: 'var(--danger-soft, rgba(220,80,60,0.12))',
-                          border: '1px solid var(--danger, #d8503c)', color: 'var(--fg)' }}>
-              <strong>{folders.length} folder{folders.length === 1 ? '' : 's'}</strong>{' '}
-              and everything inside {folders.length === 1 ? 'it' : 'them'} will be permanently
-              deleted. This can’t be undone.
-            </div>
-          )}
-          {!recursive && <div>This can’t be undone.</div>}
-          <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex',
-                        flexDirection: 'column', gap: 3 }}>
-            {entries.map((e) => (
-              <div key={e.rel} className="mono"
-                   style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 7,
-                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                <Icon name={e.is_dir ? 'folder' : 'file'} size={13}/>{e.rel}
-              </div>
-            ))}
+      ) : <div>This can’t be undone.</div>}
+      <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex',
+                    flexDirection: 'column', gap: 3 }}>
+        {entries.map((e) => (
+          <div key={e.rel} className="mono"
+               style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 7,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <Icon name={e.is_dir ? 'folder' : 'file'} size={13}/>{e.rel}
           </div>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
-                      borderTop: '1px solid var(--border-soft)' }}>
-          <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
-          <Button variant="primary" icon="trash-2" disabled={busy}
-                  onClick={() => onConfirm(entries)}
-                  style={{ background: 'var(--danger, #d8503c)', borderColor: 'var(--danger, #d8503c)',
-                           color: '#fff' }}>
-            {busy ? 'Deleting…' : (recursive ? 'Delete everything' : 'Delete')}
-          </Button>
-        </div>
+        ))}
       </div>
-    </div>
+    </DeleteConfirmDialog>
   );
 };
 
@@ -1168,7 +1143,7 @@ const FilesPage = () => {
                            onClose={() => setDrawing(null)}
                            onSaved={() => refresh()} fire={fire}/>
       )}
-      <DeleteConfirmDialog state={confirmState} busy={busy === 'deleting'}
+      <FilesDeleteConfirm state={confirmState} busy={busy === 'deleting'}
                            onCancel={() => setConfirmState(null)}
                            onConfirm={performDelete}/>
       {toastNode}

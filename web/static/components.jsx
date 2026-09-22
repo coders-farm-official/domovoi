@@ -225,6 +225,81 @@ const IconButton = ({ name, ...rest }) => (
   </button>
 );
 
+/* ---- Delete confirmation ------------------------------------ */
+/* The one confirm every destructive delete in the dashboard goes
+ * through. Files shipped its own while Settings had none at all — the
+ * first click on a trash icon deleted a trained wake word, its recorded
+ * clips or an uploaded Piper voice with nothing in between (F-009).
+ * `children` is the body (default: the plain "can't be undone" line);
+ * `title` names what is about to go, so the operator can tell a
+ * misclick from the row they meant. Clicking the backdrop cancels,
+ * except while the delete is in flight. */
+const DeleteConfirmDialog = ({ open = true, title = 'Delete?', busy = false, confirmLabel = 'Delete',
+                               icon = 'trash-2', onCancel, onConfirm, children }) => {
+  if (!open) return null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.45)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+         onClick={busy ? undefined : onCancel}>
+      <div role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+           style={{ width: 'min(460px, 100%)', background: 'var(--card)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
+                      borderBottom: '1px solid var(--border-soft)' }}>
+          <Icon name={icon} size={16}/>
+          <strong style={{ fontSize: 14 }}>{title}</strong>
+        </div>
+        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10,
+                      fontSize: 13, color: 'var(--fg-muted)' }}>
+          {children || <div>This can’t be undone.</div>}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
+                      borderTop: '1px solid var(--border-soft)' }}>
+          <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" icon={icon} disabled={busy} onClick={onConfirm}
+                  style={{ background: 'var(--danger, #d8503c)', borderColor: 'var(--danger, #d8503c)',
+                           color: '#fff' }}>
+            {busy ? 'Deleting…' : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* The pending-delete state a list panel needs to put DeleteConfirmDialog
+ * in front of its delete handler:
+ *
+ *   const del = useDeleteConfirm((item) => remove(item));
+ *   <IconButton name="trash-2" onClick={() => del.request(item, { title, body })}/>
+ *   {del.node}
+ *
+ * `perform` runs on confirm and the dialog closes once it settles — a
+ * failure is the caller's to report (its guard/toast), not the dialog's. */
+const useDeleteConfirm = (perform) => {
+  const [pending, setPending] = React.useState(null);   // { item, title, body, confirmLabel }
+  const [busy, setBusy] = React.useState(false);
+  const performRef = React.useRef(perform);
+  performRef.current = perform;
+  const request = (item, { title, body, confirmLabel } = {}) =>
+    setPending({ item, title, body, confirmLabel });
+  const cancel = () => { if (!busy) setPending(null); };
+  const confirm = async () => {
+    if (!pending) return;
+    setBusy(true);
+    try { await performRef.current(pending.item); }
+    finally { setBusy(false); setPending(null); }
+  };
+  const node = pending ? (
+    <DeleteConfirmDialog title={pending.title} busy={busy} confirmLabel={pending.confirmLabel}
+                         onCancel={cancel} onConfirm={confirm}>
+      {pending.body}
+    </DeleteConfirmDialog>
+  ) : null;
+  return { request, cancel, confirm, pending, node };
+};
+
 /* ---- Time helpers ------------------------------------------- */
 /* Use wall-clock NOW so relative timestamps tick as data flows in.
  * The skill's demo bundle pinned NOW to a fixed sample date so its
@@ -811,5 +886,5 @@ const AuthModalHost = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  relTime, fmtDur, LoginModal, AuthModalHost,
+  relTime, fmtDur, LoginModal, AuthModalHost, DeleteConfirmDialog, useDeleteConfirm,
 });
