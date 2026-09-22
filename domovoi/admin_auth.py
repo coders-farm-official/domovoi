@@ -488,7 +488,10 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
 async def reset_admin() -> str:
     """``--reset-admin`` (§7.2 password recovery): drop the credential
     and every session, regenerate + persist a fresh setup code. Returns
-    the new code (the CLI prints it)."""
+    the new code (the CLI prints it). The install is back in the
+    pre-setup state: the daily surface keeps its LAN grace, the security
+    tier (:func:`require_admin_security`) stays closed until setup
+    completes again."""
     async with session_scope() as s:
         await s.execute(text("DELETE FROM admin_sessions"))
         await s.execute(text("DELETE FROM admin_auth"))

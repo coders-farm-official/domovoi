@@ -27,8 +27,8 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from domovoi import git_version
-from domovoi.db.session import engine
+from domovoi import admin_auth, git_version
+from domovoi.db.session import engine, session_scope
 from domovoi.main import _SAT_CODE_EXT_ALLOW, app
 from domovoi.streaming import StreamSession
 from domovoi.tests.conftest import TABLES_TO_TRUNCATE, requires_db
@@ -41,6 +41,15 @@ async def _truncate_between_tests():
             text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE")
         )
     yield
+
+
+async def _admin_headers() -> dict[str, str]:
+    """The upgrade endpoint is security-tier (Bearer-only, 501 before
+    setup): claim admin through the primitives and return the header."""
+    async with session_scope() as s:
+        await admin_auth.set_password(s, "correct-horse-battery")
+        token = await admin_auth.create_session(s, "test")
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ─── Satellite-code manifest endpoint ────────────────────────────────────
@@ -138,7 +147,9 @@ async def test_admin_satellite_upgrade_503_with_no_sessions() -> None:
         app.state.active_sessions = {}
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post(
-                "/v1/admin/satellite/upgrade", json={"room_id": "kitchen"}
+                "/v1/admin/satellite/upgrade",
+                json={"room_id": "kitchen"},
+                headers=await _admin_headers(),
             )
     assert r.status_code == 503
     assert "no satellites" in r.json()["detail"].lower()
@@ -155,7 +166,9 @@ async def test_admin_satellite_upgrade_404_for_unknown_room() -> None:
         app.state.active_sessions = {"kitchen": fake}
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post(
-                "/v1/admin/satellite/upgrade", json={"room_id": "garage"}
+                "/v1/admin/satellite/upgrade",
+                json={"room_id": "garage"},
+                headers=await _admin_headers(),
             )
     assert r.status_code == 404
     assert "garage" in r.json()["detail"]
@@ -173,7 +186,9 @@ async def test_admin_satellite_upgrade_requests_and_logs() -> None:
         app.state.active_sessions = {"kitchen": kitchen}
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post(
-                "/v1/admin/satellite/upgrade", json={"room_id": "kitchen"}
+                "/v1/admin/satellite/upgrade",
+                json={"room_id": "kitchen"},
+                headers=await _admin_headers(),
             )
         assert r.status_code == 200, r.text
         body = r.json()

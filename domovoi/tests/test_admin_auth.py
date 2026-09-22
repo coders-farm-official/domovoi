@@ -31,7 +31,7 @@ from domovoi import admin_auth
 from domovoi.acquisitions import ACQUISITIONS
 from domovoi.db.session import engine
 from domovoi.main import app as core_app
-from domovoi.tests.conftest import TABLES_TO_TRUNCATE, requires_db
+from domovoi.tests.conftest import _DB_OK, TABLES_TO_TRUNCATE, requires_db
 from web.backend.main import app as web_app
 
 STRONG_PW = "correct-horse-battery"
@@ -49,6 +49,11 @@ async def _auth_isolation(tmp_path, monkeypatch):
     monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")
     admin_auth.LOGIN_BACKOFF.reset()
     admin_auth.URL_FETCH_LIMITER.reset()
+    if not _DB_OK:
+        # The DB-free tests in this module must run (not error) without
+        # Postgres — the requires_db ones skip on their own.
+        yield
+        return
     async with engine.begin() as conn:
         await conn.execute(
             text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE")
@@ -404,15 +409,16 @@ async def test_gated_route_matrix_web() -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_pre_setup_grace_vs_fail_closed() -> None:
-    """Before setup: daily/admin-bridge surfaces keep the open
-    LAN-trust grace, but plugin MANAGEMENT fails closed (501 — install
-    is code execution, §7.1)."""
+    """Before setup: daily surfaces and admin READS keep the open
+    LAN-trust grace, but the SECURITY tier (config write, like plugin
+    management) fails closed with 501 — install is code execution
+    (§7.1) and a config write can change what the server runs."""
     core_app.state.config_apply_lock = asyncio.Lock()
     async with _core() as core:
         r = await core.get("/v1/admin/config")
         assert r.status_code == 200
         r = await core.post("/v1/admin/config", json={"changes": {}})
-        assert r.status_code == 200
+        assert r.status_code == 501
         r = await core.post("/v1/plugins/nonexistent/enable", json={})
         assert r.status_code == 501
 

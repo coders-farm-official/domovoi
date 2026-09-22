@@ -118,8 +118,20 @@ const _authHeaders = () => {
   try { return (typeof Auth !== 'undefined' && Auth.headers()) || {}; }
   catch { return {}; }
 };
+// Before first-run setup the security tier (config write, service
+// restart, satellite code push, pairing changes) answers 501 rather than
+// letting the request through — the setup modal is the right prompt for
+// that, exactly as it is for a 401 once setup is done. Only while the
+// status probe says setup is incomplete: a 501 from a set-up server is a
+// real "not implemented" and stays an error.
+const _setupPending = () => {
+  try {
+    return typeof Auth !== 'undefined' && !!Auth.status
+      && Auth.status.setup_complete === false;
+  } catch { return false; }
+};
 const _maybeRequestLogin = (status) => {
-  if (status !== 401 && status !== 403) return;
+  if (status !== 401 && status !== 403 && !(status === 501 && _setupPending())) return;
   try { if (typeof Auth !== 'undefined') Auth.requestLogin(); } catch {}
 };
 
@@ -143,7 +155,9 @@ const _maybeRequestLogin = (status) => {
 // web→core hop that forgets to forward credentials, say — and prompting
 // for it forever is a login-modal loop standing where a visible error
 // belongs.
-const _isAuthStatus = (status) => status === 401 || status === 403;
+const _isAuthStatus = (status) => (
+  status === 401 || status === 403 || (status === 501 && _setupPending())
+);
 
 const _isMutation = (method) => {
   const m = (method || 'GET').toUpperCase();

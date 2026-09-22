@@ -155,12 +155,18 @@ On first boot the core service prints an 8-word **setup code** to its console
 `http://<server>:6369`, go to **Settings → Configuration → Admin → "set up
 admin"**, enter the setup code, and choose an admin password. (The same
 prompt also appears automatically the first time you attempt any
-admin-gated action.) The code file is deleted the moment setup completes.
+admin-gated action.) The code is valid for 24 hours (restart the core for a
+fresh one) and the file is deleted the moment setup completes. Until setup
+is done, configuration writes, service restarts, satellite code pushes and
+pairing changes answer 501 — finish setup first.
 
 Day-to-day features work without logging in — the admin password gates the
-risky operations (plugin installs, configuration, credentials). Forgot the
-password? Run `python -m domovoi.main --reset-admin` on the server to clear
-it and print a fresh setup code.
+risky operations (plugin installs, configuration, credentials). The
+household **device token** in `~/.domovoi/device-token.txt` (also shown in
+the dashboard once you are logged in) is what your phones and dashboards
+will present for ordinary actions. Forgot the password? Run
+`python -m domovoi.main --reset-admin` on the server to clear it and print a
+fresh setup code.
 
 ### 3. Add your first satellite
 

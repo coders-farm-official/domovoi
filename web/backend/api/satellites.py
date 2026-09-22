@@ -26,7 +26,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_admin_security,
+)
 
 from satellite import provisioning_protocol as proto
 
@@ -107,9 +111,9 @@ async def list_pending() -> list[PendingSatellite]:
 @router.post(
     "/pending/{pending_id}/adopt",
     # Writes Wi-Fi credentials to a device and mints its pairing token —
-    # security-tier, Bearer-only (the core preseed applies the same gate;
-    # credentials are forwarded).
-    dependencies=[Depends(require_admin_mutation)],
+    # security-tier: Bearer-only, 501 before setup (the core preseed
+    # applies the same gate; credentials are forwarded).
+    dependencies=[Depends(require_admin_security)],
 )
 async def adopt_pending(pending_id: str, body: AdoptRequest, request: Request):
     """Adopt a pending satellite: validate the room name, preseed pairing on
@@ -269,7 +273,11 @@ async def reject_satellite(room_id: str, request: Request):
     )
 
 
-@router.delete("/{room_id}", dependencies=[Depends(require_admin_mutation)])
+@router.delete(
+    "/{room_id}",
+    # Security tier at both hops: Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
 async def delete_satellite(room_id: str, request: Request, purge: bool = False):
     """Remove a satellite and release its room name.
 
@@ -633,9 +641,10 @@ async def set_display(room_id: str, body: DisplayRequest):
 
 @router.post(
     "/{room_id}/upgrade",
-    # §7.3 gated list: satellite code push is admin-tier, Bearer-only.
-    # The core applies the same gate; credentials are forwarded.
-    dependencies=[Depends(require_admin_mutation)],
+    # §7.3 gated list: satellite code push is security-tier — Bearer-only,
+    # 501 before setup. The core applies the same gate; credentials are
+    # forwarded.
+    dependencies=[Depends(require_admin_security)],
 )
 async def upgrade(room_id: str, request: Request):
     """Ask a satellite to sync its code from the Domovoi server and self-restart.
@@ -702,9 +711,10 @@ async def patch_satellite_config(room_id: str, body: ConfigUpdateRequest):
 @router.post(
     "/{room_id}/pairing/reset",
     # §7.3 gated list: resetting a satellite's pairing is a SECURITY op (it
-    # lets the next connection re-pair as this room), so it's admin-tier,
-    # Bearer-only. The core applies the same gate; credentials are forwarded.
-    dependencies=[Depends(require_admin_mutation)],
+    # lets the next connection re-pair as this room), so it's security-tier:
+    # Bearer-only, 501 before setup. The core applies the same gate;
+    # credentials are forwarded.
+    dependencies=[Depends(require_admin_security)],
 )
 async def reset_pairing(room_id: str, request: Request):
     """Reset a satellite's WS pairing (V002): delete its pairing row so the

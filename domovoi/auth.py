@@ -16,7 +16,11 @@ uninstall / upgrade) are gated through :func:`require_admin`:
 
 Token validation (sha256 lookup + 30-day sliding expiry) lives in
 :mod:`domovoi.admin_auth`, shared with the web process — both validate
-against the same ``admin_sessions`` table.
+against the same ``admin_sessions`` table. The same fail-closed posture
+now covers the rest of the security tier (config write, service restart,
+satellite code push, pairing preseed / reset, satellite delete) through
+:func:`domovoi.admin_auth.require_admin_security`; this module keeps the
+plugin-specific wording.
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.admin_auth import require_admin_read, require_admin_security
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -81,8 +81,9 @@ async def get_editable_config(request: Request):
 
 @router.patch(
     "/config/editable",
-    # §7.3: config writes are admin-tier mutations — Bearer-only.
-    dependencies=[Depends(require_admin_mutation)],
+    # §7.3: config writes are security-tier mutations — Bearer-only and
+    # 501 before setup, at both hops.
+    dependencies=[Depends(require_admin_security)],
 )
 async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
     """Apply config changes through the Domovoi server (validate → persist to
@@ -120,7 +121,8 @@ async def check_version():
 
 @router.post(
     "/config/version/restart",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier at both hops: Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
 )
 async def restart_version(request: Request):
     """Bounce the Domovoi services so pulled code actually loads.

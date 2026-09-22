@@ -1254,9 +1254,10 @@ async def admin_version_pull() -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/version/restart",
-    # Admin-tier: this bounces the host's services. Same gate as the
+    # Security tier: this bounces the host's services. Same gate as the
     # satellite code push, for the same reason — it changes what runs.
-    dependencies=[Depends(require_admin_mutation)],
+    # Fails closed (501) until an admin password exists.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_version_restart() -> dict[str, Any]:
     """Bounce domovoi-core + domovoi-web so pulled code actually loads.
@@ -1274,9 +1275,9 @@ class _AdminSatelliteUpgradeBody(BaseModel):
 
 @app.post(
     "/v1/admin/satellite/upgrade",
-    # §7.3 gated list: satellite code push is admin-tier (it makes a Pi
-    # execute freshly-synced code). Bearer-only post-setup.
-    dependencies=[Depends(require_admin_mutation)],
+    # §7.3 gated list: satellite code push is security-tier (it makes a
+    # Pi execute freshly-synced code). Bearer-only; 501 before setup.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_upgrade(
     body: _AdminSatelliteUpgradeBody,
@@ -1835,10 +1836,10 @@ async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
 @app.delete(
     "/v1/admin/satellites/{room_id}/pairing",
     # Resetting a pairing is a SECURITY op (it lets the next connection
-    # re-pair as this room), so it's admin-tier, Bearer-only. The web
-    # backend forwards the caller's credentials; both processes validate
-    # against the same admin_sessions table.
-    dependencies=[Depends(require_admin_mutation)],
+    # re-pair as this room), so it's security-tier: Bearer-only and 501
+    # before setup. The web backend forwards the caller's credentials;
+    # both processes validate against the same admin_sessions table.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
     """Delete a room's satellite pairing row (V002) so the NEXT `hello` for
@@ -1875,8 +1876,9 @@ class _PreseedPairingBody(BaseModel):
 @app.post(
     "/v1/admin/satellites/{room_id}/pairing/preseed",
     # Pre-seeding mints the room's WS-auth token — a SECURITY op like the
-    # reset above: admin-tier, Bearer-only, credentials forwarded by the web.
-    dependencies=[Depends(require_admin_mutation)],
+    # reset above: Bearer-only, 501 before setup, credentials forwarded by
+    # the web.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_preseed_satellite_pairing(
     room_id: str, body: _PreseedPairingBody
@@ -1929,7 +1931,9 @@ async def admin_preseed_satellite_pairing(
 
 @app.delete(
     "/v1/admin/satellites/{room_id}",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: removing a satellite (and, with purge, its pairing and
+    # MPD instance) frees the room for another device. 501 before setup.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_delete_satellite(
     room_id: str, request: Request, purge: bool = False
@@ -3084,8 +3088,10 @@ class _AdminConfigUpdateBody(BaseModel):
 
 @app.post(
     "/v1/admin/config",
-    # §7.3: config writes are admin-tier mutations — Bearer-only.
-    dependencies=[Depends(require_admin_mutation)],
+    # §7.3: config writes are security-tier mutations — Bearer-only, and
+    # 501 before setup (a write here can point the core at another
+    # database or change what it runs).
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
     """Validate, persist, and (where the tier allows) live-apply config

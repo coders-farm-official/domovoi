@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 import web.backend.api.satellites as sat_api
 import web.backend.satellite_adoption as adoption
+from domovoi import admin_auth
 from domovoi.db.repositories import SatellitesRepository
 from domovoi.db.session import engine, session_scope
 from domovoi.tests.conftest import requires_db
@@ -46,10 +47,25 @@ def _truncate() -> None:
     async def _t():
         async with engine.begin() as conn:
             await conn.execute(
-                text("TRUNCATE satellites, satellite_pairings CASCADE")
+                text(
+                    "TRUNCATE satellites, satellite_pairings, admin_auth, "
+                    "admin_sessions CASCADE"
+                )
             )
 
     _run(_t())
+
+
+def _admin_headers() -> dict[str, str]:
+    """Adopt is security-tier (Bearer-only, 501 before setup): claim admin
+    through the primitives and return the header."""
+
+    async def _claim() -> str:
+        async with session_scope() as s:
+            await admin_auth.set_password(s, "correct-horse-battery")
+            return await admin_auth.create_session(s, "test")
+
+    return {"Authorization": f"Bearer {_run(_claim())}"}
 
 
 def _write_device_info(vol: Path, **overrides) -> dict:
@@ -81,6 +97,14 @@ def volume(tmp_path, monkeypatch):
 def client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def admin_client(client):
+    """The same app client carrying an admin Bearer (the adopt route is
+    security-tier)."""
+    client.headers.update(_admin_headers())
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -166,11 +190,11 @@ ADOPT_BODY = {
 }
 
 
-def test_adopt_happy_path_writes_valid_provision(client, volume, monkeypatch, caplog):
+def test_adopt_happy_path_writes_valid_provision(admin_client, volume, monkeypatch, caplog):
     calls = _fake_admin_hops(monkeypatch)
-    client.get("/api/satellites/pending")  # populate the nonce→mount cache
+    admin_client.get("/api/satellites/pending")  # populate the nonce→mount cache
     with caplog.at_level(logging.INFO):
-        r = client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
+        r = admin_client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "provisioned"
 
@@ -196,7 +220,7 @@ def test_adopt_happy_path_writes_valid_provision(client, volume, monkeypatch, ca
     assert "c" * 64 not in caplog.text
 
 
-def test_adopt_409_on_existing_room(client, volume, monkeypatch):
+def test_adopt_409_on_existing_room(admin_client, volume, monkeypatch):
     _fake_admin_hops(monkeypatch)
 
     async def fake_rooms():
@@ -204,29 +228,29 @@ def test_adopt_409_on_existing_room(client, volume, monkeypatch):
                  "last_connected_at": None}]
 
     monkeypatch.setattr(sat_api, "_list_rooms", fake_rooms)
-    client.get("/api/satellites/pending")
-    r = client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
+    admin_client.get("/api/satellites/pending")
+    r = admin_client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
     assert r.status_code == 409
     assert "already exists" in r.json()["detail"]
 
 
-def test_adopt_410_when_device_vanished(client, volume, monkeypatch):
+def test_adopt_410_when_device_vanished(admin_client, volume, monkeypatch):
     _fake_admin_hops(monkeypatch)
-    client.get("/api/satellites/pending")
+    admin_client.get("/api/satellites/pending")
     (volume / proto.DEVICE_INFO_NAME).unlink()
-    r = client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
+    r = admin_client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
     assert r.status_code == 410
 
 
-def test_adopt_rolls_back_preseed_on_write_failure(client, volume, monkeypatch):
+def test_adopt_rolls_back_preseed_on_write_failure(admin_client, volume, monkeypatch):
     calls = _fake_admin_hops(monkeypatch)
 
     def boom(mount, doc):
         raise OSError("device yanked")
 
     monkeypatch.setattr(adoption, "write_provision", boom)
-    client.get("/api/satellites/pending")
-    r = client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
+    admin_client.get("/api/satellites/pending")
+    r = admin_client.post(f"/api/satellites/pending/{NONCE}/adopt", json=ADOPT_BODY)
     assert r.status_code == 410
     assert calls["delete"] == ["/v1/admin/satellites/den"]
 

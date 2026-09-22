@@ -10,6 +10,9 @@ Covers:
   * ``DELETE /v1/admin/satellites/{room}`` — removes inventory + pairing,
     409 for a provisioned (mpd_rooms) room;
   * ``POST /v1/admin/satellites/{room}/label`` — set/clear.
+
+Preseed and delete are security-tier (Bearer-only, 501 before setup), so
+every client here carries an admin Bearer minted through the primitives.
 """
 
 from __future__ import annotations
@@ -56,6 +59,15 @@ class _FakeWS:
         pass
 
 
+async def _admin_headers() -> dict[str, str]:
+    """Claim the admin tier directly through the primitives and return
+    the Bearer header the security-tier routes require."""
+    async with session_scope() as s:
+        await admin_auth.set_password(s, "correct-horse-battery")
+        token = await admin_auth.create_session(s, "test")
+    return {"Authorization": f"Bearer {token}"}
+
+
 async def _preseed(client: AsyncClient, room: str, **body):
     return await client.post(
         f"/v1/admin/satellites/{room}/pairing/preseed", json=body
@@ -66,7 +78,9 @@ async def _preseed(client: AsyncClient, room: str, **body):
 async def test_preseed_creates_rows_and_token_authenticates() -> None:
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=await _admin_headers()
+        ) as client:
             r = await _preseed(
                 client, "den",
                 sat_type="video", hardware="Radxa Zero 3W",
@@ -115,7 +129,9 @@ async def test_preseed_creates_rows_and_token_authenticates() -> None:
 async def test_preseed_conflicts_and_force_rotation() -> None:
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=await _admin_headers()
+        ) as client:
             first = await _preseed(client, "kitchen")
             assert first.status_code == 200
             token_a = first.json()["token"]
@@ -140,7 +156,9 @@ async def test_preseed_conflicts_and_force_rotation() -> None:
 async def test_preseed_validation() -> None:
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=await _admin_headers()
+        ) as client:
             bad_room = await _preseed(client, "Kitchen!")
             assert bad_room.status_code == 422
             bad_type = await _preseed(client, "den", sat_type="toaster")
@@ -151,7 +169,9 @@ async def test_preseed_validation() -> None:
 async def test_delete_satellite_and_provisioned_guard() -> None:
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=await _admin_headers()
+        ) as client:
             await _preseed(client, "den")
             r = await client.delete("/v1/admin/satellites/den")
             assert r.status_code == 200 and r.json()["deleted"] is True
@@ -189,7 +209,9 @@ async def test_delete_satellite_and_provisioned_guard() -> None:
 async def test_room_label_set_and_clear() -> None:
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers=await _admin_headers()
+        ) as client:
             r = await client.post(
                 "/v1/admin/satellites/kitchen/label",
                 json={"room_label": "  Ground Floor  "},

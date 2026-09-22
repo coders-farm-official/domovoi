@@ -103,3 +103,25 @@ def test_config_load_message_keeps_login_and_unreachable_apart():
     assert "error.status === 502" in fn
     assert "domovoi unreachable" in fn
     assert "apiErrorText(error)" in fn      # the residual case shows the body
+
+
+# ── CORE-5 · SET-09 / SH-05 ────────────────────────────────────────────
+# Before first-run setup the security tier (config write, service restart,
+# satellite code push, pairing changes) answers 501 instead of passing under
+# the LAN grace. The dashboard must treat that exactly like a 401 while the
+# status probe says setup is incomplete — pop the setup modal and replay —
+# and must NOT treat a 501 from a set-up server as an auth prompt.
+
+def test_data_js_treats_a_pre_setup_501_as_a_setup_prompt():
+    src = _src("data.js")
+    fn = _component(src, "_setupPending")
+    assert "Auth.status.setup_complete === false" in fn
+    assert re.search(
+        r"const _isAuthStatus = \(status\) => \(\s*status === 401 \|\| status === 403"
+        r" \|\| \(status === 501 && _setupPending\(\)\)",
+        src,
+    )
+    assert re.search(
+        r"if \(status !== 401 && status !== 403 && !\(status === 501 && _setupPending\(\)\)\) return;",
+        src,
+    )

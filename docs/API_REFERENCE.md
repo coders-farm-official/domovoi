@@ -148,9 +148,10 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/satellite/restart` | Open | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/set-volume` | Open | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
 | `POST /v1/admin/satellite/display` | Open | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite; `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
-| `POST /v1/admin/satellite/upgrade` | **Admin (Bearer)** | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha}`. |
-| `POST /v1/admin/satellites/{room_id}/pairing/preseed` | **Admin (Bearer)** | `{sat_type?, room_label?, hardware?, board?, mac?, force?}` | USB adoption: mint the room's pairing token (sha256 stored; RAW token returned once, never logged) + upsert the inventory row. `409` already paired unless `force` (rotates). |
-| `DELETE /v1/admin/satellites/{room_id}` | **Admin (Bearer)** | — | Remove a never-connected satellite (inventory + preseeded pairing). `409` when the room is provisioned (has an MPD instance). |
+| `POST /v1/admin/satellite/upgrade` | **Admin, security tier** | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha}`. |
+| `POST /v1/admin/satellites/{room_id}/pairing/preseed` | **Admin, security tier** | `{sat_type?, room_label?, hardware?, board?, mac?, force?}` | USB adoption: mint the room's pairing token (sha256 stored; RAW token returned once, never logged) + upsert the inventory row. `409` already paired unless `force` (rotates). |
+| `DELETE /v1/admin/satellites/{room_id}/pairing` | **Admin, security tier** | — | Delete the room's pairing row so the NEXT `hello` for that room re-pairs. Returns `{room_id, reset}` (`reset: false` when there was nothing to clear). |
+| `DELETE /v1/admin/satellites/{room_id}` | **Admin, security tier** | — | Remove a never-connected satellite (inventory + preseeded pairing). `409` when the room is provisioned (has an MPD instance). |
 | `POST /v1/admin/satellites/{room_id}/label` | Open | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
 | `POST /v1/admin/satellite/{room_id}/config` | Open | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
@@ -166,9 +167,11 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `GET /v1/admin/satellites/approvals` | **Admin read** | — | Satellites waiting for a human (portal onboarding). Returns `room_id`, `code`, `mac`, `board`, `sat_type`, `attempts`, timestamps. The pairing token hash is never returned. |
 | `POST /v1/admin/satellites/approvals/{room_id}/approve` | **Admin (Bearer)** | — | Promote a pending satellite into a real pairing, copying the token hash it presented — approval binds a device, not just a room name. `409` when nothing is pending. |
 | `POST /v1/admin/satellites/approvals/{room_id}/reject` | **Admin (Bearer)** | — | Drop a pending request. Not a ban: the device keeps retrying until approved or powered off. |
-| `POST /v1/admin/version/restart` | **Admin (Bearer)** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
+| `POST /v1/admin/version/restart` | **Admin, security tier** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
 | `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | — | The editable-config registry joined with live values (`{fields, plugin_fields}`). Gated because plugin config can carry secrets (returned pre-masked). |
-| `POST /v1/admin/config` | **Admin (Bearer)** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
+| `POST /v1/admin/config` | **Admin, security tier** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
+| `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token (`header` is `X-Device-Token`). `501` before setup. |
+| `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. |
 | `POST /v1/admin/chat-tool` | Open | `{tool, args}` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. |
 | `POST /v1/admin/chat/resync` | **Admin (Bearer)** | — | Rebuild the chat tool surface and re-attach it to every chat agent. The install/enable/disable pipeline runs this automatically; this is the manual trigger. |
 | `GET /v1/admin/hardware` | Open | — | Host hardware snapshot for the Models page: `{gpus, cpu, ram, disk}`; each field degrades to empty/null independently. |
@@ -396,13 +399,14 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites/media/jobs/{id}/download` | Open | — | The overlay zip for a `kind=zip` build. |
 | `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). |
 | `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off). |
-| `POST /api/satellites/pending/{pending_id}/adopt` | **Admin (Bearer)** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
-| `DELETE /api/satellites/{room_id}` | **Admin (Bearer)** | — | Proxy → core delete (remove a `waiting` room). |
+| `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
+| `DELETE /api/satellites/{room_id}` | **Admin, security tier** | — | Proxy → core delete (remove a `waiting` room). |
 | `PATCH /api/satellites/{room_id}` | Open | `{room_label}` | Proxy → core room-label update. |
 | `POST /api/satellites/{room_id}/volume` | Open | `{level}` | Proxy → core set-volume. |
 | `POST /api/satellites/{room_id}/display` | Open | `{action}` (`on` \| `off` \| `restart_kiosk`) | Proxy → core satellite display (video satellites only; `409` otherwise). |
 | `POST /api/satellites/{room_id}/restart` | Open | — | Proxy → core satellite restart. |
-| `POST /api/satellites/{room_id}/upgrade` | **Admin (Bearer)** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). |
+| `POST /api/satellites/{room_id}/upgrade` | **Admin, security tier** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). |
+| `POST /api/satellites/{room_id}/pairing/reset` | **Admin, security tier** | — | Proxy → core `DELETE /v1/admin/satellites/{room_id}/pairing`; the core applies the same gate. |
 | `GET /api/satellites/{room_id}/config` | Open | — | Proxy → core per-satellite editable config. |
 | `PATCH /api/satellites/{room_id}/config` | Open | `{"changes": {...}}` | Proxy → core config push (Pi rewrites `config.toml`, restarts). |
 
@@ -424,14 +428,14 @@ All **Open**.
 |---|---|---|---|
 | `GET /api/config` | Open | — | Static UI bootstrap: `{bot_name, tts_voice, rooms, web_version, wake_word_min_clips}`. |
 | `GET /api/config/editable` | **Admin read (Bearer or cookie)** | — | Proxy → core `GET /v1/admin/config` (live values; plugin secrets pre-masked). |
-| `PATCH /api/config/editable` | **Admin (Bearer)** | `{"changes": {...}}` | Proxy → core `POST /v1/admin/config`. Returns `{applied, restart_required, rejected}`. |
+| `PATCH /api/config/editable` | **Admin, security tier** | `{"changes": {...}}` | Proxy → core `POST /v1/admin/config`. Returns `{applied, restart_required, rejected}`. |
 | `GET /api/config/version` | Open | — | Proxy → core version label. |
 | `POST /api/config/version/check` | Open | — | Proxy → core upstream check. |
 | `POST /api/config/version/pull` | Open | — | Proxy → core `git pull --ff-only`. |
 | `GET /api/satellites/approvals` | **Admin read** | — | Proxy → pending approvals. Declared before `/{room_id}` so the path parameter can't shadow it. |
 | `POST /api/satellites/approvals/{room_id}/approve` | **Admin (Bearer)** | — | Proxy → approve. |
 | `POST /api/satellites/approvals/{room_id}/reject` | **Admin (Bearer)** | — | Proxy → reject. |
-| `POST /api/config/version/restart` | **Admin (Bearer)** | — | Proxy → core service restart. Admin-gated at both hops. The connection drops moments after the response; clients treat that as success and poll `GET /api/config/version` until `restart_required` clears. |
+| `POST /api/config/version/restart` | **Admin, security tier** | — | Proxy → core service restart. Gated at both hops. The connection drops moments after the response; clients treat that as success and poll `GET /api/config/version` until `restart_required` clears. |
 
 ### 3.10 Playlists
 
