@@ -134,8 +134,9 @@ pip install --no-deps resemblyzer   # Windows quirk — see domovoi/README.md
 Prefer to see each step? The manual equivalent:
 
 ```powershell
+python -m domovoi.env_bootstrap      # first run only: .env with a random Postgres password
 cd domovoi
-docker compose up -d postgres        # Postgres 16 on host port 6432
+docker compose up -d postgres        # Postgres 16 on 127.0.0.1:6432 (loopback only)
 docker compose run --rm flyway       # database migrations
 docker compose run --rm flyway-test  # migrate the test DB (so pytest can run)
 cd ..
@@ -189,15 +190,17 @@ Three things hold your state:
    reminders, library metadata, play history, plugin data, admin credentials.
    It lives in the Docker volume `domovoi-pgdata`. Either move the volume, or
    `pg_dump` the `domovoi` database on the old machine and restore it on the
-   new one (Postgres publishes on host port `6432`, user/db `domovoi`).
+   new one (Postgres publishes on `127.0.0.1:6432` — run `pg_dump` on the
+   server itself — user/db `domovoi`, password in `domovoi/.env`).
 2. **`~/.domovoi/` on the server** — downloaded Piper voices, chime sounds,
    trained wake-word models and their training clips, cover art, and your
    podcast/audiobook files. Copy the whole directory across. (Music lives
    wherever your configured music directory points — `~/Music` by default —
    and moves with it.)
 3. **`domovoi/.env` in the repo checkout** — settings you changed from the
-   dashboard are persisted here. Copy it into the fresh clone before first
-   start.
+   dashboard are persisted here, and so is the Postgres password the
+   database was initialised with. Copy it into the fresh clone before first
+   start (the bootstrap leaves an existing `.env` alone).
 
 Then start the stack as in [First install](#first-install) — migrations bring
 a restored database up to the current schema automatically. Your admin

@@ -333,7 +333,7 @@ household device token instead of a caller's credential.
 | `PATCH /api/music/library/{track_id}` | Open | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
 | `DELETE /api/music/library/{track_id}` | Open | `?also_file=false` | Remove a track row (optionally the file too). `204`. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
-| `POST /api/music/library/upload` | Open | multipart audio file(s) | Upload straight into the library; triggers indexing. |
+| `POST /api/music/library/upload` | Open | multipart audio file(s) and/or `.zip` | Upload straight into the library; triggers indexing. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
 | `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
 | `GET /api/music/library/{track_id}/cover` | Open | — | Cover art. |
 | `DELETE /api/music/acquisitions/{acq_id}` | Open | — | Cancel a pending acquisition. `204`. |

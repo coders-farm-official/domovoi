@@ -60,6 +60,22 @@ For test-only work, `pip install -e ".[dev]"` is enough — the suite runs
 entirely on deterministic stubs (`USE_STUBS=true`), no GPU, no Ollama, no
 audio hardware.
 
+**Pinned installs.** `requirements.lock` at the repo root is the exact,
+hash-pinned set (core + `dev`) the suite is run against. A deployment that
+wants reproducible installs uses it instead of the resolver:
+
+```bash
+pip install --require-hashes -r requirements.lock
+pip install --no-deps -e .
+pip install -e ".[real-clients]"     # hardware extras stay outside the lock
+```
+
+When you change a dependency in `pyproject.toml`, regenerate the lock from
+a venv that has the versions you actually tested (recipe in the lock's
+header) and commit both files together. The floors on `starlette`,
+`python-multipart`, `requests` and `pillow` are one-way — raise freely,
+never lower; `domovoi/tests/test_ops_dependency_floors.py` holds the line.
+
 **The resemblyzer quirk**: Resemblyzer pins `webrtcvad`, which has no Windows
 binary wheels. Our code path never calls the part that needs it, so install
 the voice-profile extras first and Resemblyzer with `--no-deps`. Details in

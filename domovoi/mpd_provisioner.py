@@ -17,11 +17,22 @@ Docker is driven via subprocess invocations of the ``docker`` CLI rather
 than the SDK so we don't take a new dependency. The core already
 manages postgres + flyway via ``docker compose`` so docker is assumed
 available in PATH.
+
+Port exposure: each container publishes two ports. The MPD *control* port
+(container 6600) is published on ``127.0.0.1`` only — its clients are the
+core and the web backend, both on this host (``settings.mpd_host`` is
+localhost by design). The HTTP *stream* port (container 8001) stays
+published on every interface because the satellites pull the audio
+stream from it over the LAN. A container that predates this split (control
+port published on every interface) is recreated on its next
+``_ensure_container`` pass; its data volume, and so its library DB and
+playlists, carries over.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from pathlib import Path
@@ -44,6 +55,12 @@ _BUILD_CONTEXT = _PKG_DIR
 # domovoi instances pointing at the same DB. Released at transaction
 # commit, so the lock window is just the SELECT MAX → INSERT pair.
 _ALLOC_LOCK_ID = 0x4D504452_4F4F4D53  # "MPDRROOMS" in hex
+
+# Host address the MPD control port is published on. Loopback: the only
+# clients are the core and the web backend, and both run on this host.
+# The HTTP stream port is deliberately NOT bound this way (satellites
+# stream from it over the LAN).
+_CONTROL_BIND = "127.0.0.1"
 
 # Docker container names must be `[a-zA-Z0-9][a-zA-Z0-9_.-]*`. Replace
 # anything else with `-` so `room_id = "kid's bedroom"` doesn't break
@@ -112,6 +129,29 @@ async def _container_state(name: str) -> str | None:
     if rc != 0:
         return None
     return out.strip() or None
+
+
+async def _control_port_host_ip(name: str) -> str | None:
+    """The host address the container publishes MPD's control port on.
+
+    ``""`` means "every interface" (a container created before the loopback
+    bind existed). ``None`` means the binding could not be read — the
+    container is missing, docker is unhappy, or the port isn't published —
+    and callers must NOT treat that as a reason to recreate anything.
+    """
+    rc, out, _ = await _run_docker(
+        "inspect", "-f", "{{json .HostConfig.PortBindings}}", name, timeout=10.0
+    )
+    if rc != 0:
+        return None
+    try:
+        bindings = json.loads(out.strip() or "null") or {}
+        entries = bindings.get("6600/tcp") or []
+        if not entries:
+            return None
+        return str(entries[0].get("HostIp") or "")
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 async def _start_container(name: str) -> None:
@@ -205,7 +245,9 @@ async def _create_container(
         "run", "-d",
         "--name", name,
         "--restart", "unless-stopped",
-        "-p", f"{control_port}:6600",
+        # Control port: loopback only (see module docstring). Stream port:
+        # every interface — the Pis fetch the audio from it over the LAN.
+        "-p", f"{_CONTROL_BIND}:{control_port}:6600",
         "-p", f"{http_port}:8001",
         "-v", f"{volume_name}:/var/lib/mpd",
         # Mount music dir read-only — host path comes straight from settings,
@@ -231,6 +273,24 @@ async def _ensure_container(
 ) -> None:
     """Make sure container ``name`` exists and is running. Idempotent."""
     state = await _container_state(name)
+    if state is not None:
+        host_ip = await _control_port_host_ip(name)
+        if host_ip is not None and host_ip != _CONTROL_BIND:
+            # Created by an older provisioner that published the control
+            # port on every interface. Port bindings can't be edited in
+            # place, so recreate it; the named data volume survives, so the
+            # room's library DB, playlists and stored queue come back.
+            # One-time: the replacement publishes on loopback and never
+            # trips this branch again.
+            log.warning(
+                "MPD container %s publishes its control port on %r; "
+                "recreating it bound to %s (data volume kept)",
+                name, host_ip or "0.0.0.0", _CONTROL_BIND,
+            )
+            rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
+            if rc != 0:
+                raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
+            state = None
     if state == "running":
         return
     if state is None:

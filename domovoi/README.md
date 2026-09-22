@@ -768,7 +768,8 @@ docker compose up -d letta
 ```
 
 The `letta` service (in `domovoi/docker-compose.yml`) runs
-`letta/letta:latest`, published on host port `6283`. It **bundles its own
+`letta/letta:latest`, published on `127.0.0.1:6283` (loopback only — the
+core is its only client). It **bundles its own
 Postgres+pgvector**
 in the `letta-pgdata` volume and self-manages its own schema — it is NOT
 pointed at the core's Flyway-owned Postgres (that would collide
@@ -945,7 +946,8 @@ All config is env-driven via `.env` (see `.env.example`):
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `DATABASE_URL` | `postgresql+asyncpg://domovoi:domovoi@localhost:6432/domovoi` | DB connection |
+| `DATABASE_URL` | `postgresql+asyncpg://domovoi:domovoi@localhost:6432/domovoi` | DB connection. A fresh install gets a random password here (see `POSTGRES_PASSWORD`) |
+| `POSTGRES_PASSWORD` | *(random, written on first bootstrap)* | Read by `docker-compose.yml` (not by the core) when Postgres initialises its volume and on every Flyway run; must match the password inside `DATABASE_URL`. Written by `python -m domovoi.env_bootstrap`, which `dev.sh`/`dev.ps1` run first and which never touches an existing `.env`. Absent → compose falls back to `domovoi`. Rotation: docs/LINUX_HOST.md |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `SEARXNG_URL` | `http://localhost:6888` | SearxNG (DoubleCheckHandler) |
 | `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s |

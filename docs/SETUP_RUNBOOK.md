@@ -167,12 +167,18 @@ the UI and proxies admin actions to the core.
 <summary>What <code>dev.ps1</code> actually does, if you'd rather run it by hand</summary>
 
 ```powershell
+python -m domovoi.env_bootstrap      # first run only: .env with a random Postgres password
 cd domovoi
-docker compose up -d postgres        # Postgres 16, host port 6432
+docker compose up -d postgres        # Postgres 16, 127.0.0.1:6432 (loopback only)
 docker compose run --rm flyway       # schema migrations
 cd ..
 python -m domovoi.main               # core on :6370
 ```
+
+Run `env_bootstrap` *before* the first `docker compose up`: Postgres takes
+its password from `domovoi/.env` when it initialises its volume, and the
+core connects with the same value. If a `.env` already exists the command
+does nothing (prints "left untouched").
 
 Two things `dev.ps1` deliberately leaves out:
 

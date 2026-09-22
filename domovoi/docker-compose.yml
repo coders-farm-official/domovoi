@@ -2,15 +2,28 @@ services:
   # Host port 6432 (NOT the Postgres-default 5432) so Domovoi can coexist
   # with any other Postgres already bound to 5432 on the same machine.
   # Container-internal port stays 5432; only the published side moves.
+  #
+  # Published on 127.0.0.1 ONLY. The core, the web dashboard, Flyway and
+  # pytest all run on this host; nothing on the LAN needs the database.
+  # (Docker publishes on every interface when no host address is given.)
+  #
+  # POSTGRES_PASSWORD comes from `domovoi/.env` — Compose reads that file
+  # for `${...}` substitution. A fresh checkout gets a random value written
+  # there by `python -m domovoi.env_bootstrap` (dev.sh / dev.ps1 run it
+  # before this file is used); an install whose .env predates that keeps
+  # the historical default via the fallback below, so nothing changes for
+  # an existing `domovoi-pgdata` volume. Postgres only reads this value on
+  # initdb — rotating an existing database is a one-liner, see
+  # docs/LINUX_HOST.md "Rotating the Postgres password".
   postgres:
     image: postgres:16
     container_name: domovoi-postgres
     environment:
       POSTGRES_DB: domovoi
       POSTGRES_USER: domovoi
-      POSTGRES_PASSWORD: domovoi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-domovoi}
     ports:
-      - "6432:5432"
+      - "127.0.0.1:6432:5432"
     volumes:
       - domovoi-pgdata:/var/lib/postgresql/data
       # Fires only on initdb (fresh volume) — creates domovoi_test
@@ -32,7 +45,7 @@ services:
     command: >
       -url=jdbc:postgresql://postgres:5432/domovoi
       -user=domovoi
-      -password=domovoi
+      -password=${POSTGRES_PASSWORD:-domovoi}
       -connectRetries=20
       migrate
     volumes:
@@ -52,7 +65,7 @@ services:
     command: >
       -url=jdbc:postgresql://postgres:5432/domovoi_test
       -user=domovoi
-      -password=domovoi
+      -password=${POSTGRES_PASSWORD:-domovoi}
       -connectRetries=20
       migrate
     volumes:
@@ -112,9 +125,10 @@ services:
     profiles: ["chat"]
     # Host port 6283 (container-internal 8283) — keeps clear of any other
     # Letta already bound to 8283 on the same machine. Must match
-    # settings.letta_base_url.
+    # settings.letta_base_url. Published on 127.0.0.1 only: the core is
+    # Letta's sole client and it runs on this host.
     ports:
-      - "6283:8283"
+      - "127.0.0.1:6283:8283"
     volumes:
       - domovoi-letta-pgdata:/var/lib/postgresql/data
     # Docker Desktop (Windows/Mac) resolves host.docker.internal on its own;

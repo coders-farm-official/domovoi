@@ -133,6 +133,30 @@ route is loaded. Same-origin (the box that served the dashboard) is trusted
 by construction. Verifying a server's identity cryptographically (and TLS
 with pinning) stays on the hardening backlog.
 
+### What the server publishes to the LAN
+
+Only three kinds of port face the LAN: the core (`6370`), the dashboard
+(`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
+satellites fetch audio from. Everything else the stack runs — Postgres
+(`6432`), Letta (`6283`), SearXNG (`6888`) and each room's MPD **control**
+port (`6650`, `6651`, …) — is published on `127.0.0.1` only, so a device
+on your Wi-Fi cannot open the database, drive the chat agent or control a
+room's player directly; it has to go through the core or the dashboard
+and whatever tier those apply. A per-room MPD container created before the
+loopback bind existed is recreated on the core's next start (its data
+volume is kept; that room's playback stops once).
+
+### Uploads and dependencies
+
+Browser uploads into the library (`POST /api/music/library/upload`) accept
+zip archives; an archive is refused with `413` before anything is inflated
+when it declares more than 5000 members, a member over 1 GiB, or more than
+4 GiB in total. The third-party packages that parse what comes in over the
+network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
+one-way version floors in `pyproject.toml`, and `requirements.lock` pins
+the exact, hash-checked set a deployment installs — see
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
+
 ### Daily tier (LAN-trust)
 
 The reads that tell a client what this Domovoi is and let a satellite sync
@@ -398,7 +422,7 @@ All of it on hardware you own. Locations, verified against the code:
 
 | Where | What |
 |---|---|
-| **Postgres** (`domovoi` DB, host port 6432, in Docker) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
+| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
 | **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
