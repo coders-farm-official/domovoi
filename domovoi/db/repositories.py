@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import logging
+import secrets
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1850,6 +1851,12 @@ class SatellitePairingRepository:
         return row is not None
 
 
+# Compared against when a pending request has no code of its own, so the
+# answer costs the same work either way. It is not a code anyone can send:
+# the endpoint accepts digits only.
+_CODE_DECOY = "\x00no-code-on-file"
+
+
 class SatelliteApprovalRepository:
     """CRUD for `satellite_approvals` — satellites waiting on a human (V009).
 
@@ -1871,38 +1878,62 @@ class SatelliteApprovalRepository:
         mac: str | None = None,
         board: str | None = None,
         sat_type: str = "voice",
-    ) -> None:
-        """Record (or refresh) a pending approval. The device retries on its
-        own, so repeat connects bump attempts rather than piling up rows.
+    ) -> tuple[str, str | None]:
+        """Record (or refresh) a pending approval.
 
-        A retry presenting a DIFFERENT token replaces the hash: the honest
-        reading is that the device was re-provisioned, and the customer will
-        be shown the new code to match anyway."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellite_approvals "
-                "(room_id, token_hash, code, mac, board, sat_type) "
-                "VALUES (:r, :h, :c, :m, :b, :t) "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "token_hash = EXCLUDED.token_hash, code = EXCLUDED.code, "
-                "mac = EXCLUDED.mac, board = EXCLUDED.board, "
-                "sat_type = EXCLUDED.sat_type, last_seen_at = now(), "
-                "attempts = satellite_approvals.attempts + 1"
-            ),
-            {
-                "r": room_id, "h": token_hash, "c": code,
-                "m": mac, "b": board, "t": sat_type,
-            },
-        )
+        Returns ``("parked", code)`` when the row is this device's to hold
+        — ``code`` being the code the operator will be asked for, which on
+        a retry is the one already on file rather than the one just
+        offered. Returns ``("conflict", None)`` when a DIFFERENT device is
+        already parked under that room name: the parked ``token_hash`` and
+        ``code`` are retained and nothing about the request is written.
+        Only the device that got here first can refresh the row; a human
+        clears it with *reject* on the dashboard, which is the one place a
+        person is looking at both the request and the room it claims.
+
+        The device retries on its own, so a repeat connect from the SAME
+        device bumps ``attempts`` and refreshes the metadata rather than
+        piling up rows, and it keeps the code the customer was already
+        shown: whatever they are holding must stay the thing that works.
+        """
+        row = (
+            await self.s.execute(
+                text(
+                    "INSERT INTO satellite_approvals "
+                    "(room_id, token_hash, code, mac, board, sat_type) "
+                    "VALUES (:r, :h, :c, :m, :b, :t) "
+                    "ON CONFLICT (room_id) DO UPDATE SET "
+                    "code = COALESCE(satellite_approvals.code, EXCLUDED.code), "
+                    "mac = EXCLUDED.mac, board = EXCLUDED.board, "
+                    "sat_type = EXCLUDED.sat_type, last_seen_at = now(), "
+                    "attempts = satellite_approvals.attempts + 1 "
+                    "WHERE satellite_approvals.token_hash = EXCLUDED.token_hash "
+                    "RETURNING code"
+                ),
+                {
+                    "r": room_id, "h": token_hash, "c": code,
+                    "m": mac, "b": board, "t": sat_type,
+                },
+            )
+        ).first()
+        if row is None:
+            return "conflict", None
+        return "parked", row.code
 
     async def list_pending(self) -> list[dict]:
-        """Everything waiting on a human, oldest first. The token hash is
-        never returned — the dashboard has no use for it."""
+        """Everything waiting on a human, oldest first.
+
+        Neither the token hash nor the CODE is returned. The code is what
+        the operator types in to approve, and it is proof they are looking
+        at the device that made the request — printing it on the same page
+        as the approve button would make it a label again rather than
+        something only the room's device can tell them. ``has_code`` says
+        whether there is anything to type."""
         rows = (
             await self.s.execute(
                 text(
-                    "SELECT room_id, code, mac, board, sat_type, "
-                    "first_seen_at, last_seen_at, attempts "
+                    "SELECT room_id, (code IS NOT NULL) AS has_code, mac, board, "
+                    "sat_type, first_seen_at, last_seen_at, attempts "
                     "FROM satellite_approvals ORDER BY first_seen_at"
                 )
             )
@@ -1921,11 +1952,54 @@ class SatelliteApprovalRepository:
         ).mappings().first()
         return dict(row) if row else None
 
-    async def approve(self, room_id: str) -> bool:
-        """Promote a pending request into a real pairing, atomically.
+    async def approve(self, room_id: str, code: str) -> str:
+        """Promote a pending request into a real pairing, atomically, once
+        the operator has typed back the code the device showed them.
 
-        Returns False when nothing was pending — an approval racing a reject
-        (or a second click) must not invent a pairing out of nothing."""
+        Returns one of:
+
+        * ``"approved"`` — the code matched; the row is gone and the
+          pairing is written;
+        * ``"not_pending"`` — nothing was pending. An approval racing a
+          reject (or a second click) must not invent a pairing out of
+          nothing;
+        * ``"no_code"`` — the request carries no code to check against
+          (a row parked by an older server). Nothing is bound whatever was
+          sent: the device re-asks on its next connect and arrives with
+          one;
+        * ``"mismatch"`` — wrong code. The row is untouched, so the device
+          that IS in the room keeps its place in the queue.
+
+        The comparison is :func:`secrets.compare_digest` and runs even when
+        there is nothing on file, so the answers cost the same.
+        """
+        pending = (
+            await self.s.execute(
+                text(
+                    "SELECT token_hash, code FROM satellite_approvals "
+                    "WHERE room_id = :r"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        if pending is None:
+            return "not_pending"
+        stored = pending.code
+        candidate = (code or "").strip()
+        # Compared as BYTES: compare_digest refuses a non-ASCII str, and
+        # "whatever was posted" is not a promise about the alphabet. The
+        # comparison happens even when there is nothing to compare against,
+        # so the two answers cost the same; which one comes back is decided
+        # afterwards, and "this row has no code" is already on the pending
+        # list as has_code.
+        matched = secrets.compare_digest(
+            (stored or _CODE_DECOY).encode("utf-8"),
+            candidate.encode("utf-8"),
+        )
+        if stored is None:
+            return "no_code"
+        if not matched:
+            return "mismatch"
         row = (
             await self.s.execute(
                 text(
@@ -1936,7 +2010,8 @@ class SatelliteApprovalRepository:
             )
         ).first()
         if row is None:
-            return False
+            # Raced a reject between the read and the delete.
+            return "not_pending"
         await self.s.execute(
             text(
                 "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
@@ -1947,7 +2022,7 @@ class SatelliteApprovalRepository:
             ),
             {"r": room_id, "h": row.token_hash},
         )
-        return True
+        return "approved"
 
     async def reject(self, room_id: str) -> bool:
         """Drop a pending request. The device keeps retrying — rejection is

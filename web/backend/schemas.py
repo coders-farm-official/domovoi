@@ -476,6 +476,17 @@ class PendingSatellite(BaseModel):
     parse_error: str | None = None
 
 
+class SatelliteApproveRequest(BaseModel):
+    """Approve a parked satellite by the code it is showing and saying.
+
+    The dashboard never renders the code, so this is the operator copying
+    it off the device in the room — which is what makes the approval a
+    statement about a device rather than about a room name. The core
+    compares it in constant time and counts the attempt."""
+
+    code: str = Field(..., min_length=1, max_length=16, pattern=r"^[0-9]+$")
+
+
 class AdoptRequest(BaseModel):
     """Adopt a pending satellite: name it, hand it Wi-Fi, pick its mic
     profile. The PSK transits to the device on the gadget volume exactly

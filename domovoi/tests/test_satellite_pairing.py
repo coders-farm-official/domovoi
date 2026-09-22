@@ -17,6 +17,8 @@ The validation cases (see domovoi/streaming.py):
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -25,7 +27,11 @@ from sqlalchemy import text
 from domovoi import admin_auth
 from domovoi.admin_auth import token_sha256
 from domovoi.config import settings
-from domovoi.db.repositories import SatellitePairingRepository
+from domovoi import streaming
+from domovoi.db.repositories import (
+    SatelliteApprovalRepository,
+    SatellitePairingRepository,
+)
 from domovoi.db.session import SessionLocal, engine, session_scope
 from domovoi.main import app as core_app
 from domovoi.streaming import StreamSession
@@ -44,12 +50,20 @@ async def _clean_pairings(tmp_path, monkeypatch):
     monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")
     admin_auth.LOGIN_BACKOFF.reset()
+    streaming.APPROVAL_HELLO_LIMITER.reset()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE satellite_pairings, admin_auth, admin_sessions CASCADE"))
+        await conn.execute(text(
+            "TRUNCATE satellite_pairings, satellite_approvals, admin_auth, "
+            "admin_sessions CASCADE"
+        ))
     yield
     admin_auth.LOGIN_BACKOFF.reset()
+    streaming.APPROVAL_HELLO_LIMITER.reset()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE satellite_pairings, admin_auth, admin_sessions CASCADE"))
+        await conn.execute(text(
+            "TRUNCATE satellite_pairings, satellite_approvals, admin_auth, "
+            "admin_sessions CASCADE"
+        ))
 
 
 # ─── Test doubles ──────────────────────────────────────────────────────────
@@ -57,11 +71,15 @@ async def _clean_pairings(tmp_path, monkeypatch):
 
 class _FakeWS:
     """Minimal WebSocket stand-in for ``_validate_pairing`` — it only ever
-    reaches ``send_text`` (on a reject). Records the frames it's handed."""
+    reaches ``send_text`` (on a reject). Records the frames it's handed,
+    and carries a peer address because parking a room is budgeted per
+    source."""
 
-    def __init__(self) -> None:
+    def __init__(self, host: str = "192.168.1.50") -> None:
         self.sent: list[str] = []
         self.closed = False
+        self.client = type("C", (), {"host": host})()
+        self.headers: dict[str, str] = {}
 
     async def send_text(self, data: str) -> None:
         self.sent.append(data)
@@ -70,8 +88,13 @@ class _FakeWS:
         self.closed = True
 
 
-def _session(room_id: str = "kitchen") -> StreamSession:
-    return StreamSession(_FakeWS(), room_id)  # type: ignore[arg-type]
+def _session(room_id: str = "kitchen", host: str = "192.168.1.50") -> StreamSession:
+    return StreamSession(_FakeWS(host), room_id)  # type: ignore[arg-type]
+
+
+def _frame(sess: StreamSession) -> dict:
+    """The last error frame the session sent, decoded."""
+    return json.loads(sess.ws.sent[-1])
 
 
 async def _seed_pairing(room_id: str, token: str) -> None:
@@ -230,6 +253,46 @@ async def test_strict_still_pairs_a_token_bearing_first_connect(
     assert accepted is True
     async with SessionLocal() as s:
         assert await SatellitePairingRepository(s).get_pairing("den") is not None
+
+
+@pytest.mark.asyncio
+async def test_a_portal_device_parks_instead_of_claiming_the_room() -> None:
+    """A hello carrying an approval code waits for a human, and is told the
+    code the operator will be asked for so it can say it out loud."""
+    sess = _session("den")
+    accepted = await sess._validate_pairing(
+        {"pairing_token": TOKEN, "approval_code": "481502"}
+    )
+    assert accepted is False
+    frame = _frame(sess)
+    assert frame["reason"] == "awaiting_approval"
+    assert frame["code"] == "481502"
+    # Parked, not paired: the room is still unclaimed.
+    async with SessionLocal() as s:
+        assert await SatellitePairingRepository(s).get_pairing("den") is None
+
+
+@pytest.mark.asyncio
+async def test_a_second_device_parking_the_same_room_is_a_conflict() -> None:
+    """The device that got there first holds the room name until a human
+    decides. A different one is told to have that request rejected rather
+    than silently replacing it — otherwise the row the operator is looking
+    at would stop describing the device that made it."""
+    first = _session("den")
+    await first._validate_pairing(
+        {"pairing_token": TOKEN, "approval_code": "481502"}
+    )
+    second = _session("den", host="192.168.1.99")
+    accepted = await second._validate_pairing(
+        {"pairing_token": OTHER_TOKEN, "approval_code": "930071"}
+    )
+    assert accepted is False
+    assert _frame(second)["reason"] == "approval_conflict"
+
+    async with SessionLocal() as s:
+        row = await SatelliteApprovalRepository(s).get("den")
+    assert row["token_hash"] == token_sha256(TOKEN)
+    assert row["code"] == "481502"
 
 
 @pytest.mark.asyncio
