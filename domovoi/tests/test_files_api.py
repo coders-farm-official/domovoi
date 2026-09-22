@@ -724,6 +724,113 @@ def test_move_does_not_follow_a_symlink_out_of_the_library(registry, roots, no_r
     assert outside.read_text(encoding="utf-8") == "nope"
 
 
+# ─── Device blocks over HTTP, DB-free (F-010) ───────────────────────────────
+#
+# ``test_a_blocked_device_can_read_but_not_write`` (further down) is the full
+# pipeline version of this — and it carries @requires_db, so on a box without
+# Postgres it SKIPS and looks green. That is precisely how ``move()`` shipped
+# without the block check while upload/import had it. These run with the
+# block LOOKUP stubbed (the one thing that needs a database) and no lifespan
+# (no poll loop / LISTEN task), so they can never hide behind the skip.
+
+
+@pytest.fixture
+def blocked_kid(monkeypatch):
+    """Stub the block lookup: ``android-kid`` is blocked, everyone else may
+    write. ``_assert_can_write`` itself is left real so the 403 path under
+    test is the production one."""
+    reason = "Kids iPad isn't allowed to change files (bedtime)"
+
+    async def _status(device_id):
+        return reason if device_id == "android-kid" else None
+
+    monkeypatch.setattr(files_api, "_block_status", _status)
+    return reason
+
+
+def _bare_client() -> TestClient:
+    """A TestClient WITHOUT entering the lifespan — requests are served, but
+    no background task ever opens a database connection."""
+    return TestClient(app)
+
+
+def _move_body(device_id: str, **kw) -> dict:
+    body = {
+        "source_library_id": "core:music", "paths": ["song.flac"],
+        "target_library_id": "core:music", "target_path": "Beatles",
+        "device_id": device_id,
+    }
+    body.update(kw)
+    return body
+
+
+def test_move_over_http_is_refused_for_a_blocked_device(
+    registry, roots, reindex_spy, blocked_kid
+):
+    """F-010: the block applies to the drag verb too, not only upload/import,
+    and it fires before anything on disk is touched."""
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    (roots["music"] / "Beatles").mkdir()
+    r = _bare_client().post("/api/files/move", json=_move_body("android-kid"))
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == blocked_kid
+    # Nothing moved, nothing reindexed.
+    assert (roots["music"] / "song.flac").exists()
+    assert not (roots["music"] / "Beatles" / "song.flac").exists()
+    assert reindex_spy == []
+
+
+def test_move_block_is_checked_before_the_libraries_are_resolved(
+    registry, roots, reindex_spy, blocked_kid
+):
+    """A blocked device is told it's blocked even when the request would
+    otherwise 404 — the block is the outermost guard, matching upload."""
+    r = _bare_client().post(
+        "/api/files/move",
+        json=_move_body("android-kid", source_library_id="core:nope"),
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"] == blocked_kid
+
+
+def test_upload_and_import_over_http_are_refused_for_a_blocked_device(
+    registry, roots, reindex_spy, blocked_kid
+):
+    (roots["usb"] / "x.mp3").write_bytes(b"x")
+    c = _bare_client()
+    up = c.post(
+        "/api/files/upload",
+        data={"library_id": "core:music", "path": "", "device_id": "android-kid"},
+        files=[("files", ("u.mp3", b"u", "audio/mpeg"))],
+    )
+    assert up.status_code == 403
+    assert up.json()["detail"] == blocked_kid
+    im = c.post("/api/files/import", json={
+        "source_library_id": "removable:E", "source_path": "x.mp3",
+        "target_library_id": "core:music", "target_path": "",
+        "device_id": "android-kid",
+    })
+    assert im.status_code == 403
+    assert im.json()["detail"] == blocked_kid
+    assert not (roots["music"] / "u.mp3").exists()
+    assert not (roots["music"] / "x.mp3").exists()
+    assert reindex_spy == []
+
+
+def test_an_unblocked_device_still_moves_over_http(
+    registry, roots, reindex_spy, blocked_kid
+):
+    """Positive control for the stub: the block is per-device, and the gate
+    lets everyone else through to the real move."""
+    (roots["music"] / "song.flac").write_bytes(b"aa")
+    (roots["music"] / "Beatles").mkdir()
+    r = _bare_client().post("/api/files/move", json=_move_body("browser-ok"))
+    assert r.status_code == 200, r.text
+    assert r.json()["moved"] == ["Beatles/song.flac"]
+    assert (roots["music"] / "Beatles" / "song.flac").exists()
+    assert reindex_spy == ["/v1/admin/library/reindex"]
+
+
 # ─── HTTP surface (admin gate + request validation) ────────────────────────
 
 

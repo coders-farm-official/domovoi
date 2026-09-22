@@ -695,6 +695,10 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
       unrecoverable operation on this page.
     * Secret-shaped names are refused the same way upload/import refuse them.
     """
+    # Device block FIRST, like upload/import: a blocked device gets its 403
+    # before any library is resolved or any path touched. (F-010: the block
+    # was UI-only for moves — the drag verb never asked.)
+    await _assert_can_write(req.device_id)
     source = await _resolve_library(req.source_library_id)
     target = await _resolve_library(req.target_library_id)
     if not source.editable:
