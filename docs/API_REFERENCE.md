@@ -411,12 +411,12 @@ actions proxy to the core admin endpoints.
 | `GET /api/satellites/{room_id}/dropin/phone-info` | Open | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). |
 | `GET /v1/satellite-plugins/manifest` (core) | Open | — | `{files: {"<slug>/<rel>": sha256}, meta: {slug: {...}}}` — enabled plugins' `[satellite]` payloads; satellites mirror it like the code channel. |
 | `GET /v1/satellite-plugins/{path}` (core) | Open | — | One payload file by its `<slug>/<rel>` channel path. |
-| `GET /api/satellites/media/status` | Open | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
-| `GET /api/satellites/media/targets` | Open | — | Removable drives that look like a flashed Pi boot partition. |
+| `GET /api/satellites/media/status` | **Admin (read)** | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
+| `GET /api/satellites/media/targets` | **Admin (read)** | — | Removable drives that look like a flashed Pi boot partition. |
 | `POST /api/satellites/media/prepare` | **Admin (Bearer)** | `{board, mic_profile, target: {kind: drive\|zip, token?}, offline?}` | Start (or attach to) a media build; progress rides the `satellites.media` realtime channel. |
-| `GET /api/satellites/media/jobs` | Open | `?limit` | Recent build jobs (no server paths; `has_artifact` flags downloadables). |
+| `GET /api/satellites/media/jobs` | **Admin (read)** | `?limit` | Recent build jobs (no server paths; `has_artifact` flags downloadables). |
 | `POST /api/satellites/media/jobs/{id}/cancel` | **Admin (Bearer)** | — | Mark a build cancelled (best-effort). |
-| `GET /api/satellites/media/jobs/{id}/download` | Open | — | The overlay zip for a `kind=zip` build. |
+| `GET /api/satellites/media/jobs/{id}/download` | **Admin (read)** | — | The overlay zip for a `kind=zip` build. Since WEB-1 it carries no plaintext passwords: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard (`/jobs/{id}/credentials`, memory only). A card written straight to a **drive** still gets `domovoi/ap.json` + `domovoi/console.json`, which stage 1 needs. |
 | `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). |
 | `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off). |
 | `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |

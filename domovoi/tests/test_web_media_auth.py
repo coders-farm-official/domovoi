@@ -411,6 +411,59 @@ def test_saving_a_video_position_needs_a_device_token_not_just_a_cookie(claimed,
     assert c.post("/api/videos/position", json=body, headers=COOKIE_ONLY).status_code == 403
 
 
+# ═══ WEB-1 · Satellite media preparation ══════════════════════════════
+
+
+SATELLITE_MEDIA_READS = [
+    "/api/satellites/media/status",
+    "/api/satellites/media/targets",
+    "/api/satellites/media/jobs",
+    "/api/satellites/media/jobs/1/download",
+    "/api/satellites/media/jobs/1/credentials",
+]
+
+
+@pytest.mark.parametrize("path", SATELLITE_MEDIA_READS)
+def test_reading_satellite_media_needs_an_admin_session(claimed, path):
+    """The artifact a build produces is the code a Pi will run, /jobs
+    lists the small integer ids that name it, and /targets enumerates the
+    drives plugged into this server. None of that is a daily read."""
+    c = _client()
+    assert c.get(path).status_code == 401
+    assert c.get(path, headers=DEVICE).status_code == 401
+
+
+# The subset whose handlers touch neither the database nor the plugin
+# registry, so the far side of the gate can be checked without either.
+SATELLITE_MEDIA_DB_FREE_READS = [
+    "/api/satellites/media/targets",
+    "/api/satellites/media/jobs/1/credentials",
+]
+
+
+@pytest.mark.parametrize("path", SATELLITE_MEDIA_DB_FREE_READS)
+def test_an_admin_reads_satellite_media(claimed, path):
+    """A Bearer or the dashboard cookie renders these — they are reads.
+    (404 is the honest answer for job 1 on an empty install; what matters
+    is that the gate let the request through.)"""
+    c = _client()
+    assert c.get(path, headers=ADMIN).status_code in (200, 404)
+    assert c.get(path, headers=COOKIE_ONLY).status_code in (200, 404)
+
+
+def test_preparing_media_still_needs_an_admin_bearer(claimed):
+    body = {"board": "pi02w", "mic_profile": "none", "target": {"kind": "zip"}}
+    c = _client()
+    assert c.post("/api/satellites/media/prepare", json=body).status_code == 401
+    assert c.post(
+        "/api/satellites/media/prepare", json=body, headers=DEVICE
+    ).status_code == 401
+    # A cookie renders a page; it does not start a build.
+    assert c.post(
+        "/api/satellites/media/prepare", json=body, headers=COOKIE_ONLY
+    ).status_code == 403
+
+
 def test_a_fresh_install_can_still_use_the_files_surface(unclaimed, libraries):
     c = _client()
     assert c.get("/api/files/libraries").status_code == 200

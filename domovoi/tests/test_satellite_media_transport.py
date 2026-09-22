@@ -438,6 +438,52 @@ def test_userconf_lands_at_the_boot_root_with_only_the_hash(tmp_path):
     assert doc == creds                            # plaintext, for the label
 
 
+@needs_openssl
+def test_the_sidecars_can_be_left_off_while_the_hash_still_ships(tmp_path):
+    """WEB-1: a card the operator is HOLDING carries the plaintext
+    passwords — stage 1 reads ap.json to raise the portal, and whoever
+    holds the card can read them anyway. An artifact that lives on the
+    server and is fetched over HTTP must not, so the caller can ask for
+    the overlay without them. userconf.txt (the HASH) ships either way,
+    so first boot is still unattended."""
+    boot = tmp_path / "bootfs"
+    boot.mkdir()
+    (boot / "config.txt").write_text(STOCK_CONFIG)
+    (boot / "cmdline.txt").write_text(STOCK_CMDLINE)
+    tar = tmp_path / "payload.tar.gz"
+    tar.write_bytes(b"x")
+    ap = overlay.generate_ap_credentials()
+    console = overlay.generate_console_credentials("domovoi")
+
+    written = overlay.write_overlay(
+        boot, payload_tar=tar, payload_sha256="0" * 64,
+        firstrun="#!/bin/bash\ntrue\n", info={},
+        device_info=overlay.initial_device_info(
+            "voice", setup_transport="portal", ap_ssid=ap["ssid"]
+        ),
+        ap=ap, console=console, usb_gadget=False,
+        include_credential_files=False,
+    )
+
+    assert "domovoi/ap.json" not in written
+    assert not (boot / "domovoi" / "ap.json").exists()
+    assert overlay.CONSOLE_JSON_PATH not in written
+    assert not (boot / "domovoi" / "console.json").exists()
+
+    assert overlay.USERCONF_NAME in written
+    conf = (boot / overlay.USERCONF_NAME).read_text()
+    assert conf.startswith("domovoi:$6$")
+    assert console["password"] not in conf
+
+    # The SSID is not a secret and stays where adopters can see it; the
+    # key does not appear anywhere on the card.
+    info = json.loads((boot / "domovoi" / "device-info.json").read_text())
+    assert info["ap_ssid"] == ap["ssid"]
+    for path in (boot / "domovoi").rglob("*"):
+        if path.is_file():
+            assert ap["psk"].encode() not in path.read_bytes(), path
+
+
 def test_no_console_creds_means_no_userconf(tmp_path):
     boot = tmp_path / "bootfs"
     boot.mkdir()

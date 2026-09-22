@@ -199,6 +199,11 @@ async def build(
         # The zip carries only the domovoi/ dir + a README; config/cmdline
         # edits can't be applied to a not-present card, so the README
         # instructs, and firstrun re-checks.
+        # No plaintext passwords in an artifact that sits on the server
+        # and is fetched over HTTP (WEB-1). userconf.txt still carries the
+        # console password's HASH, so first boot is still unattended; the
+        # dashboard shows both passwords once, and the README says how to
+        # add the setup-AP file by hand for a portal card built this way.
         overlay.write_overlay(
             staging,
             payload_tar=fin["tar"],
@@ -213,16 +218,35 @@ async def build(
                 setup_transport != "usb"
                 and mic_profile in overlay.USB_MIC_PROFILES
             ),
+            include_credential_files=False,
         )
+        readme = [
+            "Domovoi satellite overlay",
+            "1. Flash stock OS for your board with any imaging tool.",
+            "2. Copy the domovoi/ folder to the card's boot partition, and",
+            "   apply the config.txt/cmdline.txt additions from this zip's",
+            "   copies (each addition is marked with a domovoi comment).",
+            "3. Boot the device, then plug it into the Domovoi server's USB",
+            "   port and adopt it from the dashboard's Satellites page.",
+            "",
+            "This zip deliberately contains no passwords. The dashboard shows",
+            f"the console login for {SAT_USER} once, when the build finishes —",
+            "write it down then. The card itself only carries the hash.",
+        ]
+        if ap is not None:
+            readme += [
+                "",
+                "This is a Wi-Fi setup (portal) card. Stage 1 reads its setup",
+                "network's key from domovoi/ap.json, which is not in this zip.",
+                "Create it on the boot partition with the password the",
+                "dashboard showed you:",
+                "",
+                '  {"ssid": "' + str(ap["ssid"]) + '", "psk": "<the password>"}',
+                "",
+                "Without that file the unit falls back to USB adoption.",
+            ]
         (staging / "README.txt").write_text(
-            "Domovoi satellite overlay\n"
-            "1. Flash stock OS for your board with any imaging tool.\n"
-            "2. Copy the domovoi/ folder to the card's boot partition, and\n"
-            "   apply the config.txt/cmdline.txt additions from this zip's\n"
-            "   copies (each addition is marked with a domovoi comment).\n"
-            "3. Boot the device, then plug it into the Domovoi server's USB\n"
-            "   port and adopt it from the dashboard's Satellites page.\n",
-            encoding="utf-8",
+            "\n".join(readme) + "\n", encoding="utf-8",
         )
         artifact = workspace / "domovoi-satellite-overlay.zip"
         with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -242,9 +266,10 @@ async def build(
 
     result["warnings"] = warnings
     result["offline"] = effective_offline
-    # Handed back so the caller can show them ONCE. They are already on the
-    # card in plaintext, so this is convenience rather than exposure — but
-    # the caller must not persist them, or a secret that should die with the
-    # card ends up in a database backup instead.
+    # Handed back so the caller can show them ONCE, in process memory only:
+    # persisting them would put a secret that should die with the card into
+    # a database backup. For a DRIVE build they are also on the card, where
+    # stage 1 needs them and whoever holds the card can read them anyway.
+    # For a ZIP build this is the ONLY place they appear (WEB-1).
     result["credentials"] = {"ap": ap, "console": console}
     return result
