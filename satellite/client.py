@@ -311,6 +311,12 @@ _IW_SSID_RE = re.compile(r"^\s*SSID:\s*(.+?)\s*$", re.MULTILINE)
 class Config:
     room_id: str
     domovoi_url: str
+    # The Ed25519 fingerprint of the server that prepared this device's
+    # image, baked into config.toml at adoption. Empty on a hand-built
+    # unit and on any card prepared before server identities existed, in
+    # which case the root-owned image pin and then the trust-on-first-use
+    # record stand in for it (satellite/server_identity.py).
+    server_fingerprint: str
     # Satellite kind: "voice" (the historical default) or "video" (a
     # screen-bearing kiosk build). Reported to the server in the hello
     # frame; drives which per-type controls the dashboard offers.
@@ -428,6 +434,7 @@ class Config:
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
+            server_fingerprint=str(sat.get("server_fingerprint", "") or ""),
             sat_type=sat_type,
             mic_enabled=bool(mic.get("enabled", profile.voice_capable)),
             wake_word=str(wake.get("wake_word", "hey_jarvis")),
@@ -2505,7 +2512,10 @@ class Satellite:
         # and DO NOT restart: the old code in memory + the on-disk tree both
         # stay consistent.
         try:
-            result = code_sync.sync_code(http_base, SATELLITE_ROOT, CODE_EXT_ALLOW, prev_manifest)
+            result = code_sync.sync_code(
+                http_base, SATELLITE_ROOT, CODE_EXT_ALLOW, prev_manifest,
+                expected_fingerprint=_pinned_fingerprint(self.cfg)[0],
+            )
         except Exception as e:
             log.error("upgrade: code sync failed; restoring tree, not restarting: %s", e)
             try:
@@ -2561,7 +2571,10 @@ class Satellite:
         try:
             from satellite import plugin_sync
 
-            psync = plugin_sync.sync_plugin_payloads(http_base)
+            psync = plugin_sync.sync_plugin_payloads(
+                http_base,
+                expected_fingerprint=_pinned_fingerprint(self.cfg)[0],
+            )
             if psync["root_work"]:
                 plugin_sync.request_root_apply(psync["meta"], psync["root_work"])
         except Exception as e:  # noqa: BLE001 — degrade, never block the upgrade
@@ -3965,6 +3978,10 @@ class Satellite:
                 UPGRADE_PENDING_MARKER.unlink(missing_ok=True)
             except OSError as e:
                 log.warning("upgrade: failed to clear pending marker: %s", e)
+            # Paired means a person approved this device on the dashboard,
+            # which is the only thing that turns a discovered address into
+            # configuration. No-op on a device that was told its address.
+            _promote_pending_server(CONFIG_PATH)
             # Take the ring back from the setup indicator. Until this frame
             # the device may have been showing a setup colour written
             # straight to the hardware - "awaiting approval" violet, most
@@ -4306,6 +4323,14 @@ class Satellite:
     async def _run_session(self) -> None:
         assert self._async_shutdown is not None
         url = self.cfg.domovoi_url.rstrip("/") + f"/v1/stream/{self.cfg.room_id}"
+        # Before the socket, not after: this device only talks to the core
+        # it belongs to, and "the address we wrote down once" is not proof
+        # of that. A refusal here falls through to the caller's reconnect
+        # backoff — the same path a server that is merely down takes.
+        if not await asyncio.to_thread(_verify_server_identity, self.cfg):
+            raise ConnectionError(
+                f"{url} did not prove it is this device's Domovoi server"
+            )
         log.info("connecting to %s", url)
         # Outer try/finally so `_on_session_ended` runs on EVERY exit
         # path — including when `websockets.connect` itself raises (e.g.,
@@ -5011,16 +5036,109 @@ def _remember_approval_code(offered: object) -> str | None:
     return code
 
 
+def _pinned_fingerprint(cfg: "Config") -> tuple[str | None, str]:
+    """The server fingerprint this device holds its core to, and where it
+    came from. Empty on a device that predates server identities and has
+    never met a core that carries one."""
+    from satellite import server_identity
+
+    return server_identity.pinned_fingerprint(getattr(cfg, "server_fingerprint", ""))
+
+
+def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
+    """Make the server prove it is ours before we talk to it.
+
+    Called before every connect, not only the first: an address written
+    down months ago can be answered by something else today (DHCP moves,
+    a device swapped onto the same IP, a host that just decides to listen
+    on 6370). The proof is a signature over a nonce made up in this call.
+
+    Verify if KNOWN: with no fingerprint pinned this records the first
+    identity it meets and returns True, so a device prepared before
+    identities keeps connecting exactly as it did. From then on the
+    recorded fingerprint is the pin, and a different one is refused."""
+    from satellite import server_identity, sound_sync
+
+    expected, source = _pinned_fingerprint(cfg)
+    http_base = sound_sync.http_base_from_ws(cfg.domovoi_url)
+    try:
+        actual = server_identity.verify_server(
+            http_base, expected_fingerprint=expected, opener=opener
+        )
+    except server_identity.IdentityError as e:
+        if expected:
+            log.error(
+                "refusing to connect to %s: %s (pinned from %s)",
+                http_base, e, source,
+            )
+            return False
+        # Nothing pinned and nothing to check against: an older core has
+        # no identity to offer, and refusing here would strand every
+        # device in the field the moment this code lands.
+        log.info("server identity not available at %s (%s)", http_base, e)
+        return True
+    if not expected:
+        server_identity.record_fingerprint(actual)
+    return True
+
+
+def _promote_pending_server(config_path: Path) -> None:
+    """Write a discovered address into config.toml — but only now.
+
+    "Now" is the moment the server sent ``ready``, which means this device
+    is paired: a human approved it on the dashboard. Until then the
+    address lives in a sidecar and is used for exactly one thing, asking
+    that dashboard for approval. An address nobody has agreed to is not
+    configuration, and writing it into config.toml is what used to make a
+    wrong answer permanent."""
+    from satellite import config_writer, server_identity
+
+    pending, fingerprint = server_identity.read_pending_server()
+    if not pending:
+        return
+    changes: dict[str, object] = {"satellite.domovoi_url": pending}
+    if fingerprint:
+        changes["satellite.server_fingerprint"] = fingerprint
+    try:
+        original = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config_writer.apply_changes(original, changes),
+            encoding="utf-8", newline="\n",
+        )
+    except OSError as e:
+        # Usable this boot either way; the sidecar survives for the next.
+        log.warning("approved, but could not save %s: %s", pending, e)
+        return
+    server_identity.clear_pending_server()
+    log.info("approved on the dashboard — saved the server address %s", pending)
+
+
 def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
-    """Turn an ``auto`` domovoi_url into a real one and persist it.
+    """Turn an ``auto`` domovoi_url into a real one for THIS boot.
 
     Returns False when discovery found nothing — the caller exits rather
     than looping against an address that cannot work. systemd restarts us,
     so a server that is merely slow to boot gets picked up on the retry.
-    """
-    from satellite import discovery
 
-    resolved = discovery.resolve_url(cfg.domovoi_url)
+    What changed: the address is no longer written into config.toml here.
+    It goes to a pending sidecar and is promoted only once the server
+    answers ``ready`` (:func:`_promote_pending_server`). A sweep keeps the
+    fingerprint this device was prepared with, so a host that cannot sign
+    for it is not a candidate at all.
+    """
+    from satellite import discovery, server_identity
+
+    configured = (cfg.domovoi_url or "").strip()
+    if configured and configured.lower() != discovery.AUTO:
+        return True
+
+    expected, _source = _pinned_fingerprint(cfg)
+    # An address discovered on an earlier boot and still waiting for
+    # approval: reuse it rather than sweeping the subnet on every restart.
+    pending, _pending_fp = server_identity.read_pending_server()
+    resolved = pending or discovery.resolve_url(
+        discovery.AUTO, expected_fingerprint=expected
+    )
     if resolved is None:
         log.error(
             "no Domovoi server found on this network. Set [satellite] "
@@ -5028,23 +5146,13 @@ def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
             config_path,
         )
         return False
-    if resolved == cfg.domovoi_url:
-        return True
 
     cfg.domovoi_url = resolved
-    # Persist so the sweep happens once per device, not once per boot.
-    try:
-        from satellite import config_writer
-
-        original = config_path.read_text(encoding="utf-8")
-        updated = config_writer.apply_changes(
-            original, {"satellite.domovoi_url": resolved}
-        )
-        config_path.write_text(updated, encoding="utf-8", newline="\n")
-        log.info("discovered the Domovoi server at %s (saved)", resolved)
-    except OSError as e:
-        # Usable this boot even if we can't write it down.
-        log.warning("discovered %s but could not save it: %s", resolved, e)
+    server_identity.write_pending_server(resolved, expected)
+    log.info(
+        "discovered the Domovoi server at %s — waiting for approval on the "
+        "dashboard before saving it", resolved,
+    )
     return True
 
 

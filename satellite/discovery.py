@@ -20,6 +20,7 @@ connect, and needs no new dependency and no core-side change at all.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import logging
 import socket
@@ -72,17 +73,30 @@ def candidate_hosts(ip: str, prefix: int = 24) -> list[str]:
 
 
 def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_SEC,
-          opener=None) -> bool:
-    """Whether ``host`` answers /v1/health as a Domovoi core.
+          opener=None, expected_fingerprint: str | None = None) -> bool:
+    """Whether ``host`` answers /v1/health as **this device's** Domovoi core.
 
-    The bot_name check is what keeps us from adopting some unrelated service
-    that happens to be listening on 6370.
+    The bot_name check keeps us from adopting some unrelated service that
+    happens to be listening on 6370. It is not, on its own, evidence of
+    anything: a host that wants to be adopted can answer with it. That is
+    what ``expected_fingerprint`` is for — the fingerprint baked into this
+    device's image. When one is pinned, the host also has to sign a nonce
+    this call just invented with the matching key, so answering the right
+    way is no longer enough.
+
+    With nothing pinned (a device prepared before server identities) the
+    check is exactly what it always was.
     """
     import json
     import urllib.request
 
+    from satellite import server_identity
+
     opener = opener or urllib.request.urlopen
+    challenge = server_identity.new_challenge() if expected_fingerprint else None
     url = f"http://{host}:{port}{HEALTH_PATH}"
+    if challenge:
+        url = f"{url}?challenge={challenge}"
     try:
         with opener(url, timeout=timeout) as r:
             if getattr(r, "status", 200) != 200:
@@ -90,7 +104,21 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
             doc = json.loads(r.read().decode("utf-8", "replace"))
     except Exception:      # noqa: BLE001 — every failure is just "not here"
         return False
-    return isinstance(doc, dict) and doc.get("status") == "ok" and bool(doc.get("bot_name"))
+    if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
+        return False
+    if not challenge:
+        return True
+    try:
+        server_identity.verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=expected_fingerprint
+        )
+    except server_identity.IdentityError as e:
+        # Loud, unlike the silent misses above: something on this network
+        # is answering as Domovoi and is not the server this device was
+        # prepared for. That is worth a line in the journal.
+        log.warning("%s answers as Domovoi but %s", host, e)
+        return False
+    return True
 
 
 def find_core(
@@ -100,12 +128,21 @@ def find_core(
     hosts: list[str] | None = None,
     probe_fn=probe,
     workers: int = _WORKERS,
+    expected_fingerprint: str | None = None,
 ) -> str | None:
     """The first host on this subnet that answers as a Domovoi core, or None.
 
     Concurrent because a sequential sweep at 300 ms a host would take a
     minute; 32 workers finishes a /24 in a few seconds.
+
+    ``expected_fingerprint`` is bound onto ``probe_fn`` rather than passed
+    on every call, so a substituted probe that predates identities keeps
+    the signature it always had.
     """
+    if expected_fingerprint:
+        probe_fn = functools.partial(
+            probe_fn, expected_fingerprint=expected_fingerprint
+        )
     if hosts is None:
         ip = ip or local_ipv4()
         if not ip:
@@ -132,11 +169,16 @@ def find_core(
     return None
 
 
-def resolve_url(configured: str, *, port: int = CORE_PORT, finder=None) -> str | None:
+def resolve_url(configured: str, *, port: int = CORE_PORT, finder=None,
+                expected_fingerprint: str | None = None) -> str | None:
     """Turn a configured ``domovoi_url`` into a usable one.
 
     Anything but the ``auto`` sentinel is returned untouched — an address
     typed into the setup portal always wins over discovery.
+
+    A returned address is a candidate, not a decision: the caller still has
+    to keep it out of config.toml until the server says this device is
+    paired. ``expected_fingerprint`` makes the sweep itself selective.
     """
     value = (configured or "").strip()
     if value and value.lower() != AUTO:
@@ -146,7 +188,10 @@ def resolve_url(configured: str, *, port: int = CORE_PORT, finder=None) -> str |
     # it injected a fake then sweeps the real network instead, passing or
     # failing on whatever happens to be plugged in.
     finder = find_core if finder is None else finder
-    host = finder(port=port)
+    kwargs: dict[str, object] = {"port": port}
+    if expected_fingerprint:
+        kwargs["expected_fingerprint"] = expected_fingerprint
+    host = finder(**kwargs)
     if host is None:
         return None
     return f"ws://{host}:{port}"

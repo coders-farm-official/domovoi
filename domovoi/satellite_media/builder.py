@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from domovoi import git_version, host_time
+from domovoi import git_version, host_time, server_identity
 from domovoi.config import settings
 from domovoi.satellite_media import cache, fetchers, overlay, payload
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES
@@ -137,6 +137,11 @@ async def build(
         tz=host_time.local_timezone_name(), prep_epoch=time.time(),
     )
     core_sha = await git_version.current_sha()
+    # This card's server. Baked now, readable on the card, installed
+    # root-owned by first boot and compared on every connect for the rest
+    # of the device's life: it is what tells this household's core from
+    # anything else that answers on 6370.
+    identity = server_identity.load_or_create().public_document()
     info = overlay.build_info(
         board=board.id,
         mic_profile=mic_profile,
@@ -146,6 +151,7 @@ async def build(
         os_release=board.os_release,
         plugins=asm["plugins"],
         offline=effective_offline,
+        server_identity=identity,
     )
     # Portal units get per-device AP credentials baked now — the card has
     # never booted, so there is no MAC to derive an identity from later.
@@ -187,6 +193,7 @@ async def build(
                 setup_transport != "usb"
                 and mic_profile in overlay.USB_MIC_PROFILES
             ),
+            server_identity=identity,
         )
         await progress("done", 100, "card ready — eject, boot, then plug into this machine to adopt")
         result: dict[str, Any] = {"ok": True, "written": written}
@@ -213,6 +220,7 @@ async def build(
                 setup_transport != "usb"
                 and mic_profile in overlay.USB_MIC_PROFILES
             ),
+            server_identity=identity,
         )
         (staging / "README.txt").write_text(
             "Domovoi satellite overlay\n"

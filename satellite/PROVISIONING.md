@@ -317,13 +317,38 @@ Edit `~/.domovoi/config.toml`:
 [satellite]
 room_id = "<room>"                                   # match the hostname suffix
 domovoi_url = "ws://<server-ip-or-hostname>:6370"
+# server_fingerprint = "SHA256:..."                  # see below — optional here
+```
 
+```toml
 [wake]
 wake_word = "hey_jarvis"                             # dev wake word for now
 threshold = 0.5
 ```
 
 The example file ships with sensible defaults for everything else (barge-in, noise gate, music ALSA device, etc.).
+
+**`server_fingerprint`** is your server's identity, shown on the dashboard
+under **Settings → About**. Set it and this satellite makes the server sign
+a fresh nonce before every connect, refuses anything that cannot, and only
+installs code and plugin payloads from a manifest that server signed.
+Leave it out and the satellite records the first server it meets and holds
+itself to that one from then on — fine for a hand-built unit on a network
+you trust, but a card prepared from the dashboard gets the fingerprint
+baked in and is better. See
+[SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md) § Server identity.
+
+A prepared card carries the public half at
+`domovoi/server-identity.json` on the boot partition; first boot installs
+it root-owned at `/etc/domovoi/server-identity.json` and adoption copies
+the fingerprint into `config.toml`. Nothing secret rides the card.
+
+Checking the signatures needs the `cryptography` package, which
+`requirements.txt` lists. 64-bit Pi OS (the supported build) gets an
+`aarch64` wheel with no compiler; on a 32-bit `armv7l` image there is no
+wheel and the install may fail — let it, because `satellite/_ed25519.py` is
+a pure-Python implementation of the same thing and the client falls back to
+it automatically.
 
 ### 6.5 Verify audio devices
 
@@ -499,7 +524,7 @@ You should have:
 1. A Pi at `domovoi-<room>.local` (or the reserved IP) with SSH access from your laptop
 2. Working mic capture + speaker playback through the ReSpeaker HAT, at audible volume
 3. A Python venv with all satellite deps installed and the wake-word ONNX models downloaded
-4. `~/.domovoi/config.toml` populated with the right `room_id` and `domovoi_url`
+4. `~/.domovoi/config.toml` populated with the right `room_id` and `domovoi_url` (and, on a prepared card, `server_fingerprint`)
 5. The satellite client running under systemd as `domovoi-satellite.service` and auto-starting on boot
 6. Network reachability confirmed both directions between the Pi and the Domovoi server
 7. Both sudoers entries in place: WiFi self-heal (§6.7) and self-restart (§8.1)

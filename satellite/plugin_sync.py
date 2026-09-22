@@ -48,20 +48,62 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def fetch_manifest(
+    base: str,
+    timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """The payload channel's file list, authenticated when this device
+    knows who to expect — the twin of ``code_sync.fetch_manifest``, and
+    the more important of the two: these are the files whose
+    ``post_install`` runs as root on this device.
+
+    Pinned, we take ``manifest.sig`` and refuse anything that does not
+    verify before a byte is fetched. Unpinned, the old unsigned manifest,
+    with one warning line so it is visible."""
+    from satellite import server_identity
+
+    if not expected_fingerprint:
+        log.warning(
+            "plugin sync: this device has no server fingerprint, so the "
+            "payload manifest is taken on trust"
+        )
+        r = requests.get(f"{base}/v1/satellite-plugins/manifest", timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    r = requests.get(f"{base}/v1/satellite-plugins/manifest.sig", timeout=timeout)
+    if r.status_code == 404:
+        raise RuntimeError(
+            "plugin sync: this device expects a signed manifest and the "
+            "server serves none; upgrade the Domovoi server first"
+        )
+    r.raise_for_status()
+    try:
+        return server_identity.verify_manifest_envelope(
+            r.json(),
+            channel=server_identity.PLUGIN_CHANNEL,
+            expected_fingerprint=expected_fingerprint,
+        )
+    except server_identity.IdentityError as e:
+        raise RuntimeError(f"plugin sync: {e}; nothing was written") from e
+
+
 def sync_plugin_payloads(
     http_base: str,
     payloads_root: Path = PAYLOADS_DIR,
     timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Mirror the channel into ``payloads_root``. Returns
     ``{"meta", "downloaded", "pruned", "root_work"}`` where ``root_work``
     lists slugs whose apt/post-install state changed (the caller then
-    stages + invokes the root helper). Raises on network/HTTP errors or a
-    sha mismatch — like code_sync, a corrupt body never lands."""
+    stages + invokes the root helper). Raises on network/HTTP errors, on a
+    manifest this device's server did not sign, or on a sha mismatch —
+    like code_sync, a corrupt body never lands."""
     base = http_base.rstrip("/")
-    r = requests.get(f"{base}/v1/satellite-plugins/manifest", timeout=timeout)
-    r.raise_for_status()
-    doc = r.json()
+    doc = fetch_manifest(base, timeout, expected_fingerprint)
+    if not isinstance(doc, dict):
+        raise RuntimeError("plugin sync: the manifest is not a document")
     files: dict[str, str] = doc.get("files") or {}
     meta: dict[str, Any] = doc.get("meta") or {}
 

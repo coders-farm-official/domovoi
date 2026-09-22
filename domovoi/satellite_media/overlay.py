@@ -305,9 +305,16 @@ def render_stage2(sat_user: str) -> str:
 def build_info(
     *, board: str, mic_profile: str, sat_type: str, core_sha: str | None,
     python_version: str, os_release: str, plugins: list[dict[str, str]],
-    offline: bool,
+    offline: bool, server_identity: dict[str, str] | None = None,
 ) -> dict:
-    return {
+    """The build-info.json the overlay carries.
+
+    ``server_identity`` is the preparing core's public identity — the
+    fingerprint this card will hold its server to for the rest of its
+    life. It is recorded here so a person can read it off the card, and
+    written separately as ``domovoi/server-identity.json`` for first boot
+    to install root-owned (see :func:`write_overlay`)."""
+    info = {
         "schema": 1,
         "board": board,
         "mic_profile": mic_profile,
@@ -319,6 +326,9 @@ def build_info(
         "offline": offline,
         "plugins": plugins,
     }
+    if server_identity:
+        info["server_fingerprint"] = server_identity.get("fingerprint")
+    return info
 
 
 def generate_ap_credentials(rng=None) -> dict:
@@ -345,6 +355,10 @@ def generate_ap_credentials(rng=None) -> dict:
 # mechanism Pi OS provides to answer that wizard unattended.
 USERCONF_NAME = "userconf.txt"
 CONSOLE_JSON_PATH = "domovoi/console.json"
+# The preparing core's public identity, on the card. First boot copies it
+# to /etc/domovoi/server-identity.json (root-owned) and adoption writes the
+# fingerprint into config.toml.
+SERVER_IDENTITY_NAME = "server-identity.json"
 
 
 # The approval code a satellite shows (and says) while it waits for a
@@ -452,6 +466,7 @@ def write_overlay(
     console: dict | None = None,
     usb_gadget: bool = True,
     usb_host: bool = False,
+    server_identity: dict[str, str] | None = None,
 ) -> list[str]:
     """Write the overlay onto a mounted boot partition (or any staging
     dir for the zip path). Returns the relative paths written. The tar is
@@ -482,6 +497,16 @@ def write_overlay(
         json.dumps(device_info, indent=2), encoding="utf-8"
     )
     written.append("domovoi/device-info.json")
+
+    if server_identity:
+        # The public half only — nothing secret rides a card that ships in
+        # an envelope. First boot installs this root-owned under
+        # /etc/domovoi, which is what makes it a pin the satellite user
+        # cannot quietly replace.
+        (ddir / SERVER_IDENTITY_NAME).write_text(
+            json.dumps(server_identity, indent=2), encoding="utf-8"
+        )
+        written.append(f"domovoi/{SERVER_IDENTITY_NAME}")
 
     if console is not None:
         # userconf.txt lives at the ROOT of the boot partition — Pi OS looks

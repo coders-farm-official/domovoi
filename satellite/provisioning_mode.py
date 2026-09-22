@@ -497,25 +497,33 @@ def resolve_auto_url(configured: str) -> str | None:
     """
     if (configured or "").strip().lower() != proto.AUTO_DISCOVER_URL:
         return configured or None
-    from satellite import discovery      # stdlib-only, like this module
+    # stdlib-only, like this module
+    from satellite import discovery, server_identity
 
-    url = discovery.resolve_url(proto.AUTO_DISCOVER_URL)
+    expected, source = server_identity.pinned_fingerprint()
+    url = discovery.resolve_url(
+        proto.AUTO_DISCOVER_URL, expected_fingerprint=expected
+    )
     if url is None:
         log.error(
-            "joined Wi-Fi but found no Domovoi server on this network. "
-            "Set [satellite] domovoi_url in %s by hand.", CONFIG_PATH,
+            "joined Wi-Fi but found no Domovoi server on this network%s. "
+            "Set [satellite] domovoi_url in %s by hand.",
+            f" answering for {expected} ({source})" if expected else "",
+            CONFIG_PATH,
         )
         return None
-    try:
-        current = CONFIG_PATH.read_text(encoding="utf-8")
-        CONFIG_PATH.write_text(
-            config_writer.apply_changes(current, {"satellite.domovoi_url": url}),
-            encoding="utf-8", newline="\n",
-        )
-    except OSError as e:
-        log.error("discovered %s but could not save it: %s", url, e)
+    # Not into config.toml. The address is a candidate until the server
+    # says this device is paired — that is, until a person approves it on
+    # the dashboard — and the client promotes it then. Writing it here is
+    # what used to make the first host that answered permanent.
+    if not server_identity.write_pending_server(url, expected):
+        log.error("discovered %s but could not save it", url)
         return None
-    log.info("discovered the Domovoi server at %s", url)
+    give_to_satellite_user(server_identity.PENDING_SERVER_SIDECAR)
+    log.info(
+        "discovered the Domovoi server at %s — pending approval on the "
+        "dashboard", url,
+    )
     return url
 
 
@@ -538,6 +546,16 @@ def apply_provision(
         "satellite.sat_type": payload.get("sat_type", "voice"),
         "device.profile": payload["device_profile"],
     }
+    # The identity of the core that prepared this card, copied out of the
+    # root-owned pin first boot installed, so the client compares against
+    # a value it cannot itself have invented. Absent on a card prepared
+    # before server identities — the client then falls back to recording
+    # the first core it meets.
+    from satellite import server_identity
+
+    baked, _source = server_identity.pinned_fingerprint()
+    if baked:
+        changes["satellite.server_fingerprint"] = baked
     # Pin capture AND playback to the array on boards that need it. Without
     # this the client runs on the system default: capture lands on device
     # -1, and playback leaves the array entirely, so its on-chip AEC has no

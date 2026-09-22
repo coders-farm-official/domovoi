@@ -401,6 +401,15 @@ if ! skip units; then
       >/usr/local/sbin/domovoi-status
     chmod 0755 /usr/local/sbin/domovoi-status
   fi
+  # The identity of the core that prepared this card, root-owned so the
+  # satellite user can read it and cannot rewrite it. Everything the
+  # device does about "which server is ours" compares against this.
+  # Guarded: a card prepared before server identities simply has none.
+  if [ -f "$BOOT/domovoi/server-identity.json" ]; then
+    mkdir -p /etc/domovoi
+    install -m 0644 -o root -g root \
+      "$BOOT/domovoi/server-identity.json" /etc/domovoi/server-identity.json
+  fi
   install -m 0755 "$PAYDIR/bootstrap/stage2.sh" \
     "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
   chown "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"

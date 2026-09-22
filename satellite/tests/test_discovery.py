@@ -12,6 +12,8 @@ import pytest
 
 from satellite import discovery
 from satellite import provisioning_mode as pm
+from satellite import server_identity
+from satellite.tests.test_server_identity import _health_opener, _server
 
 
 # ─── candidate addresses ──────────────────────────────────────────────────
@@ -84,6 +86,58 @@ def test_probe_swallows_connection_errors():
     def boom(url, timeout=None):
         raise OSError("connection refused")
     assert discovery.probe("192.168.0.9", opener=boom) is False
+
+
+# ─── the probe, once the card knows whose server it is ────────────────────
+
+
+def test_probe_accepts_the_core_the_card_was_prepared_for():
+    seed, public, fingerprint = _server()
+    assert discovery.probe(
+        "192.168.0.117", opener=_health_opener(seed, public),
+        expected_fingerprint=fingerprint,
+    ) is True
+
+
+def test_probe_refuses_a_host_that_answers_as_domovoi_but_is_not_ours(caplog):
+    """The bot_name is something anyone can type. Holding the key is not."""
+    _seed_a, _public_a, ours = _server(1)
+    seed_b, public_b, _ = _server(2)
+    with caplog.at_level("WARNING"):
+        assert discovery.probe(
+            "192.168.0.9", opener=_health_opener(seed_b, public_b),
+            expected_fingerprint=ours,
+        ) is False
+    assert "192.168.0.9" in caplog.text
+
+
+def test_probe_refuses_a_host_with_no_identity_when_the_card_has_one():
+    seed, public, fingerprint = _server()
+    assert discovery.probe(
+        "192.168.0.9", opener=_health_opener(seed, public, identity=False),
+        expected_fingerprint=fingerprint,
+    ) is False
+
+
+def test_a_sweep_that_finds_only_impostors_finds_nothing():
+    _seed_a, _public_a, ours = _server(1)
+    seed_b, public_b, _ = _server(2)
+    opener = _health_opener(seed_b, public_b)
+    found = discovery.find_core(
+        hosts=["192.168.0.4", "192.168.0.5"],
+        probe_fn=lambda h, port=None, expected_fingerprint=None: discovery.probe(
+            h, opener=opener, expected_fingerprint=expected_fingerprint
+        ),
+        expected_fingerprint=ours,
+    )
+    assert found is None
+
+
+def test_resolve_url_has_no_address_to_offer_when_nothing_verifies():
+    assert discovery.resolve_url(
+        "auto", finder=lambda port=None, expected_fingerprint=None: None,
+        expected_fingerprint="SHA256:ours",
+    ) is None
 
 
 # ─── the sweep ────────────────────────────────────────────────────────────
@@ -269,6 +323,19 @@ def test_an_unusable_boot_copy_falls_through_to_home(dirs, body):
 # core. Found on hardware after a successful onboarding.
 
 
+@pytest.fixture(autouse=True)
+def _isolate_identity_sidecars(tmp_path, monkeypatch):
+    """Keep every pin and every pending address inside the test's own
+    directory: the real ones live in ~/.domovoi and /etc/domovoi."""
+    monkeypatch.setattr(
+        server_identity, "RECORD_SIDECAR", tmp_path / "recorded.json"
+    )
+    monkeypatch.setattr(server_identity, "ROOT_PIN", tmp_path / "etc-pin.json")
+    monkeypatch.setattr(
+        server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending-server.json"
+    )
+
+
 @pytest.fixture
 def cfgfile(tmp_path, monkeypatch):
     cfg = tmp_path / "config.toml"
@@ -283,20 +350,33 @@ def cfgfile(tmp_path, monkeypatch):
     return cfg
 
 
-def test_auto_is_replaced_with_a_real_address(cfgfile, monkeypatch):
+def test_a_discovered_address_is_returned_for_this_boot(cfgfile, monkeypatch):
     monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
     assert pm.resolve_auto_url("auto") == "ws://192.168.0.117:6370"
-    body = cfgfile.read_text()
-    assert 'domovoi_url = "ws://192.168.0.117:6370"' in body
-    assert '"auto"' not in body
 
 
-def test_the_rewrite_preserves_the_rest_of_the_file(cfgfile, monkeypatch):
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "10.0.0.4")
+def test_a_discovered_address_is_not_written_into_the_config(cfgfile, monkeypatch):
+    """It is a candidate, not configuration. Config.toml only learns the
+    address once the server says this device is paired, which means a
+    person approved it on the dashboard."""
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
     pm.resolve_auto_url("auto")
     body = cfgfile.read_text()
-    assert "# the server this room talks to" in body    # comments survive
-    assert 'room_id = "kitchen"' in body
+    assert 'domovoi_url = "auto"' in body
+    assert "192.168.0.117" not in body
+
+
+def test_a_discovered_address_waits_in_the_pending_sidecar(cfgfile, monkeypatch):
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    pm.resolve_auto_url("auto")
+    assert server_identity.read_pending_server()[0] == "ws://192.168.0.117:6370"
+
+
+def test_the_config_file_is_left_exactly_as_it_was(cfgfile, monkeypatch):
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "10.0.0.4")
+    before = cfgfile.read_text()
+    pm.resolve_auto_url("auto")
+    assert cfgfile.read_text() == before
 
 
 def test_an_explicit_address_is_left_alone(cfgfile):
@@ -312,6 +392,24 @@ def test_failed_discovery_leaves_the_sentinel_and_says_so(cfgfile, monkeypatch, 
     assert "no Domovoi server" in caplog.text
     assert "by hand" in caplog.text                        # actionable
     assert 'domovoi_url = "auto"' in cfgfile.read_text()
+    assert server_identity.read_pending_server() == (None, None)
+
+
+def test_a_pinned_card_sweeps_for_its_own_server_only(cfgfile, monkeypatch):
+    """The fingerprint the card was prepared with rides into the sweep, so
+    a host that cannot sign for it is never even a candidate."""
+    seen = {}
+
+    def fake_find(port=None, expected_fingerprint=None):
+        seen["fingerprint"] = expected_fingerprint
+        return "192.168.0.117"
+
+    server_identity.ROOT_PIN.write_text(
+        '{"fingerprint": "SHA256:ours"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(discovery, "find_core", fake_find)
+    pm.resolve_auto_url("auto")
+    assert seen["fingerprint"] == "SHA256:ours"
 
 
 def test_it_runs_only_after_wifi_joins(monkeypatch, tmp_path):

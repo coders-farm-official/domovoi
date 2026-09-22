@@ -27,6 +27,7 @@ from sqlalchemy import text  # noqa: E402
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
+from domovoi import server_identity  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     SlidingWindowLimiter,
     check_admin_request,
@@ -600,7 +601,19 @@ async def post_intent(intent: Intent):
 
 
 @app.get("/v1/health")
-async def health() -> dict[str, str]:
+async def health(challenge: str | None = None) -> dict[str, Any]:
+    """Liveness, plus this install's cryptographic identity.
+
+    ``identity`` carries the Ed25519 public key and its fingerprint — the
+    string a prepared satellite image is baked with and the dashboard
+    shows. Pass ``?challenge=<nonce>`` and the answer also carries a
+    signature over that nonce, which is what lets a satellite tell this
+    household's server from anything else listening on 6370: a replayed
+    answer signs somebody else's nonce and fails.
+
+    The pre-identity fields are untouched, so a satellite that predates
+    this (and any other caller) reads exactly what it always read.
+    """
     try:
         async with session_scope() as s:
             await s.execute(text("SELECT 1"))
@@ -608,11 +621,22 @@ async def health() -> dict[str, str]:
         raise HTTPException(status_code=503, detail=f"db unreachable: {e}") from e
     if not HANDLERS:
         raise HTTPException(status_code=503, detail="no handlers registered")
-    return {
+    doc: dict[str, Any] = {
         "status": "ok",
         "bot_name": settings.bot_name,
         "use_stubs": "true" if settings.use_stubs else "false",
     }
+    if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
+        raise HTTPException(status_code=400, detail="challenge is too long")
+    try:
+        identity = server_identity.load_or_create()
+        doc["identity"] = (
+            identity.health_answer(challenge) if challenge
+            else identity.public_document()
+        )
+    except OSError as e:      # pragma: no cover — read-only config dir
+        log.warning("could not load the server identity: %s", e)
+    return doc
 
 
 @app.get("/v1/time")
@@ -793,6 +817,26 @@ async def satellite_code_manifest() -> dict[str, str]:
     return manifest
 
 
+@app.get("/v1/satellite-code/manifest.sig")
+async def satellite_code_manifest_signed() -> dict[str, Any]:
+    """The same file list, inside an envelope this server signed.
+
+    A satellite that was prepared with this server's fingerprint asks for
+    this instead of the plain manifest, and refuses the upgrade if the
+    signature does not check out — so a host that merely answers on 6370
+    cannot hand a Pi a file list of its own choosing. The manifest travels
+    INSIDE the envelope, so there is no window in which the list could
+    change between being signed and being used.
+
+    Declared before the ``{path:path}`` catch-all so the literal wins.
+    ``/v1/satellite-code/manifest`` keeps serving the unsigned shape for
+    devices prepared before identities existed.
+    """
+    manifest = await satellite_code_manifest()
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(server_identity.CODE_CHANNEL, manifest)
+
+
 @app.get("/v1/satellite-code/{path:path}")
 async def satellite_code_file(path: str) -> FileResponse:
     """Serve one allowlisted file from satellite/. Guarded against
@@ -829,6 +873,18 @@ async def satellite_plugins_manifest() -> dict[str, Any]:
     from domovoi.satellite_payload import build_channel_manifest
 
     return await build_channel_manifest()
+
+
+@app.get("/v1/satellite-plugins/manifest.sig")
+async def satellite_plugins_manifest_signed() -> dict[str, Any]:
+    """The payload channel's file list inside a signed envelope — the same
+    shape and the same promise as the code channel's ``manifest.sig``.
+    Payload files are the ones whose ``post_install`` runs as root on the
+    device, so this is the channel where authenticity matters most. The
+    unsigned ``manifest`` endpoint is unchanged."""
+    manifest = await satellite_plugins_manifest()
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(server_identity.PLUGIN_CHANNEL, manifest)
 
 
 @app.get("/v1/satellite-plugins/{path:path}")
