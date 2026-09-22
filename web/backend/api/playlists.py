@@ -171,9 +171,16 @@ async def list_playlist_tracks(playlist_id: int) -> list[Track]:
 
 @router.post("", response_model=Playlist, status_code=201)
 async def create_playlist(payload: PlaylistCreate) -> Playlist:
-    """Create a new playlist. Case-insensitive duplicate names are
-    rejected by the ``idx_playlists_name_ci`` unique index — we
-    pre-check here to return a friendly 409 instead of an IntegrityError."""
+    """Create a new playlist — name plus the optional description /
+    cover colour / emoji in one request (F-021). Case-insensitive
+    duplicate names are rejected by the ``idx_playlists_name_ci`` unique
+    index — we pre-check here to return a friendly 409 instead of an
+    IntegrityError."""
+    if payload.cover_color and not _COLOR_RE.match(payload.cover_color):
+        raise HTTPException(
+            status_code=400,
+            detail="cover_color must be a color value (hex, rgb(), oklch())",
+        )
     async with session_scope() as s:
         dup = (
             await s.execute(
@@ -189,13 +196,18 @@ async def create_playlist(payload: PlaylistCreate) -> Playlist:
         row = await s.execute(
             text(
                 """
-                INSERT INTO playlists (name)
-                VALUES (:n)
+                INSERT INTO playlists (name, description, cover_color, cover_emoji)
+                VALUES (:n, :description, :cover_color, :cover_emoji)
                 RETURNING id, name, created_at,
                           description, cover_color, cover_emoji
                 """
             ),
-            {"n": payload.name},
+            {
+                "n": payload.name,
+                "description": payload.description,
+                "cover_color": payload.cover_color,
+                "cover_emoji": payload.cover_emoji,
+            },
         )
         result = row.first()
         await s.execute(text("SELECT pg_notify('playlists_changed', 'created')"))

@@ -51,7 +51,13 @@ class Playlist(BaseModel):
 
 
 class PlaylistCreate(BaseModel):
+    """Create takes the same presentation fields PATCH edits, so the
+    dashboard's new-playlist form posts once instead of create-then-edit
+    (F-021)."""
     name: str = Field(..., min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    cover_color: str | None = Field(default=None, max_length=64)
+    cover_emoji: str | None = Field(default=None, max_length=16)
 
 
 class PlaylistPatch(BaseModel):

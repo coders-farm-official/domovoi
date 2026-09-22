@@ -757,52 +757,155 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire }) => {
  * track Drawer). Favorites is pinned at the top with a star icon
  * — it's a virtual playlist (id=0) the backend derives from
  * library_tracks.favorited and that can't be renamed or deleted. */
-const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, fire }) => {
+const EMPTY_PLAYLIST_FORM = { name: '', description: '', cover_color: '', cover_emoji: '' };
+const _playlistFieldStyle = {
+  font: 'inherit', fontSize: 13, height: 30, padding: '0 10px', borderRadius: 'var(--r-sm)',
+  border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)',
+};
+
+/* What the four-field form posts: a trimmed name and the three optional
+ * fields, empty ones sent as null so create and edit clear them alike. */
+const playlistFields = (form) => {
+  const opt = (v) => { const t = (v || '').trim(); return t ? t : null; };
+  return {
+    name: (form.name || '').trim(),
+    description: opt(form.description),
+    cover_color: opt(form.cover_color),
+    cover_emoji: opt(form.cover_emoji),
+  };
+};
+
+/* The playlist form — name, description, cover colour, emoji — used by
+ * the Playlists tab's "new playlist" panel and the drawer's edit mode
+ * (F-021: create used to take a name only, in a drawer off a library row). */
+const PlaylistForm = ({ form, setForm, onSubmit, submitLabel = 'save', busy = false }) => {
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const canSubmit = !busy && !!(form.name || '').trim();
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      <input value={form.name} onChange={set('name')} placeholder="name"
+             onKeyDown={e => { if (e.key === 'Enter' && canSubmit) onSubmit(); }}
+             style={_playlistFieldStyle}/>
+      <input value={form.description} onChange={set('description')}
+             placeholder="description (optional)" style={_playlistFieldStyle}/>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.cover_color) ? form.cover_color : '#7c5cff'}
+               onChange={set('cover_color')} title="cover color"
+               style={{ width: 34, height: 30, padding: 0, border: '1px solid var(--border)',
+                        borderRadius: 'var(--r-sm)', background: 'var(--card)' }}/>
+        <input value={form.cover_emoji} onChange={set('cover_emoji')} placeholder="emoji" maxLength={4}
+               style={{ ..._playlistFieldStyle, fontSize: 16, width: 56, textAlign: 'center', padding: 0 }}/>
+        <PlaylistCover playlist={{ ...form, is_virtual: false }} size={30}/>
+        <div style={{ marginLeft: 'auto' }}>
+          <Button variant="primary" icon={submitLabel === 'create' ? 'plus' : 'check'}
+                  onClick={onSubmit} disabled={!canSubmit}>{busy ? `${submitLabel}…` : submitLabel}</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* Cover swatch: the playlist's colour behind its emoji or the fallback
+ * icon. The colour used to tint only the fallback icon, so a playlist
+ * with an emoji never showed it (F-021). `data-cover-color` carries the
+ * value for tests and the DOM. */
+const PlaylistCover = ({ playlist: p, size = 26 }) => (
+  <div data-cover-color={p.cover_color || undefined}
+       style={{ width: size, height: size, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                background: p.is_virtual
+                  ? 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))'
+                  : (p.cover_color || 'var(--sunken)'),
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    {p.cover_emoji && !p.is_virtual
+      ? <span style={{ fontSize: Math.round(size * 0.55), lineHeight: 1 }}>{p.cover_emoji}</span>
+      : <Icon name={p.is_virtual ? 'star' : 'list-music'} size={Math.round(size * 0.5)}
+              style={{ color: p.is_virtual ? 'var(--card)' : 'var(--fg-muted)' }}/>}
+  </div>
+);
+
+const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, onCreate, fire }) => {
+  // "new playlist" opens the full form right here — the only create
+  // used to be a name box in the add-to-playlist drawer off a library
+  // row, unreachable with an empty library (F-021).
+  const [creating, setCreating] = React.useState(false);
+  const [form, setForm] = React.useState(EMPTY_PLAYLIST_FORM);
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      if (await onCreate(form)) { setCreating(false); setForm(EMPTY_PLAYLIST_FORM); }
+    } finally { setBusy(false); }
+  };
+  const toolbar = (
+    <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8,
+                  borderBottom: '1px solid var(--border-soft)' }}>
+      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+        {playlists.length} playlist{playlists.length === 1 ? '' : 's'}
+      </span>
+      <span style={{ flex: 1 }}/>
+      <Button variant={creating ? 'secondary' : 'primary'} icon={creating ? 'x' : 'plus'}
+              onClick={() => setCreating(c => !c)}>
+        {creating ? 'cancel' : 'new playlist'}
+      </Button>
+    </div>
+  );
+  const createPanel = creating && (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+      <div className="label" style={{ marginBottom: 8 }}>new playlist</div>
+      <PlaylistForm form={form} setForm={setForm} onSubmit={submit} submitLabel="create" busy={busy}/>
+    </div>
+  );
   if (loading && playlists.length === 0) {
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading playlists…</div>;
   }
   if (playlists.length === 0) {
-    return <Empty glyph="headphones" title="no playlists yet"
-                  sub={`click the + on a library row to start one, or say "make a new playlist called X"`}/>;
+    return (
+      <div>
+        {toolbar}
+        {createPanel}
+        <Empty glyph="headphones" title="no playlists yet"
+               sub={`create one above, click the + on a library row, or say "make a new playlist called X"`}/>
+      </div>
+    );
   }
   return (
-    <table className="tbl">
-      <thead><tr>
-        <th style={{ width: 40 }}></th>
-        <th>name</th>
-        <th className="num">tracks</th>
-        <th>created</th>
-        <th className="actions"></th>
-      </tr></thead>
-      <tbody>
-        {playlists.map(p => (
-          <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(p)}>
-            <td onClick={e => e.stopPropagation()}>
-              {p.cover_emoji
-                ? <span style={{ fontSize: 18, lineHeight: 1 }}>{p.cover_emoji}</span>
-                : <Icon name={p.is_virtual ? 'star' : 'list-music'} size={14}
-                        style={p.is_virtual ? { color: 'var(--brand)' }
-                                            : (p.cover_color ? { color: p.cover_color } : undefined)}/>}
-            </td>
-            <td>
-              <div style={{ fontWeight: 500 }}>{p.name}</div>
-              {p.description
-                ? <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{p.description}</div>
-                : p.is_virtual && (
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
-                    derived from your favorites
-                  </div>
-                )}
-            </td>
-            <td className="num mono">{p.track_count}</td>
-            <td className="mono">{p.created_at ? relTime(p.created_at) : '—'}</td>
-            <td className="actions" onClick={e => e.stopPropagation()}>
-              <IconButton name="play" title="play" onClick={() => onPlay(p)}/>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div>
+      {toolbar}
+      {createPanel}
+      <table className="tbl">
+        <thead><tr>
+          <th style={{ width: 40 }}></th>
+          <th>name</th>
+          <th className="num">tracks</th>
+          <th>created</th>
+          <th className="actions"></th>
+        </tr></thead>
+        <tbody>
+          {playlists.map(p => (
+            <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(p)}>
+              <td onClick={e => e.stopPropagation()}>
+                <PlaylistCover playlist={p} size={26}/>
+              </td>
+              <td>
+                <div style={{ fontWeight: 500 }}>{p.name}</div>
+                {p.description
+                  ? <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{p.description}</div>
+                  : p.is_virtual && (
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                      derived from your favorites
+                    </div>
+                  )}
+              </td>
+              <td className="num mono">{p.track_count}</td>
+              <td className="mono">{p.created_at ? relTime(p.created_at) : '—'}</td>
+              <td className="actions" onClick={e => e.stopPropagation()}>
+                <IconButton name="play" title="play" onClick={() => onPlay(p)}/>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 };
 
@@ -843,7 +946,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
     });
     setEditing(true);
   };
-  const saveEdit = async () => { await onEdit(playlist, form); setEditing(false); };
+  const saveEdit = async () => { await onEdit(playlist, playlistFields(form)); setEditing(false); };
 
   // HTML5 drag-to-reorder. Works on a local copy; commits the new order on drop.
   const onDrop = (toIdx) => {
@@ -870,16 +973,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
-          <div style={{ width: 56, height: 56, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                        background: playlist.is_virtual
-                          ? 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))'
-                          : (playlist.cover_color || 'var(--sunken)'),
-                        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {playlist.cover_emoji && !playlist.is_virtual
-              ? <span style={{ fontSize: 28, lineHeight: 1 }}>{playlist.cover_emoji}</span>
-              : <Icon name={playlist.is_virtual ? 'star' : 'list-music'} size={22}
-                      style={playlist.is_virtual ? { color: 'var(--card)' } : { color: 'var(--fg-muted)' }}/>}
-          </div>
+          <PlaylistCover playlist={playlist} size={56}/>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 600 }}>{playlist.name}</div>
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{trackCount} track{trackCount === 1 ? '' : 's'}</div>
@@ -906,24 +1000,8 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
             )}
           </div>
           {editing && !playlist.is_virtual && (
-            <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                     placeholder="name"
-                     style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
-              <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-                     placeholder="description (optional)"
-                     style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.cover_color) ? form.cover_color : '#7c5cff'}
-                       onChange={e => setForm({ ...form, cover_color: e.target.value })}
-                       title="cover color" style={{ width: 34, height: 30, padding: 0, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', background: 'var(--card)' }}/>
-                <input value={form.cover_emoji} onChange={e => setForm({ ...form, cover_emoji: e.target.value })}
-                       placeholder="emoji" maxLength={4}
-                       style={{ font: 'inherit', fontSize: 16, width: 56, height: 30, textAlign: 'center', padding: 0, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
-                <div style={{ marginLeft: 'auto' }}>
-                  <Button variant="primary" icon="check" onClick={saveEdit} disabled={!form.name.trim()}>save</Button>
-                </div>
-              </div>
+            <div style={{ marginTop: 12 }}>
+              <PlaylistForm form={form} setForm={setForm} onSubmit={saveEdit} submitLabel="save"/>
             </div>
           )}
         </div>
@@ -1359,6 +1437,19 @@ const MusicPage = () => {
       if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
     }
   };
+  const onCreatePlaylist = async (form) => {
+    const fields = playlistFields(form);
+    if (!fields.name) { fire('a playlist needs a name'); return false; }
+    try {
+      const created = await apiPost('/api/playlists', fields);
+      fire(`created ${(created && created.name) || fields.name}`);
+      refreshPlaylists();
+      return true;
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(`create failed: ${apiErrorText(e)}`);
+      return false;
+    }
+  };
   const onEditPlaylist = async (playlist, fields) => {
     try {
       await apiPatch(`/api/playlists/${playlist.id}`, fields);
@@ -1503,7 +1594,7 @@ const MusicPage = () => {
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'player'    && <NowPlayingPanel/>}
         {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}/>}
-        {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} fire={fire}/>}
+        {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} onCreate={onCreatePlaylist} fire={fire}/>}
         {tab === 'stats'     && <StatsTab     stats={stats} loading={!stats}/>}
         {tab === 'jobs'      && <JobsTab jobs={acquisitions} availability={acqData} loading={acqLoading} rooms={rooms} onCancel={onCancelAcquisition} fire={fire} refresh={refreshAcquisitions}/>}
       </Card>
