@@ -175,10 +175,16 @@ What the install flow *does* do (verified in
   pip runs. The trust screen shows where each resolved distribution would
   be fetched from and flags any origin outside the configured index.
 - **The trust screen** shows: publisher, version, license, the manifest's
-  declared permissions and warnings, direct **and transitive** Python
-  dependencies, the handlers it registers, how many database migrations it
-  ships, any HTTP endpoints it exposes without auth, and the trust
-  statement above.
+  declared permissions and warnings, **the satellite payload in its own
+  panel** (the apt packages, the root post-install script by path, the
+  pinned pips, and the file count and size — what `apply-payload` will run
+  as root on every satellite), **every HTTP route the plugin opted out of
+  the admin gate** (found by scanning the staged source for
+  `@open_endpoint`, so the list does not depend on the publisher's
+  goodwill), direct **and transitive** Python dependencies with the origin
+  each resolves from, the handlers it registers, how many database
+  migrations it ships, and the trust statement above. A package the
+  scanner cannot parse is refused rather than previewed incompletely.
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
@@ -348,7 +354,9 @@ your network.
 code on every satellite** (via the sudoers-allowlisted
 `domovoi-apply-payload` helper). This is gated by the plugin's
 `permissions.satellite_root` + a mandatory warnings entry surfaced at
-install-confirm time, transfer is sha256-manifest-verified, and only
+install-confirm time — and the trust screen itself lists the packages,
+the script and the payload size, not just the flag — transfer is
+sha256-manifest-verified, and only
 admin-enabled plugins' payloads flow — but there is **no sandbox**, by
 design and named honestly. Corollary: the satellite's service account is
 root-equivalent on its own device (it already executes server-synced code

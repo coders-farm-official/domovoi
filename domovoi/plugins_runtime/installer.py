@@ -57,6 +57,10 @@ from domovoi.plugins_runtime.migrations import (
     discover_migrations,
     sql_lint,
 )
+from domovoi.plugins_runtime.open_endpoints import (
+    OpenEndpointScanError,
+    collect_open_endpoints,
+)
 
 log = logging.getLogger(__name__)
 
@@ -591,8 +595,9 @@ async def stage_zip(
 
         tree_hash = hash_tree(stage_dir)          # step 8
 
-        open_mutations = _collect_open_endpoints(manifest)
+        open_mutations = _collect_open_endpoints(stage_dir, manifest)
         preview = {
+            "slug": manifest.slug,
             "name": manifest.name,
             "version": manifest.version,
             "publisher": manifest.publisher,
@@ -616,6 +621,11 @@ async def stage_zip(
             ),
             "capabilities": list(manifest.provides),
             "open_endpoints": open_mutations,
+            # What lands on every satellite, as root, if the admin confirms
+            # (§7.5): the package list, the script, the pinned pips and the
+            # size of the file payload — its own panel on the trust screen,
+            # never folded into a permission flag.
+            "satellite": _satellite_preview(stage_dir, manifest),
             "trust_statement": TRUST_STATEMENT,
         }
         staged = StagedInstall(
@@ -648,10 +658,51 @@ async def stage_zip(
         raise
 
 
-def _collect_open_endpoints(manifest: PluginManifest) -> list[str]:
-    """The install preview lists opted-out mutating routes; static best
-    effort — the authoritative audit runs at load (§13.2 check 6)."""
-    return []  # populated at load time; kept in the preview shape for §4.11
+def _collect_open_endpoints(
+    stage_dir: Path, manifest: PluginManifest
+) -> list[dict[str, Any]]:
+    """The install preview lists every route the plugin opted out of the
+    default admin gate with ``@open_endpoint`` — found by an AST walk of
+    the staged package in a throwaway subprocess (nothing is imported;
+    :mod:`domovoi.plugins_runtime.open_endpoints`). Each record is
+    ``{method, path, module, function, process, line}``; ``process`` says
+    which mount prefix applies (``core`` → ``/v1/plugins/<slug>``, ``web``
+    → ``/api/plugins/<slug>``). A package the scanner cannot read refuses
+    the install (fail closed — the trust screen cannot describe it)."""
+    try:
+        return collect_open_endpoints(stage_dir / manifest.package_name)
+    except OpenEndpointScanError as e:
+        raise InstallError("open_endpoint_scan_failed", str(e))
+
+
+def _satellite_preview(
+    stage_dir: Path, manifest: PluginManifest
+) -> dict[str, Any] | None:
+    """The ``[satellite]`` payload as the trust screen states it, or None
+    when the manifest declares none. ``files_count`` / ``payload_mb`` are
+    computed with the same enumeration the satellite channel serves
+    (:func:`domovoi.satellite_payload.payload_files`), so the number the
+    admin confirms is the number the Pis receive."""
+    if manifest.satellite is None:
+        return None
+    from domovoi.satellite_payload import _decl_from_manifest, payload_files
+
+    decl = _decl_from_manifest(manifest.raw) or {}
+    files = payload_files(stage_dir, decl) if decl else {}
+    total = 0
+    for p in files.values():
+        try:
+            total += p.stat().st_size
+        except OSError:  # pragma: no cover — vanished mid-stage
+            pass
+    sat = manifest.satellite
+    return {
+        "apt_packages": list(sat.apt_packages),
+        "post_install": sat.post_install,
+        "pip_requirements": list(sat.pip_requirements),
+        "files_count": len(files),
+        "payload_mb": round(total / (1024 * 1024), 2),
+    }
 
 
 def _semver_cmp(a: str, b: str) -> int:

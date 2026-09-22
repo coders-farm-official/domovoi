@@ -30,15 +30,23 @@ const STATUS_PILL = {
 /* ---- The §7.5 trust/confirm modal ---------------------------- */
 /* Rendered after Phase A returns a preview; the ONLY affordance that
  * reaches Phase B. Shows the standing trust statement, permission
- * rows, free-text warnings, the pinned direct requirements AND the
- * resolved transitive tree, handlers + bands, publisher/license, and
- * (github installs) the source URL verbatim. */
+ * rows, free-text warnings, the satellite payload (apt packages, the
+ * root post-install script, pips, file count + size) in its own panel,
+ * the routes the plugin opted out of the admin gate, the pinned direct
+ * requirements AND the resolved transitive tree with each dist's
+ * origin, handlers + bands, publisher/license, and (github installs)
+ * the source URL verbatim. */
 const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCancel, fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   const p = preview || {};
   const perms = p.permissions || {};
   const reqs = p.requirements || {};
+  const sat = p.satellite || null;
+  const satRoot = !!sat && ((sat.apt_packages || []).length > 0 || !!sat.post_install);
+  const openEndpoints = Array.isArray(p.open_endpoints)
+    ? p.open_endpoints.filter((e) => e && typeof e === 'object')
+    : [];
   const confirm = async () => {
     setBusy(true); setErr(null);
     try {
@@ -93,6 +101,55 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
               {(perms.warnings || []).map((w, i) => (
                 <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0', color: 'var(--warn)' }}>
                   <Icon name="alert-octagon" size={13}/> {w}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* The satellite payload gets its OWN panel (never folded into a
+            * permission flag): what apply-payload will install on every
+            * satellite, as root, if the operator confirms. */}
+          {sat && (
+            <div style={{ border: '1px solid var(--warn)', background: 'var(--err-soft)',
+                          borderRadius: 'var(--r-sm)', padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="radio" size={13}/> satellite payload
+              </div>
+              {satRoot ? (
+                <div>
+                  This plugin installs software that <strong>runs as root on every satellite</strong>{' '}
+                  the next time they sync.
+                </div>
+              ) : (
+                <div>This plugin copies files onto every satellite the next time they sync.</div>
+              )}
+              {(sat.apt_packages || []).length > 0 && (
+                <div className="mono" style={{ marginTop: 4 }}>apt packages: {(sat.apt_packages || []).join(', ')}</div>
+              )}
+              {sat.post_install && (
+                <div className="mono">post-install script (root): {sat.post_install}</div>
+              )}
+              {(sat.pip_requirements || []).length > 0 && (
+                <div className="mono">pip requirements: {(sat.pip_requirements || []).join(', ')}</div>
+              )}
+              <div className="mono" style={{ color: 'var(--fg-muted)' }}>
+                {sat.files_count || 0} file{sat.files_count === 1 ? '' : 's'} · {sat.payload_mb || 0} MB
+              </div>
+            </div>
+          )}
+
+          {/* Routes the plugin opted out of the admin gate: anyone on the
+            * network can call these without signing in. */}
+          {openEndpoints.length > 0 && (
+            <div style={{ border: '1px solid var(--warn)', borderRadius: 'var(--r-sm)',
+                          padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="unlock" size={13}/> endpoints anyone on your network can call without signing in
+              </div>
+              {openEndpoints.map((e, i) => (
+                <div key={i} className="mono">
+                  {(e.method || '?')} {(e.process === 'web' ? '/api/plugins/' : '/v1/plugins/') + (p.slug || '<slug>') + (e.path || ' (path not a literal)')}
+                  {e.function ? `  · ${e.module || ''}.${e.function}` : ''}
                 </div>
               ))}
             </div>

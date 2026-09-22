@@ -309,9 +309,13 @@ either upload the zip or paste a GitHub URL
 
 1. **Stage & preview** — the core validates everything (zip safety caps,
    manifest, layout, migration SQL lint, web-import hygiene, an *inert* pip
-   dry-run of the lockfile) and returns a preview: publisher, permissions and
-   warnings, direct + transitive requirements, handlers and bands, migration
-   count, and the trust statement.
+   dry-run of the lockfile, an AST scan of the package for `@open_endpoint`
+   routes) and returns a preview: publisher, permissions and warnings, the
+   satellite payload (apt packages, the root post-install script, pips,
+   file count and size) as its own warning panel, every route that opted out
+   of the admin gate, direct + transitive requirements with each resolved
+   distribution's origin, handlers and bands, migration count, and the
+   trust statement.
 2. **Confirm** — only after you accept the trust screen does anything
    execute: pip install (hash-verified, wheels only), migrations on both
    prod and test DBs, move into `~/.domovoi/plugins/installed/<slug>/`, a
@@ -607,8 +611,13 @@ max_payload_mb = 64                       # hard size cap on files_dir
 **The honesty contract:** `apt_packages` or `post_install` require
 `permissions.satellite_root = true` **and** at least one
 `permissions.warnings` entry — a plugin running root code on every
-satellite must say so, and the installer surfaces it at confirm time.
-`files_dir` alone (plain file sync) needs no permission. Directory
+satellite must say so, and the installer surfaces it at confirm time. The
+trust screen does not rely on your warning text alone: the preview's
+`satellite` section states the package list, the post-install script's
+path, the pinned pips, and the file count and size of the payload (counted
+exactly as the satellite channel serves it), in its own panel headed
+"runs as root on every satellite". `files_dir` alone (plain file sync)
+needs no permission and is still listed with its file count. Directory
 validation: `files_dir` exists, no symlinks, under the cap;
 `post_install` exists inside the plugin root and starts with a shebang.
 Scripts run with `DOMOVOI_PLUGIN_SLUG` / `DOMOVOI_PLUGIN_DIR` env via the
