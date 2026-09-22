@@ -65,7 +65,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/api/documents/sheet/${encodeURIComponent(rel_path)}`,
-          { cache: 'no-store', credentials: 'include' });
+          { cache: 'no-store', credentials: 'include', headers: apiHeaders() });
         if (r.status === 415) {
           if (!cancelled) setState({ status: 'unsupported' });
           return;
@@ -120,7 +120,8 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
   const onExport = async (fmt) => {
     if (dirty) await onSave();
     const a = document.createElement('a');
-    a.href = `${API_BASE}/api/documents/export/sheet/${encodeURIComponent(rel_path)}?fmt=${fmt}`;
+    a.href = withDeviceToken(
+      `${API_BASE}/api/documents/export/sheet/${encodeURIComponent(rel_path)}?fmt=${fmt}`);
     a.download = '';
     document.body.appendChild(a); a.click(); a.remove();
   };

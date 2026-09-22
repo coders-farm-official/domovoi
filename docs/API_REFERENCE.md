@@ -569,7 +569,12 @@ credentials forwarded; `audiobooks` runs the in-process indexer; `podcasts` /
 
 ### 3.14 Documents (homegrown editors)
 
-All **Open**. The former OnlyOffice/Collabora sidecars — and with them the
+**Reads are device tier** (`X-Device-Token`, an admin Bearer, the dashboard
+cookie, or `?device_token=` for the browser-fetched `/raw` and `/export`
+URLs); **writes and `/download-zip` are admin tier** (`Authorization:
+Bearer`). `documents_dir` is the operator's own `~/Documents`, so the
+household reads it and the operator changes it. Both keep the pre-setup
+grace. The former OnlyOffice/Collabora sidecars — and with them the
 open/close locks, JWT capability tokens, save callbacks, and WOPI routes —
 are retired. Editing is homegrown/in-page: a markdown doc editor
 (`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
@@ -580,20 +585,20 @@ row's `category` tells the UI how to open it
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/documents` | `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
-| `POST /api/documents/upload` | multipart | Upload documents. |
-| `POST /api/documents/delete` | `DeleteRequest` | Delete documents. |
-| `POST /api/documents/download-zip` | `ZipRequest` | Zip + download a selection. |
-| `GET /api/documents/text/{rel_path}` | — | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | `TextWriteRequest` | Write a text/markdown file. |
-| `GET /api/documents/sheet/{rel_path}` | — | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
-| `PUT /api/documents/sheet/{rel_path}` | `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
-| `GET /api/documents/export/doc/{rel_path}` | `?fmt=docx` | Export markdown/text as .docx (python-docx). |
-| `GET /api/documents/export/sheet/{rel_path}` | `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
-| `GET /api/documents/raw/{rel_path}` | — | Raw file bytes (inline). |
-| `POST /api/documents/drawings/read` | `DrawingReadRequest` | Read a drawing document. |
-| `POST /api/documents/drawings/write` | `DrawingWriteRequest` | Save a drawing. |
+| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
+| `POST /api/documents/create` | **Admin** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
+| `POST /api/documents/upload` | **Admin** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
+| `POST /api/documents/delete` | **Admin** · `DeleteRequest` | Delete documents. |
+| `POST /api/documents/download-zip` | **Admin** · `ZipRequest` | Zip + download a selection. |
+| `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
+| `PUT /api/documents/text/{rel_path}` | **Admin** · `TextWriteRequest` | Write a text/markdown file. |
+| `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
+| `PUT /api/documents/sheet/{rel_path}` | **Admin** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
+| `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
+| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
+| `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
+| `POST /api/documents/drawings/write` | **Admin** · `DrawingWriteRequest` | Save a drawing. |
 
 ### 3.15 Podcasts and audiobooks
 

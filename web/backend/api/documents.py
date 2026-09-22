@@ -23,6 +23,20 @@ listed, uploaded, and downloaded — but not edited in-app (category
 
 EVERY served/saved path is validated inside ``documents_dir`` via the same
 realpath / ``relative_to()`` containment check ``music.py`` uses.
+
+**Trust posture (two tiers, WEB-2 / REV-1, 2026-09-22).** ``documents_dir``
+is the operator's own ``~/Documents``, not a shared media library, so it
+sits a tier above Music:
+
+* **reads** (list, text, sheet, raw, export, drawing load) take the DEVICE
+  tier — a household client presenting ``X-Device-Token``, an admin, or
+  the dashboard cookie;
+* **writes** (create, upload, text/sheet save, drawing save, delete) and
+  the bulk ``/download-zip`` take the ADMIN tier: ``Authorization: Bearer``,
+  never the cookie alone.
+
+Both keep the pre-setup grace, so a fresh install's first-run flow works
+before an admin password exists.
 """
 
 from __future__ import annotations
@@ -37,13 +51,21 @@ import zipfile
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
+from web.backend.api.csrf_guard import require_requested_with
 
 log = logging.getLogger(__name__)
+
+# The two tiers this router serves under, as reusable dependency lists.
+# ``DAILY`` reads, ``ADMIN`` changes (or hands back an archive of) the
+# operator's Documents folder.
+DAILY = [Depends(require_device_read)]
+ADMIN = [Depends(require_admin_mutation)]
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -269,8 +291,8 @@ class ZipRequest(BaseModel):
 
 
 # ─── List ───────────────────────────────────────────────────────────
-@router.get("", response_model=list[DocumentRow])
-@router.get("/", response_model=list[DocumentRow])
+@router.get("", response_model=list[DocumentRow], dependencies=DAILY)
+@router.get("/", response_model=list[DocumentRow], dependencies=DAILY)
 async def list_documents(
     kind: Literal["all", "doc", "sheet", "drawing"] = Query("all"),
 ) -> list[DocumentRow]:
@@ -347,7 +369,7 @@ _KIND_NEW_EXT = {
 }
 
 
-@router.post("/create", response_model=DocumentRow)
+@router.post("/create", response_model=DocumentRow, dependencies=ADMIN)
 async def create_document(req: CreateRequest) -> DocumentRow:
     """Create a new blank file for a view. Name is a bare filename (any
     directory component is stripped). For doc/sheet/drawing the kind's
@@ -377,7 +399,7 @@ async def create_document(req: CreateRequest) -> DocumentRow:
 
 
 # ─── Delete (one or many) ───────────────────────────────────────────
-@router.post("/delete", response_model=DeleteResult)
+@router.post("/delete", response_model=DeleteResult, dependencies=ADMIN)
 async def delete_documents(req: DeleteRequest) -> DeleteResult:
     """Delete one or more files from ``documents_dir``. Best-effort per
     file — a bad/missing path lands in ``failed`` rather than aborting
@@ -402,7 +424,7 @@ async def delete_documents(req: DeleteRequest) -> DeleteResult:
 
 
 # ─── Bulk download (zip) ────────────────────────────────────────────
-@router.post("/download-zip")
+@router.post("/download-zip", dependencies=ADMIN)
 async def download_zip(req: ZipRequest) -> Response:
     """Zip the requested files and return the archive (multi-select
     download). Built in memory with an explicit Content-Length; every
@@ -432,7 +454,7 @@ async def download_zip(req: ZipRequest) -> Response:
 
 
 # ─── In-app text editor (.txt / .md / unrecognized) ─────────────────
-@router.get("/text/{rel_path:path}")
+@router.get("/text/{rel_path:path}", dependencies=DAILY)
 async def read_text_file(rel_path: str) -> Any:
     """Read a file as UTF-8 text for the in-app editors (text + markdown).
     Falls back gracefully instead of choking on non-text input: a file
@@ -468,7 +490,7 @@ async def read_text_file(rel_path: str) -> Any:
     }
 
 
-@router.put("/text/{rel_path:path}", response_model=DocumentRow)
+@router.put("/text/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
 async def write_text_file(rel_path: str, req: TextWriteRequest) -> DocumentRow:
     """Write text back to a file as UTF-8. Containment-checked; newlines
     preserved verbatim."""
@@ -573,7 +595,7 @@ def _write_sheet_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> No
     )
 
 
-@router.get("/sheet/{rel_path:path}")
+@router.get("/sheet/{rel_path:path}", dependencies=DAILY)
 async def read_sheet(rel_path: str) -> dict[str, Any]:
     """The grid model for the homegrown sheet editor. 415 for sheet types
     it can't round-trip (.xls/.ods → the UI offers download instead)."""
@@ -588,7 +610,7 @@ async def read_sheet(rel_path: str) -> dict[str, Any]:
     }
 
 
-@router.put("/sheet/{rel_path:path}", response_model=DocumentRow)
+@router.put("/sheet/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
 async def write_sheet(rel_path: str, req: SheetWriteRequest) -> DocumentRow:
     """Write the editor grid back: .csv gets values (formula strings kept
     verbatim as text), .xlsx gets formulas as formulas and numbers as
@@ -674,7 +696,7 @@ def _markdown_to_docx(text_: str) -> bytes:
     return buf.getvalue()
 
 
-@router.get("/export/doc/{rel_path:path}")
+@router.get("/export/doc/{rel_path:path}", dependencies=DAILY)
 async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Response:
     """Export a markdown/text document as .docx (attachment). ``.doc`` is
     a legacy binary format nothing open writes reliably — Word opens
@@ -698,7 +720,7 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
     )
 
 
-@router.get("/export/sheet/{rel_path:path}")
+@router.get("/export/sheet/{rel_path:path}", dependencies=DAILY)
 async def export_sheet(
     rel_path: str, fmt: Literal["csv", "xlsx"] = Query("csv")
 ) -> Response:
@@ -750,7 +772,12 @@ async def export_sheet(
 
 
 # ─── Upload files into documents_dir ────────────────────────────────
-@router.post("/upload", response_model=UploadResult)
+@router.post(
+    "/upload",
+    response_model=UploadResult,
+    # Multipart, so the preflight-forcing header rides along (WEB-6).
+    dependencies=[*ADMIN, Depends(require_requested_with)],
+)
 async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
     """Upload one or more files straight into ``documents_dir`` from the
     browser. Filenames are sanitized to a bare basename (defanging
@@ -795,7 +822,7 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
 
 
 # ─── Browser-facing raw serve (PDFs / images / open-raw fallback) ───
-@router.get("/raw/{rel_path:path}")
+@router.get("/raw/{rel_path:path}", dependencies=DAILY)
 async def serve_raw(rel_path: str) -> FileResponse:
     """Serve a file's bytes to the BROWSER (plain ``window.open`` works)
     with the right ``Content-Type`` and an inline ``Content-Disposition``.
@@ -813,7 +840,7 @@ async def serve_raw(rel_path: str) -> FileResponse:
 
 
 # ─── Excalidraw (in-page, no lock) ──────────────────────────────────
-@router.post("/drawings/read")
+@router.post("/drawings/read", dependencies=[Depends(require_device)])
 async def read_drawing(req: DrawingReadRequest) -> dict[str, str]:
     """Load an Excalidraw scene (.excalidraw JSON) or .svg for editing."""
     target = _safe_target(req.rel_path)
@@ -827,7 +854,7 @@ async def read_drawing(req: DrawingReadRequest) -> dict[str, str]:
     }
 
 
-@router.post("/drawings/write")
+@router.post("/drawings/write", dependencies=ADMIN)
 async def write_drawing(req: DrawingWriteRequest) -> DocumentRow:
     """Save an Excalidraw scene / exported SVG into ``documents_dir``."""
     target = _safe_target(req.rel_path)

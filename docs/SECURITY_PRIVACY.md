@@ -45,7 +45,8 @@ flowchart TB
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
-        v1["The household token every dashboard, phone<br/>and satellite presents (ordinary routes move<br/>onto it next; the mechanism ships now)"]
+        v1["The household token every dashboard, phone<br/>and satellite presents"]
+        v2["Reading the Documents folder<br/>(list, text, sheet, raw, export)"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -69,8 +70,28 @@ after which every household client has to be re-enrolled. It is rotated
 automatically the moment first-run setup completes, so a token that was
 readable during the open pre-setup window does not survive it. The gate
 (`require_device`) keeps the pre-setup grace: a fresh install still works
-before setup. No route wears it yet — the clients learn the token first,
-then the ordinary routes (music, queue, announce, intent…) move onto it.
+before setup.
+
+**Which routes ask for it.** The media surfaces do: reading the Documents
+folder, and browsing / downloading / uploading / moving / importing across
+Files, Images and Videos. The remaining ordinary routes (music, queue,
+announce, intent…) move onto it as their clients learn the token.
+
+**Reads the browser fetches by URL.** An `<img src>`, a `<video src>` and a
+`window.open` cannot set a header, so the READ half of this tier
+(`require_device_read`) also accepts the dashboard's session cookie and the
+same token as a `?device_token=` query parameter. Nothing that writes looks
+at the query — a token in a URL lands in history and logs, which is a
+reasonable price for rendering a thumbnail and not for changing a file.
+
+**What a device id means now.** Files writes still name a `device_id`, and
+the admin block list (`files_device_blocks`) still matches on it or on the
+device's registered name — but only requests that already carry the
+household token (or an admin Bearer) reach that check at all. So an
+unpaired device can't write regardless of what it calls itself, while
+within the household the id stays self-asserted and the block stays
+*household policy* rather than a security boundary, exactly as the room
+queue's does.
 
 ### Daily tier (LAN-trust)
 
@@ -131,7 +152,8 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token/rotate`. Dashboard: `GET/POST /api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
-| **File deletion** (the one Files verb that destroys something) | Dashboard: `POST /api/files/delete`. Everything else under `/api/files` — browse, download, upload, move, import — and the `/api/images` / `/api/videos` file serves are **daily tier**: a phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
+| **Documents** (the operator's own `~/Documents`, not a shared media library) | Dashboard: `POST /api/documents/create`, `/delete`, `/upload`, `/download-zip`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`, and the same writes through `/api/files` when the target library is `core:documents`. The **reads** (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`) are device tier. | Pre-setup grace. A folder of personal files is a tier above the music library: the household may read it, only the operator changes it or takes a zip of it. |
+| **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |

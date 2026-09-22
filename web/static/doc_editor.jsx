@@ -54,7 +54,7 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
     (async () => {
       try {
         const r = await fetch(`${API_BASE}/api/documents/text/${encodeURIComponent(rel_path)}`,
-          { cache: 'no-store', credentials: 'include' });
+          { cache: 'no-store', credentials: 'include', headers: apiHeaders() });
         if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
         const j = await r.json();
         if (!cancelled) { setText(j.text || ''); setState({ status: 'ready' }); }
@@ -93,7 +93,10 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
   const onExport = async () => {
     if (dirty) await onSave();
     const a = document.createElement('a');
-    a.href = `${API_BASE}/api/documents/export/doc/${encodeURIComponent(rel_path)}?fmt=docx`;
+    // A browser-driven download, so no header — the daily read tier takes
+    // the household token in the query for exactly this shape of request.
+    a.href = withDeviceToken(
+      `${API_BASE}/api/documents/export/doc/${encodeURIComponent(rel_path)}?fmt=docx`);
     a.download = '';
     document.body.appendChild(a); a.click(); a.remove();
   };
