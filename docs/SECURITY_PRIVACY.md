@@ -102,16 +102,31 @@ risk: a guest (or a compromised IoT gadget) on your Wi-Fi can do these
 things too. Keep your Wi-Fi password good; use a guest VLAN for devices you
 don't trust.
 
-The video satellite's kiosk page (`display.html` + the now-playing reads
-and transport actions it uses) rides this same tier by design — the device
-renders it unattended, with no interactive login.
+The video satellite's kiosk page rides this same tier **by design** — the
+device renders it unattended, with no interactive login, so there is nobody
+to hold a credential. Exactly what that leaves open, named rather than
+implied:
 
-Its **live state socket is the exception**: `/ws/state` carries who is
-home, what the calendar says and which devices are on the network, so its
-handshake needs the household device token (see below). A kiosk browser
-that has never been paired still renders and still polls its reads; what it
-no longer gets is the push. Pair it once, from the dashboard's Settings →
-Connection, and the socket connects like any other household client.
+| Open to any LAN client | What it gives away, or does |
+|---|---|
+| `GET /display.html?room=<room_id>` | The kiosk page itself. It is a page, not data — everything on it comes from the two calls below. |
+| `GET /api/music/now-playing` | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
+| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` | Pauses or resumes that room's playback. The kiosk's tap-to-pause, usable by anything on the network. |
+
+That is the whole kiosk surface, and it is the accepted risk of the daily
+tier: someone on your Wi-Fi can see what is playing and pause it. It is not
+a path to anything else — no write touches a file, a row or a setting, and
+the two verbs are the same ones a guest could reach from the dashboard.
+
+Two things narrow it even so. Both verbs are writes, so they need the
+`X-Requested-With` header like every other write, which keeps a page on
+another site from triggering them from a browser you happen to have open.
+And the kiosk's **live push** is not on this tier: `/ws/state` carries the
+household's presence and calendar, so its handshake needs the device token
+(below). A kiosk that has never been paired still renders and still polls
+its reads; what it no longer gets is the push. Pair it once, from the
+dashboard's Settings → Connection, and the socket connects like any other
+household client.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
