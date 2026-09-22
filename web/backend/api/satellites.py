@@ -308,7 +308,13 @@ async def delete_satellite(room_id: str, request: Request, purge: bool = False):
     return bridge_response(status, payload)
 
 
-@router.patch("/{room_id}", response_model=dict)
+@router.patch(
+    "/{room_id}", response_model=dict,
+    # Device tier: renaming a room is an ordinary household action, and
+    # the core route this proxies to (/v1/admin/satellites/{room}/label)
+    # is on the same tier.
+    dependencies=[Depends(require_device)],
+)
 async def update_satellite(room_id: str, body: RoomLabelRequest, request: Request):
     """Update a satellite's display room label (grouping tag). Daily-tier
     cosmetic metadata, like volume. The core route is on the device tier,
@@ -524,7 +530,12 @@ async def list_timers(room_id: str) -> list[Timer]:
         ]
 
 
-@router.delete("/{room_id}/timers/{timer_id}", status_code=204)
+@router.delete(
+    "/{room_id}/timers/{timer_id}", status_code=204,
+    # Device tier: cancelling a timer somebody in the house set is an
+    # ordinary daily action.
+    dependencies=[Depends(require_device)],
+)
 async def cancel_timer(room_id: str, timer_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(
@@ -546,7 +557,13 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
 # ─── Action endpoints (proxied to domovoi admin) ──────────────────────
 
 
-@router.post("/{room_id}/announce")
+@router.post(
+    "/{room_id}/announce",
+    # Device tier at both hops: the core's /v1/admin/announce is on the
+    # household tier, so speaking into a room needs a household
+    # credential here too.
+    dependencies=[Depends(require_device)],
+)
 async def announce(room_id: str, body: AnnounceRequest, request: Request):
     status, payload = await post_admin(
         "/v1/admin/announce",
@@ -556,7 +573,11 @@ async def announce(room_id: str, body: AnnounceRequest, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/announce-all")
+@router.post(
+    "/announce-all",
+    # Device tier, like the per-room announce it fans out.
+    dependencies=[Depends(require_device)],
+)
 async def announce_all(body: AnnounceRequest, request: Request):
     """Broadcast: ``room_id=null`` to fan out to every connected
     satellite. The Domovoi server returns 503 when nothing's connected."""
@@ -632,7 +653,12 @@ async def dropin_phone_info(room_id: str):
     }
 
 
-@router.post("/{room_id}/volume")
+@router.post(
+    "/{room_id}/volume",
+    # Device tier at both hops: /v1/admin/satellite/set-volume is on the
+    # household tier.
+    dependencies=[Depends(require_device)],
+)
 async def set_volume(room_id: str, body: VolumeRequest, request: Request):
     """Set a satellite's master output volume (0-100) from the overview tab.
     Proxies to the Domovoi server, which sends the ``set_volume`` frame to the
@@ -646,12 +672,19 @@ async def set_volume(room_id: str, body: VolumeRequest, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/{room_id}/restart")
+@router.post(
+    "/{room_id}/restart",
+    # Admin tier at both hops: /v1/admin/satellite/restart is admin-gated,
+    # so this hop names the same tier instead of forwarding a refusal from
+    # one process later.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def restart(room_id: str, request: Request):
     """Ask a satellite to restart its own service. The Pi drains playback
     then runs a sudo'ed systemctl restart (needs the self-restart sudoers
-    entry from PROVISIONING.md). 404 if the room isn't connected. The core
-    route is admin-gated, so the caller's credentials are forwarded."""
+    entry from PROVISIONING.md). 404 if the room isn't connected. Admin tier
+    here and at the core, and the caller's credentials are forwarded so the
+    core can apply its own gate too."""
     status, payload = await post_admin(
         "/v1/admin/satellite/restart",
         {"room_id": room_id},
@@ -660,11 +693,17 @@ async def restart(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/{room_id}/display")
+@router.post(
+    "/{room_id}/display",
+    # Admin tier at both hops: /v1/admin/satellite/display is admin-gated.
+    # Not to be confused with the kiosk PAGE's own transport verbs, which
+    # FE-3 leaves open (see web/static/display.jsx).
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def set_display(room_id: str, body: DisplayRequest, request: Request):
     """Drive a video satellite's screen from the drawer's Display block:
-    panel on/off or a kiosk-browser restart. Daily-tier device control,
-    like volume/restart. Proxies to the Domovoi server, which sends the
+    panel on/off or a kiosk-browser restart. Admin tier, like the satellite
+    restart beside it. Proxies to the Domovoi server, which sends the
     ``set_display`` frame to the live session. 404 when the room isn't
     connected, 409 when it isn't a video satellite, 503 when nothing is."""
     status, payload = await post_admin(
@@ -738,7 +777,12 @@ async def get_satellite_logs(
     return bridge_response(status, payload)
 
 
-@router.patch("/{room_id}/config")
+@router.patch(
+    "/{room_id}/config",
+    # Admin tier at both hops: /v1/admin/satellite/{room}/config is
+    # admin-gated — it rewrites the Pi's config.toml and restarts it.
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def patch_satellite_config(
     room_id: str, body: ConfigUpdateRequest, request: Request
 ):
