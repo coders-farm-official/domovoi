@@ -64,6 +64,9 @@ GADGET_DIR = Path("/sys/kernel/config/usb_gadget/domovoi")
 UDC_DIR = Path("/sys/class/udc")
 
 EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.toml.example"
+# Where the wpa_supplicant fallback appends its network block. Root-owned;
+# this module runs as root.
+WPA_SUPPLICANT_CONF = Path("/etc/wpa_supplicant/wpa_supplicant.conf")
 
 
 # ─── Small host probes (overridable in tests) ─────────────────────────────
@@ -308,7 +311,15 @@ def apply_wifi(
 ) -> tuple[bool, str | None]:
     """Join the network and verify reachability. (ok, error). The PSK is
     passed via argv to nmcli (process args are root-only readable here) and
-    NEVER logged — errors mention the ssid only."""
+    NEVER logged — errors mention the ssid only.
+
+    The network name is checked first, on both paths: it lands in a
+    root-owned network configuration, and a name with a newline, a quote
+    or a brace in it is refused rather than written."""
+    try:
+        proto.validate_wifi_ssid(ssid)
+    except proto.ProvisionInvalid as e:
+        return False, f"wifi network name refused: {e}"
     if country:
         run(["iw", "reg", "set", country], capture_output=True, timeout=15)
     nmcli = shutil.which("nmcli")
@@ -338,18 +349,17 @@ def apply_wifi(
             return False, f"wifi join failed for {ssid!r}: {detail or 'wrong password?'}"
         except subprocess.TimeoutExpired:
             return False, f"wifi join timed out for {ssid!r}"
-    # wpa_supplicant fallback: render a network block and reconfigure.
-    conf = Path("/etc/wpa_supplicant/wpa_supplicant.conf")
+    # wpa_supplicant fallback: append a network block of our own making
+    # (ssid= as hex, psk= as the derived key, no passphrase comment) and
+    # reconfigure. Built in Python rather than taken from wpa_passphrase,
+    # whose output carries the name verbatim and the passphrase in a
+    # comment.
     try:
-        gen = run(
-            ["wpa_passphrase", ssid, psk], capture_output=True, timeout=15
-        )
-        if gen.returncode != 0:
-            return False, "wpa_passphrase failed"
-        block = gen.stdout.decode()
-        if hidden:
-            block = block.replace("}", "\tscan_ssid=1\n}")
-        with open(conf, "a", encoding="utf-8") as f:
+        block = proto.wpa_supplicant_network_block(ssid, psk, hidden=hidden)
+    except proto.ProvisionInvalid as e:
+        return False, f"wifi credentials refused: {e}"
+    try:
+        with open(WPA_SUPPLICANT_CONF, "a", encoding="utf-8") as f:
             f.write("\n" + block)
         run(["wpa_cli", "-i", "wlan0", "reconfigure"], capture_output=True, timeout=30)
         deadline = time.monotonic() + timeout

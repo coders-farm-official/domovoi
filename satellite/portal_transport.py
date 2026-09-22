@@ -454,10 +454,8 @@ class PortalTransport:
         Raises :class:`proto.ProvisionInvalid` with a message safe to show a
         customer — it must never echo the password back.
         """
-        ssid = (fields.get("ssid") or "").strip()
+        ssid = proto.validate_wifi_ssid((fields.get("ssid") or "").strip())
         psk = fields.get("psk") or ""
-        if not ssid:
-            raise proto.ProvisionInvalid("Choose your Wi-Fi network.")
         if not psk:
             raise proto.ProvisionInvalid("Enter your Wi-Fi password.")
 

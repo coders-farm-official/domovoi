@@ -105,6 +105,80 @@ SERVER_URL_HELP = (
 )
 
 
+# 802.11 allows a network name of 1-32 bytes. Beyond that, three characters
+# are refused outright because each means something inside a wpa_supplicant
+# network block, and a name is data, never syntax.
+WIFI_SSID_MAX_BYTES = 32
+_SSID_FORBIDDEN = frozenset('"{}')
+WIFI_PSK_MIN_LEN = 8
+WIFI_PSK_MAX_LEN = 63
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def validate_wifi_ssid(ssid: Any) -> str:
+    """A network name this code can carry safely: 1-32 bytes of UTF-8 with
+    no control characters and none of ``"``, ``{`` or ``}``. Returns the
+    name unchanged; raises ProvisionInvalid with a message fit for a form
+    (the name itself is never echoed)."""
+    if not isinstance(ssid, str) or not ssid:
+        raise ProvisionInvalid("Choose your Wi-Fi network.")
+    if len(ssid.encode("utf-8")) > WIFI_SSID_MAX_BYTES:
+        raise ProvisionInvalid("That network name is too long.")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch in _SSID_FORBIDDEN for ch in ssid):
+        raise ProvisionInvalid(
+            "That network name has characters that cannot be used here."
+        )
+    return ssid
+
+
+def validate_wifi_psk(psk: Any) -> str:
+    """What WPA2-PSK accepts: 8 to 63 printable ASCII characters, or the
+    64-hex-digit key itself. Never echoed."""
+    if not isinstance(psk, str) or not psk:
+        raise ProvisionInvalid("Enter your Wi-Fi password.")
+    if len(psk) == 64 and all(ch in _HEX for ch in psk):
+        return psk
+    if not (WIFI_PSK_MIN_LEN <= len(psk) <= WIFI_PSK_MAX_LEN):
+        raise ProvisionInvalid("Wi-Fi passwords are 8 to 63 characters long.")
+    if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in psk):
+        raise ProvisionInvalid(
+            "That Wi-Fi password has characters that cannot be used here."
+        )
+    return psk
+
+
+def wpa_psk_hex(ssid: str, psk: str) -> str:
+    """The 256-bit pairwise master key wpa_supplicant derives from a
+    passphrase (PBKDF2-HMAC-SHA1, the SSID as salt, 4096 rounds): what
+    ``psk=`` carries so the passphrase itself never sits in the file. A
+    64-hex-digit passphrase IS the key."""
+    if len(psk) == 64 and all(ch in _HEX for ch in psk):
+        return psk.lower()
+    return hashlib.pbkdf2_hmac(
+        "sha1", psk.encode("utf-8"), ssid.encode("utf-8"), 4096, 32
+    ).hex()
+
+
+def wpa_supplicant_network_block(ssid: str, psk: str, *, hidden: bool = False) -> str:
+    """The ``network={...}`` block the wpa_supplicant fallback appends to
+    its configuration, built here rather than taken from ``wpa_passphrase``:
+    ``ssid=`` as hex, so no byte of the name is ever read as syntax;
+    ``psk=`` as the derived key, and no ``#psk="..."`` comment carrying the
+    passphrase; ``scan_ssid=1`` for a hidden network. Validates both
+    inputs first."""
+    validate_wifi_ssid(ssid)
+    validate_wifi_psk(psk)
+    lines = [
+        "network={",
+        f"\tssid={ssid.encode('utf-8').hex()}",
+        f"\tpsk={wpa_psk_hex(ssid, psk)}",
+    ]
+    if hidden:
+        lines.append("\tscan_ssid=1")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 def _lan_host(host: str) -> bool:
     """An RFC 1918 IPv4 address, or a name under .local (mDNS never
     resolves off the link)."""
@@ -331,6 +405,13 @@ def validate_provision(doc: Any, expected_nonce: str) -> dict[str, Any]:
     wifi = payload.get("wifi")
     if not isinstance(wifi, dict) or not wifi.get("ssid") or not wifi.get("psk"):
         raise ProvisionInvalid("payload missing wifi credentials")
+    # The name goes into a root-owned network configuration on the device
+    # (as argv to nmcli, or hex into wpa_supplicant.conf); one that cannot
+    # be carried safely is refused here, on every transport.
+    try:
+        validate_wifi_ssid(wifi["ssid"])
+    except ProvisionInvalid:
+        raise ProvisionInvalid("payload wifi ssid invalid") from None
     if payload.get("sat_type") not in ("voice", "video"):
         raise ProvisionInvalid("payload sat_type invalid")
     return payload
