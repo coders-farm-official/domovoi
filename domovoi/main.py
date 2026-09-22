@@ -3184,39 +3184,100 @@ async def plugin_status(slug: str) -> dict[str, Any]:
     "/v1/admin/config",
     # §7.3: config READS are gated too (plugin config carries secrets).
     # GETs may render via the dashboard cookie; Bearer also accepted.
+    # CORE-6: what the answer CONTAINS depends on which of the two the
+    # caller presented — see below.
     dependencies=[Depends(require_admin_read)],
 )
-async def admin_get_config() -> dict[str, Any]:
+async def admin_get_config(
+    request: Request,
+    section: str | None = Query(
+        default=None,
+        description=(
+            "Ask for one section only. 'advanced' is the infrastructure "
+            "block (database URL, ports, paths) and needs an admin Bearer."
+        ),
+    ),
+) -> dict[str, Any]:
     """Editable-config registry joined with the live settings values, for
     the web settings gear. The web backend passes this through rather than
-    reading its own (separate-process, stale) settings copy."""
-    from domovoi.config_schema import EDITABLE_FIELDS
+    reading its own (separate-process, stale) settings copy.
 
-    fields = [
-        {
-            "name": spec.name,
-            "label": spec.label,
-            "group": spec.group,
-            "section": spec.section,
-            "tier": spec.tier,
-            "type": spec.type,
-            "min": spec.min,
-            "max": spec.max,
-            "choices": spec.choices,
-            "unit": spec.unit,
-            "help": spec.help,
-            "value": getattr(settings, spec.name, None),
-        }
-        for spec in EDITABLE_FIELDS
-    ]
+    CORE-6 — two things depend on HOW the caller authenticated, because
+    cookies are host-scoped rather than port-scoped and the pre-setup
+    grace means "anyone on the LAN":
+
+    * secret values (``config_schema.SECRET_SETTING_NAMES``: the database
+      URL and the third-party keys) read back as a mask unless the caller
+      presented an admin Bearer;
+    * the ``advanced`` section — the infrastructure knobs — is included
+      only for a Bearer (or a pre-setup install, which has no credential
+      to present yet). ``?section=advanced`` from a cookie-only caller is
+      a 401 rather than a silently empty list, so the dashboard can say
+      "sign in to see these" instead of showing nothing.
+
+    ``advanced_available`` tells the page which of those it got.
+    """
+    from domovoi.config_schema import EDITABLE_FIELDS, mask_secret
+
+    wants = (section or "").strip().lower() or None
+    if wants not in (None, "common", "advanced"):
+        raise HTTPException(
+            status_code=422, detail="section must be 'common' or 'advanced'"
+        )
+
+    auth = await check_admin_request(request)
+    full_read = auth == "ok"            # a live admin Bearer
+    advanced_ok = full_read or auth == "pre-setup"
+    if wants == "advanced" and not advanced_ok:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "the advanced section needs an admin session — sign in "
+                "with Authorization: Bearer to read it"
+            ),
+        )
+
+    fields = []
+    for spec in EDITABLE_FIELDS:
+        if wants is not None and spec.section != wants:
+            continue
+        if spec.section == "advanced" and not advanced_ok:
+            continue
+        value = getattr(settings, spec.name, None)
+        fields.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "group": spec.group,
+                "section": spec.section,
+                "tier": spec.tier,
+                "type": spec.type,
+                "min": spec.min,
+                "max": spec.max,
+                "choices": spec.choices,
+                "unit": spec.unit,
+                "help": spec.help,
+                "secret": spec.secret,
+                # ``masked`` says the value in this row is the mask, not
+                # the setting — the page renders it read-only rather than
+                # letting someone save the mask back over the real value.
+                "masked": bool(spec.secret and not full_read),
+                "value": value if (full_read or not spec.secret) else mask_secret(value),
+            }
+        )
     # One group per plugin (design §4.6): FieldSpec rows joined with the
     # plugin's live settings; kind="secret" values arrive pre-masked.
     from domovoi.plugins_runtime.config_bridge import PLUGIN_CONFIG
 
     plugin_fields: list[dict[str, Any]] = []
-    for _slug in PLUGIN_CONFIG.slugs():
-        plugin_fields.extend(PLUGIN_CONFIG.dashboard_group(_slug))
-    return {"fields": fields, "plugin_fields": plugin_fields}
+    if wants != "advanced":
+        for _slug in PLUGIN_CONFIG.slugs():
+            plugin_fields.extend(PLUGIN_CONFIG.dashboard_group(_slug))
+    return {
+        "fields": fields,
+        "plugin_fields": plugin_fields,
+        "advanced_available": advanced_ok,
+    }
 
 
 class _AdminConfigUpdateBody(BaseModel):

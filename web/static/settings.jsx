@@ -709,6 +709,10 @@ const ConfigPanel = () => {
   const dirtyCount = Object.keys(edits).length;
   const common = fields.filter(f => f.section !== 'advanced');
   const advanced = fields.filter(f => f.section === 'advanced');
+  // CORE-6: the core sends the advanced block only to a caller holding an
+  // admin bearer. Say so where the block would be — an absent Advanced
+  // section otherwise reads as "this server has no infrastructure knobs".
+  const advancedWithheld = !!data && data.advanced_available === false;
 
   const save = async () => {
     if (dirtyCount === 0) return;
@@ -763,6 +767,13 @@ const ConfigPanel = () => {
             </div>
           : <>
               {renderGroups(common)}
+              {advancedWithheld && (
+                <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 10,
+                              fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                  Advanced settings — database URL, ports, paths — need an admin
+                  sign-in on this browser. Sign in to see and edit them.
+                </div>
+              )}
               {advanced.length > 0 && (
                 <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
                   <button onClick={() => setAdvOpen(o => !o)}

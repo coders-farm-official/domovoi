@@ -68,16 +68,22 @@ async def get_config() -> ConfigResponse:
     # carries secrets). GETs may render via the dashboard cookie.
     dependencies=[Depends(require_admin_read)],
 )
-async def get_editable_config(request: Request):
+async def get_editable_config(request: Request, section: str | None = None):
     """Editable domovoi settings — the FieldSpec registry joined with
     current values — for the settings gear. Passes through to the
     Domovoi server so values are LIVE; the web process holds its own separate
     ``settings`` copy that goes stale the moment a save mutates the
     Domovoi server's singleton, so we must not read it here. Credentials are
-    forwarded — the core applies its own §7.3 gate."""
-    status, payload = await get_admin(
-        "/v1/admin/config", headers=auth_forward_headers(request)
-    )
+    forwarded — the core applies its own §7.3 gate, and decides from them
+    what the answer contains: secret values (the database URL, API keys)
+    read back masked, and the ``advanced`` section comes back only for a
+    caller holding an admin Bearer (``advanced_available`` says which).
+    ``section=advanced`` asks for that block alone and is a 401 for a
+    cookie-only caller."""
+    path = "/v1/admin/config"
+    if section:
+        path += f"?section={quote(section, safe='')}"
+    status, payload = await get_admin(path, headers=auth_forward_headers(request))
     return bridge_response(status, payload)
 
 
