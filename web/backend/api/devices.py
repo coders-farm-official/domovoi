@@ -9,8 +9,8 @@ from a named device.
 So a client introduces itself once per session: ``POST /register`` upserts
 its row, seeding ``name`` from whatever the client can tell about itself
 ("Chrome on Windows", "Pixel 8") and refreshing ``last_seen_at``. The name
-is editable afterwards — by the device itself under LAN trust, or by an
-admin from the roster.
+is editable afterwards — by the device itself, or by an admin from the
+roster.
 
 **Trust posture.** Registration and rename are DEVICE tier (REV-1): a valid
 ``X-Device-Token`` or an admin Bearer, with the pre-setup LAN grace kept so a
