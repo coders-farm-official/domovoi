@@ -102,11 +102,6 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/models/active"): (
         "proxy — the core's security tier gates the config write it forwards to"
     ),
-    ("web", "POST", "/api/news/people/{person_id}/topics"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/news/topics/{topic_id}"): "daily tier — device tier in wave 2",
-    ("web", "DELETE", "/api/news/topics/{topic_id}/feeds/{feed_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/news/items/{item_id}/favorite"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/news/poll"): "daily tier — device tier in wave 2",
 }
 
 

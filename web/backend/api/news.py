@@ -43,6 +43,13 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
+# Following a topic, dropping a feed, hearting a story and polling now are
+# ordinary household actions, so every write here takes the DEVICE tier: a
+# valid ``X-Device-Token`` or an admin Bearer, with the pre-setup LAN grace
+# kept. Some of them also reach out to the network, which is the other
+# reason not to leave them open to anything on the LAN.
+DEVICE = [Depends(require_device)]
+
 
 # ─── Schemas ─────────────────────────────────────────────────────────────
 
@@ -137,7 +144,10 @@ async def list_topics(person_id: int) -> list[NewsTopic]:
         ]
 
 
-@router.post("/people/{person_id}/topics", response_model=NewsTopic, status_code=201)
+@router.post(
+    "/people/{person_id}/topics", response_model=NewsTopic, status_code=201,
+    dependencies=DEVICE,
+)
 async def add_topic(person_id: int, payload: NewsTopicCreate) -> NewsTopic:
     kind = (payload.kind or "").strip().lower()
     topic = (payload.topic or "").strip()
@@ -201,7 +211,7 @@ async def add_topic(person_id: int, payload: NewsTopicCreate) -> NewsTopic:
     )
 
 
-@router.delete("/topics/{topic_id}", status_code=204)
+@router.delete("/topics/{topic_id}", status_code=204, dependencies=DEVICE)
 async def delete_topic(topic_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(
@@ -284,7 +294,9 @@ async def add_topic_feed(topic_id: int, payload: NewsFeedCreate) -> NewsFeed:
     return feed
 
 
-@router.delete("/topics/{topic_id}/feeds/{feed_id}", status_code=204)
+@router.delete(
+    "/topics/{topic_id}/feeds/{feed_id}", status_code=204, dependencies=DEVICE
+)
 async def detach_feed(topic_id: int, feed_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(
@@ -369,7 +381,9 @@ async def list_items(
         return [_row_to_item(r) for r in rows.all()]
 
 
-@router.post("/items/{item_id}/favorite", response_model=NewsItem)
+@router.post(
+    "/items/{item_id}/favorite", response_model=NewsItem, dependencies=DEVICE
+)
 async def favorite_item(item_id: int, payload: NewsItemFavorite) -> NewsItem:
     async with session_scope() as s:
         ok = await news_service.favorite_item(s, item_id, payload.favorited)
@@ -415,7 +429,7 @@ async def get_briefing(person_id: int) -> NewsBriefing:
 # ─── Poll now ────────────────────────────────────────────────────────────
 
 
-@router.post("/poll")
+@router.post("/poll", dependencies=DEVICE)
 async def poll_now(person_id: int | None = Query(default=None)) -> dict[str, Any]:
     """Trigger a fetch pass immediately (the 'poll now' button). Fetches the
     house scopes always; also this person's topics + briefing when
