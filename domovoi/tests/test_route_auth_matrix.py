@@ -118,8 +118,11 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "DELETE", "/api/satellites/{room_id}/timers/{timer_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/satellites/{room_id}/announce"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/satellites/announce-all"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "daily tier — device tier in wave 2",
+    # CORE-2: the core routes behind these are gated now (start takes an
+    # admin Bearer, end the household token) and this hop forwards the
+    # caller's credentials, so an ungated proxy cannot open a call.
+    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_mutation gates it (auth forwarded)",
+    ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "proxy — core require_device gates it (auth forwarded)",
     ("web", "POST", "/api/satellites/{room_id}/volume"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/satellites/{room_id}/restart"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/satellites/{room_id}/display"): "daily tier — device tier in wave 2",
