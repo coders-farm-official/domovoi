@@ -254,7 +254,7 @@ def test_jobs_api_lifecycle(monkeypatch, tmp_path):
 
     monkeypatch.setattr(media_api.builder, "build", fake_build)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get("/api/satellites/media/status")
         assert r.status_code == 200
         body = r.json()
@@ -290,7 +290,7 @@ def test_jobs_api_lifecycle(monkeypatch, tmp_path):
 
 @requires_db
 def test_prepare_validates_inputs():
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/satellites/media/prepare",
             json={"board": "radxa-zero3w", "mic_profile": "none", "target": {"kind": "zip"}},

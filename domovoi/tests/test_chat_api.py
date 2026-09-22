@@ -21,7 +21,7 @@ from web.backend.main import app
 
 
 def _client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 @pytest.fixture

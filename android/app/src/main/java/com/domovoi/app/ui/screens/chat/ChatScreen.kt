@@ -162,6 +162,9 @@ private suspend fun sendStreaming(
     }.toString().toRequestBody("application/json".toMediaType())
     val req = Request.Builder()
         .url(app.api.absolute("/api/chat/threads/$threadId/messages"))
+        // SSE, so it builds its own call instead of using ApiClient.raw()
+        // — and sends the same preflight-forcing header (WEB-6).
+        .header("X-Requested-With", "DomovoiApp")
         .post(body)
         .build()
     app.api.http.newCall(req).execute().use { resp ->

@@ -113,7 +113,7 @@ def reindex_spy(monkeypatch):
 
 
 def _client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 # ─── GET /libraries ─────────────────────────────────────────────────────────
@@ -776,7 +776,7 @@ XRW = {"X-Requested-With": "XMLHttpRequest"}
 def _bare_client() -> TestClient:
     """A TestClient WITHOUT entering the lifespan — requests are served, but
     no background task ever opens a database connection."""
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 def _move_body(device_id: str, **kw) -> dict:

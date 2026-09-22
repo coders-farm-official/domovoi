@@ -36,6 +36,14 @@ router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 # Generous timeout: confirm runs pip + migrations + hot load.
 _PROXY_TIMEOUT = float(os.environ.get("WEB_PLUGIN_PROXY_TIMEOUT_SEC", "600"))
 
+# A plugin zip this process will hold in memory before handing it to the
+# core. 64 MB is far above any real plugin (the bundled radio plugin is
+# tens of KB) and far below "fill the box's RAM by POSTing to a route the
+# core has not authorized yet".
+_MAX_PROXY_BODY_BYTES = int(
+    os.environ.get("WEB_PLUGIN_MAX_UPLOAD_BYTES", str(64 * 1024 * 1024))
+)
+
 
 def _core_url() -> str:
     return os.environ.get("DOMOVOI_URL", "http://localhost:6370")
@@ -48,7 +56,21 @@ async def _proxy_post(request: Request, core_path: str) -> JSONResponse:
     content_type = request.headers.get("content-type")
     if content_type:
         headers["Content-Type"] = content_type
+    # Size first, body second: the core is the one that decides whether this
+    # caller may install anything, and until it has, nothing justifies
+    # buffering an arbitrary upload here (WEB-8).
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > _MAX_PROXY_BODY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"plugin upload too large (limit {_MAX_PROXY_BODY_BYTES} bytes)",
+        )
     body = await request.body()
+    if len(body) > _MAX_PROXY_BODY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"plugin upload too large (limit {_MAX_PROXY_BODY_BYTES} bytes)",
+        )
     url = f"{_core_url().rstrip('/')}{core_path}"
     try:
         async with httpx.AsyncClient(timeout=_PROXY_TIMEOUT) as client:

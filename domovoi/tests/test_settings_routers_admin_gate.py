@@ -157,7 +157,13 @@ _MUTATION_REQUESTS = _all_mutation_requests()
 
 def _bare_client(**kw) -> TestClient:
     """No ``with`` — the lifespan (poll loop, LISTEN task) never starts, so
-    no background task opens a database connection."""
+    no background task opens a database connection.
+
+    Bare of CREDENTIALS, not of headers: it still sends X-Requested-With,
+    because these tests are about the missing session (401) rather than
+    the missing preflight (403, WEB-6's backstop).
+    """
+    kw.setdefault("headers", {"X-Requested-With": "domovoi-tests"})
     return TestClient(app, **kw)
 
 

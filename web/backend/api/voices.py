@@ -48,6 +48,52 @@ router = APIRouter(prefix="/api/voices", tags=["voices"])
 # letting an accidental wrong-file upload fill the disk.
 _MAX_ONNX_BYTES = 200 * 1024 * 1024
 
+# The sidecar config is a small JSON document (phoneme map, sample rate,
+# speaker ids) — a few KB in practice. 4 MB is generous and keeps a file
+# picked by mistake from being read into memory whole.
+_MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
+# Both uploads are streamed to disk in blocks of this size, so the process
+# holds one block at a time rather than the whole model.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _save_under_budget(upload: UploadFile, dest: Path, budget: int, what: str) -> int:
+    """Stream ``upload`` into ``dest``, stopping with 413 the moment it
+    passes ``budget``. Returns the byte count.
+
+    The partial file is removed on refusal (and on any write error), so a
+    rejected upload leaves nothing behind. The caller is also fronted by
+    ``BodyLimitMiddleware``, which refuses a declared oversize before the
+    request body is read at all; this is the check that holds when the
+    size is not declared up front.
+    """
+    written = 0
+    try:
+        with dest.open("wb") as fh:
+            while True:
+                chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > budget:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"{what} too large (limit {budget} bytes)",
+                    )
+                fh.write(chunk)
+    except OSError as e:
+        # Disk full, permission denied, path gone: the operator needs to
+        # read which one, not a bare 500.
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500, detail=f"could not save {what}: {e}"
+        ) from e
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    return written
+
 
 class Voice(BaseModel):
     id: int
@@ -173,7 +219,12 @@ async def upload_piper_voice(
 ) -> Voice:
     """Upload a Piper voice: the ``.onnx`` model and its ``.onnx.json``
     config. Saved under the voice-models dir as ``<slug>.onnx`` /
-    ``<slug>.onnx.json``; the row's ``model_ref`` is the slug."""
+    ``<slug>.onnx.json``; the row's ``model_ref`` is the slug.
+
+    Admin-gated, and both files are streamed to disk under a byte budget
+    (model ``_MAX_ONNX_BYTES``, config ``_MAX_CONFIG_BYTES``) rather than
+    read into memory — an oversized upload is answered 413 while it is
+    still arriving."""
     name = name.strip()
     slug = voice_slug(name)
     if not (onnx.filename or "").endswith(".onnx"):
@@ -185,14 +236,20 @@ async def upload_piper_voice(
     vdir.mkdir(parents=True, exist_ok=True)
     onnx_path = vdir / f"{slug}.onnx"
     json_path = vdir / f"{slug}.onnx.json"
+    # Staged names, so a refused upload (or a name collision) never leaves a
+    # half-written model where the synth path would find it.
+    onnx_part = vdir / f"{slug}.onnx.part"
+    json_part = vdir / f"{slug}.onnx.json.part"
 
-    onnx_bytes = await onnx.read()
-    if len(onnx_bytes) > _MAX_ONNX_BYTES:
-        raise HTTPException(status_code=413, detail="model file too large")
-    json_bytes = await config.read()
+    await _save_under_budget(onnx, onnx_part, _MAX_ONNX_BYTES, "model file")
+    try:
+        await _save_under_budget(config, json_part, _MAX_CONFIG_BYTES, "config file")
+    except BaseException:
+        onnx_part.unlink(missing_ok=True)
+        raise
 
-    # Write to a clean DB row first (so a name collision fails BEFORE we
-    # litter the disk), then drop the files. Reverse cleanup on file error.
+    # Then the DB row (so a name collision fails before anything lands under
+    # its final name), and only after that do the staged files take it.
     try:
         async with session_scope() as s:
             repo = VoicesRepository(s)
@@ -200,12 +257,20 @@ async def upload_piper_voice(
                 name=name, engine="piper", model_ref=slug, is_default=set_default,
             )
     except IntegrityError as e:
+        onnx_part.unlink(missing_ok=True)
+        json_part.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="a voice with that name already exists") from e
+    except BaseException:
+        onnx_part.unlink(missing_ok=True)
+        json_part.unlink(missing_ok=True)
+        raise
 
     try:
-        onnx_path.write_bytes(onnx_bytes)
-        json_path.write_bytes(json_bytes)
+        onnx_part.replace(onnx_path)
+        json_part.replace(json_path)
     except OSError as e:
+        onnx_part.unlink(missing_ok=True)
+        json_part.unlink(missing_ok=True)
         # Roll back the row we just created so the registry doesn't point at
         # a model that isn't on disk.
         async with session_scope() as s:

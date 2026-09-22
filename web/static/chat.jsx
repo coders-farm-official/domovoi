@@ -21,7 +21,10 @@ const chatSendStream = async (threadId, body, onDelta) => {
   const r = await fetch(`${API_BASE}/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(typeof Auth !== 'undefined' ? Auth.headers() : {}) },
+    // Streams the reply, so it builds its own request rather than using
+    // apiFetch — and sends what apiFetch would, the bearer plus the
+    // preflight-forcing header.
+    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
     body: JSON.stringify(body),
   });
   if (!r.ok || !r.body) throw new Error(`${r.status} ${r.statusText}`);

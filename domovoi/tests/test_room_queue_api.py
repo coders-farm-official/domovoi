@@ -201,7 +201,7 @@ def test_core_queue_read_reports_order_and_the_playing_entry(seeded_room) -> Non
     # prepare_tracks is what a cast does; it leaves MPD paused on the first
     # track, which is what gives us a current_song_id to assert against.
     asyncio.run(seeded_room.prepare_tracks([{"title": "cast"}]))
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         body = client.get("/v1/admin/music/queue/kitchen").json()
     assert body["room_id"] == "kitchen"
     assert [i["title"] for i in body["items"]] == ["cast"]
@@ -212,7 +212,7 @@ def test_core_queue_read_is_empty_for_an_untouched_room(seeded_room) -> None:
     from domovoi.main import app
 
     asyncio.run(seeded_room.queue_clear())
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         body = client.get("/v1/admin/music/queue/kitchen").json()
     assert body["items"] == []
     assert body["current_song_id"] is None
@@ -259,7 +259,7 @@ def test_blocked_message_falls_back_to_the_device_id() -> None:
 def web_client():
     from web.backend.main import app as web_app
 
-    with TestClient(web_app) as client:
+    with TestClient(web_app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         yield client
 
 

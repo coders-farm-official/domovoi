@@ -85,6 +85,10 @@ one; the fetch re-checks. A refused URL is `400` where a caller typed it and
 Failure codes across tiers: `401` missing/invalid/expired token (Bearer,
 device or chat callback), `403` cookie-only mutation attempt (or a
 rejected outbound fetch),
+`403` a write that arrived without `X-Requested-With` (see 1.2),
+`413` a request body whose declared `Content-Length` is over its route's
+budget (one that arrives without a declared length is cut off instead, and
+the route reports the interrupted read),
 `429` login backoff / rate limit (with a `Retry-After` header), `501` a
 security-tier or plugin-management endpoint before setup.
 
@@ -95,7 +99,51 @@ verbatim. `domovoi/tests/test_route_auth_matrix.py` walks every mutating
 route of both apps and fails when one lacks a gate and is not allowlisted
 with a reason.
 
-### 1.2 Error shapes
+### 1.2 `X-Requested-With` on every write
+
+Every `POST` / `PUT` / `PATCH` / `DELETE` under `/api/` must carry an
+`X-Requested-With` header. Any non-empty value does; the dashboard sends
+`XMLHttpRequest` and the Android app sends `DomovoiApp`. Without it the
+request is refused **403** by
+`web.backend.middleware.RequireRequestedWithMiddleware`, in front of the
+router — no endpoint runs, no body is read, nothing is written.
+
+The reason is the shape of the request rather than who sent it: a form
+post, a multipart upload and a body-less POST are "simple requests", which
+a browser sends to another origin without asking this server first. A
+header outside that set makes the browser preflight instead, and a
+preflight is something the server can refuse. `GET` and `HEAD` are
+untouched, and so is the CORS `OPTIONS` preflight itself.
+
+This is a backstop, not a gate: it answers "could a page on another origin
+have caused this", not "may this caller do it". The auth tiers above are
+what decide the second question.
+
+Any non-browser client — a script, a harness, `curl` — has to send the
+header too:
+
+```bash
+curl -X POST http://domovoi.local:6369/api/podcasts/poll \
+     -H 'X-Requested-With: curl'
+```
+
+Plugin routes mounted under `/api/plugins/<slug>/...` are covered by the
+same rule; a plugin page that uses the dashboard's `apiPost` / `apiPatch` /
+`apiDelete` helpers inherits the header, and one that builds its own
+`fetch` must add it.
+
+### 1.3 Response headers
+
+Every response carries `Content-Security-Policy`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The
+CSP allows inline and `eval`'d script (the dashboard compiles JSX in the
+browser) but forbids framing, objects and `<base>`; see
+`docs/SECURITY_PRIVACY.md`.
+
+Credentialed cross-origin requests are allowed only from a LAN host on
+**this process's own port** — the server switcher, and nothing else.
+
+### 1.4 Error shapes
 
 * Standard errors are FastAPI-shaped: `{"detail": "<message>"}` with an
   appropriate 4xx/5xx status.
@@ -107,7 +155,7 @@ with a reason.
   unchanged. Plugin-management proxies return `503` when the core process
   itself is unreachable.
 
-### 1.3 Realtime WebSockets
+### 1.5 Realtime WebSockets
 
 **Request bodies.** Both processes refuse a body over 1 MiB
 (`MAX_REQUEST_BYTES`) with `413` before reading it — a declared
@@ -129,7 +177,7 @@ which is how satellites and every non-browser client connect.
 
 | Socket | Process | Purpose |
 |---|---|---|
-| `WS /ws/state` | web :6369 | Dashboard state push. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...]}`; no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |
+| `WS /ws/state` | web :6369 | Dashboard state push. **The handshake needs a household credential** — an `X-Device-Token` header, an admin `Bearer`, the dashboard's session cookie, or (for a browser, which can set no header here) the `domovoi.device-token.<token>` subprotocol, which the server echoes back. Without one the upgrade is answered **403** and nothing is ever pushed to that socket. The pre-setup grace applies, so a fresh install's dashboard connects. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...], "device_token": "..."}` (the `device_token` field is accepted and ignored — the credential is settled in the handshake); no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |
 | `WS /v1/stream/{room_id}` | core :6370 | The satellite voice stream: bidirectional audio + control frames (hello, wake, audio chunks, transcripts, TTS, music start/stop handshake, drop-in, config/volume/voice status, wake-word recording). The full frame contract is documented in [uml/satellite-protocol.md](uml/satellite-protocol.md); the implementation is `domovoi/streaming.py`. The client's first frame must be `hello`; the server provisions nothing, lists nothing, and sends no `ready` until that `hello` has passed the pairing check (a socket that stays silent for `SATELLITE_HELLO_TIMEOUT_SEC`, default 5 s, or sends any other frame first is closed with nothing created). One session per `room_id` — a second connect with the same id evicts the first for broadcasts (and closes the socket it replaced), but only once its own `hello` is accepted. `Origin`, when present, must be a LAN origin; satellites send none, which passes. |
 | `WS /v1/dropin/{room_id}` | core :6370 | Phone drop-in only: joins the intercom bridge as a call peer *without* registering as a satellite. Query param `phone_id` identifies the caller (auto-prefixed `phone-` so it can never collide with a room). **Device tier, checked on the upgrade:** send the household token as the `X-Device-Token` header, or as `?token=` when the client is a browser and cannot set headers, or an admin `Authorization: Bearer`. Anything else gets `{"type":"error","code":"unauthorized"}` and a `1008` close before any session exists, so the target room is never disturbed and `active_dropins` gains no entry. With `DROPIN_ACCEPT_MODE=ring` the call does not open on connect: the server sends `{"type":"dropin_ringing"}`, rings the room, and only bridges when someone there says yes (`dropin_end` with `reason: "no_answer"` after `DROPIN_RING_TIMEOUT_SEC`). `Origin`, when present, must be a LAN origin. See `domovoi/phone_dropin.py`. |
 
@@ -322,7 +370,7 @@ household device token instead of a caller's credential.
 | `GET /plugins/{slug}/static/{path}` | Open | — | A plugin's `web/static` assets. Containment-checked; `404` when the plugin is disabled. |
 | `GET /api/plugins` | Open | — | Installed plugins with the fields the admin list renders: manifest metadata, permissions, capabilities, handlers, pages, `web_load_error`. |
 | `GET /api/plugins/{slug}/purge-preview` | Open | — | What uninstall-with-purge would drop: `{schema: "plugin_<slug>", tables: [{table, rows}]}`. |
-| `POST /api/plugins/install` | Admin, fail-closed (core gates) | zip upload or `{"github_url"}` | Proxy to core `POST /v1/plugins/install`, auth forwarded, response verbatim. `503` when the core is down. |
+| `POST /api/plugins/install` | Admin, fail-closed (core gates) | zip upload or `{"github_url"}` | Proxy to core `POST /v1/plugins/install`, auth forwarded, response verbatim. `503` when the core is down; `413` for a body over 64 MB, refused here rather than buffered (`WEB_PLUGIN_MAX_UPLOAD_BYTES`). |
 | `POST /api/plugins/install/{staged_id}/confirm` | Admin, fail-closed (core) | — | Proxy of the confirm phase. |
 | `POST /api/plugins/{slug}/enable` | Admin, fail-closed (core) | — | Proxy. |
 | `POST /api/plugins/{slug}/disable` | Admin, fail-closed (core) | — | Proxy. |
@@ -350,7 +398,7 @@ household device token instead of a caller's credential.
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | Open | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
-| `DELETE /api/music/library/{track_id}` | Open | `?also_file=false` | Remove a track row (optionally the file too). `204`. |
+| `DELETE /api/music/library/{track_id}` | **Admin (Bearer)** | `?also_file=false` | Remove a track row (optionally the file too). `204`. `401` without an admin session, `403` for the dashboard cookie alone — the row and the file are left alone either way. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
 | `POST /api/music/library/upload` | Open | multipart audio file(s) and/or `.zip` | Upload straight into the library; triggers indexing. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
 | `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
@@ -418,18 +466,23 @@ it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### 3.6 People
 
-All **Open**. Person-centric views over the voice-profile / memory tables.
+Reads and the memory / favorite / preference edits are **Open**. The two
+deletes that lose identification data — forgetting a person and dropping a
+voice profile — are **Admin (Bearer)**: `401` without an admin session,
+`403` for the dashboard cookie alone.
+
+Person-centric views over the voice-profile / memory tables.
 
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/people` | — | Everyone Domovoi has voice-identified. |
 | `GET /api/people/{person_id}` | — | One person. |
-| `DELETE /api/people/{person_id}` | — | Forget a person (profiles, memories, links). |
+| `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
 | `GET /api/people/{person_id}/sessions` | `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | `?limit=50` | Recent conversation turns. |
 | `GET /api/people/{person_id}/notes` | — | Notes mentioning them. |
 | `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
-| `DELETE /api/people/{person_id}/profiles/{profile_id}` | — | Drop one voice profile. |
+| `DELETE /api/people/{person_id}/profiles/{profile_id}` | **Admin** | Drop one voice profile. |
 | `GET /api/people/{person_id}/memories` | `?status=` | Extracted memories. |
 | `POST /api/people/{person_id}/memories` | `MemoryCreate` | Add a memory manually. |
 | `PATCH /api/people/{person_id}/memories/{memory_id}` | `MemoryPatch` | Edit/confirm/reject a memory. |
@@ -440,8 +493,9 @@ All **Open**. Person-centric views over the voice-profile / memory tables.
 | `GET /api/people/{person_id}/preferences` | — | Per-person preferences. |
 | `PATCH /api/people/{person_id}/preferences` | `PreferencesPatch` | Update preferences. |
 
-Related: `GET /api/denylist` and `DELETE /api/denylist/{entry_id}` (Open) —
-the voice-identification denylist.
+Related: the voice-identification denylist — `GET /api/denylist` (Open) and
+`DELETE /api/denylist/{entry_id}` (**Admin (Bearer)**: removing an opt-out
+puts someone back in front of the matcher, so it answers to the operator).
 
 ### 3.7 Satellites
 
@@ -546,7 +600,7 @@ file on the server. Mutations trigger the core's background clip re-render
 | `GET /api/voices` | — | The voice registry (engine, model ref, default flag). |
 | `GET /api/voices/{voice_id}/sample` | — | WAV sample — proxies the core's live TTS (`/v1/admin/voices/sample`); the web process has no TTS of its own. |
 | `POST /api/voices/edge` | `EdgeVoiceCreate` | Register a cloud (edge) voice. `201`. |
-| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. |
+| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. Both files are streamed to disk under a byte budget — the model at 200 MB, the config at 4 MB — and an upload over either one is answered `413` while it is still arriving, leaving nothing on disk. A request whose declared `Content-Length` is over 210 MB is refused before its body is read at all. |
 | `PATCH /api/voices/{voice_id}` | `VoicePatch` | Rename / set default. |
 | `DELETE /api/voices/{voice_id}` | — | Remove a voice. `204`. |
 

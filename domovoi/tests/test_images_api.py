@@ -52,7 +52,7 @@ def thumbs_dir(tmp_path, monkeypatch):
 
 
 def _client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 def _png(root: Path, rel: str) -> Path:

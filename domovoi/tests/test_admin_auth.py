@@ -66,7 +66,11 @@ async def _auth_isolation(tmp_path, monkeypatch):
 
 
 def _web() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test")
+    return AsyncClient(
+        transport=ASGITransport(app=web_app),
+        base_url="http://test",
+        headers={"X-Requested-With": "domovoi-tests"},
+    )
 
 
 def _core() -> AsyncClient:
@@ -338,7 +342,8 @@ async def test_cookie_only_mutation_403s_but_cookie_get_renders() -> None:
         )
         assert r.status_code == 200, r.text
     async with AsyncClient(
-        transport=ASGITransport(app=web_app), base_url="http://test", **cookie_only
+        transport=ASGITransport(app=web_app), base_url="http://test",
+        headers={"X-Requested-With": "domovoi-tests"}, **cookie_only
     ) as web:
         # Same stance on the web process.
         r = await web.patch("/api/config/editable", json={"changes": {}})

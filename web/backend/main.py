@@ -23,9 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from domovoi import admin_auth
 from domovoi.config import settings
 from domovoi.transport_guard import (
-    BodyLimitMiddleware,
+    # Aliased: WEB-4 ships a SECOND body limiter
+    # (web.backend.middleware) with tighter, per-upload-route
+    # budgets. Both run — see the stack below — so neither name may
+    # shadow the other.
+    BodyLimitMiddleware as TransportBodyLimitMiddleware,
     LanHostMiddleware,
-    lan_origin_regex,
 )
 from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
@@ -57,6 +60,12 @@ from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend import plugin_host
 from web.backend import realtime as realtime_mod
+from web.backend.middleware import (
+    BodyLimitMiddleware as UploadBodyLimitMiddleware,
+    RequireRequestedWithMiddleware,
+    SecurityHeadersMiddleware,
+    cors_origin_regex,
+)
 from web.backend.realtime import (
     DEFAULT_POLL_INTERVAL_SEC,
     ListenTask,
@@ -231,6 +240,31 @@ app = FastAPI(
 )
 
 
+# ─── Transport guards ─────────────────────────────────────────────────────
+#
+# Starlette wraps `user_middleware[0]` — the most recently added — around
+# everything else, so this stack is written INNERMOST FIRST. What a request
+# actually meets, outermost in:
+#
+#   SecurityHeaders → CORS → process-wide body cap → Host → upload budgets
+#   → X-Requested-With → the router
+#
+# Every one of those refuses before a route is chosen, and the header
+# middleware is outermost so its headers are stamped on their refusals too.
+
+# WEB-6. A write under /api/ without X-Requested-With is refused in front
+# of the router, so no endpoint runs and nothing reads the body.
+# Registered FIRST and therefore INNERMOST, so CORS still answers its own
+# preflight (which carries no such header) and an oversized body is still
+# refused 413 whether or not it brought one.
+app.add_middleware(RequireRequestedWithMiddleware)
+
+# WEB-4. The per-route upload budgets — a Piper voice, a plugin zip on its
+# way to the core — sized to what those two handlers actually accept, and
+# tighter than the transport ceilings below. Inside the process-wide cap,
+# so the narrower number is the one a caller meets.
+app.add_middleware(UploadBodyLimitMiddleware)
+
 # ─── Host ─────────────────────────────────────────────────────────────────
 # CORE-8: which names this server answers to at all. CORS (below) governs
 # what a browser may READ cross-origin; a public name pointed at this box
@@ -239,29 +273,39 @@ app = FastAPI(
 
 app.add_middleware(LanHostMiddleware)
 # CORE-7: added after the host check so it wraps it — the cheapest
-# possible refusal for a body nobody is going to read anyway. Upload
-# routes keep their own, much larger ceilings (transport_guard).
-app.add_middleware(BodyLimitMiddleware)
+# possible refusal for a body nobody is going to read anyway. 1 MiB for
+# an ordinary route; the upload routes keep the much larger ceilings in
+# transport_guard.UPLOAD_LIMITS, two of which WEB-4 narrows above.
+app.add_middleware(TransportBodyLimitMiddleware)
 
 
-# ─── CORS ─────────────────────────────────────────────────────────────────
-# LAN-trust: allow localhost + RFC 1918 ranges for cross-origin requests
-# from the browser when the user opens the UI by IP. Refuses public
-# origins as a basic defense against malicious websites trying to hit
-# the user's LAN device when they happen to have a tab open elsewhere.
-# This is belt-and-suspenders next to binding only to LAN interfaces.
+# ─── CORS (WEB-8) ─────────────────────────────────────────────────────────
+# LAN-trust, narrowed to THIS PORT: a browser opening the dashboard by IP
+# works, and so does the server switcher pointing one dashboard at another
+# Domovoi — both are this port on a LAN host. Every other service on the
+# same machine is a different origin but the same site, and the old
+# any-port regex let a page served by one of them read this API with the
+# dashboard's cookie attached.
 
 app.add_middleware(
     CORSMiddleware,
-    # One source of truth with the core's WebSocket Origin check
-    # (domovoi/transport_guard.py), so a page that cannot call the REST
-    # API cannot open a socket either. Same LAN ranges as before, plus
-    # .lan / .home.arpa / .internal and anything in TRUSTED_HOSTS.
-    allow_origin_regex=lan_origin_regex(),
+    # cors_origin_regex is lan_origin_regex() with the port pinned, so the
+    # host alternatives here and the core's WebSocket Origin check
+    # (domovoi/transport_guard.py) stay ONE source: a page that cannot call
+    # the REST API cannot open a socket either.
+    allow_origin_regex=cors_origin_regex(_PORT),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Response headers (WEB-8) ─────────────────────────────────────────────
+# Registered last, so it wraps everything above and stamps CSP,
+# X-Frame-Options, nosniff and Referrer-Policy onto every response this
+# process makes — including a CORS preflight and the refusals from the two
+# middlewares above.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ─── API routes ───────────────────────────────────────────────────────────
@@ -344,6 +388,65 @@ async def health() -> HealthResponse:
 # ─── WebSocket ────────────────────────────────────────────────────────────
 
 
+# How a BROWSER presents the household device token on this socket: it
+# cannot set a request header, but it can offer a subprotocol, and that
+# travels in the handshake rather than in the URL (a query string would
+# land in every access log). The dashboard offers
+# "domovoi.device-token.<token>" when it holds one (web/static/data.js).
+WS_DEVICE_TOKEN_SUBPROTOCOL = "domovoi.device-token."
+
+_REFUSE = object()
+
+
+def _offered_token_subprotocol(ws: WebSocket) -> tuple[str | None, str | None]:
+    """``(token, subprotocol)`` from ``Sec-WebSocket-Protocol``, or
+    ``(None, None)``. The subprotocol has to be echoed back on accept or the
+    browser drops the connection, so it is returned even when the token in
+    it turns out to be useless."""
+    raw = ws.headers.get("sec-websocket-protocol") or ""
+    for offered in (part.strip() for part in raw.split(",")):
+        if offered.startswith(WS_DEVICE_TOKEN_SUBPROTOCOL):
+            token = offered[len(WS_DEVICE_TOKEN_SUBPROTOCOL):].strip()
+            return (token or None), offered
+    return None, None
+
+
+async def _authorize_state_socket(ws: WebSocket) -> object | None:
+    """Decide whether this socket may subscribe, and with which
+    subprotocol echoed back. Returns ``_REFUSE`` to turn the handshake
+    away.
+
+    What counts, in the order a caller is likely to have it:
+
+    * ``X-Device-Token`` — the Android app and any other header-setting
+      client (``check_device_request``);
+    * an admin ``Bearer``, or the dashboard's session cookie: this socket
+      only renders state, which is the read tier's bar (the cookie is
+      ``SameSite=Strict``, so another site's page cannot bring it here);
+    * the ``domovoi.device-token.<token>`` subprotocol, for a browser that
+      is paired but not signed in — a kiosk display, mostly;
+    * the pre-setup grace, so a fresh install's dashboard is live before
+      anyone has claimed the admin password.
+
+    Anything else is refused before the socket is accepted, which means an
+    unauthenticated subscriber is never registered with the broadcaster and
+    is pushed nothing at all.
+    """
+    _, offered = _offered_token_subprotocol(ws)
+    result = await admin_auth.check_device_request(ws)
+    if result in ("ok", "admin", "pre-setup", "cookie-only"):
+        return offered
+    token, _ = _offered_token_subprotocol(ws)
+    if token:
+        try:
+            async with admin_auth.session_scope() as s:
+                if await admin_auth.validate_device_token(s, token):
+                    return offered
+        except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+            log.warning("ws device-token check failed: %s", e)
+    return _REFUSE
+
+
 @app.websocket("/ws/state")
 async def websocket_state(ws: WebSocket) -> None:
     """Client subscribes to channels; server pushes state-change
@@ -355,15 +458,26 @@ async def websocket_state(ws: WebSocket) -> None:
 
     Empty list / no frame = subscribed to all channels.
 
-    ``device_token`` is how a BROWSER presents the household credential
-    here: a browser WebSocket cannot set request headers, so the
-    dashboard puts the token that its fetches send as ``X-Device-Token``
-    into this first frame (web/static/data.js). Nothing validates it yet
-    — this socket is on the daily tier — and the field is ignored, so an
-    older client that omits it behaves exactly as before. Android and the
-    satellites use the header instead.
+    **The handshake needs a household credential** (WEB-9): this stream
+    carries who is home, what the calendar says and which devices are on
+    the network, so it is not for any socket that can reach the port. See
+    :func:`_authorize_state_socket` for what counts; without one the
+    handshake is refused (the socket is closed before it is accepted, which
+    the server answers as HTTP 403) and nothing is ever pushed to it.
+
+    ``device_token`` in the first frame is accepted and ignored: a browser
+    WebSocket cannot set request headers, so the dashboard used to put the
+    household token here (FE-2), and an older client that still does is
+    unaffected. The credential is settled during the handshake now — a
+    browser offers it as the ``domovoi.device-token.<token>``
+    subprotocol — because a frame arrives only after the socket has been
+    accepted, which is too late to refuse it.
     """
-    await ws.accept()
+    subprotocol = await _authorize_state_socket(ws)
+    if subprotocol is _REFUSE:
+        await ws.close(code=1008, reason="household device token or admin session required")
+        return
+    await ws.accept(subprotocol=subprotocol)
     broadcaster: StateBroadcaster = ws.app.state.broadcaster
     await broadcaster.connect(ws)
     try:

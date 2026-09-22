@@ -200,6 +200,12 @@ class StateBroadcaster:
             self._clients.pop(ws, None)
         log.info("ws disconnected; total=%d", len(self._clients))
 
+    def client_count(self) -> int:
+        """How many sockets are registered to receive events. A socket the
+        handshake refused (WEB-9) never gets here, which is what makes
+        "pushed nothing at all" checkable from outside."""
+        return len(self._clients)
+
     async def set_subscriptions(self, ws: WebSocket, channels: list[str]) -> None:
         async with self._lock:
             if ws in self._clients:

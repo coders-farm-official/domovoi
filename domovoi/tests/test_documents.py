@@ -42,7 +42,7 @@ def docs_dir(monkeypatch, tmp_path):
 
 
 def _client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
 
 
 # ─── Containment ────────────────────────────────────────────────────

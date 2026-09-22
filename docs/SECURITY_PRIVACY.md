@@ -239,10 +239,31 @@ one shared household secret, no per-device identity, and anything holding
 it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
 
-The video satellite's kiosk page (`display.html` + the now-playing reads
-and transport actions it uses) rides this same tier by design — the device
-renders it unattended, with no interactive login. Per-device read tokens
-for kiosk clients sit in the hardening backlog alongside TLS.
+The video satellite's kiosk page rides this same tier **by design** — the
+device renders it unattended, with no interactive login, so there is nobody
+to hold a credential. Exactly what that leaves open, named rather than
+implied:
+
+| Open to any LAN client | What it gives away, or does |
+|---|---|
+| `GET /display.html?room=<room_id>` | The kiosk page itself. It is a page, not data — everything on it comes from the two calls below. |
+| `GET /api/music/now-playing` | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
+| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` | Pauses or resumes that room's playback. The kiosk's tap-to-pause, usable by anything on the network. |
+
+That is the whole kiosk surface, and it is the accepted risk of the daily
+tier: someone on your Wi-Fi can see what is playing and pause it. It is not
+a path to anything else — no write touches a file, a row or a setting, and
+the two verbs are the same ones a guest could reach from the dashboard.
+
+Two things narrow it even so. Both verbs are writes, so they need the
+`X-Requested-With` header like every other write, which keeps a page on
+another site from triggering them from a browser you happen to have open.
+And the kiosk's **live push** is not on this tier: `/ws/state` carries the
+household's presence and calendar, so its handshake needs the device token
+(below). A kiosk that has never been paired still renders and still polls
+its reads; what it no longer gets is the push. Pair it once, from the
+dashboard's Settings → Connection, and the socket connects like any other
+household client.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
@@ -363,12 +384,31 @@ admin tier is code execution and configuration, not day-to-day use.
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
+| **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
 
 Everything else under `/v1/admin/...` — announce, drop-in, music playback,
 satellite restart and volume, wake-word clip recording, sound regeneration,
 library reindex — is **daily tier**. The `admin` in the path means "used by
 the dashboard," not "requires the admin password."
+
+### Writes answer only to this dashboard's own kind of request
+
+Independently of the tiers, every `POST` / `PUT` / `PATCH` / `DELETE` under
+`/api/` must carry an `X-Requested-With` header, or it is refused **403**
+before the router sees it. That closes a gap the tiers leave open: a form
+post, a multipart upload and a body-less POST are requests a browser will
+send to this server from *any* page you happen to have open elsewhere,
+without asking it first — so on a daily-tier route the side effect would
+land before the server had a say, and a cookie would not be involved either
+way. A header outside that set makes the browser ask first, and the asking
+is something this server can refuse.
+
+It is a backstop, not a gate — it answers "could a page on another origin
+have caused this", not "may this caller do it" — so it sits underneath the
+tiers above rather than replacing any of them. The dashboard, the Android
+app and every plugin page send the header; so must any script or harness
+that writes to this API (`docs/API_REFERENCE.md` §1.2).
 
 The rows marked **fails closed** are the *security tier*
 (`require_admin_security`): the same posture plugin management has always
@@ -788,6 +828,74 @@ itself is sent (and only its hash stored), so on a hostile LAN a passive
 sniffer could capture a token in transit. Pairing raises the bar from "walk
 up and impersonate any room" to "already-on-the-wire at pairing time or
 sniffing the token," but the LAN is still the trust boundary.
+
+
+### The state socket
+
+`/ws/state` is the dashboard's live push channel, and what it pushes is the
+household: presence (`people.last_seen`), calendar entries with their
+titles, satellite and device details, what each room is playing. Reading it
+needs a household credential on the **handshake**:
+
+* `X-Device-Token` — the Android app and anything else that can set a
+  header;
+* an admin `Bearer`, or the dashboard's `SameSite=Strict` session cookie —
+  this socket renders state and nothing more, which is the read tier's bar,
+  and a page on another site cannot bring that cookie to the handshake;
+* `Sec-WebSocket-Protocol: domovoi.device-token.<token>` — a browser can
+  set no header on a WebSocket handshake, and a query string would print
+  the token into every access log, so a paired-but-not-signed-in browser
+  (a kiosk) offers it as a subprotocol instead. The server echoes the
+  subprotocol back, which is what keeps the browser from dropping the
+  connection.
+
+Anything else is refused: the socket is closed before it is accepted (the
+server answers the upgrade **403**), so it is never registered with the
+broadcaster and is pushed nothing at all. Before first-run setup there is
+no token to hold and the socket keeps the same pre-setup grace as the rest
+of the surface.
+
+The choice here was to gate the socket rather than trim what it carries: a
+client that belongs to the household sees exactly what it saw before, and
+one that does not sees nothing, instead of everyone getting a redacted
+stream that is still a presence feed.
+
+## Response headers and cross-origin rules
+
+Every response this process makes — the dashboard shell, the static
+bundle, plugin assets, API JSON, and the refusals above — carries:
+
+| Header | Value | What it buys |
+|---|---|---|
+| `Content-Security-Policy` | see below | Nothing may frame this page; no plugin or object embeds; no `<base>` rewriting every relative URL on it. |
+| `X-Frame-Options` | `DENY` | The same, for anything that predates `frame-ancestors`. |
+| `X-Content-Type-Options` | `nosniff` | A stored file served back from `/api/files/raw` is treated as the type the server declared, never guessed into a page. |
+| `Referrer-Policy` | `no-referrer` | Media reads may carry the household token in the query string (`?device_token=`), and a referrer would hand that URL to whatever you click through to. |
+
+The policy is `default-src 'self'` with `object-src`, `base-uri` and
+`frame-ancestors` set to `'none'`, and three deliberate loosenings:
+
+* `script-src` allows `'unsafe-inline'` and `'unsafe-eval'`. The dashboard
+  compiles its own JSX in the browser (`@babel/standalone`) and runs a
+  plugin's page code through `new Function`; without both, the bundle is a
+  blank page. This is the cost of the zero-build frontend, and it is why
+  the other directives are worth having.
+* `connect-src` is open. The server switcher points one dashboard at
+  *another* Domovoi on the LAN, and CSP cannot express "any RFC 1918 host"
+  the way the CORS regex can.
+* `img-src` / `media-src` are open, because a plugin page renders artwork
+  from whatever service it fronts.
+
+**CORS is pinned to this process's own port.** A LAN host (or `localhost`,
+or an mDNS `.local` name) *on the web port* may make credentialed
+cross-origin calls — that is the server switcher, and nothing else. The
+previous rule allowed any port on a LAN host, and a port is not a site: a
+page served by some other service on the same machine sat inside the
+allowance and could read this API with the dashboard's cookie attached.
+
+The plugin-install proxy also refuses a body over 64 MB (`413`) rather than
+buffering it, since the core — not this process — is what decides whether
+the caller may install anything.
 
 ## HARDENING BACKLOG — deferred in v1, on purpose
 

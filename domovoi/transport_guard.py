@@ -125,12 +125,26 @@ def host_allowed(host: str | None) -> bool:
     return host.endswith(LOCAL_SUFFIXES)
 
 
-def lan_origin_regex() -> str:
-    """The CORS / WebSocket origin pattern, including any configured
-    hosts."""
-    alternatives = list(_LAN_ORIGIN_ALTERNATIVES)
+def lan_origin_regex(port: int | None = None) -> str:
+    """The CORS / WebSocket origin pattern, including any configured hosts.
+
+    ``port`` pins the pattern to a single port (WEB-8). The web process
+    passes its own, because every OTHER service on this machine — a media
+    server, a printer's web UI — is a different origin but the same site,
+    and an any-port pattern let a page served by one of them read this API
+    with the dashboard's cookie attached. The only cross-origin caller that
+    legitimately exists is another Domovoi dashboard reached through the
+    server switcher, and that one answers on the same port.
+
+    Left as ``None`` the pattern accepts any port, which is what the
+    WebSocket ``Origin`` check wants: the dashboard opens the core's
+    sockets from the web port, so a socket must never be stricter about
+    ports than the REST API beside it.
+    """
+    suffix = r"(:\d+)?" if port is None else ":" + str(int(port))
+    alternatives = [a.replace(r"(:\d+)?", suffix) for a in _LAN_ORIGIN_ALTERNATIVES]
     for name in configured_hosts():
-        alternatives.append(re.escape(name.lstrip("*.")) + r"(:\d+)?")
+        alternatives.append(re.escape(name.lstrip("*.")) + suffix)
     return r"^https?://(" + r"|".join(alternatives) + r")$"
 
 

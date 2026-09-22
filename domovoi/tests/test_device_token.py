@@ -330,7 +330,8 @@ async def test_web_device_token_mirror_behaves_like_the_core(_db) -> None:
         rotated = r.json()["token"]
         assert rotated != token
     async with AsyncClient(
-        transport=ASGITransport(app=web_app), base_url="http://test", cookies={COOKIE: admin}
+        transport=ASGITransport(app=web_app), base_url="http://test",
+        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin}
     ) as web:
         assert (await web.get("/api/auth/device-token")).json()["token"] == rotated
         assert (await web.post("/api/auth/device-token/rotate")).status_code == 403

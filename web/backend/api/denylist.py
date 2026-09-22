@@ -9,9 +9,10 @@ asked to be re-prompted on a future visit).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
+from domovoi.admin_auth import require_admin_mutation
 from web.backend.db import session_scope
 from web.backend.schemas import DenylistEntry
 
@@ -36,7 +37,10 @@ async def list_denylist() -> list[DenylistEntry]:
         ]
 
 
-@router.delete("/{entry_id}", status_code=204)
+@router.delete(
+    "/{entry_id}", status_code=204,
+    dependencies=[Depends(require_admin_mutation)],
+)
 async def delete_denylist_entry(entry_id: int) -> None:
     async with session_scope() as s:
         result = await s.execute(
