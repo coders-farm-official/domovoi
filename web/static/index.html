@@ -118,6 +118,14 @@
     const loadPluginScripts = async (manifest) => {
       window.DomovoiPlugins = window.DomovoiPlugins || {};
       const errors = {};
+      // Plugin code runs in this origin, so it only ever comes from a
+      // server the user confirmed in the switcher (FE-2). Same-origin is
+      // trusted by construction; a selected server that somehow is not
+      // (storage edited by hand) gets its core pages and nothing else.
+      if (!ServerStore.isTrusted(ServerStore.current())) {
+        console.warn('selected server is not trusted — plugin pages skipped:', ServerStore.current());
+        return errors;
+      }
       for (const plugin of manifest.plugins || []) {
         for (const url of plugin.scripts || []) {
           try {

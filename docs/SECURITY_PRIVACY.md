@@ -72,6 +72,32 @@ readable during the open pre-setup window does not survive it. The gate
 before setup. No route wears it yet — the clients learn the token first,
 then the ordinary routes (music, queue, announce, intent…) move onto it.
 
+**How a client gets it.** The dashboard keeps the token in `localStorage`,
+per server, and sends it on every request; a refusal that names the header
+opens a *pair this browser* prompt (the token is pasted once, and the
+refused request is replayed), and an admin login pairs the browser without
+a prompt by reading `GET /api/auth/device-token`. An admin sees the token
+under **Settings → Devices → Household token**, with copy and rotate.
+The Android app asks for it once under **Settings → Connection**, stores it
+in `EncryptedSharedPreferences` (outside Android backups) and sends it on
+every HTTP request, on `/ws/state` and on the drop-in call socket; a
+refusal returns the app to that pairing screen. Rotating the token from
+either surface invalidates the old one everywhere: every browser and phone
+has to be paired again.
+
+### Trusting a server before talking to it
+
+Both clients discover Domovoi servers by sweeping the LAN for anything that
+answers `/api/health`. Choosing one is consequential — the dashboard runs
+that server's plugin scripts in its own origin and posts the admin password
+to it at login — so choosing is a deliberate step: the picker shows the
+address it found and asks *trust this server?* before anything is stored.
+Until that confirmation nothing is persisted, no plugin JS is fetched or
+executed, no credential is sent, and on Android no capability or plugin
+route is loaded. Same-origin (the box that served the dashboard) is trusted
+by construction. Verifying a server's identity cryptographically (and TLS
+with pinning) stays on the hardening backlog.
+
 ### Daily tier (LAN-trust)
 
 Voice, music control, intercom, announcements, timers, reminders, news —

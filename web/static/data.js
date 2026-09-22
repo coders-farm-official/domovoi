@@ -24,9 +24,17 @@
 // backend than the one that served it. '' = same-origin (default).
 // Selection + the saved server list persist in localStorage; switching
 // reloads the page so every hook and the WebSocket re-init cleanly.
+//
+// A server is only ever SELECTED once the user has trusted it (FE-2):
+// the switcher shows the discovered address and asks first, because
+// selecting a server means running its plugin JS in this origin and
+// sending it the admin password at login. Same-origin — the box that
+// served the page — is trusted by construction; every other address
+// sits in the trusted list only after that confirmation.
 
 const SERVER_KEY = 'domovoi-server';
 const SERVERS_KEY = 'domovoi-servers'; // [{url, name}]
+const TRUSTED_KEY = 'domovoi-trusted-servers'; // [url, ...]
 
 const API_BASE = (() => {
   try { return localStorage.getItem(SERVER_KEY) || ''; } catch { return ''; }
@@ -38,6 +46,12 @@ const ServerStore = {
   currentLabel() {
     if (!API_BASE) return window.location.host;
     try { return new URL(API_BASE).host; } catch { return API_BASE; }
+  },
+  // The host:port a person can check against the box — what the trust
+  // prompt shows, prominently, before anything is persisted.
+  hostOf(url) {
+    if (!url) return window.location.host;
+    try { return new URL(url).host; } catch { return String(url).replace(/^https?:\/\//, ''); }
   },
   list() {
     try { return JSON.parse(localStorage.getItem(SERVERS_KEY) || '[]'); } catch { return []; }
@@ -53,13 +67,53 @@ const ServerStore = {
   },
   remove(url) {
     this._save(this.list().filter((s) => s.url !== url));
+    this.untrust(url);
   },
+  // ── Trust ──────────────────────────────────────────────────────────
+  // Servers the user has confirmed in the switcher. Dashboards from
+  // before the trust list existed carry a saved list that was only ever
+  // filled by explicit "use" clicks, so the first load seeds the trusted
+  // list from it (plus the current selection) rather than re-asking.
+  trustedList() {
+    let raw = null;
+    try { raw = localStorage.getItem(TRUSTED_KEY); } catch {}
+    if (raw === null) {
+      const seed = this.list().map((s) => s.url);
+      if (API_BASE && !seed.includes(API_BASE)) seed.push(API_BASE);
+      try { localStorage.setItem(TRUSTED_KEY, JSON.stringify(seed)); } catch {}
+      return seed;
+    }
+    try { return JSON.parse(raw) || []; } catch { return []; }
+  },
+  isTrusted(url) {
+    const clean = (url || '').replace(/\/+$/, '');
+    if (!clean) return true; // same-origin: the server that served this page
+    return this.trustedList().includes(clean);
+  },
+  trust(url) {
+    const clean = (url || '').replace(/\/+$/, '');
+    if (!clean) return;
+    const list = this.trustedList().filter((u) => u !== clean);
+    list.push(clean);
+    try { localStorage.setItem(TRUSTED_KEY, JSON.stringify(list)); } catch {}
+  },
+  untrust(url) {
+    const clean = (url || '').replace(/\/+$/, '');
+    const list = this.trustedList().filter((u) => u !== clean);
+    try { localStorage.setItem(TRUSTED_KEY, JSON.stringify(list)); } catch {}
+  },
+  // Point the dashboard at `url` and reload. Refused — nothing written,
+  // no reload, returns false — for a server that has not been trusted;
+  // the switcher asks first and calls trust() on confirmation.
   select(url) {
+    const clean = (url || '').replace(/\/+$/, '');
+    if (clean && !this.isTrusted(clean)) return false;
     try {
-      if (url) localStorage.setItem(SERVER_KEY, url.replace(/\/+$/, ''));
+      if (clean) localStorage.setItem(SERVER_KEY, clean);
       else localStorage.removeItem(SERVER_KEY);
     } catch {}
     window.location.reload();
+    return true;
   },
   // Probe one base URL for a live web backend; resolves {url, name} or null.
   async probe(base, timeoutMs = 1200) {
@@ -111,13 +165,22 @@ const ServerStore = {
   },
 };
 
-// Admin auth (auth.js, loaded first): the in-memory bearer token rides
-// along on every API call; a 401/403 from an admin-gated endpoint pops
-// the login modal so the user can authenticate.
+// Admin auth (auth.js, loaded first): the in-memory bearer token AND the
+// stored household device token ride along on every API call
+// (Auth.headers() carries both); a 401/403 from an admin-gated endpoint
+// pops the login modal so the user can authenticate, and one that names
+// the device token pops the pair modal instead.
 const _authHeaders = () => {
   try { return (typeof Auth !== 'undefined' && Auth.headers()) || {}; }
   catch { return {}; }
 };
+
+// A refusal on the DEVICE tier: the server's detail names the header it
+// wanted ("X-Device-Token or admin session required", or the cookie-only
+// 403). Anything else that is 401/403 is the admin tier's business.
+const _isDeviceTokenRefusal = (status, text) => (
+  (status === 401 || status === 403) && /x-device-token|device token/i.test(String(text || ''))
+);
 // Before first-run setup the security tier (config write, service
 // restart, satellite code push, pairing changes) answers 501 rather than
 // letting the request through — the setup modal is the right prompt for
@@ -183,35 +246,72 @@ const _signInAgain = async (refusedToken) => {
   } catch { return false; }
 };
 
+const _deviceToken = () => {
+  try { return typeof Auth !== 'undefined' && Auth.deviceToken ? Auth.deviceToken() : null; }
+  catch { return null; }
+};
+
+const _pairAgain = async (refusedDeviceToken) => {
+  try {
+    if (typeof Auth === 'undefined' || !Auth.ensurePaired) return false;
+    return await Auth.ensurePaired(refusedDeviceToken);
+  } catch { return false; }
+};
+
+const _maybeRequestPairing = () => {
+  try { if (typeof Auth !== 'undefined' && Auth.requestPairing) Auth.requestPairing(); } catch {}
+};
+
 // Shared tail for apiFetch/apiUpload. `send` MUST rebuild its headers on
-// each call — that is how the replay carries the bearer the first attempt
-// was missing.
+// each call — that is how the replay carries the bearer (or the device
+// token) the first attempt was missing.
+//
+// Two prompts, chosen by what the refusal asked for: a body naming the
+// device token opens the "pair this browser" modal and replays once the
+// household token is stored; any other 401/403 opens the admin login
+// and replays once a fresh bearer exists. The replay is the only reason
+// a refused response body is read before the error is built.
 const _sendWithAuthRetry = async (send, { method, body } = {}) => {
   const refusedToken = _authToken();
+  const refusedDeviceToken = _deviceToken();
   let r = await send();
   let promptedHere = false;
   let signInDismissed = false;
+  let text = null;
+  let deviceRefusal = false;
+
+  if (_isAuthStatus(r.status)) {
+    text = await r.text().catch(() => '');
+    deviceRefusal = _isDeviceTokenRefusal(r.status, text);
+  }
 
   if (_isAuthStatus(r.status) && _isMutation(method) && _replayableBody(body)) {
     promptedHere = true;
-    if (await _signInAgain(refusedToken)) r = await send();
+    const again = deviceRefusal ? _pairAgain(refusedDeviceToken) : _signInAgain(refusedToken);
+    if (await again) { r = await send(); text = null; }
     else signInDismissed = true;
   }
 
   if (!r.ok) {
+    if (text === null) text = await r.text().catch(() => '');
     // Never re-open a modal we have just come back from — that is the loop.
-    if (!promptedHere) _maybeRequestLogin(r.status);
-    const text = await r.text().catch(() => '');
+    if (!promptedHere) {
+      if (_isDeviceTokenRefusal(r.status, text)) _maybeRequestPairing();
+      else _maybeRequestLogin(r.status);
+    }
     const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
     err.status = r.status;   // callers branch on auth failures
     // Lets a caller say "cancelled" instead of "failed": the operator
-    // dismissed the sign-in, they did not hit a broken endpoint.
+    // dismissed the sign-in (or the pairing), they did not hit a broken
+    // endpoint.
     if (signInDismissed) err.authCancelled = true;
-    // The login modal was shown for THIS refusal (and, on a mutation,
-    // dismissed) — see isAuthFailure. Deliberately false for a 401 that
-    // came back against the fresh bearer: no modal was re-opened for it,
-    // so the caller's error toast is the only thing the operator will see.
+    // The login (or pair) modal was shown for THIS refusal (and, on a
+    // mutation, dismissed) — see isAuthFailure. Deliberately false for a
+    // 401 that came back against the fresh credential: no modal was
+    // re-opened for it, so the caller's error toast is the only thing
+    // the operator will see.
     err.loginPrompted = signInDismissed || (!promptedHere && _isAuthStatus(r.status));
+    err.deviceTokenRequired = _isDeviceTokenRefusal(r.status, text);
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
   }
@@ -338,7 +438,13 @@ class StateBus {
       this.connected = true;
       this.reconnectDelayMs = 1000;
       // Empty subscribe = subscribe to all channels (server contract).
-      try { ws.send(JSON.stringify({ subscribe: [] })); } catch {}
+      // A browser WebSocket cannot set request headers, so the household
+      // device token travels in this first frame instead (`device_token`,
+      // the same value the X-Device-Token header carries on fetches).
+      const hello = { subscribe: [] };
+      const device = _deviceToken();
+      if (device) hello.device_token = device;
+      try { ws.send(JSON.stringify(hello)); } catch {}
       this._notifyAll({ type: '_status', connected: true });
     });
 
@@ -420,12 +526,12 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  // Recover after login. An admin-gated path 401s on first mount (the token
-  // lives only in JS memory, so a page load always starts unauthenticated),
-  // which pops the login modal via _maybeRequestLogin — but nothing re-ran
-  // the request once the user authenticated, leaving the panel stuck on a
-  // stale error against a now-valid session. Re-fetch when a 401/403 is
-  // followed by a successful login.
+  // Recover after login (or pairing). An admin-gated path 401s on first
+  // mount (the token lives only in JS memory, so a page load always starts
+  // unauthenticated), which pops the login modal via _maybeRequestLogin —
+  // but nothing re-ran the request once the user authenticated, leaving
+  // the panel stuck on a stale error against a now-valid session. Re-fetch
+  // when a 401/403 is followed by a successful login or pairing.
   //
   // AT MOST ONE retry per error, reset on any success. A 401 that persists
   // while logged in is a real failure (e.g. a web→core hop that forgets to
@@ -435,8 +541,13 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
+      // Retry when a CREDENTIAL changed since the refusal — a login, or
+      // the household token arriving through the pair modal — never on
+      // the notify that merely opened a modal.
+      const seen = Auth.credentialVersion;
       return Auth.subscribe(() => {
-        if (!Auth.isLoggedIn() || retriedRef.current) return;
+        if (Auth.credentialVersion === seen || retriedRef.current) return;
+        if (!Auth.isLoggedIn() && !(Auth.isPaired && Auth.isPaired())) return;
         retriedRef.current = true;
         refresh();
       });
@@ -486,12 +597,12 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  // Recover after login. An admin-gated path 401s on first mount (the token
-  // lives only in JS memory, so a page load always starts unauthenticated),
-  // which pops the login modal via _maybeRequestLogin — but nothing re-ran
-  // the request once the user authenticated, leaving the panel stuck on a
-  // stale error against a now-valid session. Re-fetch when a 401/403 is
-  // followed by a successful login.
+  // Recover after login (or pairing). An admin-gated path 401s on first
+  // mount (the token lives only in JS memory, so a page load always starts
+  // unauthenticated), which pops the login modal via _maybeRequestLogin —
+  // but nothing re-ran the request once the user authenticated, leaving
+  // the panel stuck on a stale error against a now-valid session. Re-fetch
+  // when a 401/403 is followed by a successful login or pairing.
   //
   // AT MOST ONE retry per error, reset on any success. A 401 that persists
   // while logged in is a real failure (e.g. a web→core hop that forgets to
@@ -501,8 +612,13 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
+      // Retry when a CREDENTIAL changed since the refusal — a login, or
+      // the household token arriving through the pair modal — never on
+      // the notify that merely opened a modal.
+      const seen = Auth.credentialVersion;
       return Auth.subscribe(() => {
-        if (!Auth.isLoggedIn() || retriedRef.current) return;
+        if (Auth.credentialVersion === seen || retriedRef.current) return;
+        if (!Auth.isLoggedIn() && !(Auth.isPaired && Auth.isPaired())) return;
         retriedRef.current = true;
         refresh();
       });

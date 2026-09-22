@@ -1720,6 +1720,120 @@ const FilesAccessCard = ({ fire, deviceList }) => {
   );
 };
 
+/* ---- Household token (the device tier) ----------------------------
+ * The one secret every household device presents (X-Device-Token) for
+ * ordinary actions. Shown ONLY to an admin session — Bearer or the
+ * dashboard cookie — because it is what a new phone or browser is
+ * enrolled with; a viewer who is not signed in sees nothing here, and
+ * nothing is fetched for them (a 401 on this GET would otherwise pop
+ * the login modal at everyone who opens the tab).
+ *
+ * Copy hands it to the clipboard; Rotate mints a replacement (Bearer-
+ * only on the server), re-pairs THIS browser with it and tells the admin
+ * that every other device must pair again. */
+const HouseholdTokenCard = ({ fire }) => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined') return;
+    try { return Auth.subscribe(force); } catch { /* auth.js absent */ }
+  }, []);
+  // Ask the server once when nobody has probed yet, so a cookie session
+  // (a reload while logged in) renders the card too.
+  React.useEffect(() => {
+    try { if (typeof Auth !== 'undefined' && !Auth.status) Auth.refreshStatus(); } catch {}
+  }, []);
+
+  let admin = false;
+  try {
+    admin = typeof Auth !== 'undefined'
+      && (Auth.isLoggedIn() || !!(Auth.status && Auth.status.authenticated));
+  } catch {}
+
+  const { data, error, refresh } = useApiObject(admin ? '/api/auth/device-token' : null);
+  const [rotating, setRotating] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [rotated, setRotated] = React.useState(false);
+
+  if (!admin) return null;
+
+  const token = data && data.token;
+  const header = (data && data.header) || 'X-Device-Token';
+  const thisPaired = (() => {
+    try { return !!token && Auth.deviceToken && Auth.deviceToken() === token; } catch { return false; }
+  })();
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(token);
+      fire('household token copied');
+    } catch {
+      fire('copy failed — select the token and copy it by hand');
+    }
+  };
+
+  const rotate = async () => {
+    setConfirmOpen(false);
+    setRotating(true);
+    try {
+      const out = await apiPost('/api/auth/device-token/rotate');
+      if (out && out.token) {
+        try { Auth.pair(out.token); } catch {}
+        setRotated(true);
+        fire('household token rotated — every other browser and phone must pair again');
+      }
+      refresh();
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(`rotate failed: ${apiErrorText(e)}`);
+    } finally { setRotating(false); }
+  };
+
+  return (
+    <Card title="Household token"
+          sub="What a phone or browser presents to prove it belongs to this household. Share it only with devices you own.">
+      {error ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          {error.status === 501
+            ? 'Available once first-run admin setup is complete.'
+            : `couldn't load the token: ${apiErrorText(error)}`}
+        </div>
+      ) : !token ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : (
+        <>
+          <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
+                        gap: 10, flexWrap: 'wrap' }}>
+            <code className="mono" data-testid="household-token"
+                  style={{ fontSize: 13, padding: '6px 10px', borderRadius: 'var(--r-sm)',
+                           border: '1px solid var(--border)', background: 'var(--sunken)',
+                           userSelect: 'all', wordBreak: 'break-all', flex: '1 1 320px' }}>
+              {token}
+            </code>
+            <Button icon="copy" onClick={copy}>copy</Button>
+            <Button icon="refresh-cw" disabled={rotating} onClick={() => setConfirmOpen(true)}>
+              {rotating ? 'rotating…' : 'rotate'}
+            </Button>
+          </div>
+          <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Connection → Household token.
+            {thisPaired
+              ? ' This browser is paired with it.'
+              : ' This browser is not paired with it yet — log in again or paste it into the pairing prompt.'}
+            {rotated && ' Rotated: the previous token no longer works anywhere.'}
+          </div>
+        </>
+      )}
+      <DeleteConfirmDialog open={confirmOpen} title="Rotate the household token?" icon="refresh-cw"
+                           confirmLabel="Rotate" onCancel={() => setConfirmOpen(false)} onConfirm={rotate}>
+        <div>
+          Every phone and browser in the household will need the new token
+          before it can change things again. This browser is re-paired
+          automatically.
+        </div>
+      </DeleteConfirmDialog>
+    </Card>
+  );
+};
+
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
   // ONE devices list for the whole tab. Each card used to fetch its own,
@@ -1730,6 +1844,7 @@ const DevicesPanel = () => {
   return (
     <>
       <ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/>
+      <HouseholdTokenCard fire={fire}/>
       <QueueAccessCard fire={fire} deviceList={deviceList}/>
       <FilesAccessCard fire={fire} deviceList={deviceList}/>
       {toastNode}
@@ -1756,7 +1871,7 @@ const SETTINGS_SUB = {
   greetings: 'Lines a satellite plays the instant the wake word fires.',
   voices: 'The TTS voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
-  devices: 'Name this device, and choose who may edit a room’s play queue.',
+  devices: 'Name this device, the household token, and who may edit a room’s play queue.',
   models: "What's active in each role, install more, and the host hardware readout.",
   config: 'Editable domovoi configuration.',
 };

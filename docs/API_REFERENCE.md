@@ -45,6 +45,17 @@ rotated automatically when first-run setup completes, so a token read during
 the pre-setup window does not outlive it — read the file *after* claiming
 admin.
 
+Clients carry it without being asked twice. The dashboard stores the token
+per server in `localStorage` and attaches the header to every call; a refusal
+whose detail names the header opens a "pair this browser" prompt and the
+refused request is replayed once the token is pasted, while an admin login
+fetches `GET /api/auth/device-token` and pairs the browser silently. The
+Android app keeps it in `EncryptedSharedPreferences` and sends it on every
+request, on the `/ws/state` socket and on the drop-in call socket. Browser
+WebSockets cannot set headers, so the dashboard's first `/ws/state` frame
+carries `{"subscribe": [...], "device_token": "..."}` instead; the Android
+socket uses the header.
+
 Every endpoint below is labeled with one of these tiers:
 
 | Tier | Meaning |
@@ -256,7 +267,7 @@ ranges, and `*.local` origins only.
 | `GET /api/auth/sessions` | Bearer or cookie | — | `{"sessions": [{token_hash, label, created_at, expires_at, last_used_at, current}]}` for the revoke UI. |
 | `DELETE /api/auth/sessions/{token_hash}` | Bearer only | — | Revoke a session by hash. `404` unknown hash. |
 | `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). Every other session is revoked; returns `{ok, revoked_sessions}`. |
-| `GET /api/auth/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, from the same table the core reads. `401` unauthenticated, `501` before setup. |
+| `GET /api/auth/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, from the same table the core reads. `401` unauthenticated, `501` before setup. The dashboard calls it right after a login to pair the browser, and Settings → Devices renders it for an admin. |
 | `POST /api/auth/device-token/rotate` | **Admin, security tier** | — | Rotate the household token (`{token, header, rotated}`); the core sees the new one immediately and the file mirror is rewritten. |
 
 ### 3.2 Plugins (management proxies + host)

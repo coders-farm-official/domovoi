@@ -20,12 +20,16 @@
 // resolve to null); every mutation is appended to `calls`.
 //
 // Usage: node jsx_interact_harness.js <repo-root> '<scenarios json>'
-//   scenario: { files, component, props?, fnProps?, api?, script }
+//   scenario: { files, component, props?, fnProps?, api?, setup?, script }
+//   setup    — JS source evaluated INSIDE the sandbox before the files
+//              load, for a scenario that needs a different Auth /
+//              ServerStore / navigator than the defaults below.
 //   script   — a JS function body run with (h) — the helpers below —
 //              whose return value is the scenario's result (JSON).
 // Helpers on h: render(), tree(), find(sel), findAll(sel), text(),
 //   click(sel), type(sel, value), change(sel, value), submit(sel),
-//   key(sel, key), plain(el), calls, hookCalls, api, settle().
+//   key(sel, key), plain(el), calls, hookCalls, api, settle(),
+//   global(name) (a sandbox global, e.g. what a `setup` stub recorded).
 //   sel is {type?, text?, title?, placeholder?, icon?, value?, name?, nth?}
 //   or a predicate (el) => boolean; `text` and `title` match substrings.
 'use strict';
@@ -214,7 +218,7 @@ const makeApi = (table) => {
 };
 
 /* ── one scenario ───────────────────────────────────────────────────── */
-const run = async ({ files, component, props = {}, fnProps = [], api: table = {}, script }) => {
+const run = async ({ files, component, props = {}, fnProps = [], api: table = {}, setup = '', script }) => {
   const rt = createRuntime();
   const React = rt.React;
   const api = makeApi(table);
@@ -241,7 +245,10 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     useStateEvents: noop,
     useDebouncedValue: (v) => v,
     stateBus: { subscribe: () => noop },
-    DeviceIdentity: { id: () => 'dev-1', name: () => 'harness', register: noop },
+    DeviceIdentity: { id: () => 'dev-1', name: () => 'harness',
+                      suggestedName: () => 'Harness on test',
+                      register: () => Promise.resolve({ device_id: 'dev-1', name: 'harness' }),
+                      rename: (name) => Promise.resolve({ device_id: 'dev-1', name }) },
     deviceDownload: (url) => api.calls.push({ method: 'DOWNLOAD', path: url, body: null }),
     usePlayback: () => ({ available: false, playItems: noop, enqueue: noop, playNext: noop }),
     NowPlayingPanel: () => null,
@@ -276,6 +283,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  if (setup) vm.runInContext(setup, sandbox, { filename: 'setup.js' });
   for (const file of files) vm.runInContext(compile(file), sandbox, { filename: file });
   vm.runInContext(`window.__component = ${component};`, sandbox);
   const Component = sandbox.window.__component;
@@ -306,6 +314,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     hookCalls,
     api: table,
     settle,
+    global(name) { return sandbox[name]; },
     render() { return rt.mount(React.createElement(Component, fullProps)); },
     tree() { return rt.tree(); },
     findAll(sel) { return rt.tree().filter((el) => matches(el, sel)); },

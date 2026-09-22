@@ -665,8 +665,22 @@ const ServerSwitcher = ({ onClose }) => {
     setScanning(false);
   };
 
+  // A server the user has not trusted yet is shown — address first — and
+  // confirmed before anything is written or loaded from it (FE-2).
+  const [pendingTrust, setPendingTrust] = React.useState(null); // {url, name}
+
   const pick = (url, name) => {
+    if (url && !ServerStore.isTrusted(url)) { setPendingTrust({ url, name }); return; }
     if (url) ServerStore.upsert(url, name);
+    ServerStore.select(url); // reloads
+  };
+
+  const confirmTrust = () => {
+    if (!pendingTrust) return;
+    const { url, name } = pendingTrust;
+    ServerStore.trust(url);
+    ServerStore.upsert(url, name);
+    setPendingTrust(null);
     ServerStore.select(url); // reloads
   };
 
@@ -755,6 +769,37 @@ const ServerSwitcher = ({ onClose }) => {
         <div className="meta" style={{ marginTop: 10 }}>
           switching reloads the page pointed at the selected backend
         </div>
+
+        {pendingTrust && (
+          <TrustServerPrompt url={pendingTrust.url} name={pendingTrust.name}
+                             onCancel={() => setPendingTrust(null)} onConfirm={confirmTrust}/>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* Before a server is used for the first time: its address, plainly, and a
+ * yes/no. Confirming is what puts it in the trusted list; only then does
+ * the switcher persist it, and only a trusted server has its plugin JS
+ * loaded or receives the admin password at login (data.js / auth.js). */
+const TrustServerPrompt = ({ url, name, onCancel, onConfirm }) => {
+  const host = ServerStore.hostOf(url);
+  return (
+    <div style={{ marginTop: 14, padding: 14, borderRadius: 'var(--r-md)',
+                  border: '1px solid var(--warn, #c98a1a)', background: 'var(--sunken)' }}
+         role="dialog" aria-label="trust this server?">
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>trust this server?</div>
+      <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{host}</div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        {name ? `It calls itself “${name}”. ` : ''}
+        Check that this address is your Domovoi box before continuing: the
+        dashboard will load this server's plugin pages and send your admin
+        password to it when you log in. Nothing is saved until you confirm.
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+        <Button icon="x" onClick={onCancel}>cancel</Button>
+        <Button variant="primary" icon="shield-check" onClick={onConfirm}>trust this server</Button>
       </div>
     </div>
   );
@@ -874,17 +919,73 @@ const LoginModal = ({ onClose }) => {
   );
 };
 
+/* ---- Pair this browser (the household device token) ---------
+ * Pops when a request is refused for want of the device token
+ * (data.js calls Auth.requestPairing()). The token is pasted once and
+ * stored for this server; the refused request is replayed with it.
+ * An admin never sees this: logging in pairs the browser itself. */
+const PairModal = ({ onClose }) => {
+  const [value, setValue] = useState('');
+  const [err, setErr] = useState(null);
+
+  const submit = () => {
+    setErr(null);
+    if (!value.trim()) { setErr('paste the household token first'); return; }
+    Auth.pair(value);
+    onClose();
+  };
+
+  return (
+    <div className="cal-modal-bg" onClick={onClose}>
+      <div className="cal-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-head">
+          <div className="ttl">pair this browser</div>
+          <IconButton name="x" onClick={onClose}/>
+        </div>
+        <div className="cal-modal-body">
+          <div className="hint">
+            This Domovoi asks devices to prove they belong to the household
+            before they can change things. Paste the household token below —
+            once, for this browser.
+          </div>
+          <div className="field">
+            <label>household token</label>
+            <input className="cal-inp mono" value={value} autoFocus
+                   placeholder="paste the token here"
+                   onChange={(e) => setValue(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
+          </div>
+          {err && <div className="err">{err}</div>}
+          <div className="hint">
+            An admin finds the token on their dashboard under
+            <strong> Settings → Devices → Household token</strong>. Logging
+            in as admin here pairs this browser automatically instead.
+          </div>
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={onClose}>cancel</Button>
+          <Button variant="primary" icon="link" onClick={submit} disabled={!value.trim()}>
+            pair
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* Mounted once in the App shell — re-renders on Auth store changes. */
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   useEffect(() => Auth.subscribe(force), []);
-  if (!Auth.modalOpen) return null;
-  return <LoginModal onClose={() => Auth.closeModal()}/>;
+  if (Auth.modalOpen) return <LoginModal onClose={() => Auth.closeModal()}/>;
+  if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
+  return null;
 };
 
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  relTime, fmtDur, LoginModal, AuthModalHost, DeleteConfirmDialog, useDeleteConfirm,
+  relTime, fmtDur, LoginModal, PairModal, AuthModalHost, DeleteConfirmDialog, useDeleteConfirm,
+  TrustServerPrompt,
 });
