@@ -71,12 +71,16 @@ done: the satellite joins your Wi-Fi and appears on the dashboard.
 Two details that are load-bearing rather than cosmetic:
 
 - **Approve it on the dashboard.** As the setup network closes the portal
-  shows a four-digit code, and the satellite presents that code when it
-  connects. Because the server took no part in the exchange, it has nothing
-  preseeded to match — so it parks the device under *waiting for approval*
-  until a human confirms the code. That is what stops whoever connects first
-  from claiming a room. (A satellite provisioned by hand presents no code and
-  keeps the older trust-on-first-use behaviour.)
+  shows a six-digit code, the satellite says that code out loud, and it
+  presents the code when it connects. Because the server took no part in
+  the exchange, it has nothing preseeded to match — so it parks the device
+  under *waiting for approval* until a human types the code in. The
+  dashboard never shows you the code: you read it off the device, which is
+  what ties the request on screen to the unit in the room. That is what
+  stops whoever connects first from claiming a room. (A satellite
+  provisioned by hand presents no code and keeps the older
+  trust-on-first-use behaviour, unless `SATELLITE_PAIRING_STRICT` is on —
+  see docs/SECURITY_PRIVACY.md.)
 - **No USB gadget overlay.** Portal builds deliberately skip
   `dtoverlay=dwc2,dr_mode=peripheral`. Nothing ever reverts it, and on a Pi
   Zero 2 W it pins the only data port as a peripheral — where a USB mic array

@@ -3,8 +3,8 @@
 > **Shipped units use the Wi-Fi setup portal.** A card prepared with
 > `setup_transport = "portal"` never touches this checklist and never
 > touches the server: power the device on, join its `Domovoi-Setup-<id>`
-> network from a phone, and the setup page opens itself. Approve the
-> four-digit code on the dashboard to finish. See
+> network from a phone, and the setup page opens itself. Type the device's
+> six-digit code into the dashboard's approval card to finish. See
 > [docs/SATELLITE_HARDWARE.md](../docs/SATELLITE_HARDWARE.md). USB adoption
 > below remains the bench and manufacturing route.
 >

@@ -347,6 +347,29 @@ USERCONF_NAME = "userconf.txt"
 CONSOLE_JSON_PATH = "domovoi/console.json"
 
 
+# The approval code a satellite shows (and says) while it waits for a
+# human on the dashboard. Six digits rather than four for the same reason
+# the setup-AP key is ten characters rather than eight: the code is
+# compared by the server now, so it is a credential, and the cost of the
+# extra entropy is two more digits read off a screen once. One in a
+# million per guess, with the core's per-room attempt limit on top.
+APPROVAL_CODE_DIGITS = 6
+
+
+def generate_approval_code(rng=None) -> str:
+    """A fresh approval code for a satellite the core parks for approval.
+
+    Zero-padded to :data:`APPROVAL_CODE_DIGITS`, so a code that starts
+    with 0 is still six characters the customer types — the same shape the
+    setup portal generates on the device
+    (:func:`satellite.portal_transport.generate_approval_code`), because
+    the customer must not be able to tell which end minted it."""
+    import secrets
+
+    rng = rng or secrets
+    return "".join(rng.choice("0123456789") for _ in range(APPROVAL_CODE_DIGITS))
+
+
 def generate_console_credentials(username: str, rng=None) -> dict:
     """A per-card console login. Same shape and reasoning as the setup-AP
     credentials: unique per unit, printable on a label, drawn from an

@@ -53,6 +53,28 @@ PORTAL_PORT = 80
 BIND_HOST = "0.0.0.0"
 AP_CONNECTION = "domovoi-setup"
 
+# ── The approval code ────────────────────────────────────────────────────
+#
+# The customer reads this off the portal page (and hears it from the
+# device) and types it into the dashboard, where the core compares it
+# before it binds the room to this device. Six digits, because the code is
+# now a credential rather than a label: four gave one chance in ten
+# thousand per guess, six gives one in a million, and the server's attempt
+# limit does the rest. Digits only, and still short enough to read aloud
+# and type on a phone in one go.
+#
+# The core has the same constant (domovoi/satellite_media/overlay.py,
+# beside the setup-AP key it reasons about the same way) for the codes it
+# mints itself; this tree ships standalone on the Pi and cannot import it.
+APPROVAL_CODE_DIGITS = 6
+
+
+def generate_approval_code() -> str:
+    """A fresh six-digit approval code, zero-padded so every code is the
+    same length (a leading zero is a digit the customer must type, not one
+    the format may drop)."""
+    return f"{secrets.randbelow(10 ** APPROVAL_CODE_DIGITS):0{APPROVAL_CODE_DIGITS}d}"
+
 # The connectivity-check URLs each OS probes right after associating. We
 # answer all of them with a redirect, which is what makes the sign-in sheet
 # open by itself. Matched on path — wildcard DNS is what brings the
@@ -189,7 +211,7 @@ class PortalTransport:
         self.nonce = device_info["nonce"]
         # A fresh code per session, for the same reason as the nonce: an
         # approval shown in a previous attempt must not still be valid.
-        self.approval_code = f"{secrets.randbelow(10000):04d}"
+        self.approval_code = generate_approval_code()
         # Wait for the radio BEFORE surveying with it. This service can win
         # the race against the wireless device at boot, and a scan issued
         # then finds no device, returns nothing, and leaves the form saying
