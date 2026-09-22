@@ -51,6 +51,7 @@ from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend import plugin_host
 from web.backend import realtime as realtime_mod
+from web.backend.middleware import BodyLimitMiddleware
 from web.backend.realtime import (
     DEFAULT_POLL_INTERVAL_SEC,
     ListenTask,
@@ -231,6 +232,12 @@ app = FastAPI(
 # origins as a basic defense against malicious websites trying to hit
 # the user's LAN device when they happen to have a tab open elsewhere.
 # This is belt-and-suspenders next to binding only to LAN interfaces.
+
+# ─── Request-body budgets (WEB-4) ─────────────────────────────────────────
+# Outside CORS so an oversized upload is refused before anything reads
+# it. Only the routes named in middleware.BODY_LIMITS have a budget.
+app.add_middleware(BodyLimitMiddleware)
+
 
 app.add_middleware(
     CORSMiddleware,

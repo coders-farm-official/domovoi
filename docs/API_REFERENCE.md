@@ -489,7 +489,7 @@ file on the server. Mutations trigger the core's background clip re-render
 | `GET /api/voices` | — | The voice registry (engine, model ref, default flag). |
 | `GET /api/voices/{voice_id}/sample` | — | WAV sample — proxies the core's live TTS (`/v1/admin/voices/sample`); the web process has no TTS of its own. |
 | `POST /api/voices/edge` | `EdgeVoiceCreate` | Register a cloud (edge) voice. `201`. |
-| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. |
+| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. Both files are streamed to disk under a byte budget — the model at 200 MB, the config at 4 MB — and an upload over either one is answered `413` while it is still arriving, leaving nothing on disk. A request whose declared `Content-Length` is over 210 MB is refused before its body is read at all. |
 | `PATCH /api/voices/{voice_id}` | `VoicePatch` | Rename / set default. |
 | `DELETE /api/voices/{voice_id}` | — | Remove a voice. `204`. |
 
