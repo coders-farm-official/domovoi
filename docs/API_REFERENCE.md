@@ -85,6 +85,16 @@ with a reason.
 
 ### 1.3 Realtime WebSockets
 
+**Request bodies.** Both processes refuse a body over 1 MiB
+(`MAX_REQUEST_BYTES`) with `413` before reading it — a declared
+`Content-Length` is rejected outright, an undeclared one is cut off as it
+streams. The upload routes (music library zip, Piper voice, satellite
+media, documents, files, chat uploads, plugin install) carry their own much
+larger ceilings. `POST /v1/intent` additionally bounds `transcript`
+(4096 chars) and `room_id` (120), and a config push is bounded by key
+count (500) — all `422`. Both processes run uvicorn with
+`--limit-concurrency` (`MAX_CONCURRENT_CONNECTIONS`, default 128).
+
 **Host and Origin.** Both processes answer only to a `Host` that names this
 box on the LAN — a private/loopback IP, a single-label name, anything under
 `.local` / `.lan` / `.home.arpa` / `.internal`, or a name listed in

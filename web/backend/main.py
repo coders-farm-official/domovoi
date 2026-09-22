@@ -21,7 +21,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from domovoi import admin_auth
-from domovoi.transport_guard import LanHostMiddleware, lan_origin_regex
+from domovoi.config import settings
+from domovoi.transport_guard import (
+    BodyLimitMiddleware,
+    LanHostMiddleware,
+    lan_origin_regex,
+)
 from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
 from web.backend.api import calendar as calendar_api
@@ -233,6 +238,10 @@ app = FastAPI(
 # CORS never sees it — only the Host header does.
 
 app.add_middleware(LanHostMiddleware)
+# CORE-7: added after the host check so it wraps it — the cheapest
+# possible refusal for a body nobody is going to read anyway. Upload
+# routes keep their own, much larger ceilings (transport_guard).
+app.add_middleware(BodyLimitMiddleware)
 
 
 # ─── CORS ─────────────────────────────────────────────────────────────────
@@ -386,6 +395,8 @@ def main() -> None:
         # Multi-worker is OK here (no GPU pinning); start at 1 and
         # bump only if the dashboard's request count justifies it.
         workers=1,
+        # CORE-7: the same connection ceiling the core runs with.
+        limit_concurrency=settings.max_concurrent_connections,
     )
 
 

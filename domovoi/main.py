@@ -52,6 +52,7 @@ from domovoi.connectivity import ConnectivityProbe  # noqa: E402
 from domovoi.db.session import session_scope  # noqa: E402
 from domovoi.handlers import HANDLERS  # noqa: E402
 from domovoi.lifecycle import install_signal_handlers, signal_shutdown  # noqa: E402
+from domovoi.models import MAX_CONFIG_CHANGES  # noqa: E402
 from domovoi.models import (  # noqa: E402
     ConnectivityState,
     Context,
@@ -64,7 +65,11 @@ from domovoi.capabilities import CAPABILITIES  # noqa: E402
 from domovoi.now_playing import NOW_PLAYING  # noqa: E402
 from domovoi.router import route  # noqa: E402
 from domovoi.streaming import StreamSession  # noqa: E402
-from domovoi.transport_guard import LanHostMiddleware, origin_allowed  # noqa: E402
+from domovoi.transport_guard import (  # noqa: E402
+    BodyLimitMiddleware,
+    LanHostMiddleware,
+    origin_allowed,
+)
 from domovoi.workers.timer_watcher import TimerWatcher  # noqa: E402
 from domovoi.workers.playback_state_sweeper import PlaybackStateSweeper  # noqa: E402
 from domovoi.workers.media_plays_pruner import MediaPlaysPruner  # noqa: E402
@@ -567,6 +572,9 @@ app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
 # /v1/admin/hardware and the pre-setup config from the victim's browser as
 # same-origin. Answer only to names that mean this machine on this LAN.
 app.add_middleware(LanHostMiddleware)
+# CORE-7. Added last, so it wraps the host check: the cheapest possible
+# refusal for a body nobody is going to read anyway.
+app.add_middleware(BodyLimitMiddleware)
 
 # Plugin management API (install/confirm/enable/disable/uninstall/upgrade)
 # — every mutation depends on domovoi.auth.require_admin (structurally
@@ -1778,7 +1786,10 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
 
 
 class _AdminSatelliteConfigBody(BaseModel):
-    changes: dict[str, Any]
+    # CORE-7: a config push is a handful of keys, not a payload. The
+    # bound is on the NUMBER of keys (pydantic's max_length for a dict);
+    # the transport cap on the whole body is in domovoi/transport_guard.py.
+    changes: dict[str, Any] = Field(..., max_length=MAX_CONFIG_CHANGES)
 
 
 @app.post(
@@ -3314,7 +3325,10 @@ async def admin_get_config(
 
 
 class _AdminConfigUpdateBody(BaseModel):
-    changes: dict[str, Any]
+    # CORE-7: a config push is a handful of keys, not a payload. The
+    # bound is on the NUMBER of keys (pydantic's max_length for a dict);
+    # the transport cap on the whole body is in domovoi/transport_guard.py.
+    changes: dict[str, Any] = Field(..., max_length=MAX_CONFIG_CHANGES)
     # When set, `changes` targets THIS plugin's settings model (§4.6):
     # values validate through the plugin model, persist to
     # ~/.domovoi/plugins/<slug>.env, and run registered reapply hooks.
@@ -3894,6 +3908,12 @@ def main() -> None:
         # flaky wifi and broadcast/intercom writes vanished silently.
         ws_ping_interval=settings.ws_ping_interval_sec,
         ws_ping_timeout=settings.ws_ping_timeout_sec,
+        # CORE-7: over this many concurrent connections uvicorn answers
+        # 503 instead of accepting work it has no memory for. Every
+        # satellite WebSocket holds an utterance buffer and a frame
+        # buffer for as long as it is open, so "accept everything" is a
+        # promise this box cannot keep.
+        limit_concurrency=settings.max_concurrent_connections,
     )
 
 

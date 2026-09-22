@@ -15,10 +15,14 @@ enforced at:
   ``Origin`` is the only thing that says which page did. The LAN regex is
   the one the web process already enforces for CORS, so a page that
   cannot call the REST API cannot open a socket either.
+* :class:`BodyLimitMiddleware` (CORE-7) — how much body a route will read
+  at all. FastAPI buffers the whole body before validation runs, so
+  without a cap here one request decides how much memory the process
+  uses, however small the model it was going to be parsed into.
 
-Both are deliberately generous about what counts as "the LAN", because
-the alternative — a household locked out of its own server — is the
-failure mode people actually hit.
+The first two are deliberately generous about what counts as "the LAN",
+because the alternative — a household locked out of its own server — is
+the failure mode people actually hit.
 """
 
 from __future__ import annotations
@@ -196,3 +200,136 @@ class LanHostMiddleware:
             ],
         })
         await send({"type": "http.response.body", "body": body})
+
+
+# ─── Request-body limits (CORE-7) ─────────────────────────────────────────
+
+# A JSON request to this household is a sentence someone said, a room
+# name, a handful of config keys. One mebibyte is already generous for
+# all of it, and the point of a cap is that the body is refused rather
+# than buffered: `await request.body()` reads the whole thing into memory
+# before validation ever runs, so without this a single request decides
+# how much RAM the process uses.
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+
+# The routes that legitimately carry a big body, longest-prefix first.
+# Each one already enforces its own domain limit further in (a member
+# cap on a zip, a byte cap on a model); these are the transport-level
+# ceilings that stop a body nobody asked for from being read at all.
+UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
+    # A music library zip, and the file manager's bulk import.
+    ("/api/music/library/upload", 8 * 1024 * 1024 * 1024),
+    ("/api/files/upload", 8 * 1024 * 1024 * 1024),
+    ("/api/files/import", 8 * 1024 * 1024 * 1024),
+    # A Piper voice: the .onnx plus its .onnx.json (voices.py caps the
+    # model itself at 200 MB).
+    ("/api/voices/piper", 512 * 1024 * 1024),
+    # Satellite media prepare/refresh — a media payload for a Pi.
+    ("/api/satellites/media", 2 * 1024 * 1024 * 1024),
+    # Documents and the chat surface.
+    ("/api/documents/upload", 512 * 1024 * 1024),
+    ("/api/documents/drawings/write", 64 * 1024 * 1024),
+    ("/api/documents/text", 64 * 1024 * 1024),
+    ("/api/documents/sheet", 64 * 1024 * 1024),
+    ("/api/chat/uploads", 64 * 1024 * 1024),
+    # A plugin zip, on both the core route and the web proxy in front of it.
+    ("/v1/plugins/install", 256 * 1024 * 1024),
+    ("/api/plugins/install", 256 * 1024 * 1024),
+)
+
+
+def default_body_limit() -> int:
+    try:
+        return max(1024, int(getattr(settings, "max_request_bytes", 0) or 0)
+                   or DEFAULT_MAX_BODY_BYTES)
+    except (TypeError, ValueError):  # pragma: no cover — malformed .env
+        return DEFAULT_MAX_BODY_BYTES
+
+
+def body_limit_for(path: str) -> int:
+    """The largest body ``path`` may carry, in bytes."""
+    best: int | None = None
+    best_len = -1
+    for prefix, limit in UPLOAD_LIMITS:
+        if (path == prefix or path.startswith(prefix + "/")) and len(prefix) > best_len:
+            best, best_len = limit, len(prefix)
+    return best if best is not None else default_body_limit()
+
+
+async def _send_413(send: Any, limit: int) -> None:
+    body = f"request body exceeds the {limit}-byte limit for this route".encode()
+    await send({
+        "type": "http.response.start",
+        "status": 413,
+        "headers": [
+            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+class BodyLimitMiddleware:
+    """Refuse a request body over the route's limit with ``413``.
+
+    Two paths, because a client can decline to say how much it is about
+    to send:
+
+    * a ``Content-Length`` over the limit is refused BEFORE the
+      application is called, so the body is never read;
+    * otherwise the body is counted as it streams and the request is cut
+      off the moment it crosses the limit. Everything the application
+      sends afterwards is dropped, so a handler that was mid-response
+      cannot emit a second one.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        limit = body_limit_for(scope.get("path", "") or "")
+        declared = None
+        for key, value in scope.get("headers") or ():
+            if key == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None
+                break
+
+        if declared is not None and declared > limit:
+            log.warning(
+                "refused %s %s: Content-Length %d over the %d-byte limit",
+                scope.get("method"), scope.get("path"), declared, limit,
+            )
+            await _send_413(send, limit)
+            return
+
+        read = 0
+        responded = False
+
+        async def limited_receive() -> dict:
+            nonlocal read, responded
+            message = await receive()
+            if message.get("type") == "http.request":
+                read += len(message.get("body") or b"")
+                if read > limit:
+                    log.warning(
+                        "cut off %s %s: body passed the %d-byte limit",
+                        scope.get("method"), scope.get("path"), limit,
+                    )
+                    responded = True
+                    await _send_413(send, limit)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: dict) -> None:
+            if responded:
+                return
+            await send(message)
+
+        await self.app(scope, limited_receive, guarded_send)

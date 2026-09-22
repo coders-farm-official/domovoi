@@ -720,6 +720,18 @@ class StreamSession:
                 "ws %s connected (replacing prior session — likely a reconnect)",
                 self.room_id,
             )
+            # CORE-7: and CLOSE the one we replaced. Dropping it from the
+            # registry only stopped it receiving broadcasts — the socket
+            # itself stayed open, holding its utterance buffer and
+            # uvicorn's frame buffer, and only a TCP timeout or the ping
+            # watchdog would ever reclaim it. Reconnect in a bad-wifi loop
+            # and those accumulate. 1001 "going away": the server is
+            # dropping THIS session, and the Pi's normal backoff reconnect
+            # is the right response. Best-effort — the peer is usually
+            # already gone, which is why it reconnected at all. A genuine
+            # duplicate-room misconfig now flaps visibly instead of
+            # leaving a silent session that receives nothing forever.
+            await existing._close_quietly(1001)
         else:
             log.info("ws %s connected", self.room_id)
         await self._safe_send_text({

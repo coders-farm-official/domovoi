@@ -128,6 +128,30 @@ so a page that cannot call the REST API cannot open a socket either. An
 every command-line client send none, and only a browser is bound by the
 rule this enforces.
 
+### How much a request may weigh
+
+Both processes refuse a request body over 1 MiB with `413`, before it is
+read. FastAPI buffers the whole body into memory before validation runs,
+so without a cap one request decides how much memory the process uses,
+however small the model it was going to be parsed into. A declared
+`Content-Length` over the limit is refused without reading anything; a
+body sent without one is counted as it streams and cut off the moment it
+crosses. The upload routes — a music zip, a Piper voice, satellite media,
+documents and files, a plugin zip — keep their own much larger ceilings
+(`domovoi/transport_guard.py`), on top of the domain limits they already
+enforced. `MAX_REQUEST_BYTES` moves the default.
+
+Two smaller bounds go with it. `Intent.transcript` and `room_id` are
+length-bounded, so a body that is not a spoken turn is refused by the
+model instead of being carried into the router, the LLM prompt and
+`intents_log`; a config push is bounded by key count. And both processes
+run uvicorn with `--limit-concurrency`
+(`MAX_CONCURRENT_CONNECTIONS`, default 128): over it uvicorn answers 503
+rather than accepting work it has no memory for, because every satellite
+WebSocket holds an utterance buffer and a frame buffer for as long as it
+is open. Relatedly, a second connect for a room now **closes** the socket
+it replaced (1001) instead of leaving it open and unread.
+
 ### Daily tier (LAN-trust)
 
 The reads that tell a client what this Domovoi is and let a satellite sync

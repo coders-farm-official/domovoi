@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from domovoi.models import MAX_CONFIG_CHANGES
+
 
 # ─── Music ────────────────────────────────────────────────────────────────
 
@@ -588,4 +590,7 @@ class ConfigResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     """A batch of domovoi config edits from the settings gear, keyed by
     Settings field name. Validated/coerced server-side by the Domovoi core."""
-    changes: dict[str, Any]
+    # CORE-7: a config push is a handful of keys, not a payload. The
+    # bound is on the NUMBER of keys (pydantic's max_length for a dict);
+    # the transport cap on the whole body is in domovoi/transport_guard.py.
+    changes: dict[str, Any] = Field(..., max_length=MAX_CONFIG_CHANGES)

@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     # listed here is also accepted as a browser Origin.
     trusted_hosts: str = ""
 
+    # The largest request body either process will READ on a route that
+    # is not an upload (uploads have their own, much larger ceilings in
+    # domovoi/transport_guard.py). A body over this is refused with 413
+    # before it is buffered — FastAPI reads the whole thing into memory
+    # before validation, so without a cap one request decides how much
+    # memory the process uses. 1 MiB is already generous for a spoken
+    # sentence, a room name and a handful of config keys.
+    max_request_bytes: int = 1024 * 1024
+    # Ceiling on concurrent connections per process, passed to uvicorn as
+    # --limit-concurrency. Over it, uvicorn answers 503 instead of
+    # accepting work it has no memory for: every satellite WebSocket
+    # holds an utterance buffer and a frame buffer for as long as it is
+    # open. Sized for a household, not a crowd.
+    max_concurrent_connections: int = 128
+
     # Host port 6432, not 5432 — the compose file publishes the Domovoi
     # Postgres on 6432 so it can coexist with any other Postgres already
     # bound to the default port on the same machine.
