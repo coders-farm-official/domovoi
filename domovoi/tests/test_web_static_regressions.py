@@ -48,3 +48,31 @@ def test_topbar_has_no_inert_search_affordance():
 
 def test_cmdk_styles_went_with_the_control():
     assert ".cmdk" not in _src("styles.css")
+
+
+# ── F-008 · SH-12 ─────────────────────────────────────────────────────
+# Renaming this device PATCHed /api/devices/{id} and updated only the text
+# box: the Known-devices table and both access pickers each held their own
+# useApiList('/api/devices') that nothing refreshed (no devices channel on
+# the state bus). One list, owned by the tab, refreshed after the rename.
+
+def test_devices_tab_shares_one_devices_list():
+    src = _src("settings.jsx")
+    calls = [m.start() for m in re.finditer(r"useApiList\('/api/devices'\)", src)]
+    assert len(calls) == 1, f"expected one /api/devices list, found {len(calls)}"
+    panel = _component(src, "DevicesPanel")
+    assert "useApiList('/api/devices')" in panel
+    for card in ("QueueAccessCard", "FilesAccessCard"):
+        body = _component(src, card)
+        assert "useApiList('/api/devices')" not in body, f"{card} fetches its own list"
+        assert "deviceList" in body, f"{card} does not read the shared list"
+
+
+def test_rename_refreshes_the_shared_devices_list():
+    src = _src("settings.jsx")
+    card = _component(src, "ThisDeviceCard")
+    rename = card.index("await DeviceIdentity.rename(")
+    catch = card.index("} catch (e) {", rename)
+    assert "onRenamed()" in card[rename:catch], "rename success path does not refresh"
+    panel = _component(src, "DevicesPanel")
+    assert re.search(r"<ThisDeviceCard [^>]*onRenamed=\{deviceList\.refresh\}", panel)

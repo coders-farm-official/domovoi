@@ -1303,8 +1303,13 @@ const AboutPanel = () => (
  * from the user agent on first contact and editable here; renaming relabels
  * this device's existing queue entries (the queue read prefers the live
  * name), and can't be used to dodge a block, which matches the id too.
+ *
+ * `onRenamed` is DevicesPanel's refresh of the shared /api/devices list:
+ * the Known-devices table and both access pickers read this device's name
+ * from it, and nothing pushes the change (there is no devices channel on
+ * the state bus), so the PATCH has to be followed by a re-fetch (F-008).
  */
-const ThisDeviceCard = ({ fire }) => {
+const ThisDeviceCard = ({ fire, onRenamed }) => {
   const deviceId = DeviceIdentity.id();
   const [draft, setDraft] = React.useState('');
   const [saving, setSaving] = React.useState(false);
@@ -1329,6 +1334,7 @@ const ThisDeviceCard = ({ fire }) => {
       const row = await DeviceIdentity.rename(name);
       setServerName(row?.name || name);
       fire(`this device is now “${row?.name || name}”`);
+      if (onRenamed) onRenamed();
     } catch (e) {
       fire(`rename failed: ${apiErrorText(e)}`);
     } finally { setSaving(false); }
@@ -1359,9 +1365,8 @@ const ThisDeviceCard = ({ fire }) => {
   );
 };
 
-const QueueAccessCard = ({ fire }) => {
-  const { items: devices, loading: devicesLoading, refresh: refreshDevices } =
-    useApiList('/api/devices');
+const QueueAccessCard = ({ fire, deviceList }) => {
+  const { items: devices, loading: devicesLoading, refresh: refreshDevices } = deviceList;
   const { items: blocks, loading: blocksLoading, refresh: refreshBlocks } =
     useApiList('/api/music/queue-blocks');
   const { items: nowPlaying } = useApiList('/api/music/now-playing',
@@ -1539,8 +1544,8 @@ const QueueAccessCard = ({ fire }) => {
  * upload, move, import; only delete needs admin), so this is the control
  * that takes WRITES away from one device without making every phone sign
  * in. Same device model and the same honesty note as the queue blocks. */
-const FilesAccessCard = ({ fire }) => {
-  const { items: devices, loading: devicesLoading } = useApiList('/api/devices');
+const FilesAccessCard = ({ fire, deviceList }) => {
+  const { items: devices, loading: devicesLoading } = deviceList;
   const { items: blocks, loading: blocksLoading, refresh: refreshBlocks } =
     useApiList('/api/files/device-blocks');
 
@@ -1658,11 +1663,16 @@ const FilesAccessCard = ({ fire }) => {
 
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
+  // ONE devices list for the whole tab. Each card used to fetch its own,
+  // so renaming this device updated the text box and nothing else until
+  // the table's refresh button was pressed (F-008): the write landed, the
+  // tab lied about it. Renames now refresh the list every card reads.
+  const deviceList = useApiList('/api/devices');
   return (
     <>
-      <ThisDeviceCard fire={fire}/>
-      <QueueAccessCard fire={fire}/>
-      <FilesAccessCard fire={fire}/>
+      <ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/>
+      <QueueAccessCard fire={fire} deviceList={deviceList}/>
+      <FilesAccessCard fire={fire} deviceList={deviceList}/>
       {toastNode}
     </>
   );
