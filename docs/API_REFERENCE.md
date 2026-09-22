@@ -733,7 +733,14 @@ for how to declare them.
 
 * Routers registered via the plugin's web entry point (`register_web(ctx)`,
   `ctx.add_router(...)`) mount behind a slug-enable gate (`404` when
-  disabled).
+  disabled) **and the same default-deny auth gate as the core**: every
+  non-GET route requires an admin session (`401` with no credential, `403`
+  when only the dashboard cookie is present — mutations are Bearer-only)
+  unless its route function carries `@domovoi.webkit.open_endpoint`. GETs
+  are open unless the plugin adds `Depends(domovoi.webkit.admin_required)`.
+  The dashboard attaches its Bearer to every plugin call and opens the
+  sign-in modal on a `401`, so a signed-in operator never notices the gate.
+  The pre-setup grace applies here too.
 * Static assets serve from `GET /plugins/<slug>/static/<path>` (containment-
   checked). Pages, nav entries, and realtime channels are announced through
   `GET /api/plugins/manifest` so the frontend needs no rebuild.
@@ -755,22 +762,26 @@ default — none opt out):
 | `POST /v1/plugins/radio/stations/{station_id}/resolve-simulcast` | Admin (default mutation gate) | Find an online simulcast stream for an FM station. |
 | `GET /v1/plugins/radio/state` | Open | Live tuner state: `{sdr_available, sdr_frequency_mhz, fcc_import}`. (Named `/state` because the core reserves `/status`.) |
 
-Web router → mounted at `/api/plugins/radio` (slug-enable gate; all open —
-the dashboard's daily-use radio pages):
+Web router → mounted at `/api/plugins/radio` (slug-enable gate; GETs open
+for the dashboard's daily-use radio pages, every mutation behind the
+default admin gate — none opt out):
 
-| Method & path | Request | Purpose |
-|---|---|---|
-| `GET /api/plugins/radio/search` | `?q=&country_code=&tag=&language=&limit=30&offset=0` | Station-directory search; hits already saved locally carry their row id + favorited flag. |
-| `GET /api/plugins/radio/stations` | `?favorited_only=&source=online\|fm&q=&frequency_mhz=&limit=200&offset=0` | Saved stations. |
-| `GET /api/plugins/radio/stations/{station_id}` | — | One station. |
-| `POST /api/plugins/radio/stations` | station body | Save a station. `201`. |
-| `PATCH /api/plugins/radio/stations/{station_id}` | patch body | Edit / favorite. |
-| `DELETE /api/plugins/radio/stations/{station_id}` | — | Delete. `204`. |
-| `POST /api/plugins/radio/stations/{station_id}/resolve-simulcast` | — | Simulcast resolution from the dashboard. |
-| `POST /api/plugins/radio/fcc-import` / `GET .../fcc-import` | — | Start / poll the FCC import. |
-| `GET /api/plugins/radio/detections` | filters | Passive song-detection history. |
-| `GET /api/plugins/radio/badge` | — | `{favorites: N}` — the sidebar badge count. |
-| `GET /api/plugins/radio/stations/{station_id}/stream` | — | Proxy a station's audio through the web backend for the browser player (dodges CORS/mixed-content). FM/SDR stations return `409` — those play only through a satellite room. |
+| Method & path | Auth | Request | Purpose |
+|---|---|---|---|
+| `GET /api/plugins/radio/search` | Open | `?q=&country_code=&tag=&language=&limit=30&offset=0` | Station-directory search; hits already saved locally carry their row id + favorited flag. |
+| `GET /api/plugins/radio/stations` | Open | `?favorited_only=&source=online\|fm&q=&frequency_mhz=&limit=200&offset=0` | Saved stations. |
+| `GET /api/plugins/radio/stations/{station_id}` | Open | — | One station. |
+| `GET /api/plugins/radio/recent` | Open | — | The ten most recently played stations. |
+| `POST /api/plugins/radio/play` | Admin (default mutation gate) | `{source, external_id?, station_id?, ...}` | Stamp a station as played (resolve-or-create, not a favorite) and return the row to stream. |
+| `POST /api/plugins/radio/stations` | Admin (default mutation gate) | station body | Save a station. `201`. |
+| `PATCH /api/plugins/radio/stations/{station_id}` | Admin (default mutation gate) | patch body | Edit / favorite. |
+| `DELETE /api/plugins/radio/stations/{station_id}` | Admin (default mutation gate) | — | Delete. `204`. |
+| `POST /api/plugins/radio/stations/{station_id}/resolve-simulcast` | Admin (default mutation gate) | — | Simulcast resolution from the dashboard; the caller's Bearer is forwarded to the core's own gate. |
+| `POST /api/plugins/radio/fcc-import` | Admin (default mutation gate) | `?state=` | Start the FCC import (Bearer forwarded to the core). |
+| `GET /api/plugins/radio/fcc-import` | Open | — | Poll the FCC import. |
+| `GET /api/plugins/radio/detections` | Open | filters | Passive song-detection history. |
+| `GET /api/plugins/radio/badge` | Open | — | `{favorites: N}` — the sidebar badge count. |
+| `GET /api/plugins/radio/stations/{station_id}/stream` | Open | — | Proxy a station's audio through the web backend for the browser player (dodges CORS/mixed-content). FM/SDR stations return `409` — those play only through a satellite room. |
 
 ---
 

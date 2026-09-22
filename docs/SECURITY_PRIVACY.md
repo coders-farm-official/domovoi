@@ -180,6 +180,14 @@ What the install flow *does* do (verified in
   schema and runs its own migrations there; plugins never run DDL against
   core tables. This is an architectural boundary against *accidents*, not
   against malice — in-process code could ignore it.
+- **Plugin HTTP routes are admin-gated by default in both processes.** A
+  plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
+  dashboard (`/api/plugins/<slug>/…`) sit behind the same rule: every
+  non-GET route requires an admin session (Bearer-only — the dashboard
+  cookie alone answers `403`, no credential answers `401`) unless the
+  plugin author decorated that route `@open_endpoint`, and every such
+  opt-out is listed on the trust screen. A plugin cannot ship a mutation
+  the LAN can call unnoticed. The bundled radio plugin opts nothing out.
 
 And the crucial caveat: **the manifest's permission flags and warnings are
 honesty devices, not enforcement.** A flag like `network = true` is the

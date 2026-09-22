@@ -179,6 +179,8 @@ def test_fcc_import_proxies_to_core(web_client) -> None:
     (call,) = core_proxy.calls
     assert call["method"] == "POST_ADMIN"
     assert call["path"] == "/v1/plugins/radio/fcc-import"
+    # The caller's admin credential rides along to the core's gate.
+    assert call["forwarded_request"] is True
 
 
 def test_resolve_simulcast_proxies_to_core(web_client) -> None:
@@ -193,6 +195,7 @@ def test_resolve_simulcast_proxies_to_core(web_client) -> None:
     assert out["resolved"] is True
     (call,) = core_proxy.calls
     assert call["method"] == "POST_ADMIN"
+    assert call["forwarded_request"] is True
 
 
 # ─── Browser stream proxy ────────────────────────────────────────────────

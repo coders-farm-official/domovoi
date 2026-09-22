@@ -1022,20 +1022,57 @@ GETs are open by default (add `Depends(admin_required)` from
 core already serves `GET /v1/plugins/{slug}/status` and it would shadow
 yours (the radio plugin uses `/state` for exactly this reason).
 
+`open_endpoint` is applied to the route **function** — put it directly
+above the `def`, under the router decorator. The install preview finds every
+opted-out route by scanning the staged package's source for the decorator
+(`open_endpoints` in the preview; the trust screen lists them as the routes
+anyone on the network can call), so an opt-out is always visible to the
+admin before the plugin lands.
+
 ### 4.16 The web entry point — `register_web(ctx)`
 
 Runs in the separate dashboard process. Your `web.py` receives a
 `WebPluginContext`:
 
-* `ctx.add_router(router)` — mounts at `/api/plugins/<slug>/...` (404-gated
-  while disabled).
+* `ctx.add_router(router)` — mounts at `/api/plugins/<slug>/...` behind the
+  **same gate as the core**: 404 while disabled, and every non-GET route
+  requires an admin session unless its function is decorated
+  `@open_endpoint`. The decorator and the GET-gating dependency come from
+  the one module a web entry may import:
+
+  ```python
+  from fastapi import APIRouter, Depends
+  from domovoi.webkit import admin_required, open_endpoint
+
+  router = APIRouter()
+
+  @router.post("/stations")            # admin session required (default)
+  async def create_station(...): ...
+
+  @router.post("/tune")
+  @open_endpoint                       # daily-use; listed on the install preview
+  async def tune(...): ...
+
+  @router.get("/export", dependencies=[Depends(admin_required)])
+  async def export(...): ...           # a GET that wants gating
+  ```
+
+  Without a credential a gated mutation answers `401`; with only the
+  dashboard cookie it answers `403` (mutations are Bearer-only, so a
+  cross-site POST carries nothing that authorizes it). The dashboard's
+  `apiPost`/`apiPatch`/`apiDelete` helpers attach the operator's Bearer and
+  open the sign-in modal on a `401`, so a page built on them needs nothing
+  extra. Before first-run setup the gate allows everything, exactly like
+  the core.
 * `ctx.db_session_scope()` — async context manager yielding a session with
   `search_path` preset to your schema.
 * `ctx.core` — a typed `CoreClient` for calling the core service (`:6370`):
   `await ctx.core.get(path)`, `await ctx.core.post(path, json=...)`,
   `await ctx.core.post_admin(path, request=incoming_request)` (forwards the
   incoming request's admin credential — the web process holds no ambient
-  admin credential). Relative paths resolve to `/v1/plugins/<slug>/...`.
+  admin credential, so a proxy to one of your gated core mutations **must**
+  take `request: Request` and pass it along, or the core answers `401`).
+  Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory.
 * `ctx.log` — the `webplugin.<slug>` logger.
 
@@ -1220,8 +1257,13 @@ favorites-pagination total, so there's no second count query), and a browser
 stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
 (FCC import, simulcast resolve) are **proxied to the plugin's own core
-endpoints** through the context's `CoreClient` — the web process never
-imports core code. Writes fire commit-coupled NOTIFYs on the
+endpoints** through the context's `CoreClient`, forwarding the caller's
+request so the core's admin gate sees the same Bearer — the web process
+never imports core code. None of the router's mutations opt out of the
+web gate: saving, editing, deleting and playing stations and the two
+proxies all require an admin session (the dashboard signs the operator in
+on the first `401`), while every GET stays open. Writes fire
+commit-coupled NOTIFYs on the
 `plugin_radio_stations_changed` channel; `SNAPSHOTS` exposes the two
 snapshot functions the manifest names. The JSX page registers itself only as
 `window.DomovoiPlugins.radio.pages.StationsPage` and builds its player queue
@@ -1271,7 +1313,10 @@ suite runs as part of the repo-wide `pytest` (see
 AST tripwire catches the honest mistakes; the web process's `sys.meta_path`
 import guard blocks the rest at runtime, however the import is spelled.
 Anything needing live core state gets proxied over HTTP to your own core
-endpoints.
+endpoints. `domovoi.webkit` carries everything a web router needs for
+auth — `open_endpoint` and `admin_required` are the same objects the core
+hands out from `domovoi.sdk` / `domovoi.plugin_http`, so a mutation is
+gated by one rule wherever it is mounted.
 
 Note this guard is an **architectural invariant, not a security boundary.**
 Plugin code is unsandboxed (see [Security & Privacy](SECURITY_PRIVACY.md)) —

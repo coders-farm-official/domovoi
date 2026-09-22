@@ -9,8 +9,12 @@ APIRouter at ``/v1/plugins/<slug>/...`` behind two gate dependencies:
 * **Auth gate (default DENY for mutations)** — every non-GET route
   requires an admin session unless the endpoint author opted OUT with
   :func:`open_endpoint` (for genuinely daily-use actions; every opt-out
-  is listed on the install preview). GETs are open unless the plugin
-  adds its own ``Depends(admin_required)``.
+  is listed on the install preview, found by an AST scan of the staged
+  package). GETs are open unless the plugin adds its own
+  ``Depends(admin_required)``. The marker, the predicate and the gate
+  dependency live in :mod:`domovoi.webkit` — the web dashboard process
+  mounts plugin routers behind the very same rule (``web.backend.
+  plugin_host``), so one decorator means one thing in both processes.
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -23,34 +27,26 @@ posture — so a fresh clone works before the setup flow runs.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_admin_request
 from domovoi.db.session import session_scope
+from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
+    _OPEN_MARKER,
+    admin_required,
+    is_open_endpoint,
+    open_endpoint,
+)
 
 log = logging.getLogger(__name__)
-
-_OPEN_MARKER = "_domovoi_open_endpoint"
 
 # slug → enabled? Populated by mount_plugin_router / the plugin runtime.
 _plugin_enabled: dict[str, bool] = {}
 # slug → mounted router (reused across disable/enable).
 _mounted: dict[str, Any] = {}
-
-
-def open_endpoint(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Opt a plugin route OUT of the default admin gate (§4.11). For
-    genuinely daily-use mutations (e.g. a tune/stream action); shown on
-    the install preview as part of the plugin's open surface."""
-    setattr(fn, _OPEN_MARKER, True)
-    return fn
-
-
-def is_open_endpoint(fn: Callable[..., Any]) -> bool:
-    return bool(getattr(fn, _OPEN_MARKER, False))
 
 
 def set_plugin_enabled(slug: str, enabled: bool) -> None:
@@ -85,27 +81,6 @@ async def _admin_ok(request: Request) -> bool:
     module docstring); afterwards requires a live Bearer session
     (sha256 lookup + sliding expiry via :mod:`domovoi.admin_auth`)."""
     return await check_admin_request(request) in ("ok", "pre-setup")
-
-
-async def admin_required(request: Request) -> None:
-    """Shared admin-gate dependency (usable by plugin GETs that want
-    gating: ``Depends(admin_required)``). Mutations behind this gate are
-    Bearer-only — a cookie-only request is refused with 403 so the
-    dashboard cookie can never authorize a cross-site POST (§7.3)."""
-    result = await check_admin_request(request)
-    if result in ("ok", "pre-setup"):
-        return
-    if result == "cookie-only":
-        if request.method in ("GET", "HEAD"):
-            return  # cookies may render GET state (§7.3)
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "mutations require Authorization: Bearer — the dashboard "
-                "cookie only renders GET state"
-            ),
-        )
-    raise HTTPException(status_code=401, detail="admin session required")
 
 
 def _make_gate(slug: str):
