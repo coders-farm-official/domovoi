@@ -35,6 +35,8 @@ def _isolate_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(
         server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending-server.json"
     )
+    # The "this core has none" latch is per process; each test starts fresh.
+    monkeypatch.setattr(client, "_SERVER_HAS_NO_IDENTITY", False)
 
 
 def _cfg(url="auto", fingerprint=""):
@@ -180,6 +182,50 @@ def test_an_older_core_with_no_identity_is_still_talked_to():
         cfg, opener=_health_opener(seed, public, identity=False)
     ) is True
     assert server_identity.pinned_fingerprint() == (None, "none")
+
+
+def test_an_older_core_is_only_asked_once_a_boot():
+    """Every reconnect attempt during an outage would otherwise spend a
+    round trip in front of the socket, asking a core that will not have
+    grown an identity since the last attempt."""
+    seed, public, _fingerprint = _server()
+    cfg = _cfg("ws://192.168.0.117:6370")
+    client._verify_server_identity(
+        cfg, opener=_health_opener(seed, public, identity=False)
+    )
+
+    def must_not_ask(*a, **k):
+        raise AssertionError("asked the same core again")
+
+    assert client._verify_server_identity(cfg, opener=must_not_ask) is True
+
+
+def test_a_pinned_device_keeps_asking_an_unreachable_server():
+    """The latch is only for a core that HAS no identity. One that is
+    merely down has to be re-checked, because the next attempt may reach
+    the real server."""
+    _seed, _public, ours = _server()
+    cfg = _cfg("ws://192.168.0.117:6370", ours)
+    calls = []
+
+    def down(url, timeout=None):
+        calls.append(url)
+        raise OSError("connection refused")
+
+    assert client._verify_server_identity(cfg, opener=down) is False
+    assert client._verify_server_identity(cfg, opener=down) is False
+    assert len(calls) == 2
+
+
+def test_an_unreachable_server_does_not_block_an_unpinned_device():
+    """Nothing to compare against, so the socket attempt below is what
+    reports the outage — with its own message and its own backoff."""
+    cfg = _cfg("ws://192.168.0.117:6370")
+
+    def down(url, timeout=None):
+        raise OSError("connection refused")
+
+    assert client._verify_server_identity(cfg, opener=down) is True
 
 
 def test_the_identity_is_proved_before_the_socket_is_opened():

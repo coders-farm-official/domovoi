@@ -5036,6 +5036,11 @@ def _remember_approval_code(offered: object) -> str | None:
     return code
 
 
+# Set once per process when an unpinned device meets a core that has no
+# identity at all — see _verify_server_identity.
+_SERVER_HAS_NO_IDENTITY = False
+
+
 def _pinned_fingerprint(cfg: "Config") -> tuple[str | None, str]:
     """The server fingerprint this device holds its core to, and where it
     came from. Empty on a device that predates server identities and has
@@ -5057,14 +5062,32 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
     identity it meets and returns True, so a device prepared before
     identities keeps connecting exactly as it did. From then on the
     recorded fingerprint is the pin, and a different one is refused."""
+    global _SERVER_HAS_NO_IDENTITY
     from satellite import server_identity, sound_sync
 
     expected, source = _pinned_fingerprint(cfg)
+    if not expected and _SERVER_HAS_NO_IDENTITY:
+        # Asked once, this boot, and the core had none. It will not grow
+        # one between reconnects, and a round trip in front of every
+        # connect attempt is exactly what an outage does not need.
+        return True
     http_base = sound_sync.http_base_from_ws(cfg.domovoi_url)
     try:
         actual = server_identity.verify_server(
             http_base, expected_fingerprint=expected, opener=opener
         )
+    except server_identity.IdentityUnavailable as e:
+        if expected:
+            log.error(
+                "refusing to connect to %s: %s (pinned from %s)",
+                http_base, e, source,
+            )
+            return False
+        # An older core. Refusing here would strand every device in the
+        # field the moment this code lands.
+        log.info("server identity not available at %s (%s)", http_base, e)
+        _SERVER_HAS_NO_IDENTITY = True
+        return True
     except server_identity.IdentityError as e:
         if expected:
             log.error(
@@ -5072,10 +5095,10 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
                 http_base, e, source,
             )
             return False
-        # Nothing pinned and nothing to check against: an older core has
-        # no identity to offer, and refusing here would strand every
-        # device in the field the moment this code lands.
-        log.info("server identity not available at %s (%s)", http_base, e)
+        # Unreachable, or an answer we could not make sense of. Nothing to
+        # compare against either way, so this is the server's problem to
+        # have and the WS attempt below will report it properly.
+        log.info("could not check the server identity at %s (%s)", http_base, e)
         return True
     if not expected:
         server_identity.record_fingerprint(actual)

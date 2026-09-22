@@ -205,6 +205,17 @@ class IdentityError(Exception):
     """A server that could not prove it is ours."""
 
 
+class IdentityUnavailable(IdentityError):
+    """The server answered, and has no identity to offer at all.
+
+    Told apart from every other refusal because it is the one that says
+    something permanent about the host rather than about this attempt: an
+    older core will not grow an identity between now and the next
+    reconnect, so a device with nothing pinned can stop asking instead of
+    spending a round trip before every connect for the rest of the
+    outage."""
+
+
 def verify_health_document(
     doc: Any, *, challenge: str, expected_fingerprint: str | None
 ) -> str:
@@ -219,9 +230,9 @@ def verify_health_document(
         raise IdentityError("the server's answer was not a document")
     identity = doc.get("identity")
     if not isinstance(identity, dict):
-        raise IdentityError("the server offered no identity to check")
+        raise IdentityUnavailable("the server offered no identity to check")
     if identity.get("algorithm") != ALGORITHM:
-        raise IdentityError(
+        raise IdentityUnavailable(
             f"unsupported identity algorithm {identity.get('algorithm')!r}"
         )
     public = unb64(identity.get("public_key"))

@@ -115,12 +115,26 @@ def test_a_server_that_offers_no_signature_is_refused():
 
 
 def test_a_server_that_offers_no_identity_at_all_is_refused_when_pinned():
+    """Told apart from the other refusals, because "this host has none" is
+    permanent in a way that "unreachable" is not, and an unpinned device
+    uses that to stop asking."""
     seed, public, fingerprint = _server()
-    with pytest.raises(server_identity.IdentityError):
+    with pytest.raises(server_identity.IdentityUnavailable):
         server_identity.verify_server(
             "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
             opener=_health_opener(seed, public, identity=False),
         )
+
+
+def test_an_unreachable_host_is_not_reported_as_having_no_identity():
+    def boom(url, timeout=None):
+        raise OSError("connection refused")
+    with pytest.raises(server_identity.IdentityError) as e:
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint="SHA256:ours",
+            opener=boom,
+        )
+    assert not isinstance(e.value, server_identity.IdentityUnavailable)
 
 
 def test_an_unreachable_host_is_reported_as_unprovable_not_as_a_crash():
