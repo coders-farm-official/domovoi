@@ -58,6 +58,7 @@ from web.backend.schemas import (
     RecentlyPlayed,
     RoomLabelRequest,
     Satellite,
+    SatelliteApproveRequest,
     SatelliteDisplay,
     SatellitePairing,
     Session,
@@ -230,10 +231,18 @@ def _server_tz() -> str | None:
         return None
 
 
-@router.get("/approvals")
+@router.get(
+    "/approvals",
+    # CORE-3 — an admin READ at this hop too: the list names the rooms a
+    # household is about to bind devices to. The core gate would catch an
+    # anonymous caller anyway (the credential is forwarded); this one says
+    # so without a round trip.
+    dependencies=[Depends(require_admin_read)],
+)
 async def list_approvals(request: Request):
     """Satellites waiting on a human. Declared BEFORE /{room_id} so the
-    path parameter can't shadow it."""
+    path parameter can't shadow it. Codes are not part of the response:
+    the operator reads the code off the device."""
     return bridge_response(
         *await get_admin(
             "/v1/admin/satellites/approvals",
@@ -246,13 +255,17 @@ async def list_approvals(request: Request):
     "/approvals/{room_id}/approve",
     dependencies=[Depends(require_admin_mutation)],
 )
-async def approve_satellite(room_id: str, request: Request):
+async def approve_satellite(
+    room_id: str, request: Request, body: SatelliteApproveRequest
+):
     """Approve a pending satellite — writes the pairing that binds this room
-    to this device. Admin-gated at both hops."""
+    to this device. Admin-gated at both hops, and the core compares the
+    code the operator typed before it binds anything (400 without one, 403
+    on a mismatch, 429 once a room has been tried too often)."""
     return bridge_response(
         *await post_admin(
             f"/v1/admin/satellites/approvals/{room_id}/approve",
-            {},
+            {"code": body.code},
             headers=auth_forward_headers(request),
         )
     )

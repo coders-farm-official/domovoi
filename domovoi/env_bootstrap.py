@@ -176,6 +176,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         print(f"created {result.path} (fresh install: random Postgres password written)")
+    if result.created:
+        # CORE-9. The example ships SATELLITE_PAIRING_STRICT=true, so the
+        # household this file just created starts closed. Say so here
+        # rather than in dev.sh/dev.ps1, so both scripts — and anyone who
+        # runs the module directly — report the same posture.
+        print(
+            "  satellite pairing is STRICT: a new satellite parks for approval\n"
+            "  on the dashboard. Set SATELLITE_PAIRING_STRICT=false for the older\n"
+            "  trust-on-first-use behaviour."
+        )
     return 0
 
 

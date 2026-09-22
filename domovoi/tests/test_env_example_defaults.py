@@ -57,3 +57,73 @@ def test_env_example_does_not_default_to_a_cloud_engine() -> None:
     """Belt and braces: even if Settings changes, the shipped example must
     not send every spoken response off-box by default."""
     assert _example_values().get("TTS_ENGINE") != "edge"
+
+
+# ─── Where the example deliberately DISAGREES with Settings (CORE-9) ──────
+#
+# Strict satellite pairing is the one setting where "what a fresh box
+# runs" and "what the code defaults to" are meant to differ. A fresh box
+# has nothing paired, so it can start closed. A box that upgrades into
+# this code has satellites in the house already, and a field default that
+# flipped under it would park the whole fleet on the next restart.
+
+SCRIPTS = REPO_ROOT / "domovoi" / "scripts"
+
+
+def test_a_fresh_install_starts_with_strict_satellite_pairing() -> None:
+    env = _example_values()
+    assert env.get("SATELLITE_PAIRING_STRICT") == "true", (
+        ".env.example no longer starts a fresh install with strict pairing"
+    )
+
+
+def test_the_field_default_stays_lenient_for_installs_that_upgrade() -> None:
+    assert Settings.model_fields["satellite_pairing_strict"].default is False
+
+
+def test_the_dev_scripts_create_an_env_only_when_there_is_none() -> None:
+    """The scripts may bootstrap a missing .env from the example. They must
+    never rewrite one that exists — that file is the household's posture,
+    including the satellites it has already let in.
+
+    Both scripts delegate to ``python -m domovoi.env_bootstrap`` (OPS-1),
+    which copies the example with a random Postgres password and opens the
+    target ``O_EXCL`` so an existing file is never truncated; see
+    ``test_env_bootstrap.py``. What is checked here is that the scripts do
+    not ALSO copy the file themselves — an unguarded ``cp`` / ``Copy-Item``
+    beside the bootstrap would be exactly the rewrite this forbids.
+    """
+    sh = (SCRIPTS / "dev.sh").read_text(encoding="utf-8")
+    assert "python -m domovoi.env_bootstrap" in sh, (
+        "dev.sh no longer bootstraps .env through domovoi.env_bootstrap"
+    )
+    assert not [
+        l for l in sh.splitlines()
+        if l.strip().startswith("cp ") and ".env" in l
+    ], "dev.sh copies .env itself instead of going through env_bootstrap"
+
+    ps1 = (SCRIPTS / "dev.ps1").read_text(encoding="utf-8")
+    assert "python -m domovoi.env_bootstrap" in ps1, (
+        "dev.ps1 no longer bootstraps .env through domovoi.env_bootstrap"
+    )
+    assert not [
+        l for l in ps1.splitlines() if "Copy-Item" in l and ".env" in l
+    ], "dev.ps1 copies .env itself instead of going through env_bootstrap"
+
+
+def test_a_bootstrapped_env_carries_the_examples_strict_pairing() -> None:
+    """The composition that matters: the bootstrap rewrites only the
+    Postgres credential, so the .env a fresh install actually gets still
+    carries the example's `SATELLITE_PAIRING_STRICT=true`."""
+    from domovoi.env_bootstrap import render_fresh_env
+
+    rendered = render_fresh_env(
+        ENV_EXAMPLE.read_text(encoding="utf-8"), "a-random-password"
+    )
+    values = {}
+    for raw in rendered.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            values[k.strip()] = v.strip()
+    assert values.get("SATELLITE_PAIRING_STRICT") == "true"

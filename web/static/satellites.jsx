@@ -1340,40 +1340,59 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
  *
  * A satellite set up through its own Wi-Fi portal can't be preseeded — the
  * server was never part of that exchange — so it parks here instead of
- * claiming its room on trust. The customer saw a four-digit code as the
- * setup network closed; matching it is what makes this a decision someone
- * made rather than whoever connected first.
+ * claiming its room on trust. It shows a six-digit code and says it out
+ * loud; typing that code in is what makes this a decision about the device
+ * in the room rather than about whoever connected first.
+ *
+ * The code is deliberately NOT in this payload. A code printed next to the
+ * approve button would be a label again — the whole point is that only
+ * someone who can see or hear the device knows it. The server compares it
+ * and counts the attempts.
  */
-const ApprovalCard = ({ a, busy, onApprove, onReject }) => (
-  <Card>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
-                  flexWrap: 'wrap' }}>
-      <div style={{ flex: 1, minWidth: 200 }}>
-        <div style={{ fontWeight: 600 }}>{a.room_id}</div>
-        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-          {a.board || 'unknown board'}
-          {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
-          {' · '}{a.sat_type || 'voice'}
-          {a.attempts > 1 ? ` · ${a.attempts} attempts` : ''}
+const APPROVAL_CODE_LEN = 6;
+
+const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
+  const [code, setCode] = React.useState('');
+  const ready = code.length >= 4 && !busy;
+  const submit = () => { if (ready) onApprove(a, code); };
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
+                    flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 600 }}>{a.room_id}</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {a.board || 'unknown board'}
+            {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
+            {' · '}{a.sat_type || 'voice'}
+            {a.attempts > 1 ? ` · ${a.attempts} attempts` : ''}
+          </div>
         </div>
+        <input value={code}
+               onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
+               onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+               inputMode="numeric" autoComplete="off" spellCheck={false}
+               aria-label={`approval code for ${a.room_id}`}
+               placeholder={'0'.repeat(APPROVAL_CODE_LEN)} disabled={busy}
+               className="mono"
+               style={{ width: 130, fontSize: 20, letterSpacing: '0.16em', height: 38,
+                        textAlign: 'center', padding: '0 10px',
+                        borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                        background: 'var(--card)', color: 'var(--fg)',
+                        boxShadow: 'var(--inner-highlight)' }}/>
+        <Button variant="primary" icon="check" disabled={!ready}
+                onClick={submit}>approve</Button>
+        <Button variant="ghost" icon="x" disabled={busy}
+                onClick={() => onReject(a)}>reject</Button>
       </div>
-      {a.code && (
-        <div className="mono" style={{ fontSize: 24, letterSpacing: '0.16em',
-                                       padding: '6px 12px', borderRadius: 'var(--r-sm)',
-                                       background: 'var(--sunken)' }}>
-          {a.code}
-        </div>
-      )}
-      <Button variant="primary" icon="check" disabled={busy}
-              onClick={() => onApprove(a)}>approve</Button>
-      <Button variant="ghost" icon="x" disabled={busy}
-              onClick={() => onReject(a)}>reject</Button>
-    </div>
-    <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
-      Approve only if this code matches the one shown during setup.
-    </div>
-  </Card>
-);
+      <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+        {a.has_code === false
+          ? `This request arrived without a code — power-cycle the satellite so it asks again with one.`
+          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you.`}
+      </div>
+    </Card>
+  );
+};
 
 const PendingSatCard = ({ p, adopted, onAdopt }) => {
   const failed = p.status === 'wifi_failed';
@@ -1435,14 +1454,17 @@ const SatellitesPage = () => {
     return () => clearInterval(t);
   }, [refreshApprovals]);
 
-  const decide = async (a, action) => {
+  const decide = async (a, action, code) => {
     if (action === 'reject' && !window.confirm(
       `Reject ${a.room_id}?\n\nThe satellite keeps retrying until it is ` +
       `approved or powered off — this clears the request, it doesn't ban the device.`
     )) return;
     setApprovalBusy(a.room_id);
     try {
-      await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`, {});
+      // The code rides with the approval: the server compares it before it
+      // binds the room to that device, so an approve without one is refused.
+      await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
+                    action === 'approve' ? { code } : {});
       fire(action === 'approve' ? `${a.room_id} approved` : `${a.room_id} rejected`);
       refreshApprovals();
     } catch (e) {
@@ -1493,7 +1515,7 @@ const SatellitesPage = () => {
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
             <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
-                          onApprove={x => decide(x, 'approve')}
+                          onApprove={(x, code) => decide(x, 'approve', code)}
                           onReject={x => decide(x, 'reject')}/>
           ))}
         </div>

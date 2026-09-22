@@ -3,7 +3,10 @@ $CoreDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RepoRoot = (Resolve-Path (Join-Path $CoreDir "..")).Path
 
 # First run only: write domovoi/.env from .env.example with a random
-# Postgres password. An existing .env is never touched (exit 0 either way).
+# Postgres password, and with the example's STRICT satellite pairing
+# (CORE-9) — a fresh household has nothing paired, so it starts closed.
+# An existing .env is NEVER touched (exit 0 either way): that file is the
+# household's posture, including the satellites it has already let in.
 Push-Location $RepoRoot
 try {
     python -m domovoi.env_bootstrap

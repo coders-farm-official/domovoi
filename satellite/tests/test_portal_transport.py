@@ -254,6 +254,14 @@ def test_submit_answers_the_phone_then_hands_over(portal):
     assert payload["wifi"]["psk"] == PSK
 
 
+def test_the_session_code_is_six_digits(portal):
+    """The code the customer reads off the portal is the one the core
+    compares, so it is a credential: six digits, zero-padded."""
+    assert len(portal.approval_code) == 6
+    assert portal.approval_code.isdigit()
+    assert all(len(pt.generate_approval_code()) == 6 for _ in range(50))
+
+
 def test_bad_room_redisplays_the_form_without_the_password(portal):
     status, body = _post(portal, "/provision", {
         "ssid": "HomeNet", "psk": PSK, "room": "", "room_custom": "!!!",

@@ -29,6 +29,7 @@ from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
+    SlidingWindowLimiter,
     check_admin_request,
     check_outbound_fetch,
     require_admin_mutation,
@@ -1920,16 +1921,41 @@ async def admin_get_satellite_logs(
     }
 
 
-@app.get("/v1/admin/satellites/approvals")
+@app.get(
+    "/v1/admin/satellites/approvals",
+    # CORE-3 — admin READ: this is the list of room names a household is
+    # about to bind devices to, with how long each has been waiting. The
+    # dashboard cookie renders it; nothing less does.
+    dependencies=[Depends(require_admin_read)],
+)
 async def admin_satellite_approvals() -> list[dict[str, Any]]:
     """Satellites waiting for a human to approve them.
 
     Portal-onboarded devices land here instead of claiming their room on
     trust: the core was never a participant in their adoption, so there is
-    no preseeded token to match. The token hash is never returned — the
-    dashboard's job is to match the four-digit code the customer saw."""
+    no preseeded token to match. Neither the token hash nor the code is
+    returned — the operator reads the six-digit code off the device and
+    types it into :func:`admin_satellite_approve`, which is what ties the
+    row on screen to the unit in the room."""
     async with session_scope() as s:
         return await SatelliteApprovalRepository(s).list_pending()
+
+
+class _ApproveSatelliteBody(BaseModel):
+    code: str = Field(default="", max_length=64)
+
+
+# Five tries per room per five minutes. Six digits is a million
+# possibilities; this turns "guess it" into years of trying while leaving
+# an operator who fat-fingers the code room to try again within the same
+# visit. In memory by design, like the login backoff: a restart clears it,
+# and the endpoint is admin-gated either way.
+APPROVAL_CODE_MAX_ATTEMPTS = 5
+APPROVAL_CODE_WINDOW_SEC = 300.0
+APPROVAL_CODE_LIMITER = SlidingWindowLimiter(
+    max_per_window=APPROVAL_CODE_MAX_ATTEMPTS,
+    window_sec=APPROVAL_CODE_WINDOW_SEC,
+)
 
 
 @app.post(
@@ -1938,15 +1964,49 @@ async def admin_satellite_approvals() -> list[dict[str, Any]]:
     # decision someone actually made, and it binds a room to a device.
     dependencies=[Depends(require_admin_mutation)],
 )
-async def admin_satellite_approve(room_id: str) -> dict[str, Any]:
-    """Promote a pending satellite into a real pairing.
+async def admin_satellite_approve(
+    room_id: str, body: _ApproveSatelliteBody
+) -> dict[str, Any]:
+    """Promote a pending satellite into a real pairing, if the code matches.
 
-    409 when nothing is pending — a second click, or an approval racing a
-    reject, must not invent a pairing out of nothing."""
+    The operator sends the code the device showed and said. The core
+    compares it in constant time and counts the attempt:
+
+    * 400 — no code sent, or not digits;
+    * 403 — wrong code (the request stays parked for the real device);
+    * 409 — nothing pending, or the pending row predates codes;
+    * 429 — too many attempts for that room in the window.
+    """
+    code = (body.code or "").strip()
+    if not code or not code.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="send the numeric code the satellite is showing",
+        )
+    if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
+        log.warning("pairing: room=%s approval attempts throttled", room_id)
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "too many approval attempts for that room — wait a few "
+                "minutes, or power-cycle the satellite for a fresh code"
+            ),
+        )
     async with session_scope() as s:
-        ok = await SatelliteApprovalRepository(s).approve(room_id)
-    if not ok:
+        result = await SatelliteApprovalRepository(s).approve(room_id, code)
+    if result == "not_pending":
         raise HTTPException(status_code=409, detail="nothing pending for that room")
+    if result == "no_code":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "that request carries no code — power-cycle the satellite "
+                "so it asks again with one"
+            ),
+        )
+    if result != "approved":
+        log.warning("pairing: room=%s approval code did not match", room_id)
+        raise HTTPException(status_code=403, detail="that code does not match")
     log.info("pairing: room=%s APPROVED by an operator", room_id)
     return {"approved": True, "room_id": room_id}
 

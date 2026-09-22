@@ -548,7 +548,7 @@ create outbound traffic:
 | **Podcasts** — the subscribed feeds and the episode files they point at | Only for shows you subscribed to, when the poller runs (off by default) or you press "poll now" | `podcast_feed_poller_enabled = false` (the default); unsubscribe from a show to stop fetching it. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
-| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Approve on the dashboard only when the code matches what setup showed. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
+| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. The first device to park holds that room name until someone approves or rejects it; a different device asking for the same name is refused as a conflict. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. The follow-up **restart** is local only (it bounces systemd units, reaches no network) and is admin-gated; it can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** | While you're listening to an internet station (bundled radio plugin) | Don't play internet radio; FM/SDR paths in the same plugin are local RF. |
@@ -588,24 +588,35 @@ so it cannot listen in or speak into the room. A room that has never paired
 still accepts a tokenless connection, so **existing tokenless satellites keep
 working with zero changes** — the default is zero-breakage.
 
-**The first-connect race (the TOFU caveat).** Because the *first* token wins,
-there is a one-time window: for a room that has never paired, whoever
-connects first — your real satellite or an attacker already on your LAN who
-raced it — claims the room. This is the standard trust-on-first-use trade:
-after the legitimate device pairs, the impostor is locked out; but if an
-attacker pairs *first*, your real satellite is the one refused (and you'd
-notice — the room won't work — and reset the pairing). Pairing narrows the
-threat from "any LAN host, any time" to "an attacker who is already on your
-LAN at the exact moment a room first pairs." On a trusted home LAN that
-window is normally the moment you provision the Pi.
+**The first-connect race (the TOFU caveat).** With strict pairing OFF, the
+*first* token wins, so there is a one-time window: for a room that has never
+paired, whoever connects first — your real satellite or an attacker already
+on your LAN who raced it — claims the room. This is the standard
+trust-on-first-use trade: after the legitimate device pairs, the impostor is
+locked out; but if an attacker pairs *first*, your real satellite is the one
+refused (and you'd notice — the room won't work — and reset the pairing).
+Pairing narrows the threat from "any LAN host, any time" to "an attacker who
+is already on your LAN at the exact moment a room first pairs." On a trusted
+home LAN that window is normally the moment you provision the Pi.
 
-**Strict mode.** Set `SATELLITE_PAIRING_STRICT=true` (default `false`; also
-editable from the dashboard's satellite Settings → Security, restart-tier) to
-require a token for **every** room — a tokenless `hello` for an unpaired room
-is then refused too. This removes the first-connect race for *new* rooms (an
-unpaired room can't be claimed tokenlessly), at the cost of breaking any
-older tokenless satellite. Turn it on only once every satellite in your
-fleet has paired.
+**Strict mode (the default for a new install).** `SATELLITE_PAIRING_STRICT`
+is written as `true` into a FRESH `.env` (from `domovoi/.env.example`), and
+is also editable from the dashboard's satellite Settings → Security
+(restart-tier). It does two things:
+
+* a tokenless `hello` is refused, for every room;
+* **every** first pairing for an unpaired room is parked under *waiting for
+  approval* — with or without a token, with or without a setup code. A
+  device that brings no code is given one by the server and says it out
+  loud. That closes the first-connect race completely: connecting first
+  wins you a row on a dashboard, not a room.
+
+An install that UPGRADES into this keeps whatever it already had: the
+field default stays `false` and an existing `.env` is never rewritten,
+because a household running hand-provisioned satellites would otherwise
+find its fleet parked after a restart. Turn it on there once every
+satellite has paired (or approve them one at a time — the code is on the
+device).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD

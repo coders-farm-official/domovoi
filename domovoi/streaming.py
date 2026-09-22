@@ -268,7 +268,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from domovoi.admin_auth import token_sha256
+from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import get_whisper_client
@@ -286,6 +286,20 @@ from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import route
 
 log = logging.getLogger(__name__)
+
+# CORE-3 — per-source budget for approval requests. Parking a room name is
+# the one unauthenticated write a stranger on the LAN can still cause, and
+# the approvals list is a surface a person reads: without a ceiling, one
+# address can fill it with invented rooms and bury the device someone is
+# actually standing next to. Twenty in ten minutes is far more than a
+# satellite retrying its own connect needs (it backs off between tries)
+# and far less than a sweep wants. In memory, like the login backoff.
+APPROVAL_HELLO_MAX_PER_WINDOW = 20
+APPROVAL_HELLO_WINDOW_SEC = 600.0
+APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
+    max_per_window=APPROVAL_HELLO_MAX_PER_WINDOW,
+    window_sec=APPROVAL_HELLO_WINDOW_SEC,
+)
 
 # Set once when the pairing check hits a missing satellite_pairings table
 # (V002 not applied yet) so we log an actionable hint ONCE instead of on
@@ -991,6 +1005,107 @@ class StreamSession:
             # Already gone; nothing useful to do.
             pass
 
+    def _hello_source(self) -> str:
+        """Rate-limit identity for this connection.
+
+        Same rule as :func:`admin_auth.request_source`: the forwarded
+        address counts only when the peer itself is trusted, because
+        otherwise it is a header anyone can rotate for a fresh bucket. A
+        stand-in socket with no peer at all keys on ``"unknown"`` rather
+        than raising — a throttle must never be the thing that breaks a
+        connection path."""
+        try:
+            client = getattr(self.ws, "client", None)
+            peer = getattr(client, "host", None) or "unknown"
+            headers = getattr(self.ws, "headers", None) or {}
+            fwd = headers.get("x-forwarded-for") if hasattr(headers, "get") else None
+            if fwd and peer in TRUSTED_PROXIES:
+                return fwd.split(",")[0].strip()
+            return peer
+        except Exception:  # pragma: no cover — defensive
+            return "unknown"
+
+    async def _park_for_approval(
+        self,
+        s: Any,
+        ctrl: dict[str, Any],
+        *,
+        token_hash: str,
+        code: str | None,
+    ) -> bool:
+        """Park an unpaired room's first connect for a human to approve.
+
+        Always returns False: parking is not an accepted connection. The
+        device is told why, and with which code, so it can say the code out
+        loud — the customer reads it off the unit and types it into the
+        dashboard, which is what ties the row on screen to the device in
+        the room.
+
+        Three things guard this path:
+
+        * a per-source-IP budget, so one address cannot fill the approvals
+          list with room names;
+        * :meth:`SatelliteApprovalRepository.request` refusing a device
+          that is not the one already parked under this room name;
+        * a code minted here when the device brought none, so there is
+          always something for the operator to match.
+        """
+        if not APPROVAL_HELLO_LIMITER.allow(self._hello_source()):
+            log.warning(
+                "pairing: room=%s approval request throttled for this source",
+                self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error",
+                "reason": "approval_throttled",
+                "message": "too many approval requests — try again shortly",
+            })
+            return False
+        if not code:
+            from domovoi.satellite_media.overlay import generate_approval_code
+
+            code = generate_approval_code()
+        approvals = SatelliteApprovalRepository(s)
+        outcome, parked_code = await approvals.request(
+            self.room_id,
+            token_hash=token_hash,
+            code=code,
+            mac=ctrl.get("mac"),
+            board=ctrl.get("board"),
+            sat_type=ctrl.get("sat_type") or "voice",
+        )
+        if outcome == "conflict":
+            log.warning(
+                "pairing: room=%s REFUSED — a different device is already "
+                "waiting for approval under that room name",
+                self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error",
+                "reason": "approval_conflict",
+                "message": (
+                    "another device is already waiting for approval for this "
+                    "room — reject that request on the dashboard first"
+                ),
+            })
+            return False
+        log.info(
+            "pairing: room=%s awaiting approval (code shown to the operator)",
+            self.room_id,
+        )
+        # The code on FILE rides back, not the one just offered: on a retry
+        # the row keeps the code the customer was already shown, and the
+        # device must say that one. It lets a device that minted no code of
+        # its own say the core's. The socket closes straight after and
+        # nothing is provisioned.
+        await self._safe_send_text({
+            "type": "error",
+            "reason": "awaiting_approval",
+            "message": "waiting for approval on the dashboard",
+            "code": parked_code or code,
+        })
+        return False
+
     async def _validate_pairing(self, ctrl: dict[str, Any]) -> bool:
         """Trust-on-first-use WS auth for the hello frame (V002).
 
@@ -999,13 +1114,20 @@ class StreamSession:
         stored — reusing ``admin_auth.token_sha256`` — so the raw token never
         leaves the Pi's sidecar. The five cases:
 
-          1. token, no pairing row  -> PAIR (claim the room), accept
+          1. token, no pairing row  -> PARK for approval when the device
+                                       brings an approval code, or when
+                                       ``settings.satellite_pairing_strict``
+                                       is on (every first pairing is then a
+                                       decision someone makes); otherwise
+                                       PAIR (claim the room), accept
           2. token, row hash match  -> accept, bump last_seen_at
           3. token, row hash MISMATCH -> REFUSE (impostor / wrong token)
           4. no token, row EXISTS    -> REFUSE (a paired room requires its token)
           5. no token, no row        -> accept (older/unpaired satellite),
                                         UNLESS ``settings.satellite_pairing_strict``
-                                        is on, then REFUSE.
+                                        is on, then REFUSE. Parking needs a
+                                        token to bind to, so a tokenless
+                                        hello is refused rather than parked.
 
         On a REFUSE we send a text ``error`` frame ({reason:"pairing_rejected"})
         and provision/relay NOTHING — the caller closes the socket.
@@ -1042,28 +1164,22 @@ class StreamSession:
                         # keeps the historical trust-on-first-use behaviour —
                         # upgrading the server must not strand satellites that
                         # were provisioned by hand.
+                        #
+                        # CORE-9 — unless strict pairing is on, and then
+                        # EVERY first pairing for an unpaired room is a
+                        # decision a person makes: bringing a token proves
+                        # only that you have a token, not that you are the
+                        # device in that room. The core mints a code for a
+                        # device that brought none, and the device says it
+                        # out loud. Fresh installs bootstrap strict (see
+                        # domovoi/.env.example); existing ones keep the
+                        # value they already have.
                         code = ctrl.get("approval_code")
                         code = code.strip() if isinstance(code, str) else None
-                        if code:
-                            approvals = SatelliteApprovalRepository(s)
-                            await approvals.request(
-                                self.room_id,
-                                token_hash=token_hash,
-                                code=code,
-                                mac=ctrl.get("mac"),
-                                board=ctrl.get("board"),
-                                sat_type=ctrl.get("sat_type") or "voice",
+                        if code or settings.satellite_pairing_strict:
+                            return await self._park_for_approval(
+                                s, ctrl, token_hash=token_hash, code=code
                             )
-                            log.info(
-                                "pairing: room=%s awaiting approval (code shown "
-                                "to the operator)", self.room_id,
-                            )
-                            await self._safe_send_text({
-                                "type": "error",
-                                "reason": "awaiting_approval",
-                                "message": "waiting for approval on the dashboard",
-                            })
-                            return False
                         await repo.pair(self.room_id, token_hash)
                         log.info(
                             "pairing: room=%s paired (trust-on-first-use)",

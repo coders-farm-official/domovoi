@@ -434,12 +434,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Security ──────────────────────────────────────────────────────
     FieldSpec(
         "satellite_pairing_strict", "Strict satellite pairing", "Security",
-        "Require every satellite to present its pairing token. OFF (default) "
-        "= trust-on-first-use: a room that has never paired still accepts a "
+        "Require every satellite to be let in deliberately. ON (the default "
+        "for a new install) = a tokenless connection is refused, and a "
+        "room's first pairing waits under 'waiting for approval' until you "
+        "type in the six-digit code the satellite is showing and saying — "
+        "so a new or re-flashed Pi needs you at the dashboard. OFF = "
+        "trust-on-first-use: a room that has never paired still accepts a "
         "tokenless connection, while any room that HAS paired is fully "
-        "protected. ON = a tokenless connection is refused even for a room "
-        "that has never paired — use only once every satellite has paired, or "
-        "new/re-flashed Pis can't connect. Takes effect after a restart.",
+        "protected. Takes effect after a restart.",
         "bool", section="advanced", tier="restart",
     ),
     FieldSpec(
