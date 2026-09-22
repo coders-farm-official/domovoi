@@ -69,6 +69,26 @@ CORE_NAV: dict[str, int] = {
     "settings": 100,
 }
 
+# Every route the shell resolves itself (CORE_NAV plus the un-navigated
+# manual page) — window.DomovoiCore.pages in web/static/index.html. The
+# core refuses a plugin page on one of these at install / enable / boot
+# (plugins_runtime.contracts check 7, F-026); this host drops such a page
+# from the frontend manifest too, so a row written before that check
+# existed never puts a nav item on screen that opens the wrong page.
+CORE_ROUTES: frozenset[str] = frozenset(CORE_NAV) | {"manual"}
+
+
+def web_route_collision_message(route: str, page: str | None) -> str:
+    """Same words as the core's contract failure (kept in step by
+    test_plugin_web_routes.py) so the Plugins page reads the same
+    whichever side caught it."""
+    return (
+        f"web page {page!r} uses route {route!r}, which is the dashboard's "
+        f"core {route} page (#{route}) — the shell resolves core routes "
+        f"first, so the page would never render; pick another route "
+        f"(core routes: {', '.join(sorted(CORE_ROUTES))})"
+    )
+
 
 # ─── Import guard (§5.1) ───────────────────────────────────────────────────
 
@@ -271,6 +291,20 @@ class PluginHost:
         if not r:
             return None
         return Path(r["install_dir"]) / "web" / "static"
+
+    def page_route_errors(self, slug: str) -> list[str]:
+        """One message per declared page whose route the shell owns
+        (F-026). Such pages are left out of the frontend manifest and the
+        messages ride on it and on /api/plugins for the Plugins page."""
+        r = self.rows.get(slug)
+        if not r:
+            return []
+        web = (r.get("manifest") or {}).get("web") or {}
+        return [
+            web_route_collision_message(pg.get("route"), pg.get("page"))
+            for pg in (web.get("pages") or [])
+            if isinstance(pg, dict) and pg.get("route") in CORE_ROUTES
+        ]
 
     # ── mounting ─────────────────────────────────────────────────────
     def _slug_gate(self, slug: str):
@@ -481,6 +515,8 @@ class PluginHost:
 
             pages = []
             for pg in web.get("pages") or []:
+                if pg.get("route") in CORE_ROUTES:
+                    continue        # unreachable behind the core page (F-026)
                 pages.append(
                     {
                         "route": pg.get("route"),
@@ -508,6 +544,7 @@ class PluginHost:
                         _asset_url(sc) for sc in (web.get("scripts") or [])
                     ],
                     "pages": pages,
+                    "page_errors": self.page_route_errors(slug),
                     "player_sources": web.get("player_sources") or [],
                     "realtime_channels": realtime_channels,
                     "web_load_error": self.load_errors.get(slug),

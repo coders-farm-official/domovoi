@@ -113,6 +113,7 @@ async def list_installed() -> dict[str, Any]:
                 "consumes": caps.get("consumes") or [],
                 "handlers": m.get("handlers") or [],
                 "pages": ((m.get("web") or {}).get("pages")) or [],
+                "page_errors": HOST.page_route_errors(slug),
                 "android_capabilities": (m.get("android") or {}).get(
                     "capabilities"
                 ) or [],

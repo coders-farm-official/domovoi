@@ -43,7 +43,13 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
     setBusy(true); setErr(null);
     try {
       const res = await apiPost(`/api/plugins/install/${stagedId}/confirm`);
-      fire(`${verb} complete: ${p.name} ${p.version || ''}`);
+      // Installed but refused at load (contract check) is a 200 with
+      // loaded:false — say so, with the reason, instead of "complete".
+      if (res && res.loaded === false) {
+        fire(`${verb} of ${p.name} ${p.version || ''} did not load: ${res.error || res.status || 'load error'}`);
+      } else {
+        fire(`${verb} complete: ${p.name} ${p.version || ''}`);
+      }
       onDone(res);
     } catch (e) {
       setErr(String(e.message || e));
@@ -352,6 +358,11 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
               server web module: {p.web_load_error}
             </div>
           )}
+          {(p.page_errors || []).map((msg, i) => (
+            <div key={`pg${i}`} className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
+              web page: {msg}
+            </div>
+          ))}
           {browserErrors.map((e, i) => (
             <div key={i} className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
               browser ({PHASE_LABEL[e.phase] || e.phase}): {e.message}{e.count > 1 ? ` ·×${e.count}` : ''}
@@ -439,8 +450,17 @@ const PluginsPage = () => {
   const [ghUrl, setGhUrl] = React.useState('');
   const [uninstalling, setUninstalling] = React.useState(null);
 
+  // The core answers 200 with {enabled: false, status: 'load_error',
+  // error} when the plugin's contract checks refuse the load (a page
+  // route on a core route, say — F-026): that is a failure to show, not
+  // an "enabled" toast over a row that just went red.
   const onEnable = async (p) => {
-    try { await apiPost(`/api/plugins/${p.slug}/enable`); fire(`enabled ${p.name}`); refresh(); }
+    try {
+      const res = await apiPost(`/api/plugins/${p.slug}/enable`);
+      if (res && res.enabled === false) fire(`enable failed: ${res.error || res.status || 'plugin did not load'}`);
+      else fire(`enabled ${p.name}`);
+      refresh();
+    }
     catch (e) { fire(`enable failed: ${e.message}`); }
   };
   const onDisable = async (p) => {

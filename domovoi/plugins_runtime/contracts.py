@@ -20,6 +20,10 @@ Checks:
 5. Import-time budget (< 10 s) + best-effort CUDA-init check.
 6. Router auth audit — plugin routers mounted through the SDK are gated
    by construction (§4.11); anything mounted around it is warn-flagged.
+7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
+   and collides with neither a core dashboard route nor another enabled
+   plugin's page (F-026 — the shell resolves core-first, so a colliding
+   page got a nav item that silently opened the core page).
 """
 
 from __future__ import annotations
@@ -31,8 +35,10 @@ from typing import Any
 
 from domovoi.handlers.base import Handler, as_fast_path, registry_sort_key
 from domovoi.plugins_runtime.manifest import (
+    CORE_WEB_ROUTES,
     PLUGIN_BAND_MAX,
     PLUGIN_BAND_MIN,
+    WEB_ROUTE_RE,
     PluginManifest,
 )
 
@@ -385,6 +391,53 @@ def check_import_budget(
         )
 
 
+def web_route_collision_message(route: str, page: str) -> str:
+    """The one sentence a colliding page fails with — shared with the
+    web host, which drops such a page from the frontend manifest with
+    the same words (a row written before this check existed)."""
+    return (
+        f"web page {page!r} uses route {route!r}, which is the dashboard's "
+        f"core {route} page (#{route}) — the shell resolves core routes "
+        f"first, so the page would never render; pick another route "
+        f"(core routes: {', '.join(sorted(CORE_WEB_ROUTES))})"
+    )
+
+
+def check_web_routes(
+    slug: str,
+    manifest: PluginManifest,
+    foreign_routes: list[tuple[str, str]],
+    report: ContractReport,
+) -> None:
+    """Check 7 — ``[[web.pages]].route`` is a hash slug and unique
+    across the core shell, this plugin and every other enabled plugin.
+    ``foreign_routes`` is ``[(route, slug), ...]`` from the registry."""
+    seen: dict[str, str] = {}
+    for page in manifest.web_pages:
+        route = page.route
+        if not WEB_ROUTE_RE.match(route):
+            report.errors.append(
+                f"web page {page.page!r} route {route!r} is not a valid route — "
+                f"it becomes the URL hash #{route}; use lowercase letters, "
+                f"digits, '-' or '_' (up to 64 characters)"
+            )
+            continue
+        if route in CORE_WEB_ROUTES:
+            report.errors.append(web_route_collision_message(route, page.page))
+        if route in seen:
+            report.errors.append(
+                f"web pages {seen[route]!r} and {page.page!r} both declare "
+                f"route {route!r} — each page needs its own route"
+            )
+        seen[route] = page.page
+        for other_route, other_slug in foreign_routes:
+            if other_route == route and other_slug != slug:
+                report.errors.append(
+                    f"web page {page.page!r} route {route!r} is already used "
+                    f"by the enabled plugin {other_slug!r} — pick another route"
+                )
+
+
 def run_contract_checks(
     *,
     slug: str,
@@ -395,6 +448,7 @@ def run_contract_checks(
     hook_names: list[str],
     capability_names: list[str],
     foreign_corpus: list[tuple[str, str]] | None = None,
+    foreign_web_routes: list[tuple[str, str]] | None = None,
     import_seconds: float = 0.0,
     cuda_initialized: bool = False,
 ) -> ContractReport:
@@ -407,6 +461,7 @@ def run_contract_checks(
         slug, manifest, handlers, worker_names, hook_names,
         capability_names, report,
     )
+    check_web_routes(slug, manifest, list(foreign_web_routes or []), report)
     # The plugin's own declared corpus phrases must route to their owning
     # handler too — "canonical utterances this handler must win" (§2.2).
     own_corpus = [

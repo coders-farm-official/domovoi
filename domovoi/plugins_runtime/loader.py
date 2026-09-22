@@ -207,6 +207,7 @@ class PluginLoader:
         install_dir: Path,
         manifest: PluginManifest,
         foreign_corpus: list[tuple[str, str]] | None = None,
+        foreign_web_routes: list[tuple[str, str]] | None = None,
         update_registry_status: bool = True,
     ) -> LoadedPlugin:
         """Import + register + contract-check one plugin (install step 13,
@@ -278,6 +279,9 @@ class PluginLoader:
             foreign_corpus=foreign_corpus
             if foreign_corpus is not None
             else await self._foreign_corpus(exclude=slug),
+            foreign_web_routes=foreign_web_routes
+            if foreign_web_routes is not None
+            else await self._foreign_web_routes(exclude=slug),
             import_seconds=import_seconds,
             cuda_initialized=cuda_initialized,
         )
@@ -478,6 +482,23 @@ class PluginLoader:
                     pass
 
     # ── helpers ──────────────────────────────────────────────────────────────
+
+    async def _foreign_web_routes(self, *, exclude: str) -> list[tuple[str, str]]:
+        """``(route, slug)`` for every page of every ENABLED plugin except
+        the candidate (contract check 7, F-026)."""
+        routes: list[tuple[str, str]] = []
+        try:
+            for row in await reg.list_plugins():
+                if row.slug == exclude or not row.enabled:
+                    continue
+                web = row.manifest.get("web") or {}
+                for page in web.get("pages", []) or []:
+                    route = page.get("route")
+                    if route:
+                        routes.append((route, row.slug))
+        except Exception as e:  # noqa: BLE001 — DB-less unit contexts
+            log.debug("foreign web routes unavailable: %s", e)
+        return routes
 
     async def _foreign_corpus(self, *, exclude: str) -> list[tuple[str, str]]:
         """Manifest-declared corpus phrases of every ENABLED plugin except
