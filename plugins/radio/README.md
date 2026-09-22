@@ -72,7 +72,11 @@ The demodulated FM audio is served over HTTP on
 `RADIO_SDR_STREAM_BASE:RADIO_SDR_HTTP_PORT`. The room's MPD runs in a
 container, so **its localhost is not your machine's localhost** — set
 `RADIO_SDR_STREAM_BASE` to a LAN hostname/IP that resolves from inside
-the MPD container.
+the MPD container. The listener binds that same address (it serves a
+single client, so it is never opened on every interface); set
+`RADIO_SDR_BIND_HOST` only when the bind must differ from the host MPD
+dials. With the default stream base the listener is reachable from this
+machine alone.
 
 At startup the plugin probes for the dongle (`rtl_test`); if the probe
 fails, FM commands answer with a friendly explainer instead of erroring.
@@ -92,6 +96,7 @@ interesting ones:
 | `RADIO_ICY_POLLER_ENABLED` | `true` | the stream-metadata poller |
 | `RADIO_SDR_ENABLED` | `false` | the RTL-SDR FM tuner |
 | `RADIO_SDR_STREAM_BASE` | `http://127.0.0.1` | host MPD dials for FM audio (see hardware notes) |
+| `RADIO_SDR_BIND_HOST` | empty | address the FM listener binds; empty = the stream base's host, never `0.0.0.0` |
 | `RADIO_FINGERPRINTER_ENABLED` | `true` | fingerprint library tracks for offline matching |
 
 ## Privacy & permissions (what the manifest warns about)

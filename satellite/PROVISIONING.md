@@ -418,6 +418,8 @@ journalctl -u domovoi-satellite -f   # tail logs
 
 `Restart=on-failure` lets the Pi recover from a transient WiFi drop without intervention (the client also reconnects internally with exponential backoff, so you'll usually see the systemd restart only on hard failures).
 
+The unit runs under `ProtectSystem=strict`: the file system is read-only to the client except `~/.domovoi`, `~/domovoi` and `/tmp`. If you add something the client must write elsewhere, extend `ReadWritePaths=` in the unit rather than dropping the directive — and do not add `NoNewPrivileges=` or any directive that implies it (`ProtectKernelTunables=`, `PrivateDevices=`, `RestrictRealtime=`, …): the sudoers helpers are how the client restarts itself, and they need to gain privileges to do it.
+
 After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reconnects to the Domovoi server automatically. For the bulletproof path, also turn on overlayfs once the Pi's behavior is dialed in.
 
 > **Note on the `journalctl` line above** — `enable --now` already started the service in the background. The `journalctl -u domovoi-satellite -f` tail is just for watching the startup log. Ctrl+C to exit the tail; the service keeps running.
@@ -606,7 +608,7 @@ Get the exact `CARD=` name from `arecord -L` (it's usually `Array`). The shippin
 
 The 12-LED ring is driven through Seeed's `xvf_host` CLI (it also configures the chip). Without it the satellite still runs — the ring just stays dark, which on a finished unit reads as a dead device rather than a plain one.
 
-> **A card from media prep has already done all of this.** The tool is fetched into the `xvf_host` cache bucket, travels in the payload, and stage 1 installs it to `/opt/xvf3800` with the sudoers entry and `libusb-1.0-0` alongside. The steps below are for a satellite you are building by hand.
+> **A card from media prep has already done all of this.** The tool is fetched into the `xvf_host` cache bucket at one pinned upstream commit (`XVF_HOST_COMMIT` in `domovoi/satellite_media/fetchers.py`, with the sha256 of `xvf_host` and `libcommand_map.so` checked before anything reaches the cache — a branch tip never ships), travels in the payload, and stage 1 installs it to `/opt/xvf3800` with the sudoers entry and `libusb-1.0-0` alongside. The steps below are for a satellite you are building by hand; check out that same commit rather than the branch.
 
 `xvf_host` is **not** a single file — it loads `libcommand_map.so` (and other companion files) from its *own* directory, so it must stay alongside them. Install the whole `rpi_64bit/` folder, don't copy just the binary (a lone binary fails with `libcommand_map.so: cannot open shared object file`).
 

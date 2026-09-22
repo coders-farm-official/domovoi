@@ -130,3 +130,58 @@ async def test_tuner_stop_is_idempotent() -> None:
     tuner = SdrTuner(enabled=True)
     await tuner.stop()      # nothing running — must not raise
     assert tuner.current_frequency_mhz is None
+
+
+# --- the listener binds one address, never every interface ---------------
+#
+# ffmpeg's -listen 1 serves exactly one client; a wildcard bind is a
+# listener anyone on the network can occupy ahead of the room's MPD.
+
+
+def test_the_listener_binds_the_host_mpd_dials() -> None:
+    from domovoi_plugin_radio.clients.rtl_sdr import listener_host
+
+    assert listener_host("http://192.168.1.10") == "192.168.1.10"
+    assert listener_host("http://192.168.1.10/") == "192.168.1.10"
+    assert listener_host("http://127.0.0.1") == "127.0.0.1"
+    assert listener_host("192.168.1.10") == "192.168.1.10"
+
+
+def test_an_explicit_bind_host_wins() -> None:
+    from domovoi_plugin_radio.clients.rtl_sdr import listener_host
+
+    assert listener_host("http://domovoi.lan", "10.0.0.5") == "10.0.0.5"
+
+
+def test_a_name_is_resolved_once_and_an_unresolvable_one_falls_back_to_loopback() -> None:
+    from domovoi_plugin_radio.clients.rtl_sdr import listener_host
+
+    assert listener_host("http://domovoi.lan", resolve=lambda n: "192.168.1.20") == "192.168.1.20"
+
+    def nope(name):
+        raise OSError("no such host")
+
+    assert listener_host("http://nowhere.invalid", resolve=nope) == "127.0.0.1"
+
+
+@pytest.mark.parametrize("configured", ["0.0.0.0", "http://0.0.0.0", "::", "*", "", "http://"])
+def test_the_wildcard_is_never_bound(configured) -> None:
+    from domovoi_plugin_radio.clients.rtl_sdr import listener_host
+
+    assert listener_host(configured) == "127.0.0.1"
+    assert listener_host("http://192.168.1.10", configured) != "0.0.0.0"
+
+
+def test_the_tuner_hands_ffmpeg_the_bound_address_not_the_wildcard() -> None:
+    import inspect
+
+    from domovoi_plugin_radio.clients import rtl_sdr
+
+    tuner = SdrTuner(enabled=True, http_port=6391, stream_base="http://192.168.1.10")
+    assert tuner.listen_host == "192.168.1.10"
+    assert tuner.stream_url == "http://192.168.1.10:6391/fm.mp3"
+    src = inspect.getsource(rtl_sdr.SdrTuner._start_locked)
+    assert "0.0.0.0" not in src
+    assert "{self.listen_host}:{self._http_port}" in src
+    probe = inspect.getsource(rtl_sdr.SdrTuner._wait_for_listener_bound)
+    assert "0.0.0.0" not in probe

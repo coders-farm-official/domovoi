@@ -55,7 +55,7 @@ def usb(tmp_path, monkeypatch):
 
 def test_candidate_mounts_reads_the_dict_shape(usb, monkeypatch):
     monkeypatch.setattr(adoption, "detect_removable", _fake_removable(usb))
-    assert adoption._candidate_mounts() == [(Path(usb), True)]
+    assert adoption._candidate_mounts() == [(Path(usb), True, "/dev/sdb1")]
 
 
 def test_candidate_mounts_skips_entries_without_a_mount(monkeypatch):

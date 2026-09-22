@@ -313,7 +313,12 @@ success); the raw token appears once in the preseed HTTP response on the
 LAN (same exposure as every admin call until TLS lands); and neither secret
 is ever logged on either side. A force re-adopt **rotates** the token, so
 the previous device for that room stops matching — deliberate, and the UI
-warns before doing it.
+warns before doing it. The scanner treats a removable volume as a setup
+volume only when its label is `DOMOVOI-SET` **and** it carries a parseable
+`device-info.json` — on Linux the label is read from udev's `by-label`
+entry or `lsblk`, so a stick that merely carries the file is not offered
+for adoption (the `SATELLITE_ADOPTION_SCAN_DIRS` dev harness is the one
+path that skips the label).
 
 **Known limitation — connect-time disruption.** The pairing check runs on the
 `hello` frame, but the socket is accepted and the room's in-memory session
@@ -355,7 +360,14 @@ the account's mirror into a root-owned staging directory of its own,
 skipping anything that is not a regular file, runs the post-install script
 from there, and writes its log (`/var/log/domovoi-payload-apply.log`) and
 state (`/var/lib/domovoi/plugin_payload_state.json`) to root-owned paths
-it chose itself. `sudo -n true` as the service account fails.
+it chose itself. `sudo -n true` as the service account fails. The client's
+unit runs under `ProtectSystem=strict`: the file system is read-only to it
+except `~/.domovoi`, `~/domovoi` and `/tmp` (`NoNewPrivileges` is
+deliberately not set, nor anything that implies it — sudo has to gain
+privileges for the helpers to work; `domovoi-apply-payload` re-runs itself
+as a transient unit to get out of the read-only view before it touches
+apt). The kiosk unit on a video satellite carries the same directive with
+the home directory writable.
 
 What that does **not** buy, stated plainly: a plugin with `satellite_root`
 still runs root code, because that is what the permission means — the

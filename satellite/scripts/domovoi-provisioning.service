@@ -5,7 +5,11 @@
 # satellite/provisioning_mode.py).
 #
 # Root on purpose: configfs gadget composition, mkfs.vfat, nmcli,
-# timedatectl, and the post-provision reboot all need it.
+# timedatectl, and the post-provision reboot all need it. Not sandboxed:
+# it edits /etc/wpa_supplicant, /boot/firmware and /sys/kernel/config, the
+# very places a sandbox would close. It starts from the satellite
+# account's venv and code tree, which docs/SECURITY_PRIVACY.md names as
+# the remaining root-runs-user-editable-code path.
 #
 # Install (the media-prep pipeline does this; manual form):
 #   sudo sed -e "s|@USER@|$USER|g" -e "s|@HOME@|$HOME|g" \

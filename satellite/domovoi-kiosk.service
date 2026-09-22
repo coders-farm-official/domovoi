@@ -34,6 +34,15 @@ WorkingDirectory=@HOME@/domovoi
 ExecStart=@HOME@/domovoi/satellite/scripts/kiosk_launch.sh
 Restart=always
 RestartSec=3
+# Read-only file system except what a browser session writes: the home
+# (its profile lives under ~/.domovoi/kiosk-profile, its caches under
+# ~/.cache), /tmp, and the session's runtime directory that logind mounts
+# for the seat. Nothing here implies NoNewPrivileges - cage takes the seat
+# through logind, not setuid - but it is left unset all the same, for
+# symmetry with the client unit. Hardware-verified on a video satellite
+# only; see VIDEO_SATELLITE.md.
+ProtectSystem=strict
+ReadWritePaths=@HOME@ /tmp -/run/user
 
 [Install]
 WantedBy=multi-user.target
