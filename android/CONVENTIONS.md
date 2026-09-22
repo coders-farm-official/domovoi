@@ -1,10 +1,15 @@
 # Domovoi Android — code conventions
 
-The app mirrors the web dashboard (`web/static/*.jsx`) feature-for-feature.
+The app mirrors the web dashboard (`web/static/*.jsx`) feature-for-feature,
+with one deliberate exception: server administration (the dashboard's
+Greetings / Voices / Wake Words / Models / Configuration settings tabs) is
+not mirrored, because the app has no admin session — Settings keeps only
+Connection and About and hands off to the dashboard. Do not add admin
+panels to the app.
 Read these core files before writing a screen:
 
 - `app/src/main/java/com/domovoi/app/AppContainer.kt` — `LocalApp` (api, bus, prefs, player), `LocalToast`
-- `app/src/main/java/com/domovoi/app/net/ApiClient.kt` — `api.get/post/patch/put/delete(path, body)` return `JsonElement`; `api.upload(path, MultipartBody)`; `api.bytes(path)`; `api.absolute(path)` for media URLs; `DomovoiJson`
+- `app/src/main/java/com/domovoi/app/net/ApiClient.kt` — `api.get/post/patch/put/delete(path, body)` return `JsonElement`; `api.upload(path, MultipartBody)`; `api.absolute(path)` for media URLs; `DomovoiJson`
 - `app/src/main/java/com/domovoi/app/net/ApiHooks.kt` — `rememberApi(keys..., eventTypes) { app -> ... }` (the useApiList/useApiObject analog), `OnStateEvents`
 - `app/src/main/java/com/domovoi/app/net/StateBus.kt` — WS events (`WsEvent(type, payload)`)
 - `app/src/main/java/com/domovoi/app/ui/components/*.kt` — `DomovoiCard`, `Pill`, `Tone`, `StatusDot`, `RoomChip`, `AvatarBubble`, `PageHeader`, `SectionLabel`, `Stat`, `EmptyState`, `LoadingState`, `ErrorState`, `ConfirmDialog`, `PromptDialog`, `relTime`, `fmtDur`, `fmtBigDur`, `fmtBytes`, `fmtRemaining`, `isLive`, `DomovoiGlyph`, `SleepingDomovoi`

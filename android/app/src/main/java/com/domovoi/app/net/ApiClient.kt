@@ -110,17 +110,6 @@ class ApiClient(private val baseUrlProvider: () -> String) {
     suspend fun upload(path: String, form: MultipartBody): JsonElement =
         parse(raw("POST", path, form))
 
-    /** GET returning raw bytes (audio samples, clip playback, zip downloads). */
-    suspend fun bytes(path: String): Pair<ByteArray, Map<String, String>> =
-        withContext(Dispatchers.IO) {
-            val req = Request.Builder().url(absolute(path)).build()
-            http.newCall(req).await().use { resp ->
-                if (!resp.isSuccessful) throw ApiException(resp.code, "${resp.code} ${resp.message}")
-                val headers = resp.headers.names().associateWith { resp.headers[it].orEmpty() }
-                (resp.body?.bytes() ?: ByteArray(0)) to headers
-            }
-        }
-
     private fun parse(text: String): JsonElement =
         if (text.isBlank()) JsonNull else DomovoiJson.parseToJsonElement(text)
 }

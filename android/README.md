@@ -1,9 +1,10 @@
 # Domovoi Android
 
 Native Android client (`com.domovoi.app`) for the Domovoi dashboard —
-feature parity with the web UI (`web/static/`), talking to the same
-web backend on `:6369` (REST + `/ws/state` WebSocket) and, through it,
-the Domovoi core on `:6370`.
+feature parity with the web UI (`web/static/`) for everyday use,
+talking to the same web backend on `:6369` (REST + `/ws/state`
+WebSocket) and, through it, the Domovoi core on `:6370`. Server
+administration is the deliberate exception — see *Settings* below.
 
 ## Stack
 
@@ -15,7 +16,7 @@ the Domovoi core on `:6370`.
 | Realtime | One OkHttp WebSocket to `/ws/state`, subscribe-all, exponential-backoff reconnect (1s → 15s) — `net/StateBus.kt` |
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
 | Images | Coil |
-| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person) |
+| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person) — device-local only; server administration hands off to the dashboard |
 
 ## Building
 
@@ -40,6 +41,18 @@ your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
 `/api/health` before accepting. Change it later under Settings →
 Connection. Traffic is plain HTTP on your LAN (same trust model as the
 web dashboard); cleartext is enabled in the manifest for that reason.
+
+## Settings: device-local only
+
+The app's Settings screen keeps just the tabs that belong to the phone —
+**Connection** (server, theme, this device's name, "listening as") and
+**About**. The dashboard's server-administration tabs (Greetings, Voices,
+Wake Words, Models, Configuration) are *not* mirrored: they need the
+dashboard's admin session, which this app does not have, so they could
+never apply a change correctly. In their place a **Server settings** tab
+says so in plain words and its **Open the dashboard** button launches the
+browser at the connected server's Settings page (`<server>/#settings`);
+with no server configured the button is disabled with a hint.
 
 While connected, the save-to-device actions across Music / Videos /
 Podcasts / Audiobooks download through the system `DownloadManager` into
@@ -96,5 +109,6 @@ web-dashboard plugin pages only; this app stays provider-agnostic.
   Web-Audio-style filter graph without a custom audio processor).
 - No offline pin/auto-cache of tracks yet (the web PWA's Cache Storage
   feature) — streaming only.
-- Wake-word clip playback uses simple in-place audio playback; the RMS
-  envelope sparkline is simplified.
+- No server administration (greetings, voices, wake words, models,
+  configuration) — by design; Settings → Server settings opens the
+  dashboard instead.

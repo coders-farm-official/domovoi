@@ -88,11 +88,11 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "Can I change the wake word?",
-        "Yes. Record a handful of clips on a satellite and train a custom model — Settings → Wake Words. (Training is Linux-only, so it runs off-box.)",
+        "Yes. Record a handful of clips on a satellite and train a custom model on the web dashboard — Settings → Wake Words. (Training is Linux-only, so it runs off-box.)",
     ),
     FaqRow(
         "Can I add my own voice?",
-        "Upload a Piper .onnx model for a fully-local voice, or register a Microsoft Edge neural voice — Settings → Voices.",
+        "Upload a Piper .onnx model for a fully-local voice, or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
     ),
     FaqRow(
         "Why two different LLMs?",
@@ -115,7 +115,7 @@ internal val MANUAL_HOWTO = listOf(
         "satellites",
         listOf(
             "Add one: flash the Pi and drop in its config — it shows up here once it connects.",
-            "Change its voice or wake word in Settings, then push to the room.",
+            "Change its voice or wake word on the web dashboard (Settings → Voices / Wake Words), then push to the room.",
             "Set playback volume per room from the Music page.",
         ),
         listOf(
@@ -128,6 +128,7 @@ internal val MANUAL_HOWTO = listOf(
         "the web dashboard",
         listOf(
             "Switch pages from the nav — each surface manages one area.",
+            "Server settings (greetings, voices, wake words, models, configuration) are managed here — this app's Settings → Server settings opens it.",
             "Change server settings under the gear → Configuration.",
             "Install and manage plugins under Settings → Plugins.",
             "Check versions / pull updates under Configuration → Version.",
@@ -142,7 +143,7 @@ internal val MANUAL_HOWTO = listOf(
         listOf(
             "Restart it on the server to apply restart-tier config changes.",
             "Check health at /v1/health and connectivity at /v1/connectivity.",
-            "Update under Configuration → Version: check, pull, then restart to apply.",
+            "Update on the web dashboard under Configuration → Version: check, pull, then restart to apply.",
         ),
         listOf(
             "Nothing responds? Confirm the process is up and Postgres is reachable.",
@@ -152,29 +153,29 @@ internal val MANUAL_HOWTO = listOf(
     HowtoRow(
         "whisper (speech-to-text)",
         listOf(
-            "Switch the speech-to-text model or pre-download a size from the Models page.",
+            "Switch the speech-to-text model or pre-download a size from the web dashboard's Models page.",
             "Prefer large-v3 for accuracy; a smaller size if VRAM is tight.",
         ),
         listOf(
             "Slow or garbled? Confirm it is on CUDA (float16), not the CPU.",
-            "First use slow? The model may be cold-downloading — pre-stage it on the Models page.",
+            "First use slow? The model may be cold-downloading — pre-stage it on the dashboard's Models page.",
         ),
     ),
     HowtoRow(
         "ollama (the language model)",
         listOf(
-            "Switch the Q&A or tool-routing model, or pull a new one, from the Models page.",
+            "Switch the Q&A or tool-routing model, or pull a new one, from the web dashboard's Models page.",
             "Two models by design: a fast one answers, a stronger one routes tools.",
         ),
         listOf(
             "LLM commands failing? Check the Ollama server is reachable and the model is installed.",
-            "See what's loaded in VRAM right now on the hardware panel.",
+            "See what's loaded in VRAM right now on the dashboard's hardware panel.",
         ),
     ),
     HowtoRow(
         "text-to-speech",
         listOf(
-            "Pick or upload a voice under Settings → Voices and set a default.",
+            "Pick or upload a voice on the web dashboard under Settings → Voices and set a default.",
             "Register an Edge cloud voice by id, or upload a local Piper .onnx.",
         ),
         listOf(
@@ -205,7 +206,7 @@ internal val MANUAL_HOWTO = listOf(
     HowtoRow(
         "background workers",
         listOf(
-            "Enable/disable background workers (library upkeep, memory, plugin workers…) under Configuration.",
+            "Enable/disable background workers (library upkeep, memory, plugin workers…) on the web dashboard under Configuration.",
         ),
         listOf(
             "A feature isn't updating? Check its worker's enabled flag — and that the core service was restarted after the change.",

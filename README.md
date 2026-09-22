@@ -274,7 +274,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Satellite management & per-room settings | — | ✅ edits the Pi's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | ✅ record → train → push to room | — |
 | **Plugin install & administration** | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
-| Admin setup / login | — | ✅ | ✅ login for gated screens |
+| Admin setup / login | — | ✅ | — (no admin session; Settings → Server settings opens the dashboard) |
 
 The differences are deliberate:
 
@@ -299,6 +299,9 @@ The differences are deliberate:
   screens are **capability-gated**: it asks the server what's installed and
   only renders screens for capabilities that exist — install the radio
   plugin and a Stations screen appears; remove it and the screen goes away.
+  Server administration (greetings, voices, wake words, models,
+  configuration) stays on the dashboard: the app's Settings keeps only
+  Connection and About, and its Server settings tab opens the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
   whoever's there from anywhere on the network.
