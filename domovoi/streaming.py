@@ -1936,7 +1936,7 @@ class StreamSession:
                 )
                 return
             mode = getattr(settings, "dropin_accept_mode", "auto")
-            if mode == "confirm":
+            if mode in ("confirm", "ring"):
                 await self._prompt_target_for_dropin(target)
             else:
                 await self._begin_dropin(target)
@@ -1945,6 +1945,11 @@ class StreamSession:
         if action == "accept":
             initiator_room = response.dropin_room
             initiator = sessions.get(initiator_room) if initiator_room else None
+            if initiator is None and initiator_room:
+                # Ring mode parks phone callers here instead: a phone is
+                # never in active_sessions, so without this the room's
+                # "yeah" would find nobody to connect it to.
+                initiator = self.ws.app.state.pending_dropins.get(initiator_room)
             if initiator is None or initiator.dropin_peer is not None:
                 # They hung up (or got into another call) before the target
                 # answered. Same mid-response constraint as above — log
@@ -3040,54 +3045,80 @@ class StreamSession:
         session so its next "yeah" routes to ``DropInHandler.handle_confirmation``,
         then prompt it with a no-wake-word followup. The auto path skips all
         this (which is why auto is the default)."""
-        from domovoi.confirmations import request_confirmation
-        from domovoi.db.repositories import SessionRepository
+        await ring_target_for_dropin(self.room_id, target)
 
-        peer_label = self.room_id.replace("_", " ")
+
+# ─── Ringing a room before a call opens ──────────────────────────────────
+
+
+async def ring_target_for_dropin(initiator_room: str, target: "StreamSession") -> bool:
+    """Ask ``target``'s room whether it will take a call from
+    ``initiator_room``, and open nothing.
+
+    Parks a ``core.dropin_invite`` pending confirmation in the target's
+    session so its next "yeah" routes to
+    ``DropInHandler.handle_confirmation``, then prompts it with a
+    no-wake-word followup. The bridge is built later, by the target's own
+    accept turn (``_handle_dropin_action``) — never here.
+
+    Module-level rather than a ``StreamSession`` method because the
+    initiator is not always a session: ``dropin_accept_mode='ring'``
+    routes HTTP- and phone-initiated calls through here too, and a phone
+    (``phone_dropin.PhoneDropinSession``) has no session of its own. Only
+    the TARGET has to be a real satellite, which it always is.
+
+    Returns True when the prompt went out.
+    """
+    from domovoi.confirmations import request_confirmation
+    from domovoi.db.repositories import SessionRepository
+
+    peer_label = initiator_room.replace("_", " ")
+    try:
+        async with session_scope() as s:
+            repo = SessionRepository(s)
+            target_session_id = await repo.get_or_create(
+                target.session_id, target.room_id
+            )
+            await request_confirmation(
+                s,
+                target_session_id,
+                kind="core.dropin_invite",
+                handler="dropin",
+                data={
+                    "initiator_room": initiator_room,
+                    "peer_label": peer_label,
+                },
+            )
+        # Keep the target's in-memory session_id aligned so its followup
+        # turn reuses the sessions row the pending lives in.
+        target.session_id = target_session_id
+    except Exception as e:
+        log.warning(
+            "drop-in: failed to park confirmation for %s: %s",
+            target.room_id, e,
+        )
+        return False
+
+    # Free the card so the prompt is audible; a decline auto-resumes
+    # music on that turn, an accept keeps it suppressed for the call.
+    await target._suppress_music_for(target)
+    try:
+        await target.prompt_dropin(
+            f"The {peer_label} wants to drop in. Is that okay?"
+        )
+    except Exception as e:
+        log.warning(
+            "drop-in: prompt to %s failed (busy?): %s", target.room_id, e
+        )
+        # Clear the parked confirmation so a later stray "yes" can't open
+        # a call nobody is waiting on, and restore the target's music.
         try:
             async with session_scope() as s:
-                repo = SessionRepository(s)
-                target_session_id = await repo.get_or_create(
-                    target.session_id, target.room_id
+                await SessionRepository(s).set_context_key(
+                    target.session_id, "pending_confirmation", None
                 )
-                await request_confirmation(
-                    s,
-                    target_session_id,
-                    kind="core.dropin_invite",
-                    handler="dropin",
-                    data={
-                        "initiator_room": self.room_id,
-                        "peer_label": peer_label,
-                    },
-                )
-            # Keep the target's in-memory session_id aligned so its followup
-            # turn reuses the sessions row the pending lives in.
-            target.session_id = target_session_id
-        except Exception as e:
-            log.warning(
-                "drop-in: failed to park confirmation for %s: %s",
-                target.room_id, e,
-            )
-            return
-
-        # Free the card so the prompt is audible; a decline auto-resumes
-        # music on that turn, an accept keeps it suppressed for the call.
-        await self._suppress_music_for(target)
-        try:
-            await target.prompt_dropin(
-                f"The {peer_label} wants to drop in. Is that okay?"
-            )
-        except Exception as e:
-            log.warning(
-                "drop-in: prompt to %s failed (busy?): %s", target.room_id, e
-            )
-            # Clear the parked confirmation so a later stray "yes" can't open
-            # a call nobody is waiting on, and restore the target's music.
-            try:
-                async with session_scope() as s:
-                    await SessionRepository(s).set_context_key(
-                        target.session_id, "pending_confirmation", None
-                    )
-            except Exception:
-                pass
-            await self._restore_music_for(target)
+        except Exception:
+            pass
+        await target._restore_music_for(target)
+        return False
+    return True

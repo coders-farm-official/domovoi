@@ -30,6 +30,7 @@ from domovoi.admin_auth import (
     require_admin_mutation,
     require_admin_read,
     require_admin_security,
+    require_device,
 )
 
 from satellite import provisioning_protocol as proto
@@ -580,7 +581,14 @@ async def dropin_end(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
-@router.get("/{room_id}/dropin/phone-info")
+@router.get(
+    "/{room_id}/dropin/phone-info",
+    # Device tier: this is the map to a room's live microphone socket.
+    # The socket itself is gated (domovoi/main.py), so this is defence in
+    # depth — but an unauthenticated caller has no business being told
+    # where the core listens either.
+    dependencies=[Depends(require_device)],
+)
 async def dropin_phone_info(room_id: str):
     """Connection info for a phone client that wants to drop in on
     ``room_id`` itself (phone ↔ room audio, domovoi
@@ -590,7 +598,10 @@ async def dropin_phone_info(room_id: str):
     lives on the Domovoi server process. Return the Domovoi server's port (and
     host when it isn't the loopback shorthand) so the client can derive
     ``ws://<host>:<port>/v1/dropin/{room_id}``. No domovoi round-trip
-    — this is static config."""
+    — this is static config.
+
+    Requires the household device token (or an admin Bearer); the phone
+    presents the same token again on the WebSocket upgrade."""
     from urllib.parse import urlparse
 
     from web.backend.domovoi_client import domovoi_url

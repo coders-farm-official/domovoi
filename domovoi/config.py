@@ -366,8 +366,16 @@ class Settings(BaseSettings):
     dropin_enabled: bool = True
     # How a target room accepts an incoming drop-in:
     #   'auto'    → the target's mic opens immediately (Alexa-style)
-    #   'confirm' → the target hears a prompt and must say yes first
+    #   'confirm' → a SPOKEN "drop in on X" prompts the target first; a
+    #               dashboard click or a phone call still opens at once
+    #   'ring'    → every caller rings: spoken, dashboard/HTTP and phone.
+    #               Nothing is bridged until someone in the target room
+    #               says yes to their own satellite.
     dropin_accept_mode: str = "auto"
+    # How long a phone waits for a rung room to answer before giving up
+    # (ring mode only). The room's prompt is a normal pending confirmation,
+    # so a late "yeah" after this simply finds no caller waiting.
+    dropin_ring_timeout_sec: float = 30.0
     # Auto-end a call after this many seconds of two-way silence.
     dropin_silence_timeout_sec: float = 20.0
     # Echo mitigation for calls between NEARBY rooms. The XVF3800's on-chip

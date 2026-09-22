@@ -36,6 +36,7 @@ def make_app(*, active=None, fd=None, dropins=None):
             active_sessions=active if active is not None else {},
             satellite_full_duplex=fd if fd is not None else {},
             active_dropins=dropins if dropins is not None else {},
+            pending_dropins={},
             dropin_lock=asyncio.Lock(),
             resumable_music={},
             pending_music_start={},
@@ -512,3 +513,90 @@ async def test_admin_dropin_end_happy_and_404(monkeypatch):
             # Second end on a room no longer in a call → 404.
             r2 = await client.post("/v1/admin/dropin/end", json={"room_id": "kitchen"})
             assert r2.status_code == 404
+
+
+# ─── CORE-2: the HTTP start rings the room when told to ──────────────────
+
+
+class _RoomDouble:
+    """A satellite session as ``admin_dropin_start`` uses it: something
+    that can be rung, or bridged, and remembers which happened."""
+
+    def __init__(self, room_id):
+        self.room_id = room_id
+        self.dropin_peer = None
+        self.rung_by = []
+        self.bridged_with = []
+
+    async def _prompt_target_for_dropin(self, target):
+        target.rung_by.append(self.room_id)
+
+    async def _begin_dropin(self, peer):
+        self.bridged_with.append(peer.room_id)
+        self.dropin_peer = peer
+        peer.dropin_peer = self
+
+
+def _two_room_doubles(monkeypatch):
+    from domovoi.main import app
+
+    office, kitchen = _RoomDouble("office"), _RoomDouble("kitchen")
+    monkeypatch.setattr(
+        app.state, "active_sessions", {"office": office, "kitchen": kitchen},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        app.state, "satellite_full_duplex", {"office": True, "kitchen": True},
+        raising=False,
+    )
+    monkeypatch.setattr(app.state, "active_dropins", {}, raising=False)
+    monkeypatch.setattr(app.state, "pending_dropins", {}, raising=False)
+    return app, office, kitchen
+
+
+async def test_http_start_in_ring_mode_rings_and_opens_nothing(monkeypatch):
+    """``dropin_accept_mode='ring'``: a dashboard click asks the room
+    instead of opening its microphone. No bridge exists until someone
+    there answers their own satellite."""
+    from domovoi.main import _AdminDropInStartBody, admin_dropin_start
+
+    monkeypatch.setattr(settings, "dropin_accept_mode", "ring", raising=False)
+    app, office, kitchen = _two_room_doubles(monkeypatch)
+
+    out = await admin_dropin_start(
+        _AdminDropInStartBody(initiator_room="office", target_room="kitchen")
+    )
+
+    assert out["status"] == "ringing"
+    assert kitchen.rung_by == ["office"]
+    assert office.bridged_with == [] and kitchen.bridged_with == []
+    assert office.dropin_peer is None and kitchen.dropin_peer is None
+    assert app.state.active_dropins == {}
+
+
+async def test_http_start_in_auto_mode_still_opens_immediately(monkeypatch):
+    """The default is unchanged: a dashboard click is its own consent."""
+    from domovoi.main import _AdminDropInStartBody, admin_dropin_start
+
+    monkeypatch.setattr(settings, "dropin_accept_mode", "auto", raising=False)
+    _app, office, kitchen = _two_room_doubles(monkeypatch)
+
+    out = await admin_dropin_start(
+        _AdminDropInStartBody(initiator_room="office", target_room="kitchen")
+    )
+
+    assert out["status"] == "active"
+    assert office.bridged_with == ["kitchen"]
+    assert kitchen.rung_by == []
+
+
+async def test_spoken_start_in_ring_mode_says_it_is_asking(
+    rooms_office_kitchen, monkeypatch
+):
+    monkeypatch.setattr(settings, "dropin_accept_mode", "ring", raising=False)
+    app = make_app(
+        active={"office": 1, "kitchen": 1}, fd={"office": True, "kitchen": True}
+    )
+    r = DropInHandler()._start("kitchen", ctx_for("office", app))
+    assert r.dropin_action == "request"
+    assert "asking" in r.text.lower()

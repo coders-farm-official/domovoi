@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -406,6 +407,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Live drop-in pairings: room_id → peer room_id (both directions).
     app.state.active_dropins = {}
     app.state.dropin_lock = asyncio.Lock()
+    # Callers that have RUNG a room and are waiting for it to say yes
+    # (dropin_accept_mode='ring'), keyed by the caller's id. Phones live
+    # here and nowhere else — they are not satellites, so active_sessions
+    # can't hold them — which is how the target's accept turn finds the
+    # peer to pair with. Entries are removed when the caller gives up or
+    # the socket closes; a ringing caller is NOT in active_dropins,
+    # because no bridge exists yet.
+    app.state.pending_dropins = {}
 
     probe = ConnectivityProbe()
     await probe.start()
@@ -1034,8 +1043,11 @@ class _AdminDropInEndBody(BaseModel):
 
 @app.post(
     "/v1/admin/dropin/start",
-    # Device tier: opens a live two-way mic bridge between rooms.
-    dependencies=[Depends(require_device)],
+    # Admin tier: this opens a live two-way microphone bridge between two
+    # rooms from an HTTP call, with no one in either room asked first.
+    # That is a physical-effect action on the household, so it takes an
+    # admin Bearer rather than the household device token.
+    dependencies=[Depends(require_admin_mutation)],
 )
 async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     """Open a live two-way drop-in between two connected satellite rooms
@@ -1045,8 +1057,13 @@ async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
 
     400 when the two rooms are the same; 404 when a room isn't connected;
     409 when drop-in is disabled, a room lacks AEC, or a room is already in
-    a call. Always opens immediately (auto-accept) regardless of
-    ``dropin_accept_mode`` — a dashboard click is its own consent.
+    a call.
+
+    ``dropin_accept_mode`` decides what an HTTP start does: ``auto`` (the
+    default) opens the bridge immediately — a dashboard click is its own
+    consent — while ``ring`` prompts the target room and returns
+    ``{"status": "ringing"}`` with NO bridge, so the call only becomes
+    live when someone in that room says yes to their own satellite.
     """
     from domovoi.dropin_common import OK, dropin_feasibility
 
@@ -1067,6 +1084,14 @@ async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     target = sessions.get(body.target_room)
     if initiator is None or target is None:  # raced since feasibility check
         raise HTTPException(status_code=404, detail="room not connected")
+
+    if getattr(settings, "dropin_accept_mode", "auto") == "ring":
+        await initiator._prompt_target_for_dropin(target)
+        return {
+            "status": "ringing",
+            "initiator": body.initiator_room,
+            "target": body.target_room,
+        }
 
     await initiator._begin_dropin(target)
     # _begin_dropin refuses under the lock (already paired) or tears down if
@@ -3746,6 +3771,28 @@ async def stream(ws: WebSocket, room_id: str) -> None:
     await session.run()
 
 
+async def _refuse_ws(ws: WebSocket, code: str, detail: str) -> None:
+    """Turn a WS upgrade away with nothing created.
+
+    Accept-then-close so the peer gets a readable 1008 close frame and a
+    one-line ``error`` payload (the satellite client and the Android app
+    already handle both from the hello gate) instead of a bare handshake
+    failure. Called BEFORE any session object exists, so no registry —
+    ``active_sessions``, ``active_dropins``, ``satellite_full_duplex`` —
+    is touched on this path.
+    """
+    try:
+        await ws.accept()
+        await ws.send_text(json.dumps({"type": "error", "code": code}))
+    except Exception:  # noqa: BLE001 — peer may already be gone
+        pass
+    try:
+        await ws.close(code=1008)
+    except Exception:  # noqa: BLE001
+        pass
+    log.warning("ws upgrade refused (%s): %s", code, detail)
+
+
 @app.websocket("/v1/dropin/{room_id}")
 async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """Drop-in-only stream for phones — joins the existing intercom bridge
@@ -3755,8 +3802,25 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     See `domovoi/phone_dropin.py` for the wire protocol. ``phone_id``
     (query param) is the caller's identity in ``active_dropins``; give it
     a stable per-device value so busy-checks work.
+
+    DEVICE TIER. This socket carries a room's live microphone, so the
+    upgrade itself is the gate: the caller presents the household
+    ``X-Device-Token`` header (Android, satellites) or ``?token=`` (a
+    browser, which cannot set headers — the same value the dashboard
+    sends as the header elsewhere), or an admin ``Authorization: Bearer``.
+    Anything else is closed 1008 here, before a ``PhoneDropinSession``
+    exists, so the refusal leaves ``active_dropins`` untouched and the
+    target room never learns a call was attempted.
     """
     from domovoi.phone_dropin import PhoneDropinSession
+
+    if not await admin_auth_mod.websocket_device_ok(ws):
+        await _refuse_ws(
+            ws, "unauthorized",
+            f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "
+            "(or ?token=) or an admin Bearer",
+        )
+        return
 
     phone_id = ws.query_params.get("phone_id") or "phone"
     # Namespace the id so a phone can never collide with (or masquerade

@@ -23,20 +23,38 @@ Wire protocol (WebSocket ``/v1/dropin/{room_id}?phone_id=...``):
     text  dropin_end       {"type":"dropin_end"} — hang up.
 
   server→client
+    text  dropin_ringing   {"type":"dropin_ringing","peer_room":...,
+                           "peer_label":...} — ring mode only: the room
+                           has been asked and has not answered yet. No
+                           audio flows in either direction until it does.
     text  dropin_start     {"type":"dropin_start","peer_room":...,
                            "peer_label":...,"audio_sample_rate":16000,
                            "full_duplex":true} — call is live.
     binary                 16 kHz mono int16 PCM: the connected/disconnected
                            chimes and the room's relayed mic audio.
     text  dropin_end       {"type":"dropin_end","reason":...} — call over
-                           (either side hung up, silence timeout, failure).
+                           (either side hung up, silence timeout, failure,
+                           or "no_answer" when a rung room never replied).
     text  error            {"type":"error","code":...} — refused before
                            start; code is a feasibility reason
                            ("target_offline", "target_no_aec",
-                           "target_busy", "initiator_busy", "disabled").
+                           "target_busy", "initiator_busy", "disabled")
+                           or "unauthorized" (see below).
 
-Same LAN trust model as ``/v1/stream`` — no auth. Revisit both together
-if satellite audio ever leaves the LAN (docs/BACKLOG.md).
+AUTHENTICATION. The upgrade carries a room's live microphone, so it is on
+the DEVICE TIER and the core checks it before this module is reached
+(``domovoi/main.py``): the caller presents the household device token as
+the ``X-Device-Token`` header, or as ``?token=`` when it is a browser and
+cannot set headers, or an admin ``Authorization: Bearer``. A caller with
+none of those gets ``{"type":"error","code":"unauthorized"}`` and a 1008
+close, and no ``PhoneDropinSession`` is ever constructed — so a refusal
+leaves ``active_dropins`` untouched and the room is never disturbed.
+
+CONSENT. With ``dropin_accept_mode='ring'`` the room is asked before
+anything opens: this session parks itself in ``app.state.pending_dropins``,
+rings the target, and waits (``dropin_ring_timeout_sec``) for someone
+there to say yes to their own satellite. Under ``auto`` (the default) and
+``confirm`` a phone call still opens immediately, as it always has.
 """
 
 from __future__ import annotations
@@ -110,6 +128,37 @@ class PhoneDropinSession:
         if peer is not None:
             await peer._end_dropin(ended_by=ended_by, status=status)
 
+    async def _begin_dropin(self, peer: Any) -> None:
+        """Pair this phone with ``peer``'s room for a live call.
+
+        A phone is a duck-typed peer, not a session that can drive
+        pairing, so the room's ``StreamSession`` does the work and this
+        only corrects the initiator flags afterwards — the phone placed
+        the call, whatever order the pairing ran in. Present so a ringing
+        room's accept turn can pair with a phone exactly as it would with
+        another room (``_handle_dropin_action``).
+        """
+        await peer._begin_dropin(self)
+        if self.dropin_peer is not peer:
+            return
+        active = self.ws.app.state.active_dropins
+        if self.room_id in active and peer.room_id in active:
+            active[self.room_id]["initiator"] = True
+            active[peer.room_id]["initiator"] = False
+
+    async def _await_accept(self, timeout: float) -> bool:
+        """Wait for a rung room to say yes — i.e. for its accept turn to
+        pair us. Polls rather than waiting on an event because the
+        pairing is done by another task through the shared
+        ``_begin_dropin`` path, which knows nothing about phones."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if self.dropin_peer is not None:
+                return True
+            await asyncio.sleep(0.1)
+        return False
+
     async def run(self) -> None:
         await self.ws.accept()
         app = self.ws.app
@@ -127,25 +176,44 @@ class PhoneDropinSession:
         # defense-in-depth re-check) sees both ends as echo-cancelling.
         app.state.satellite_full_duplex[self.room_id] = True
         try:
-            # The target's StreamSession drives the shared pairing logic;
-            # roles in the frames are symmetric so which side is `self`
-            # only affects the initiator flags, corrected just below.
-            await target._begin_dropin(self)
-            if self.dropin_peer is not target:
-                # Lost a race (target got into another call between the
-                # feasibility check and the lock).
-                await self._safe_send_text({"type": "error", "code": "target_busy"})
-                return
+            if getattr(settings, "dropin_accept_mode", "auto") == "ring":
+                # Ring mode: the room decides. Nothing is bridged until
+                # someone there answers their own satellite, so the phone
+                # hears silence, not the room, while it waits.
+                from domovoi.streaming import ring_target_for_dropin
 
-            # _begin_dropin marked the Pi as initiator; the phone placed
-            # this call — flip the flags so the dashboard rows read true.
-            active = app.state.active_dropins
-            if self.room_id in active and self.target_room in active:
-                active[self.room_id]["initiator"] = True
-                active[self.target_room]["initiator"] = False
+                app.state.pending_dropins[self.room_id] = self
+                if not await ring_target_for_dropin(self.room_id, target):
+                    await self._safe_send_text(
+                        {"type": "error", "code": "target_busy"}
+                    )
+                    return
+                await self._safe_send_text({
+                    "type": "dropin_ringing",
+                    "peer_room": self.target_room,
+                    "peer_label": self.target_room.replace("_", " "),
+                })
+                timeout = float(
+                    getattr(settings, "dropin_ring_timeout_sec", 30.0)
+                )
+                if not await self._await_accept(timeout):
+                    await self._safe_send_text(
+                        {"type": "dropin_end", "reason": "no_answer"}
+                    )
+                    return
+            else:
+                await self._begin_dropin(target)
+                if self.dropin_peer is not target:
+                    # Lost a race (target got into another call between the
+                    # feasibility check and the lock).
+                    await self._safe_send_text(
+                        {"type": "error", "code": "target_busy"}
+                    )
+                    return
 
             await self._pump()
         finally:
+            app.state.pending_dropins.pop(self.room_id, None)
             if self.dropin_peer is not None:
                 await target._end_dropin(ended_by=self.room_id, status="ended")
             app.state.satellite_full_duplex.pop(self.room_id, None)

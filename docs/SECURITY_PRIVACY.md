@@ -46,13 +46,14 @@ flowchart TB
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
-        v1["A turn (/v1/intent), announce, drop-in"]
+        v1["A turn (/v1/intent), announce,<br/>the drop-in WebSocket"]
         v2["Play/queue music, the room queue,<br/>volume, add-by-query"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
         a3["Satellite code push (makes a Pi run new code),<br/>satellite restart / display / config rewrite"]
+        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start)"]
         a4["Git pull, clip re-render, library sweeps,<br/>wake-word recording and model push"]
         a5["Satellite log pull (a room transcript)"]
         a6["Chat-tool resync, session management"]
@@ -77,7 +78,24 @@ before setup.
 
 The ordinary actions now sit behind it: a text or voice turn
 (`POST /v1/intent`), announcements and drop-in, playback and the room
-queue, per-room volume, add-by-query. A client that presents nothing gets
+queue, per-room volume, add-by-query. The phone drop-in **WebSocket**
+(`WS /v1/dropin/{room_id}`) is on this tier too, and is checked on the
+UPGRADE rather than inside the handler: by the time a drop-in session
+object exists it has already joined the room's live microphone, so a
+caller without a credential is closed (`1008`) before one is built, and
+the room never learns a call was attempted. A browser cannot set request
+headers on a WebSocket, so that route — and only that route — also accepts
+the token as `?token=`; every HTTP route takes the header, because a query
+string ends up in access logs and `Referer` headers.
+
+A credential says *who* is calling, not that the room agreed. That is what
+`DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
+microphone as soon as a call is placed, `confirm` asks first when the call
+was asked for out loud, and **`ring` asks for every caller** — spoken,
+dashboard and phone alike. Under `ring` nothing is bridged until someone in
+that room answers their own satellite, so a stolen or shared household token
+cannot open a microphone by itself. Households that want consent on every
+call should set it. A client that presents nothing gets
 `401`; the dashboard cookie alone gets `403`, because rendering a page is
 not the same as acting in a room. The web dashboard forwards whatever the
 browser presented on every hop to the core, so signing in is enough there;

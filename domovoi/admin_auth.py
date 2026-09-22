@@ -709,25 +709,18 @@ async def require_admin_security_read(request: Request) -> None:
 DeviceCheckResult = Literal["ok", "admin", "pre-setup", "no-auth", "cookie-only", "invalid"]
 
 
-async def check_device_request(
-    request: Request, session: AsyncSession | None = None
+async def _classify_device(
+    conn: Any, presented: str | None, session: AsyncSession | None
 ) -> DeviceCheckResult:
-    """Classify a request against the device tier.
-
-    * ``ok`` — a valid ``X-Device-Token``.
-    * ``admin`` — no (valid) device token but a live admin Bearer.
-    * ``pre-setup`` — no admin credential exists yet (LAN grace).
-    * ``cookie-only`` — only the dashboard cookie: renders nothing on
-      this tier (the dashboard learns the token after login and sends
-      the header).
-    * ``no-auth`` / ``invalid`` — nothing usable / a stale token.
-    """
+    """Shared body of :func:`check_device_request` and
+    :func:`check_device_websocket`. ``conn`` only has to provide the
+    ``headers`` / ``cookies`` surface ``check_admin_request`` reads, which
+    both ``Request`` and ``WebSocket`` do."""
 
     async def _check(s: AsyncSession) -> DeviceCheckResult:
-        presented = device_token_from_request(request)
         if presented is not None and await validate_device_token(s, presented):
             return "ok"
-        admin = await check_admin_request(request, s)
+        admin = await check_admin_request(conn, s)
         if admin == "ok":
             return "admin"
         if admin == "pre-setup":
@@ -744,6 +737,59 @@ async def check_device_request(
     except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
         log.warning("device check failed: %s", e)
         return "invalid"
+
+
+async def check_device_request(
+    request: Request, session: AsyncSession | None = None
+) -> DeviceCheckResult:
+    """Classify a request against the device tier.
+
+    * ``ok`` — a valid ``X-Device-Token``.
+    * ``admin`` — no (valid) device token but a live admin Bearer.
+    * ``pre-setup`` — no admin credential exists yet (LAN grace).
+    * ``cookie-only`` — only the dashboard cookie: renders nothing on
+      this tier (the dashboard learns the token after login and sends
+      the header).
+    * ``no-auth`` / ``invalid`` — nothing usable / a stale token.
+    """
+    return await _classify_device(
+        request, device_token_from_request(request), session
+    )
+
+
+# A browser WebSocket cannot set request headers, so the household token
+# may ride in the query string on a WS UPGRADE only. Deliberately NOT
+# accepted on HTTP routes: a query string lands in access logs, proxy
+# logs and Referer headers, and every HTTP caller can set the header.
+WS_TOKEN_QUERY_PARAM = "token"
+
+
+def device_token_from_websocket(ws: Any) -> str | None:
+    """The household token a WS upgrade presents: ``X-Device-Token``
+    first (satellites and the Android app set it), then ``?token=`` (the
+    dashboard's browser socket, which cannot)."""
+    header = (ws.headers.get(DEVICE_TOKEN_HEADER.lower()) or "").strip()
+    if header:
+        return header
+    try:
+        query = (ws.query_params.get(WS_TOKEN_QUERY_PARAM) or "").strip()
+    except Exception:  # pragma: no cover — scope without a query string
+        return None
+    return query or None
+
+
+async def check_device_websocket(
+    ws: Any, session: AsyncSession | None = None
+) -> DeviceCheckResult:
+    """:func:`check_device_request` for a WebSocket UPGRADE, with the
+    ``?token=`` fallback. Same result vocabulary."""
+    return await _classify_device(ws, device_token_from_websocket(ws), session)
+
+
+async def websocket_device_ok(ws: Any) -> bool:
+    """True when a WS upgrade may proceed on the device tier: a valid
+    household token, an admin Bearer, or the pre-setup LAN grace."""
+    return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
 
 
 async def require_device(request: Request) -> None:
