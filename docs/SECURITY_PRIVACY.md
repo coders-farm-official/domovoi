@@ -336,10 +336,39 @@ code on every satellite** (via the sudoers-allowlisted
 `permissions.satellite_root` + a mandatory warnings entry surfaced at
 install-confirm time, transfer is sha256-manifest-verified, and only
 admin-enabled plugins' payloads flow — but there is **no sandbox**, by
-design and named honestly. Corollary: the satellite's service account is
-root-equivalent on its own device (it already executes server-synced code
-and holds the apply-payload sudoers line) — treat "installed a plugin with
-satellite_root" as "trusted its publisher with your satellites".
+design and named honestly. Treat "installed a plugin with
+`satellite_root`" as "trusted its publisher with your satellites".
+
+**The satellite service account — what it can and cannot do.** On a card
+from media prep, the account the client runs as (`domovoi`) is **not in the
+`sudo` group**, Pi OS's `010_pi-nopasswd` drop-in is masked by the
+bootstrap, and its root access is exactly the lines in
+`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli device
+connect wlan0`, `systemctl --no-block restart` of its own two units,
+`domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
+those targets is a root-owned path the account cannot edit, and every
+script root runs on the device (stage 1, stage 2 as
+`/usr/local/sbin/domovoi-stage2`, the two helpers, `domovoi-status`) lives
+outside the account's home. `domovoi-apply-payload` reads the request file
+only for *which* plugin slugs to apply; it copies each slug's files out of
+the account's mirror into a root-owned staging directory of its own,
+skipping anything that is not a regular file, runs the post-install script
+from there, and writes its log (`/var/log/domovoi-payload-apply.log`) and
+state (`/var/lib/domovoi/plugin_payload_state.json`) to root-owned paths
+it chose itself. `sudo -n true` as the service account fails.
+
+What that does **not** buy, stated plainly: a plugin with `satellite_root`
+still runs root code, because that is what the permission means — the
+account is prevented from *choosing* what root runs, not from *receiving*
+it from the server it trusts. And `domovoi-provisioning.service` (root,
+every boot until the unit is adopted, a no-op afterwards) still starts
+`python -m satellite.provisioning_mode` from the account's own venv and
+code tree; moving that onto a root-owned copy is the remaining item. The
+console login media prep prints on the label is this same account: it
+gives an operator a shell and the logs, not root. Root on a shipped unit
+means the card in another machine, or a re-flash — and these guarantees
+hold only for cards prepared after this change (an earlier Pi keeps its
+`sudo` membership until it is re-prepped and re-flashed).
 
 **This does not add encryption.** Pairing authenticates *which device is this
 room*; it does not encrypt the audio. Combined with the deferred TLS item

@@ -229,7 +229,10 @@ Three finishing moves, all from PROVISIONING.md:
    `domovoi-satellite.service` so the satellite starts at boot and
    restarts on failure. After this, recovery from any weirdness is
    "unplug it and plug it back in."
-2. **Three sudoers entries** — least-privilege single-command grants:
+2. **The sudoers entries** — single-command grants for root-owned
+   helpers (what each helper may do is bounded by the helper; the
+   posture note in [§6.7](../satellite/PROVISIONING.md) says what
+   that does and does not mean):
    - *Wi-Fi self-heal* ([§6.7](../satellite/PROVISIONING.md)): lets the
      client run exactly `wpa_cli -i wlan0 reassociate` to un-wedge a
      Wi-Fi link on its own, once it has lost the server and the server

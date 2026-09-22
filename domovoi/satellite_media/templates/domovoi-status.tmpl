@@ -14,7 +14,8 @@
 # or an array that has not enumerated must still finish setting itself up —
 # a dark ring is a disappointment, a failed provision is a returned unit.
 #
-# Placeholders: @HOME@, @ANNOUNCE@, @ALSA_CARD@, @ALSA_CONTROL@
+# Placeholders: @HOME@, @USER@ (rendered by stage 1), @ANNOUNCE@,
+# @ALSA_CARD@, @ALSA_CONTROL@ (rendered by the media builder)
 
 set -u
 
@@ -28,6 +29,12 @@ ANNOUNCE="@ANNOUNCE@"
 # one boot and no longer.
 LAST=/run/domovoi-last-said
 VENVPY="@HOME@/satellite-venv/bin/python"
+SAT_USER="@USER@"
+# Three of this script's callers are root and one is the satellite user,
+# and the two must not share files: root writing into a directory the
+# satellite user owns is a write that user can redirect.
+AS_ROOT=0
+[ "$(id -u)" = "0" ] && AS_ROOT=1
 # Setup runs before any of the client's audio config exists, so aplay would
 # otherwise land on the ALSA default — the Pi's onboard jack or HDMI, not the
 # USB array the customer's speaker is actually plugged into. Empty means the
@@ -38,7 +45,11 @@ ALSA_CONTROL="@ALSA_CONTROL@"
 # stage 2 into their own logs, the client into a subprocess it never reads —
 # so without this there is no record anywhere of whether a clip played, only
 # a customer reporting silence. That is the position this file put us in.
-SLOG="@HOME@/.domovoi/setup-status.log"
+if [ "$AS_ROOT" = "1" ]; then
+  SLOG=/var/log/domovoi-setup-status.log
+else
+  SLOG="@HOME@/.domovoi/setup-status.log"
+fi
 note() { printf '%s %s
 ' "$(date -Is 2>/dev/null)" "$*" >>"$SLOG" 2>/dev/null || true; }
 
@@ -185,8 +196,17 @@ if [ -n "$EFFECT" ]; then xvf led_effect "$EFFECT" && RING_OK=1; fi
 # no on-chip effects — every frame is clocked out over SPI by whoever owns
 # the bus — so a phase can only be a SOLID colour here, and only once the
 # venv and spidev exist. The XVF is lit from step 3b; this board is not.
+#
+# The venv and the code tree are the satellite user's, so root never
+# executes them: a root caller drops to that account first. The spi/gpio
+# groups it holds are all the ring needs.
 if [ "$RING_OK" = "0" ] && [ -x "$VENVPY" ]; then
-  ( cd "@HOME@/domovoi" && "$VENVPY" -m satellite.leds "$STATE" ) >/dev/null 2>&1 || true
+  if [ "$AS_ROOT" = "1" ]; then
+    runuser -u "$SAT_USER" -- sh -c 'cd "$1" && exec "$2" -m satellite.leds "$3"' \
+      sh "@HOME@/domovoi" "$VENVPY" "$STATE" >/dev/null 2>&1 || true
+  else
+    ( cd "@HOME@/domovoi" && "$VENVPY" -m satellite.leds "$STATE" ) >/dev/null 2>&1 || true
+  fi
 fi
 
 # Never say the same line twice running. Provisioning re-enters its states

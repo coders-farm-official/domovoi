@@ -102,15 +102,31 @@ fi
 if ! skip user; then
   info bootstrapping create-user
   id "$SAT_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$SAT_USER"
-  # `sudo` matters: this is also the console account media prep hands the
-  # operator (userconf.txt), and without it there is NO route to root on the
-  # device at all — the root account is locked on Pi OS and the
-  # sudoers.d/domovoi-satellite file grants three specific commands only.
-  # A unit you cannot get a shell on is a unit you cannot support.
-  usermod -aG sudo,audio,video,plugdev,gpio,spi,i2c "$SAT_USER" 2>/dev/null || true
+  # The hardware groups the client needs, and NOT sudo. This account runs
+  # code the server syncs to it, so its root access is exactly the helper
+  # lines in sudoers.d/domovoi-satellite (step 7) and nothing wider. It is
+  # also the console login media prep hands the operator (userconf.txt):
+  # that gives a shell and the logs, not root - root on a shipped unit
+  # means the card in another machine, or a re-flash.
+  usermod -aG audio,video,plugdev,gpio,spi,i2c "$SAT_USER" 2>/dev/null || true
   done_step user
 fi
 HOME_DIR="$(getent passwd "$SAT_USER" | cut -d: -f6)"
+
+# The service account's root access is the sudoers.d file rendered in step
+# 7, full stop. Pi OS's own first-boot user setup (userconf.txt, which runs
+# on boot 2) puts the account it handles in the sudo group and writes
+# /etc/sudoers.d/010_pi-nopasswd for it, so this is not a skip-marked step:
+# it runs here, and again from stage 2 after that has happened. Masking the
+# file (a comment, 0440) rather than deleting it means a later rename-user
+# has nothing to rewrite.
+harden_account() {
+  gpasswd -d "$SAT_USER" sudo >/dev/null 2>&1 || true
+  printf '# masked by the Domovoi bootstrap: the satellite account has no blanket sudo\n' \
+    >/etc/sudoers.d/010_pi-nopasswd
+  chmod 0440 /etc/sudoers.d/010_pi-nopasswd
+}
+harden_account
 
 # 3. Debs (offline cache; ordering handled by a double pass).
 if ! skip debs; then
@@ -168,8 +184,8 @@ if [ -d "$PAYDIR/xvf_host" ] && ! skip xvfhost; then
 fi
 
 if [ -f "$PAYDIR/system/domovoi-status" ] && ! skip statushelper; then
-  sed -e "s|@HOME@|$HOME_DIR|g" "$PAYDIR/system/domovoi-status" \
-    >/usr/local/sbin/domovoi-status
+  sed -e "s|@HOME@|$HOME_DIR|g" -e "s|@USER@|$SAT_USER|g" \
+    "$PAYDIR/system/domovoi-status" >/usr/local/sbin/domovoi-status
   chmod 0755 /usr/local/sbin/domovoi-status
   done_step statushelper
 fi
@@ -243,7 +259,9 @@ if ! skip code; then
   [ -d "$PAYDIR/sounds" ] && cp -r "$PAYDIR/sounds" "$HOME_DIR/.domovoi/" || true
   [ -d "$PAYDIR/wake_models" ] && cp -r "$PAYDIR/wake_models" "$HOME_DIR/.domovoi/" || true
   [ -d "$PAYDIR/plugins" ] && cp -r "$PAYDIR/plugins" "$HOME_DIR/.domovoi/plugin_payloads" || true
-  [ -d "$PAYDIR/debs" ] && cp -r "$PAYDIR/debs" "$HOME_DIR/.domovoi/deb_cache" || true
+  # The deb cache stays where step 1 unpacked it ($PAYDIR/debs, root's):
+  # apply-payload installs from there. A copy in the home directory would
+  # be packages the satellite account can edit and root then installs.
   [ "$SAT_TYPE" = "video" ] && echo video >"$HOME_DIR/.domovoi/image_sat_type" || true
   # The mic board is decided at prepare time; provisioning mode needs it
   # to fill device_profile without asking the customer.
@@ -397,13 +415,14 @@ if ! skip units; then
   # Re-install rather than assume step 3b ran: a card whose payload predates
   # the helper still gets it once the payload is refreshed.
   if [ -f "$PAYDIR/system/domovoi-status" ]; then
-    sed -e "s|@HOME@|$HOME_DIR|g" "$PAYDIR/system/domovoi-status" \
-      >/usr/local/sbin/domovoi-status
+    sed -e "s|@HOME@|$HOME_DIR|g" -e "s|@USER@|$SAT_USER|g" \
+      "$PAYDIR/system/domovoi-status" >/usr/local/sbin/domovoi-status
     chmod 0755 /usr/local/sbin/domovoi-status
   fi
-  install -m 0755 "$PAYDIR/bootstrap/stage2.sh" \
-    "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
-  chown "$SAT_USER:$SAT_USER" "$HOME_DIR/domovoi/satellite/scripts/stage2.sh"
+  # Stage 2 runs as root (domovoi-bootstrap.service), so it lives with the
+  # other root helpers - never in the code tree the satellite account owns
+  # and the server rewrites on every upgrade.
+  install -m 0755 "$PAYDIR/bootstrap/stage2.sh" /usr/local/sbin/domovoi-stage2
   for U in domovoi-satellite domovoi-provisioning domovoi-bootstrap; do
     sed -e "s|@USER@|$SAT_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
       "$PAYDIR/system/$U.service" >"/etc/systemd/system/$U.service"

@@ -1,5 +1,6 @@
 # Domovoi satellite — stage-2 bootstrap oneshot (post-Wi-Fi finish work).
-# Rendered by stage 1 with @USER@/@HOME@; self-disables via the
+# Rendered by stage 1 with @USER@/@HOME@ (the script itself is installed
+# root-owned as /usr/local/sbin/domovoi-stage2); self-disables via the
 # bootstrap-done condition once the satellite unit is up.
 
 [Unit]
@@ -12,7 +13,7 @@ ConditionPathExists=!/var/lib/domovoi/bootstrap-done
 [Service]
 Type=oneshot
 User=root
-ExecStart=/bin/bash @HOME@/domovoi/satellite/scripts/stage2.sh
+ExecStart=/usr/local/sbin/domovoi-stage2
 Restart=on-failure
 # Two minutes, not thirty seconds: a failing run of this unit can now be
 # retrying a pip install of numpy/scipy/onnxruntime, and a Pi Zero 2 W

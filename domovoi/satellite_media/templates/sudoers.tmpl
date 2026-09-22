@@ -1,7 +1,10 @@
 # Domovoi satellite sudoers set (rendered by stage 1; 0440 in
-# /etc/sudoers.d/domovoi-satellite). One line per allowlisted command —
-# the exact argv forms the client invokes; see PROVISIONING.md §6.7/§8.1
-# and docs/SECURITY_PRIVACY.md for the posture.
+# /etc/sudoers.d/domovoi-satellite). This file is the WHOLE of the service
+# account's root access: it is not in the sudo group, and the bootstrap
+# masks Pi OS's 010_pi-nopasswd. One line per helper - the exact argv the
+# client invokes, every target a root-owned path the account cannot edit.
+# What each helper does with root is bounded by the helper itself; see
+# PROVISIONING.md §6.7/§8.1 and docs/SECURITY_PRIVACY.md for the posture.
 @USER@ ALL=(root) NOPASSWD: /usr/sbin/wpa_cli -i wlan0 reassociate
 # A portal-onboarded satellite is NetworkManager end to end, and wpa_cli
 # cannot talk to an NM-driven supplicant - so the line above recovers
@@ -9,6 +12,9 @@
 @USER@ ALL=(root) NOPASSWD: /usr/bin/nmcli device connect wlan0
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
+# Installs the packages and runs the post-install script of a plugin the
+# SERVER declared, from a staging copy root makes for itself - the request
+# file names slugs, never paths. See satellite/scripts/domovoi-apply-payload.
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-apply-payload
 # The clock and the time zone come from the server, on every connect, and
 # setting either needs root. The helper only reads the server's /v1/time

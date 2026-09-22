@@ -125,7 +125,7 @@ The 12-LED ring is driven through Seeed's `xvf_host` CLI. Skip this and the sate
   sudo /opt/xvf3800/xvf_host led_effect 3 && sudo /opt/xvf3800/xvf_host led_color 0x00ff50   # solid green
   sudo /opt/xvf3800/xvf_host led_effect 0                                                     # off
   ```
-- [ ] Add a passwordless sudoers entry so the client can drive the ring without a prompt (mirrors the wifi entry, least-privilege — one binary):
+- [ ] Add a passwordless sudoers entry so the client can drive the ring without a prompt (mirrors the wifi entry — one root-owned binary; the posture note in PROVISIONING.md §6.7 applies):
   ```bash
   sudo visudo -f /etc/sudoers.d/satellite-xvf
   # add, replacing <username> with the service user (the User= in the systemd unit):

@@ -359,9 +359,9 @@ If you see the WebSocket connect immediately drop, or never see `server ready`, 
 
 ### 6.7 Sudoers entry for the WiFi self-heal
 
-The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single locked-down sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
+The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
 
-This is **least-privilege by design** — the satellite process gains the ability to reassociate the WiFi link, and nothing else.
+> **What the sudoers lines are, and are not.** A card from media prep renders all of these lines into `/etc/sudoers.d/domovoi-satellite` (see `domovoi/satellite_media/templates/sudoers.tmpl`), keeps the service account **out of the `sudo` group**, and masks Pi OS's `010_pi-nopasswd`, so that file is the whole of the account's root access — `sudo -n true` fails. Each line names one root-owned helper the account cannot edit; what the helper does with root is bounded by the helper (the plugin-payload helper, for instance, runs whatever post-install script the server declared for an enabled plugin — see [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md), "The satellite service account"). On a hand-built satellite the user you created in the imager is normally in `sudo`; these entries then only remove the password prompt for the client's own calls. Remove the account from `sudo` (`sudo gpasswd -d <username> sudo`) and delete `/etc/sudoers.d/010_pi-nopasswd` if you want the prepared-card posture.
 
 ```bash
 sudo visudo -f /etc/sudoers.d/satellite-wifi
@@ -424,7 +424,7 @@ After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reco
 
 ### 8.1 Sudoers entry for self-restart
 
-The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one locked-down, no-password, single-command sudoers line. Least-privilege: the satellite gains the ability to restart its own unit, and nothing else.
+The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
 
 > **Upgrading an existing satellite?** This entry is part of the rollout, not just fresh provisioning — add it to every Pi you push the new client to, or self-restart silently won't work there.
 
@@ -619,7 +619,7 @@ sudo chmod +x /opt/xvf3800/xvf_host
 
 - [ ] Quick LED test (runs with no missing-lib error): `sudo /opt/xvf3800/xvf_host led_effect 3 && sudo /opt/xvf3800/xvf_host led_color 0x00ff50` turns the ring solid green; `sudo /opt/xvf3800/xvf_host led_effect 0` turns it off.
 
-`xvf_host` typically needs root for USB access. The satellite probes a plain call first and falls back to `sudo -n`, so add a passwordless sudoers entry (mirrors §6.7's wpa_cli pattern — least-privilege, one binary):
+`xvf_host` typically needs root for USB access. The satellite probes a plain call first and falls back to `sudo -n`, so add a passwordless sudoers entry (mirrors §6.7's wpa_cli pattern — one root-owned binary, and the posture note there applies):
 
 ```bash
 sudo visudo -f /etc/sudoers.d/satellite-xvf

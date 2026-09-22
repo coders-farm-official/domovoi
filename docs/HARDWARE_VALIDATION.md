@@ -48,7 +48,7 @@ pre-configuration.
 7. [ ] **Plugin payload:** enable a plugin with a `[satellite]` section →
        dashboard **Upgrade satellite** → files land under
        `~/.domovoi/plugin_payloads/<slug>/`; root steps run via
-       `domovoi-apply-payload` (check `~/.domovoi/payload_apply.log`);
+       `domovoi-apply-payload` (check `/var/log/domovoi-payload-apply.log`);
        disabling the plugin prunes exactly its subtree on the next
        upgrade.
 8. [ ] **Mid-adopt unplug:** yank the cable between the adopt click and

@@ -88,7 +88,7 @@ and it's the same amount of work the second time you do it.
 
 The version panel's **Restart to apply changes** button bounces both
 services so pulled code actually loads. The service user can't do that
-unaided, so grant exactly that one command — the same least-privilege
+unaided, so grant exactly that one command — the same single-command
 pattern the satellite uses for its own self-restart
 ([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1):
 

@@ -590,8 +590,12 @@ satellite must say so, and the installer surfaces it at confirm time.
 validation: `files_dir` exists, no symlinks, under the cap;
 `post_install` exists inside the plugin root and starts with a shebang.
 Scripts run with `DOMOVOI_PLUGIN_SLUG` / `DOMOVOI_PLUGIN_DIR` env via the
-sudoers-allowlisted `domovoi-apply-payload` helper; output lands in the
-device's `~/.domovoi/payload_apply.log`. Security posture:
+sudoers-allowlisted `domovoi-apply-payload` helper, which first copies the
+slug's whole `files_dir` into a root-owned staging directory and runs the
+script from there (so `DOMOVOI_PLUGIN_DIR` is that staged copy, not
+`~/.domovoi/plugin_payloads/<slug>/`; regular files only — a symlink in
+`files_dir` does not travel). Output lands in the device's
+`/var/log/domovoi-payload-apply.log`. Security posture:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### `[android]`
