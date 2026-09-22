@@ -268,3 +268,30 @@ def test_the_proxy_still_explains_an_fm_row_without_a_url(proxy_client) -> None:
 def test_the_proxy_404s_for_a_station_that_is_not_there(proxy_client) -> None:
     resp = proxy_client.get("/api/plugins/radio/stations/9999/stream")
     assert resp.status_code == 404
+
+
+# ─── The ICY poller's own fetch ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("url", REFUSED_STREAM_URLS)
+def test_the_icy_poller_never_fetches_a_house_local_station(monkeypatch, url) -> None:
+    """The ICY poller runs unattended every few minutes against station
+    rows — the last place a URL pointing at the house should be opened.
+    It reports the refusal the same way it reports "no ICY here", so the
+    tristate logic upstream is unchanged."""
+    import asyncio
+
+    import httpx
+
+    from domovoi_plugin_radio.clients.icy_metadata import RealIcyClient
+
+    monkeypatch.setattr(net_safety, "resolve_host", lambda host: [])
+
+    def never(*args, **kwargs):  # pragma: no cover — opening IS the failure
+        raise AssertionError(f"the ICY poller opened {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", never)
+
+    result = asyncio.run(RealIcyClient().fetch(url))
+    assert result.supported is False
+    assert result.error.startswith("refused:")
