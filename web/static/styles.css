@@ -99,16 +99,6 @@
 .crumbs .sep { color: var(--fg-faint); }
 .topbar .spacer { flex: 1; }
 
-.cmdk {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 30px; padding: 0 10px 0 10px;
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-  background: var(--card); box-shadow: var(--inner-highlight);
-  color: var(--fg-subtle); font-size: 12px; min-width: 220px;
-  cursor: pointer;
-}
-.cmdk .key { margin-left: auto; font-family: var(--ff-mono); font-size: 10px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--sunken); }
-
 .theme-toggle {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 8px;
@@ -293,7 +283,6 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item .badge { display: none; }
   .main { padding: 16px; }
   .topbar { padding: 0 14px; gap: 8px; }
-  .cmdk { min-width: 0; flex: 1; }
 }
 
 /* ================================================================

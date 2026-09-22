@@ -546,11 +546,9 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
         <strong>{labels[route]}</strong>
       </div>
       <div className="spacer"/>
-      <div className="cmdk" role="button" tabIndex={0}>
-        <Icon name="search" size={13}/>
-        <span>search anything</span>
-        <span className="key">⌘K</span>
-      </div>
+      {/* No search box here: there is no command palette yet, and a
+          tab-focusable "search anything ⌘K" that did nothing advertised
+          one (F-007). Add the control back together with the feature. */}
       <button className="theme-toggle" onClick={() => setShowServers(true)}
               title="switch domovoi">
         <Icon name="server" size={14} className="ic"/>
