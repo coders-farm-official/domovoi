@@ -27,7 +27,7 @@ class ApiClientTest {
 
     @Before fun up() {
         server = MockWebServer().also { it.start() }
-        api = ApiClient { server.url("/").toString().trimEnd('/') }
+        api = ApiClient(baseUrlProvider = { server.url("/").toString().trimEnd('/') })
     }
 
     @After fun down() = server.shutdown()
@@ -144,7 +144,7 @@ class ApiClientTest {
     }
 
     @Test fun noServerConfigured_failsBeforeAnyRequest() = runBlocking {
-        val blank = ApiClient { "" }
+        val blank = ApiClient(baseUrlProvider = { "" })
         try {
             blank.get("/api/health")
             fail("expected IOException")

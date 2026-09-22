@@ -34,6 +34,8 @@ class Prefs(private val context: Context) {
 
     private val kServer = stringPreferencesKey("server_url")
     private val kServers = stringPreferencesKey("known_servers")
+    private val kTrusted = stringPreferencesKey("trusted_servers")
+    private val kDeviceTokens = stringPreferencesKey("device_tokens")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
@@ -43,6 +45,15 @@ class Prefs(private val context: Context) {
 
     private val _knownServers = MutableStateFlow<List<KnownServer>>(emptyList())
     val knownServers: StateFlow<List<KnownServer>> = _knownServers
+
+    /** Servers the user confirmed in the picker (ServerCredentials). */
+    private val _trustedServers = MutableStateFlow<Set<String>>(emptySet())
+    val trustedServers: StateFlow<Set<String>> = _trustedServers
+
+    /** Household device token of the ACTIVE server; null = not paired yet. */
+    private val _deviceToken = MutableStateFlow<String?>(null)
+    val deviceToken: StateFlow<String?> = _deviceToken
+    private var deviceTokens: Map<String, String> = emptyMap()
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)
     val themeMode: StateFlow<ThemeMode> = _themeMode
@@ -62,6 +73,18 @@ class Prefs(private val context: Context) {
             _knownServers.value = runCatching {
                 Json.decodeFromString(ListSerializer(KnownServer.serializer()), p[kServers] ?: "[]")
             }.getOrDefault(emptyList())
+            // An install from before the trust list existed only ever saved a
+            // server because the user picked it by hand, so those count as
+            // trusted rather than being asked about again.
+            _trustedServers.value = p[kTrusted]?.let { ServerCredentials.decodeTrusted(it) }
+                ?: (_knownServers.value.map { ServerCredentials.normalize(it.url) }.toSet() +
+                    setOfNotNull(_serverUrl.value.takeIf { it.isNotBlank() })).also { seeded ->
+                    scope.launch {
+                        context.dataStore.edit { it[kTrusted] = ServerCredentials.encodeTrusted(seeded) }
+                    }
+                }
+            deviceTokens = ServerCredentials.decodeTokens(p[kDeviceTokens])
+            _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
@@ -70,11 +93,51 @@ class Prefs(private val context: Context) {
         }
     }
 
-    fun setServerUrl(url: String) {
-        val clean = url.trim().trimEnd('/')
+    /**
+     * Point the app at [url]. Refused for a server the user has not trusted
+     * (nothing written, `false` returned) — the picker shows the address and
+     * asks first, then calls [trustServer].
+     */
+    fun setServerUrl(url: String): Boolean {
+        val clean = ServerCredentials.normalize(url)
+        if (clean.isNotBlank() && !isTrusted(clean)) return false
         _serverUrl.value = clean
+        _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
+        return true
     }
+
+    // ── Trust ──────────────────────────────────────────────────────────
+
+    fun isTrusted(url: String): Boolean =
+        ServerCredentials.isTrusted(_trustedServers.value, url)
+
+    fun trustServer(url: String) = setTrusted(ServerCredentials.withTrusted(_trustedServers.value, url))
+
+    fun untrustServer(url: String) = setTrusted(ServerCredentials.withoutTrusted(_trustedServers.value, url))
+
+    private fun setTrusted(next: Set<String>) {
+        _trustedServers.value = next
+        scope.launch {
+            context.dataStore.edit { it[kTrusted] = ServerCredentials.encodeTrusted(next) }
+        }
+    }
+
+    // ── Household device token ─────────────────────────────────────────
+
+    /** Store (or, with a blank value, forget) the active server's token. */
+    fun setDeviceToken(token: String?) = setDeviceTokenFor(_serverUrl.value, token)
+
+    fun setDeviceTokenFor(url: String, token: String?) {
+        val next = ServerCredentials.withToken(deviceTokens, url, token)
+        deviceTokens = next
+        _deviceToken.value = ServerCredentials.tokenFor(next, _serverUrl.value)
+        scope.launch {
+            context.dataStore.edit { it[kDeviceTokens] = ServerCredentials.encodeTokens(next) }
+        }
+    }
+
+    fun isPaired(): Boolean = !_deviceToken.value.isNullOrBlank()
 
     fun upsertKnownServer(url: String, name: String? = null) {
         val clean = url.trim().trimEnd('/')
@@ -85,8 +148,11 @@ class Prefs(private val context: Context) {
         setKnownServers(kept + KnownServer(clean, name ?: existing))
     }
 
+    /** Forget a server completely: its entry, its trust and its token. */
     fun removeKnownServer(url: String) {
         setKnownServers(_knownServers.value.filter { it.url != url })
+        untrustServer(url)
+        setDeviceTokenFor(url, null)
     }
 
     private fun setKnownServers(list: List<KnownServer>) {

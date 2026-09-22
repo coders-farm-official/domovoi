@@ -18,7 +18,6 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -77,8 +76,9 @@ class DropinCallClient(
         }
 
         startPlayback()
+        // Carries this phone's household device token, like every other call.
         ws = api.http.newWebSocket(
-            Request.Builder().url(url).build(),
+            api.wsRequest(url),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     startMic()
@@ -112,6 +112,7 @@ class DropinCallClient(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    response?.let { api.notePossiblePairingRefusal(it.code, it.message) }
                     if (_state.value is CallState.Connecting || _state.value is CallState.Live) {
                         teardown()
                         _state.value = CallState.Failed(t.message ?: "connection lost")

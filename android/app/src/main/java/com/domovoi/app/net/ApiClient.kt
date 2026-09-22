@@ -2,6 +2,8 @@ package com.domovoi.app.net
 
 import com.domovoi.app.data.Prefs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -29,7 +31,13 @@ val DomovoiJson = Json {
     isLenient = true
 }
 
-class ApiException(val status: Int, message: String) : IOException(message)
+class ApiException(
+    val status: Int,
+    message: String,
+    /** The server asked this phone to pair, not to log in (see
+     *  [isDeviceTokenRefusal]) — the UI routes to the pairing screen. */
+    val deviceTokenRequired: Boolean = false,
+) : IOException(message)
 
 /**
  * Toast text for a failed mutation (CONVENTIONS rule 4). A non-2xx response is
@@ -51,22 +59,53 @@ fun failureText(action: String, e: Throwable): String {
  * (apiGet/apiPost/apiPatch/apiDelete/apiUpload). Same error contract:
  * non-2xx throws with "{status} {reason}: {body}".
  */
-class ApiClient(private val baseUrlProvider: () -> String) {
-    /** Production wiring: the base URL follows the saved server preference. */
-    constructor(prefs: Prefs) : this({ prefs.serverUrl.value })
+class ApiClient(
+    private val baseUrlProvider: () -> String,
+    private val deviceTokenProvider: () -> String? = { null },
+) {
+    /** Production wiring: the base URL and the household device token both
+     *  follow the saved preferences for the active server. */
+    constructor(prefs: Prefs) : this({ prefs.serverUrl.value }, { prefs.deviceToken.value })
 
+    /** The ONE http client the app uses — JSON calls, media3 playback,
+     *  Coil images and both WebSockets — so the device token rides on
+     *  everything (DeviceAuthInterceptor). */
     val http: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(DeviceAuthInterceptor(deviceTokenProvider))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    val baseUrl: String get() = baseUrlProvider()
+    /** Flipped when the server refuses this phone for want of the device
+     *  token; the shell shows the pairing screen while it is true, and
+     *  pairing (or switching server) clears it. */
+    private val _pairingRequired = MutableStateFlow(false)
+    val pairingRequired: StateFlow<Boolean> = _pairingRequired
+
+    fun clearPairingRequired() { _pairingRequired.value = false }
+
+    /** Called from the response path and from the WebSocket listeners,
+     *  which see the refusal as a failed upgrade rather than a body. */
+    fun notePossiblePairingRefusal(status: Int, body: String?) {
+        if (isDeviceTokenRefusal(status, body)) _pairingRequired.value = true
+    }
+
+    val baseUrl: String get() = baseUrl()
+
+    private fun baseUrl(): String = baseUrlProvider()
+
+    val deviceToken: String? get() = deviceTokenProvider()
 
     fun absolute(path: String): String {
         if (path.startsWith("http://") || path.startsWith("https://")) return path
         return baseUrl + path
     }
+
+    /** A WebSocket upgrade carrying this phone's household token. Used by
+     *  StateBus (/ws/state) and DropinCallClient (/v1/dropin/{room}). */
+    fun wsRequest(url: String): Request =
+        Request.Builder().url(url).withDeviceToken(deviceTokenProvider()).build()
 
     private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
         enqueue(object : Callback {
@@ -88,8 +127,13 @@ class ApiClient(private val baseUrlProvider: () -> String) {
             http.newCall(req).await().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    throw ApiException(resp.code, "${resp.code} ${resp.message}: ${text.take(200)}")
+                    val pairing = isDeviceTokenRefusal(resp.code, text)
+                    if (pairing) _pairingRequired.value = true
+                    throw ApiException(
+                        resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
+                    )
                 }
+                if (_pairingRequired.value) _pairingRequired.value = false
                 text
             }
         }

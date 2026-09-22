@@ -128,6 +128,7 @@ fun AudiobooksScreen() {
             app.api.absolute("/api/audiobooks/${book.id}/download"),
             name,
             mimeType = if (book.is_folder) "application/zip" else null,
+            deviceToken = app.prefs.deviceToken.value,
         )
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }

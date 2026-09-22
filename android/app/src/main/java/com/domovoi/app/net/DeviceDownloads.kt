@@ -12,6 +12,10 @@ import android.os.Environment
  * (under Downloads/Domovoi/) with a progress notification, so downloads
  * survive app death and show up in the Files app.
  *
+ * The download carries this phone's household device token like every other
+ * request; DownloadManager is a separate HTTP stack, so it is set as an
+ * explicit request header rather than by the shared interceptor.
+ *
  * The server marks these responses `Content-Disposition: attachment`
  * (?download=1 / /download endpoints), but DownloadManager wants an explicit
  * destination name — callers pass a title-derived name and [safeName] scrubs
@@ -31,7 +35,13 @@ object DeviceDownloads {
      * user-showable error message, or null when the download was enqueued
      * (completion is the DownloadManager notification's job).
      */
-    fun enqueue(context: Context, url: String, fileName: String, mimeType: String? = null): String? {
+    fun enqueue(
+        context: Context,
+        url: String,
+        fileName: String,
+        mimeType: String? = null,
+        deviceToken: String? = null,
+    ): String? {
         return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url))
@@ -41,6 +51,11 @@ object DeviceDownloads {
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(true)
             mimeType?.let { req.setMimeType(it) }
+            // DownloadManager fetches outside the app's OkHttp client, so the
+            // household device token has to be attached by hand here or this
+            // would be the one request the app makes without it.
+            deviceToken?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { req.addRequestHeader(DEVICE_TOKEN_HEADER, it) }
             dm.enqueue(req)
             null
         } catch (e: SecurityException) {

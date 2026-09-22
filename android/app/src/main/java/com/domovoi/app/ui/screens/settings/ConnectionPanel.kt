@@ -57,8 +57,10 @@ internal fun ConnectionPanel() {
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
     val connected by app.bus.connected.collectAsState()
+    val deviceToken by app.prefs.deviceToken.collectAsState()
 
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var tokenDraft by remember(serverUrl) { mutableStateOf("") }
 
     // The server is the source of truth for this device's name (it may have
     // been renamed from the dashboard), so read it back from the idempotent
@@ -110,10 +112,63 @@ internal fun ConnectionPanel() {
                     Button(
                         enabled = url.isNotBlank(),
                         onClick = {
-                            app.prefs.setServerUrl(url)
-                            toast("server saved — reconnecting")
+                            // A hand-typed address is a choice, so typing it
+                            // here IS the trust decision (the picker's dialog
+                            // is for the ones a LAN sweep turned up).
+                            app.prefs.trustServer(url)
+                            if (app.prefs.setServerUrl(url)) toast("server saved — reconnecting")
+                            else toast("couldn't switch to that server")
                         },
                     ) { Text("Save & reconnect") }
+                }
+            }
+        }
+
+        item {
+            PanelCard(
+                "Household token",
+                "What this phone presents so the server knows it belongs here. " +
+                    "An admin finds it on the dashboard under Settings → Devices.",
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        StatusDot(if (deviceToken != null) Tone.Ok else Tone.Idle, live = false)
+                        Text(
+                            if (deviceToken != null) "paired" else "not paired",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (deviceToken != null) Domovoi.colors.ok else Domovoi.colors.fgMuted,
+                        )
+                    }
+                    if (deviceToken != null) {
+                        Text(
+                            "This phone sends the household token with every request. " +
+                                "Paste a new one here after an admin rotates it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgMuted,
+                        )
+                    }
+                    PairingField(
+                        token = tokenDraft,
+                        onTokenChange = { tokenDraft = it },
+                        label = if (deviceToken != null) "replace" else "pair",
+                        onPair = {
+                            app.prefs.setDeviceToken(tokenDraft.trim())
+                            app.api.clearPairingRequired()
+                            tokenDraft = ""
+                            toast("this phone is paired")
+                        },
+                    )
+                    if (deviceToken != null) {
+                        Button(
+                            onClick = {
+                                app.prefs.setDeviceToken(null)
+                                toast("this phone is no longer paired")
+                            },
+                        ) { Text("forget the token") }
+                    }
                 }
             }
         }

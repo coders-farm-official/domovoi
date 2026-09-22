@@ -487,6 +487,14 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 * `scripts` — zero-build JSX files, Babel-compiled by the dashboard shell and
   wrapped in an IIFE. Export pages **only** through the namespaced registry:
   `window.DomovoiPlugins.<slug>.pages.<PageName>` — never a bare global.
+  The shell fetches and runs them only for a server the user has trusted
+  (the server switcher asks before it connects, see
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md)); pointed at an untrusted
+  address the dashboard renders its core pages and skips every plugin
+  script. Your scripts run in the dashboard's origin and inherit its
+  credentials — including the household device token — so call the shell's
+  `apiGet` / `apiPost` from `data.js` rather than a bare `fetch` and the
+  `X-Device-Token` header rides along for free.
 * `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
   `nav_order` slots among core pages (core publishes its own orders; default
   50); `badge` polls an endpoint and renders `payload[key]` as a count.
@@ -597,7 +605,9 @@ device's `~/.domovoi/payload_apply.log`. Security posture:
 ### `[android]`
 
 `capabilities = ["stations"]` — free-form strings the Android app gates
-features on. See [API Reference](API_REFERENCE.md).
+features on. See [API Reference](API_REFERENCE.md). The app reads the
+manifest only after the user has trusted the server in its picker, so a
+capability-gated screen never appears for a server nobody confirmed.
 
 ### `[assets]`
 

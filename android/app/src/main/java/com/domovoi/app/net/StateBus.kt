@@ -14,7 +14,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -76,8 +75,9 @@ class StateBus(private val api: ApiClient, private val prefs: Prefs) {
 
     private fun connect() {
         val url = wsUrl() ?: run { scheduleReconnect(); return }
-        val req = Request.Builder().url(url).build()
-        ws = api.http.newWebSocket(req, object : WebSocketListener() {
+        // The household device token rides on the upgrade request, like it
+        // does on every other call (ApiClient.wsRequest).
+        ws = api.http.newWebSocket(api.wsRequest(url), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 delayMs = 1000L
                 _connected.value = true
@@ -93,7 +93,12 @@ class StateBus(private val api: ApiClient, private val prefs: Prefs) {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = dropped()
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = dropped()
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // A refused upgrade is the only way this socket hears "pair
+                // first": there is no body to read, just the status.
+                response?.let { api.notePossiblePairingRefusal(it.code, it.message) }
+                dropped()
+            }
         })
     }
 

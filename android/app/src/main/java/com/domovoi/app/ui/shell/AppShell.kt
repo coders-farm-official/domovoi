@@ -63,6 +63,7 @@ import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.screens.ScreenRouter
+import com.domovoi.app.ui.screens.settings.PairingScreen
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
@@ -124,6 +125,19 @@ fun AppShell() {
 @Composable
 private fun ShellContent() {
     val app = LocalApp.current
+    // Refused for want of the household token: the phone goes to the pairing
+    // screen rather than showing empty panels it cannot load (FE-2 / the
+    // device tier). Pairing clears the flag and the shell comes back.
+    val pairingRequired by app.api.pairingRequired.collectAsState()
+    val deviceToken by app.prefs.deviceToken.collectAsState()
+    var pairingDismissed by remember(deviceToken) { mutableStateOf(false) }
+    if (pairingRequired && !pairingDismissed) {
+        PairingScreen(
+            onDone = { pairingDismissed = false },
+            onSkip = { pairingDismissed = true },
+        )
+        return
+    }
     var route by rememberSaveable { mutableStateOf(Route.Music) }
     val backStack = remember { mutableStateListOf<Route>() }
     val navigate: (Route) -> Unit = { r ->

@@ -81,10 +81,24 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     var manualBusy by remember { mutableStateOf(false) }
     var manualError by remember { mutableStateOf<String?>(null) }
 
+    // Trust before connect (FE-2): a LAN sweep finds whatever answers
+    // /api/health, and connecting means loading that server's capability
+    // manifest and plugin-backed screens. The gate shows the address and
+    // waits for a yes; nothing is written or fetched before that.
+    val gate = remember {
+        ServerConnectGate(
+            isTrusted = { app.prefs.isTrusted(it) },
+            onTrust = { app.prefs.trustServer(it) },
+            onConnect = { url, name ->
+                app.prefs.upsertKnownServer(url, name)
+                app.prefs.setServerUrl(url)
+            },
+        )
+    }
+    val pendingTrust by gate.pending.collectAsState()
+
     fun select(url: String, name: String?) {
-        app.prefs.upsertKnownServer(url, name)
-        app.prefs.setServerUrl(url)
-        onSelected()
+        if (gate.select(url, name)) onSelected()
     }
 
     fun rescan() {
@@ -255,6 +269,75 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
         }
         if (manualError != null) {
             Text(manualError!!, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.err)
+        }
+    }
+
+    pendingTrust?.let { server ->
+        TrustServerDialog(
+            server = server,
+            onDismiss = { gate.cancel() },
+            onConfirm = { if (gate.confirm()) onSelected() },
+        )
+    }
+}
+
+/**
+ * "Is this your Domovoi?" — the address first, because that is what a person
+ * can check against the box. Nothing has been saved at this point; cancelling
+ * leaves the app connected to whatever it was connected to.
+ */
+@Composable
+private fun TrustServerDialog(
+    server: PendingServer,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        DomovoiCard(Modifier.fillMaxWidth(), padding = 20) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Dns, contentDescription = null,
+                        tint = Domovoi.colors.warn, modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "trust this server?",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Domovoi.colors.fg,
+                    )
+                }
+                Text(
+                    server.address,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Domovoi.colors.fg,
+                )
+                Text(
+                    buildString {
+                        server.name?.takeIf { it.isNotBlank() }?.let { append("It calls itself \"$it\". ") }
+                        append(
+                            "Check that this address is your Domovoi before you continue: the app " +
+                                "will load the screens this server advertises and send it your " +
+                                "requests. Nothing is saved until you confirm.",
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
+                    OutlinedButton(onClick = onDismiss) { Text("cancel") }
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Domovoi.colors.brand,
+                            contentColor = Domovoi.colors.brandFg,
+                        ),
+                    ) { Text("trust this server") }
+                }
+            }
         }
     }
 }
