@@ -106,6 +106,23 @@ private data class MessageRow(
 @Serializable
 private data class MessageList(val messages: List<MessageRow> = emptyList())
 
+/** Images per message the backend accepts (web/static/chat.jsx: "up to 4 images per message"). */
+internal const val MAX_CHAT_IMAGES = 4
+
+internal const val CHAT_IMAGE_CAP_TOAST = "up to $MAX_CHAT_IMAGES images per message"
+
+/**
+ * How a picker result fits beside the images already attached (F-A005):
+ * `accepted` is how many of the [picked] URIs to upload, `refused` is true
+ * when at least one was dropped for the cap — the caller must say so.
+ */
+internal data class AttachBudget(val accepted: Int, val refused: Boolean)
+
+internal fun attachBudget(attached: Int, picked: Int, cap: Int = MAX_CHAT_IMAGES): AttachBudget {
+    val room = (cap - attached).coerceAtLeast(0)
+    return AttachBudget(accepted = minOf(picked, room), refused = picked > room)
+}
+
 /** Mutable transcript entry (the streaming assistant bubble updates live). */
 private class LiveMessage(
     val role: String,
@@ -291,7 +308,10 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
     ) { uris ->
-        uris.take(4 - attachments.size).forEach { uri ->
+        // F-A005: refuse the overflow out loud instead of dropping it in silence.
+        val budget = attachBudget(attached = attachments.size, picked = uris.size)
+        if (budget.refused) toast(CHAT_IMAGE_CAP_TOAST)
+        uris.take(budget.accepted).forEach { uri ->
             scope.launch(Dispatchers.IO) {
                 runCatching {
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -310,7 +330,10 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         )
                         .build()
                     val up = app.api.upload("/api/chat/uploads", form).decode<ImageRef>()
-                    withContext(Dispatchers.Main) { attachments.add(up) }
+                    withContext(Dispatchers.Main) {
+                        // Uploads run in parallel: two picker rounds can race past the cap.
+                        if (attachments.size < MAX_CHAT_IMAGES) attachments.add(up) else toast(CHAT_IMAGE_CAP_TOAST)
+                    }
                 }.onFailure {
                     withContext(Dispatchers.Main) { toast("upload failed") }
                 }
@@ -397,8 +420,12 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            IconButton(onClick = { picker.launch("image/*") }) {
-                Icon(Icons.Outlined.AttachFile, contentDescription = "attach image", tint = Domovoi.colors.fgMuted)
+            val atCap = attachments.size >= MAX_CHAT_IMAGES
+            IconButton(onClick = { if (atCap) toast(CHAT_IMAGE_CAP_TOAST) else picker.launch("image/*") }) {
+                Icon(
+                    Icons.Outlined.AttachFile, contentDescription = "attach image",
+                    tint = if (atCap) Domovoi.colors.fgFaint else Domovoi.colors.fgMuted,
+                )
             }
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
@@ -426,7 +453,7 @@ private fun MessageBubble(m: LiveMessage) {
     ) {
         if (m.images.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
-                m.images.take(4).forEach { img ->
+                m.images.take(MAX_CHAT_IMAGES).forEach { img ->
                     AsyncImage(
                         model = app.api.absolute("/api/chat/uploads/${img.token}"),
                         contentDescription = img.name,
