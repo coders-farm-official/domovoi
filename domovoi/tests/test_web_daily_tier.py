@@ -32,7 +32,18 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from domovoi import admin_auth
-from domovoi.tests.auth_testkit import COOKIE, HEADER, bearer, install_fake_db, web_app
+from domovoi.tests.auth_testkit import (
+    COOKIE,
+    HEADER,
+    _db,  # noqa: F401 — fixture
+    bearer,
+    claim_admin,
+    db_device_token,
+    install_fake_db,
+    web_app,
+    web_client,
+)
+from domovoi.tests.conftest import requires_db
 from domovoi.tests.test_route_auth_matrix import ROUTES, _dependency_calls
 
 BROWSER = {"X-Requested-With": "XMLHttpRequest"}
@@ -409,3 +420,58 @@ async def test_a_write_without_the_preflight_header_never_reaches_a_gate(
         r = await c.post("/api/playlists", json={"name": "road trip"})
     assert r.status_code == 403
     assert mark_reached == []
+
+
+# ─── The same matrix end-to-end, against a real database ──────────────────
+#
+# The fakes above prove the dependency logic; this proves the credentials
+# themselves. It claims the admin through the real setup endpoint (which
+# ROTATES the household token), reads the surviving token out of
+# ``household_device_tokens``, and drives two PROXY routes — so the only
+# thing behind the gate is a hop to a core that isn't there. Past the gate
+# that hop answers 502/504 and nothing is written either way.
+
+DB_DEVICE_ROUTE = ("POST", "/api/satellites/kitchen/volume", {"level": 30})
+DB_ADMIN_ROUTE = ("POST", "/api/satellites/kitchen/restart", None)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_real_household_token_works_and_nothing_else_does(_db) -> None:
+    async with web_client() as setup:
+        admin = await claim_admin(setup)
+    token = await db_device_token()
+    assert token, "setup should have minted a household token"
+
+    method, path, body = DB_DEVICE_ROUTE
+    async with _client() as anon:
+        assert (await anon.request(method, path, json=body)).status_code == 401
+    async with _client({HEADER: "0" * 64}) as stale:
+        r = await stale.request(method, path, json=body)
+        assert r.status_code == 401, r.text
+    async with _client(cookies={COOKIE: admin}) as cookie_only:
+        r = await cookie_only.request(method, path, json=body)
+        assert r.status_code == 403, r.text
+    async with _client({HEADER: token}) as paired:
+        r = await paired.request(method, path, json=body)
+        assert r.status_code not in (401, 403), r.text
+    async with _client(bearer(admin)) as operator:
+        r = await operator.request(method, path, json=body)
+        assert r.status_code not in (401, 403), r.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_real_household_token_does_not_buy_the_admin_tier(_db) -> None:
+    async with web_client() as setup:
+        admin = await claim_admin(setup)
+    token = await db_device_token()
+    assert token
+
+    method, path, body = DB_ADMIN_ROUTE
+    async with _client({HEADER: token}) as paired:
+        r = await paired.request(method, path, json=body)
+        assert r.status_code == 401, r.text
+    async with _client(bearer(admin)) as operator:
+        r = await operator.request(method, path, json=body)
+        assert r.status_code not in (401, 403), r.text
