@@ -104,8 +104,14 @@ don't trust.
 
 The video satellite's kiosk page (`display.html` + the now-playing reads
 and transport actions it uses) rides this same tier by design — the device
-renders it unattended, with no interactive login. Per-device read tokens
-for kiosk clients sit in the hardening backlog alongside TLS.
+renders it unattended, with no interactive login.
+
+Its **live state socket is the exception**: `/ws/state` carries who is
+home, what the calendar says and which devices are on the network, so its
+handshake needs the household device token (see below). A kiosk browser
+that has never been paired still renders and still polls its reads; what it
+no longer gets is the push. Pair it once, from the dashboard's Settings →
+Connection, and the socket connects like any other household client.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
@@ -461,6 +467,37 @@ itself is sent (and only its hash stored), so on a hostile LAN a passive
 sniffer could capture a token in transit. Pairing raises the bar from "walk
 up and impersonate any room" to "already-on-the-wire at pairing time or
 sniffing the token," but the LAN is still the trust boundary.
+
+
+### The state socket
+
+`/ws/state` is the dashboard's live push channel, and what it pushes is the
+household: presence (`people.last_seen`), calendar entries with their
+titles, satellite and device details, what each room is playing. Reading it
+needs a household credential on the **handshake**:
+
+* `X-Device-Token` — the Android app and anything else that can set a
+  header;
+* an admin `Bearer`, or the dashboard's `SameSite=Strict` session cookie —
+  this socket renders state and nothing more, which is the read tier's bar,
+  and a page on another site cannot bring that cookie to the handshake;
+* `Sec-WebSocket-Protocol: domovoi.device-token.<token>` — a browser can
+  set no header on a WebSocket handshake, and a query string would print
+  the token into every access log, so a paired-but-not-signed-in browser
+  (a kiosk) offers it as a subprotocol instead. The server echoes the
+  subprotocol back, which is what keeps the browser from dropping the
+  connection.
+
+Anything else is refused: the socket is closed before it is accepted (the
+server answers the upgrade **403**), so it is never registered with the
+broadcaster and is pushed nothing at all. Before first-run setup there is
+no token to hold and the socket keeps the same pre-setup grace as the rest
+of the surface.
+
+The choice here was to gate the socket rather than trim what it carries: a
+client that belongs to the household sees exactly what it saw before, and
+one that does not sees nothing, instead of everyone getting a redacted
+stream that is still a presence feed.
 
 ## Response headers and cross-origin rules
 

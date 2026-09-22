@@ -352,17 +352,92 @@ async def health() -> HealthResponse:
 # ─── WebSocket ────────────────────────────────────────────────────────────
 
 
+# How a BROWSER presents the household device token on this socket: it
+# cannot set a request header, but it can offer a subprotocol, and that
+# travels in the handshake rather than in the URL (a query string would
+# land in every access log). The dashboard offers
+# "domovoi.device-token.<token>" when it holds one (web/static/data.js).
+WS_DEVICE_TOKEN_SUBPROTOCOL = "domovoi.device-token."
+
+_REFUSE = object()
+
+
+def _offered_token_subprotocol(ws: WebSocket) -> tuple[str | None, str | None]:
+    """``(token, subprotocol)`` from ``Sec-WebSocket-Protocol``, or
+    ``(None, None)``. The subprotocol has to be echoed back on accept or the
+    browser drops the connection, so it is returned even when the token in
+    it turns out to be useless."""
+    raw = ws.headers.get("sec-websocket-protocol") or ""
+    for offered in (part.strip() for part in raw.split(",")):
+        if offered.startswith(WS_DEVICE_TOKEN_SUBPROTOCOL):
+            token = offered[len(WS_DEVICE_TOKEN_SUBPROTOCOL):].strip()
+            return (token or None), offered
+    return None, None
+
+
+async def _authorize_state_socket(ws: WebSocket) -> object | None:
+    """Decide whether this socket may subscribe, and with which
+    subprotocol echoed back. Returns ``_REFUSE`` to turn the handshake
+    away.
+
+    What counts, in the order a caller is likely to have it:
+
+    * ``X-Device-Token`` — the Android app and any other header-setting
+      client (``check_device_request``);
+    * an admin ``Bearer``, or the dashboard's session cookie: this socket
+      only renders state, which is the read tier's bar (the cookie is
+      ``SameSite=Strict``, so another site's page cannot bring it here);
+    * the ``domovoi.device-token.<token>`` subprotocol, for a browser that
+      is paired but not signed in — a kiosk display, mostly;
+    * the pre-setup grace, so a fresh install's dashboard is live before
+      anyone has claimed the admin password.
+
+    Anything else is refused before the socket is accepted, which means an
+    unauthenticated subscriber is never registered with the broadcaster and
+    is pushed nothing at all.
+    """
+    _, offered = _offered_token_subprotocol(ws)
+    result = await admin_auth.check_device_request(ws)
+    if result in ("ok", "admin", "pre-setup", "cookie-only"):
+        return offered
+    token, _ = _offered_token_subprotocol(ws)
+    if token:
+        try:
+            async with admin_auth.session_scope() as s:
+                if await admin_auth.validate_device_token(s, token):
+                    return offered
+        except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+            log.warning("ws device-token check failed: %s", e)
+    return _REFUSE
+
+
 @app.websocket("/ws/state")
 async def websocket_state(ws: WebSocket) -> None:
     """Client subscribes to channels; server pushes state-change
     events as they're emitted by the poll loop. Subscription frame
     format::
 
-        {"subscribe": ["music", "satellites", "downloads", ...]}
+        {"subscribe": ["music", "satellites", "downloads", ...],
+         "device_token": "<the household device token>"}
 
     Empty list / no frame = subscribed to all channels.
+
+    **The handshake needs a household credential** (WEB-9): this stream
+    carries who is home, what the calendar says and which devices are on
+    the network, so it is not for any socket that can reach the port. See
+    :func:`_authorize_state_socket` for what counts; without one the
+    handshake is refused (the socket is closed before it is accepted, which
+    the server answers as HTTP 403) and nothing is ever pushed to it.
+
+    ``device_token`` in the first frame is accepted and ignored: the
+    credential is settled during the handshake, and an older client that
+    sends the field is unaffected.
     """
-    await ws.accept()
+    subprotocol = await _authorize_state_socket(ws)
+    if subprotocol is _REFUSE:
+        await ws.close(code=1008, reason="household device token or admin session required")
+        return
+    await ws.accept(subprotocol=subprotocol)
     broadcaster: StateBroadcaster = ws.app.state.broadcaster
     await broadcaster.connect(ws)
     try:

@@ -32,6 +32,8 @@ const API_BASE = (() => {
   try { return localStorage.getItem(SERVER_KEY) || ''; } catch { return ''; }
 })();
 const WS_PATH = '/ws/state';
+// Must match web/backend/main.py WS_DEVICE_TOKEN_SUBPROTOCOL.
+const WS_DEVICE_TOKEN_SUBPROTOCOL = 'domovoi.device-token.';
 
 const ServerStore = {
   current: () => API_BASE, // '' = same-origin
@@ -354,9 +356,18 @@ class StateBus {
     const httpBase = API_BASE
       || `${window.location.protocol}//${window.location.host}`;
     const url = httpBase.replace(/^http/, 'ws') + WS_PATH;
+    // The state stream needs a household credential (WEB-9). A signed-in
+    // browser has the session cookie, which rides the handshake on its own;
+    // a paired one that is not signed in offers its device token as a
+    // SUBPROTOCOL instead. That is the one place a browser can put a
+    // credential on a WebSocket handshake — it cannot set a header, and a
+    // query string would end up in every access log.
+    const device = deviceToken();
     let ws;
     try {
-      ws = new WebSocket(url);
+      ws = device
+        ? new WebSocket(url, [`${WS_DEVICE_TOKEN_SUBPROTOCOL}${device}`])
+        : new WebSocket(url);
     } catch (e) {
       console.warn('ws connect failed:', e);
       this._scheduleReconnect();
@@ -368,7 +379,9 @@ class StateBus {
       this.connected = true;
       this.reconnectDelayMs = 1000;
       // Empty subscribe = subscribe to all channels (server contract).
-      try { ws.send(JSON.stringify({ subscribe: [] })); } catch {}
+      const hello = { subscribe: [] };
+      if (device) hello.device_token = device;
+      try { ws.send(JSON.stringify(hello)); } catch {}
       this._notifyAll({ type: '_status', connected: true });
     });
 
