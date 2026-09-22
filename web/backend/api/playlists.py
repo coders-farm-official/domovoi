@@ -268,6 +268,30 @@ async def update_playlist(playlist_id: int, payload: PlaylistPatch) -> Playlist:
     return _playlist_from_row(result, track_count=int(result[6]))
 
 
+def _reorder_statement(track_ids: list[int]) -> tuple[str, dict[str, Any]]:
+    """The one-statement position rewrite behind ``reorder_playlist`` —
+    ``UPDATE … FROM (VALUES (tid, pos), …)`` — built apart from the route so
+    its SQL text can be asserted without a database.
+
+    Every ``:tN`` bind is wrapped in ``CAST(… AS integer)``. A bare
+    ``VALUES (:t0, 0)`` gives the driver nothing to infer a type from, so
+    asyncpg sends the bind as ``text`` and Postgres refuses the join
+    predicate with "operator does not exist: integer = text" — the route
+    500'd on every call (F-022). The literal ``pos`` needs no cast.
+    Returns the SQL and the ``tN`` params; the caller adds ``id``."""
+    values_sql = ", ".join(
+        f"(CAST(:t{i} AS integer), {i})" for i in range(len(track_ids))
+    )
+    sql = f"""
+        UPDATE playlist_tracks AS pt
+        SET position = v.pos
+        FROM (VALUES {values_sql}) AS v(tid, pos)
+        WHERE pt.playlist_id = :id AND pt.track_id = v.tid
+    """
+    params: dict[str, Any] = {f"t{i}": int(tid) for i, tid in enumerate(track_ids)}
+    return sql, params
+
+
 @router.patch("/{playlist_id}/order", status_code=204)
 async def reorder_playlist(playlist_id: int, payload: PlaylistReorder) -> None:
     """Full-order rewrite — ``track_ids`` is the playlist's tracks in the
@@ -299,22 +323,9 @@ async def reorder_playlist(playlist_id: int, payload: PlaylistReorder) -> None:
                 status_code=400,
                 detail="track_ids must be exactly the playlist's current tracks",
             )
-        # UPDATE ... FROM (VALUES (tid,pos), ...) — one statement.
-        values_sql = ", ".join(f"(:t{i}, {i})" for i in range(len(track_ids)))
-        params: dict[str, Any] = {"id": playlist_id}
-        for i, tid in enumerate(track_ids):
-            params[f"t{i}"] = tid
-        await s.execute(
-            text(
-                f"""
-                UPDATE playlist_tracks AS pt
-                SET position = v.pos
-                FROM (VALUES {values_sql}) AS v(tid, pos)
-                WHERE pt.playlist_id = :id AND pt.track_id = v.tid
-                """
-            ),
-            params,
-        )
+        sql, params = _reorder_statement(track_ids)
+        params["id"] = playlist_id
+        await s.execute(text(sql), params)
         await s.execute(
             text("UPDATE playlists SET updated_at = NOW() WHERE id = :id"),
             {"id": playlist_id},
