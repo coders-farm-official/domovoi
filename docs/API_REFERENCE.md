@@ -50,15 +50,17 @@ Every endpoint below is labeled with one of these tiers:
 | Tier | Meaning |
 |---|---|
 | **Open** | No auth. Daily-use surface, LAN trust. |
-| **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. (No route wears it yet — the clients learn the token first; ordinary routes move onto it next.) |
+| **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. This is the tier for ordinary household actions: a turn, an announcement, playback, the room queue. |
+| **Chat callback** | `require_chat_callback`: the per-boot secret the chat agent's generated proxy tools carry in `X-Chat-Callback`. One endpoint (`POST /v1/admin/chat-tool`) wears it, because Letta's sandbox holds no admin session. A core restart mints a new secret, so the tools must be regenerated (`POST /v1/admin/chat/resync`). |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
 | **Admin, security tier** | `require_admin_security` (mutations) / `require_admin_security_read` (the device-token read): Bearer-only for mutations, cookie may render the read. **No pre-setup grace — 501 until admin setup completes**, and `--reset-admin` closes them again. Config write, service restart, satellite code push, pairing preseed / reset, satellite delete, device-token rotation. |
 | **Admin, fail-closed** | `domovoi.auth.require_admin`, plugin management (it is code execution). Same posture as the security tier: **501** until admin setup completes, Bearer-only for mutations. |
 | **Outbound-fetch** | `check_outbound_fetch`: the server will fetch a caller-chosen URL. Passes with an admin Bearer session, **or** when the URL matches an installed media-provider plugin's `url_matcher` allowlist *and* the caller is within a per-source rate limit (10 requests / 60 s). |
 
-Failure codes across tiers: `401` missing/invalid/expired token (Bearer or
-device), `403` cookie-only mutation attempt (or a rejected outbound fetch),
+Failure codes across tiers: `401` missing/invalid/expired token (Bearer,
+device or chat callback), `403` cookie-only mutation attempt (or a
+rejected outbound fetch),
 `429` login backoff / rate limit (with a `Retry-After` header), `501` a
 security-tier or plugin-management endpoint before setup.
 
@@ -101,7 +103,7 @@ with a reason.
 | `GET /v1/time` | Open | — | `{tz, epoch, iso, utc_offset_sec}` — this host's IANA zone name (`null` if the host cannot name it) and its clock. Satellites copy both on every connect, and stage 2 of a prepared card calls it before anything else, through the root helper `domovoi-sync-time`; a Pi has no battery clock and Pi OS boots in Europe/London. |
 | `GET /v1/connectivity` | Open | — | `{online, last_checked_at, last_online_at, target}` — the internet-connectivity probe the offline-first router consults. |
 | `GET /v1/handlers` | Open | — | List of `HandlerInfo`: `{name, requires_network, tool_schema, fast_path_count, priority_band, origin, display, example_phrases}`. `origin` is `"core"` or a plugin slug. Powers the dashboard's manual page. |
-| `POST /v1/intent` | Open | `{transcript, room_id?, session_id?, synthesize?}` | Routes a text utterance through the full intent pipeline. Returns the `Response` JSON (`{text, session_id, matched_handler, matched_path, online, data, music_action, music_stream_url, ...}`); with `synthesize: true` returns `audio/wav` bytes instead, with the text and metadata in `X-Response-Text`, `X-Session-Id`, `X-Matched-Handler`, `X-Matched-Path`, `X-Online` headers. |
+| `POST /v1/intent` | **Device (`X-Device-Token` or Bearer)** | `{transcript, room_id?, session_id?, synthesize?}` | Routes a text utterance through the full intent pipeline. Returns the `Response` JSON (`{text, session_id, matched_handler, matched_path, online, data, music_action, music_stream_url, ...}`); with `synthesize: true` returns `audio/wav` bytes instead, with the text and metadata in `X-Response-Text`, `X-Session-Id`, `X-Matched-Handler`, `X-Matched-Path`, `X-Online` headers. |
 
 ### 2.2 File-sync channels (pulled by satellites)
 
@@ -148,7 +150,7 @@ fulfiller later drains the backlog.
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /v1/acquisitions` | Open | `?status=&limit=50` (max 200) | `{"acquisitions": [...], "fulfillers": [...], "can_fulfill_query", "can_fulfill_url"}` — rows from `media_acquisitions`, newest first. |
-| `POST /v1/admin/music/add-by-query` | Open | `{room_id, query, artist?, attach_to_playlist_id?}` | Enqueue a free-text acquisition. Returns `{queued, outcome, message, already_in_library, already_downloading, acquisition_id, fulfiller_available, title}`. |
+| `POST /v1/admin/music/add-by-query` | **Device (`X-Device-Token` or Bearer)** | `{room_id, query, artist?, attach_to_playlist_id?}` | Enqueue a free-text acquisition. Returns `{queued, outcome, message, already_in_library, already_downloading, acquisition_id, fulfiller_available, title}`. |
 | `POST /v1/admin/music/add-by-url` | **Outbound-fetch** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Enqueue an acquisition for an exact external URL (skips fuzzy library dedup; honors `dedup_key`). Gated because it triggers provider code against a caller-chosen URL. |
 
 ### 2.5 Admin: live state and satellite actions
@@ -160,37 +162,37 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version}`. |
-| `POST /v1/admin/announce` | Open | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
-| `POST /v1/admin/dropin/start` | Open | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. |
-| `POST /v1/admin/dropin/end` | Open | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
-| `POST /v1/admin/satellite/restart` | Open | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
-| `POST /v1/admin/satellite/set-volume` | Open | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
-| `POST /v1/admin/satellite/display` | Open | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite; `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
+| `POST /v1/admin/announce` | **Device (`X-Device-Token` or Bearer)** | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
+| `POST /v1/admin/dropin/start` | **Device (`X-Device-Token` or Bearer)** | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. |
+| `POST /v1/admin/dropin/end` | **Device (`X-Device-Token` or Bearer)** | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
+| `POST /v1/admin/satellite/restart` | **Admin (Bearer)** | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
+| `POST /v1/admin/satellite/set-volume` | **Device (`X-Device-Token` or Bearer)** | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
+| `POST /v1/admin/satellite/display` | **Admin (Bearer)** | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite; `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/upgrade` | **Admin, security tier** | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha}`. |
 | `POST /v1/admin/satellites/{room_id}/pairing/preseed` | **Admin, security tier** | `{sat_type?, room_label?, hardware?, board?, mac?, force?}` | USB adoption: mint the room's pairing token (sha256 stored; RAW token returned once, never logged) + upsert the inventory row. `409` already paired unless `force` (rotates). |
 | `DELETE /v1/admin/satellites/{room_id}/pairing` | **Admin, security tier** | — | Delete the room's pairing row so the NEXT `hello` for that room re-pairs. Returns `{room_id, reset}` (`reset: false` when there was nothing to clear). |
 | `DELETE /v1/admin/satellites/{room_id}` | **Admin, security tier** | — | Remove a never-connected satellite (inventory + preseeded pairing). `409` when the room is provisioned (has an MPD instance). |
-| `POST /v1/admin/satellites/{room_id}/label` | Open | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
+| `POST /v1/admin/satellites/{room_id}/label` | **Device (`X-Device-Token` or Bearer)** | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
-| `POST /v1/admin/satellite/{room_id}/config` | Open | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
-| `GET /v1/admin/satellite/{room_id}/logs` | Open | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering. |
+| `POST /v1/admin/satellite/{room_id}/config` | **Admin (Bearer)** | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
+| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). Gated like a config read: the ring holds what the room said (the satellite logs each transcript). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering. |
 
 ### 2.6 Admin: version, config, chat, hardware
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /v1/admin/version` | Open | — | `{sha, running_sha, checkout_sha, restart_required, restart_capable, restart_hint, started_at, uptime_sec}`. `sha`/`running_sha` are captured at boot (the code actually loaded); `checkout_sha` is read live from the tree. |
-| `POST /v1/admin/version/check` | Open | — | Fetch upstream and report behind/ahead counts. Read-only, best-effort. |
-| `POST /v1/admin/version/pull` | Open | — | `git pull --ff-only`; a dirty/diverged tree returns `pulled: false` + stderr. Never restarts the process — that's the separate restart below. |
+| `POST /v1/admin/version/check` | **Device (`X-Device-Token` or Bearer)** | — | Fetch upstream and report behind/ahead counts. Read-only, best-effort. |
+| `POST /v1/admin/version/pull` | **Admin (Bearer)** | — | `git pull --ff-only`; a dirty/diverged tree returns `pulled: false` + stderr. Admin-tier: it changes the code on disk that this process and `/v1/satellite-code` serve from. Never restarts the process — that's the separate restart below. |
 | `GET /v1/admin/satellites/approvals` | **Admin read** | — | Satellites waiting for a human (portal onboarding). Returns `room_id`, `code`, `mac`, `board`, `sat_type`, `attempts`, timestamps. The pairing token hash is never returned. |
 | `POST /v1/admin/satellites/approvals/{room_id}/approve` | **Admin (Bearer)** | — | Promote a pending satellite into a real pairing, copying the token hash it presented — approval binds a device, not just a room name. `409` when nothing is pending. |
 | `POST /v1/admin/satellites/approvals/{room_id}/reject` | **Admin (Bearer)** | — | Drop a pending request. Not a ban: the device keeps retrying until approved or powered off. |
 | `POST /v1/admin/version/restart` | **Admin, security tier** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
-| `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | — | The editable-config registry joined with live values (`{fields, plugin_fields}`). Gated because plugin config can carry secrets (returned pre-masked). |
+| `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | `?section=common\|advanced` (optional) | The editable-config registry joined with live values (`{fields, plugin_fields, advanced_available}`). What comes back depends on how the caller authenticated: a **Bearer** reads everything; a **cookie-only** caller gets the `common` section with every credential value replaced by a mask (`masked: true` on the field) and no `advanced` section at all — `?section=advanced` answers `401` for it. Masked settings: `database_url`, `acoustid_api_key`, `letta_token` (`config_schema.SECRET_SETTING_NAMES`); plugin secrets arrive pre-masked as before. |
 | `POST /v1/admin/config` | **Admin, security tier** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
 | `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token (`header` is `X-Device-Token`). `501` before setup. |
 | `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. |
-| `POST /v1/admin/chat-tool` | Open | `{tool, args}` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. |
+| `POST /v1/admin/chat-tool` | **Chat callback** | `{tool, args}` + `X-Chat-Callback` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. The header must carry this boot's callback secret, which the generated tool source embeds — `401` otherwise. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. Regenerate the tools after a core restart (`POST /v1/admin/chat/resync`). |
 | `POST /v1/admin/chat/resync` | **Admin (Bearer)** | — | Rebuild the chat tool surface and re-attach it to every chat agent. The install/enable/disable pipeline runs this automatically; this is the manual trigger. |
 | `GET /v1/admin/hardware` | Open | — | Host hardware snapshot for the Models page: `{gpus, cpu, ram, disk}`; each field degrades to empty/null independently. |
 
@@ -198,12 +200,12 @@ posture; the specifically dangerous ones carry the Bearer gate.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `POST /v1/admin/sounds/regenerate` | Open | — | Kick a background re-render of all voices' greeting/canned clips, then notify satellites to re-sync. Returns `{"started": true}` immediately. |
-| `POST /v1/admin/voices/sample` | Open | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice. |
-| `POST /v1/admin/wake/record/start` | Open | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, `502` send failure. |
-| `POST /v1/admin/wake/record/stop` | Open | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
-| `POST /v1/admin/wake/push` | Open | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet. |
-| `POST /v1/admin/wake/score` | Open | `{wake_word_id}` | Offline-score recorded clips against the trained model (per-clip max score + silence baseline). `409` no model, `501` when openWakeWord isn't installed. |
+| `POST /v1/admin/sounds/regenerate` | **Admin (Bearer)** | — | Kick a background re-render of all voices' greeting/canned clips, then notify satellites to re-sync. Returns `{"started": true}` immediately. |
+| `POST /v1/admin/voices/sample` | **Device (`X-Device-Token` or Bearer)** | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice. |
+| `POST /v1/admin/wake/record/start` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, `502` send failure. |
+| `POST /v1/admin/wake/record/stop` | **Admin (Bearer)** | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
+| `POST /v1/admin/wake/push` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet. |
+| `POST /v1/admin/wake/score` | **Admin (Bearer)** | `{wake_word_id}` | Offline-score recorded clips against the trained model (per-clip max score + silence baseline). `409` no model, `501` when openWakeWord isn't installed. |
 
 ### 2.8 Admin: music and library
 
@@ -221,6 +223,8 @@ entry 3" into "remove the wrong song". They know nothing about devices;
 the "added by" provenance and the device blocklist live in the web
 process (§3.5a).
 
+Everything in this table is on the **Device** tier (`X-Device-Token` or an admin Bearer) — ordinary household playback — except the two library sweeps at the end, which are **Admin (Bearer)**.
+
 | Method & path | Request | Response / purpose |
 |---|---|---|
 | `POST /v1/admin/music/play` | `{room_id, query}` | Route `"play <query>"` through the full pipeline; dispatches the music-start frame to the room's Pi. Returns `{text, matched_handler, matched_path, music_action, online}`. |
@@ -233,8 +237,8 @@ process (§3.5a).
 | `POST /v1/admin/music/queue/{room_id}/remove` | `{song_ids: [..]}` | Drop entries by songid. `{removed:[..], skipped:[..]}` — an id MPD no longer has is reported, not an error. |
 | `POST /v1/admin/music/queue/{room_id}/move` | `{song_id, to_position}` | Reorder. `404` when the id isn't in the queue any more. |
 | `POST /v1/admin/music/queue/{room_id}/clear` | — | Empty the queue and stop the room (dispatches the music-stop frame). |
-| `POST /v1/admin/library/reindex` | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
-| `POST /v1/admin/library/enrich` | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. |
+| `POST /v1/admin/library/reindex` (**Admin**) | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
+| `POST /v1/admin/library/enrich` (**Admin**) | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. |
 
 ---
 
@@ -244,6 +248,14 @@ All routes are `/api/...` (plus `/plugins/{slug}/static/*` for plugin assets
 and `WS /ws/state`). The frontend itself is served statically from `/`.
 Unlabeled endpoints are **Open** (LAN trust). CORS allows localhost, RFC 1918
 ranges, and `*.local` origins only.
+
+An **Open** label here describes this hop only. Every web route that forwards
+to the core passes the caller's `Authorization`, `Cookie`, `X-Device-Token`
+and real client address along with it, so the tier on the core route (§2) is
+what finally decides — a proxied playback call needs the device token or an
+admin Bearer even though the web hop asks for nothing. The web process's own
+timer-driven calls (the state poll, a background media build) present the
+household device token instead of a caller's credential.
 
 ### 3.1 Auth
 

@@ -33,7 +33,9 @@ def domovoi_url() -> str:
     return os.environ.get("DOMOVOI_URL", "http://localhost:6370")
 
 
-async def fetch_admin_snapshot(timeout: float = 1.5) -> dict[str, Any] | None:
+async def fetch_admin_snapshot(
+    timeout: float = 1.5, headers: dict[str, str] | None = None
+) -> dict[str, Any] | None:
     """Pull the Domovoi server's process-state snapshot.
 
     Expected shape:
@@ -48,11 +50,15 @@ async def fetch_admin_snapshot(timeout: float = 1.5) -> dict[str, Any] | None:
 
     Returns ``None`` on any failure — connection refused, non-200,
     invalid JSON. Callers must handle that case.
+
+    ``headers`` carries the web process's OWN credential on this hop (see
+    :func:`service_auth_headers`): the poll loop runs on a timer with no
+    request behind it, so there is no caller credential to forward.
     """
     url = f"{domovoi_url().rstrip('/')}/v1/admin/snapshot"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(url)
+            r = await client.get(url, headers=headers)
         if r.status_code != 200:
             return None
         data = r.json()
@@ -175,18 +181,61 @@ def auth_forward_headers(request: Any) -> dict[str, str]:
     return headers
 
 
+# The household token, remembered after the first successful read so the
+# 1.5 s poll loop doesn't re-query on every tick. Rotation rewrites the
+# file mirror, which is what the reader below prefers.
+_service_token: str | None = None
+
+
+async def service_auth_headers() -> dict[str, str]:
+    """Credentials for a hop the WEB PROCESS makes on its OWN behalf —
+    the state poll loop, a background job, anything running on a timer
+    rather than inside a request.
+
+    There is no caller to forward here, so the process presents the
+    household DEVICE token (``admin_auth.DEVICE_TOKEN_HEADER``): both
+    processes read it from the same ``household_device_tokens`` row, and
+    the web lifespan mirrors it to ``~/.domovoi/device-token.txt`` at
+    boot, so the file is the cheap read and the table is the fallback.
+    Returns ``{}`` when neither is available (a fresh install before the
+    migration, or a DB hiccup) — the core's pre-setup grace covers that
+    case, and once setup is done the hop's own 401 is the honest answer.
+    """
+    global _service_token
+    from domovoi import admin_auth
+
+    token = admin_auth.read_device_token_file()
+    if token is None:
+        token = _service_token
+    if token is None:
+        try:
+            from web.backend.db import session_scope
+
+            async with session_scope() as s:
+                token = await admin_auth.get_device_token(s)
+        except Exception as e:  # noqa: BLE001 — degrade, never break a poll
+            log.debug("service credential unavailable: %s", e)
+            token = None
+    if token is None:
+        return {}
+    _service_token = token
+    return {admin_auth.DEVICE_TOKEN_HEADER: token}
+
+
 async def post_admin_bytes(
     path: str,
     body: dict[str, Any] | None = None,
     timeout: float = 30.0,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, bytes, dict[str, str]]:
     """POST to an admin endpoint that returns binary (e.g. synthesized audio).
     Returns ``(status_code, content, headers)``. ``(0, b"", {})`` on a
-    connection failure so callers can map it to a 502."""
+    connection failure so callers can map it to a 502. ``headers`` forwards
+    the caller's credentials like :func:`post_admin`."""
     url = f"{domovoi_url().rstrip('/')}{path}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(url, json=body or {})
+            r = await client.post(url, json=body or {}, headers=headers)
     except Exception as e:
         log.warning("admin POST(bytes) %s failed: %s", path, e)
         return 0, b"", {}

@@ -14,14 +14,14 @@ render time, so name greetings track BOT_NAME.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.db.repositories import ClientGreetingsRepository
 from web.backend.db import session_scope
-from web.backend.domovoi_client import post_admin
+from web.backend.domovoi_client import auth_forward_headers, post_admin
 
 router = APIRouter(prefix="/api/greetings", tags=["greetings"])
 
@@ -55,10 +55,14 @@ def _check_category(category: str) -> str:
     return c
 
 
-async def _trigger_rerender() -> None:
+async def _trigger_rerender(request: Request) -> None:
     """Best-effort re-render + live push to satellites. Non-fatal: a failure
-    leaves the DB change in place to render on the next server boot."""
-    await post_admin("/v1/admin/sounds/regenerate")
+    leaves the DB change in place to render on the next server boot. The
+    core route is admin-gated, so the editing admin's credentials ride
+    along on this hop."""
+    await post_admin(
+        "/v1/admin/sounds/regenerate", headers=auth_forward_headers(request)
+    )
 
 
 @router.get("", response_model=list[Greeting])
@@ -72,7 +76,7 @@ async def list_greetings() -> list[Greeting]:
     "", response_model=Greeting, status_code=201,
     dependencies=[Depends(require_admin_mutation)],
 )
-async def create_greeting(payload: GreetingCreate) -> Greeting:
+async def create_greeting(payload: GreetingCreate, request: Request) -> Greeting:
     category = _check_category(payload.category)
     body = payload.text.strip()
     if not body:
@@ -86,7 +90,7 @@ async def create_greeting(payload: GreetingCreate) -> Greeting:
         raise HTTPException(
             status_code=409, detail="a greeting with that text already exists"
         ) from e
-    await _trigger_rerender()
+    await _trigger_rerender(request)
     return Greeting(id=new_id, text=body, category=category, enabled=True)
 
 
@@ -94,7 +98,9 @@ async def create_greeting(payload: GreetingCreate) -> Greeting:
     "/{greeting_id}", response_model=Greeting,
     dependencies=[Depends(require_admin_mutation)],
 )
-async def patch_greeting(greeting_id: int, payload: GreetingPatch) -> Greeting:
+async def patch_greeting(
+    greeting_id: int, payload: GreetingPatch, request: Request
+) -> Greeting:
     category = _check_category(payload.category) if payload.category is not None else None
     body = payload.text.strip() if payload.text is not None else None
     if body is not None and not body:
@@ -117,7 +123,7 @@ async def patch_greeting(greeting_id: int, payload: GreetingPatch) -> Greeting:
         raise HTTPException(
             status_code=409, detail="a greeting with that text already exists"
         ) from e
-    await _trigger_rerender()
+    await _trigger_rerender(request)
     for i, t, c, e in rows:
         if i == greeting_id:
             return Greeting(id=i, text=t, category=c, enabled=e)
@@ -125,9 +131,9 @@ async def patch_greeting(greeting_id: int, payload: GreetingPatch) -> Greeting:
 
 
 @router.delete("/{greeting_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
-async def delete_greeting(greeting_id: int) -> None:
+async def delete_greeting(greeting_id: int, request: Request) -> None:
     async with session_scope() as s:
         deleted = await ClientGreetingsRepository(s).delete(greeting_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"greeting {greeting_id} not found")
-    await _trigger_rerender()
+    await _trigger_rerender(request)

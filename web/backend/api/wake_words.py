@@ -39,7 +39,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -51,7 +51,11 @@ from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
 from domovoi.db.repositories import WakeWordsRepository
 from web.backend.db import session_scope
-from web.backend.domovoi_client import bridge_response, post_admin
+from web.backend.domovoi_client import (
+    auth_forward_headers,
+    bridge_response,
+    post_admin,
+)
 
 log = logging.getLogger(__name__)
 
@@ -257,7 +261,7 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
 
 
 @router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_mutation)])
-async def record_start(wake_word_id: int, body: RoomBody):
+async def record_start(wake_word_id: int, body: RoomBody, request: Request):
     """Tell a connected satellite to start recording positive clips for
     this wake word. Proxies the Domovoi server, which owns the live Pi
     session: pass-through 404 (room not connected / wake word missing),
@@ -265,17 +269,19 @@ async def record_start(wake_word_id: int, body: RoomBody):
     status, payload = await post_admin(
         "/v1/admin/wake/record/start",
         {"room_id": body.room_id, "wake_word_id": wake_word_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{wake_word_id}/record/stop", dependencies=[Depends(require_admin_mutation)])
-async def record_stop(wake_word_id: int, body: RoomBody):
+async def record_stop(wake_word_id: int, body: RoomBody, request: Request):
     """Stop an in-progress recording on ``room_id`` so the Pi resumes its
     normal wake loop. Pass-through 404 when the room isn't connected."""
     status, payload = await post_admin(
         "/v1/admin/wake/record/stop",
         {"room_id": body.room_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -504,19 +510,21 @@ async def patch_wake_word(wake_word_id: int, payload: WakeWordPatch) -> WakeWord
 
 
 @router.post("/{wake_word_id}/score", dependencies=[Depends(require_admin_mutation)])
-async def score_wake_word(wake_word_id: int):
+async def score_wake_word(wake_word_id: int, request: Request):
     """Offline-score this word's clips against its trained model (raw + trimmed,
     max-over-clip) — the decisive real-vs-harness check. Proxies the
     Domovoi server (which owns openWakeWord + the model). Pass-through: 404 (no
     such word), 409 (not trained yet), 501 (openWakeWord not installed)."""
     status, payload = await post_admin(
-        "/v1/admin/wake/score", {"wake_word_id": wake_word_id}
+        "/v1/admin/wake/score",
+        {"wake_word_id": wake_word_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])
-async def push_wake_word(wake_word_id: int, body: RoomBody):
+async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
     """Push a trained wake model to a connected satellite. Proxies the
     Domovoi server (which sets the Pi's wake sidecar + tells it to sync and
     restart). Pass-through 404 (room not connected / wake word missing),
@@ -524,6 +532,7 @@ async def push_wake_word(wake_word_id: int, body: RoomBody):
     status, payload = await post_admin(
         "/v1/admin/wake/push",
         {"room_id": body.room_id, "wake_word_id": wake_word_id},
+        headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 

@@ -426,6 +426,8 @@ After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reco
 
 The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one locked-down, no-password, single-command sudoers line. Least-privilege: the satellite gains the ability to restart its own unit, and nothing else.
 
+> **Who can ask for it:** both buttons are admin actions on the server — the config push and the restart require an admin sign-in on the dashboard (`401` without one), as does pushing a wake model. Everyday room control — volume, playback, announcements — needs the household device token instead, which every satellite and app already carries. See [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#the-tiers).
+
 > **Upgrading an existing satellite?** This entry is part of the rollout, not just fresh provisioning — add it to every Pi you push the new client to, or self-restart silently won't work there.
 
 ```bash

@@ -23,7 +23,10 @@ router level, directly or through another dependency):
   fails closed before setup;
 * :func:`domovoi.auth.require_admin` — plugin management, fails closed;
 * :func:`domovoi.admin_auth.require_device` — the household device
-  token OR an admin Bearer.
+  token OR an admin Bearer;
+* :func:`domovoi.admin_auth.require_chat_callback` — the per-boot secret
+  the chat agent's generated proxy tools carry (the one machine-to-machine
+  caller that can hold neither tier's credential).
 
 ``require_admin_read`` deliberately does NOT count for a mutating route:
 the dashboard cookie renders GET state and never authorizes a change.
@@ -48,6 +51,7 @@ AUTH_GATES: tuple[Any, ...] = (
     admin_auth.require_admin_mutation,
     admin_auth.require_admin_security,
     admin_auth.require_device,
+    admin_auth.require_chat_callback,
     require_admin,
 )
 
@@ -55,45 +59,19 @@ AUTH_GATES: tuple[Any, ...] = (
 # NO gate today; the reason says which tier owns it and, where known,
 # which security batch is expected to close it.
 ALLOWLIST: dict[tuple[str, str, str], str] = {
-    # ── core: the auth surface / open by design ───────────────────────
-    ("core", "POST", "/v1/intent"): "daily tier — voice/text turns; device tier in wave 2 (B2)",
+    # ── core: open by design ──────────────────────────────────────────
+    # Everything else the core mutates through now wears a tier (B2):
+    # the ordinary household actions take require_device, the
+    # code-adjacent and physical-effect ones take require_admin_mutation,
+    # and the chat agent's callback takes its per-boot secret.
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/add"): "daily tier — device tier with ADD-3",
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/remove"): "daily tier — device tier with ADD-3",
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/move"): "daily tier — device tier with ADD-3",
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/clear"): "daily tier — device tier with ADD-3",
     ("core", "POST", "/v1/admin/music/add-by-url"): (
         "outbound-fetch tier — check_outbound_fetch inside the handler (admin "
         "OR provider allowlist + per-source rate limit)"
     ),
-    # ── core: daily tier, physical effect on satellites ───────────────
-    ("core", "POST", "/v1/admin/announce"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/dropin/start"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/dropin/end"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/satellite/restart"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/satellite/set-volume"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/satellite/display"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/satellite/{room_id}/config"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/satellites/{room_id}/label"): "daily tier — cosmetic label",
-    # ── core: version / chat / wake / sounds / voices ─────────────────
-    ("core", "POST", "/v1/admin/version/check"): "read-shaped git fetch — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/version/pull"): "git pull --ff-only — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/chat-tool"): "chat agent's proxy tools — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/wake/record/start"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/wake/record/stop"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/wake/push"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/wake/score"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/sounds/regenerate"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/sounds/setup-clips"): "daily tier — the dashboard hop is admin-gated",
-    ("core", "POST", "/v1/admin/voices/sample"): "daily tier — renders a sample clip",
-    # ── core: music playback and the room queue ───────────────────────
-    ("core", "POST", "/v1/admin/music/play"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/play-track"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/play-tracks"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/play-playlist"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/{action}/{room_id}"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/add"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/remove"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/move"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/queue/{room_id}/clear"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/music/add-by-query"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/library/reindex"): "daily tier — device tier in wave 2 (B2)",
-    ("core", "POST", "/v1/admin/library/enrich"): "daily tier — device tier in wave 2 (B2)",
     # ── web: the auth surface itself ──────────────────────────────────
     ("web", "POST", "/api/auth/setup"): "IS the auth surface — requires the setup code, backoff-throttled",
     ("web", "POST", "/api/auth/login"): "IS the auth surface — password + backoff",

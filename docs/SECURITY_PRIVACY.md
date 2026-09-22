@@ -18,40 +18,44 @@ page keeps being blunt about.
 
 ## The threat model, in one paragraph
 
-Domovoi assumes **your LAN is your household**. Anyone who can reach the
-server over the network can use the daily features — talk to it, play
-music, announce to a room — the same way anyone in your house can talk to
-it. On top of that sit two credentials: a per-household **device token**
-(one shared secret every household client presents; the mechanism exists
-today and ordinary routes move onto it next) and a single **admin tier**
-(one password, set on first run) that gates the dangerous stuff: anything
-that executes code or changes configuration. There are no per-user
-accounts, no roles, and — in v1 — no TLS. Domovoi is **not designed to be
-exposed to the internet**. Don't port-forward 6369 or 6370. If a hostile
-device is already inside your Wi-Fi, the honest answer is that it can use
-Domovoi's daily features and can listen to unencrypted LAN traffic; the
-admin tier is what keeps it from going further.
+Domovoi assumes **your LAN is your household**. Anything on the network can
+read what this Domovoi is — and a device the household enrolled can use the
+daily features, talk to it, play music, announce to a room, the same way
+anyone in your house can. Two credentials sit on top of the LAN: a
+per-household **device token** (one shared secret every household client
+presents — the dashboard, the app, the satellites — which those daily
+actions require) and a single **admin tier** (one password, set on first
+run) that gates the dangerous stuff: anything that executes code, reaches a
+credential, or changes what the server or a satellite runs. There are no
+per-user accounts, no roles, and — in v1 — no TLS. Domovoi is **not designed
+to be exposed to the internet**. Don't port-forward 6369 or 6370. If a
+hostile device is already inside your Wi-Fi, the honest answer is that it
+can listen to unencrypted LAN traffic — including the household token as a
+real client presents it — and then do anything on the daily tier; the admin
+tier is what keeps it from going further.
 
 ## The tiers
 
 ```mermaid
 flowchart TB
     subgraph daily["Daily tier — any LAN host, no auth"]
-        d1["Voice via satellites"]
-        d2["Play/queue music, announce,<br/>drop-in, timers, wake-word recording"]
-        d3["Dashboard read-only pages"]
+        d1["Reads: health, time, handlers,<br/>capabilities, the file-sync channels"]
+        d2["Dashboard read-only pages"]
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
-        v1["The household token every dashboard, phone<br/>and satellite presents (ordinary routes move<br/>onto it next; the mechanism ships now)"]
+        v1["A turn (/v1/intent), announce, drop-in"]
+        v2["Play/queue music, the room queue,<br/>volume, add-by-query"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
-        a3["Satellite code push (makes a Pi run new code)"]
-        a4["Chat-tool resync, session management"]
+        a3["Satellite code push (makes a Pi run new code),<br/>satellite restart / display / config rewrite"]
+        a4["Git pull, clip re-render, library sweeps,<br/>wake-word recording and model push"]
+        a5["Satellite log pull (a room transcript)"]
+        a6["Chat-tool resync, session management"]
     end
     daily --> fetch --> device --> admin
 ```
@@ -69,17 +73,30 @@ after which every household client has to be re-enrolled. It is rotated
 automatically the moment first-run setup completes, so a token that was
 readable during the open pre-setup window does not survive it. The gate
 (`require_device`) keeps the pre-setup grace: a fresh install still works
-before setup. No route wears it yet — the clients learn the token first,
-then the ordinary routes (music, queue, announce, intent…) move onto it.
+before setup.
+
+The ordinary actions now sit behind it: a text or voice turn
+(`POST /v1/intent`), announcements and drop-in, playback and the room
+queue, per-room volume, add-by-query. A client that presents nothing gets
+`401`; the dashboard cookie alone gets `403`, because rendering a page is
+not the same as acting in a room. The web dashboard forwards whatever the
+browser presented on every hop to the core, so signing in is enough there;
+the Android app and the satellites carry the token itself.
 
 ### Daily tier (LAN-trust)
 
-Voice, music control, intercom, announcements, timers, reminders, news —
-all usable by anything on the LAN with no credentials. This is a feature:
-your household shouldn't log in to ask for a song. It's also the accepted
-risk: a guest (or a compromised IoT gadget) on your Wi-Fi can do these
-things too. Keep your Wi-Fi password good; use a guest VLAN for devices you
-don't trust.
+The reads that tell a client what this Domovoi is and let a satellite sync
+itself — health, time, handlers, capabilities, the sounds / satellite-code
+/ wake-model channels, the dashboard's state snapshot — answer anything on
+the LAN. So does everything on a fresh install, until first-run setup
+completes: the pre-setup grace is what lets you set the thing up.
+
+Acting in a room is one step up, on the device tier above: your household
+shouldn't log in to ask for a song, but the ask should come from a device
+the household enrolled. The accepted risk is now narrower and still real —
+one shared household secret, no per-device identity, and anything holding
+it can do everything on that tier. Keep your Wi-Fi password good; use a
+guest VLAN for devices you don't trust.
 
 The video satellite's kiosk page (`display.html` + the now-playing reads
 and transport actions it uses) rides this same tier by design — the device
@@ -89,11 +106,13 @@ for kiosk clients sit in the hardening backlog alongside TLS.
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
 (`POST /api/devices/register`), and the server takes that at face value —
-there is no credential behind it, by the same LAN-trust reasoning as the rest
-of this tier. So the queue blocklist (see the table below) is *household
-policy*, not a security control: it reliably keeps a known device out of a
-room's queue, and someone determined can claim a different id. It is
-documented that way in the dashboard, too. Binding a device id to a
+one household token says the device belongs to the house, not which device
+it is. So the queue and files blocklists (see the table below) are
+*household policy*: they apply where the dashboard and the app ask, they
+reliably keep a known device out of a room's queue, and someone determined
+can claim a different id. What changed is that the core's own queue routes
+now want the household token too, so a blocked device can no longer simply
+call port 6370 and skip the surface that asked. Binding a device id to a
 per-device token belongs with the kiosk read tokens in the hardening
 backlog.
 

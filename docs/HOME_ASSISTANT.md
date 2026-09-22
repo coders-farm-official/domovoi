@@ -142,8 +142,13 @@ both. That's the setup Domovoi is designed for.
 ### What you can wire up today: HA → Domovoi over HTTP
 
 There's no integration, but Domovoi's core API is plain HTTP on the LAN, so
-HA's `rest_command` can drive it. Two useful endpoints (both LAN-trust
-"daily tier" — see [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers)):
+HA's `rest_command` can drive it. Two useful endpoints, both on Domovoi's
+**device tier** — see
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers) — so each carries the
+household device token. Read it from the dashboard (Settings) or from
+`~/.domovoi/device-token.txt` on the server, and keep it in HA's
+`secrets.yaml` as `domovoi_device_token`: it is a credential, and rotating
+it in Domovoi means updating it here too.
 
 ```yaml
 # configuration.yaml
@@ -153,6 +158,8 @@ rest_command:
     url: "http://<domovoi-server>:6370/v1/admin/announce"
     method: POST
     content_type: "application/json"
+    headers:
+      X-Device-Token: !secret domovoi_device_token
     payload: '{"room_id": "{{ room }}", "message": "{{ message }}"}'
 
   # Feed Domovoi a text command as if it had been spoken
@@ -160,6 +167,8 @@ rest_command:
     url: "http://<domovoi-server>:6370/v1/intent"
     method: POST
     content_type: "application/json"
+    headers:
+      X-Device-Token: !secret domovoi_device_token
     payload: '{"transcript": "{{ transcript }}", "room_id": "{{ room }}"}'
 ```
 

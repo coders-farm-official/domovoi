@@ -39,6 +39,11 @@ Three gates, from weakest to strongest:
   501 until an admin password exists, exactly like plugin management.
   ``--reset-admin`` therefore reopens only the daily surface.
 
+Beside them sits one narrow machine-to-machine gate:
+:func:`require_chat_callback`, which guards the endpoint the chat agent's
+sandboxed proxy tools call back on. It takes neither tier's credential —
+the tools hold a per-boot secret this process generated into their source.
+
 DEFERRED (documented hardening backlog, scope amendment): TLS /
 fingerprint pinning. v1 admin flows run over plain LAN HTTP.
 """
@@ -97,6 +102,12 @@ TRUSTED_PROXIES: set[str] = {"127.0.0.1", "::1"}
 # Header a household client presents on the device tier (design: two-tier
 # auth, 2026-09-22). Mirrored to ``device_token_path()`` at boot.
 DEVICE_TOKEN_HEADER = "X-Device-Token"
+
+# Header the chat agent's generated proxy tools present when they call the
+# core back (see :func:`require_chat_callback`). The secret is minted per
+# BOOT and embedded in the generated source, so only tool code this
+# process generated carries it.
+CHAT_CALLBACK_HEADER = "X-Chat-Callback"
 
 # Global login-attempt ceiling — a v1 backstop that caps the endpoint AS A
 # WHOLE, independent of the per-source backoff. Even an attacker who rotates
@@ -754,6 +765,60 @@ async def require_device(request: Request) -> None:
     raise HTTPException(
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
+    )
+
+
+# ─── The chat-tool callback tier: a per-boot shared secret ────────────────
+
+# Minted once per process start by :func:`chat_callback_secret`. It is NOT
+# persisted: the value only has to outlive the tool sources generated from
+# it, and those are regenerated whenever the tool surface is resynced.
+_CHAT_CALLBACK_SECRET: str | None = None
+
+
+def chat_callback_secret() -> str:
+    """The secret this boot embeds in the generated chat proxy-tool source
+    (``letta_tools._proxy_source``) and expects back on
+    ``POST /v1/admin/chat-tool``.
+
+    Minted lazily on first use and stable for the life of the process. A
+    restart mints a fresh one, so the tool sources have to be regenerated
+    (``POST /v1/admin/chat/resync``, which every plugin lifecycle change
+    already runs) before chat tools work again — that is the price of the
+    secret never touching disk."""
+    global _CHAT_CALLBACK_SECRET
+    if _CHAT_CALLBACK_SECRET is None:
+        _CHAT_CALLBACK_SECRET = secrets.token_hex(32)
+    return _CHAT_CALLBACK_SECRET
+
+
+def reset_chat_callback_secret() -> str:
+    """Mint a fresh secret (tests; a deliberate re-key). Returns it."""
+    global _CHAT_CALLBACK_SECRET
+    _CHAT_CALLBACK_SECRET = None
+    return chat_callback_secret()
+
+
+def chat_callback_from_request(request: Request) -> str | None:
+    value = request.headers.get(CHAT_CALLBACK_HEADER.lower()) or ""
+    return value.strip() or None
+
+
+async def require_chat_callback(request: Request) -> None:
+    """Dependency for the chat agent's callback endpoint: the caller must
+    present this boot's :func:`chat_callback_secret` in
+    ``X-Chat-Callback``. The agent's tools run in Letta's own sandbox on
+    the LAN, so they can't hold an admin Bearer — the secret is what
+    distinguishes tool source THIS core generated from anything else that
+    can reach the port. Constant-time compare; 401 otherwise."""
+    presented = chat_callback_from_request(request)
+    if presented is not None and secrets.compare_digest(
+        presented, chat_callback_secret()
+    ):
+        return
+    raise HTTPException(
+        status_code=401,
+        detail=f"{CHAT_CALLBACK_HEADER} required — regenerate the chat tools",
     )
 
 

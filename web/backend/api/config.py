@@ -9,6 +9,8 @@ source the web backend can read without a live domovoi hop.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 
@@ -99,7 +101,7 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
 
 
 @router.get("/config/version")
-async def get_version():
+async def get_version(request: Request):
     """What the Domovoi server is RUNNING, and what's checked out on disk.
 
     Returns ``sha``/``running_sha`` (captured at the core's boot, so it names
@@ -108,15 +110,21 @@ async def get_version():
     SHAs diverge after a ``git pull`` without a restart — the case this panel
     most needs to get right. Read-only proxy to the Domovoi server, which
     owns the git working tree; the web process can't see it."""
-    return bridge_response(*await get_admin("/v1/admin/version"))
+    return bridge_response(
+        *await get_admin("/v1/admin/version", headers=auth_forward_headers(request))
+    )
 
 
 @router.post("/config/version/check")
-async def check_version():
+async def check_version(request: Request):
     """Fetch upstream and report how far the Domovoi server's HEAD is
     behind/ahead. Best-effort: offline / no tracking branch comes back with
     upstream=False rather than an error status. Read-only — never pulls."""
-    return bridge_response(*await post_admin("/v1/admin/version/check", {}))
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/version/check", {}, headers=auth_forward_headers(request)
+        )
+    )
 
 
 @router.post(
@@ -141,8 +149,12 @@ async def restart_version(request: Request):
 
 
 @router.post("/config/version/pull")
-async def pull_version():
+async def pull_version(request: Request):
     """`git pull --ff-only` on the Domovoi server — a deliberate, separate
     action never triggered by the check. A dirty or diverged tree returns
     pulled=False; the Domovoi server process is not restarted."""
-    return bridge_response(*await post_admin("/v1/admin/version/pull", {}))
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/version/pull", {}, headers=auth_forward_headers(request)
+        )
+    )
