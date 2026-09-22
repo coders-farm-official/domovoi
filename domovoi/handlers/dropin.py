@@ -208,7 +208,7 @@ class DropInHandler(Handler):
         mode = getattr(settings, "dropin_accept_mode", "auto")
         text = (
             f"Asking the {label} if you can drop in."
-            if mode == "confirm"
+            if mode in ("confirm", "ring")
             else f"Dropping in on the {label}."
         )
         return Response(

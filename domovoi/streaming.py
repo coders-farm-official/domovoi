@@ -397,6 +397,17 @@ class WakeRecordingState:
     clips_written: int = 0
 
 
+# ADD-2. How much more than the requested ``max_bytes`` a satellite's
+# answer may come to before the pull is abandoned. The Pi is asked for at
+# most N bytes of log; what comes back is that text inside JSON frames,
+# so it is legitimately somewhat larger — escaping, and the tail of a
+# chunk that straddled the boundary. Twice the ask plus 64 KiB covers a
+# worst case of every character escaping to six; anything beyond it is
+# not an answer to the question that was asked.
+LOG_REASSEMBLY_SLACK = 2.0
+LOG_REASSEMBLY_FLOOR = 64 * 1024
+
+
 @dataclass
 class _LogRequest:
     """One in-flight `get_logs` → `logs_chunk`… exchange.
@@ -405,12 +416,35 @@ class _LogRequest:
     protocol, so the correlation id, reassembly buffer and expected
     sequence live here rather than in a general mechanism with a single
     caller. ``future`` resolves on the chunk marked ``final``, or takes an
-    exception if the satellite disconnects or misorders the series.
+    exception if the satellite disconnects, misorders the series, or
+    sends more than ``max_chars`` in total.
+
+    ``max_chars`` is the point of the cap: the core asks for at most
+    ``max_bytes`` of log, and until this existed nothing enforced that on
+    the way back — a session could answer a single pull with frames for
+    as long as the timeout allowed, straight into core memory.
     """
 
     future: "asyncio.Future[dict[str, Any]]"
+    max_chars: int = 0
     chunks: list[str] = field(default_factory=list)
     next_seq: int = 0
+    total_chars: int = 0
+
+    def accept(self, data: str) -> bool:
+        """Take one chunk, or refuse the whole request. Refusing stops
+        the accumulation as well as failing the future — the buffer is
+        dropped, not kept around holding what arrived so far."""
+        if self.max_chars and self.total_chars + len(data) > self.max_chars:
+            self.chunks.clear()
+            self.future.set_exception(RuntimeError(
+                f"satellite log exceeded the {self.max_chars}-character cap "
+                f"for this request"
+            ))
+            return False
+        self.total_chars += len(data)
+        self.chunks.append(data)
+        return True
 
 
 async def _resume_mpd_for_room(room_id: str) -> None:
@@ -720,6 +754,18 @@ class StreamSession:
                 "ws %s connected (replacing prior session — likely a reconnect)",
                 self.room_id,
             )
+            # CORE-7: and CLOSE the one we replaced. Dropping it from the
+            # registry only stopped it receiving broadcasts — the socket
+            # itself stayed open, holding its utterance buffer and
+            # uvicorn's frame buffer, and only a TCP timeout or the ping
+            # watchdog would ever reclaim it. Reconnect in a bad-wifi loop
+            # and those accumulate. 1001 "going away": the server is
+            # dropping THIS session, and the Pi's normal backoff reconnect
+            # is the right response. Best-effort — the peer is usually
+            # already gone, which is why it reconnected at all. A genuine
+            # duplicate-room misconfig now flaps visibly instead of
+            # leaving a silent session that receives nothing forever.
+            await existing._close_quietly(1001)
         else:
             log.info("ws %s connected", self.room_id)
         await self._safe_send_text({
@@ -1936,7 +1982,7 @@ class StreamSession:
                 )
                 return
             mode = getattr(settings, "dropin_accept_mode", "auto")
-            if mode == "confirm":
+            if mode in ("confirm", "ring"):
                 await self._prompt_target_for_dropin(target)
             else:
                 await self._begin_dropin(target)
@@ -1945,6 +1991,11 @@ class StreamSession:
         if action == "accept":
             initiator_room = response.dropin_room
             initiator = sessions.get(initiator_room) if initiator_room else None
+            if initiator is None and initiator_room:
+                # Ring mode parks phone callers here instead: a phone is
+                # never in active_sessions, so without this the room's
+                # "yeah" would find nobody to connect it to.
+                initiator = self.ws.app.state.pending_dropins.get(initiator_room)
             if initiator is None or initiator.dropin_peer is not None:
                 # They hung up (or got into another call) before the target
                 # answered. Same mid-response constraint as above — log
@@ -2724,7 +2775,12 @@ class StreamSession:
             ))
             return
         pending.next_seq += 1
-        pending.chunks.append(str(ctrl.get("data") or ""))
+        if not pending.accept(str(ctrl.get("data") or "")):
+            log.warning(
+                "log pull from room=%s abandoned: over the %d-character cap",
+                self.room_id, pending.max_chars,
+            )
+            return
         if ctrl.get("final"):
             stats = ctrl.get("stats")
             pending.future.set_result({
@@ -2742,10 +2798,18 @@ class StreamSession:
         and answers with a numbered series of `logs_chunk` frames, which
         this reassembles. Raises on a dead socket, `TimeoutError` if the
         satellite goes quiet mid-transfer, so the admin endpoint can tell
-        the difference between "offline" and "stopped answering".
+        the difference between "offline" and "stopped answering" — and
+        (ADD-2) if the answer comes to more than ``max_bytes`` allows for,
+        rather than letting the reassembly buffer follow whatever the
+        session decides to send.
         """
         request_id = secrets.token_hex(8)
-        pending = _LogRequest(future=asyncio.get_running_loop().create_future())
+        cap = max(
+            LOG_REASSEMBLY_FLOOR, int(int(max_bytes) * LOG_REASSEMBLY_SLACK)
+        )
+        pending = _LogRequest(
+            future=asyncio.get_running_loop().create_future(), max_chars=cap
+        )
         self._log_requests[request_id] = pending
         try:
             await self.ws.send_text(json.dumps({
@@ -3040,54 +3104,80 @@ class StreamSession:
         session so its next "yeah" routes to ``DropInHandler.handle_confirmation``,
         then prompt it with a no-wake-word followup. The auto path skips all
         this (which is why auto is the default)."""
-        from domovoi.confirmations import request_confirmation
-        from domovoi.db.repositories import SessionRepository
+        await ring_target_for_dropin(self.room_id, target)
 
-        peer_label = self.room_id.replace("_", " ")
+
+# ─── Ringing a room before a call opens ──────────────────────────────────
+
+
+async def ring_target_for_dropin(initiator_room: str, target: "StreamSession") -> bool:
+    """Ask ``target``'s room whether it will take a call from
+    ``initiator_room``, and open nothing.
+
+    Parks a ``core.dropin_invite`` pending confirmation in the target's
+    session so its next "yeah" routes to
+    ``DropInHandler.handle_confirmation``, then prompts it with a
+    no-wake-word followup. The bridge is built later, by the target's own
+    accept turn (``_handle_dropin_action``) — never here.
+
+    Module-level rather than a ``StreamSession`` method because the
+    initiator is not always a session: ``dropin_accept_mode='ring'``
+    routes HTTP- and phone-initiated calls through here too, and a phone
+    (``phone_dropin.PhoneDropinSession``) has no session of its own. Only
+    the TARGET has to be a real satellite, which it always is.
+
+    Returns True when the prompt went out.
+    """
+    from domovoi.confirmations import request_confirmation
+    from domovoi.db.repositories import SessionRepository
+
+    peer_label = initiator_room.replace("_", " ")
+    try:
+        async with session_scope() as s:
+            repo = SessionRepository(s)
+            target_session_id = await repo.get_or_create(
+                target.session_id, target.room_id
+            )
+            await request_confirmation(
+                s,
+                target_session_id,
+                kind="core.dropin_invite",
+                handler="dropin",
+                data={
+                    "initiator_room": initiator_room,
+                    "peer_label": peer_label,
+                },
+            )
+        # Keep the target's in-memory session_id aligned so its followup
+        # turn reuses the sessions row the pending lives in.
+        target.session_id = target_session_id
+    except Exception as e:
+        log.warning(
+            "drop-in: failed to park confirmation for %s: %s",
+            target.room_id, e,
+        )
+        return False
+
+    # Free the card so the prompt is audible; a decline auto-resumes
+    # music on that turn, an accept keeps it suppressed for the call.
+    await target._suppress_music_for(target)
+    try:
+        await target.prompt_dropin(
+            f"The {peer_label} wants to drop in. Is that okay?"
+        )
+    except Exception as e:
+        log.warning(
+            "drop-in: prompt to %s failed (busy?): %s", target.room_id, e
+        )
+        # Clear the parked confirmation so a later stray "yes" can't open
+        # a call nobody is waiting on, and restore the target's music.
         try:
             async with session_scope() as s:
-                repo = SessionRepository(s)
-                target_session_id = await repo.get_or_create(
-                    target.session_id, target.room_id
+                await SessionRepository(s).set_context_key(
+                    target.session_id, "pending_confirmation", None
                 )
-                await request_confirmation(
-                    s,
-                    target_session_id,
-                    kind="core.dropin_invite",
-                    handler="dropin",
-                    data={
-                        "initiator_room": self.room_id,
-                        "peer_label": peer_label,
-                    },
-                )
-            # Keep the target's in-memory session_id aligned so its followup
-            # turn reuses the sessions row the pending lives in.
-            target.session_id = target_session_id
-        except Exception as e:
-            log.warning(
-                "drop-in: failed to park confirmation for %s: %s",
-                target.room_id, e,
-            )
-            return
-
-        # Free the card so the prompt is audible; a decline auto-resumes
-        # music on that turn, an accept keeps it suppressed for the call.
-        await self._suppress_music_for(target)
-        try:
-            await target.prompt_dropin(
-                f"The {peer_label} wants to drop in. Is that okay?"
-            )
-        except Exception as e:
-            log.warning(
-                "drop-in: prompt to %s failed (busy?): %s", target.room_id, e
-            )
-            # Clear the parked confirmation so a later stray "yes" can't open
-            # a call nobody is waiting on, and restore the target's music.
-            try:
-                async with session_scope() as s:
-                    await SessionRepository(s).set_context_key(
-                        target.session_id, "pending_confirmation", None
-                    )
-            except Exception:
-                pass
-            await self._restore_music_for(target)
+        except Exception:
+            pass
+        await target._restore_music_for(target)
+        return False
+    return True

@@ -274,8 +274,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "dropin_accept_mode", "Accept mode", "Drop-in",
         "How a target room accepts: 'auto' opens its mic immediately "
-        "(Alexa-style); 'confirm' prompts the target to say yes first.",
-        "choice", choices=["auto", "confirm"],
+        "(Alexa-style); 'confirm' prompts the target to say yes first "
+        "when the call was asked for out loud; 'ring' prompts it for "
+        "every caller, including the dashboard and a phone, so nothing "
+        "opens until someone in that room answers.",
+        "choice", choices=["auto", "confirm", "ring"],
+    ),
+    FieldSpec(
+        "dropin_ring_timeout_sec", "Ring timeout", "Drop-in",
+        "How long a phone waits for a rung room to answer before giving "
+        "up. Ring mode only.",
+        "float", min=5.0, max=300.0, unit="sec",
     ),
     FieldSpec(
         "dropin_silence_timeout_sec", "Silence auto-end", "Drop-in",

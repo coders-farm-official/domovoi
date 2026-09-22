@@ -54,7 +54,6 @@ DEVICE_TOKEN = "device-token"
 DEVICE_TIER = [
     ("POST", "/v1/intent"),
     ("POST", "/v1/admin/announce"),
-    ("POST", "/v1/admin/dropin/start"),
     ("POST", "/v1/admin/dropin/end"),
     ("POST", "/v1/admin/satellite/set-volume"),
     ("POST", "/v1/admin/satellites/{room_id}/label"),
@@ -75,6 +74,10 @@ DEVICE_TIER = [
 
 ADMIN_TIER = [
     ("POST", "/v1/admin/version/pull"),
+    # CORE-2: opening a live two-way mic bridge between two rooms from
+    # an HTTP call, with nobody in either room asked first, is a
+    # physical-effect action - admin Bearer, not the household token.
+    ("POST", "/v1/admin/dropin/start"),
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/config"),

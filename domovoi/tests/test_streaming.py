@@ -1254,3 +1254,30 @@ def test_stream_non_hello_first_frame_is_refused(
             assert exc.value.code == 1008
         assert "kitchen" not in app.state.active_sessions
         assert provisioned == []
+def test_a_replaced_room_session_has_its_socket_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CORE-7. A second connect for the same room has always taken the
+    room over for broadcasts, but the socket it displaced stayed open —
+    holding its utterance buffer and uvicorn's frame buffer until a TCP
+    timeout or the ping watchdog noticed, which under flaky wifi meant
+    they piled up. The replaced session is now closed (1001, going away)
+    as soon as the new one registers, so a duplicate-room misconfig flaps
+    visibly instead of leaving a session that silently receives nothing.
+    """
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    _spy_provisioning(monkeypatch)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "use_stubs", False)
+        with client.websocket_connect("/v1/stream/kitchen") as first:
+            _hello(first)
+            assert app.state.active_sessions["kitchen"] is not None
+            with client.websocket_connect("/v1/stream/kitchen") as second:
+                second_ready = _hello(second)
+                assert second_ready["type"] == "ready"
+                with pytest.raises(WebSocketDisconnect) as exc:
+                    first.receive_json()
+                assert exc.value.code == 1001
+            # The replacement still owns the room.
+            assert "kitchen" not in app.state.active_sessions

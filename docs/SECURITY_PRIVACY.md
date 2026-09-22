@@ -48,7 +48,7 @@ flowchart TB
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
         v1["The household token every dashboard, phone<br/>and satellite presents"]
-        v2["A turn (/v1/intent), announce, drop-in"]
+        v2["A turn (/v1/intent), announce,<br/>the drop-in WebSocket"]
         v3["Play/queue music, the room queue,<br/>volume, add-by-query"]
         v4["Documents, Files, Images and Videos:<br/>list, read, upload, move, import"]
         v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
@@ -57,6 +57,7 @@ flowchart TB
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
         a3["Satellite code push (makes a Pi run new code),<br/>satellite restart / display / config rewrite"]
+        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start)"]
         a4["Git pull, clip re-render, library sweeps,<br/>wake-word recording and model push"]
         a5["Satellite log pull (a room transcript)"]
         a6["Chat-tool resync, session management"]
@@ -90,6 +91,25 @@ gets `401`; the dashboard cookie alone gets `403`, because rendering a page
 is not the same as acting in a room. The web dashboard forwards whatever
 the browser presented on every hop to the core, so signing in is enough
 there; the Android app and the satellites carry the token itself.
+
+**The drop-in socket.** The phone drop-in **WebSocket**
+(`WS /v1/dropin/{room_id}`) is on this tier too, and is checked on the
+UPGRADE rather than inside the handler: by the time a drop-in session
+object exists it has already joined the room's live microphone, so a
+caller without a credential is closed (`1008`) before one is built, and
+the room never learns a call was attempted. A browser cannot set request
+headers on a WebSocket, so that route — and only that route — also accepts
+the token as `?token=`; every HTTP route takes the header, because a query
+string ends up in access logs and `Referer` headers.
+
+A credential says *who* is calling, not that the room agreed. That is what
+`DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
+microphone as soon as a call is placed, `confirm` asks first when the call
+was asked for out loud, and **`ring` asks for every caller** — spoken,
+dashboard and phone alike. Under `ring` nothing is bridged until someone in
+that room answers their own satellite, so a stolen or shared household token
+cannot open a microphone by itself. Households that want consent on every
+call should set it.
 
 **Reads the browser fetches by URL.** An `<img src>`, a `<video src>` and a
 `window.open` cannot set a header, so the READ half of this tier
@@ -132,6 +152,77 @@ executed, no credential is sent, and on Android no capability or plugin
 route is loaded. Same-origin (the box that served the dashboard) is trusted
 by construction. Verifying a server's identity cryptographically (and TLS
 with pinning) stays on the hardening backlog.
+
+### Which names the server answers to
+
+Both processes refuse an HTTP request whose `Host` header is not a name
+that can only mean this box on this LAN, with `400`, before routing. This
+is the DNS-rebinding guard: a page on the public internet can point a name
+it owns at `127.0.0.1`, and from the browser's point of view the result is
+same-origin — so CORS never sees it, and nothing but the `Host` header can
+tell the difference.
+
+What passes: a private, loopback or link-local IP; a single-label name
+(`localhost`, `beelink`, a container name — a bare label cannot be bought,
+because public DNS names always contain a dot); anything under `.local`,
+`.lan`, `.home.arpa`, `.internal`; and anything the operator lists in
+`TRUSTED_HOSTS`. A request with no `Host` at all passes, because rebinding
+needs a name. Set `TRUSTED_HOSTS` if you reach Domovoi through a name of
+your own — a reverse proxy, a tailnet — or it will answer you with a 400.
+
+WebSocket upgrades are judged on `Origin` instead, in the route: a page may
+open a socket to any host it can reach, exempt from the same-origin policy,
+and `Origin` is the only thing that says which page did. Both
+`WS /v1/stream/{room_id}` and `WS /v1/dropin/{room_id}` refuse an `Origin`
+outside the LAN regex — the same regex the web process enforces for CORS,
+so a page that cannot call the REST API cannot open a socket either. An
+**absent** `Origin` passes, and must: the satellites, the Android app and
+every command-line client send none, and only a browser is bound by the
+rule this enforces.
+
+### The wake-word phrase never reaches a shell
+
+Automatic wake-word training shells out to a command the operator writes
+(`WAKE_WORD_TRAIN_COMMAND` — on Windows typically a `wsl …` or
+`docker run …` wrapper), with the phrase substituted in. Two rules keep
+the phrase an argument and nothing more:
+
+* the template is split into tokens FIRST and each value is substituted
+  inside a single token, so **a substituted value is always exactly one
+  element of argv** — it cannot become several arguments, and cannot land
+  ahead of an image name. The command is run with a list, never through a
+  shell;
+* a phrase must match `^[A-Za-z0-9 ,.'-]+$` — letters, digits, spaces and
+  the punctuation that appears inside a spoken name. The dashboard route
+  answers `422` for anything else, and the trainer re-checks every queued
+  row before it runs, for rows that predate the bound.
+
+Training stays off by default: it needs both `WAKE_WORD_TRAINER_ENABLED`
+and a non-empty `WAKE_WORD_TRAIN_COMMAND`.
+
+### How much a request may weigh
+
+Both processes refuse a request body over 1 MiB with `413`, before it is
+read. FastAPI buffers the whole body into memory before validation runs,
+so without a cap one request decides how much memory the process uses,
+however small the model it was going to be parsed into. A declared
+`Content-Length` over the limit is refused without reading anything; a
+body sent without one is counted as it streams and cut off the moment it
+crosses. The upload routes — a music zip, a Piper voice, satellite media,
+documents and files, a plugin zip — keep their own much larger ceilings
+(`domovoi/transport_guard.py`), on top of the domain limits they already
+enforced. `MAX_REQUEST_BYTES` moves the default.
+
+Two smaller bounds go with it. `Intent.transcript` and `room_id` are
+length-bounded, so a body that is not a spoken turn is refused by the
+model instead of being carried into the router, the LLM prompt and
+`intents_log`; a config push is bounded by key count. And both processes
+run uvicorn with `--limit-concurrency`
+(`MAX_CONCURRENT_CONNECTIONS`, default 128): over it uvicorn answers 503
+rather than accepting work it has no memory for, because every satellite
+WebSocket holds an utterance buffer and a frame buffer for as long as it
+is open. Relatedly, a second connect for a room now **closes** the socket
+it replaced (1001) instead of leaving it open and unread.
 
 ### Daily tier (LAN-trust)
 

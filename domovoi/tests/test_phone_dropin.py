@@ -28,6 +28,7 @@ def make_app(*, active=None, fd=None, dropins=None):
             active_sessions=active if active is not None else {},
             satellite_full_duplex=fd if fd is not None else {},
             active_dropins=dropins if dropins is not None else {},
+            pending_dropins={},
             dropin_lock=asyncio.Lock(),
             resumable_music={},
             pending_music_start={},
@@ -140,7 +141,12 @@ async def _run_phone(app, target_room="kitchen", phone_id="phone-test"):
     # Let the handshake (accept → feasibility → _begin_dropin → dropin_start
     # frames) complete. dropin_peer is set under the lock before the frames
     # go out, so wait for the start frame (or closure on refusal).
-    for _ in range(100):
+    #
+    # Budget generously: _begin_dropin writes its best-effort audit row
+    # between the pairing and the frames, and when Postgres is unreachable
+    # (the DB-free run) that failing connect is what the wait is actually
+    # spent on. A short budget returned a paired-but-frameless session.
+    for _ in range(400):
         await asyncio.sleep(0.01)
         if phone.ws.closed or any('"dropin_start"' in t for t in phone.ws.sent_text):
             break
@@ -275,3 +281,104 @@ async def test_second_phone_refused_while_room_busy(quiet_dropin):
     assert phone1.dropin_peer is pi and pi.dropin_peer is phone1
     phone1.ws.feed_text({"type": "dropin_end"})
     await asyncio.wait_for(task1, timeout=2)
+
+
+# ─── CORE-2: ring mode — the room decides ────────────────────────────────
+
+
+@pytest.fixture
+def ring_mode(monkeypatch):
+    """Ring mode with the DB-backed prompt stubbed out: the parking of the
+    pending confirmation is StreamSession's business and is covered in
+    test_dropin; here we care that the phone waits."""
+    monkeypatch.setattr(settings, "dropin_accept_mode", "ring", raising=False)
+    monkeypatch.setattr(settings, "dropin_ring_timeout_sec", 2.0, raising=False)
+    rung: list[tuple[str, str]] = []
+
+    async def fake_ring(initiator_room, target):
+        rung.append((initiator_room, target.room_id))
+        return True
+
+    import domovoi.streaming as streaming_mod
+
+    monkeypatch.setattr(streaming_mod, "ring_target_for_dropin", fake_ring)
+    return rung
+
+
+async def _ringing_phone(app, rung, phone_id="phone-test"):
+    """Start a phone call in ring mode and wait for the ringing frame."""
+    phone = PhoneDropinSession(FakeWS(app), phone_id=phone_id, target_room="kitchen")
+    task = asyncio.create_task(phone.run())
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if rung or phone.ws.closed:
+            break
+    return phone, task
+
+
+async def test_phone_call_in_ring_mode_opens_no_bridge_until_the_room_says_yes(
+    quiet_dropin, ring_mode
+):
+    app = make_app(fd={"kitchen": True})
+    pi = StreamSession(FakeWS(app), "kitchen")
+    app.state.active_sessions["kitchen"] = pi
+
+    phone, task = await _ringing_phone(app, ring_mode)
+
+    # Rung, and nothing else: no pairing, no registry entry, and the Pi
+    # has not been told to open its microphone.
+    assert ring_mode == [("phone-test", "kitchen")]
+    assert phone.dropin_peer is None and pi.dropin_peer is None
+    assert app.state.active_dropins == {}
+    assert not any('"dropin_start"' in t for t in pi.ws.sent_text)
+    # The caller is told it is ringing, and is findable by the room's
+    # accept turn.
+    assert any('"dropin_ringing"' in t for t in phone.ws.sent_text)
+    assert app.state.pending_dropins["phone-test"] is phone
+
+    # The room answers: its accept turn pairs with whoever is waiting.
+    await phone._begin_dropin(pi)
+    await asyncio.sleep(0.2)
+
+    assert phone.dropin_peer is pi and pi.dropin_peer is phone
+    assert any('"dropin_start"' in t for t in phone.ws.sent_text)
+    # The phone placed the call, even though the room closed it.
+    assert app.state.active_dropins["phone-test"]["initiator"] is True
+    assert app.state.active_dropins["kitchen"]["initiator"] is False
+
+    phone.ws.feed_text({"type": "dropin_end"})
+    await asyncio.wait_for(task, timeout=2)
+    assert "phone-test" not in app.state.pending_dropins
+
+
+async def test_phone_call_in_ring_mode_gives_up_when_nobody_answers(
+    quiet_dropin, ring_mode, monkeypatch
+):
+    monkeypatch.setattr(settings, "dropin_ring_timeout_sec", 0.3, raising=False)
+    app = make_app(fd={"kitchen": True})
+    pi = StreamSession(FakeWS(app), "kitchen")
+    app.state.active_sessions["kitchen"] = pi
+
+    phone, task = await _ringing_phone(app, ring_mode)
+    await asyncio.wait_for(task, timeout=3)
+
+    ends = [json.loads(t) for t in phone.ws.sent_text if '"dropin_end"' in t]
+    assert ends and ends[-1]["reason"] == "no_answer"
+    assert app.state.active_dropins == {}
+    assert "phone-test" not in app.state.pending_dropins
+    assert "phone-test" not in app.state.satellite_full_duplex
+    assert phone.ws.closed
+
+
+async def test_phone_call_in_auto_mode_still_opens_immediately(quiet_dropin):
+    """The default path is untouched by ring mode."""
+    app = make_app(fd={"kitchen": True})
+    pi = StreamSession(FakeWS(app), "kitchen")
+    app.state.active_sessions["kitchen"] = pi
+
+    phone, task = await _run_phone(app)
+    assert phone.dropin_peer is pi
+    assert app.state.pending_dropins == {}
+
+    phone.ws.feed_text({"type": "dropin_end"})
+    await asyncio.wait_for(task, timeout=2)

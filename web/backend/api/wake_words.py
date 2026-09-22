@@ -50,6 +50,7 @@ from domovoi import wake_clip_quality as wq
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
 from domovoi.db.repositories import WakeWordsRepository
+from domovoi.models import MAX_WAKE_PHRASE_CHARS, WAKE_PHRASE_PATTERN
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -78,7 +79,18 @@ class WakeWord(BaseModel):
 
 class WakeWordCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
-    phrase: str = Field(..., min_length=1, max_length=120)
+    # CORE-10: a phrase is words someone says out loud, so it is bounded
+    # to letters, digits, spaces and spoken punctuation. It ends up as an
+    # argument to the operator's configured training command, and a value
+    # carrying quotes or shell metacharacters is not a phrase. 422 here;
+    # the trainer re-checks before it runs anything (defence in depth,
+    # and for rows created before this bound existed).
+    phrase: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_WAKE_PHRASE_CHARS,
+        pattern=WAKE_PHRASE_PATTERN,
+    )
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     source_room_id: str | None = Field(default=None, max_length=120)
 

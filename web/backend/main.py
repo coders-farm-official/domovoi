@@ -21,6 +21,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from domovoi import admin_auth
+from domovoi.config import settings
+from domovoi.transport_guard import (
+    BodyLimitMiddleware,
+    LanHostMiddleware,
+    lan_origin_regex,
+)
 from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
 from web.backend.api import calendar as calendar_api
@@ -225,6 +231,19 @@ app = FastAPI(
 )
 
 
+# ─── Host ─────────────────────────────────────────────────────────────────
+# CORE-8: which names this server answers to at all. CORS (below) governs
+# what a browser may READ cross-origin; a public name pointed at this box
+# (DNS rebinding) is same-origin as far as the browser is concerned, so
+# CORS never sees it — only the Host header does.
+
+app.add_middleware(LanHostMiddleware)
+# CORE-7: added after the host check so it wraps it — the cheapest
+# possible refusal for a body nobody is going to read anyway. Upload
+# routes keep their own, much larger ceilings (transport_guard).
+app.add_middleware(BodyLimitMiddleware)
+
+
 # ─── CORS ─────────────────────────────────────────────────────────────────
 # LAN-trust: allow localhost + RFC 1918 ranges for cross-origin requests
 # from the browser when the user opens the UI by IP. Refuses public
@@ -234,16 +253,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=(
-        r"^https?://("
-        r"localhost(:\d+)?"
-        r"|127\.0\.0\.1(:\d+)?"
-        r"|192\.168\.\d+\.\d+(:\d+)?"
-        r"|10\.\d+\.\d+\.\d+(:\d+)?"
-        r"|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+(:\d+)?"
-        r"|[\w-]+\.local(:\d+)?"
-        r")$"
-    ),
+    # One source of truth with the core's WebSocket Origin check
+    # (domovoi/transport_guard.py), so a page that cannot call the REST
+    # API cannot open a socket either. Same LAN ranges as before, plus
+    # .lan / .home.arpa / .internal and anything in TRUSTED_HOSTS.
+    allow_origin_regex=lan_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -390,6 +404,8 @@ def main() -> None:
         # Multi-worker is OK here (no GPU pinning); start at 1 and
         # bump only if the dashboard's request count justifies it.
         workers=1,
+        # CORE-7: the same connection ceiling the core runs with.
+        limit_concurrency=settings.max_concurrent_connections,
     )
 
 

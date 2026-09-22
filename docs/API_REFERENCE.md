@@ -109,11 +109,29 @@ with a reason.
 
 ### 1.3 Realtime WebSockets
 
+**Request bodies.** Both processes refuse a body over 1 MiB
+(`MAX_REQUEST_BYTES`) with `413` before reading it — a declared
+`Content-Length` is rejected outright, an undeclared one is cut off as it
+streams. The upload routes (music library zip, Piper voice, satellite
+media, documents, files, chat uploads, plugin install) carry their own much
+larger ceilings. `POST /v1/intent` additionally bounds `transcript`
+(4096 chars) and `room_id` (120), and a config push is bounded by key
+count (500) — all `422`. Both processes run uvicorn with
+`--limit-concurrency` (`MAX_CONCURRENT_CONNECTIONS`, default 128).
+
+**Host and Origin.** Both processes answer only to a `Host` that names this
+box on the LAN — a private/loopback IP, a single-label name, anything under
+`.local` / `.lan` / `.home.arpa` / `.internal`, or a name listed in
+`TRUSTED_HOSTS`. Anything else gets `400` before routing (the DNS-rebinding
+guard). WebSocket upgrades are judged on `Origin` instead, against the same
+LAN pattern the dashboard's CORS policy uses; an absent `Origin` passes,
+which is how satellites and every non-browser client connect.
+
 | Socket | Process | Purpose |
 |---|---|---|
 | `WS /ws/state` | web :6369 | Dashboard state push. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...]}`; no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |
-| `WS /v1/stream/{room_id}` | core :6370 | The satellite voice stream: bidirectional audio + control frames (hello, wake, audio chunks, transcripts, TTS, music start/stop handshake, drop-in, config/volume/voice status, wake-word recording). The full frame contract is documented in [uml/satellite-protocol.md](uml/satellite-protocol.md); the implementation is `domovoi/streaming.py`. The client's first frame must be `hello`; the server provisions nothing, lists nothing, and sends no `ready` until that `hello` has passed the pairing check (a socket that stays silent for `SATELLITE_HELLO_TIMEOUT_SEC`, default 5 s, or sends any other frame first is closed with nothing created). One session per `room_id` — a second connect with the same id evicts the first for broadcasts, but only once its own `hello` is accepted. |
-| `WS /v1/dropin/{room_id}` | core :6370 | Phone drop-in only: joins the intercom bridge as a call peer *without* registering as a satellite. Query param `phone_id` identifies the caller (auto-prefixed `phone-` so it can never collide with a room). See `domovoi/phone_dropin.py`. |
+| `WS /v1/stream/{room_id}` | core :6370 | The satellite voice stream: bidirectional audio + control frames (hello, wake, audio chunks, transcripts, TTS, music start/stop handshake, drop-in, config/volume/voice status, wake-word recording). The full frame contract is documented in [uml/satellite-protocol.md](uml/satellite-protocol.md); the implementation is `domovoi/streaming.py`. The client's first frame must be `hello`; the server provisions nothing, lists nothing, and sends no `ready` until that `hello` has passed the pairing check (a socket that stays silent for `SATELLITE_HELLO_TIMEOUT_SEC`, default 5 s, or sends any other frame first is closed with nothing created). One session per `room_id` — a second connect with the same id evicts the first for broadcasts (and closes the socket it replaced), but only once its own `hello` is accepted. `Origin`, when present, must be a LAN origin; satellites send none, which passes. |
+| `WS /v1/dropin/{room_id}` | core :6370 | Phone drop-in only: joins the intercom bridge as a call peer *without* registering as a satellite. Query param `phone_id` identifies the caller (auto-prefixed `phone-` so it can never collide with a room). **Device tier, checked on the upgrade:** send the household token as the `X-Device-Token` header, or as `?token=` when the client is a browser and cannot set headers, or an admin `Authorization: Bearer`. Anything else gets `{"type":"error","code":"unauthorized"}` and a `1008` close before any session exists, so the target room is never disturbed and `active_dropins` gains no entry. With `DROPIN_ACCEPT_MODE=ring` the call does not open on connect: the server sends `{"type":"dropin_ringing"}`, rings the room, and only bridges when someone there says yes (`dropin_end` with `reason: "no_answer"` after `DROPIN_RING_TIMEOUT_SEC`). `Origin`, when present, must be a LAN origin. See `domovoi/phone_dropin.py`. |
 
 ---
 
@@ -187,7 +205,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 |---|---|---|---|
 | `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version}`. |
 | `POST /v1/admin/announce` | **Device (`X-Device-Token` or Bearer)** | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
-| `POST /v1/admin/dropin/start` | **Device (`X-Device-Token` or Bearer)** | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. |
+| `POST /v1/admin/dropin/start` | **Admin (Bearer)** | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms — a live microphone bridge nobody in either room was asked about, so it takes an admin Bearer. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. Under `DROPIN_ACCEPT_MODE=ring` it returns `{"status": "ringing"}` and opens nothing until the target room answers. |
 | `POST /v1/admin/dropin/end` | **Device (`X-Device-Token` or Bearer)** | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
 | `POST /v1/admin/satellite/restart` | **Admin (Bearer)** | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/set-volume` | **Device (`X-Device-Token` or Bearer)** | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
@@ -199,7 +217,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/satellites/{room_id}/label` | **Device (`X-Device-Token` or Bearer)** | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
 | `GET /v1/admin/satellite/{room_id}/config` | Open | — | Editable satellite config: the schema joined with the values the Pi reported. `404` when the room isn't connected. |
 | `POST /v1/admin/satellite/{room_id}/config` | **Admin (Bearer)** | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. |
-| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). Gated like a config read: the ring holds what the room said (the satellite logs each transcript). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering. |
+| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | Tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`). Gated like a config read: the ring holds what the room said (the satellite logs each transcript). `404` not connected, `503` disconnected mid-transfer, `504` stopped answering, `502` when the answer comes to more than `max_bytes` allows for (the reassembly buffer is capped per request, so a session cannot answer one pull with frames for as long as the timeout permits). |
 
 ### 2.6 Admin: version, config, chat, hardware
 
@@ -442,9 +460,9 @@ actions proxy to the core admin endpoints.
 | `DELETE /api/satellites/{room_id}/timers/{timer_id}` | Open | — | Cancel a timer. |
 | `POST /api/satellites/{room_id}/announce` | Open | `{message}` | Proxy → core announce (one room). |
 | `POST /api/satellites/announce-all` | Open | `{message}` | Proxy → core announce (broadcast). |
-| `POST /api/satellites/{room_id}/dropin/start` | Open | `{target_room}` | Proxy → core drop-in start. |
+| `POST /api/satellites/{room_id}/dropin/start` | Proxy — core requires an admin Bearer | `{target_room}` | Proxy → core drop-in start; the caller's credentials are forwarded. |
 | `POST /api/satellites/{room_id}/dropin/end` | Open | — | Proxy → core drop-in end. |
-| `GET /api/satellites/{room_id}/dropin/phone-info` | Open | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). |
+| `GET /api/satellites/{room_id}/dropin/phone-info` | **Device (`X-Device-Token` or Bearer)** | — | What a phone client needs to join this room's drop-in (`/v1/dropin/...` URL + capability info). The phone presents the same token again on the upgrade. |
 | `GET /v1/satellite-plugins/manifest` (core) | Open | — | `{files: {"<slug>/<rel>": sha256}, meta: {slug: {...}}}` — enabled plugins' `[satellite]` payloads; satellites mirror it like the code channel. |
 | `GET /v1/satellite-plugins/{path}` (core) | Open | — | One payload file by its `<slug>/<rel>` channel path. |
 | `GET /api/satellites/media/status` | **Admin (read)** | — | Media-prep card data: boards, cache state, docker availability, per-plugin payload summary. |
@@ -542,7 +560,7 @@ picked up by the core's background trainer. The default wake word is
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/wake-words` | — | Registry: slug, status (`recording`/`training`/`ready`/`failed`), clip counts, threshold. |
-| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. |
+| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. `phrase` must match `^[A-Za-z0-9 ,.'-]+$` (letters, digits, spaces and spoken punctuation, ≤ 120 chars) — it becomes an argument to the operator's `WAKE_WORD_TRAIN_COMMAND`, so `422` for anything else. |
 | `POST /api/wake-words/{id}/record/start` | `{room_id}` | Proxy → core: satellite starts capturing positive clips. |
 | `POST /api/wake-words/{id}/record/stop` | `{room_id}` | Proxy → core: stop capturing. |
 | `POST /api/wake-words/{id}/train` | — | Queue training (the background trainer picks it up). |

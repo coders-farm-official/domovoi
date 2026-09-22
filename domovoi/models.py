@@ -7,9 +7,32 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+# A spoken turn. Whisper's longest plausible utterance is a few hundred
+# characters and a room id is a slug, so these bounds are far above
+# anything a real client sends — they exist so a body that is not a turn
+# at all is rejected by the model instead of being carried into the
+# router, the LLM prompt and the intents_log. The transport-level cap on
+# the whole body is in domovoi/transport_guard.py (CORE-7).
+MAX_TRANSCRIPT_CHARS = 4096
+MAX_ROOM_ID_CHARS = 120
+# How many keys one config push may carry. The satellite schema has a
+# few dozen editable fields and the core's has a few hundred; nobody
+# edits more than a screenful at a time.
+MAX_CONFIG_CHANGES = 500
+
+# What a wake-word phrase may contain. A phrase is words a person says
+# out loud — letters, digits, spaces, and the punctuation that shows up
+# inside a spoken name ("hey, jarvis", "o'brien", "wake-up"). Nothing
+# else, because the phrase is handed to the operator's configured
+# training command (wake_word_train_command), and a value that can carry
+# quotes or shell metacharacters into that is not a phrase.
+WAKE_PHRASE_PATTERN = r"^[A-Za-z0-9 ,.'-]+$"
+MAX_WAKE_PHRASE_CHARS = 120
+
+
 class Intent(BaseModel):
-    transcript: str
-    room_id: str | None = None
+    transcript: str = Field(..., max_length=MAX_TRANSCRIPT_CHARS)
+    room_id: str | None = Field(default=None, max_length=MAX_ROOM_ID_CHARS)
     session_id: UUID | None = None
     synthesize: bool = False   # if true, /v1/intent returns audio/wav bytes
 
