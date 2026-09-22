@@ -19,6 +19,10 @@ deliberately tiny surface:
   default-deny gate: every non-GET route requires an admin session unless
   its function is decorated ``@open_endpoint``; a GET that wants gating
   adds ``Depends(admin_required)``.
+* :mod:`domovoi.net_safety` (re-exported as ``webkit.net_safety``) — the
+  shared outbound-URL check and its safe fetchers, so a plugin web module
+  that fetches a caller-chosen URL goes through the same gate the core
+  does.
 
 Everything else in ``domovoi.*`` is refused at runtime in the web
 process by a ``sys.meta_path`` guard (``web.backend.plugin_host``), so
@@ -37,12 +41,14 @@ from typing import Any, Callable
 import httpx
 from fastapi import HTTPException, Request
 
+from domovoi import net_safety
 from domovoi.admin_auth import check_admin_request
 from domovoi.db.session import SessionLocal, engine, session_scope
 
 __all__ = [
     "SessionLocal",
     "engine",
+    "net_safety",
     "session_scope",
     "CoreClient",
     "CoreDown",

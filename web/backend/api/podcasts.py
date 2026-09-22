@@ -9,6 +9,12 @@ per-(device × person × episode) resume-position store.
 Every served episode path is containment-checked inside ``podcasts_dir``
 with the same realpath / ``relative_to`` guard music.py uses, so a stale or
 hand-edited ``file_path`` row can't become an arbitrary-file read.
+
+Subscribing and polling make the server fetch a URL the caller chose, so
+both sit on the device tier (``X-Device-Token`` or an admin Bearer) and
+every feed URL — typed in, or returned by discovery — goes through
+``domovoi.net_safety``: http(s) only, and never an address inside the
+house or on the box.
 """
 
 from __future__ import annotations
@@ -17,11 +23,13 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from domovoi import net_safety
+from domovoi.admin_auth import require_device
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
 from web.backend.api.audio_serve import safe_download_name, serve_audio_range
@@ -35,6 +43,20 @@ router = APIRouter(prefix="/api/podcasts", tags=["podcasts"])
 # ─── Containment (music.py:349-367 pattern) ─────────────────────────────
 def _podcasts_dir() -> Path:
     return Path(core_settings.podcasts_dir).expanduser().resolve(strict=False)
+
+
+async def _checked_feed_url(url: str) -> str:
+    """``url`` if the server may fetch it, else 400 saying why. Storing a
+    subscription does not itself resolve the name (a feed whose DNS is
+    down, or a household offline, must still be able to subscribe) — the
+    poller re-checks with resolution before it fetches."""
+    url = (url or "").strip()
+    reason = await net_safety.acheck_outbound_url(url, require_resolution=False)
+    if reason is not None:
+        raise HTTPException(
+            status_code=400, detail=f"refusing this feed URL — {reason}"
+        )
+    return url
 
 
 def _safe_episode_path(file_path: str) -> Path:
@@ -93,9 +115,13 @@ async def list_subscriptions() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-@router.post("/subscriptions")
+@router.post("/subscriptions", dependencies=[Depends(require_device)])
 async def subscribe(req: SubscribeRequest) -> dict[str, Any]:
-    """Subscribe by RSS URL, or by name via iTunes discovery (network)."""
+    """Subscribe by RSS URL, or by name via iTunes discovery (network).
+
+    Device tier: ``X-Device-Token`` or an admin Bearer. The feed URL —
+    typed in or returned by discovery — must be an http(s) URL outside
+    the house's own address space."""
     feed_url = (req.feed_url or "").strip()
     title = None
     if not feed_url and req.query:
@@ -104,6 +130,7 @@ async def subscribe(req: SubscribeRequest) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"no podcast found for {req.query!r}")
     if not feed_url:
         raise HTTPException(status_code=400, detail="feed_url or query required")
+    feed_url = await _checked_feed_url(feed_url)
 
     async with session_scope() as s:
         row = (
@@ -183,12 +210,17 @@ async def discover(q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
         raise HTTPException(status_code=502, detail="discovery unavailable (offline?)")
     out = []
     for it in data.get("results", []):
-        if it.get("feedUrl"):
+        feed_url = it.get("feedUrl")
+        # A directory hit is only useful if we could fetch it: hide the
+        # ones subscribe would refuse rather than offering a dead button.
+        if feed_url and net_safety.is_safe_outbound_url(
+            feed_url, require_resolution=False
+        ):
             out.append({
                 "title": it.get("collectionName"),
                 "author": it.get("artistName"),
                 "artwork": it.get("artworkUrl600") or it.get("artworkUrl100"),
-                "feed_url": it.get("feedUrl"),
+                "feed_url": feed_url,
             })
     return out
 
@@ -214,11 +246,13 @@ async def _itunes_lookup(name: str) -> tuple[Optional[str], Optional[str]]:
 
 
 # ─── Manual poll trigger ────────────────────────────────────────────────
-@router.post("/poll")
+@router.post("/poll", dependencies=[Depends(require_device)])
 async def poll_now() -> dict[str, int]:
     """Run one feed-poll + download + keep-N pass immediately (network).
     The web process runs the poller functions directly against the shared DB
-    — the same code the background worker ticks."""
+    — the same code the background worker ticks.
+
+    Device tier: it makes the server fetch every subscribed feed now."""
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
 
     try:

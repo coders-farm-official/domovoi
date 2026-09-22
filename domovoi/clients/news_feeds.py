@@ -21,9 +21,15 @@ scopes resolve to known-good feeds instantly and offline-defined. LOCAL
 scope is discovered from ``news_location`` (see ``local_feed_candidates``).
 
 Network + parse both happen off the event loop (``asyncio.to_thread`` for
-the blocking feedparser call, httpx async for the HTML probe). Everything
-here is best-effort: a dead feed or an HTML page with no autodiscovery link
-yields an empty list, never an exception to the caller.
+the blocking feed fetch + parse, httpx async for the HTML probe).
+Everything here is best-effort: a dead feed or an HTML page with no
+autodiscovery link yields an empty list, never an exception to the caller.
+
+Both fetchers go through ``domovoi.net_safety``: a feed or probe URL must
+be http(s) and must not resolve into the house's own address space, and
+every redirect hop is re-checked. The feed body is fetched here (capped)
+and handed to feedparser as bytes — feedparser would otherwise open the
+URL itself, and it accepts local paths and other schemes.
 
 Testability: ``parse_feed`` and ``_probe_page_for_feed_urls`` are
 module-level so a test can monkeypatch them; ``discover_feeds`` drives the
@@ -41,10 +47,17 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from domovoi import net_safety
 from domovoi.clients.searxng import get_searxng_client
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
+
+# An RSS/Atom document. Generous for a feed with long show notes, still
+# bounded — the parse happens in this process.
+MAX_FEED_BYTES = 8 * 1024 * 1024
+# The HTML page probed for an autodiscovery <link>.
+MAX_PAGE_BYTES = 4 * 1024 * 1024
 
 
 # ─── Curated default feeds ───────────────────────────────────────────────
@@ -119,11 +132,21 @@ def _entry_published(entry: Any) -> datetime | None:
 
 
 def _parse_feed_blocking(url: str) -> tuple[str | None, list[FeedArticle]]:
-    """Blocking feedparser call — run via ``asyncio.to_thread``. Returns
-    ``(feed_title, articles)``. Empty article list on any failure."""
+    """Blocking fetch + parse — run via ``asyncio.to_thread``. Returns
+    ``(feed_title, articles)``. Empty article list on any failure. The
+    document is fetched through the outbound-URL check and capped, then
+    parsed from bytes."""
     import feedparser  # local import — optional [real-clients] dep
 
-    parsed = feedparser.parse(url)
+    result = net_safety.fetch_bytes_sync(
+        url,
+        max_bytes=MAX_FEED_BYTES,
+        timeout=15.0,
+        headers={"User-Agent": "Domovoi-news/1.0"},
+    )
+    if result.status_code >= 400:
+        raise RuntimeError(f"feed returned {result.status_code}")
+    parsed = feedparser.parse(result.content)
     feed = getattr(parsed, "feed", {}) or {}
     source = feed.get("title") if hasattr(feed, "get") else getattr(feed, "title", None)
 
@@ -217,12 +240,15 @@ async def _probe_page_for_feed_urls(url: str) -> list[str]:
         candidates.append(url)
 
     try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            r = await client.get(url, headers={"User-Agent": "Domovoi-news/1.0"})
-            r.raise_for_status()
-            html = r.text
+        result = await net_safety.fetch_bytes(
+            url,
+            max_bytes=MAX_PAGE_BYTES,
+            timeout=8.0,
+            headers={"User-Agent": "Domovoi-news/1.0"},
+        )
+        if result.status_code >= 400:
+            raise RuntimeError(f"probe returned {result.status_code}")
+        html = result.content.decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
         log.debug("news: probe fetch failed for %s: %s", url, e)
         return candidates

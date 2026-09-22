@@ -12,6 +12,11 @@ discovery on free-form topic add, "poll now") run the shared
 :pymod:`domovoi.news_service` in-process — the web backend imports the
 domovoi package, so this is fine for a user-driven button.
 
+Attaching or re-validating a feed makes the server fetch a URL the caller
+chose, so both sit on the device tier (``X-Device-Token`` or an admin
+Bearer) and the URL goes through ``domovoi.net_safety`` — http(s) only,
+never an address inside the house or on the box.
+
 Every mutation issues ``pg_notify('news_changed', ...)`` so the dashboard
 refreshes sub-second via the LISTEN/NOTIFY accelerator (see
 ``realtime.py``'s ``news_changed`` → ``news`` mapping).
@@ -22,11 +27,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi import net_safety
 from domovoi import news_service
+from domovoi.admin_auth import require_device
 from domovoi.clients import news_feeds as news_feeds_client
 from domovoi.clients.news_feeds import CATEGORY_KEYS
 from domovoi.config import settings as core_settings
@@ -227,11 +234,25 @@ async def list_topic_feeds(topic_id: int) -> list[NewsFeed]:
         return [_row_to_feed(r) for r in rows.all()]
 
 
-@router.post("/topics/{topic_id}/feeds", response_model=NewsFeed, status_code=201)
+@router.post(
+    "/topics/{topic_id}/feeds",
+    response_model=NewsFeed,
+    status_code=201,
+    dependencies=[Depends(require_device)],
+)
 async def add_topic_feed(topic_id: int, payload: NewsFeedCreate) -> NewsFeed:
+    """Attach a feed to a topic. Device tier: ``X-Device-Token`` or an
+    admin Bearer — attaching makes the server fetch the URL."""
     url = (payload.url or "").strip()
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="url must be http(s)")
+    # Attaching stores a URL the poller will fetch: http(s) only, and
+    # never an address inside the house or on the box. Resolution is left
+    # to the fetch itself so a feed whose DNS is momentarily down (or a
+    # household offline) can still be added.
+    reason = await net_safety.acheck_outbound_url(url, require_resolution=False)
+    if reason is not None:
+        raise HTTPException(
+            status_code=400, detail=f"refusing this feed URL — {reason}"
+        )
     # Validate by parsing before we attach so a bad URL surfaces immediately.
     valid = await news_feeds_client.feed_is_valid(url)
     async with session_scope() as s:
@@ -279,9 +300,14 @@ async def detach_feed(topic_id: int, feed_id: int) -> None:
         await s.execute(text("SELECT pg_notify('news_changed', 'feed_removed')"))
 
 
-@router.post("/feeds/{feed_id}/validate", response_model=NewsFeed)
+@router.post(
+    "/feeds/{feed_id}/validate",
+    response_model=NewsFeed,
+    dependencies=[Depends(require_device)],
+)
 async def validate_feed(feed_id: int) -> NewsFeed:
-    """Re-check a feed's validity by parsing it now; update the validity dot."""
+    """Re-check a feed's validity by parsing it now; update the validity
+    dot. Device tier — it fetches the feed."""
     async with session_scope() as s:
         row = await s.execute(
             text("SELECT url FROM news_feeds WHERE id = :id"), {"id": feed_id}

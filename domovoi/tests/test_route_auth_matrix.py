@@ -135,9 +135,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "DELETE", "/api/playlists/{playlist_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/playlists/{playlist_id}/tracks"): "daily tier — device tier in wave 2",
     ("web", "DELETE", "/api/playlists/{playlist_id}/tracks/{track_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/podcasts/subscriptions"): "daily tier — device tier in wave 2",
     ("web", "DELETE", "/api/podcasts/subscriptions/{sub_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/podcasts/poll"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/podcasts/positions/{episode_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/audiobooks/reindex"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/audiobooks/{book_id}/position"): "daily tier — device tier in wave 2",
@@ -146,15 +144,12 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "DELETE", "/api/chat/threads/{thread_id}"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/chat/threads/{thread_id}/messages"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/chat/uploads"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/models/active"): "daily tier — admin tier in wave 2 (WEB-7)",
-    ("web", "DELETE", "/api/models/{name:path}"): "daily tier — admin tier in wave 2 (WEB-7)",
-    ("web", "POST", "/api/models/pull"): "daily tier — admin tier in wave 2 (WEB-7)",
-    ("web", "POST", "/api/models/pull/{job_id}/cancel"): "daily tier — admin tier in wave 2 (WEB-7)",
+    ("web", "POST", "/api/models/active"): (
+        "proxy — the core's security tier gates the config write it forwards to"
+    ),
     ("web", "POST", "/api/news/people/{person_id}/topics"): "daily tier — device tier in wave 2",
     ("web", "DELETE", "/api/news/topics/{topic_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/news/topics/{topic_id}/feeds"): "daily tier — device tier in wave 2 (WEB-7)",
     ("web", "DELETE", "/api/news/topics/{topic_id}/feeds/{feed_id}"): "daily tier — device tier in wave 2",
-    ("web", "POST", "/api/news/feeds/{feed_id}/validate"): "daily tier — device tier in wave 2 (WEB-7)",
     ("web", "POST", "/api/news/items/{item_id}/favorite"): "daily tier — device tier in wave 2",
     ("web", "POST", "/api/news/poll"): "daily tier — device tier in wave 2",
 }

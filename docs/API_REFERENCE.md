@@ -69,6 +69,19 @@ Every endpoint below is labeled with one of these tiers:
 | **Admin, fail-closed** | `domovoi.auth.require_admin`, plugin management (it is code execution). Same posture as the security tier: **501** until admin setup completes, Bearer-only for mutations. |
 | **Outbound-fetch** | `check_outbound_fetch`: the server will fetch a caller-chosen URL. Passes with an admin Bearer session, **or** when the URL matches an installed media-provider plugin's `url_matcher` allowlist *and* the caller is within a per-source rate limit (10 requests / 60 s). |
 
+Whatever the tier, a URL the **server** then fetches also has to pass
+`domovoi.net_safety.check_outbound_url`: `http`/`https` only, every hostname
+resolved, and refused when any address it resolves to is loopback,
+link-local, RFC 1918, CGNAT, an IPv6 ULA, multicast or unspecified —
+including the shorthand spellings of those (`127.1`, `0x7f000001`, `[::1]`)
+and IPv6 forms that wrap an IPv4. Redirects are followed one hop at a time
+(five at most) and each target is checked before it is opened, and each
+fetcher caps how many bytes it will read. Endpoints that merely *store* a
+URL (subscribe to a feed, favorite a station) apply the same rules but skip
+the "must resolve right now" part, so an offline household can still save
+one; the fetch re-checks. A refused URL is `400` where a caller typed it and
+`409` where it came off a stored row.
+
 Failure codes across tiers: `401` missing/invalid/expired token (Bearer,
 device or chat callback), `403` cookie-only mutation attempt (or a
 rejected outbound fetch),
@@ -640,17 +653,19 @@ row's `category` tells the UI how to open it
 
 ### 3.15 Podcasts and audiobooks
 
-All **Open**. Feeds are polled by core background workers; audio is served by
-this process.
+**Open** except where noted: subscribing and polling make the server fetch a
+URL, so they are **Device** tier and the feed URL must pass the
+outbound-URL rules (§1.1). Feeds are polled by core background workers;
+audio is served by this process.
 
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/podcasts/subscriptions` | — | Subscribed feeds. |
-| `POST /api/podcasts/subscriptions` | `SubscribeRequest` | Subscribe to a feed URL. |
+| `POST /api/podcasts/subscriptions` | `SubscribeRequest` | **Device.** Subscribe to a feed URL. `400` for a URL the server won't fetch. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
 | `GET /api/podcasts/subscriptions/{sub_id}/episodes` | — | Episodes for one subscription. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
-| `GET /api/podcasts/discover` | `?q=` (required) | Search a podcast directory. |
-| `POST /api/podcasts/poll` | — | Poll feeds now (instead of waiting for the worker). |
+| `GET /api/podcasts/discover` | `?q=` (required) | Search a podcast directory. Hits whose feed URL would be refused are left out. |
+| `POST /api/podcasts/poll` | — | **Device.** Poll feeds now (instead of waiting for the worker). |
 | `GET /api/podcasts/episodes/{episode_id}/audio` | `?download=` | Stream a downloaded episode. `?download=1` serves it as an attachment named from the episode title plus its on-disk extension. |
 | `GET /api/podcasts/positions/{episode_id}` | `?device_id=&person_id=` | Resume position. |
 | `POST /api/podcasts/positions/{episode_id}` | `PositionSave` | Save position. |
@@ -745,14 +760,17 @@ conversational one and the tool-routing one — switchable independently.
 | `GET /api/models/active` | — | Which models are active for each role. |
 | `POST /api/models/active` | `SetActiveBody` | Switch the active model for a role. |
 | `GET /api/models/hardware` | — | Proxy → core `GET /v1/admin/hardware` (GPU/CPU/RAM/disk fit badges). |
-| `DELETE /api/models/{name}` | — | Remove an installed model. |
+| `DELETE /api/models/{name}` | — | **Admin.** Remove an installed model. |
 | `GET /api/models/jobs` | — | Running/finished pull jobs with progress. |
-| `POST /api/models/pull` | `PullBody` | Start downloading a model (background job). |
-| `POST /api/models/pull/{job_id}/cancel` | — | Cancel a pull. |
+| `POST /api/models/pull` | `PullBody` | **Admin.** Start downloading a model (background job). A reference that names its own registry host (`host/ns/model:tag`) is `400` when that host fails the outbound-URL rules. |
+| `POST /api/models/pull/{job_id}/cancel` | — | **Admin.** Cancel a pull. |
 
 ### 3.20 News
 
-All **Open**. Fetching runs in a core background worker.
+**Open** except where noted: attaching or re-testing a feed makes the server
+fetch it, so both are **Device** tier and the URL must pass the
+outbound-URL rules (§1.1). Scheduled fetching runs in a core background
+worker.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -761,9 +779,9 @@ All **Open**. Fetching runs in a core background worker.
 | `POST /api/news/people/{person_id}/topics` | `NewsTopicCreate` | Follow a topic. |
 | `DELETE /api/news/topics/{topic_id}` | — | Unfollow. |
 | `GET /api/news/topics/{topic_id}/feeds` | — | Feeds attached to a topic. |
-| `POST /api/news/topics/{topic_id}/feeds` | `NewsFeedCreate` | Attach a feed. |
+| `POST /api/news/topics/{topic_id}/feeds` | `NewsFeedCreate` | **Device.** Attach a feed. `400` for a URL the server won't fetch. |
 | `DELETE /api/news/topics/{topic_id}/feeds/{feed_id}` | — | Detach a feed. |
-| `POST /api/news/feeds/{feed_id}/validate` | — | Fetch-test a feed. |
+| `POST /api/news/feeds/{feed_id}/validate` | — | **Device.** Fetch-test a feed. |
 | `GET /api/news/people/{person_id}/items` | `?limit=50` | Fetched items for a person. |
 | `POST /api/news/items/{item_id}/favorite` | `NewsItemFavorite` | Star an item. |
 | `GET /api/news/people/{person_id}/briefing` | — | The assembled spoken-style briefing. |

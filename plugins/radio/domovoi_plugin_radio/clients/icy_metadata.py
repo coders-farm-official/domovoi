@@ -23,6 +23,11 @@ poller can flip the tristate ``icy_supported`` to FALSE after a handful
 of consecutive misses. Stations that DO advertise the header but yield
 an empty title come back ``supported=True`` / ``stream_title=None`` —
 "ICY works but nothing identifiable right now".
+
+The URL comes off a station row, so it goes through the shared
+outbound-URL check first (and each redirect hop with it): this poller
+runs unattended every few minutes, which is the last place a URL
+pointing at the house should be fetched.
 """
 
 from __future__ import annotations
@@ -33,6 +38,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+
+from domovoi.sdk import net_safety
 
 from domovoi_plugin_radio import USER_AGENT
 
@@ -147,10 +154,9 @@ class RealIcyClient:
             "Accept": "*/*",
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, follow_redirects=True
-            ) as client:
-                async with client.stream("GET", url, headers=headers) as resp:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await net_safety.open_stream(client, url, headers=headers)
+                try:
                     # 2xx can still lack ICY — check the header, not the
                     # status. 4xx/5xx mean the stream itself is broken.
                     if resp.status_code >= 400:
@@ -179,6 +185,13 @@ class RealIcyClient:
                     return IcyPollResult(
                         supported=True, stream_title=title, raw_metadata=raw
                     )
+                finally:
+                    await resp.aclose()
+        except net_safety.OutboundFetchError as e:
+            # Not a station we may poll at all. Same shape as a station
+            # without ICY, so the tristate logic is unchanged.
+            log.warning("radio: refusing to poll %s — %s", url, e)
+            return IcyPollResult(supported=False, error=f"refused: {e}")
         except httpx.HTTPError as e:
             # Network blip / DNS / reset / timeout — don't flip
             # icy_supported off the back of one transport error.

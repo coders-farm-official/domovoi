@@ -363,7 +363,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.1.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.2.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 
 ### `[entry_points]`
@@ -678,7 +678,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.1.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.2.0"`) is the semver your
 `domovoi_api` range is checked against.
 
 ### 4.1 `register(ctx)` — the PluginContext
@@ -1042,6 +1042,19 @@ variables shadow the file**.
   User-Agent preset (`domovoi/<version> (+github.com/coders-farm-official/domovoi)`)
   and a 15 s default timeout. Use it for all outbound HTTP — several
   upstream services require a descriptive UA.
+* `net_safety` (`from domovoi.sdk import net_safety`, also
+  `domovoi.webkit.net_safety` in `web.py`) — the shared outbound-URL check.
+  **Any URL that reached you from outside — a user typed it, a directory
+  returned it, a row holds it — goes through this before you fetch it**:
+  `net_safety.require_safe_outbound_url(url)` (or `await
+  arequire_safe_outbound_url(url)`) refuses anything that is not http(s) or
+  that resolves into the house's own address space, and
+  `await net_safety.fetch_bytes(url, max_bytes=...)` /
+  `open_stream(client, url)` do that check on every redirect hop and cap the
+  body. Pass `require_resolution=False` when you are only *storing* a URL to
+  fetch later. Handing such a URL to an external tool instead? Constrain the
+  tool too — the bundled radio plugin passes
+  `-protocol_whitelist http,https,tcp,tls` to ffmpeg.
 * `sdk.state` — a per-plugin in-memory dict (single-process by design) for
   sharing live objects (the radio plugin parks its SDR tuner here). Cleared
   on disable.
@@ -1124,6 +1137,10 @@ Runs in the separate dashboard process. Your `web.py` receives a
   take `request: Request` and pass it along, or the core answers `401`).
   Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory.
+* `domovoi.webkit.net_safety` — the same outbound-URL check the core uses
+  (see [§4.14](#414-sounds-http-state-logging)); a web route that fetches a
+  URL out of your own table still goes through it, because rows outlive the
+  checks that wrote them.
 * `ctx.log` — the `webplugin.<slug>` logger.
 
 Module-level `SNAPSHOTS = {"snapshot_stations": snapshot_stations, ...}`

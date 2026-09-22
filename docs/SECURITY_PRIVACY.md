@@ -44,12 +44,14 @@ flowchart TB
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
+        f2["Every URL the server fetches:<br/>http(s) only, never an address<br/>inside the house or on the box"]
     end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
         v1["The household token every dashboard, phone<br/>and satellite presents"]
         v2["A turn (/v1/intent), announce, drop-in"]
         v3["Play/queue music, the room queue,<br/>volume, add-by-query"]
         v4["Documents, Files, Images and Videos:<br/>list, read, upload, move, import"]
+        v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -81,7 +83,9 @@ The ordinary actions now sit behind it: a text or voice turn
 (`POST /v1/intent`), announcements and drop-in, playback and the room
 queue, per-room volume, add-by-query. So do the media surfaces: reading
 the Documents folder, and browsing / downloading / uploading / moving /
-importing across Files, Images and Videos. A client that presents nothing
+importing across Files, Images and Videos. So do the routes that make
+the server go and fetch something a caller chose — podcast subscribe
+and poll, news feed attach and re-test. A client that presents nothing
 gets `401`; the dashboard cookie alone gets `403`, because rendering a page
 is not the same as acting in a room. The web dashboard forwards whatever
 the browser presented on every hop to the core, so signing in is enough
@@ -164,16 +168,50 @@ backlog.
 
 ### Outbound-fetch tier
 
-One endpoint makes the server fetch a **caller-chosen URL**
-(`POST /v1/admin/music/add-by-url`, used for media acquisition). That's a
-server-side request-forgery surface, so it gets its own rules (verified in
-`domovoi/admin_auth.py::check_outbound_fetch`):
+Several features make the server fetch a **caller-chosen URL**: media
+acquisition (`POST /v1/admin/music/add-by-url`), a podcast feed and its
+episode files, a news feed, an internet radio stream (the browser proxy and
+the song sampler), a model pull. A server that fetches what it is told to
+is a server-side request-forgery surface — the thing it can reach that you
+cannot is *everything else in your house*, plus its own admin endpoints on
+localhost. Two rules apply.
+
+**Who may ask** (`domovoi/admin_auth.py::check_outbound_fetch`, for
+add-by-URL):
 
 - An admin session passes outright.
 - Without one, the URL must match an **installed media-provider plugin's
   allowlist** (its registered `url_matcher`), **and** the caller is limited
   to **10 URL requests per 60 seconds per source IP**.
 - Anything else is refused.
+
+Podcast subscribe/poll and news feed attach/re-test sit on the device tier;
+model pull, cancel and delete on the admin tier.
+
+**Where the server will go** (`domovoi/net_safety.py`, used by every
+fetcher — the podcast poller, the news fetcher, the radio stream proxy and
+sampler, the model pull):
+
+- `http` and `https` only. Not `file:`, not `concat:`, nothing else — the
+  radio sampler additionally passes `-protocol_whitelist http,https,tcp,tls`
+  to ffmpeg so the tool itself won't open anything else either.
+- Every hostname is resolved, and the URL is refused when **any** address it
+  resolves to is loopback, link-local (including `169.254.169.254`), RFC
+  1918, CGNAT, an IPv6 ULA, multicast or unspecified. The shorthand
+  spellings resolvers accept (`127.1`, `0x7f000001`, `2130706433`) and the
+  IPv6 forms that wrap an IPv4 (`::ffff:10.0.0.1`, 6to4, NAT64) are read as
+  the address they denote, not as text.
+- Redirects are followed **one hop at a time** (five at most), each target
+  re-checked before it is opened — a public URL cannot bounce the server
+  into your LAN.
+- Every fetcher caps how many bytes it will read, so a "feed" that is really
+  a firehose stops instead of filling the disk.
+
+Endpoints that only *store* a URL for later (subscribe to a feed, favorite a
+station) apply the same rules, minus the "must resolve right now" part, so a
+household that is offline can still save one; the fetch itself resolves and
+re-checks. None of this replaces network segmentation — it is the server
+declining to be your attacker's proxy.
 
 ### Admin tier
 
@@ -383,6 +421,7 @@ create outbound traffic:
 | **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box nothing Domovoi says leaves the network. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
+| **Podcasts** — the subscribed feeds and the episode files they point at | Only for shows you subscribed to, when the poller runs (off by default) or you press "poll now" | `podcast_feed_poller_enabled = false` (the default); unsubscribe from a show to stop fetching it. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Approve on the dashboard only when the code matches what setup showed. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |

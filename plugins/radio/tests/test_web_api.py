@@ -217,14 +217,20 @@ def test_stream_proxy_409_for_fm_without_url(web_client) -> None:
     assert "satellite room" in resp.json()["detail"]
 
 
-def test_stream_proxy_409_for_host_local_url(web_client) -> None:
-    st = _seed_station(
-        web_client, name="FMTMP", external_id="x-local",
-        stream_url="http://127.0.0.1:6391/fm.mp3",
+def test_a_host_local_stream_url_cannot_be_saved(web_client) -> None:
+    """The SDR's transient host-local URL (and anything else pointing at
+    the house) is refused where it would be stored, so the proxy never
+    has such a row to resolve."""
+    resp = web_client.post(
+        "/api/plugins/radio/stations",
+        json={
+            "name": "FMTMP", "source": "online", "external_id": "x-local",
+            "stream_url": "http://127.0.0.1:6391/fm.mp3",
+        },
     )
-    resp = web_client.get(f"/api/plugins/radio/stations/{st['id']}/stream")
-    assert resp.status_code == 409
-    assert "host-local" in resp.json()["detail"]
+    assert resp.status_code == 400, resp.text
+    assert "stream URL" in resp.json()["detail"]
+    assert web_client.get("/api/plugins/radio/stations").json() == []
 
 
 # ─── Realtime snapshots (§5.3 contract) ─────────────────────────────────
