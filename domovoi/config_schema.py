@@ -31,6 +31,17 @@ Deliberately EXCLUDED: ``tts_edge_voice`` / ``tts_piper_voice``. The
 voice a satellite actually speaks is resolved from the Voices registry
 table (managed on the Voices page), not from these settings — editing
 them here would be a silent no-op in normal operation.
+
+Also deliberately EXCLUDED, and for a different reason: the two keys
+that decide who may talk to this box and what it may reach out to —
+``trusted_hosts`` (which Host headers are accepted) and
+``outbound_allow_hosts`` (which otherwise-refused endpoints the server
+may fetch, see ``domovoi/net_safety.py``). This registry is the ONLY way
+a setting becomes writable over HTTP, so leaving them out is what makes
+them server configuration rather than a request parameter: they are set
+in the environment or ``.env`` by whoever owns the machine, and a
+compromised dashboard session cannot widen either gate. Do not add
+them here.
 """
 
 from __future__ import annotations

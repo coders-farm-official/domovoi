@@ -194,6 +194,205 @@ async def test_the_async_form_agrees_with_the_sync_one(dns) -> None:
         await net_safety.arequire_safe_outbound_url("http://[::1]/x")
 
 
+# ─── The operator's allowlist (OUTBOUND_ALLOW_HOSTS) ──────────────────────
+#
+# The one escape hatch, and it is server configuration: an endpoint the
+# person who owns the box named on purpose. Empty by default, matched on
+# the host AS WRITTEN and exactly, port included.
+
+
+@pytest.fixture
+def allowlist(monkeypatch):
+    """``allowlist("127.0.0.1:6391")`` sets the setting for one test (and
+    pins it to empty otherwise, so a value in this box's .env can't leak
+    into the assertions)."""
+    from domovoi.config import settings
+
+    def set_to(raw: str) -> None:
+        monkeypatch.setattr(settings, "outbound_allow_hosts", raw, raising=False)
+
+    set_to("")
+    return set_to
+
+
+def test_the_allowlist_ships_empty() -> None:
+    """A fresh install refuses exactly what it refused before the key
+    existed — the default must never become "convenient"."""
+    from domovoi.config import Settings
+
+    assert Settings.model_fields["outbound_allow_hosts"].default == ""
+    assert net_safety.parse_allow_entries("") == ()
+
+
+def test_with_no_allowlist_the_loopback_fixture_url_is_still_refused(dns, allowlist) -> None:
+    assert net_safety.allow_entries() == ()
+    assert not net_safety.is_safe_outbound_url("http://127.0.0.1:6391/podcast/feed.xml")
+    assert "non-public" in (
+        net_safety.check_outbound_url("http://127.0.0.1:6391/podcast/feed.xml") or ""
+    )
+
+
+def test_an_allowlisted_host_and_port_is_fetchable(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    assert net_safety.allow_entries() == (("127.0.0.1", 6391),)
+    assert net_safety.check_outbound_url("http://127.0.0.1:6391/podcast/feed.xml") is None
+    assert net_safety.is_safe_outbound_url("http://127.0.0.1:6391/news/tech.xml")
+    # …and storing one (the endpoints that only save a URL) agrees.
+    assert net_safety.is_safe_outbound_url(
+        "http://127.0.0.1:6391/news/tech.xml", require_resolution=False
+    )
+
+
+def test_another_port_on_the_allowlisted_address_is_still_refused(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    for url in (
+        "http://127.0.0.1:9999/x",
+        "http://127.0.0.1:6370/v1/admin/snapshot",  # the core's own API
+        "http://127.0.0.1/x",                       # port 80 by scheme
+        "https://127.0.0.1/x",                      # port 443 by scheme
+    ):
+        assert not net_safety.is_safe_outbound_url(url), url
+
+
+def test_another_host_in_the_same_blocked_range_is_still_refused(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    for url in (
+        "http://127.0.0.2:6391/x",
+        "http://127.0.0.10:6391/x",   # not a prefix match
+        "http://192.168.1.50:6391/x",
+        "http://10.0.0.1:6391/x",
+        "http://169.254.169.254:6391/latest/meta-data/",
+        "http://[::1]:6391/x",
+    ):
+        assert not net_safety.is_safe_outbound_url(url), url
+
+
+def test_a_name_that_merely_resolves_to_the_allowlisted_address_is_refused(dns, allowlist) -> None:
+    """The hole a resolved-address allowlist would open: allowlisting
+    127.0.0.1:6391 must not hand an attacker-chosen name the same pass
+    just because DNS points it at loopback."""
+    allowlist("127.0.0.1:6391")
+    dns.set({"evil.example.com": ["127.0.0.1"]})
+    assert not net_safety.is_safe_outbound_url("http://evil.example.com:6391/x")
+    assert not net_safety.is_safe_outbound_url("http://evil.example.com/x")
+
+
+def test_an_allowlisted_name_is_matched_by_name_and_exactly(dns, allowlist) -> None:
+    allowlist("fixtures.example.com:6391")
+    # Every name here resolves into the house, so the ONLY thing that can
+    # let one through is an exact match on the entry.
+    dns.set({
+        "fixtures.example.com": ["10.1.2.3"],
+        "evil.fixtures.example.com": ["10.1.2.3"],
+        "fixtures.example.com.evil.test": ["10.1.2.3"],
+        "notfixtures.example.com": ["10.1.2.3"],
+    })
+    assert net_safety.is_safe_outbound_url("http://fixtures.example.com:6391/rss")
+    assert net_safety.is_safe_outbound_url("http://FIXTURES.Example.COM.:6391/rss")
+    for url in (
+        "http://evil.fixtures.example.com:6391/rss",
+        "http://fixtures.example.com.evil.test:6391/rss",
+        "http://notfixtures.example.com:6391/rss",
+        "http://fixtures.example.com:6392/rss",
+    ):
+        assert not net_safety.is_safe_outbound_url(url), url
+
+
+def test_a_bare_host_entry_permits_every_port_on_that_host(dns, allowlist) -> None:
+    """Documented as the bigger hammer: no port means no port rule."""
+    allowlist("127.0.0.1")
+    assert net_safety.allow_entries() == (("127.0.0.1", None),)
+    assert net_safety.is_safe_outbound_url("http://127.0.0.1:6391/x")
+    assert net_safety.is_safe_outbound_url("http://127.0.0.1:9999/x")
+    assert net_safety.is_safe_outbound_url("https://127.0.0.1/x")
+    assert not net_safety.is_safe_outbound_url("http://127.0.0.2:6391/x")
+
+
+def test_shorthand_spellings_of_the_allowlisted_address_are_the_same_endpoint(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    assert net_safety.is_safe_outbound_url("http://127.1:6391/x")
+    assert net_safety.is_safe_outbound_url("http://0x7f000001:6391/x")
+    assert net_safety.is_safe_outbound_url("http://2130706433:6391/x")
+    assert not net_safety.is_safe_outbound_url("http://127.1:9999/x")
+
+
+def test_the_allowlist_does_not_widen_the_scheme_allowlist(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    for url in (
+        "file://127.0.0.1:6391/etc/passwd",
+        "ftp://127.0.0.1:6391/x",
+        "gopher://127.0.0.1:6391/1",
+    ):
+        assert not net_safety.is_safe_outbound_url(url), url
+
+
+def test_localhost_by_name_has_to_be_named_before_it_is_allowed(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    assert not net_safety.is_safe_outbound_url("http://localhost:6391/x")
+    allowlist("localhost:6391")
+    assert net_safety.is_safe_outbound_url("http://localhost:6391/x")
+    assert not net_safety.is_safe_outbound_url("http://api.localhost:6391/x")
+    assert not net_safety.is_safe_outbound_url("http://localhost:11434/api/tags")
+
+
+def test_an_allowlisted_endpoint_does_not_have_to_resolve(dns, allowlist) -> None:
+    """A fixture server named by a hosts-file entry the checker can't see
+    is still the endpoint the operator named."""
+    allowlist("fixtures.test:6391")
+    dns.set({})
+    assert net_safety.is_safe_outbound_url("http://fixtures.test:6391/rss")
+    assert not net_safety.is_safe_outbound_url("http://other.test:6391/rss")
+
+
+def test_several_entries_are_read_and_whitespace_ignored(dns, allowlist) -> None:
+    allowlist(" 127.0.0.1:6391 , [::1]:8080 ,fixtures.example.com ")
+    assert net_safety.allow_entries() == (
+        ("127.0.0.1", 6391),
+        ("::1", 8080),
+        ("fixtures.example.com", None),
+    )
+    assert net_safety.is_safe_outbound_url("http://[::1]:8080/x")
+    assert not net_safety.is_safe_outbound_url("http://[::1]:8081/x")
+
+
+def test_unusable_entries_are_dropped_rather_than_guessed_at(dns, allowlist) -> None:
+    allowlist(
+        "http://127.0.0.1:6391/feed, *.example.com, 127.0.0.1:0, "
+        "127.0.0.1:70000, 127.0.0.1:six, 10.0.0.0/8, , 127.0.0.1:6391"
+    )
+    assert net_safety.allow_entries() == (("127.0.0.1", 6391),)
+    assert net_safety.is_safe_outbound_url("http://127.0.0.1:6391/feed")
+    dns.set({"anything.example.com": ["10.0.0.1"]})
+    assert not net_safety.is_safe_outbound_url("http://anything.example.com/x")
+
+
+def test_a_change_to_the_setting_takes_effect_without_a_restart(dns, allowlist) -> None:
+    assert not net_safety.is_safe_outbound_url("http://127.0.0.1:6391/x")
+    allowlist("127.0.0.1:6391")
+    assert net_safety.is_safe_outbound_url("http://127.0.0.1:6391/x")
+    allowlist("")
+    assert not net_safety.is_safe_outbound_url("http://127.0.0.1:6391/x")
+
+
+@pytest.mark.asyncio
+async def test_the_async_form_honours_the_allowlist(dns, allowlist) -> None:
+    allowlist("127.0.0.1:6391")
+    assert await net_safety.acheck_outbound_url("http://127.0.0.1:6391/x") is None
+    assert await net_safety.acheck_outbound_url("http://127.0.0.1:9999/x") is not None
+    await net_safety.arequire_safe_outbound_url("http://127.0.0.1:6391/x")
+    with pytest.raises(net_safety.UnsafeOutboundURL):
+        await net_safety.arequire_safe_outbound_url("http://127.0.0.1:9999/x")
+
+
+def test_the_allowlist_is_not_an_editable_setting(dns) -> None:
+    """It is server configuration, not a parameter: the only way a setting
+    becomes writable over HTTP is the FieldSpec registry, and the save
+    route answers 'not an editable setting' for anything absent from it."""
+    from domovoi.config_schema import FIELD_BY_NAME
+
+    assert "outbound_allow_hosts" not in FIELD_BY_NAME
+
+
 # ─── Redirects ────────────────────────────────────────────────────────────
 
 
@@ -220,6 +419,34 @@ async def test_a_redirect_into_the_house_is_refused(dns) -> None:
         with pytest.raises(net_safety.UnsafeOutboundURL):
             await net_safety.fetch_bytes(
                 "http://feeds.example.com/show.rss", max_bytes=1024, client=client
+            )
+
+
+@pytest.mark.asyncio
+async def test_an_allowlisted_fixture_is_fetched_but_its_redirect_is_re_checked(
+    dns, allowlist
+) -> None:
+    """Each hop is judged by the same rule, so allowlisting the fixture
+    server does not let it bounce the fetch onto the core's admin API."""
+    allowlist("127.0.0.1:6391")
+    transport = _transport(
+        {
+            "http://127.0.0.1:6391/podcast/feed.xml": httpx.Response(
+                200, content=b"<rss/>"
+            ),
+            "http://127.0.0.1:6391/bounce": httpx.Response(
+                302, headers={"location": "http://127.0.0.1:6370/v1/admin/snapshot"}
+            ),
+        }
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await net_safety.fetch_bytes(
+            "http://127.0.0.1:6391/podcast/feed.xml", max_bytes=1024, client=client
+        )
+        assert result.content == b"<rss/>"
+        with pytest.raises(net_safety.UnsafeOutboundURL):
+            await net_safety.fetch_bytes(
+                "http://127.0.0.1:6391/bounce", max_bytes=1024, client=client
             )
 
 

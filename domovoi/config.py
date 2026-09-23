@@ -23,6 +23,28 @@ class Settings(BaseSettings):
     # listed here is also accepted as a browser Origin.
     trusted_hosts: str = ""
 
+    # Endpoints the server may fetch even though they sit in an address
+    # range it otherwise refuses (loopback, link-local, RFC 1918, CGNAT,
+    # ULA). Comma-separated, each entry a bare host or host:port —
+    # "127.0.0.1:6391", "fixtures.example.com", "[::1]:8080". EMPTY BY
+    # DEFAULT, and that is the setting for every normal install: the
+    # outbound gate (domovoi/net_safety.py) exists because a URL somebody
+    # else picked must never be able to make this box read its own admin
+    # API, a neighbour's printer or a cloud metadata endpoint. Set it only
+    # for a service you host yourself and deliberately want fetched — a
+    # LAN feed mirror, or a test harness serving its own fixtures.
+    #
+    # Matched against the host AS WRITTEN IN THE URL (never against what a
+    # name resolves to, which would let any attacker-chosen name that
+    # resolves to 127.0.0.1 through the hole you opened for 127.0.0.1),
+    # exactly, after lower-casing — no wildcards, no subdomains, no
+    # substrings. The port compared is the URL's, or 80/443 by scheme; an
+    # entry naming a port permits ONLY that port, and an entry with no
+    # port permits every port on that host. Server configuration only:
+    # it is not in the dashboard's editable-settings registry, so no
+    # request can add an entry.
+    outbound_allow_hosts: str = ""
+
     # The largest request body either process will READ on a route that
     # is not an upload (uploads have their own, much larger ceilings in
     # domovoi/transport_guard.py). A body over this is refused with 413

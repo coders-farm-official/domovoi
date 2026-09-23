@@ -357,6 +357,45 @@ household that is offline can still save one; the fetch itself resolves and
 re-checks. None of this replaces network segmentation — it is the server
 declining to be your attacker's proxy.
 
+**The one exception, and it is yours to grant** (`OUTBOUND_ALLOW_HOSTS`,
+empty on every install unless you set it). Some households genuinely do
+host something on the box or the LAN they want Domovoi to fetch — a feed
+mirror, a self-hosted registry, a test harness serving its own fixtures.
+List those endpoints, comma-separated, in your `.env`:
+
+```
+OUTBOUND_ALLOW_HOSTS=127.0.0.1:6391,feeds.home.arpa
+```
+
+What an entry does and does not buy:
+
+- It is matched against the host **as written in the URL**, never against
+  what a name resolves to. Allowlisting `127.0.0.1:6391` therefore does
+  *not* allow `http://something-an-attacker-owns.example/` merely because
+  its DNS points at `127.0.0.1` — the rebinding hole a resolved-address
+  allowlist would open.
+- The match is **exact** after lower-casing: no wildcards, no subdomains,
+  no substrings. `feeds.home.arpa` does not cover
+  `evil.feeds.home.arpa`, and `127.0.0.1` does not cover `127.0.0.10`.
+  An IP written in a shorthand spelling (`127.1`) is read as the address
+  it denotes, so it matches the same entry — it is the same endpoint.
+- The **port** compared is the one in the URL, or 80/443 by scheme. An
+  entry with a port opens only that port (`127.0.0.1:6391` leaves
+  `127.0.0.1:6370`, Domovoi's own admin API, refused); an entry with no
+  port opens every port on that host, which is a much bigger hammer —
+  prefer `host:port`.
+- It relaxes the address rules and nothing else. `http`/`https` only
+  still holds, every redirect hop is still checked against the same list,
+  and the byte caps still apply.
+
+`OUTBOUND_ALLOW_HOSTS` is **server configuration**: it is read from the
+environment or `.env` and is deliberately absent from the dashboard's
+editable-settings registry, so no HTTP request — not even an
+authenticated admin's — can add an entry to it. Changing it takes effect
+without a restart, and the server logs a warning naming the endpoints it
+will now fetch, so an allowlist is visible to anyone reading the log
+after an incident.
+
 ### Admin tier
 
 Everything that executes code or rewrites configuration. Details next.

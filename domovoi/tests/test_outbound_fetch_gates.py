@@ -68,6 +68,21 @@ def dns(monkeypatch):
     monkeypatch.setattr(net_safety, "resolve_host", fake_resolve)
 
 
+@pytest.fixture(autouse=True)
+def allowlist(monkeypatch):
+    """``OUTBOUND_ALLOW_HOSTS`` pinned empty for every test in this module
+    (so a value in this box's .env can never soften a refusal assertion),
+    and settable by the handful of tests that are about it:
+    ``allowlist("127.0.0.1:6391")``."""
+    from domovoi.config import settings
+
+    def set_to(raw: str) -> None:
+        monkeypatch.setattr(settings, "outbound_allow_hosts", raw, raising=False)
+
+    set_to("")
+    return set_to
+
+
 class _DBTouched(Exception):
     """Raised by the recording session scope: the handler got to the DB."""
 
@@ -199,6 +214,90 @@ async def test_a_subscribable_feed_url_survives_the_check(monkeypatch, dns, no_d
 
 
 @pytest.mark.asyncio
+async def test_an_allowlisted_fixture_feed_gets_past_the_subscribe_gate(
+    monkeypatch, dns, no_db, allowlist
+) -> None:
+    """The escape hatch, end to end at the route: the operator named
+    127.0.0.1:6391, so the URL passes the check and the handler goes on to
+    write the row — which is exactly what a test harness serving its own
+    fixtures needs."""
+    allowlist("127.0.0.1:6391")
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    async with web_client() as web:
+        with pytest.raises(_DBTouched):
+            await web.post(
+                "/api/podcasts/subscriptions",
+                json={"feed_url": "http://127.0.0.1:6391/podcast/feed.xml"},
+                headers={HEADER: DEVICE_TOKEN},
+            )
+    assert no_db["entered"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:6370/v1/admin/snapshot",   # a different port
+        "http://127.0.0.1:11434/api/tags",
+        "http://127.0.0.2:6391/podcast/feed.xml",    # a different address
+        "http://192.168.1.50:6391/podcast/feed.xml",
+        "http://169.254.169.254:6391/latest/meta-data/",
+    ],
+)
+async def test_the_allowlist_opens_only_the_endpoint_it_names(
+    monkeypatch, dns, no_db, allowlist, url
+) -> None:
+    allowlist("127.0.0.1:6391")
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    async with web_client() as web:
+        r = await web.post(
+            "/api/podcasts/subscriptions",
+            json={"feed_url": url},
+            headers={HEADER: DEVICE_TOKEN},
+        )
+    assert r.status_code == 400, r.text
+    assert "refusing this feed URL" in r.json()["detail"]
+    assert no_db["entered"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_allowlist_is_server_config_not_a_request_parameter(
+    monkeypatch, dns, no_db, allowlist
+) -> None:
+    """A caller cannot smuggle an entry in alongside the URL: the request
+    body is parsed into the route's schema, and nothing in it reaches the
+    setting."""
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    from domovoi.config import settings
+
+    async with web_client() as web:
+        for body in (
+            {
+                "feed_url": "http://127.0.0.1:6391/podcast/feed.xml",
+                "outbound_allow_hosts": "127.0.0.1:6391",
+            },
+            {
+                "feed_url": "http://127.0.0.1:6391/podcast/feed.xml",
+                "allow_hosts": ["127.0.0.1:6391"],
+            },
+        ):
+            r = await web.post(
+                "/api/podcasts/subscriptions", json=body, headers={HEADER: DEVICE_TOKEN}
+            )
+            assert r.status_code == 400, r.text
+            assert "refusing this feed URL" in r.json()["detail"]
+    assert settings.outbound_allow_hosts == ""
+    assert net_safety.allow_entries() == ()
+    assert no_db["entered"] is False
+
+
+@pytest.mark.asyncio
 async def test_discovery_hides_hits_the_server_would_refuse(monkeypatch, dns) -> None:
     """A directory can answer with anything; the page only gets the hits
     a subscribe would accept."""
@@ -266,6 +365,51 @@ async def test_attaching_a_house_local_news_feed_is_refused(monkeypatch, dns, no
         r = await web.post(
             "/api/news/topics/1/feeds",
             json={"url": url},
+            headers={HEADER: DEVICE_TOKEN},
+        )
+    assert r.status_code == 400, r.text
+    assert "refusing this feed URL" in r.json()["detail"]
+    assert no_db["entered"] is False
+
+
+@pytest.mark.asyncio
+async def test_an_allowlisted_fixture_feed_gets_past_the_news_attach_gate(
+    monkeypatch, dns, no_db, allowlist
+) -> None:
+    allowlist("127.0.0.1:6391")
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    from web.backend.api import news as news_api
+
+    async def valid(url: str) -> bool:
+        return True
+
+    # feed_is_valid runs before the DB; stub it so this asserts about the
+    # URL gate, not about reaching a feed server that isn't running here.
+    monkeypatch.setattr(news_api.news_feeds_client, "feed_is_valid", valid)
+    async with web_client() as web:
+        with pytest.raises(_DBTouched):
+            await web.post(
+                "/api/news/topics/1/feeds",
+                json={"url": "http://127.0.0.1:6391/news/tech.xml"},
+                headers={HEADER: DEVICE_TOKEN},
+            )
+    assert no_db["entered"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_neighbouring_port_is_still_refused_by_the_news_attach_gate(
+    monkeypatch, dns, no_db, allowlist
+) -> None:
+    allowlist("127.0.0.1:6391")
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    async with web_client() as web:
+        r = await web.post(
+            "/api/news/topics/1/feeds",
+            json={"url": "http://127.0.0.1:6369/api/config/editable"},
             headers={HEADER: DEVICE_TOKEN},
         )
     assert r.status_code == 400, r.text
@@ -359,6 +503,20 @@ def test_only_a_reference_that_names_a_host_has_a_registry() -> None:
 def test_the_feed_fetch_refuses_a_house_local_feed(dns) -> None:
     from domovoi.workers import podcast_feed_poller as poller
 
+    for url in ("file:///etc/passwd", "http://127.0.0.1:6370/v1/admin/snapshot"):
+        with pytest.raises(net_safety.UnsafeOutboundURL):
+            poller.fetch_feed_bytes(url)
+
+
+def test_the_poller_reads_the_same_allowlist_as_the_web_routes(dns, allowlist) -> None:
+    """The poller fetches in its own thread, in the CORE process — the
+    reason the key is read inside net_safety and nowhere else. Subscribing
+    and then never polling would be a harness that still can't be tested."""
+    from domovoi.workers import podcast_feed_poller as poller
+
+    allowlist("127.0.0.1:6391")
+    assert net_safety.check_outbound_url("http://127.0.0.1:6391/podcast/feed.xml") is None
+    # Still refused: the scheme rule, and every endpoint the entry did not name.
     for url in ("file:///etc/passwd", "http://127.0.0.1:6370/v1/admin/snapshot"):
         with pytest.raises(net_safety.UnsafeOutboundURL):
             poller.fetch_feed_bytes(url)

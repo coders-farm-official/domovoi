@@ -78,6 +78,26 @@ def test_import_guard_preloads_lazily_imported_request_modules():
         remove_import_guard()
 
 
+def test_the_outbound_allowlist_is_readable_under_the_guard(monkeypatch):
+    """``net_safety`` reads ``OUTBOUND_ALLOW_HOSTS`` through a lazy
+    ``from domovoi.config import settings`` — inside the function, which
+    is the web F-001 shape. ``domovoi.config`` is preloaded, so it
+    resolves from ``sys.modules``; if that ever stops being true the
+    check must still ANSWER (safely), not raise, because it runs on every
+    outbound URL the dashboard is handed."""
+    from domovoi import net_safety
+    from domovoi.config import settings
+
+    install_import_guard()
+    try:
+        monkeypatch.setattr(settings, "outbound_allow_hosts", "127.0.0.1:6391")
+        assert net_safety.configured_allow_hosts() == "127.0.0.1:6391"
+        assert net_safety.check_outbound_url("http://127.0.0.1:6391/feed.xml") is None
+        assert net_safety.check_outbound_url("http://127.0.0.1:6370/v1/admin") is not None
+    finally:
+        remove_import_guard()
+
+
 # ─── Fake plugin fixture ───────────────────────────────────────────────────
 
 _SLUG = "wdemo"
