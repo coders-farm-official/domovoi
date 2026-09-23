@@ -32,6 +32,23 @@ def test_tts_voice_fields_are_excluded() -> None:
     assert "tts_piper_voice" not in names
 
 
+def test_the_network_gate_keys_are_not_editable_over_http() -> None:
+    """``trusted_hosts`` (who may talk to this box) and
+    ``outbound_allow_hosts`` (what it may reach out to despite the
+    address rules) are set by whoever owns the machine, in the
+    environment or .env. This registry is the ONLY door a setting has
+    onto the HTTP surface — the save route rejects anything absent from
+    it with "not an editable setting" — so their absence here is what
+    makes them server configuration rather than a request parameter."""
+    names = {f.name for f in EDITABLE_FIELDS}
+    assert "trusted_hosts" not in names
+    assert "outbound_allow_hosts" not in names
+    # …and both are still real settings, so this test fails if one is
+    # renamed rather than silently passing on a typo.
+    assert "trusted_hosts" in Settings.model_fields
+    assert "outbound_allow_hosts" in Settings.model_fields
+
+
 def test_field_specs_are_well_formed() -> None:
     seen = set()
     for spec in EDITABLE_FIELDS:

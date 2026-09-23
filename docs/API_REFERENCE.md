@@ -80,7 +80,11 @@ fetcher caps how many bytes it will read. Endpoints that merely *store* a
 URL (subscribe to a feed, favorite a station) apply the same rules but skip
 the "must resolve right now" part, so an offline household can still save
 one; the fetch re-checks. A refused URL is `400` where a caller typed it and
-`409` where it came off a stored row.
+`409` where it came off a stored row. The only way past the address rules is
+`OUTBOUND_ALLOW_HOSTS` — server configuration, empty by default, naming
+specific `host` / `host:port` endpoints matched on the host **as written in
+the URL** and exactly (see SECURITY_PRIVACY.md §"Where the server will go").
+It is not an editable setting, so no request can add to it.
 
 Failure codes across tiers: `401` missing/invalid/expired token (Bearer,
 device or chat callback), `403` cookie-only mutation attempt (or a

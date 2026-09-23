@@ -1068,7 +1068,10 @@ variables shadow the file**.
   body. Pass `require_resolution=False` when you are only *storing* a URL to
   fetch later. Handing such a URL to an external tool instead? Constrain the
   tool too — the bundled radio plugin passes
-  `-protocol_whitelist http,https,tcp,tls` to ffmpeg.
+  `-protocol_whitelist http,https,tcp,tls` to ffmpeg. The check reads the
+  operator's `OUTBOUND_ALLOW_HOSTS` for you (empty by default), so a
+  household that has deliberately allowlisted a LAN endpoint gets the same
+  answer from your plugin as from core — never keep your own allowlist.
 * `sdk.state` — a per-plugin in-memory dict (single-process by design) for
   sharing live objects (the radio plugin parks its SDR tuner here). Cleared
   on disable.

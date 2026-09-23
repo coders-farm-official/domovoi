@@ -19,6 +19,13 @@ This module is the single answer for all of them:
   fetchers that never follow a redirect themselves: each hop's target is
   run through the same check first, at most :data:`MAX_REDIRECTS` hops,
   and a byte cap is enforced while reading.
+* :func:`parse_allow_entries` — the ONE escape hatch, and it belongs to
+  the person who owns the box: ``OUTBOUND_ALLOW_HOSTS``
+  (``settings.outbound_allow_hosts``) names specific endpoints that may
+  be fetched even though they sit in a blocked range. **Empty by
+  default**, so a fresh install and every production box behave exactly
+  as they did before the key existed. Read here and nowhere else, so the
+  poller, the web API and plugin fetchers all honour one list.
 
 Resolution happens in :func:`resolve_host`, a module-level function so
 tests patch it instead of touching DNS. A name that does not resolve is
@@ -30,7 +37,9 @@ resolution before a byte moves.
 
 Importable by the web process (this module is re-exported through
 :mod:`domovoi.webkit` for plugin web modules and :mod:`domovoi.sdk` for
-plugin core modules) — so it depends on stdlib + httpx only.
+plugin core modules) — so it depends on stdlib + httpx only, and reads
+:mod:`domovoi.config` lazily (inside :func:`configured_allow_hosts`,
+tolerating an ImportError) rather than at import time.
 """
 
 from __future__ import annotations
@@ -180,6 +189,180 @@ def _addresses_for(host: str) -> list[IPAddress]:
     return resolve_host(host)
 
 
+# ─── The admin's allowlist ────────────────────────────────────────────────
+#
+# MATCHING SEMANTICS — decided deliberately, and the reason is the whole
+# point of the key:
+#
+#  * An entry is ``host`` or ``host:port``; an IPv6 literal is bracketed
+#    (``[::1]`` / ``[::1]:6391``). Several entries are separated by commas
+#    (whitespace around each is ignored). Anything else — a scheme, a
+#    path, a wildcard, a port that is not 1..65535 — is IGNORED with a log
+#    line, never half-honoured.
+#  * The entry is matched against the host **as it is written in the
+#    URL**, NOT against the addresses that host resolves to. This is the
+#    security-critical half: matching on the resolved address would mean
+#    that allowlisting ``127.0.0.1:6391`` also allowlists any
+#    attacker-chosen name that happens to resolve to 127.0.0.1 — a DNS
+#    rebinding hole opened by a convenience key. So an entry permits
+#    exactly the host string it names, and a name still has to be named.
+#  * Comparison is EXACT after normalisation (lower-cased, one trailing
+#    dot removed, brackets stripped). No substring, no suffix, no
+#    subdomain: ``fixtures.example.com`` does not permit
+#    ``evil.fixtures.example.com`` and ``127.0.0.1`` does not permit
+#    ``127.0.0.10``.
+#  * An IP literal is normalised to the canonical text of the address it
+#    denotes, so ``127.1`` and ``0x7f000001`` match the entry
+#    ``127.0.0.1``. They are spellings of the same endpoint, and an entry
+#    names an endpoint — this grants nothing the entry did not already.
+#  * The port compared is the EFFECTIVE port: the one in the URL, else 80
+#    for http and 443 for https. ``127.0.0.1:6391`` therefore does not
+#    permit ``127.0.0.1:9999``. An entry with no port permits every port
+#    on that host — a bigger hammer, offered because it is sometimes what
+#    an operator means, and documented as such.
+#  * A match skips the localhost-by-name rule, the resolution
+#    requirement, and the address ranges — and NOTHING else. The scheme
+#    allowlist, the redirect re-check (each hop is judged by this same
+#    rule), the byte cap and the malformed-URL refusals are untouched.
+#
+# The list is server configuration: it is read from the process
+# environment / ``.env`` only. It is deliberately absent from
+# ``config_schema.EDITABLE_FIELDS``, so no HTTP request — not even an
+# admin's — can add an entry.
+
+AllowEntry = tuple[str, int | None]
+
+_DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
+
+# Parsed entries cached against the raw settings string, so a hot edit is
+# picked up on the next call without re-parsing on every URL checked.
+_allow_cache: tuple[str, tuple[AllowEntry, ...]] = ("", ())
+
+
+def configured_allow_hosts() -> str:
+    """The raw ``outbound_allow_hosts`` setting, read from the live
+    settings singleton at call time (so a change applies without a
+    restart). Empty — the default — when the key is unset, and also when
+    :mod:`domovoi.config` cannot be imported at all, which is how a
+    sandboxed plugin web module gets the SAFE answer rather than an
+    exception."""
+    try:
+        from domovoi.config import settings
+    except Exception:  # pragma: no cover — sandboxed import guard
+        return ""
+    return str(getattr(settings, "outbound_allow_hosts", "") or "")
+
+
+def _canonical_host(host: str) -> str:
+    """The comparison form of a host: lower-cased, one trailing dot
+    dropped, IPv6 brackets stripped, and — when the result is an IP
+    literal in any spelling a resolver accepts — the canonical text of
+    the address it denotes."""
+    host = host.strip().lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if host.endswith("."):
+        host = host[:-1]
+    literal = parse_ip_literal(host)
+    return str(literal) if literal is not None else host
+
+
+def _split_entry(entry: str) -> AllowEntry | None:
+    """``"host"`` / ``"host:port"`` / ``"[v6]"`` / ``"[v6]:port"`` split
+    into a canonical host and an optional port. None when the text is not
+    one of those shapes."""
+    text = entry.strip()
+    if not text or "/" in text or "\\" in text or "*" in text or "@" in text:
+        return None
+    port_text = ""
+    if text.startswith("["):
+        close = text.find("]")
+        if close == -1:
+            return None
+        host, rest = text[: close + 1], text[close + 1 :]
+        if rest:
+            if not rest.startswith(":"):
+                return None
+            port_text = rest[1:]
+    elif text.count(":") == 1:
+        host, _, port_text = text.partition(":")
+    else:
+        # No colon (a name or IPv4), or several (a bare IPv6 literal).
+        host = text
+    host = _canonical_host(host)
+    if not host:
+        return None
+    if not port_text:
+        return (host, None)
+    if not port_text.isdigit():
+        return None
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        return None
+    return (host, port)
+
+
+def parse_allow_entries(raw: str) -> tuple[AllowEntry, ...]:
+    """``OUTBOUND_ALLOW_HOSTS`` text → the entries it names. Unparseable
+    entries are dropped with a log line rather than guessed at."""
+    entries: list[AllowEntry] = []
+    bad: list[str] = []
+    for chunk in str(raw or "").replace(";", ",").split(","):
+        if not chunk.strip():
+            continue
+        parsed = _split_entry(chunk)
+        if parsed is None:
+            bad.append(chunk.strip())
+        elif parsed not in entries:
+            entries.append(parsed)
+    if bad:
+        log.warning(
+            "outbound_allow_hosts: ignoring %d unusable entr%s (%s) — "
+            "each entry must be a bare host or host:port, e.g. "
+            "127.0.0.1:6391 or fixtures.example.com",
+            len(bad), "y" if len(bad) == 1 else "ies", ", ".join(repr(b) for b in bad),
+        )
+    if entries:
+        # A relaxation of the outbound gate is worth a line in the log
+        # somebody reads after an incident.
+        log.warning(
+            "outbound_allow_hosts: %d endpoint(s) may be fetched despite "
+            "resolving into a blocked range: %s",
+            len(entries),
+            ", ".join(h if p is None else f"{h}:{p}" for h, p in entries),
+        )
+    return tuple(entries)
+
+
+def allow_entries() -> tuple[AllowEntry, ...]:
+    """The configured allowlist, parsed (and cached against the raw
+    string). Empty by default."""
+    global _allow_cache
+    raw = configured_allow_hosts()
+    if _allow_cache[0] != raw:
+        _allow_cache = (raw, parse_allow_entries(raw))
+    return _allow_cache[1]
+
+
+def is_allowlisted_endpoint(host: str, port: int | None, scheme: str = "http") -> bool:
+    """Whether the admin named this exact endpoint in
+    ``OUTBOUND_ALLOW_HOSTS``. ``host`` is the host as written in the URL —
+    never a resolved address (see the note above)."""
+    entries = allow_entries()
+    if not entries:
+        return False
+    candidate = _canonical_host(host)
+    if not candidate:
+        return False
+    effective = port if port is not None else _DEFAULT_PORTS.get(scheme.lower())
+    for entry_host, entry_port in entries:
+        if entry_host != candidate:
+            continue
+        if entry_port is None or entry_port == effective:
+            return True
+    return False
+
+
 # ─── The check ────────────────────────────────────────────────────────────
 
 
@@ -190,7 +373,12 @@ def check_outbound_url(url: str, *, require_resolution: bool = True) -> str | No
     ``localhost`` (and ``*.localhost``), any address — literal or
     resolved — outside the public space (see :func:`is_public_address`),
     and, unless ``require_resolution`` is False, a name that does not
-    resolve at all."""
+    resolve at all.
+
+    The one exception is an endpoint the operator put in
+    ``OUTBOUND_ALLOW_HOSTS`` (empty by default) — see
+    :func:`is_allowlisted_endpoint`. The scheme allowlist still applies to
+    it, and so does every other refusal here."""
     if not isinstance(url, str) or not url.strip():
         return "empty url"
     try:
@@ -202,12 +390,17 @@ def check_outbound_url(url: str, *, require_resolution: bool = True) -> str | No
         return f"scheme {scheme or '(none)'!r} is not http(s)"
     try:
         host = parts.hostname
-        parts.port  # noqa: B018 — raises on a non-numeric / out-of-range port
+        port = parts.port  # raises on a non-numeric / out-of-range port
     except ValueError:
         return "malformed host or port"
     if not host:
         return "missing host"
     host = host.rstrip(".").lower()
+    # The operator's own allowlist, consulted on the host AS WRITTEN — a
+    # deliberate, server-side "yes, that endpoint" that outranks the
+    # address rules below (and only them).
+    if is_allowlisted_endpoint(host, port, scheme):
+        return None
     if host == "localhost" or host.endswith(".localhost"):
         return "host is localhost"
     addresses = _addresses_for(host)
@@ -471,18 +664,23 @@ def describe_blocked(addresses: Iterable[IPAddress]) -> str:
 __all__ = [
     "ALLOWED_SCHEMES",
     "MAX_REDIRECTS",
+    "AllowEntry",
     "FetchResult",
     "OutboundFetchError",
     "ResponseTooLarge",
     "TooManyRedirects",
     "UnsafeOutboundURL",
     "acheck_outbound_url",
+    "allow_entries",
     "arequire_safe_outbound_url",
     "check_outbound_url",
+    "configured_allow_hosts",
     "fetch_bytes",
     "fetch_bytes_sync",
+    "is_allowlisted_endpoint",
     "is_public_address",
     "is_safe_outbound_url",
+    "parse_allow_entries",
     "iter_capped",
     "open_stream",
     "open_stream_sync",
