@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # .env lives next to config.py (in domovoi/), but `python -m
@@ -8,6 +9,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # pydantic-settings' default cwd-relative lookup wouldn't find it. Pin to
 # an absolute path so settings load consistently regardless of cwd.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+# The host address every per-room MPD container publishes its CONTROL
+# port on. `mpd_provisioner` imports this rather than keeping its own
+# copy, and `mpd_host` below is normalised to it, so the address the
+# containers are BOUND to and the address every client DIALS are one
+# value instead of two that can drift apart.
+#
+# It is an IPv4 literal deliberately. The publish is
+# `-p 127.0.0.1:<port>:6600`, so nothing listens on ::1; a client that
+# dials the dual-stack NAME "localhost" tries ::1 first, and on Windows
+# that attempt times out (~2 s) instead of refusing. That is exactly how
+# the dashboard's 1.5 s now-playing read came back "stop" for a room
+# that was playing (F-046). The HTTP *stream* port is published on every
+# interface on purpose — the satellites fetch it over the LAN.
+MPD_CONTROL_BIND = "127.0.0.1"
+
+# Host values that mean "this machine" but resolve to BOTH address
+# families, or to IPv6 loopback alone. None of them can be relied on to
+# reach an IPv4-loopback-only listener, so `mpd_host` is pinned to
+# MPD_CONTROL_BIND when it is set to one of them.
+_DUAL_STACK_LOOPBACK_NAMES = frozenset({
+    "",
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+    "::1",
+    "[::1]",
+})
 
 
 class Settings(BaseSettings):
@@ -251,13 +281,34 @@ class Settings(BaseSettings):
     # assignments survive server restart. No teardown on disconnect —
     # idle MPDs cost ~20 MB RAM each and Pis routinely drop WiFi.
     #
-    # mpd_host is where MPD's control port lives from the core's
-    # POV (always localhost since the containers run on the same host).
+    # mpd_host is where MPD's control port lives from the core's POV.
+    # Always loopback — the containers run on the same host — and always
+    # the IPv4 LITERAL, never the name "localhost": the control port is
+    # published on 127.0.0.1 alone, so a dual-stack name would try ::1
+    # first and reach nothing. See MPD_CONTROL_BIND above and the
+    # validator below, which pins a loopback name to it.
     # mpd_http_base is the URL prefix the Pi uses to reach the per-room
     # HTTP stream — needs a LAN-routable hostname (not localhost, which
     # resolves to the Pi itself).
-    mpd_host: str = "localhost"
+    mpd_host: str = MPD_CONTROL_BIND
     mpd_http_base: str = "http://localhost"
+
+    @field_validator("mpd_host")
+    @classmethod
+    def _pin_mpd_host_to_the_control_bind(cls, value: str) -> str:
+        """Keep the address we dial in step with the address we publish.
+
+        Every install created before the control port moved to loopback
+        has `MPD_HOST=localhost` in its .env — so did `.env.example` —
+        and that name resolves to ::1 first, where nothing is listening.
+        Rewriting it here repairs those installs on the next restart
+        without an operator edit and without re-exposing the control port
+        to the LAN. A host that is NOT a loopback alias is left exactly as
+        written: that is an operator pointing at an MPD of their own, and
+        the address is theirs to choose.
+        """
+        host = (value or "").strip()
+        return MPD_CONTROL_BIND if host.lower() in _DUAL_STACK_LOOPBACK_NAMES else host
 
     # Image tag the provisioner builds + runs. Kept stable so existing
     # containers can be `docker start`-ed without recreating them.

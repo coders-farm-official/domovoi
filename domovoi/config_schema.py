@@ -386,8 +386,11 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "mpd_host", "MPD host", "Connections",
-        "Hostname the Domovoi server uses to reach the per-room MPD music "
-        "containers. Almost always 'localhost'. Takes effect after a restart.",
+        "Address the Domovoi server uses to reach the per-room MPD music "
+        "containers. Almost always 127.0.0.1 — the containers publish "
+        "their control port on IPv4 loopback only, so the name "
+        "'localhost' is rewritten to 127.0.0.1 rather than resolved. "
+        "Takes effect after a restart.",
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(

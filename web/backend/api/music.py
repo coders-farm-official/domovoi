@@ -1565,6 +1565,35 @@ async def _favorite_external_stream(
     )
 
 
+# Daemons we are currently failing to read, so the log gets ONE warning
+# per outage instead of one per poll: the dashboard polls now-playing
+# every few seconds, and a room whose MPD is genuinely down must not
+# drown the log. Cleared on the next successful read, so a later outage
+# warns again. Keyed by (host, port).
+_MPD_READ_FAILING: set[tuple[str, int]] = set()
+
+
+def _note_mpd_read_failure(host: str, port: int, what: str, err: object) -> None:
+    """Warn on the first failure of an outage, debug for the rest.
+
+    An unreadable daemon is reported to the browser as a plain
+    ``state: "stop"`` — indistinguishable from a room sitting idle. That
+    is the right answer for the UI and the wrong one for whoever is
+    debugging, so the reason lands in the log at least once. F-046 was
+    invisible for exactly this long: every read failed, every failure was
+    logged at debug, and the strip just looked idle.
+    """
+    key = (host, port)
+    if key in _MPD_READ_FAILING:
+        log.debug("mpd %s %s:%d failed: %s", what, host, port, err)
+        return
+    _MPD_READ_FAILING.add(key)
+    log.warning(
+        "mpd %s %s:%d failed (%s) — reporting this room as stopped until it "
+        "answers again", what, host, port, err,
+    )
+
+
 async def _read_mpd(
     host: str, port: int, timeout: float = 1.5
 ) -> tuple[str, dict[str, Any] | None, float | None]:
@@ -1572,7 +1601,9 @@ async def _read_mpd(
 
     Falls back to ``("stop", None, None)`` on any failure — connection
     refused, timeout, malformed response. We don't want one offline
-    daemon to crash the whole now-playing list.
+    daemon to crash the whole now-playing list. The fallback is logged
+    (see ``_note_mpd_read_failure``) so "every room says stop" is never
+    again a silent symptom.
     """
     import asyncio
 
@@ -1586,19 +1617,21 @@ async def _read_mpd(
     try:
         await asyncio.wait_for(client.connect(host, port), timeout=timeout)
     except Exception as e:
-        log.debug("mpd connect %s:%d failed: %s", host, port, e)
+        _note_mpd_read_failure(host, port, "connect", e)
         return "stop", None, None
 
     try:
         status = await asyncio.wait_for(client.status(), timeout=timeout)
         song = await asyncio.wait_for(client.currentsong(), timeout=timeout)
     except Exception as e:
-        log.debug("mpd query %s:%d failed: %s", host, port, e)
+        _note_mpd_read_failure(host, port, "query", e)
         try:
             client.disconnect()
         except Exception:
             pass
         return "stop", None, None
+
+    _MPD_READ_FAILING.discard((host, port))
 
     try:
         client.disconnect()

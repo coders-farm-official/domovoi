@@ -19,14 +19,16 @@ manages postgres + flyway via ``docker compose`` so docker is assumed
 available in PATH.
 
 Port exposure: each container publishes two ports. The MPD *control* port
-(container 6600) is published on ``127.0.0.1`` only — its clients are the
-core and the web backend, both on this host (``settings.mpd_host`` is
-localhost by design). The HTTP *stream* port (container 8001) stays
-published on every interface because the satellites pull the audio
-stream from it over the LAN. A container that predates this split (control
-port published on every interface) is recreated on its next
-``_ensure_container`` pass; its data volume, and so its library DB and
-playlists, carries over.
+(container 6600) is published on ``config.MPD_CONTROL_BIND`` — IPv4
+loopback — only, because its clients are the core and the web backend and
+both run on this host. ``settings.mpd_host``, the address those clients
+dial, is normalised to the SAME constant: an IPv4-only bind behind the
+dual-stack name ``localhost`` is unreachable via ``::1`` (F-046). The HTTP
+*stream* port (container 8001) stays published on every interface because
+the satellites pull the audio stream from it over the LAN. A container
+that predates this split (control port published on every interface) is
+recreated on its next ``_ensure_container`` pass; its data volume, and so
+its library DB and playlists, carries over.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from domovoi.config import settings
+from domovoi.config import MPD_CONTROL_BIND, settings
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +62,13 @@ _ALLOC_LOCK_ID = 0x4D504452_4F4F4D53  # "MPDRROOMS" in hex
 # clients are the core and the web backend, and both run on this host.
 # The HTTP stream port is deliberately NOT bound this way (satellites
 # stream from it over the LAN).
-_CONTROL_BIND = "127.0.0.1"
+#
+# It lives in domovoi.config next to `mpd_host`, which is normalised to
+# it, so the address we bind and the address we dial are one value. When
+# they were two, this said 127.0.0.1 while mpd_host still said
+# "localhost" — which resolves to ::1 first — and the dashboard's
+# now-playing read timed out against a room that was playing (F-046).
+_CONTROL_BIND = MPD_CONTROL_BIND
 
 # Docker container names must be `[a-zA-Z0-9][a-zA-Z0-9_.-]*`. Replace
 # anything else with `-` so `room_id = "kid's bedroom"` doesn't break
