@@ -25,7 +25,13 @@ Indexer fires from three places:
   * The voice "rescan my library" / "update the music library"
     command — pairs with the existing MPD ``update`` so both indexes
     stay in sync.
-  * The ``/v1/library/reindex`` admin endpoint — manual trigger.
+  * The ``/v1/admin/library/reindex`` admin endpoint — the
+    dashboard's "Rescan library" button. Admin-gated since CORE-4,
+    because it walks the whole tree and rescans every room's MPD.
+  * The web upload handler, via ``index_paths`` — the BOUNDED variant,
+    covering only the files that one request just wrote, so a
+    device-tier upload does not have to reach an admin route to be
+    indexed (F-A017).
 
 Metadata strategy:
 
@@ -46,7 +52,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import text
 
@@ -170,6 +176,144 @@ def _resolve_metadata_for(path: Path) -> dict[str, Any]:
     }
 
 
+async def _insert_track(session: Any, path: Path) -> bool:
+    """INSERT one audio file into ``library_tracks``; no-op when its
+    ``file_path`` is already there. Returns True when a row was really
+    added (so callers can tell inserted from skipped).
+
+    Split out of :func:`index_music_dir` so the bounded post-write path
+    (:func:`index_paths`) writes rows exactly the way the full sweep
+    does — same metadata resolution, same idempotent INSERT, same
+    ``added_via='manual'`` audit stamp.
+
+    INSERT ... SELECT WHERE NOT EXISTS, rather than INSERT ... ON
+    CONFLICT DO NOTHING.
+
+    Both no-op on duplicate file_path, but the ON CONFLICT form
+    pre-allocates ``nextval('library_tracks_id_seq')`` BEFORE the
+    conflict check fires and Postgres doesn't roll the sequence back —
+    so every boot's re-scan of a 767-track library burns 767 sequence
+    values for zero actual inserts. After a few restarts,
+    library_tracks.id values skip into the thousands while the real row
+    count barely moves.
+
+    The SELECT/WHERE-NOT-EXISTS form only calls ``nextval()`` when the
+    SELECT yields a row, so the sequence advances exactly once per real
+    insert. Still uses rowcount to distinguish actual insert vs. no-op.
+    """
+    meta = _resolve_metadata_for(path)
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO library_tracks
+              (file_path, title, artist, album, duration_sec, added_via)
+            SELECT :fp, :t, :a, :al, :d, 'manual'
+            WHERE NOT EXISTS (
+              SELECT 1 FROM library_tracks WHERE file_path = :fp
+            )
+            """
+        ),
+        {
+            "fp": str(path),
+            "t": meta["title"],
+            "a": meta["artist"],
+            "al": meta["album"],
+            "d": meta["duration_sec"],
+        },
+    )
+    return (result.rowcount or 0) > 0
+
+
+def _under_music_dir(path: Path) -> Path | None:
+    """``path`` resolved, if it really is a file inside MUSIC_DIR with an
+    audio extension — otherwise None.
+
+    :func:`index_paths` is reached from an upload handler, so its
+    argument is caller-derived and gets checked here rather than
+    trusted: a name that resolves outside MUSIC_DIR (``..``, a symlink,
+    an absolute path from somewhere else) indexes nothing.
+    """
+    music_dir = Path(settings.music_dir).expanduser()
+    try:
+        root = music_dir.resolve(strict=False)
+        resolved = Path(path).expanduser().resolve(strict=False)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if resolved.suffix.lower() not in _AUDIO_EXTENSIONS:
+        return None
+    if not resolved.is_file():
+        return None
+    return resolved
+
+
+async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
+    """Index exactly ``paths`` into ``library_tracks`` — the BOUNDED
+    counterpart of :func:`index_music_dir`. Same counts dict.
+
+    Why this exists (F-A017). Uploading into the library is an ordinary
+    household action on the device tier, but the post-write index it
+    depends on used to be the core's ``/v1/admin/library/reindex``,
+    which CORE-4 moved to the admin tier — rightly, because it walks the
+    whole tree and rescans every room's MPD. The upload then wrote its
+    files and indexed nothing: a phone's upload reported success and the
+    track never appeared.
+
+    The gate is not the problem; the hop was. A post-write index is an
+    implicit consequence of a write the caller was already allowed to
+    make, and the work is bounded by what that one request wrote — so it
+    runs in-process here, and the admin gate on the user-triggered
+    library-wide sweep stays exactly where CORE-4 put it.
+
+    Paths that are not audio files, are not files at all, or resolve
+    outside MUSIC_DIR are counted as errors and indexed not at all.
+    """
+    wanted: list[Path] = []
+    errors = 0
+    for raw in paths:
+        resolved = _under_music_dir(Path(raw))
+        if resolved is None:
+            errors += 1
+            log.warning("library indexer: refusing to index %s", raw)
+            continue
+        wanted.append(resolved)
+
+    inserted = skipped = 0
+    if wanted:
+        async with session_scope() as session:
+            for path in wanted:
+                try:
+                    if await _insert_track(session, path):
+                        inserted += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    errors += 1
+                    log.warning("library indexer: failed on %s: %s", path, e)
+
+            if inserted > 0:
+                # Same commit-coupled NOTIFY the full sweep fires, so the
+                # dashboard's Library / Stats views refetch the moment
+                # the uploaded rows land.
+                await session.execute(
+                    text("SELECT pg_notify('library_changed', :payload)"),
+                    {"payload": f"inserted={inserted}"},
+                )
+
+            await session.commit()
+
+    log.info(
+        "library indexer: indexed %d path(s) — inserted=%d skipped=%d errors=%d",
+        len(wanted), inserted, skipped, errors,
+    )
+    return {
+        "scanned": len(wanted),
+        "inserted": inserted,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
 async def index_music_dir() -> dict[str, int]:
     """Walk ``MUSIC_DIR`` and INSERT ... ON CONFLICT DO NOTHING into
     library_tracks for every audio file. Returns counts:
@@ -202,44 +346,7 @@ async def index_music_dir() -> dict[str, int]:
             scanned += 1
 
             try:
-                meta = _resolve_metadata_for(path)
-                # INSERT ... SELECT WHERE NOT EXISTS, rather than
-                # INSERT ... ON CONFLICT DO NOTHING.
-                #
-                # Both no-op on duplicate file_path, but the
-                # ON CONFLICT form pre-allocates ``nextval('library_
-                # tracks_id_seq')`` BEFORE the conflict check fires and
-                # Postgres doesn't roll the sequence back — so every
-                # boot's re-scan of a 767-track library burns 767
-                # sequence values for zero actual inserts. After a few
-                # restarts, library_tracks.id values skip into the
-                # thousands while the real row count barely moves.
-                #
-                # The SELECT/WHERE-NOT-EXISTS form only calls
-                # ``nextval()`` when the SELECT yields a row, so the
-                # sequence advances exactly once per real insert.
-                # Still uses rowcount to distinguish actual insert vs.
-                # no-op for the scanned/inserted/skipped counts.
-                result = await session.execute(
-                    text(
-                        """
-                        INSERT INTO library_tracks
-                          (file_path, title, artist, album, duration_sec, added_via)
-                        SELECT :fp, :t, :a, :al, :d, 'manual'
-                        WHERE NOT EXISTS (
-                          SELECT 1 FROM library_tracks WHERE file_path = :fp
-                        )
-                        """
-                    ),
-                    {
-                        "fp": str(path),
-                        "t": meta["title"],
-                        "a": meta["artist"],
-                        "al": meta["album"],
-                        "d": meta["duration_sec"],
-                    },
-                )
-                if (result.rowcount or 0) > 0:
+                if await _insert_track(session, path):
                     inserted += 1
                 else:
                     skipped += 1

@@ -328,6 +328,7 @@ Everything in this table is on the **Device** tier (`X-Device-Token` or an admin
 | `POST /v1/admin/music/queue/{room_id}/remove` | `{song_ids: [..]}` | Drop entries by songid. `{removed:[..], skipped:[..]}` — an id MPD no longer has is reported, not an error. |
 | `POST /v1/admin/music/queue/{room_id}/move` | `{song_id, to_position}` | Reorder. `404` when the id isn't in the queue any more. |
 | `POST /v1/admin/music/queue/{room_id}/clear` | — | Empty the queue and stop the room (dispatches the music-stop frame). |
+| `POST /v1/admin/music/mpd-rescan` | — | Tell every provisioned room's MPD to rescan the music dir — the playability half of a reindex, without the library sweep. `{rooms, updated}`. Device tier on purpose: no caller input, no database, and the web calls it after an upload has already written the files. |
 | `POST /v1/admin/library/reindex` (**Admin**) | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
 | `POST /v1/admin/library/enrich` (**Admin**) | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. |
 
@@ -406,7 +407,7 @@ household device token instead of a caller's credential.
 | `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
 | `DELETE /api/music/library/{track_id}` | **Admin (Bearer)** | `?also_file=false` | Remove a track row (optionally the file too). `204`. `401` without an admin session, `403` for the dashboard cookie alone — the row and the file are left alone either way. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
-| `POST /api/music/library/upload` | **Device** | multipart audio file(s) and/or `.zip` | Upload straight into the library; triggers indexing. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
+| `POST /api/music/library/upload` | **Device** | multipart audio file(s) and/or `.zip` | Upload straight into the library. The files just written are indexed **in-process** (`library_indexer.index_paths`, bounded to this request's own files) and then the core is asked for an MPD rescan — deliberately *not* the admin-gated library-wide sweep, which a device-tier caller cannot reach. `reindex_triggered` reports whether that index ran. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
 | `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
 | `GET /api/music/library/{track_id}/cover` | Open | — | Cover art. |
 | `DELETE /api/music/acquisitions/{acq_id}` | **Device** | — | Cancel a pending acquisition. `204`. |
