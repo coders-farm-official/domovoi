@@ -3832,6 +3832,41 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
 
 
 @app.post(
+    "/v1/admin/music/mpd-rescan",
+    # Device tier: the MPD half of a post-write refresh, nothing else.
+    dependencies=[Depends(require_device)],
+)
+async def admin_music_mpd_rescan() -> dict[str, Any]:
+    """Tell every provisioned room's MPD to rescan MUSIC_DIR.
+
+    The playability half of what ``/v1/admin/library/reindex`` does, on
+    its own and without the library sweep. It exists because the per-room
+    MPD daemons are reachable only from this process (``_room_ports`` is
+    filled when a satellite connects to ``/v1/stream/{room_id}``), so the
+    web process cannot fan the ``update`` out itself after it writes an
+    uploaded file.
+
+    Device tier, deliberately: it takes no caller input, touches no
+    database, and asks each daemon to re-read a directory it already
+    watches — the same class of work as the playback and queue routes
+    above, and strictly less than the "rescan my library" voice command
+    that ``/v1/intent`` already reaches on this tier. The library-wide
+    sweep below stays admin-gated (CORE-4); this is not it.
+    """
+    from domovoi.clients.mpd import iter_mpd_clients
+
+    rooms = iter_mpd_clients()
+    updated = 0
+    for room_id, mpd in rooms:
+        try:
+            await mpd.update_library()
+            updated += 1
+        except Exception as e:
+            log.warning("mpd-rescan: MPD update failed for room=%s: %s", room_id, e)
+    return {"rooms": len(rooms), "updated": updated}
+
+
+@app.post(
     "/v1/admin/library/reindex",
     # Admin tier: a full library sweep plus an MPD rescan per room.
     dependencies=[Depends(require_admin_mutation)],

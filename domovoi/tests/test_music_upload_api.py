@@ -2,10 +2,10 @@
 
 Lives under ``domovoi/tests`` for the test-DB fixtures + conftest
 safety net (same rationale as ``test_radio_api.py``). The upload
-endpoint touches the filesystem (``MUSIC_DIR/uploads``) and the
-core admin HTTP — not the DB — so these monkeypatch
-``settings.music_dir`` to a tmp dir and stub ``post_admin`` so no live
-domovoi is needed.
+endpoint touches the filesystem (``MUSIC_DIR/uploads``), the test DB
+(the post-write index writes ``library_tracks`` in-process since
+F-A017) and one core hop, so these monkeypatch ``settings.music_dir``
+to a tmp dir and stub ``post_admin`` so no live domovoi is needed.
 """
 
 from __future__ import annotations
@@ -120,7 +120,14 @@ def test_upload_dedupes_colliding_filenames(music_dir, stub_reindex_ok):
 
 
 @requires_db
-def test_upload_saves_even_when_domovoi_unreachable(music_dir, stub_reindex_down):
+def test_upload_still_indexes_when_domovoi_is_unreachable(music_dir, stub_reindex_down):
+    """A dead core costs the MPD rescan and nothing else (F-A017).
+
+    This used to assert ``reindex_triggered is False``, because the index
+    WAS the hop: no core, no row. The index now runs in this process, so
+    a core that cannot be reached leaves the track listed — only its
+    playability waits for the next rescan.
+    """
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.post(
             "/api/music/library/upload",
@@ -129,5 +136,29 @@ def test_upload_saves_even_when_domovoi_unreachable(music_dir, stub_reindex_down
     assert r.status_code == 200
     body = r.json()
     assert body["saved"] == 1
-    assert body["reindex_triggered"] is False
+    assert body["reindex_triggered"] is True
     assert (music_dir / "uploads" / "x.mp3").exists()
+
+
+@requires_db
+def test_upload_reports_a_failed_index(music_dir, stub_reindex_ok, monkeypatch):
+    """``reindex_triggered`` now tracks the thing it names: when the
+    post-write index cannot run, the answer says so instead of claiming
+    the track is in the library."""
+    import domovoi.workers.library_indexer as library_indexer
+
+    async def _boom(paths):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(library_indexer, "index_paths", _boom)
+
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
+        r = client.post(
+            "/api/music/library/upload",
+            files=[("files", ("y.mp3", b"data", "audio/mpeg"))],
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] == 1
+    assert body["reindex_triggered"] is False
+    assert (music_dir / "uploads" / "y.mp3").exists()

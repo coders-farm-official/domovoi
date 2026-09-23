@@ -70,12 +70,73 @@ def test_import_guard_preloads_lazily_imported_request_modules():
     try:
         for mod in (
             "domovoi.workers.audiobook_indexer",
+            "domovoi.workers.library_indexer",
             "domovoi.workers.podcast_feed_poller",
             "domovoi.host_time",
         ):
             assert importlib.import_module(mod) is not None, mod
     finally:
         remove_import_guard()
+
+
+def test_every_lazy_core_import_in_the_web_backend_survives_the_guard():
+    """The same claim, derived from the source instead of a hand list.
+
+    The list above is maintained by hand, which is how F-A017 got out:
+    the music upload's post-write index was added as a lazy
+    ``from domovoi.workers.library_indexer import …`` inside the handler,
+    nobody added it to ``_WEB_BACKEND_CORE_IMPORTS``, the handler caught
+    its own ImportError — and every upload quietly indexed nothing while
+    answering 200. Unit tests never see it, because pytest does not
+    install the guard.
+
+    So: parse every module under ``web/backend``, collect each
+    ``domovoi.*`` import written INSIDE a function body, and require it
+    to resolve with the guard installed. A new lazy import that nobody
+    allowlisted fails here instead of in production.
+    """
+    import ast
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[2] / "web" / "backend"
+    assert backend.is_dir(), backend
+
+    lazy: dict[str, set[str]] = {}
+    for path in sorted(backend.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                names: list[str] = []
+                if isinstance(inner, ast.ImportFrom) and inner.level == 0 and inner.module:
+                    names = [inner.module]
+                elif isinstance(inner, ast.Import):
+                    names = [a.name for a in inner.names]
+                for name in names:
+                    # "domovoi" itself is never refused, only its children.
+                    if name.split(".")[0] == "domovoi" and name != "domovoi":
+                        lazy.setdefault(name, set()).add(path.name)
+
+    assert "domovoi.workers.library_indexer" in lazy, (
+        "this test has stopped seeing the upload's post-write index — "
+        "if the import moved, point the scan at where it lives now"
+    )
+
+    install_import_guard()
+    try:
+        refused = {}
+        for mod, where in sorted(lazy.items()):
+            try:
+                importlib.import_module(mod)
+            except ImportError as e:
+                refused[mod] = f"{sorted(where)}: {e}"
+    finally:
+        remove_import_guard()
+    assert not refused, (
+        "lazy core imports the web process cannot actually perform — add "
+        "each to plugin_host._WEB_BACKEND_CORE_IMPORTS: " + repr(refused)
+    )
 
 
 # ─── Fake plugin fixture ───────────────────────────────────────────────────

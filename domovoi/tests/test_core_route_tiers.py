@@ -65,6 +65,9 @@ DEVICE_TIER = [
     ("POST", "/v1/admin/music/play-playlist"),
     ("POST", "/v1/admin/music/add-by-query"),
     ("POST", "/v1/admin/music/{action}/{room_id}"),
+    # F-A017: the MPD half of a post-write refresh, on its own. No caller
+    # input, no library sweep — the sweep below stays admin.
+    ("POST", "/v1/admin/music/mpd-rescan"),
     # ADD-3: the queue routes the device blocks are about.
     ("POST", "/v1/admin/music/queue/{room_id}/add"),
     ("POST", "/v1/admin/music/queue/{room_id}/remove"),

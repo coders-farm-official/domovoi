@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
 
+import domovoi.workers.library_indexer as library_indexer
 import web.backend.api.music as music_api
 
 # ─── building archives with forged declared sizes ─────────────────────────
@@ -67,13 +68,22 @@ def music_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def reindex_calls(monkeypatch):
+    """Records the web→core hops the upload makes, and stubs the
+    in-process post-write index (F-A017) so this file stays DB-free —
+    what the index does with the saved paths is asserted in
+    ``test_music_upload_indexes_for_device_tier``."""
     calls: list[str] = []
 
     async def _ok(path, body=None, headers=None):
         calls.append(path)
         return 200, {"queued": True}
 
+    async def _index(paths):
+        n = len(list(paths))
+        return {"scanned": n, "inserted": n, "skipped": 0, "errors": 0}
+
     monkeypatch.setattr(music_api, "post_admin", _ok)
+    monkeypatch.setattr(library_indexer, "index_paths", _index)
     return calls
 
 
@@ -152,7 +162,9 @@ async def test_archive_within_the_caps_is_extracted(music_dir, reindex_calls) ->
     result = await music_api.upload_to_library(_request(), files=[_upload("album.zip", buf.getvalue())])
     assert result.saved == 1 and result.files == ["a.mp3"]
     assert (music_dir / "uploads" / "a.mp3").read_bytes() == b"aaa"
-    assert reindex_calls == ["/v1/admin/library/reindex"]
+    # The MPD half only — the library-wide sweep is admin-gated and the
+    # upload no longer depends on it (F-A017).
+    assert reindex_calls == ["/v1/admin/music/mpd-rescan"]
 
 
 def test_caps_are_generous_enough_for_real_audio() -> None:

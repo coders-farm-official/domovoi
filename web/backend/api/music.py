@@ -66,7 +66,9 @@ router = APIRouter(prefix="/api/music", tags=["music"])
 # The two library-wide jobs take the ADMIN tier instead, because the core
 # routes they proxy to do (``/v1/admin/library/reindex`` and ``/enrich``).
 # Both hops have to name the same tier, or the refusal only moves one
-# process further in.
+# process further in. The corollary (F-A017): a device-tier route must
+# not DEPEND on an admin-tier hop either — the upload below indexes the
+# files it wrote itself rather than calling the admin sweep.
 #
 # ``pause`` / ``resume`` / ``stop`` / ``skip`` stay open on purpose: they
 # are the video satellite's kiosk transport row (FE-3), and that screen
@@ -443,11 +445,11 @@ async def delete_track(
 
 # ─── Upload ────────────────────────────────────────────────────────────────
 # Drop audio files into the library straight from the browser. Files land
-# in MUSIC_DIR/uploads/; the Domovoi server's reindex (triggered after the
-# write) indexes them into library_tracks AND tells each room's MPD to
-# rescan so they're immediately playable. Mirrors the established
-# file-upload pattern in web/backend/api/voices.py (UploadFile → write to
-# a dir the Domovoi server owns → ping the Domovoi server).
+# in MUSIC_DIR/uploads/; the post-write index (in-process, scoped to the
+# files just written) puts them in library_tracks, and a device-tier hop
+# tells each room's MPD to rescan so they're immediately playable. Mirrors
+# the established file-upload pattern in web/backend/api/voices.py
+# (UploadFile → write to a dir the Domovoi server owns → ping it).
 
 
 # Audio extensions accepted for upload. Mirrors
@@ -486,7 +488,7 @@ class LibraryUploadResult(BaseModel):
     saved: int
     files: list[str]            # basenames actually written, in upload order
     skipped: list[str]          # "<name>: <reason>" for anything not saved
-    reindex_triggered: bool     # False when the Domovoi server was unreachable
+    reindex_triggered: bool     # False when the post-write index could not run
 
 
 def _check_zip_budget(fname: str, members: list[zipfile.ZipInfo]) -> None:
@@ -562,15 +564,16 @@ async def upload_to_library(
     Accepts one or more audio files directly, and/or ``.zip`` archives
     (each unpacked, with audio members extracted and non-audio members
     — cover art, ``.txt`` — ignored). Everything lands in
-    ``MUSIC_DIR/uploads/``; a library reindex is then triggered on the
-    Domovoi server, which indexes the new rows and tells each room's MPD
-    to rescan so the tracks are playable right away.
+    ``MUSIC_DIR/uploads/``; the files just written are then indexed into
+    ``library_tracks`` in-process and each room's MPD is asked to rescan,
+    so the tracks are listed and playable right away. Neither step is the
+    admin-gated library-wide sweep — see the comment at the call site.
 
     Supported extensions: mp3, m4a, mp4, flac, ogg, oga, opus, wav,
     wma, aac, alac. Standalone files of any other type are reported in
     ``skipped``; if nothing supported is found, returns 400.
 
-    If the Domovoi server is unreachable the files are still saved
+    If the index cannot run the files are still saved
     (``reindex_triggered=false``) and get picked up by the indexer on
     its next startup sweep.
     """
@@ -586,6 +589,7 @@ async def upload_to_library(
         ) from e
 
     saved: list[str] = []
+    saved_paths: list[Path] = []
     skipped: list[str] = []
 
     def _write_audio(raw_name: str, data: bytes) -> None:
@@ -606,6 +610,7 @@ async def upload_to_library(
             skipped.append(f"{base}: write failed ({e})")
             return
         saved.append(path.name)
+        saved_paths.append(path)
 
     for up in files:
         raw = await up.read()
@@ -638,18 +643,48 @@ async def upload_to_library(
             detail += "; " + "; ".join(skipped[:10])
         raise HTTPException(status_code=400, detail=detail)
 
-    # Index the new files into library_tracks and tell each room's MPD to
-    # rescan (so they're playable). Best-effort: a saved-but-unindexed
-    # file is recovered by the Domovoi server's startup sweep.
-    status_code, _ = await post_admin(
-        "/v1/admin/library/reindex", headers=auth_forward_headers(request)
-    )
-    reindex_triggered = status_code == 200
-    if not reindex_triggered:
+    # Index the new files into library_tracks, then tell each room's MPD
+    # to rescan so they're playable.
+    #
+    # NOT the core's /v1/admin/library/reindex (F-A017). Upload is on the
+    # device tier — a phone does it without the admin password — but that
+    # sweep moved to the ADMIN tier in CORE-4, so the hop answered 401 and
+    # every device-tier upload indexed nothing while still reporting
+    # success. The gate is right and stays: a library-wide sweep is an
+    # admin job, and the "Rescan library" button below still proxies it.
+    # This post-write index is a different operation — implicit, and
+    # bounded by the handful of files THIS request just wrote — so it runs
+    # in-process against the same indexer, which is also what
+    # ``files.py``'s audiobook branch already does.
+    reindex_triggered = False
+    try:
+        from domovoi.workers.library_indexer import index_paths
+
+        counts = await index_paths(saved_paths)
+        reindex_triggered = True
+        log.info(
+            "library upload: indexed %d of %d saved file(s) (%d already known)",
+            counts["inserted"], len(saved), counts["skipped"],
+        )
+    except Exception as e:  # noqa: BLE001 — the files are saved either way
         log.warning(
-            "library upload: saved %d file(s) but reindex trigger failed "
-            "(domovoi status=%s); files will index on its next boot",
-            len(saved), status_code,
+            "library upload: saved %d file(s) but indexing them failed (%s); "
+            "they will be picked up by the server's next startup sweep",
+            len(saved), e,
+        )
+
+    # The MPD half. Each room's daemon has its own tag DB and lives behind
+    # the core process, so this one stays a hop — on the device tier, and
+    # carrying no library sweep. Best-effort: a failure costs playability
+    # until the next rescan, not the index the caller just earned.
+    mpd_status, _ = await post_admin(
+        "/v1/admin/music/mpd-rescan", headers=auth_forward_headers(request)
+    )
+    if mpd_status != 200:
+        log.warning(
+            "library upload: MPD rescan trigger failed (domovoi status=%s); "
+            "the tracks are indexed but may not be playable until a rescan",
+            mpd_status,
         )
 
     return LibraryUploadResult(
