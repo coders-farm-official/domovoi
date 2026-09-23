@@ -11,6 +11,7 @@ from domovoi.capabilities import (
     STREAMING_SEARCH_PROVIDER,
 )
 from domovoi.clients.mpd import (
+    MPDNotPlaying,
     get_mpd_client_for,
     iter_mpd_clients,
     mpd_stream_url_for,
@@ -973,6 +974,17 @@ class MusicHandler(Handler):
                 text = "Previous track."
             else:
                 text = f"Done: {action}."
+        except MPDNotPlaying:
+            # The daemon answered — it refused because the queue is idle
+            # (MPD ACK 55). Saying "I couldn't reach the music player"
+            # here blamed the player for a stopped room and sent whoever
+            # was debugging after a connection that was never broken
+            # (F-V021). Same wording the now-playing path already uses.
+            return Response(
+                text="Nothing is playing right now.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         except Exception as e:
             log.warning("MPD %s failed: %s", action, e)
             return Response(

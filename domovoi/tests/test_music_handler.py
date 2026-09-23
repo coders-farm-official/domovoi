@@ -935,9 +935,16 @@ async def test_smart_skip_no_session_inspects_mpd_currentsong(db_session) -> Non
 @pytest.mark.asyncio
 async def test_smart_skip_no_session_no_currentsong_falls_through() -> None:
     """No session context AND MPD reports no current song (or an HTTP
-    stream we can't reason about as a library track) — there's
-    nothing local to skip in, so fall through to ``_simple_ack`` and
-    let MPD's ``next`` do whatever it does."""
+    stream we can't reason about as a library track) — there's nothing
+    local to skip in, so fall through to ``_simple_ack`` and let MPD's
+    ``next`` do whatever it does.
+
+    What MPD actually does when the player is stopped is REFUSE, with
+    ACK 55 "Not playing". Until F-V021 this assertion read
+    ``"Next track."`` because the stub returned success where the real
+    daemon errors, and the product's real answer in this state was
+    "I couldn't reach the music player." — a connection complaint about
+    a daemon that had just replied. Both ends now say the true thing."""
     from domovoi.clients import mpd as mpd_module
 
     # Default stub state: state="stop", song=None.
@@ -945,7 +952,7 @@ async def test_smart_skip_no_session_no_currentsong_falls_through() -> None:
     handler = MusicHandler()
     ctx = Context(session_id=None, room_id="kitchen", online=True)
     response = await handler._smart_skip(ctx, None)
-    assert response.text == "Next track."
+    assert response.text == "Nothing is playing right now."
 
 
 @requires_db

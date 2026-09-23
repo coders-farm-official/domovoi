@@ -201,11 +201,16 @@ class MPDStubClient:
     async def stop(self) -> None:
         self._state = "stop"
 
+    # The real daemon refuses these while stopped (ACK 55). The stub
+    # refuses too, or stub-mode tests would prove a behaviour the
+    # product does not have.
     async def next(self) -> None:
-        pass
+        if self._state == "stop":
+            raise MPDNotPlaying("next: nothing is playing")
 
     async def previous(self) -> None:
-        pass
+        if self._state == "stop":
+            raise MPDNotPlaying("previous: nothing is playing")
 
     async def current_song(self) -> dict[str, Any] | None:
         if self._state == "stop":
@@ -238,6 +243,20 @@ class MPDStubClient:
         if self._state == "stop" or self._song is None:
             return None
         return float(self._song.get("_elapsed", 0.0))
+
+
+def _is_not_playing(exc: BaseException) -> bool:
+    """Is this MPD's ACK 55 refusal rather than a real fault?
+
+    python-mpd2 surfaces it as
+    ``CommandError("[55@0] {previous} Not playing")``. Matched on the
+    numeric ACK code, which is wire protocol rather than prose; the
+    English text is only a fallback. Matching by exception TYPE would
+    mean importing python-mpd2 at module import, which the stub path
+    (``use_stubs``) deliberately does not require.
+    """
+    text = str(exc)
+    return "[55@" in text or "not playing" in text.lower()
 
 
 class RealMPDClient:
@@ -595,11 +614,21 @@ class RealMPDClient:
 
     async def next(self) -> None:
         async with self._connect() as c:
-            await c.next()
+            try:
+                await c.next()
+            except Exception as e:
+                if _is_not_playing(e):
+                    raise MPDNotPlaying("next: nothing is playing") from e
+                raise
 
     async def previous(self) -> None:
         async with self._connect() as c:
-            await c.previous()
+            try:
+                await c.previous()
+            except Exception as e:
+                if _is_not_playing(e):
+                    raise MPDNotPlaying("previous: nothing is playing") from e
+                raise
 
     async def current_song(self) -> dict[str, Any] | None:
         async with self._connect() as c:
@@ -684,6 +713,19 @@ def _resolve_room(room_id: str | None) -> str | None:
     if not _room_ports:
         return None
     return next(iter(_room_ports.keys()))
+
+
+class MPDNotPlaying(RuntimeError):
+    """A transport command was refused because nothing is playing.
+
+    MPD answers ``next``/``previous`` with ACK 55
+    (``ACK_ERROR_PLAYER_SYNC``, "Not playing") when the player is
+    stopped — the daemon is perfectly reachable, it is the queue that
+    is idle. Typed so a handler can say so, instead of reporting the
+    refusal as a connection failure: an honest "nothing is playing"
+    tells the user what is true, and it stops a stopped room from
+    looking like a dead music player (F-V021).
+    """
 
 
 class MPDNotProvisioned(RuntimeError):
