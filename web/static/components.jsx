@@ -935,7 +935,14 @@ const LoginModal = ({ onClose }) => {
  * Pops when a request is refused for want of the device token
  * (data.js calls Auth.requestPairing()). The token is pasted once and
  * stored for this server; the refused request is replayed with it.
- * An admin never sees this: logging in pairs the browser itself. */
+ *
+ * TWO ways out, because a browser with cleared storage lands here
+ * before anyone has had a chance to sign in, and the household token is
+ * a secret most people have never heard of (F-048). "sign in as an
+ * admin instead" opens the login modal on top of this one — logging in
+ * fetches the household token itself (auth.js autoPair), so the token
+ * is never seen or typed, and the refused request is replayed the same
+ * way. Dismissing that login comes back here rather than nowhere. */
 const PairModal = ({ onClose }) => {
   const [value, setValue] = useState('');
   const [err, setErr] = useState(null);
@@ -947,6 +954,11 @@ const PairModal = ({ onClose }) => {
     onClose();
   };
 
+  // NOT onClose: this modal stays open underneath the login, so
+  // cancelling the login lands back here (AuthModalHost renders the
+  // login modal in preference, so only one shows).
+  const signIn = () => { setErr(null); Auth.signInInstead(); };
+
   return (
     <div className="cal-modal-bg" onClick={onClose}>
       <div className="cal-modal" onClick={(e) => e.stopPropagation()}>
@@ -957,8 +969,19 @@ const PairModal = ({ onClose }) => {
         <div className="cal-modal-body">
           <div className="hint">
             This Domovoi asks devices to prove they belong to the household
-            before they can change things. Paste the household token below —
-            once, for this browser.
+            before they can change things. It normally wants the household
+            token — but if you set this Domovoi up, just sign in and it
+            pairs this browser for you.
+          </div>
+          <div className="pair-signin">
+            <Button variant="primary" icon="key" onClick={signIn}>
+              sign in as an admin instead
+            </Button>
+          </div>
+          <div className="pair-or">
+            <span/>
+            <span className="lab">or paste the household token</span>
+            <span/>
           </div>
           <div className="field">
             <label>household token</label>
@@ -970,13 +993,14 @@ const PairModal = ({ onClose }) => {
           {err && <div className="err">{err}</div>}
           <div className="hint">
             An admin finds the token on their dashboard under
-            <strong> Settings → Devices → Household token</strong>. Logging
-            in as admin here pairs this browser automatically instead.
+            <strong> Settings → Devices → Household token</strong>. It is also
+            in the file <code>~/.domovoi/device-token.txt</code> on the
+            Domovoi server.
           </div>
         </div>
         <div className="cal-modal-foot">
           <Button onClick={onClose}>cancel</Button>
-          <Button variant="primary" icon="link" onClick={submit} disabled={!value.trim()}>
+          <Button icon="link" onClick={submit} disabled={!value.trim()}>
             pair
           </Button>
         </div>
@@ -985,7 +1009,12 @@ const PairModal = ({ onClose }) => {
   );
 };
 
-/* Mounted once in the App shell — re-renders on Auth store changes. */
+/* Mounted once in the App shell — re-renders on Auth store changes.
+ *
+ * The login modal WINS when both flags are set, and that ordering is
+ * load-bearing: "sign in as an admin instead" leaves the pair modal
+ * open behind the login so that cancelling the login returns to it.
+ * Exactly one modal is ever on screen. */
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   useEffect(() => Auth.subscribe(force), []);
