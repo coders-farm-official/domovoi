@@ -1769,6 +1769,75 @@ const FilesAccessCard = ({ fire, deviceList }) => {
  * Copy hands it to the clipboard; Rotate mints a replacement (Bearer-
  * only on the server), re-pairs THIS browser with it and tells the admin
  * that every other device must pair again. */
+/* Set a custom household token.
+ *
+ * NOT DeleteConfirmDialog: that component is a confirm, not a form — its
+ * `busy` flag is the only way to disable the confirm button and it also
+ * disables Cancel and the backdrop, its in-flight label is hard-coded
+ * "Deleting…", and its confirm button is unconditionally danger-red. The
+ * house idiom for "a modal with one field and a primary action" is the
+ * cal-modal family in styles.css, of which PairModal (components.jsx) is
+ * the twin. Zero new CSS. */
+const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
+  const [value, setValue] = React.useState('');
+  React.useEffect(() => { if (open) setValue(''); }, [open]);
+  if (!open) return null;
+  const stored = value.trim();
+  const tooShort = stored.length < 12;
+  const submit = () => { if (!tooShort && !busy) onSave(stored); };
+  return (
+    <div className="cal-modal-bg" onClick={busy ? undefined : onCancel}>
+      <div className="cal-modal" role="dialog" aria-modal="true"
+           aria-label="Set a custom household token" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-head">
+          <div className="ttl">Set a custom household token</div>
+          <IconButton name="x" onClick={onCancel}/>
+        </div>
+        <div className="cal-modal-body">
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            Replace the generated phrase with one of your own. At least 12
+            characters — letters, numbers, punctuation and spaces all work.
+          </div>
+          <div className="field">
+            <label>new household token</label>
+            <input className="cal-inp mono" value={value} autoFocus
+                   placeholder="at least 12 characters"
+                   data-testid="set-token-input"
+                   onChange={(e) => setValue(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
+            {/* The counter counts the STORED form: outer whitespace is
+                trimmed before it is saved, so it must be trimmed here too
+                or the count lies about whether the button will unlock. */}
+            <div className="hint">{stored.length} characters.</div>
+          </div>
+          {error && <div className="err">{error}</div>}
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            A token you chose is easier to remember and easier to guess.
+            Domovoi slows down repeated wrong guesses from the same device,
+            but it will not stop you picking something short or obvious.
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            Domovoi keeps this token in plain text so it can show it to you
+            here, and it appears in the server's request log when the
+            dashboard loads media. Do not reuse a password from anywhere else.
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            Saving replaces the current token: every other phone and browser
+            in the household must be given the new one before it can change
+            anything. This browser is re-paired automatically.
+          </div>
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon="key" disabled={tooShort || busy} onClick={submit}>
+            {busy ? 'saving…' : 'Save token'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const HouseholdTokenCard = ({ fire }) => {
   const [, force] = React.useReducer((n) => n + 1, 0);
   React.useEffect(() => {
@@ -1791,6 +1860,9 @@ const HouseholdTokenCard = ({ fire }) => {
   const [rotating, setRotating] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [rotated, setRotated] = React.useState(false);
+  const [setOpen, setSetOpen] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [setError, setSetError] = React.useState(null);
 
   if (!admin) return null;
 
@@ -1825,6 +1897,26 @@ const HouseholdTokenCard = ({ fire }) => {
     } finally { setRotating(false); }
   };
 
+  const saveToken = async (value) => {
+    setSetError(null);
+    setSaving(true);
+    try {
+      const out = await apiPost('/api/auth/device-token', { token: value });
+      if (out && out.token) {
+        try { Auth.pair(out.token); } catch {}
+        setRotated(true);
+        setSetOpen(false);
+        fire('household token set — every other browser and phone must pair again');
+      }
+      refresh();
+    } catch (e) {
+      // Inline, next to the field: the server's message is the actionable
+      // one ("at least 12 characters"), and a toast would take it away
+      // while the dialog is still standing.
+      if (!isAuthFailure(e)) setSetError(apiErrorText(e));
+    } finally { setSaving(false); }
+  };
+
   return (
     <Card title="Household token"
           sub="What a phone or browser presents to prove it belongs to this household. Share it only with devices you own.">
@@ -1847,6 +1939,9 @@ const HouseholdTokenCard = ({ fire }) => {
               {token}
             </code>
             <Button icon="copy" onClick={copy}>copy</Button>
+            <Button icon="key" disabled={saving} onClick={() => { setSetError(null); setSetOpen(true); }}>
+              set…
+            </Button>
             <Button icon="refresh-cw" disabled={rotating} onClick={() => setConfirmOpen(true)}>
               {rotating ? 'rotating…' : 'rotate'}
             </Button>
@@ -1856,7 +1951,9 @@ const HouseholdTokenCard = ({ fire }) => {
             {thisPaired
               ? ' This browser is paired with it.'
               : ' This browser is not paired with it yet — log in again or paste it into the pairing prompt.'}
-            {rotated && ' Rotated: the previous token no longer works anywhere.'}
+            {' '}<span className="mono">set…</span> replaces it with one you choose (12+ characters);
+            {' '}<span className="mono">rotate</span> generates a new phrase.
+            {rotated && ' Changed: the previous token no longer works anywhere.'}
           </div>
         </>
       )}
@@ -1868,6 +1965,9 @@ const HouseholdTokenCard = ({ fire }) => {
           automatically.
         </div>
       </DeleteConfirmDialog>
+      <SetTokenDialog open={setOpen} busy={saving} error={setError}
+                      onCancel={() => { setSetOpen(false); setSetError(null); }}
+                      onSave={saveToken}/>
     </Card>
   );
 };

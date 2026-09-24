@@ -986,11 +986,17 @@ const PairModal = ({ onClose }) => {
           <div className="field">
             <label>household token</label>
             <input className="cal-inp mono" value={value} autoFocus
-                   placeholder="acorn maple river ..."
+                   placeholder="household token"
                    onChange={(e) => setValue(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
-            <div className="hint">eight words — spaces, capitals and hyphens
-                 are all read the same way.</div>
+            {/* True whichever kind of token this household runs: a
+                generated phrase is canonical, so the server also accepts
+                its canonical form and case/spacing do not matter; a token
+                an admin chose is matched exactly. */}
+            <div className="hint">type it exactly as the dashboard shows it —
+                 capitals and punctuation count. A generated eight-word phrase
+                 is forgiving about spaces and capitals; a token an admin
+                 chose is not.</div>
           </div>
           {err && <div className="err">{err}</div>}
           <div className="hint">
