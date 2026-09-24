@@ -273,7 +273,11 @@ MODAL_SCENARIOS = {
         "files": [COMPONENTS], "component": "AuthModalHost", "setup": HOST_SETUP,
         "script": r"""
           h.render();
-          await h.type({ placeholder: 'paste the token here' }, '  household-typed  ');
+          // The modal has exactly ONE input, so select it by type rather than by
+          // its placeholder: the placeholder is copy and it has already changed
+          // once (it shows the word-phrase shape now), which broke this scenario
+          // the moment the two branches met.
+          await h.type({ type: 'input' }, '  household-typed  ');
           await h.click({ type: 'button', text: 'pair' });
           const a = h.global('window').__auth;
           return { tree: h.tree().length, paired: a.paired, signIn: a.signIn, pairOpen: a.pairOpen };
@@ -330,7 +334,12 @@ def test_signing_in_from_the_pair_modal_pairs_the_browser(modals):
 
 def test_pasting_the_household_token_still_pairs_this_browser(modals):
     o = modals["the_token_path_still_works"]
-    assert o["paired"] == "household-typed"         # trimmed
+        # Trimmed by the stub Auth this scenario installs. The REAL
+    # canonicalisation Auth.pair does now — lowercasing, and collapsing
+    # spaces and underscores to hyphens so a typed word phrase pairs — is
+    # driven against the real auth.js in test_web_device_token_pairing.py;
+    # this scenario is about the modal, not about the token format.
+    assert o["paired"] == "household-typed"
     assert o["signIn"] == 0
     assert o["pairOpen"] is False
     assert o["tree"] == 0
