@@ -1086,7 +1086,21 @@ def test_every_setup_phase_has_a_state():
 
     import inspect
 
-    from satellite import client, provisioning_mode
+    from satellite import provisioning_mode
+    from satellite.tests._client_import import import_client
+
+    # Not `from satellite import client`. The client imports sounddevice and
+    # webrtcvad at module scope and a dev box has neither, so that spelling
+    # only ever worked when something else had already put `satellite.client`
+    # in sys.modules — which, now that `satellite/tests` is in testpaths, is
+    # decided by whether its collection ran in the same session. A test that
+    # is green in the full suite and red under `pytest domovoi/tests` is
+    # worse than one that is simply red, so this import brings its own
+    # stand-ins. `import_client` installs them only if the real modules are
+    # missing and takes them out again, so a box that HAS the audio stack,
+    # and a session that already imported the client, both get exactly what
+    # they had.
+    client = import_client()
 
     called = set()
     for src in (
