@@ -35,9 +35,14 @@ Three gates, from weakest to strongest:
   a person can read out to a phone across the room; wrong ones are
   charged an exponential per-source backoff
   (:data:`DEVICE_TOKEN_BACKOFF`) and the pair of those is what makes 64
-  bits enough. Input is canonicalised on the way in
-  (:func:`normalize_device_token`), so case, spaces and underscores all
-  pair, and a 64-hex token from an older install still validates.
+  bits enough. An admin may replace it with any printable-ASCII string of
+  12 characters or more (:func:`validate_custom_device_token`,
+  :func:`set_device_token`), which is stored VERBATIM. A presented token
+  matches the stored one exactly, or — only when the stored token is
+  itself canonical, which a generated phrase and a 64-hex token from an
+  older install both are — by its canonical form
+  (:func:`normalize_device_token`), so typing a phrase back stays
+  forgiving about case, spaces and underscores.
   :func:`require_device_read` is its read-only half for media the browser
   fetches by URL: it also takes the dashboard cookie and a
   ``?device_token=`` query, neither of which may authorize a change.
@@ -223,8 +228,10 @@ DEVICE_TOKEN_WORDS = PHRASE_WORDS
 def generate_word_phrase(words: int = PHRASE_WORDS) -> str:
     """``words`` words chosen uniformly from the first 256 of
     :data:`_WORDS`, joined with hyphens. Lowercase ASCII letters and
-    hyphens only — see :func:`normalize_device_token` for why that
-    alphabet and no other."""
+    hyphens only, so a GENERATED phrase is always canonical and typing it
+    back is forgiving — see :func:`normalize_device_token`. A token an
+    admin chose is not held to this alphabet
+    (:func:`validate_custom_device_token`)."""
     return "-".join(secrets.choice(_WORDS[:256]) for _ in range(words))
 
 
@@ -461,38 +468,127 @@ _DEVICE_TOKEN_SEPARATORS = re.compile(r"[\s_\-]+")
 
 
 def normalize_device_token(value: str | None) -> str | None:
-    """The canonical form of a household token: trimmed, lowercased, every
+    """The CANONICAL form of a household token: trimmed, lowercased, every
     run of whitespace / underscores / hyphens collapsed to a single hyphen,
     no leading or trailing hyphen. ``None`` when nothing is left.
 
-    The SAME function runs on generation, on the file mirror and on every
-    compare, so ``acorn maple …``, ``Acorn-Maple-…`` and ``acorn_maple_…``
-    are one token and the person who reads the phrase off the dashboard and
-    types it into a phone is not punished for how their keyboard felt.
+    This is the forgiving-typing helper, NOT the storage rule. A token is
+    stored exactly as it was chosen (see
+    :func:`validate_custom_device_token`); this canonical form is the
+    SECOND thing a presented candidate is compared against, and only when
+    the stored token is itself canonical — which a generated phrase and an
+    old 64-hex token both are. So ``acorn maple …``, ``Acorn-Maple-…`` and
+    ``acorn_maple_…`` still pair as one token and the person who reads the
+    phrase off the dashboard into a phone is not punished for how their
+    keyboard felt, while ``MyT0ken!!`` keeps every bit of its capitals.
 
-    Why this alphabet and no other — the token has to survive all three
-    transports it travels on, and lowercase letters plus hyphens are the
-    intersection of what they allow:
+    Where the alphabet used to come from, and why it does not any more:
+    lowercase-and-hyphens was the intersection of the transports the token
+    travels on, and the binding one was the
+    ``domovoi.device-token.<token>`` WebSocket **subprotocol**, which RFC
+    6455 requires to be an RFC 9110 *token* — no spaces, at all, ever. That
+    grammar belonged to the transport, not to the token, and it is now
+    fixed where it lives: the browser offers
+    ``domovoi.device-token-b64.<base64url(token)>`` instead
+    (``web/static/data.js`` + ``web/backend/main.py``), whose alphabet is a
+    legal token for any value. A chosen token may therefore hold any
+    printable ASCII, spaces and punctuation included.
 
-    * the ``X-Device-Token`` header value (RFC 9110 field value — a space
-      would be legal but folds/trims unpredictably through proxies);
-    * the ``?device_token=`` query the browser's ``<img>`` / ``<video>``
-      loads use, where a hyphen needs no percent-encoding;
-    * the ``domovoi.device-token.<token>`` WebSocket **subprotocol**, which
-      RFC 6455 requires to be an RFC 9110 *token* — no spaces, at all, ever.
-      A browser handed a subprotocol with a space throws before the socket
-      is opened, so a spaced token would silently kill the dashboard's live
-      stream. That transport is why the canonical form has no spaces.
+    On the CANDIDATE side this deliberately treats anything Python's ``\\s``
+    matches as a separator, which includes NEL (U+0085) and NBSP (U+00A0) —
+    the characters a phone keyboard inserts. Do not "tighten" it to
+    ``[ \\t_-]``: the printable-ASCII rule applies at SET time
+    (:func:`validate_custom_device_token`), not to what someone types back.
 
     Old 64-hex tokens (``secrets.token_hex(32)``, what every install minted
-    before this) are already lowercase with no separators, so normalising
-    one returns it unchanged and it keeps validating — see
-    :func:`validate_device_token`.
+    before the phrase existed) are already lowercase with no separators, so
+    normalising one returns it unchanged and it keeps validating by both
+    paths — see :func:`validate_device_token`.
     """
     if value is None:
         return None
     cleaned = _DEVICE_TOKEN_SEPARATORS.sub("-", value.strip().lower()).strip("-")
     return cleaned or None
+
+
+# ─── The rule for an admin-CHOSEN household token ─────────────────────────
+
+# Floor and cap on the STORED form (after the outer whitespace is trimmed).
+# The floor is the only strength rule there is — Kamron's call, stated in
+# the dialog: a token a person picked is easier to remember and easier to
+# guess, and :data:`DEVICE_TOKEN_BACKOFF` is all that stands behind it. The
+# cap is not a limit anybody meets; it exists so nothing downstream (the
+# base64url subprotocol, the mirror file, a header buffer) has to guess.
+DEVICE_TOKEN_MIN_LEN = 12
+DEVICE_TOKEN_MAX_LEN = 128
+
+
+class DeviceTokenRejected(ValueError):
+    """A proposed household token the SET endpoints will not store.
+
+    The message is written for the person standing at the dialog and is
+    handed to them verbatim as a 400 detail. It NEVER quotes the offending
+    value: a rejected token is still a near-miss secret, and this error
+    travels back over the wire and into whatever the client logs."""
+
+
+def validate_custom_device_token(value: str | None) -> str:
+    """Return the form to STORE for an admin-chosen household token, or
+    raise :class:`DeviceTokenRejected`.
+
+    One function, called by both SET endpoints (core and web), because the
+    rule existing twice is the rule drifting.
+
+    The rule:
+
+    * **trim the outer whitespace and change nothing else.** Trimming is
+      not cosmetic — ``read_device_token_file`` and every harness read the
+      mirror file back with ``.strip()``, and OkHttp trims a header value,
+      so a stored token with edge whitespace could never be presented back
+      and :func:`ensure_device_token` would rewrite the mirror on every
+      boot. Interior spaces are fine and are kept.
+    * **printable ASCII only**, 0x20 (space) through 0x7E (``~``). Control
+      characters are refused because a header value may not carry them and
+      ``.strip()`` would eat them at the edges anyway. Non-ASCII is refused
+      because it fails SILENTLY rather than loudly: Starlette decodes
+      header bytes as latin-1, so a UTF-8 token arrives mojibake'd and
+      simply never compares equal, while the web→core proxy hop (httpx)
+      raises ``UnicodeEncodeError`` and turns a 401 into a 500. No emoji,
+      which is also where Kamron drew the line.
+    * **at least :data:`DEVICE_TOKEN_MIN_LEN` characters**, measured on the
+      trimmed form; at most :data:`DEVICE_TOKEN_MAX_LEN`.
+    * **something other than separators.** ``- - - - - - -`` passes every
+      rule above and normalises to ``None``; storing it would leave the
+      household matchable only by the exact string and buys nothing.
+    """
+    if value is None or not isinstance(value, str):
+        raise DeviceTokenRejected("a token is required")
+    token = value.strip()
+    for ch in token:
+        code = ord(ch)
+        if code > 0x7F:
+            raise DeviceTokenRejected(
+                "letters, digits, punctuation and spaces only — no emoji or "
+                "other non-ASCII characters"
+            )
+        if code < 0x20 or code == 0x7F:
+            raise DeviceTokenRejected(
+                "letters, digits, punctuation and spaces only — no control "
+                "characters, tabs or line breaks"
+            )
+    if len(token) < DEVICE_TOKEN_MIN_LEN:
+        raise DeviceTokenRejected(
+            f"at least {DEVICE_TOKEN_MIN_LEN} characters"
+        )
+    if len(token) > DEVICE_TOKEN_MAX_LEN:
+        raise DeviceTokenRejected(
+            f"at most {DEVICE_TOKEN_MAX_LEN} characters"
+        )
+    if normalize_device_token(token) is None:
+        raise DeviceTokenRejected(
+            "use something other than spaces, hyphens and underscores"
+        )
+    return token
 
 
 def generate_device_token() -> str:
@@ -547,35 +643,111 @@ async def ensure_device_token_row(session: AsyncSession) -> str:
 
 
 async def rotate_device_token(session: AsyncSession) -> str:
-    """Replace the household token in place. The previous token is
-    refused from this moment; the file mirror is rewritten by the caller
-    (:func:`write_device_token_file`)."""
+    """Replace the household token in place with a freshly GENERATED
+    phrase. The previous token is refused from this moment; the file mirror
+    is rewritten by the caller (:func:`write_device_token_file`)."""
     return await _mint_device_token(session, replace=True)
+
+
+async def set_device_token(session: AsyncSession, value: str | None) -> str:
+    """Replace the household token in place with one an admin CHOSE.
+
+    Validates through :func:`validate_custom_device_token` (which raises
+    :class:`DeviceTokenRejected` the endpoints turn into a 400) and then
+    does exactly what :func:`rotate_device_token` does: one row, new
+    ``token_hash``, ``rotated_at = now()``. Setting a token IS a rotation —
+    every other device in the household has to be given the new one — and
+    the caller rewrites the mirror file the same way."""
+    token = validate_custom_device_token(value)
+    await session.execute(
+        text(
+            "INSERT INTO household_device_tokens (id, token, token_hash) "
+            "VALUES (1, :t, :h) "
+            "ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, "
+            "token_hash = EXCLUDED.token_hash, rotated_at = now()"
+        ),
+        {"t": token, "h": _sha256(token)},
+    )
+    return token
+
+
+# A hash no candidate can reach: the compare against it is real work that
+# can never succeed. It exists so the canonical branch below runs the SAME
+# two operations whether or not the stored token happens to be canonical —
+# a skipped compare is a 1.8 µs timing oracle that separates "still on the
+# generated phrase" from "a chosen token with capitals or punctuation",
+# which is exactly the bit that tells a guesser whether to run a wordlist.
+_NO_CANONICAL_FORM = _sha256("\x00no-canonical-form\x00" + secrets.token_hex(32))
+
+# `stored == normalize(stored)` is secret-dependent work, so it is done
+# ONCE per stored token rather than on every compare: (token_hash,
+# canonical hash or None). One row per install means one entry; a rotation
+# changes token_hash, which misses the cache and recomputes, so there is
+# nothing to invalidate by hand.
+_canonical_hash_cache: tuple[str, str | None] | None = None
+
+
+def _canonical_token_hash(stored: str | None, stored_hash: str) -> str | None:
+    """The hash a canonicalised candidate may be compared against, or
+    ``None`` when the stored token is not itself canonical (and so is
+    matched only by its exact characters)."""
+    global _canonical_hash_cache
+    cached = _canonical_hash_cache
+    if cached is not None and cached[0] == stored_hash:
+        return cached[1]
+    result: str | None = None
+    if stored is not None and normalize_device_token(stored) == stored:
+        result = stored_hash
+    _canonical_hash_cache = (stored_hash, result)
+    return result
 
 
 async def validate_device_token(session: AsyncSession, candidate: str | None) -> bool:
     """Constant-time hash compare of a presented token against the row.
 
-    The candidate is canonicalised first (:func:`normalize_device_token`),
-    so how it was typed does not matter — but the compare itself is still
-    ``compare_digest`` over the sha256, exactly as before. Normalising is a
-    no-op on a 64-hex token, which is why an install that minted one before
-    the phrase format existed keeps working without a rotation.
+    TWO forms are accepted, and both compares always run:
+
+    1. **the exact stored value**, after trimming the candidate. This is
+       the primary rule and the only one for a token an admin chose:
+       ``MyT0ken!!`` is matched as ``MyT0ken!!`` and its capitals carry
+       their entropy.
+    2. **the canonical form** (:func:`normalize_device_token`) — but ONLY
+       when the stored token is itself canonical. A generated eight-word
+       phrase is, and so is a 64-hex token from an older install, so typing
+       either one back stays forgiving about case, spaces and underscores
+       and NOTHING is invalidated by deploying this. ``MyT0ken!!`` is not
+       canonical, so no amount of re-spelling opens it.
+
+    The canonical test is derived from the stored value, so there is no
+    migration and no flag column. Both branches run every time — neither
+    the candidate's shape nor the stored token's shape may be readable from
+    how long this took (see :data:`_NO_CANONICAL_FORM`).
 
     This function does NOT throttle: it is called from gates that already
     know the request's source. :func:`_classify_device` is where a wrong
     token starts costing time."""
-    presented = normalize_device_token(candidate)
-    if not presented:
+    exact = (candidate or "").strip()
+    canonical = normalize_device_token(candidate) or ""
+    if not exact and not canonical:
         return False
     row = (
         await session.execute(
-            text("SELECT token_hash FROM household_device_tokens WHERE id = 1")
+            text("SELECT token, token_hash FROM household_device_tokens WHERE id = 1")
         )
     ).first()
     if row is None:
         return False
-    return secrets.compare_digest(_sha256(presented), row.token_hash)
+    stored_hash = getattr(row, "token_hash", None)
+    if not stored_hash:
+        return False
+    canonical_hash = _canonical_token_hash(getattr(row, "token", None), stored_hash)
+    exact_ok = secrets.compare_digest(_sha256(exact), stored_hash)
+    canonical_ok = secrets.compare_digest(
+        _sha256(canonical), canonical_hash or _NO_CANONICAL_FORM
+    )
+    # Bitwise, not `or`: no short-circuit, so which form matched is not
+    # readable from the timing.
+    return bool(exact_ok | canonical_ok)
 
 
 def write_device_token_file(token: str) -> Path:
