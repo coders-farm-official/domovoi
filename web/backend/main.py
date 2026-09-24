@@ -41,6 +41,7 @@ from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
+from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
 from web.backend.api import images as images_api
 from web.backend.api import models as models_api
@@ -179,6 +180,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # Make the configured media libraries exist before anything reads the
+    # Files registry. Nothing in the product used to create them, so a
+    # headless server (which has no XDG desktop dirs) had no ~/Documents and
+    # no ~/Pictures: build_core_libraries() dropped both libraries silently,
+    # taking the "+ New document / spreadsheet / drawing" menu — which renders
+    # only for core:documents — with them. The paths are CORE settings, but
+    # the WEB process is the one that serves these libraries and writes into
+    # them (uploads, document save, image save) and it owns CORE_LIBRARIES,
+    # the table that drives the creation; the core cannot import web at all.
+    # Both processes run as the same user (they share ~/.domovoi and the
+    # device-token file), so web-created dirs are core-writable. Never fatal.
+    try:
+        files_security.ensure_core_library_dirs()
+    except Exception as e:  # noqa: BLE001 — a media dir must not stop boot
+        log.warning("media-library dir boot hook raised: %s", e)
 
     broadcaster = StateBroadcaster()
     poll_loop = StatePollLoop(broadcaster, interval_sec=_POLL_INTERVAL)

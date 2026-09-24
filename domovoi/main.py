@@ -257,8 +257,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Ensure the spoken-audio storage dirs exist so the MPD nested
     # bind mounts (podcasts/audiobooks → /music/…) succeed, the podcast
     # downloader can write episodes, and the audiobook indexer has a tree to
-    # walk — all before the first satellite connects. Host-owned dirs,
-    # mirroring how music_dir / cover_art_dir are expected to exist.
+    # walk — all before the first satellite connects. Host-owned dirs.
+    # NOTE: this pair is core's own MPD-mount prerequisite and must hold even
+    # in a core-only run. The FULL set of browsable media libraries (music,
+    # audiobooks, podcasts, documents, pictures) is created at boot by the web
+    # process from the CORE_LIBRARIES table — web/backend/api/files_security.py
+    # :func:`ensure_core_library_dirs`, called from web/backend/main.py's
+    # lifespan. Core cannot drive it from here: core never imports web.
     for _spoken_dir in (settings.podcasts_dir, settings.audiobooks_dir):
         try:
             Path(_spoken_dir).expanduser().mkdir(parents=True, exist_ok=True)

@@ -9,8 +9,11 @@ plugin-root resolution incl. the denylist.
 
 from __future__ import annotations
 
+import errno
+import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -324,3 +327,279 @@ def test_build_core_libraries_excludes_missing_and_secrets(tmp_path, monkeypatch
     music_lib = next(lib for lib in libs if lib.id == "core:music")
     assert music_lib.reindex_kind == "music"
     assert music_lib.doc_editing is False
+
+
+# ─── Boot-time creation of the core library dirs ────────────────────────────
+# Regression cover for the Documents/Pictures disappearance: ``documents_dir``
+# defaults to ``~/Documents`` and ``pictures_dir`` to ``~/Pictures`` — XDG
+# desktop conventions a headless server account does not have — so
+# ``validate_root`` failed, ``build_core_libraries`` skipped them silently, and
+# the Files page lost both libraries plus the "+ New document" menu.
+
+
+@pytest.fixture
+def media_env(tmp_path, monkeypatch):
+    """A self-contained fake install: fake home, fake CONFIG_DIR, and a
+    ``core_settings`` stand-in carrying the five library paths (all missing)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    config_dir = home / ".domovoi"
+    fake_settings = SimpleNamespace(
+        music_dir=str(home / "Music"),
+        audiobooks_dir=str(config_dir / "audiobooks"),
+        podcasts_dir=str(config_dir / "podcasts"),
+        documents_dir=str(home / "Documents"),
+        pictures_dir=str(home / "Pictures"),
+    )
+    monkeypatch.setattr(fs, "core_settings", fake_settings)
+    monkeypatch.setattr(fs, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(fs, "_home_dir", lambda: home.resolve())
+    fs._SKIP_WARNED.clear()
+    yield SimpleNamespace(home=home, config_dir=config_dir, settings=fake_settings)
+    fs._SKIP_WARNED.clear()
+
+
+def _status(results, lib_id):
+    for r in results:
+        if r.library_id == lib_id:
+            return r
+    raise AssertionError(f"{lib_id} missing from {[r.library_id for r in results]}")
+
+
+def test_ensure_creates_every_missing_library_dir(media_env):
+    for attr in ("music_dir", "audiobooks_dir", "podcasts_dir", "documents_dir",
+                 "pictures_dir"):
+        assert not Path(getattr(media_env.settings, attr)).exists()
+
+    results = fs.ensure_core_library_dirs()
+
+    assert {r.library_id for r in results} == {lib[0] for lib in fs.CORE_LIBRARIES}
+    for lib_id, _label, _icon, attr, *_rest in fs.CORE_LIBRARIES:
+        assert _status(results, lib_id).status == "created"
+        assert Path(getattr(media_env.settings, attr)).is_dir()
+
+
+def test_ensure_is_driven_by_the_table_not_a_copied_list(media_env, monkeypatch):
+    """A library added to CORE_LIBRARIES later is covered automatically."""
+    extra_dir = media_env.home / "Widgets"
+    monkeypatch.setattr(
+        media_env.settings, "widgets_dir", str(extra_dir), raising=False
+    )
+    monkeypatch.setattr(
+        fs,
+        "CORE_LIBRARIES",
+        fs.CORE_LIBRARIES
+        + (("core:widgets", "Widgets", "box", "widgets_dir", True, True, "widgets", False),),
+    )
+
+    results = fs.ensure_core_library_dirs()
+
+    assert _status(results, "core:widgets").status == "created"
+    assert extra_dir.is_dir()
+
+
+def test_ensure_leaves_an_existing_dir_exactly_as_it_was(media_env, monkeypatch):
+    docs = Path(media_env.settings.documents_dir)
+    docs.mkdir(parents=True)
+    (docs / "notes.md").write_text("keep me", encoding="utf-8")
+    os.chmod(docs, 0o750)
+    before = docs.stat()
+
+    calls: list[str] = []
+    real_mkdir = Path.mkdir
+
+    def spy_mkdir(self, *a, **kw):
+        calls.append(str(self))
+        return real_mkdir(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "mkdir", spy_mkdir)
+
+    results = fs.ensure_core_library_dirs()
+
+    assert _status(results, "core:documents").status == "exists"
+    # mkdir was never even called for the existing dir → no permission/mtime churn
+    assert str(docs) not in calls
+    after = docs.stat()
+    assert after.st_mode == before.st_mode
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert (docs / "notes.md").read_text(encoding="utf-8") == "keep me"
+
+
+def test_ensure_refuses_a_path_that_is_a_file(media_env, caplog):
+    docs = Path(media_env.settings.documents_dir)
+    docs.parent.mkdir(parents=True, exist_ok=True)
+    docs.write_text("not a directory", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()
+
+    row = _status(results, "core:documents")
+    assert row.status == "refused"
+    assert "not a directory" in (row.reason or "")
+    assert docs.read_text(encoding="utf-8") == "not a directory"  # not clobbered
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("core:documents" in m and "DOCUMENTS_DIR" in m and str(docs) in m
+               for m in warned)
+    # boot continued: the other four were still created
+    assert _status(results, "core:music").status == "created"
+
+
+def test_ensure_refuses_a_drive_or_filesystem_root(media_env, caplog):
+    root = Path(media_env.home.anchor)
+    media_env.settings.documents_dir = str(root)
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()
+
+    row = _status(results, "core:documents")
+    assert row.status == "refused"
+    assert "root" in (row.reason or "")
+    assert any("core:documents" in r.getMessage() for r in caplog.records
+               if r.levelno >= logging.WARNING)
+    assert _status(results, "core:pictures").status == "created"
+
+
+def test_ensure_refuses_a_sensitive_config_dir_path(media_env, caplog):
+    secret = media_env.config_dir / "tls"
+    media_env.settings.documents_dir = str(secret)
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()
+
+    row = _status(results, "core:documents")
+    assert row.status == "refused"
+    assert "config dir" in (row.reason or "")
+    assert not secret.exists()  # never created
+    # …while the two legitimately-under-config libraries still are
+    assert _status(results, "core:podcasts").status == "created"
+    assert _status(results, "core:audiobooks").status == "created"
+
+
+def test_ensure_never_creates_an_unmounted_mountpoint(media_env, caplog, tmp_path):
+    """The mounted-media rule: a path outside home is never created, even when
+    its parent exists — that parent may be an empty mountpoint waiting for its
+    drive, and an empty dir there would mask the mount."""
+    mountpoint = tmp_path / "mnt" / "media"
+    mountpoint.mkdir(parents=True)  # exists, empty — the drive is not up yet
+    media_env.settings.music_dir = str(mountpoint / "music")
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()
+
+    row = _status(results, "core:music")
+    assert row.status == "refused"
+    assert "outside the home directory" in (row.reason or "")
+    assert list(mountpoint.iterdir()) == []  # mountpoint still pristine
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("MUSIC_DIR" in m and "core:music" in m for m in warned)
+
+
+def test_ensure_survives_a_full_or_read_only_disk(media_env, monkeypatch, caplog):
+    def boom(self, *a, **kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "mkdir", boom)
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()  # must not raise
+
+    assert {r.status for r in results} == {"failed"}
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("core:documents" in m and "DOCUMENTS_DIR" in m for m in warned)
+
+
+def test_ensure_survives_an_unreadable_setting(media_env, monkeypatch, caplog):
+    monkeypatch.delattr(media_env.settings, "documents_dir", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        results = fs.ensure_core_library_dirs()
+
+    assert _status(results, "core:documents").status == "failed"
+    assert _status(results, "core:music").status == "created"
+
+
+# ─── The silence half: a skipped library must say so ────────────────────────
+def test_build_core_libraries_warns_when_a_library_is_skipped(media_env, caplog):
+    Path(media_env.settings.music_dir).mkdir(parents=True)  # only music exists
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        libs = fs.build_core_libraries(fs._allowed_under_config())
+
+    assert [lib.id for lib in libs] == ["core:music"]
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    for lib_id, env, path in (
+        ("core:documents", "DOCUMENTS_DIR", media_env.settings.documents_dir),
+        ("core:pictures", "PICTURES_DIR", media_env.settings.pictures_dir),
+    ):
+        assert any(
+            lib_id in m and env in m and str(Path(path).resolve()) in m
+            and "does not exist" in m
+            for m in warned
+        ), f"no warning naming {lib_id}/{env}/{path} in {warned}"
+
+
+def test_build_core_libraries_warns_once_then_again_on_regression(media_env, caplog):
+    allowed = fs._allowed_under_config()
+    docs = Path(media_env.settings.documents_dir)
+
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        fs.build_core_libraries(allowed)
+        first = len([r for r in caplog.records
+                     if r.levelno >= logging.WARNING and "core:documents" in r.getMessage()])
+        fs.build_core_libraries(allowed)  # same problem → no repeat spam
+        second = len([r for r in caplog.records
+                      if r.levelno >= logging.WARNING and "core:documents" in r.getMessage()])
+    assert first == 1 and second == 1
+
+    docs.mkdir(parents=True)
+    assert any(lib.id == "core:documents" for lib in fs.build_core_libraries(allowed))
+
+    # …and if it disappears again, the operator is told again.
+    for child in docs.iterdir():
+        child.unlink()
+    docs.rmdir()
+    with caplog.at_level(logging.WARNING, logger="web.backend.api.files_security"):
+        caplog.clear()
+        fs.build_core_libraries(allowed)
+    assert any("core:documents" in r.getMessage() for r in caplog.records
+               if r.levelno >= logging.WARNING)
+
+
+def test_ensure_then_build_restores_documents_and_pictures(media_env):
+    """The end-to-end shape of Kamron's bug, DB-free."""
+    before = {lib.id for lib in fs.build_core_libraries(fs._allowed_under_config())}
+    assert "core:documents" not in before and "core:pictures" not in before
+
+    fs.ensure_core_library_dirs()
+
+    libs = fs.build_core_libraries(fs._allowed_under_config())
+    by_id = {lib.id: lib for lib in libs}
+    assert {lib[0] for lib in fs.CORE_LIBRARIES} <= set(by_id)
+    # doc_editing is what makes the "+ New document/spreadsheet/drawing" menu render
+    assert by_id["core:documents"].doc_editing is True
+
+
+# ─── root_rejection: the reason strings validate_root used to swallow ───────
+def test_root_rejection_matches_validate_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(fs, "CONFIG_DIR", tmp_path / ".domovoi")
+    real = tmp_path / "lib"
+    real.mkdir()
+    a_file = tmp_path / "a.txt"
+    a_file.write_text("x", encoding="utf-8")
+    secret = tmp_path / ".domovoi" / "tls"
+    secret.mkdir(parents=True)
+
+    cases = {
+        real: None,
+        tmp_path / "nope": "does not exist",
+        a_file: "not a directory",
+        Path(tmp_path.anchor): "root",
+        secret: "config dir",
+    }
+    for path, fragment in cases.items():
+        reason = fs.root_rejection(path, set())
+        if fragment is None:
+            assert reason is None, (path, reason)
+        else:
+            assert reason and fragment in reason, (path, reason)
+        assert fs.validate_root(path, set()) is (reason is None)

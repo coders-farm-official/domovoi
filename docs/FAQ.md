@@ -219,7 +219,32 @@ All on machines you own:
 | Service settings | `domovoi/.env` next to the code |
 | Music | `MUSIC_DIR` (default `~/Music`) |
 | Documents (office pages) | `DOCUMENTS_DIR` (default `~/Documents`) |
+| Pictures (Images tab) | `PICTURES_DIR` (default `~/Pictures`) |
+| Podcasts, audiobooks | `PODCASTS_DIR` / `AUDIOBOOKS_DIR` (default `~/.domovoi/podcasts`, `~/.domovoi/audiobooks`) |
 | Satellite config & caches | `~/.domovoi/` on each Pi |
+
+**These directories are created for you on first boot.** Every media library
+above is created (`mkdir -p`, ordinary permissions) when the dashboard starts,
+so a fresh headless server gets a working Documents and Pictures library even
+though a server account has no desktop `~/Documents` or `~/Pictures` folder.
+Nothing is overwritten: a directory that already exists is left exactly as it
+is, contents and permissions untouched.
+
+Domovoi **refuses** to create a configured path in four cases, and logs a
+`WARNING` naming the library, the setting and the path instead:
+
+- the path is **outside your home directory** — it might be the mountpoint of a
+  drive that isn't mounted yet, and creating an empty folder there would mask
+  the drive when it does come up (your files would appear to vanish). Point
+  `MUSIC_DIR` at an external disk and you create and mount it yourself;
+- the path is a whole **filesystem or drive root** (`/`, `D:\`);
+- the path is inside the private config area `~/.domovoi/` but isn't one of the
+  media folders that legitimately live there (podcasts, audiobooks);
+- the path already exists as a **file**, not a directory.
+
+The server still starts in every one of these cases — the library simply won't
+appear on the Files page until you fix the setting or create the directory. If
+a library is missing from Files, the dashboard log says which one and why.
 
 ## How do I back up and restore?
 
