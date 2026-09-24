@@ -1850,13 +1850,9 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
           <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
             Saving replaces the current token: every other phone and browser
             in the household must be given the new one before it can change
-            anything. This browser is re-paired automatically.
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
-            Only a server running this version understands a token you
-            chose. If Domovoi has been updated but not restarted yet,
-            restart it first — otherwise every phone and satellite in the
-            house is refused until you do.
+            anything. This browser is re-paired automatically. If Domovoi
+            has been updated but not restarted, restart it first: only a
+            server running this version understands a token you chose.
           </div>
         </div>
         <div className="cal-modal-foot">
