@@ -115,6 +115,15 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.workers.library_indexer",
     "domovoi.workers.podcast_feed_poller",
     "domovoi.host_time",
+    # Satellite-media prepare (SAT-1) bakes this server's Ed25519 fingerprint
+    # into the image, so the WEB process signs and therefore needs the
+    # identity module — and, on an install without ``cryptography``, the
+    # vendored implementation it falls back to. ``_ed25519`` is imported
+    # lazily INSIDE server_identity's functions, so the refusal surfaced only
+    # when someone actually pressed Prepare, as a failed job rather than a
+    # boot error.
+    "domovoi.server_identity",
+    "domovoi._ed25519",
 )
 
 

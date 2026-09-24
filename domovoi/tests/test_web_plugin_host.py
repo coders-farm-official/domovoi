@@ -73,6 +73,24 @@ def test_import_guard_preloads_lazily_imported_request_modules():
             "domovoi.workers.library_indexer",
             "domovoi.workers.podcast_feed_poller",
             "domovoi.host_time",
+            # Satellite-media prepare: the WEB process bakes this server's
+            # Ed25519 fingerprint into the image (SAT-1), so it signs, so it
+            # needs the identity module — and on an install without
+            # ``cryptography`` the vendored signer it falls back to.
+            #
+            # This one is worth reading twice, because no scan below caught
+            # it. The web imports ``domovoi.satellite_media.builder`` at
+            # MODULE scope and the builder imports ``server_identity`` at
+            # module scope, so both are in ``sys.modules`` before the guard
+            # goes on and look fine. ``server_identity`` then imports the
+            # signer as ``from domovoi import _ed25519`` — lazily, inside
+            # its signing functions, and spelled as a submodule import of
+            # the ``domovoi`` package rather than as ``domovoi._ed25519``.
+            # Nothing under ``web/backend`` ever names it, so the
+            # source-derived scan that follows could not see it either. The
+            # refusal reached Kamron as a failed Prepare job.
+            "domovoi.server_identity",
+            "domovoi._ed25519",
         ):
             assert importlib.import_module(mod) is not None, mod
     finally:
