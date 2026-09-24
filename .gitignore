@@ -236,3 +236,6 @@ android/local.properties
 # vendored bundle — that is exactly how the pinned Excalidraw 0.17.6 build
 # never reached a single clone (F-003).
 !web/static/vendor/**
+
+# Local pip download cache (PIP_CACHE_DIR pointed here); never part of the source tree
+pip/
