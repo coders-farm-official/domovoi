@@ -258,10 +258,16 @@ curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/js
 ```
 
 > A household token an admin chose may hold any printable ASCII, including
-> spaces, `$`, a backtick or a `"`. `"X-Device-Token: $TOKEN"` is safe for
-> all of those *except* a double quote, which ends the argument. If yours
-> has one, use `--header` with a here-string instead:
-> `curl --header @- ... <<< "X-Device-Token: $TOKEN"`.
+> spaces, `$`, a backtick and a `"`, and `-H "X-Device-Token: $TOKEN"`
+> carries every one of them unchanged. The shell does not re-scan the
+> result of a parameter expansion or a command substitution for quoting, so
+> the token arrives as a single argument exactly as it is stored — the
+> `$(cat …)` spelling used elsewhere in these docs is equally safe. What
+> does break the header: a stray carriage return in the mirror file (an
+> older Windows build wrote it CRLF, and `$(…)` strips the trailing newline
+> but not the CR — check with `od -c ~/.domovoi/device-token.txt | tail -2`;
+> the first boot on this build rewrites it), and an unquoted YAML scalar —
+> see [HOME_ASSISTANT.md](HOME_ASSISTANT.md).
 
 A routed turn through the tool model and then the Q&A model — slower, and
 the one that proves your model settings are actually working:

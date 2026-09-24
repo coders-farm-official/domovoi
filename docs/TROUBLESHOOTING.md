@@ -179,10 +179,28 @@ device token as `X-Device-Token` (see
 [SETUP_RUNBOOK.md](SETUP_RUNBOOK.md)) — look at `matched_handler` and
 `matched_path`, not the dashboard chat box, which never enters the router.
 A bare `401` from that curl means the header is missing or stale, not that
-routing is broken. If an admin set a custom household token, check the
-quoting before you blame the token: `-H "X-Device-Token: $TOKEN"` survives
-spaces, `$` and backticks but not a `"`, and a token pasted into a YAML
-scalar (Home Assistant) needs quotes of its own.
+routing is broken. The quoting is **not** the suspect:
+`-H "X-Device-Token: $TOKEN"` carries spaces, `$`, backticks and double
+quotes through unchanged, because the shell never re-scans the result of an
+expansion for quoting. Three things do bite a custom household token:
+
+* **A stray CR in the mirror file.** An older Windows build wrote
+  `~/.domovoi/device-token.txt` with CRLF endings, and `$(cat …)` strips the
+  trailing newline but not the carriage return, so the header never matches.
+  `od -c ~/.domovoi/device-token.txt | tail -2` shows it. The first boot
+  on the current build rewrites the file with a bare `\n`, so if it is
+  still CRLF the process has not restarted since the update.
+* **An unquoted YAML scalar** (Home Assistant) — quote the value, see
+  [HOME_ASSISTANT.md](HOME_ASSISTANT.md).
+* **A process that has not been restarted since the update.** A token an
+  admin *chose* is only understood by a build that has the two-form match;
+  an older core still canonicalises the candidate first, so it refuses every
+  device-tier call — the dashboard's proxied writes, `/v1/intent`, the
+  satellites and the phone all at once. The dashboard can set the token
+  before the core has restarted, so restart **both** units and then set it.
+  If a device tier has already gone dead this way, restart rather than
+  rotate; rotating to a generated phrase also works, because a phrase is
+  canonical and an old process accepts it.
 
 **Fix:** try the other small tool model (`ollama_tool_model`, hot setting —
 see [CPU_HOST.md](CPU_HOST.md)); if one phrasing keeps misrouting, an
