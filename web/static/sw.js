@@ -53,7 +53,18 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) =>
       // Best-effort: a missing optional asset shouldn't fail the whole install.
-      Promise.allSettled(SHELL_ASSETS.map((u) => cache.add(u)))
+      //
+      // `cache: 'reload'`, NOT a bare cache.add(u): a bare add is a
+      // default-mode fetch, and same-origin static is served by Starlette's
+      // StaticFiles, which sets ETag and Last-Modified and no Cache-Control
+      // at all. Freshness is therefore heuristic, so a browser that opened
+      // the dashboard recently answers the install fetch out of its own HTTP
+      // cache — and a cache named for the NEW shell fills up with the OLD
+      // auth.js. This file's bytes will not change again, so the install
+      // handler will not fire again either, and that browser would keep the
+      // stale bundle until someone hard-reloads it. 'reload' bypasses the
+      // HTTP cache on the way out and updates it on the way back.
+      Promise.allSettled(SHELL_ASSETS.map((u) => cache.add(new Request(u, { cache: 'reload' }))))
     ).then(() => self.skipWaiting())
   );
 });
