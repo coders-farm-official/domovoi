@@ -749,7 +749,7 @@ permanent.
 
 **Verify if known, not verify always.** A device prepared before any of
 this has no fingerprint. It keeps working: it records the first identity it
-meets in `~/.domovoi/server-identity.json` and is held to that one
+meets in `~/.domovoi/server-fingerprint.json` and is held to that one
 afterwards, and its code sync falls back to the unsigned manifest with a
 warning in the journal. The core serves both the signed and the unsigned
 manifest for exactly this reason. Baking the fingerprint in at prepare time
@@ -761,6 +761,42 @@ than built by hand.
 LAN: the identity proves *who* answered and that the code manifest is the
 one your core published, not that nothing in between could read the
 traffic. See the hardening backlog.
+
+### The two identity files are not the same file
+
+`~/.domovoi/server-identity.json` is a **core's private key**, mode 0600.
+`~/.domovoi/server-fingerprint.json` is a **satellite's public record** of
+which core it met. They live in the same directory and until now shared the
+same name — harmless on a Pi, which has no core, and not harmless on a
+developer box, an all-in-one install, or a container satellite running
+beside a core, where one process's private key and another's trust-on-first-
+use pin were one path. Nothing was destroyed only because the core's
+document happens to carry a `fingerprint` field and the satellite writes its
+record only when none exists.
+
+Both sides now refuse the other's document rather than relying on that:
+
+- the satellite ignores any record file containing a private key, and says
+  so at ERROR rather than pinning itself to whatever core shares its disk;
+- the satellite only ever *creates* its record (`O_EXCL`) — it never
+  overwrites a file it did not write;
+- the core refuses to generate a key over a public-only fingerprint
+  document, because doing so would mint a new server identity and orphan
+  every satellite image ever prepared from that install. `/v1/health` then
+  reports no identity and the signed-manifest routes fail, which is the
+  fail-closed direction; move the stray file aside to recover.
+
+**Upgrading a satellite that is already pinned.** A device that recorded its
+pin at the old path is migrated the first time it reads it: the public
+fields (`fingerprint`, `public_key`, `algorithm`) are copied to
+`server-fingerprint.json` and the old file is left exactly where it is. The
+device stays pinned across the upgrade — silently becoming unpinned would
+be the security regression the rename was meant to avoid. A satellite with
+nothing recorded is unaffected.
+
+`/etc/domovoi/server-identity.json`, the root-owned copy first boot installs
+from the card, keeps its name: it is a different directory, root-owned, and
+no core keeps a key there.
 
 ## Satellite pairing (WS auth)
 

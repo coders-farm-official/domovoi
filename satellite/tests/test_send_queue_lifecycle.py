@@ -53,7 +53,10 @@ def make_sat(*, loop=None):
     """A Satellite with exactly the state the session lifecycle touches."""
     sat = object.__new__(client.Satellite)
     sat.cfg = types.SimpleNamespace(
-        domovoi_url="ws://192.168.0.117:6370",
+        # Loopback, deliberately. `_run_session` verifies the server's
+        # identity over HTTP before it opens the socket, so a real LAN
+        # address here is a real connection to whatever answers there.
+        domovoi_url="ws://127.0.0.1:6370",
         room_id="kitchen",
         sat_type="voice",
         mic_enabled=True,
@@ -174,6 +177,18 @@ def test_each_session_gets_a_fresh_queue_and_frames_reach_the_wire(monkeypatch):
         monkeypatch.setattr(client, name, lambda cfg: "domovoi")
     for name in ("_read_synced_sha", "_effective_pairing_token", "_effective_approval_code"):
         monkeypatch.setattr(client, name, lambda: None)
+    # The identity handshake is a real HTTP GET to the configured server.
+    # It has its own tests (test_client_server_identity.py); here it is
+    # just the thing standing between this test and a socket, so it is
+    # stubbed — and asserted, so a change that stops consulting it at all
+    # is caught here rather than in the field.
+    verified: list = []
+
+    def verify(cfg, **kw):
+        verified.append(cfg.domovoi_url)
+        return True
+
+    monkeypatch.setattr(client, "_verify_server_identity", verify)
 
     async def scenario():
         sat = make_sat(loop=asyncio.get_running_loop())
@@ -219,6 +234,8 @@ def test_each_session_gets_a_fresh_queue_and_frames_reach_the_wire(monkeypatch):
         # first drop of the next outage warns at once.
         assert sat._offline_drops == 0
         assert sat._offline_drop_last_log == 0.0
+        # Once per session, before the socket — not once per process.
+        assert verified == ["ws://127.0.0.1:6370"] * 2
 
     asyncio.run(scenario())
 

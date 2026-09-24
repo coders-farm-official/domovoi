@@ -8,7 +8,9 @@ questioned it again, and every later code download was checked against a
 manifest the same host had served — integrity, not authenticity.
 
 So the install gets a long-lived Ed25519 key pair, generated the first time
-it is needed and kept at ``~/.domovoi/server-identity.json`` (0600). Its
+it is needed and kept at ``~/.domovoi/server-identity.json`` (0600) — the
+private half, which is why a satellite running on the same box keeps its
+public record of which server it belongs to under a different name. Its
 **fingerprint** — ``SHA256:<base64 of sha256(public key)>``, the shape ssh
 prints — is the short string a person can read off the dashboard and
 compare, and the exact string that is baked into a prepared satellite image.
@@ -214,10 +216,56 @@ class ServerIdentity:
 
 def identity_path() -> Path:
     """Where the key lives. ``CONFIG_DIR``-relative like the setup code and
-    the device token, so a throwaway harness run keeps its own."""
+    the device token, so a throwaway harness run keeps its own.
+
+    A satellite running on the same box keeps its record of which server it
+    belongs to in ``server-fingerprint.json`` beside this — a different
+    file, because that one is public and this one is a private key."""
     from domovoi.admin_auth import CONFIG_DIR
 
     return CONFIG_DIR / "server-identity.json"
+
+
+class IdentityFileConflict(OSError):
+    """The identity file holds a document that is not this core's key.
+
+    An :class:`OSError` on purpose: every caller already degrades when the
+    config dir cannot give up an identity (``/v1/health`` drops its
+    identity block, the signed-manifest routes fail), and "there is a file
+    here that is not mine" needs the same fail-closed handling as "I cannot
+    read the directory". What it must never do is fall through to
+    generating a new key over the top."""
+
+
+# A satellite's recorded-fingerprint sidecar used to share this filename.
+_SATELLITE_RECORD_KIND = "satellite-server-fingerprint"
+
+
+def _refuse_a_foreign_document(path: Path) -> None:
+    """Stop rather than generate a key over somebody else's document.
+
+    The one document that could plausibly be sitting here is a satellite's
+    recorded server fingerprint: public-only, and written to this exact
+    path by every satellite built before it was given a name of its own.
+    Overwriting it would both destroy that device's pin and — far worse —
+    mint a new server identity, which orphans every card ever prepared
+    from this install. A corrupt or truncated key file of our own is a
+    different thing and still regenerates, exactly as before."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(doc, dict) or doc.get("private_key"):
+        return
+    if doc.get("kind") == _SATELLITE_RECORD_KIND or doc.get("fingerprint"):
+        raise IdentityFileConflict(
+            f"{path} holds a public fingerprint and no private key — that is "
+            "a satellite's record of its server, not this core's identity. "
+            "Refusing to overwrite it, because generating a new key here "
+            "would orphan every satellite image prepared from this install. "
+            "Move it aside (a satellite's record now lives in "
+            "server-fingerprint.json) or restore this core's key file."
+        )
 
 
 def _read_identity(path: Path) -> ServerIdentity | None:
@@ -278,6 +326,7 @@ def load_or_create(path: Path | None = None) -> ServerIdentity:
         return cached
     identity = _read_identity(target)
     if identity is None:
+        _refuse_a_foreign_document(target)
         seed = secrets.token_bytes(32)
         identity = ServerIdentity(seed=seed, public=public_key_for(seed))
         _write_identity(target, identity)

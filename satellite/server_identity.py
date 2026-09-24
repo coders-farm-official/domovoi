@@ -25,6 +25,13 @@ did before, recording the first identity it sees
 Baking a fingerprint at prepare time is what turns that into real
 authentication from the very first boot.
 
+What this module writes is only ever a **public** fingerprint, and it
+writes it to a file of its own — ``~/.domovoi/server-fingerprint.json``.
+The core's private key lives one filename away at
+``~/.domovoi/server-identity.json``, and on any box that runs both (a
+developer machine, an all-in-one install, a container satellite beside a
+core) the two used to be the same path.
+
 Stdlib only (plus the optional ``cryptography`` speed-up), because
 :mod:`satellite.provisioning_mode` runs before the venv has anything else.
 """
@@ -57,9 +64,23 @@ PLUGIN_CHANNEL = "satellite-plugins"
 CONFIG_DIR = Path("~/.domovoi").expanduser()
 # What this device learned on its own (trust on first use), for images
 # prepared before fingerprints were baked in.
-RECORD_SIDECAR = CONFIG_DIR / "server-identity.json"
+#
+# The name matters. This file holds a PUBLIC fingerprint and nothing else;
+# a Domovoi core keeps its PRIVATE key at ``~/.domovoi/server-identity.json``
+# in the very same directory. On a Pi there is no core and the two could
+# never meet, but a developer box, an all-in-one install and a container
+# satellite sitting beside a core all have both — and two different
+# documents, one of them a private key, must not share a path on the
+# strength of nobody having written to it yet.
+RECORD_SIDECAR = CONFIG_DIR / "server-fingerprint.json"
+# Where the record lived before it was given a name of its own. Read for
+# migration, never written: on a box that also runs a core, this path is
+# the core's private key.
+LEGACY_RECORD_SIDECAR = CONFIG_DIR / "server-identity.json"
 # What the image was prepared with, installed by first boot. Root-owned:
-# the satellite user can read it and cannot rewrite it.
+# the satellite user can read it and cannot rewrite it. Shares the core's
+# filename but never the core's directory — /etc/domovoi is root-owned and
+# installed from the card, and no core keeps its key there.
 ROOT_PIN = Path("/etc/domovoi/server-identity.json")
 # A discovered address waiting for the dashboard to approve this device.
 # Deliberately NOT config.toml: an address that no human has agreed to is
@@ -155,6 +176,110 @@ def normalize_fingerprint(value: object) -> str | None:
     return text
 
 
+RECORD_SCHEMA = 1
+# Stamped into every record this module writes, so the document says what
+# it is rather than being identified by where it happens to sit.
+RECORD_KIND = "satellite-server-fingerprint"
+# Fields that only ever appear in a CORE's identity document. A file
+# carrying one of them is somebody's private key, whatever its name.
+_PRIVATE_FIELDS = ("private_key", "seed", "secret_key")
+
+
+def _holds_a_private_key(doc: dict[str, Any]) -> bool:
+    return any(doc.get(field) for field in _PRIVATE_FIELDS)
+
+
+def _read_record(path: Path, *, what: str) -> dict[str, Any]:
+    """A recorded-fingerprint document, or nothing.
+
+    A document with a private key in it is a core's identity, not this
+    device's note of which server it met. Trusting its ``fingerprint``
+    field would pin the satellite to whatever core shares its filesystem —
+    so it is refused, and said out loud rather than swallowed."""
+    doc = _read_json(path)
+    if not doc:
+        return {}
+    if _holds_a_private_key(doc):
+        log.error(
+            "%s at %s contains a private key: that is a Domovoi core's own "
+            "identity, not this device's record of its server. Ignoring it. "
+            "This satellite's record belongs in %s.",
+            what, path, RECORD_SIDECAR.name,
+        )
+        return {}
+    return doc
+
+
+def _write_record(doc: dict[str, Any]) -> bool:
+    """Create the record file, and only create it.
+
+    ``O_EXCL``: a file already at this path was written by something else —
+    a core's key that ended up here, another process, a person — and this
+    module does not get to decide what happens to it. Best-effort
+    otherwise: a read-only config dir costs the record, not the
+    connection."""
+    try:
+        RECORD_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(
+            RECORD_SIDECAR, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+    except FileExistsError:
+        log.warning(
+            "not overwriting %s — this module only ever creates it",
+            RECORD_SIDECAR,
+        )
+        return False
+    except OSError as e:
+        log.debug("could not record the server identity: %s", e)
+        return False
+    try:
+        os.write(fd, (json.dumps(doc, indent=2) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(RECORD_SIDECAR, 0o600)
+    except OSError:      # pragma: no cover — Windows dev boxes
+        pass
+    return True
+
+
+def recorded_document() -> dict[str, Any]:
+    """This device's own record of the server it met, migrating one written
+    at the old shared path across the first time it is read.
+
+    A satellite already in the field recorded its pin at
+    :data:`LEGACY_RECORD_SIDECAR`. Leaving it there would silently unpin
+    the device the moment this code lands — which is a security regression,
+    not a rename — so the PUBLIC fields are copied to the new file. The old
+    one is left exactly where it is: on a box that also runs a core, it is
+    that core's private key, and this module never writes to it."""
+    doc = _read_record(RECORD_SIDECAR, what="the recorded server fingerprint")
+    if normalize_fingerprint(doc.get("fingerprint")):
+        return doc
+    legacy = _read_record(
+        LEGACY_RECORD_SIDECAR, what="the pre-rename recorded server fingerprint"
+    )
+    fingerprint = normalize_fingerprint(legacy.get("fingerprint"))
+    if not fingerprint:
+        return {}
+    migrated: dict[str, Any] = {
+        "schema": RECORD_SCHEMA,
+        "kind": RECORD_KIND,
+        "algorithm": legacy.get("algorithm") or ALGORITHM,
+        "fingerprint": fingerprint,
+    }
+    public_key = legacy.get("public_key")
+    if isinstance(public_key, str) and public_key:
+        migrated["public_key"] = public_key
+    if _write_record(migrated):
+        log.warning(
+            "moved this device's recorded server fingerprint %s from %s to "
+            "%s — the old path is a core's private-key file and is left "
+            "untouched", fingerprint, LEGACY_RECORD_SIDECAR, RECORD_SIDECAR,
+        )
+    return migrated
+
+
 def pinned_fingerprint(configured: object = None) -> tuple[str | None, str]:
     """The fingerprint this device holds the server to, and where it came
     from: ``"config"`` (baked into config.toml at adoption), ``"image"``
@@ -166,7 +291,7 @@ def pinned_fingerprint(configured: object = None) -> tuple[str | None, str]:
     from_image = normalize_fingerprint(_read_json(ROOT_PIN).get("fingerprint"))
     if from_image:
         return from_image, "image"
-    recorded = normalize_fingerprint(_read_json(RECORD_SIDECAR).get("fingerprint"))
+    recorded = normalize_fingerprint(recorded_document().get("fingerprint"))
     if recorded:
         return recorded, "recorded"
     return None, "none"
@@ -180,20 +305,18 @@ def record_fingerprint(fingerprint: str, public_key: str | None = None) -> bool:
     not the connection."""
     if not normalize_fingerprint(fingerprint):
         return False
-    existing = normalize_fingerprint(_read_json(RECORD_SIDECAR).get("fingerprint"))
+    existing = normalize_fingerprint(recorded_document().get("fingerprint"))
     if existing:
         return existing == fingerprint
-    doc = {"algorithm": ALGORITHM, "fingerprint": fingerprint}
+    doc: dict[str, Any] = {
+        "schema": RECORD_SCHEMA,
+        "kind": RECORD_KIND,
+        "algorithm": ALGORITHM,
+        "fingerprint": fingerprint,
+    }
     if public_key:
         doc["public_key"] = public_key
-    try:
-        RECORD_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
-        RECORD_SIDECAR.write_text(
-            json.dumps(doc, indent=2) + "\n", encoding="utf-8"
-        )
-        os.chmod(RECORD_SIDECAR, 0o600)
-    except OSError as e:
-        log.debug("could not record the server identity: %s", e)
+    if not _write_record(doc):
         return False
     log.info("recorded the Domovoi server identity %s", fingerprint)
     return True

@@ -65,7 +65,11 @@ def _health_opener(seed, public, *, fingerprint=None, sign_challenge=True,
 @pytest.fixture(autouse=True)
 def _isolate_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        server_identity, "RECORD_SIDECAR", tmp_path / "server-identity.json"
+        server_identity, "RECORD_SIDECAR", tmp_path / "server-fingerprint.json"
+    )
+    monkeypatch.setattr(
+        server_identity, "LEGACY_RECORD_SIDECAR",
+        tmp_path / "server-identity.json",
     )
     monkeypatch.setattr(server_identity, "ROOT_PIN", tmp_path / "etc-pin.json")
     monkeypatch.setattr(
@@ -194,6 +198,105 @@ def test_the_first_identity_met_is_recorded_and_never_replaced():
 def test_recording_the_same_identity_again_is_fine():
     server_identity.record_fingerprint("SHA256:first")
     assert server_identity.record_fingerprint("SHA256:first") is True
+
+
+# ─── the record does not share a file with the core's private key ─────────
+
+CORE_KEY_DOCUMENT = {
+    "schema": 1,
+    "algorithm": "ed25519",
+    # The shape domovoi/server_identity.py writes: a 32-byte seed, and the
+    # fingerprint of the key it belongs to.
+    "private_key": base64.b64encode(bytes(32)).decode("ascii"),
+    "public_key": base64.b64encode(bytes(32)).decode("ascii"),
+    "fingerprint": "SHA256:thecoresown",
+}
+
+
+def test_the_record_and_the_cores_private_key_are_not_the_same_file():
+    """The whole defect in one assertion. Both live in ``~/.domovoi`` on any
+    box that runs a core and a satellite; they must not be one path."""
+    from domovoi import server_identity as core_identity
+
+    assert server_identity.RECORD_SIDECAR.name != "server-identity.json"
+    assert (
+        server_identity.RECORD_SIDECAR.name
+        != core_identity.identity_path().name
+    )
+
+
+def test_a_document_with_a_private_key_is_never_used_as_the_record(caplog):
+    """A core's identity file has a ``fingerprint`` field too. Reading it as
+    a pin would hold this device to whatever core shares its disk."""
+    server_identity.RECORD_SIDECAR.write_text(
+        json.dumps(CORE_KEY_DOCUMENT), encoding="utf-8"
+    )
+    with caplog.at_level("ERROR", logger="satellite.server_identity"):
+        assert server_identity.pinned_fingerprint() == (None, "none")
+    assert any("private key" in r.getMessage() for r in caplog.records), \
+        "refused loudly, not silently"
+
+
+def test_a_core_key_at_the_old_path_is_not_migrated_into_the_record(caplog):
+    server_identity.LEGACY_RECORD_SIDECAR.write_text(
+        json.dumps(CORE_KEY_DOCUMENT), encoding="utf-8"
+    )
+    with caplog.at_level("ERROR", logger="satellite.server_identity"):
+        assert server_identity.pinned_fingerprint() == (None, "none")
+    assert not server_identity.RECORD_SIDECAR.exists(), "nothing was written"
+    assert any("private key" in r.getMessage() for r in caplog.records)
+
+
+def test_a_record_written_before_the_rename_migrates_across_once():
+    """A Pi in the field recorded its pin at the old path. It must still be
+    pinned after the upgrade — being silently unpinned is the regression."""
+    server_identity.LEGACY_RECORD_SIDECAR.write_text(
+        json.dumps({"algorithm": "ed25519", "fingerprint": "SHA256:inthefield",
+                    "public_key": "AAAA"}),
+        encoding="utf-8",
+    )
+    assert server_identity.pinned_fingerprint() == ("SHA256:inthefield", "recorded")
+
+    migrated = json.loads(
+        server_identity.RECORD_SIDECAR.read_text(encoding="utf-8")
+    )
+    assert migrated["fingerprint"] == "SHA256:inthefield"
+    assert migrated["public_key"] == "AAAA"
+    assert "private_key" not in migrated, "public fields only"
+    assert server_identity.LEGACY_RECORD_SIDECAR.exists(), "the old file is left alone"
+
+    # Read again with the old file gone: the new one is now the source.
+    server_identity.LEGACY_RECORD_SIDECAR.unlink()
+    assert server_identity.pinned_fingerprint() == ("SHA256:inthefield", "recorded")
+
+
+def test_the_new_record_wins_over_a_stale_one_at_the_old_path():
+    server_identity.record_fingerprint("SHA256:current")
+    server_identity.LEGACY_RECORD_SIDECAR.write_text(
+        json.dumps({"fingerprint": "SHA256:stale"}), encoding="utf-8"
+    )
+    assert server_identity.pinned_fingerprint() == ("SHA256:current", "recorded")
+
+
+def test_a_file_this_module_did_not_write_is_never_overwritten():
+    server_identity.RECORD_SIDECAR.write_text("not json at all", encoding="utf-8")
+    assert server_identity.record_fingerprint("SHA256:new") is False
+    assert server_identity.RECORD_SIDECAR.read_text(encoding="utf-8") == \
+        "not json at all"
+
+
+def test_recording_never_writes_to_the_cores_file():
+    assert server_identity.record_fingerprint("SHA256:first") is True
+    assert server_identity.RECORD_SIDECAR.exists()
+    assert not server_identity.LEGACY_RECORD_SIDECAR.exists()
+
+
+def test_a_migrated_record_is_still_only_written_once():
+    server_identity.LEGACY_RECORD_SIDECAR.write_text(
+        json.dumps({"fingerprint": "SHA256:inthefield"}), encoding="utf-8"
+    )
+    assert server_identity.record_fingerprint("SHA256:somethingelse") is False
+    assert server_identity.pinned_fingerprint() == ("SHA256:inthefield", "recorded")
 
 
 # ─── an address nobody has approved yet ───────────────────────────────────

@@ -105,6 +105,51 @@ def test_the_fingerprint_is_the_hash_of_the_published_key(tmp_path):
     ) == identity.fingerprint
 
 
+# ─── somebody else's document at our path ─────────────────────────────────
+
+def test_a_satellites_recorded_fingerprint_is_not_generated_over(tmp_path):
+    """The satellite's record used to share this filename. Generating a key
+    over one would mint a new server identity and orphan every card ever
+    prepared from this install, so it stops instead."""
+    path = tmp_path / "server-identity.json"
+    path.write_text(
+        json.dumps({"schema": 1, "algorithm": "ed25519",
+                    "kind": "satellite-server-fingerprint",
+                    "fingerprint": "SHA256:somebodyelses"}),
+        encoding="utf-8",
+    )
+    server_identity.reset_cache()
+    with pytest.raises(server_identity.IdentityFileConflict) as e:
+        server_identity.load_or_create(path)
+    assert "server-fingerprint.json" in str(e.value), "says where it belongs"
+    assert json.loads(path.read_text(encoding="utf-8"))["fingerprint"] == \
+        "SHA256:somebodyelses", "left exactly as it was"
+
+
+def test_the_conflict_degrades_health_instead_of_crashing_it(tmp_path, monkeypatch):
+    """Callers already guard the identity with ``except OSError``; this is
+    one, so /v1/health drops its identity block rather than 500ing — and a
+    pinned satellite then refuses to connect, which is the safe direction."""
+    from domovoi import admin_auth
+
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    (tmp_path / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:somebodyelses"}), encoding="utf-8"
+    )
+    server_identity.reset_cache()
+    assert isinstance(server_identity.IdentityFileConflict("x"), OSError)
+    assert server_identity.public_document() == {}
+
+
+def test_our_own_truncated_key_file_still_regenerates(tmp_path):
+    """The control: a corrupt file of OUR shape is not somebody else's
+    document, and the old behaviour is unchanged."""
+    path = tmp_path / "server-identity.json"
+    path.write_text("{", encoding="utf-8")
+    server_identity.reset_cache()
+    assert server_identity.load_or_create(path).fingerprint.startswith("SHA256:")
+
+
 # ─── the health challenge ─────────────────────────────────────────────────
 
 def test_a_health_answer_proves_the_server_signed_our_nonce(tmp_path):
