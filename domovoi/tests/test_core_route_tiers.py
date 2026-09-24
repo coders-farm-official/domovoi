@@ -110,14 +110,9 @@ def _dependency_calls(dependant: Any) -> Iterator[Any]:
 
 
 def _gates_for(method: str, path: str) -> list[Any]:
-    try:
-        from fastapi.routing import iter_route_contexts
+    from domovoi.tests.route_walk import iter_route_contexts
 
-        contexts = list(iter_route_contexts(core_app.routes))
-    except ImportError:  # pragma: no cover — older FastAPI flattens itself
-        from fastapi.routing import APIRoute
-
-        contexts = [r for r in core_app.routes if isinstance(r, APIRoute)]
+    contexts = list(iter_route_contexts(core_app.routes))
     for rc in contexts:
         if getattr(rc, "path", None) == path and method in (
             getattr(rc, "methods", None) or set()

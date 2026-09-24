@@ -342,8 +342,7 @@ def test_the_upload_route_itself_is_still_device_tier() -> None:
     """Both halves of the mismatch, named in one place: the route the
     phone calls is device tier, and it no longer depends on a route that
     is not."""
-    from fastapi.routing import APIRoute
-
+    from domovoi.tests.route_walk import iter_route_contexts
     from web.backend.main import app as web_app
 
     # FastAPI 0.139 keeps included routers as ``_IncludedRouter`` entries on
@@ -351,12 +350,7 @@ def test_the_upload_route_itself_is_still_device_tier() -> None:
     # finds nothing at all. ``iter_route_contexts`` resolves the effective
     # path and dependencies; older releases flatten on include and are read
     # directly. Same shape as test_route_auth_matrix's walker.
-    try:
-        from fastapi.routing import iter_route_contexts
-    except ImportError:  # pragma: no cover — older FastAPI flattens itself
-        contexts: list[Any] = [r for r in web_app.routes if isinstance(r, APIRoute)]
-    else:
-        contexts = list(iter_route_contexts(web_app.routes))
+    contexts = list(iter_route_contexts(web_app.routes))
 
     gates: list[Any] = []
     for route in contexts:

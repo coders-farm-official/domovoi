@@ -75,7 +75,7 @@ async def test_listing_voices_stays_open(monkeypatch) -> None:
     """Only the mutations moved: the list is still a read anyone on the
     daily surface can render (it feeds the Settings page's voice picker)."""
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
-    from fastapi.routing import iter_route_contexts
+    from domovoi.tests.route_walk import iter_route_contexts
 
     listed = [
         rc for rc in iter_route_contexts(web_app.routes)

@@ -38,11 +38,11 @@ from typing import Any, Iterator
 
 import pytest
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 
 from domovoi import admin_auth
 from domovoi.auth import require_admin
 from domovoi.main import app as core_app
+from domovoi.tests.route_walk import iter_route_contexts
 from web.backend.main import app as web_app
 
 MUTATING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
@@ -125,12 +125,7 @@ def _route_records(app: FastAPI, label: str) -> list[tuple[str, str, str, Any]]:
     included routers flattened (FastAPI >= 0.139 keeps them nested as
     ``_IncludedRouter`` entries; ``iter_route_contexts`` resolves the
     effective path + dependencies; older releases flatten on include)."""
-    try:
-        from fastapi.routing import iter_route_contexts
-    except ImportError:  # pragma: no cover — older FastAPI flattens itself
-        contexts = [r for r in app.routes if isinstance(r, APIRoute)]
-    else:
-        contexts = list(iter_route_contexts(app.routes))
+    contexts = list(iter_route_contexts(app.routes))
     out: list[tuple[str, str, str, Any]] = []
     for rc in contexts:
         methods = getattr(rc, "methods", None) or set()
@@ -227,12 +222,7 @@ def test_device_token_reads_are_admin_reads_that_fail_closed() -> None:
     render to a Bearer or the cookie and 501 before setup."""
     found = {}
     for app, label in ((core_app, "core"), (web_app, "web")):
-        try:
-            from fastapi.routing import iter_route_contexts
-
-            contexts = list(iter_route_contexts(app.routes))
-        except ImportError:  # pragma: no cover
-            contexts = [r for r in app.routes if isinstance(r, APIRoute)]
+        contexts = list(iter_route_contexts(app.routes))
         for rc in contexts:
             path = getattr(rc, "path", None)
             if path in ("/v1/admin/device-token", "/api/auth/device-token") and "GET" in (

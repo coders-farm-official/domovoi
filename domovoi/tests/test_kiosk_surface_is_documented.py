@@ -16,13 +16,7 @@ from pathlib import Path
 
 import pytest
 
-try:
-    from fastapi.routing import iter_route_contexts
-except ImportError:  # pragma: no cover — older FastAPI flattens on include
-    from fastapi.routing import APIRoute
-
-    def iter_route_contexts(routes):
-        return [r for r in routes if isinstance(r, APIRoute)]
+from domovoi.tests.route_walk import iter_route_contexts
 
 from domovoi import admin_auth
 from domovoi.tests.auth_testkit import web_app

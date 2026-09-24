@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi.routing import iter_route_contexts
+from domovoi.tests.route_walk import iter_route_contexts
 from httpx import ASGITransport, AsyncClient
 
 from domovoi.tests.auth_testkit import web_app
