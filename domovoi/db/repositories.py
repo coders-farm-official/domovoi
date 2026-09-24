@@ -57,16 +57,28 @@ class TimerRepository:
         label: str | None,
         message: str | None,
         room_id: str | None,
+        created_at: datetime | None = None,
     ) -> int:
+        # ``created_at`` defaults to NOW(), the transaction start, which on a
+        # tool-routed turn is seconds before the caller computed
+        # ``expires_at``. A caller that needs ``expires_at - created_at`` to
+        # be the exact duration passes the instant it computed it from.
         row = await self.s.execute(
             text(
                 """
-                INSERT INTO timers (label, message, expires_at, room_id)
-                VALUES (:label, :message, :expires_at, :room_id)
+                INSERT INTO timers (label, message, expires_at, room_id, created_at)
+                VALUES (:label, :message, :expires_at, :room_id,
+                        COALESCE(:created_at, NOW()))
                 RETURNING id
                 """
             ),
-            {"label": label, "message": message, "expires_at": expires_at, "room_id": room_id},
+            {
+                "label": label,
+                "message": message,
+                "expires_at": expires_at,
+                "room_id": room_id,
+                "created_at": created_at,
+            },
         )
         return int(row.scalar_one())
 
@@ -101,18 +113,23 @@ class TimerRepository:
             return None
         return int(result[0]), result[1], result[2]
 
-    async def pop_expired(self) -> list[tuple[int, str | None, str | None, str | None]]:
-        """Atomically select + delete all expired timers. Returns (id, label, message, room_id)."""
+    async def pop_expired(
+        self,
+    ) -> list[tuple[int, str | None, str | None, str | None, datetime, datetime]]:
+        """Atomically select + delete all expired timers.
+
+        Returns (id, label, message, room_id, created_at, expires_at).
+        """
         result = await self.s.execute(
             text(
                 """
                 DELETE FROM timers
                 WHERE expires_at <= NOW()
-                RETURNING id, label, message, room_id
+                RETURNING id, label, message, room_id, created_at, expires_at
                 """
             )
         )
-        return [(int(r[0]), r[1], r[2], r[3]) for r in result.all()]
+        return [(int(r[0]), r[1], r[2], r[3], r[4], r[5]) for r in result.all()]
 
 
 class IntentLogRepository:

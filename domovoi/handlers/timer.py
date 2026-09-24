@@ -144,9 +144,12 @@ class TimerHandler(Handler):
         self, *, duration_sec: int, label: str | None, ctx: Context, session: AsyncSession
     ) -> Response:
         repo = TimerRepository(session)
-        expires_at = utcnow() + timedelta(seconds=duration_sec)
+        # One instant for both ends: the TimerWatcher recovers the duration
+        # as expires_at - created_at to say "Your 10 minute timer is done."
+        now = utcnow()
         await repo.create(
-            expires_at=expires_at,
+            expires_at=now + timedelta(seconds=duration_sec),
+            created_at=now,
             label=label,
             message=None,
             room_id=ctx.room_id,

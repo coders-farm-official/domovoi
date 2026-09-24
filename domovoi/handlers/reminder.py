@@ -2,9 +2,9 @@
 
 A reminder is just a row in `timers` with `message IS NOT NULL` (V001
 schema is already shaped for this). The TimerWatcher fires reminders
-the same way it fires plain timers, but when `message` is populated it
-delivers the message via the originating room's `StreamSession.announce`
-instead of just logging.
+the same way it fires plain timers, through the originating room's
+`StreamSession.announce`, but when `message` is populated it speaks
+"Reminder: <message>" instead of the plain "Your timer is done." line.
 
 Three usage shapes:
 
