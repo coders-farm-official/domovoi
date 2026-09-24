@@ -31,6 +31,34 @@ answer to "this test wants to talk to a server" is a loopback fixture — not
 a pinned fingerprint, and not an exclusion here.
 """
 
+# Run this package with `python -m pytest` from the repo root, not with the
+# bare `pytest` console script.
+#
+# This directory has no `__init__.py`, so pytest's prepend import mode stops
+# here: it puts `satellite/tests` on sys.path, not the repo root. The console
+# script adds nothing else, and `satellite` is not in the editable install's
+# MAPPING — that lists `domovoi` and `web` only — so `pytest satellite/tests`
+# dies at collection with "No module named 'satellite'". Bare `pytest` with
+# no arguments does work, but by luck of ordering rather than design:
+# `domovoi/tests` is collected first and has an `__init__.py` chain up to the
+# repo root, which lands on sys.path before anything here is imported. Name
+# this package first and the same invocation fails.
+#
+# The mapped names are the quiet half of it. `domovoi` and `web` resolve
+# through that MAPPING, which points at whichever checkout `pip install -e .`
+# was run from — from a git worktree, the OTHER tree. A run that gets far
+# enough therefore reports on code nobody is editing, and nothing about the
+# output looks wrong. `python -m pytest` puts the cwd at sys.path[0] and none
+# of this arises.
+#
+# Adding an `__init__.py` here would also put the repo root on sys.path, but
+# it is not a drive-by fix. It changes the import name of every module in
+# this package, and it would quietly invalidate the reason `real_install_paths`
+# below is a fixture at all: that reasoning is about this file being loadable
+# a SECOND time as `satellite.tests.conftest`, which is a property of the
+# namespace package. Change one and re-read the other. The invocation is the
+# cheaper thing to get right.
+
 from __future__ import annotations
 
 import socket
