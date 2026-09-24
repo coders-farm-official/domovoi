@@ -1769,11 +1769,38 @@ const FilesAccessCard = ({ fire, deviceList }) => {
  * the twin. Zero new CSS. */
 const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
   const [value, setValue] = React.useState('');
-  React.useEffect(() => { if (open) setValue(''); }, [open]);
+  // The value a server refusal belongs to. The error is the card's state
+  // and nothing clears it until the next submit, so without this the red
+  // line stays pinned under the field describing a token the person has
+  // already typed over.
+  const [rejected, setRejected] = React.useState(null);
+  React.useEffect(() => { if (open) { setValue(''); setRejected(null); } }, [open]);
   if (!open) return null;
   const stored = value.trim();
   const tooShort = stored.length < 12;
-  const submit = () => { if (!tooShort && !busy) onSave(stored); };
+  const submit = () => { if (!tooShort && !busy) { setRejected(stored); onSave(stored); } };
+  /* WHICH RULE will match this token, live as it is typed.
+   *
+   * The server accepts the exact stored value always, and its canonical
+   * form (normalize_device_token) only when the stored token IS its own
+   * canonical form. `normalize` lowercases and collapses every run of
+   * spaces/underscores/hyphens to one hyphen, so `$$bills_yall-market!!1999`
+   * is NOT canonical: it is matched character for character, and the same
+   * token with the underscore typed as a hyphen is refused with nothing on
+   * screen to explain why. That refusal is correct and must not change —
+   * what must not happen is springing it on the person who set it.
+   *
+   * Auth.normalizeDeviceToken is the same function as the server's
+   * (domovoi/admin_auth.normalize_device_token) and the two are held to
+   * each other character for character by
+   * test_web_settings_household_token.py: a disagreement here would make
+   * this line lie about how the token behaves, which is worse than saying
+   * nothing. `null` = auth.js is not on the page at all (a JSX harness
+   * loading components.jsx alone) — then say nothing rather than guess. */
+  const forgiving = (() => {
+    if (!stored) return null;
+    try { return Auth.normalizeDeviceToken(stored) === stored; } catch { return null; }
+  })();
   return (
     <div className="cal-modal-bg" onClick={busy ? undefined : onCancel}>
       <div className="cal-modal" role="dialog" aria-modal="true"
@@ -1784,8 +1811,9 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
         </div>
         <div className="cal-modal-body">
           <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-            Replace the generated phrase with one of your own. At least 12
-            characters — letters, numbers, punctuation and spaces all work.
+            Replace the current household token with one of your own. At
+            least 12 characters — letters, numbers, punctuation and spaces
+            all work.
           </div>
           <div className="field">
             <label>new household token</label>
@@ -1798,8 +1826,17 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
                 trimmed before it is saved, so it must be trimmed here too
                 or the count lies about whether the button will unlock. */}
             <div className="hint">{stored.length} characters.</div>
+            {/* Never blocks Save — it is what the token will DO, not a
+                complaint about it. */}
+            {forgiving !== null && (
+              <div className="hint" data-testid="set-token-rule">
+                {forgiving
+                  ? 'Typing this back is forgiving — capitals, spaces and underscores all match.'
+                  : 'This one must be typed exactly, character for character.'}
+              </div>
+            )}
           </div>
-          {error && <div className="err">{error}</div>}
+          {error && stored === rejected && <div className="err">{error}</div>}
           <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
             A token you chose is easier to remember and easier to guess.
             Domovoi slows down repeated wrong guesses from the same device,
@@ -1814,6 +1851,12 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
             Saving replaces the current token: every other phone and browser
             in the household must be given the new one before it can change
             anything. This browser is re-paired automatically.
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            Only a server running this version understands a token you
+            chose. If Domovoi has been updated but not restarted yet,
+            restart it first — otherwise every phone and satellite in the
+            house is refused until you do.
           </div>
         </div>
         <div className="cal-modal-foot">

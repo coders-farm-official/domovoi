@@ -25,8 +25,77 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
+# Runs the SHIPPED web/static/auth.js and reports what its
+# normalizeDeviceToken did to a table of values.
+NORMALIZE_HARNESS = Path(__file__).with_name("device_token_normalize_harness.js")
 COMPONENTS = "web/static/components.jsx"
 SETTINGS = "web/static/settings.jsx"
+
+# The two lines the set dialog chooses between, live as the field is typed
+# (custom-token-spec.md ADDENDUM). Copied here character for character on
+# purpose: this is the copy, and a silent edit to it is a change to what
+# the product promises about how a token will be matched.
+RULE_FORGIVING = (
+    "Typing this back is forgiving — capitals, spaces and underscores all match."
+)
+RULE_EXACT = "This one must be typed exactly, character for character."
+
+# Typed into the dialog, one after another, to watch the line change.
+RULE_PROBES = [
+    "$$bills_yall-market!!1999",
+    "$$bills-yall-market!!1999",
+    "frontdoorcats1999",
+    "My House Is Red",
+    "acorn-maple-otter-basin-cedar-ridge-harbor-willow",
+    "Maple Street, 1984!",
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "  padded token here  ",
+    "  frontdoorcats1999  "
+]
+
+# Values the two implementations have to agree about. The ADDENDUM names
+# the first ten; the rest are the tokens this feature's own tests and docs
+# use, a generated phrase, and the whole printable-ASCII run the SET rule
+# allows.
+AWKWARD_TOKENS = [
+    "$$bills_yall-market!!1999",      # the ADDENDUM's example: NOT canonical
+    "$$bills-yall-market!!1999",      # the near miss that gets refused
+    "$$billsyall1999",
+    "My House Is Red",
+    "  padded  ",
+    "a--b",
+    "a__b",
+    "a_-b",
+    "-leading",
+    "trailing-",
+    "0123456789abcdef" * 4,           # a 64-hex token from an older install
+    "acorn-maple-otter-basin-cedar-ridge-harbor-willow",
+    "ACORN MAPLE OTTER BASIN CEDAR RIDGE HARBOR WILLOW",
+    "frontdoorcats1999",
+    "Maple Street, 1984!",
+    "MyT0ken!!going",
+    'Say "hi", pal$x`y` z',
+    "a - b _ c",
+    "tab\there too",
+    "\u00a0nbsp\u00a0padded\u00a0",
+    "".join(chr(c) for c in range(0x20, 0x7F)),
+    "---",
+    "   ",
+    "",
+]
+# ...and each one's stored form, since that is what the dialog tests.
+AWKWARD_TOKENS += [v.strip() for v in AWKWARD_TOKENS if v.strip() not in AWKWARD_TOKENS]
+
+# The copy of the helper the scenarios below stub onto their Auth object,
+# because a `setup` snippet replaces Auth wholesale and auth.js is not one
+# of the files the JSX harness loads. It goes through the SAME agreement
+# table as the shipped helper (test_the_stub_the_scenarios_use_is_the_shipped_helper),
+# so a scenario can never prove the dialog right against a stub that has
+# drifted from what a browser actually runs.
+NORMALIZE_STUB = (
+    "(v) => String(v == null ? '' : v).trim().toLowerCase()"
+    ".replace(/[\\s_-]+/g, '-').replace(/^-+|-+$/g, '')"
+)
 
 TOKEN = "hh-0123456789abcdef"
 ROTATED = "hh-rotated-fedcba9876543210"
@@ -71,6 +140,7 @@ Auth = { status: { setup_complete: true, authenticated: true }, subscribe: () =>
          deviceToken: () => window.__paired, pair: (t) => { window.__paired = t; return true; } };
 navigator.clipboard = { writeText: (t) => { window.__copied = t; return Promise.resolve(); } };
 """
+ADMIN_SETUP_CANON = ADMIN_SETUP + f"Auth.normalizeDeviceToken = {NORMALIZE_STUB};\n"
 
 # A ServerStore stub with the real trust semantics, recording what the
 # switcher persisted; `probe` answers for the manual-add path.
@@ -219,6 +289,69 @@ SCENARIOS = {
                    calls: h.calls.map((c) => `${c.method} ${c.path}`) };
         """,
     },
+    # ── the ADDENDUM: which rule will match this token ───────────────
+    "the_rule_line_follows_what_is_typed": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP_CANON,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token": SET_OK},
+        "script": "const PROBES = " + json.dumps(RULE_PROBES) + r""";
+          h.render();
+          await h.click({ type: 'button', text: 'set…' });
+          const rule = () => {
+            const el = h.find((e) => e.props && e.props['data-testid'] === 'set-token-rule');
+            return el ? el.text : null;
+          };
+          const empty = rule();
+          const lines = {};
+          const saveDisabled = {};
+          for (const v of PROBES) {
+            await h.type({ placeholder: 'at least 12 characters' }, v);
+            lines[v] = rule();
+            saveDisabled[v] = !!h.find({ type: 'button', text: 'Save token' }).props.disabled;
+          }
+          // Two characters: under the floor, so Save is blocked — but the
+          // line still tells the truth about what was typed.
+          await h.type({ placeholder: 'at least 12 characters' }, 'Ab');
+          return { empty, lines, saveDisabled, shortLine: rule(),
+                   shortDisabled: !!h.find({ type: 'button', text: 'Save token' }).props.disabled,
+                   calls: h.calls.length };
+        """,
+    },
+    "reopening_set_after_a_chosen_token_is_already_the_one_in_use": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP_CANON,
+        "api": {"GET /api/auth/device-token": {"token": CHOSEN, "header": "X-Device-Token"}},
+        "script": r"""
+          h.render();
+          const card = h.find({ type: 'code' });
+          await h.click({ type: 'button', text: 'set…' });
+          return { currentToken: card && card.text,
+                   intro: h.text().filter((t) => t.includes('At least 12')) };
+        """,
+    },
+    "a_refusal_stops_describing_a_value_that_has_been_typed_over": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP_CANON,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token":
+                    {"__error": {"status": 400,
+                                 "message": "use something other than spaces, hyphens and underscores"}}},
+        "script": r"""
+          h.render();
+          await h.click({ type: 'button', text: 'set…' });
+          const errs = () => h.findAll((e) => (e.props.className || '') === 'err').map((e) => e.text);
+          await h.type({ placeholder: 'at least 12 characters' }, '- - - - - - -');
+          await h.click({ type: 'button', text: 'Save token' });
+          const afterSave = errs();
+          await h.type({ placeholder: 'at least 12 characters' }, 'a perfectly fine token');
+          const whileTyping = errs();
+          await h.type({ placeholder: 'at least 12 characters' }, '- - - - - - -');
+          const retyped = errs();
+          return { afterSave, whileTyping, retyped,
+                   value: h.find({ placeholder: 'at least 12 characters' }).props.value };
+        """,
+    },
     "switcher_asks_before_trusting_a_manual_server": {
         "files": [COMPONENTS], "component": "ServerSwitcher", "fnProps": ["onClose"],
         "setup": SWITCHER_SETUP,
@@ -264,6 +397,21 @@ def outcomes() -> dict:
     for name, o in out.items():
         assert "__harness_error" not in o, f"{name}: {o.get('__harness_error')}"
     return out
+
+
+@pytest.fixture(scope="module")
+def js_normalize() -> dict:
+    """What the SHIPPED web/static/auth.js does to AWKWARD_TOKENS, plus
+    what NORMALIZE_STUB does to the same table."""
+    node = shutil.which("node")
+    assert node, "node is required to run the shipped auth.js (see jsxcheck)"
+    payload = json.dumps({"values": AWKWARD_TOKENS, "extra": {"scenario_stub": NORMALIZE_STUB}})
+    proc = subprocess.run(
+        [node, str(NORMALIZE_HARNESS), str(REPO_ROOT), payload],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
 
 
 # ── 2. the household token card ─────────────────────────────────────────
@@ -367,3 +515,126 @@ def test_switcher_shows_the_address_and_persists_only_after_the_confirmation(out
 def test_switcher_does_not_re_ask_for_a_trusted_server(outcomes):
     o = outcomes["switcher_uses_a_trusted_server_without_asking"]
     assert o == {"prompt": False, "selected": "http://10.0.0.42:6369", "trustCalls": 0}
+
+
+# ── the ADDENDUM: the dialog says which rule will match ─────────────────
+#
+# A household sets `$$bills_yall-market!!1999`, reads it down the hall, and
+# the other person types the underscore as a hyphen. That is refused, and
+# correctly so — the token is not its own canonical form, so it is matched
+# character for character. What must not happen is the product springing
+# that on the person who set it, which is what the two lines below are for.
+
+
+def test_the_js_canonical_helper_agrees_with_the_python_one(js_normalize) -> None:
+    """The dialog's whole claim rests on this. If the browser's
+    normalizeDeviceToken and the server's normalize_device_token disagree
+    about one value, the dialog tells somebody their token is forgiving
+    when it is not (or the reverse), which is worse than saying nothing."""
+    from domovoi.admin_auth import normalize_device_token
+
+    disagree = []
+    for value in AWKWARD_TOKENS:
+        # normalize_device_token returns None for "nothing left"; the JS
+        # helper returns the empty string for the same input. Every other
+        # character has to match exactly.
+        want = normalize_device_token(value) or ""
+        got = js_normalize["auth"][value]
+        if got != want:
+            disagree.append((value, want, got))
+    assert disagree == [], disagree
+    assert len(AWKWARD_TOKENS) >= 12
+
+
+def test_the_two_agree_on_the_verdict_the_dialog_actually_renders(js_normalize) -> None:
+    """Not the string — the yes/no the line is keyed on."""
+    from domovoi.admin_auth import normalize_device_token
+
+    checked = 0
+    for value in AWKWARD_TOKENS:
+        stored = value.strip()
+        if not stored:
+            continue  # the dialog renders no line at all for an empty field
+        checked += 1
+        py = normalize_device_token(stored) == stored
+        js = js_normalize["auth"][stored] == stored
+        assert py == js, (stored, py, js)
+    assert checked >= 12
+    # The ADDENDUM's own example, spelled out: not canonical, so exact.
+    assert normalize_device_token("$$bills_yall-market!!1999") == "$$bills-yall-market!!1999"
+    assert js_normalize["auth"]["$$bills_yall-market!!1999"] == "$$bills-yall-market!!1999"
+
+
+def test_the_only_input_they_disagree_about_is_one_the_dialog_never_asks_about(
+    js_normalize,
+) -> None:
+    """Python says the empty string has no canonical form (None); JS says
+    its canonical form is the empty string, so JS would call it canonical
+    and Python would not. Pinned rather than hidden: the dialog guards on
+    a non-empty trimmed value before it asks, and the 12-character floor
+    blocks Save anyway."""
+    from domovoi.admin_auth import normalize_device_token
+
+    assert normalize_device_token("") is None
+    assert js_normalize["auth"][""] == ""
+
+
+def test_the_stub_the_scenarios_use_is_the_shipped_helper(js_normalize) -> None:
+    """The JSX harness replaces Auth wholesale, so the scenarios below
+    stub normalizeDeviceToken. This is what stops that stub drifting into
+    a second, differently-wrong implementation."""
+    assert js_normalize["extra"]["scenario_stub"] == js_normalize["auth"]
+
+
+def test_the_dialog_says_which_rule_will_match_live_as_it_is_typed(outcomes) -> None:
+    o = outcomes["the_rule_line_follows_what_is_typed"]
+    assert o["empty"] is None, "nothing to say about an empty field"
+    assert o["lines"]["$$bills_yall-market!!1999"] == RULE_EXACT
+    assert o["lines"]["$$bills-yall-market!!1999"] == RULE_FORGIVING
+    assert o["lines"]["frontdoorcats1999"] == RULE_FORGIVING
+    assert o["lines"]["My House Is Red"] == RULE_EXACT
+    assert o["lines"]["acorn-maple-otter-basin-cedar-ridge-harbor-willow"] == RULE_FORGIVING
+    assert o["lines"]["Maple Street, 1984!"] == RULE_EXACT
+    assert o["lines"]["0123456789abcdef" * 4] == RULE_FORGIVING
+    # Both read the STORED form: the outer padding is trimmed before
+    # either of them looks. The inner space is not — it collapses to a
+    # hyphen, so "padded token here" is not its own canonical form and is
+    # matched exactly, while the same value with no space to collapse is
+    # forgiving even when it was typed with padding.
+    assert o["lines"]["  padded token here  "] == RULE_EXACT
+    assert o["lines"]["  frontdoorcats1999  "] == RULE_FORGIVING
+
+
+def test_the_rule_line_never_blocks_saving(outcomes) -> None:
+    """It describes what the token will do; it is not a complaint about
+    it. Kamron's whole point was that any printable ASCII is allowed."""
+    o = outcomes["the_rule_line_follows_what_is_typed"]
+    assert set(o["saveDisabled"].values()) == {False}
+    assert o["calls"] == 0, "typing posts nothing"
+    # ...and it keeps telling the truth below the floor, where the only
+    # thing blocking Save is the length.
+    assert o["shortLine"] == RULE_EXACT
+    assert o["shortDisabled"] is True
+
+
+def test_the_dialog_does_not_call_a_chosen_token_the_generated_phrase(outcomes) -> None:
+    """Reopening set… on a household that already runs a chosen token used
+    to greet the admin with "Replace the generated phrase" — wrong on the
+    one screen that also shows the chosen token, two inches away."""
+    o = outcomes["reopening_set_after_a_chosen_token_is_already_the_one_in_use"]
+    assert o["currentToken"] == CHOSEN
+    assert len(o["intro"]) == 1
+    assert "Replace the current household token" in o["intro"][0]
+    assert "generated phrase" not in o["intro"][0]
+
+
+def test_a_refusal_belongs_to_the_value_it_was_raised_for(outcomes) -> None:
+    """The error is the card's state and only the next submit replaces it,
+    so a red line about `- - - - - - -` used to sit under a field that now
+    held something perfectly legal."""
+    o = outcomes["a_refusal_stops_describing_a_value_that_has_been_typed_over"]
+    assert o["afterSave"] == ["use something other than spaces, hyphens and underscores"]
+    assert o["whileTyping"] == []
+    assert o["value"] == "- - - - - - -"
+    # Type the refused value back and the reason comes back with it.
+    assert o["retyped"] == ["use something other than spaces, hyphens and underscores"]
