@@ -105,7 +105,7 @@ CUSTOM_TOKENS = [
     "back\\slash;colon:slash/x",
     "=equals=and=more=",
     "~!#$&*+^_`|.-tchar",
-    " " .join(["word"] * 8),
+    " ".join(["word"] * 8),
     "".join(chr(c) for c in range(0x20, 0x7F)).strip(),   # every printable one
 ]
 
