@@ -1758,17 +1758,6 @@ const FilesAccessCard = ({ fire, deviceList }) => {
   );
 };
 
-/* ---- Household token (the device tier) ----------------------------
- * The one secret every household device presents (X-Device-Token) for
- * ordinary actions. Shown ONLY to an admin session — Bearer or the
- * dashboard cookie — because it is what a new phone or browser is
- * enrolled with; a viewer who is not signed in sees nothing here, and
- * nothing is fetched for them (a 401 on this GET would otherwise pop
- * the login modal at everyone who opens the tab).
- *
- * Copy hands it to the clipboard; Rotate mints a replacement (Bearer-
- * only on the server), re-pairs THIS browser with it and tells the admin
- * that every other device must pair again. */
 /* Set a custom household token.
  *
  * NOT DeleteConfirmDialog: that component is a confirm, not a form — its
@@ -1838,6 +1827,18 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
   );
 };
 
+/* ---- Household token (the device tier) ----------------------------
+ * The one secret every household device presents (X-Device-Token) for
+ * ordinary actions. Shown ONLY to an admin session — Bearer or the
+ * dashboard cookie — because it is what a new phone or browser is
+ * enrolled with; a viewer who is not signed in sees nothing here, and
+ * nothing is fetched for them (a 401 on this GET would otherwise pop
+ * the login modal at everyone who opens the tab).
+ *
+ * Copy hands it to the clipboard; Set… replaces it with one the admin
+ * chose (SetTokenDialog above); Rotate mints a generated phrase. Both
+ * writes re-pair THIS browser and tell the admin that every other device
+ * must pair again. */
 const HouseholdTokenCard = ({ fire }) => {
   const [, force] = React.useReducer((n) => n + 1, 0);
   React.useEffect(() => {
