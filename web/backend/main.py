@@ -447,20 +447,20 @@ async def _authorize_state_socket(ws: WebSocket) -> object | None:
 
     Anything else is refused before the socket is accepted, which means an
     unauthenticated subscriber is never registered with the broadcaster and
-    is pushed nothing at all.
+    is pushed nothing at all. A source that has presented too many wrong
+    household tokens is refused without its token being looked at —
+    ``check_device_credential`` puts this transport behind the same backoff
+    as the header and the query, so the subprotocol is not a free oracle.
     """
-    _, offered = _offered_token_subprotocol(ws)
+    token, offered = _offered_token_subprotocol(ws)
     result = await admin_auth.check_device_request(ws)
     if result in ("ok", "admin", "pre-setup", "cookie-only"):
         return offered
-    token, _ = _offered_token_subprotocol(ws)
-    if token:
-        try:
-            async with admin_auth.session_scope() as s:
-                if await admin_auth.validate_device_token(s, token):
-                    return offered
-        except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
-            log.warning("ws device-token check failed: %s", e)
+    if result != "throttled" and token:
+        if await admin_auth.check_device_credential(ws, token) in (
+            "ok", "admin", "pre-setup", "cookie-only"
+        ):
+            return offered
     return _REFUSE
 
 

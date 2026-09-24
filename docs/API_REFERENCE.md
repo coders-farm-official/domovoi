@@ -35,9 +35,9 @@ values — only their sha256 is stored — with a 30-day sliding expiry under a
 processes validate against the same `admin_sessions` table, so a token
 minted by the dashboard works on the core too. See `domovoi/admin_auth.py`.
 
-The **device token** is one 256-bit secret per install, minted at the first
-boot of either process into the `household_device_tokens` table and mirrored
-to `~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
+The **device token** is one secret per install, minted at the first boot of
+either process into the `household_device_tokens` table and mirrored to
+`~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
 present it as the `X-Device-Token` header; an admin Bearer always passes the
 same gate. Admins read it from `GET /v1/admin/device-token` /
 `GET /api/auth/device-token` and rotate it from the `/rotate` siblings. It is
@@ -45,10 +45,33 @@ rotated automatically when first-run setup completes, so a token read during
 the pre-setup window does not outlive it — read the file *after* claiming
 admin.
 
+**Format.** Eight words from a 256-word bank, hyphen-joined and lowercase —
+`acorn-maple-river-thistle-harbor-quartz-willow-ember`, 64 bits, the same
+strength and the same bank as the setup code. Lowercase letters and hyphens
+only, because the value must be legal as a header value, as a
+`?device_token=` query and as the `domovoi.device-token.<token>` WebSocket
+subprotocol (RFC 6455 requires that to be a *token*, so no spaces). Input is
+normalised before it is compared — trimmed, lowercased, and every run of
+whitespace / underscores / hyphens collapsed to one hyphen — so a phrase
+typed with spaces or capitals still pairs. A parser should treat the value
+as **opaque**: match `^[a-z-]+$`, never a fixed length. Installs created
+before 2026-09-23 hold a 64-hex token and keep validating unchanged; only a
+rotation issues the new format.
+
+**Wrong tokens are throttled.** Presenting a wrong `X-Device-Token` (in the
+header, the query or the WebSocket subprotocol) is charged to a per-source
+exponential backoff after five free attempts: 1 s doubling to a 5-minute
+cap. While a source is throttled the gates answer **429** with
+`Retry-After` — including for a *correct* token — and the value presented
+is not looked at. A correct token clears the counter, and a request that
+also carries a live admin Bearer is never charged.
+
 Clients carry it without being asked twice. The dashboard stores the token
 per server in `localStorage` and attaches the header to every call; a refusal
 whose detail names the header opens a "pair this browser" prompt and the
-refused request is replayed once the token is pasted, while an admin login
+refused request is replayed once the phrase is entered (the browser
+canonicalises it first, so the value it stores and offers as a WebSocket
+subprotocol is always the hyphenated form), while an admin login
 fetches `GET /api/auth/device-token` and pairs the browser silently. The
 Android app keeps it in `EncryptedSharedPreferences` and sends it on every
 request, on the `/ws/state` socket and on the drop-in call socket. Browser
@@ -285,8 +308,8 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/version/restart` | **Admin, security tier** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
 | `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | `?section=common\|advanced` (optional) | The editable-config registry joined with live values (`{fields, plugin_fields, advanced_available}`). What comes back depends on how the caller authenticated: a **Bearer** reads everything; a **cookie-only** caller gets the `common` section with every credential value replaced by a mask (`masked: true` on the field) and no `advanced` section at all — `?section=advanced` answers `401` for it. Masked settings: `database_url`, `acoustid_api_key`, `letta_token` (`config_schema.SECRET_SETTING_NAMES`); plugin secrets arrive pre-masked as before. |
 | `POST /v1/admin/config` | **Admin, security tier** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
-| `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token (`header` is `X-Device-Token`). `501` before setup. |
-| `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. |
+| `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, an eight-word hyphenated phrase (`header` is `X-Device-Token`). `501` before setup. |
+| `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token in the eight-word phrase format: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. |
 | `POST /v1/admin/chat-tool` | **Chat callback** | `{tool, args}` + `X-Chat-Callback` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. The header must carry this boot's callback secret, which the generated tool source embeds — `401` otherwise. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. Regenerate the tools after a core restart (`POST /v1/admin/chat/resync`). |
 | `POST /v1/admin/chat/resync` | **Admin (Bearer)** | — | Rebuild the chat tool surface and re-attach it to every chat agent. The install/enable/disable pipeline runs this automatically; this is the manual trigger. |
 | `GET /v1/admin/hardware` | Open | — | Host hardware snapshot for the Models page: `{gpus, cpu, ram, disk}`; each field degrades to empty/null independently. |

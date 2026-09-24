@@ -70,7 +70,10 @@ const run = async ({ storage: seed, responses, script }) => {
   };
   const sockets = [];
   class WebSocket {
-    constructor(url) { this.url = url; this.sent = []; this.handlers = {}; sockets.push(this); }
+    constructor(url, protocols) {
+      this.url = url; this.protocols = protocols || []; this.sent = [];
+      this.handlers = {}; sockets.push(this);
+    }
     addEventListener(ev, fn) { this.handlers[ev] = fn; }
     send(frame) { this.sent.push(JSON.parse(frame)); }
     open() { this.handlers.open && this.handlers.open(); }
@@ -246,6 +249,29 @@ SCENARIOS = {
           h.Auth.pair('other-house');
           await h.w.apiGet('/api/x');
           return { before, url: h.calls[0].url, header: h.calls[0].headers['X-Device-Token'], stored: h.storage.dump() };
+        """,
+    },
+    # An eight-word phrase typed by a person: however it was spelled, one
+    # canonical value is stored, sent and offered on the socket.
+    "a_typed_phrase_is_canonicalised_before_it_is_stored": {
+        "responses": [OK],
+        "script": r"""
+          h.Auth.pair('  Acorn  Maple_River-Thistle   HARBOR quartz willow ember ');
+          await h.w.apiGet('/api/x');
+          h.w.stateBus.subscribe(() => {});
+          return { stored: h.storage.dump(), header: h.calls[0].headers['X-Device-Token'],
+                   protocols: h.sockets[0].protocols, url: h.sockets[0].url };
+        """,
+    },
+    # A 64-hex token from an install that predates the phrase survives the
+    # same canonicalisation untouched, so an upgraded browser stays paired.
+    "a_legacy_hex_token_is_untouched": {
+        "responses": [OK],
+        "script": r"""
+          const hex = 'a3f0'.repeat(16);
+          h.Auth.pair(hex);
+          await h.w.apiGet('/api/x');
+          return { stored: h.Auth.deviceToken(), header: h.calls[0].headers['X-Device-Token'], hex };
         """,
     },
     # The WebSocket hello carries the token (browsers cannot set headers).
@@ -476,3 +502,27 @@ def test_the_pair_modal_names_where_an_admin_finds_the_token():
     assert "Settings → Devices → Household token" in modal
     host = src[src.index("const AuthModalHost"):src.index("/* expose to other Babel scripts */")]
     assert "Auth.pairModalOpen" in host and "PairModal" in host
+
+
+# ── the phrase format ───────────────────────────────────────────────────
+
+CANONICAL_PHRASE = "acorn-maple-river-thistle-harbor-quartz-willow-ember"
+
+
+def test_a_typed_phrase_is_canonicalised_before_it_is_stored(outcomes):
+    """People TYPE the household token now, so auth.js canonicalises it the
+    same way the server does. This is not cosmetic: what gets stored is
+    what rides the WebSocket handshake as a subprotocol, and a subprotocol
+    with a space in it makes the WebSocket constructor throw — the token
+    would pair over HTTP and then silently kill the live state stream."""
+    o = outcomes["a_typed_phrase_is_canonicalised_before_it_is_stored"]
+    assert o["stored"]["domovoi-device-token"] == CANONICAL_PHRASE
+    assert o["header"] == CANONICAL_PHRASE
+    assert o["protocols"] == [f"domovoi.device-token.{CANONICAL_PHRASE}"]
+    assert " " not in o["protocols"][0]
+
+
+def test_a_legacy_hex_token_is_untouched_by_canonicalisation(outcomes):
+    o = outcomes["a_legacy_hex_token_is_untouched"]
+    assert o["stored"] == o["hex"]
+    assert o["header"] == o["hex"]

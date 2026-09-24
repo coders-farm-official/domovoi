@@ -30,7 +30,14 @@ Three gates, from weakest to strongest:
   ``X-Device-Token`` (the per-household token in
   ``household_device_tokens``, mirrored to ``~/.domovoi/device-token.txt``
   by :func:`ensure_device_token` at boot) OR an admin Bearer. Keeps the
-  pre-setup LAN grace so a fresh install still works before setup.
+  pre-setup LAN grace so a fresh install still works before setup. The
+  token is an eight-word phrase (:func:`generate_device_token`, 64 bits)
+  a person can read out to a phone across the room; wrong ones are
+  charged an exponential per-source backoff
+  (:data:`DEVICE_TOKEN_BACKOFF`) and the pair of those is what makes 64
+  bits enough. Input is canonicalised on the way in
+  (:func:`normalize_device_token`), so case, spaces and underscores all
+  pair, and a 64-hex token from an older install still validates.
   :func:`require_device_read` is its read-only half for media the browser
   fetches by URL: it also takes the dashboard cookie and a
   ``?device_token=`` query, neither of which may authorize a change.
@@ -56,6 +63,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -86,6 +94,15 @@ SETUP_CODE_TTL_SEC = 24 * 3600.0
 # Failed-login backoff: 1 s doubling per failure, capped at 5 min (§7.3).
 BACKOFF_BASE_SEC = 1.0
 BACKOFF_CAP_SEC = 300.0
+# How many WRONG household device tokens a source may present before the
+# same doubling backoff starts charging it. A real household trips this
+# without malice: a browser or phone still holding a rotated token fires
+# several requests in parallel, and every one of them is a failure, so
+# charging from the first would put the person who is about to paste the
+# right phrase behind a wait they did nothing to earn. After the grace the
+# doubling is the same 1 s → 5 min ladder the login uses, which caps a
+# source at ~17 tries an hour — nothing against 64 bits.
+DEVICE_TOKEN_FREE_ATTEMPTS = 5
 # Outbound-fetch tier (add-by-url without an admin session): per-source
 # request budget within the window.
 URL_FETCH_WINDOW_SEC = 60.0
@@ -157,10 +174,18 @@ def write_private_file(path: Path, content: str) -> Path:
     return path
 
 
-# ─── Setup code (proof of possession of the server, §7.2) ─────────────────
+# ─── Word phrases: the setup code and the household device token ──────────
 
 # 256 short common words → 8 words = 64 bits of entropy. Plain ASCII so
 # the code survives any console / copy-paste path (Windows cp1252 hosts).
+#
+# The bank is FLAT on purpose. Banks split by part of speech (nouns,
+# verbs, adjectives, pronouns) read better but are far weaker: each role
+# bank would hold a couple of hundred words at best, and grammar then
+# constrains which slot takes which word, so a four-word sentence lands
+# near 32 bits — a number a patient guesser reaches. Eight words drawn
+# uniformly from one 256-word bank is 64 bits and still reads out loud in
+# one breath.
 _WORDS = (
     "acorn apple arrow autumn badge baker basil beach berry birch bison "
     "blaze bloom bluff brass bread breeze brick brook broom bucket butter "
@@ -189,9 +214,22 @@ _WORDS = (
 ).split()
 assert len(_WORDS) >= 256, "setup-code wordlist must give >= 8 bits/word"
 
+# Words per phrase. Both the setup code and the household device token use
+# eight, so both carry 8 × 8 = 64 bits.
+PHRASE_WORDS = 8
+DEVICE_TOKEN_WORDS = PHRASE_WORDS
+
+
+def generate_word_phrase(words: int = PHRASE_WORDS) -> str:
+    """``words`` words chosen uniformly from the first 256 of
+    :data:`_WORDS`, joined with hyphens. Lowercase ASCII letters and
+    hyphens only — see :func:`normalize_device_token` for why that
+    alphabet and no other."""
+    return "-".join(secrets.choice(_WORDS[:256]) for _ in range(words))
+
 
 def generate_setup_code() -> str:
-    return "-".join(secrets.choice(_WORDS[:256]) for _ in range(8))
+    return generate_word_phrase()
 
 
 def write_setup_code(code: str) -> Path:
@@ -416,6 +454,54 @@ async def revoke_other_sessions(session: AsyncSession, keep_token_hash: str | No
 
 # ─── Household device token (the device tier) ─────────────────────────────
 
+# Anything that separates words when a person types the phrase back:
+# spaces (including the ones a phone keyboard inserts), underscores, and
+# runs of hyphens. All of them collapse to ONE hyphen.
+_DEVICE_TOKEN_SEPARATORS = re.compile(r"[\s_\-]+")
+
+
+def normalize_device_token(value: str | None) -> str | None:
+    """The canonical form of a household token: trimmed, lowercased, every
+    run of whitespace / underscores / hyphens collapsed to a single hyphen,
+    no leading or trailing hyphen. ``None`` when nothing is left.
+
+    The SAME function runs on generation, on the file mirror and on every
+    compare, so ``acorn maple …``, ``Acorn-Maple-…`` and ``acorn_maple_…``
+    are one token and the person who reads the phrase off the dashboard and
+    types it into a phone is not punished for how their keyboard felt.
+
+    Why this alphabet and no other — the token has to survive all three
+    transports it travels on, and lowercase letters plus hyphens are the
+    intersection of what they allow:
+
+    * the ``X-Device-Token`` header value (RFC 9110 field value — a space
+      would be legal but folds/trims unpredictably through proxies);
+    * the ``?device_token=`` query the browser's ``<img>`` / ``<video>``
+      loads use, where a hyphen needs no percent-encoding;
+    * the ``domovoi.device-token.<token>`` WebSocket **subprotocol**, which
+      RFC 6455 requires to be an RFC 9110 *token* — no spaces, at all, ever.
+      A browser handed a subprotocol with a space throws before the socket
+      is opened, so a spaced token would silently kill the dashboard's live
+      stream. That transport is why the canonical form has no spaces.
+
+    Old 64-hex tokens (``secrets.token_hex(32)``, what every install minted
+    before this) are already lowercase with no separators, so normalising
+    one returns it unchanged and it keeps validating — see
+    :func:`validate_device_token`.
+    """
+    if value is None:
+        return None
+    cleaned = _DEVICE_TOKEN_SEPARATORS.sub("-", value.strip().lower()).strip("-")
+    return cleaned or None
+
+
+def generate_device_token() -> str:
+    """A household token a person can read out loud: eight words from the
+    same 256-word bank the setup code uses, hyphen-joined. 64 bits, the
+    same strength as the setup code, and short enough to say down a
+    hallway. Guessing it is what :data:`DEVICE_TOKEN_BACKOFF` prices."""
+    return generate_word_phrase(DEVICE_TOKEN_WORDS)
+
 
 async def get_device_token(session: AsyncSession) -> str | None:
     row = (
@@ -427,7 +513,7 @@ async def get_device_token(session: AsyncSession) -> str | None:
 
 
 async def _mint_device_token(session: AsyncSession, *, replace: bool) -> str:
-    token = secrets.token_hex(32)  # 256 bits
+    token = generate_device_token()  # 8 words, 64 bits, already canonical
     if replace:
         await session.execute(
             text(
@@ -468,8 +554,19 @@ async def rotate_device_token(session: AsyncSession) -> str:
 
 
 async def validate_device_token(session: AsyncSession, candidate: str | None) -> bool:
-    """Constant-time hash compare of a presented token against the row."""
-    if not candidate:
+    """Constant-time hash compare of a presented token against the row.
+
+    The candidate is canonicalised first (:func:`normalize_device_token`),
+    so how it was typed does not matter — but the compare itself is still
+    ``compare_digest`` over the sha256, exactly as before. Normalising is a
+    no-op on a 64-hex token, which is why an install that minted one before
+    the phrase format existed keeps working without a rotation.
+
+    This function does NOT throttle: it is called from gates that already
+    know the request's source. :func:`_classify_device` is where a wrong
+    token starts costing time."""
+    presented = normalize_device_token(candidate)
+    if not presented:
         return False
     row = (
         await session.execute(
@@ -478,7 +575,7 @@ async def validate_device_token(session: AsyncSession, candidate: str | None) ->
     ).first()
     if row is None:
         return False
-    return secrets.compare_digest(_sha256(candidate.strip()), row.token_hash)
+    return secrets.compare_digest(_sha256(presented), row.token_hash)
 
 
 def write_device_token_file(token: str) -> Path:
@@ -709,7 +806,9 @@ async def require_admin_security_read(request: Request) -> None:
 
 # ─── The device tier: household token OR admin Bearer ─────────────────────
 
-DeviceCheckResult = Literal["ok", "admin", "pre-setup", "no-auth", "cookie-only", "invalid"]
+DeviceCheckResult = Literal[
+    "ok", "admin", "pre-setup", "no-auth", "cookie-only", "invalid", "throttled"
+]
 
 
 async def _classify_device(
@@ -717,17 +816,49 @@ async def _classify_device(
 ) -> DeviceCheckResult:
     """Shared body of :func:`check_device_request` and
     :func:`check_device_websocket`. ``conn`` only has to provide the
-    ``headers`` / ``cookies`` surface ``check_admin_request`` reads, which
-    both ``Request`` and ``WebSocket`` do."""
+    ``headers`` / ``cookies`` / ``client`` surface ``check_admin_request``
+    and :func:`request_source` read, which both ``Request`` and
+    ``WebSocket`` do.
+
+    This is also where a wrong household token starts costing time
+    (:data:`DEVICE_TOKEN_BACKOFF`). The rules, in the order they matter:
+
+    * only a token that was actually PRESENTED and turned out to be wrong
+      is charged — a request with no token at all is not a guess;
+    * the attempt is reserved BEFORE the DB read, the same trick
+      :func:`enforce_login_backoff` uses, so a burst of parallel guesses
+      cannot all slip past the check before any of them is recorded;
+    * a request that ALSO carries a live admin Bearer (or that lands on a
+      pre-setup install) releases the reservation: the dashboard holding a
+      stale token beside a good session is not guessing, and charging it
+      would let the device tier lock an admin out of their own page;
+    * while a source is throttled its token is not even looked at, and the
+      throttled attempt adds nothing to the ladder — otherwise a client
+      that retries on a timer could never drain its own backoff.
+    """
 
     async def _check(s: AsyncSession) -> DeviceCheckResult:
-        if presented is not None and await validate_device_token(s, presented):
-            return "ok"
+        source = request_source(conn)
+        throttled = False
+        reserved = False
+        if presented is not None:
+            if DEVICE_TOKEN_BACKOFF.retry_after(source) > 0:
+                throttled = True
+            else:
+                DEVICE_TOKEN_BACKOFF.reserve(source)
+                reserved = True
+                if await validate_device_token(s, presented):
+                    DEVICE_TOKEN_BACKOFF.record_success(source)
+                    return "ok"
         admin = await check_admin_request(conn, s)
-        if admin == "ok":
-            return "admin"
-        if admin == "pre-setup":
-            return "pre-setup"
+        if admin in ("ok", "pre-setup"):
+            if reserved:
+                DEVICE_TOKEN_BACKOFF.record_success(source)
+            return "admin" if admin == "ok" else "pre-setup"
+        if reserved:
+            DEVICE_TOKEN_BACKOFF.record_failure(source)
+        if throttled:
+            return "throttled"
         if presented is not None:
             return "invalid"
         return "cookie-only" if admin == "cookie-only" else admin
@@ -754,10 +885,24 @@ async def check_device_request(
       this tier (the dashboard learns the token after login and sends
       the header).
     * ``no-auth`` / ``invalid`` — nothing usable / a stale token.
+    * ``throttled`` — this source has presented too many wrong tokens; the
+      one it sent now was not even looked at (:data:`DEVICE_TOKEN_BACKOFF`).
     """
     return await _classify_device(
         request, device_token_from_request(request), session
     )
+
+
+async def check_device_credential(
+    conn: Any, presented: str | None, session: AsyncSession | None = None
+) -> DeviceCheckResult:
+    """:func:`check_device_request` for a household token the caller
+    extracted itself — today the dashboard's ``domovoi.device-token.``
+    WebSocket subprotocol, which only the web process knows how to read.
+    Going through here rather than calling
+    :func:`validate_device_token` directly is what keeps that transport
+    behind the same throttle as the header and the query."""
+    return await _classify_device(conn, presented, session)
 
 
 # A browser WebSocket cannot set request headers, so the household token
@@ -791,7 +936,9 @@ async def check_device_websocket(
 
 async def websocket_device_ok(ws: Any) -> bool:
     """True when a WS upgrade may proceed on the device tier: a valid
-    household token, an admin Bearer, or the pre-setup LAN grace."""
+    household token, an admin Bearer, or the pre-setup LAN grace. A
+    throttled source is refused like any other bad credential — a socket
+    has no status code to carry the 429 into."""
     return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
 
 
@@ -799,10 +946,15 @@ async def require_device(request: Request) -> None:
     """Dependency for the DEVICE TIER (ordinary household actions): a
     valid ``X-Device-Token`` OR an admin Bearer passes; nothing, a stale
     token or the cookie alone does not. Keeps the pre-setup LAN grace so
-    a fresh install (and a throwaway test instance) works before setup."""
+    a fresh install (and a throwaway test instance) works before setup.
+
+    A source that keeps presenting wrong tokens gets 429 with a
+    ``Retry-After`` instead of 401 once its backoff bites."""
     result = await check_device_request(request)
     if result in ("ok", "admin", "pre-setup"):
         return
+    if result == "throttled":
+        raise device_token_throttled_error(request)
     if result == "cookie-only":
         raise HTTPException(
             status_code=403,
@@ -850,13 +1002,15 @@ async def require_device_read(request: Request) -> None:
     if result in ("ok", "admin", "pre-setup", "cookie-only"):
         return
     candidate = (request.query_params.get(DEVICE_TOKEN_QUERY) or "").strip()
-    if candidate:
-        try:
-            async with session_scope() as s:
-                if await validate_device_token(s, candidate):
-                    return
-        except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
-            log.warning("device read check failed: %s", e)
+    if candidate and result != "throttled":
+        # Through the classifier, not straight to validate_device_token:
+        # the query is a full-strength presentation of the household token
+        # and has to sit behind the same backoff as the header.
+        result = await check_device_credential(request, candidate)
+        if result in ("ok", "admin", "pre-setup", "cookie-only"):
+            return
+    if result == "throttled":
+        raise device_token_throttled_error(request)
     raise HTTPException(
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
@@ -930,9 +1084,22 @@ class LoginBackoff:
     the per-source backoff can be sidestepped by an attacker who rotates
     the source key, ``retry_after`` also throttles once aggregate failures
     within :data:`GLOBAL_LOGIN_WINDOW_SEC` cross
-    :data:`GLOBAL_LOGIN_MAX_FAILURES`, until the window drains."""
+    :data:`GLOBAL_LOGIN_MAX_FAILURES`, until the window drains.
 
-    def __init__(self) -> None:
+    Two knobs exist for the second user of this class, the household
+    device-token throttle (:data:`DEVICE_TOKEN_BACKOFF`); both default to
+    the login's behaviour, so the login instance is unchanged:
+
+    * ``free_attempts`` — failures charged nothing before the doubling
+      starts.
+    * ``global_ceiling`` — whether the aggregate backstop applies at all.
+    """
+
+    def __init__(
+        self, *, free_attempts: int = 0, global_ceiling: bool = True
+    ) -> None:
+        self.free_attempts = free_attempts
+        self.global_ceiling = global_ceiling
         # source → (consecutive_failures, last_failure_monotonic)
         self._failures: dict[str, tuple[int, float]] = {}
         # Monotonic timestamps of ALL recent failures (any source) for the
@@ -947,6 +1114,8 @@ class LoginBackoff:
             self._global = [t for t in self._global if t >= cutoff]
 
     def _global_retry_after(self, now: float) -> float:
+        if not self.global_ceiling:
+            return 0.0
         self._prune_global(now)
         if len(self._global) < GLOBAL_LOGIN_MAX_FAILURES:
             return 0.0
@@ -962,8 +1131,10 @@ class LoginBackoff:
         entry = self._failures.get(source)
         if entry is not None:
             failures, last = entry
-            delay = min(BACKOFF_BASE_SEC * (2 ** (failures - 1)), BACKOFF_CAP_SEC)
-            wait = max(wait, (last + delay) - now)
+            charged = failures - self.free_attempts
+            if charged > 0:
+                delay = min(BACKOFF_BASE_SEC * (2 ** (charged - 1)), BACKOFF_CAP_SEC)
+                wait = max(wait, (last + delay) - now)
         return max(0.0, wait)
 
     def _count(self, source: str) -> float:
@@ -1010,6 +1181,47 @@ class LoginBackoff:
 
 
 LOGIN_BACKOFF = LoginBackoff()
+
+# The same machinery, a SEPARATE ledger, for wrong household device
+# tokens (:func:`_classify_device`). Separate because the two tiers must
+# not throttle each other: a phone left holding a rotated token would
+# otherwise push the person's own admin login behind a wait, and a
+# guesser on the device tier could lock the admin out of the very page
+# that fixes it.
+#
+# The aggregate ceiling is OFF here, deliberately, and this is the one
+# place the two instances differ in posture. The device tier is the
+# ORDINARY household surface: an aggregate ceiling means any host that
+# can reach the port can put the whole house — every phone, every
+# browser, every satellite — behind a 429 by sending rubbish tokens from
+# one address. That trade is worth taking for the admin password, which
+# is the one credential a slow remote guess could plausibly reach; it is
+# not worth taking for a 64-bit phrase whose per-source ladder already
+# caps a guesser at roughly 17 tries an hour. Rotating source addresses
+# does not help an attacker here: a /24 of spoofed peers buys ~4000
+# guesses an hour against 2**64.
+DEVICE_TOKEN_BACKOFF = LoginBackoff(
+    free_attempts=DEVICE_TOKEN_FREE_ATTEMPTS, global_ceiling=False
+)
+
+
+def device_token_retry_after(conn: Any) -> float:
+    """Seconds this source must wait before another household token of
+    its will even be looked at."""
+    return DEVICE_TOKEN_BACKOFF.retry_after(request_source(conn))
+
+
+def device_token_throttled_error(conn: Any) -> HTTPException:
+    """The 429 a throttled device-tier caller gets, with ``Retry-After``."""
+    wait = device_token_retry_after(conn)
+    return HTTPException(
+        status_code=429,
+        detail=(
+            f"too many wrong {DEVICE_TOKEN_HEADER} values — retry in "
+            f"{wait:.0f}s, or sign in as an admin"
+        ),
+        headers={"Retry-After": str(max(1, int(wait + 0.999)))},
+    )
 
 
 def enforce_login_backoff(request: Request) -> str:

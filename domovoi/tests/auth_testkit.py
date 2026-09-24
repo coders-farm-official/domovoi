@@ -82,6 +82,10 @@ def install_fake_db(
     ``check_device_request`` call with in-memory fakes. Returns the state
     so a test can flip ``admin`` mid-way."""
     state = FakeState(admin=admin, sessions=sessions, device_token=device_token)
+    # Wrong device tokens now cost a per-source backoff that lives in a
+    # module global; without this a test that presented a stale token
+    # would leak its ladder into whatever ran next.
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
 
     @asynccontextmanager
     async def fake_scope():
@@ -137,12 +141,14 @@ async def _db(tmp_path, monkeypatch):
     monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
     monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")
     admin_auth.LOGIN_BACKOFF.reset()
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
     core_app.state.config_apply_lock = asyncio.Lock()
     core_app.state.active_sessions = {}
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {_AUTH_TABLES} CASCADE"))
     yield
     admin_auth.LOGIN_BACKOFF.reset()
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {_AUTH_TABLES} CASCADE"))
 
@@ -152,6 +158,8 @@ def _db_sync(tmp_path, monkeypatch):
     """Sync twin of ``_db`` for TestClient-driven (threaded) tests."""
     monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
     monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")
+    admin_auth.LOGIN_BACKOFF.reset()
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
 
     async def _truncate():
         async with engine.begin() as conn:

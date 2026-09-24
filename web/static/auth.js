@@ -41,6 +41,23 @@ const Auth = (() => {
   const DEVICE_TOKEN_HEADER = 'X-Device-Token';
   const DEVICE_TOKEN_KEY = 'domovoi-device-token';
 
+  // The household token is an eight-word phrase now, so people TYPE it —
+  // off a screen, off a note, read out across the room. Canonicalise the
+  // same way the server does (domovoi/admin_auth.py normalize_device_token)
+  // before it is stored: trim, lowercase, and collapse every run of
+  // spaces / underscores / hyphens to one hyphen.
+  //
+  // This is not cosmetic. What gets stored is what rides the WebSocket
+  // handshake as the `domovoi.device-token.<token>` subprotocol, and a
+  // subprotocol must be an RFC 9110 token — hand the WebSocket
+  // constructor a value with a space in it and it THROWS, so a token
+  // pasted with spaces would pair fine over HTTP and then silently kill
+  // the live state stream. A 64-hex token from an older install passes
+  // through this unchanged.
+  const normalizeDeviceToken = (value) =>
+    String(value == null ? '' : value).trim().toLowerCase()
+      .replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
+
   const base = () => {
     try { return localStorage.getItem('domovoi-server') || ''; } catch { return ''; }
   };
@@ -110,7 +127,7 @@ const Auth = (() => {
       if (!r.ok) return false;
       const data = await r.json();
       if (data && data.token) {
-        writeDeviceToken(data.token);
+        writeDeviceToken(normalizeDeviceToken(data.token));
         credentialVersion += 1;
         return true;
       }
@@ -128,12 +145,13 @@ const Auth = (() => {
     DEVICE_TOKEN_HEADER,
 
     // ── Device token ────────────────────────────────────────────────
+    normalizeDeviceToken,
     deviceToken: () => readDeviceToken(),
     isPaired: () => !!readDeviceToken(),
     // Store the household token for the current server (pasted in the
     // pair modal, fetched at login, or handed over by a rotation).
     pair(value) {
-      const clean = String(value || '').trim();
+      const clean = normalizeDeviceToken(value);
       if (!clean) return false;
       writeDeviceToken(clean);
       credentialVersion += 1;

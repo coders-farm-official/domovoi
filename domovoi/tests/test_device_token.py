@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from domovoi import admin_auth
 from domovoi.db.session import session_scope
@@ -192,7 +193,10 @@ async def test_core_boot_creates_the_token_row_and_file(_db) -> None:
     async with core_app.router.lifespan_context(core_app):
         pass
     token = await db_device_token()
-    assert token and len(token) == 64
+    # An eight-word phrase, not hex (2026-09-23): one canonical form, so
+    # the row, the 0600 mirror and every client agree byte for byte.
+    assert token and admin_auth.normalize_device_token(token) == token
+    assert len(token.split("-")) == admin_auth.DEVICE_TOKEN_WORDS
     assert admin_auth.read_device_token_file() == token
     if sys.platform != "win32":
         assert stat.S_IMODE(admin_auth.device_token_path().stat().st_mode) == 0o600
@@ -209,7 +213,7 @@ def test_web_boot_creates_the_token_row_and_file(_db_sync) -> None:
     with TestClient(web_app):
         pass
     token = asyncio.run(db_device_token())
-    assert token and len(token) == 64
+    assert token and len(token.split("-")) == admin_auth.DEVICE_TOKEN_WORDS
     assert admin_auth.read_device_token_file() == token
 
 
@@ -308,6 +312,76 @@ async def test_require_device_route_against_the_real_tables(_db) -> None:
     async with mini_client() as c:
         assert (await c.post("/device", headers={HEADER: device})).status_code == 401
         assert (await c.post("/device", headers={HEADER: new})).status_code == 200
+
+
+# ─── The phrase format, and the install that predates it ─────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_rotation_issues_the_phrase_format(_db) -> None:
+    """Rotation is how an existing install MOVES to a phrase, so the
+    rotate endpoints have to mint the new shape, not just a new value."""
+    async with web_client() as web:
+        admin = await claim_admin(web)
+    async with core_client() as core:
+        r = await core.post("/v1/admin/device-token/rotate", headers=bearer(admin))
+        from_core = r.json()["token"]
+    async with web_client() as web:
+        r = await web.post("/api/auth/device-token/rotate", headers=bearer(admin))
+        from_web = r.json()["token"]
+    for token in (from_core, from_web):
+        assert len(token.split("-")) == admin_auth.DEVICE_TOKEN_WORDS
+        assert admin_auth.normalize_device_token(token) == token
+    assert from_core != from_web
+    assert admin_auth.read_device_token_file() == from_web
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_install_that_still_holds_a_hex_token_keeps_working(_db) -> None:
+    """The upgrade path for a live box: the row already holds 64 hex
+    characters and every paired browser and phone holds the same string.
+    Nothing invalidates them — only a ROTATION changes the format."""
+    legacy = "9c1e" * 16
+    async with session_scope() as s:
+        await s.execute(
+            text(
+                "INSERT INTO household_device_tokens (id, token, token_hash) "
+                "VALUES (1, :t, :h)"
+            ),
+            {"t": legacy, "h": admin_auth.token_sha256(legacy)},
+        )
+    # The boot hook leaves it alone — it does not re-mint over a good row.
+    assert await admin_auth.ensure_device_token() == legacy
+    async with web_client() as web:
+        await claim_admin(web)
+    # ...but first-run setup rotates, as it always has, so THAT install
+    # lands on a phrase. Re-seed to test the steady state.
+    async with session_scope() as s:
+        await s.execute(
+            text(
+                "UPDATE household_device_tokens SET token = :t, token_hash = :h "
+                "WHERE id = 1"
+            ),
+            {"t": legacy, "h": admin_auth.token_sha256(legacy)},
+        )
+    async with mini_client() as c:
+        assert (await c.post("/device", headers={HEADER: legacy})).status_code == 200
+        assert (await c.post("/device", headers={HEADER: legacy.upper()})).status_code == 200
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_phrase_pairs_however_it_was_typed(_db) -> None:
+    async with web_client() as web:
+        await claim_admin(web)
+    phrase = await db_device_token()
+    assert phrase is not None
+    async with mini_client() as c:
+        for typed in (phrase, phrase.upper(), phrase.replace("-", " "),
+                      phrase.replace("-", "_"), f"  {phrase}  "):
+            assert (await c.post("/device", headers={HEADER: typed})).status_code == 200
 
 
 # ─── The web mirror ───────────────────────────────────────────────────────

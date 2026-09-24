@@ -957,13 +957,14 @@ const PairModal = ({ onClose }) => {
         <div className="cal-modal-body">
           <div className="hint">
             This Domovoi asks devices to prove they belong to the household
-            before they can change things. Paste the household token below —
-            once, for this browser.
+            before they can change things. Type or paste the household token
+            below — once, for this browser. It is a phrase of eight words;
+            spaces, capitals and hyphens are all read the same way.
           </div>
           <div className="field">
             <label>household token</label>
             <input className="cal-inp mono" value={value} autoFocus
-                   placeholder="paste the token here"
+                   placeholder="acorn maple river ..."
                    onChange={(e) => setValue(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
           </div>

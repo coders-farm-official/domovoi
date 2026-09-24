@@ -116,6 +116,33 @@ def test_a_browser_can_present_the_token_as_a_subprotocol(claimed, broadcaster) 
         assert broadcaster.client_count() == 1
 
 
+def test_the_subprotocol_is_not_a_free_guessing_oracle(claimed, broadcaster) -> None:
+    """The subprotocol used to reach ``validate_device_token`` directly,
+    which meant the one transport a browser can use was also the one that
+    skipped the device-token backoff. Now it goes through
+    ``check_device_credential`` like every other presentation, so a source
+    that has burned its grace is refused without its offer being read."""
+    from domovoi import admin_auth
+
+    for i in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 2):
+        with pytest.raises(Exception):
+            with _client().websocket_connect(
+                "/ws/state",
+                subprotocols=[f"{WS_DEVICE_TOKEN_SUBPROTOCOL}guess-{i}"],
+            ):
+                pass  # pragma: no cover — the handshake never completes
+    assert admin_auth.DEVICE_TOKEN_BACKOFF.retry_after("testclient") > 0
+    # Even the right token is turned away while the source is throttled.
+    with pytest.raises(Exception):
+        with _client().websocket_connect("/ws/state", subprotocols=[SUBPROTOCOL]):
+            pass  # pragma: no cover — the handshake never completes
+    assert broadcaster.client_count() == 0
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
+    with _client().websocket_connect("/ws/state", subprotocols=[SUBPROTOCOL]) as ws:
+        ws.send_json({"subscribe": []})
+        assert broadcaster.client_count() == 1
+
+
 def test_a_fresh_install_is_still_open(monkeypatch, broadcaster) -> None:
     """Before anyone has claimed the admin password there is no household
     credential to hold, so the dashboard of a brand-new install connects —

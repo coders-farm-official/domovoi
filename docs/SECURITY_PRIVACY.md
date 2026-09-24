@@ -69,11 +69,45 @@ flowchart TB
 
 ### Device tier (the household token)
 
-One 256-bit secret per install, minted at the first boot of either process
-into the `household_device_tokens` table and mirrored to
+One secret per install, minted at the first boot of either process into the
+`household_device_tokens` table and mirrored to
 `~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
 send it as the `X-Device-Token` header; an admin Bearer always passes the
-same gate, so an operator never needs both. An admin reads it from the
+same gate, so an operator never needs both.
+
+**It is an eight-word phrase**, hyphen-joined, drawn from the same 256-word
+bank the setup code uses — `acorn-maple-river-thistle-harbor-quartz-willow-ember`.
+That is **64 bits**, the same strength as the setup code, chosen so a person
+can read the household token out loud to somebody holding a phone instead
+of mailing 64 hex characters around. Input is forgiving and storage is
+canonical: case, spaces, underscores and repeated hyphens all normalise to
+the one hyphenated lowercase form, so typing it with spaces pairs fine. The
+alphabet is lowercase letters and hyphens because the token has to survive
+all three transports it travels on — the header value, the `?device_token=`
+query, and the `domovoi.device-token.<token>` WebSocket subprotocol, which
+RFC 6455 requires to be a *token* and where a space is not merely ugly but
+illegal.
+
+**Wrong tokens cost time.** 64 bits is comfortable only because guessing is
+priced: a source that presents wrong household tokens gets five free
+attempts (a browser or phone still holding a rotated token fires several
+requests in parallel, and none of those is a guess), and after that the same
+exponential backoff the admin login uses — 1 s doubling to a 5-minute cap,
+answered `429` with `Retry-After`. A correct token clears the counter; a
+request that also carries a live admin Bearer is never charged, so the
+device tier can never lock an admin out of the page that fixes it. The
+throttle is per source and has **no aggregate ceiling**, deliberately:
+unlike the admin login, this is the ordinary household surface, and a
+household-wide 429 that any host on the LAN could trigger would be a worse
+failure than the guessing it prevents. Every transport goes through the
+same throttle, including the WebSocket subprotocol.
+
+**Upgrading an existing install.** A Domovoi that was set up before this
+change still holds a 64-hex token, and it keeps working — nothing is
+invalidated and no client has to be re-paired. Only a **rotation** issues
+the new format, so moving to a phrase is a deliberate act: rotate under
+Settings → Devices → Household token, then pair each browser and phone
+again with the new phrase (an admin login re-pairs a browser by itself). An admin reads it from the
 dashboard (`GET /api/auth/device-token`, or `GET /v1/admin/device-token` on
 the core) to enrol a new phone, and rotates it from the `/rotate` sibling —
 after which every household client has to be re-enrolled. It is rotated
@@ -143,9 +177,10 @@ queue's does.
 
 **How a client gets it.** The dashboard keeps the token in `localStorage`,
 per server, and sends it on every request; a refusal that names the header
-opens a *pair this browser* prompt (the token is pasted once, and the
-refused request is replayed), and an admin login pairs the browser without
-a prompt by reading `GET /api/auth/device-token`. An admin sees the token
+opens a *pair this browser* prompt (the phrase is typed or pasted once — the
+browser canonicalises it before storing it — and the refused request is
+replayed), and an admin login pairs the browser without a prompt by reading
+`GET /api/auth/device-token`. An admin sees the token
 under **Settings → Devices → Household token**, with copy and rotate.
 The Android app asks for it once under **Settings → Connection**, stores it
 in `EncryptedSharedPreferences` (outside Android backups) and sends it on

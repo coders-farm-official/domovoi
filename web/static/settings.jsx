@@ -1843,7 +1843,7 @@ const HouseholdTokenCard = ({ fire }) => {
             <code className="mono" data-testid="household-token"
                   style={{ fontSize: 13, padding: '6px 10px', borderRadius: 'var(--r-sm)',
                            border: '1px solid var(--border)', background: 'var(--sunken)',
-                           userSelect: 'all', wordBreak: 'break-all', flex: '1 1 320px' }}>
+                           userSelect: 'all', overflowWrap: 'anywhere', flex: '1 1 320px' }}>
               {token}
             </code>
             <Button icon="copy" onClick={copy}>copy</Button>
