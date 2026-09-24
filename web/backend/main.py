@@ -10,6 +10,7 @@ poll loop in lifespan.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -408,20 +409,64 @@ async def health() -> HealthResponse:
 # How a BROWSER presents the household device token on this socket: it
 # cannot set a request header, but it can offer a subprotocol, and that
 # travels in the handshake rather than in the URL (a query string would
-# land in every access log). The dashboard offers
-# "domovoi.device-token.<token>" when it holds one (web/static/data.js).
+# land in every access log).
+#
+# The token is base64url-encoded into that element, and this is the whole
+# reason a household token may now be any printable ASCII. RFC 6455
+# requires each Sec-WebSocket-Protocol element to be an RFC 9110 *token*:
+# no space and none of " ( ) , / : ; < = > ? @ [ \ ] { }. A browser handed
+# anything else THROWS inside `new WebSocket(...)` before a byte is sent,
+# and uvicorn+websockets answers such a handshake 400 before this app is
+# called at all — so the grammar bound every client, not just browsers.
+# base64url's alphabet (A-Za-z0-9-_) is a legal token for ANY value, so
+# encoding at the transport lifts the restriction off the token itself.
+#
+# The LEGACY raw form is still read, for one release: a browser holding a
+# cached data.js from before this change offers it, and refusing would kill
+# its live state stream. (web/static/sw.js bumps SHELL_CACHE in the same
+# release so that window is short.) Note the two prefixes do not collide —
+# the character after "token" is "-" in one and "." in the other — which is
+# also why an OLD server correctly ignores the new element.
 WS_DEVICE_TOKEN_SUBPROTOCOL = "domovoi.device-token."
+WS_DEVICE_TOKEN_SUBPROTOCOL_B64 = "domovoi.device-token-b64."
 
 _REFUSE = object()
 
 
+def _decode_b64_token(payload: str) -> str | None:
+    """The token inside a ``domovoi.device-token-b64.`` element.
+
+    base64url with the ``=`` padding stripped (what ``btoa`` + replace
+    produces in the browser); the padding is put back before decoding.
+    Anything that is not valid base64url of valid UTF-8 is ``None`` — a
+    malformed offer is not a credential."""
+    pad = "=" * (-len(payload) % 4)
+    try:
+        return base64.urlsafe_b64decode(payload + pad).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
 def _offered_token_subprotocol(ws: WebSocket) -> tuple[str | None, str | None]:
     """``(token, subprotocol)`` from ``Sec-WebSocket-Protocol``, or
-    ``(None, None)``. The subprotocol has to be echoed back on accept or the
-    browser drops the connection, so it is returned even when the token in
-    it turns out to be useless."""
+    ``(None, None)``. The subprotocol has to be echoed back on accept —
+    exactly the string that was offered, or the browser drops the
+    connection — so it is returned even when the token in it turns out to
+    be useless.
+
+    EVERY offered element is scanned for the base64url form before any of
+    them is read as the legacy raw form, because a browser mid-rollout
+    offers both (b64 first) and the raw one may be a truncated or mangled
+    spelling of the same token: the header is split on "," and each part
+    stripped, so a token containing a comma or edge whitespace does not
+    survive the raw form at all. It survives the b64 one intact."""
     raw = ws.headers.get("sec-websocket-protocol") or ""
-    for offered in (part.strip() for part in raw.split(",")):
+    offers = [part.strip() for part in raw.split(",")]
+    for offered in offers:
+        if offered.startswith(WS_DEVICE_TOKEN_SUBPROTOCOL_B64):
+            token = _decode_b64_token(offered[len(WS_DEVICE_TOKEN_SUBPROTOCOL_B64):])
+            return (token or None), offered
+    for offered in offers:
         if offered.startswith(WS_DEVICE_TOKEN_SUBPROTOCOL):
             token = offered[len(WS_DEVICE_TOKEN_SUBPROTOCOL):].strip()
             return (token or None), offered
@@ -440,8 +485,10 @@ async def _authorize_state_socket(ws: WebSocket) -> object | None:
     * an admin ``Bearer``, or the dashboard's session cookie: this socket
       only renders state, which is the read tier's bar (the cookie is
       ``SameSite=Strict``, so another site's page cannot bring it here);
-    * the ``domovoi.device-token.<token>`` subprotocol, for a browser that
-      is paired but not signed in — a kiosk display, mostly;
+    * the ``domovoi.device-token-b64.<base64url(token)>`` subprotocol (or
+      the legacy ``domovoi.device-token.<token>`` one), for a browser that
+      is paired but not signed in — a kiosk display, mostly, which has no
+      cookie and for which the subprotocol is the ONLY credential;
     * the pre-setup grace, so a fresh install's dashboard is live before
       anyone has claimed the admin password.
 

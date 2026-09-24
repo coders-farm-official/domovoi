@@ -43,19 +43,24 @@ const Auth = (() => {
   const DEVICE_TOKEN_HEADER = 'X-Device-Token';
   const DEVICE_TOKEN_KEY = 'domovoi-device-token';
 
-  // The household token is an eight-word phrase now, so people TYPE it —
-  // off a screen, off a note, read out across the room. Canonicalise the
-  // same way the server does (domovoi/admin_auth.py normalize_device_token)
-  // before it is stored: trim, lowercase, and collapse every run of
-  // spaces / underscores / hyphens to one hyphen.
+  // What gets STORED: the token exactly as it was given, with the outer
+  // whitespace trimmed and nothing else. An admin may set the household
+  // token to any printable ASCII of 12 characters or more, so `MyT0ken!!`
+  // has to stay `MyT0ken!!` — lowercasing it here would pair the browser
+  // to a token that does not exist and every request would 401.
   //
-  // This is not cosmetic. What gets stored is what rides the WebSocket
-  // handshake as the `domovoi.device-token.<token>` subprotocol, and a
-  // subprotocol must be an RFC 9110 token — hand the WebSocket
-  // constructor a value with a space in it and it THROWS, so a token
-  // pasted with spaces would pair fine over HTTP and then silently kill
-  // the live state stream. A 64-hex token from an older install passes
-  // through this unchanged.
+  // This used to canonicalise, because the token rode the WebSocket
+  // handshake raw and a subprotocol must be an RFC 9110 token. It no
+  // longer does: data.js base64url-encodes the token into the
+  // `domovoi.device-token-b64.` element, so the transport's grammar is
+  // the transport's problem. See normalize_device_token in
+  // domovoi/admin_auth.py — the server still accepts the CANONICAL form of
+  // a token that is itself canonical, which is what keeps typing a
+  // generated eight-word phrase forgiving about case and spaces.
+  const storableDeviceToken = (value) => String(value == null ? '' : value).trim();
+
+  // The canonical form, for display and for comparing two spellings of a
+  // generated phrase. Nothing on the storage path may call this.
   const normalizeDeviceToken = (value) =>
     String(value == null ? '' : value).trim().toLowerCase()
       .replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -129,7 +134,7 @@ const Auth = (() => {
       if (!r.ok) return false;
       const data = await r.json();
       if (data && data.token) {
-        writeDeviceToken(normalizeDeviceToken(data.token));
+        writeDeviceToken(storableDeviceToken(data.token));
         credentialVersion += 1;
         // If the "pair this browser" prompt is standing, it has just
         // been answered without anyone typing (or seeing) the token —
@@ -159,7 +164,9 @@ const Auth = (() => {
     // Store the household token for the current server (pasted in the
     // pair modal, fetched at login, or handed over by a rotation).
     pair(value) {
-      const clean = normalizeDeviceToken(value);
+      // Verbatim (trimmed): the server stores what an admin chose, and
+      // this browser must present exactly that.
+      const clean = storableDeviceToken(value);
       if (!clean) return false;
       writeDeviceToken(clean);
       credentialVersion += 1;

@@ -40,8 +40,67 @@ const API_BASE = (() => {
   try { return localStorage.getItem(SERVER_KEY) || ''; } catch { return ''; }
 })();
 const WS_PATH = '/ws/state';
-// Must match web/backend/main.py WS_DEVICE_TOKEN_SUBPROTOCOL.
-const WS_DEVICE_TOKEN_SUBPROTOCOL = 'domovoi.device-token.';
+// Must match web/backend/main.py WS_DEVICE_TOKEN_SUBPROTOCOL[_B64].
+//
+// The household token rides the handshake base64url-encoded. RFC 6455
+// requires every Sec-WebSocket-Protocol element to be an RFC 9110 token —
+// no space, none of " ( ) , / : ; < = > ? @ [ \ ] { } — and `new
+// WebSocket(...)` THROWS on anything else before a byte leaves the tab.
+// base64url's alphabet is a legal token for any value, which is what lets
+// the household token itself be any printable ASCII.
+const WS_DEVICE_TOKEN_SUBPROTOCOL = 'domovoi.device-token.';      // legacy, still read
+const WS_DEVICE_TOKEN_SUBPROTOCOL_B64 = 'domovoi.device-token-b64.';
+
+// RFC 9110 tchar: a token that matches this may ALSO be offered raw.
+const WS_TCHAR_ONLY = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+const WS_B64URL_ALPHABET =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+// Hand-rolled rather than btoa(): btoa is byte-oriented (it throws on any
+// code point above 0xFF) and neither it nor TextEncoder exists in the Node
+// vm the pairing tests run auth.js/data.js inside.
+const wsUtf8Bytes = (s) => {
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s.codePointAt(i);
+    if (c > 0xffff) i++;                       // surrogate pair, consumed
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63),
+                  0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+};
+
+// base64url with the '=' padding stripped; the server puts it back.
+const wsBase64Url = (s) => {
+  const b = wsUtf8Bytes(s);
+  let out = '';
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((b[i + 1] || 0) << 8) | (b[i + 2] || 0);
+    const left = b.length - i;
+    out += WS_B64URL_ALPHABET[(n >> 18) & 63] + WS_B64URL_ALPHABET[(n >> 12) & 63];
+    if (left > 1) out += WS_B64URL_ALPHABET[(n >> 6) & 63];
+    if (left > 2) out += WS_B64URL_ALPHABET[n & 63];
+  }
+  return out;
+};
+
+// What this browser offers on the handshake, b64 FIRST. The legacy raw
+// element is added only when the token is itself a legal RFC 9110 token —
+// the constructor validates EVERY element, so offering an illegal one
+// alongside a legal one throws the whole call away. It is worth adding
+// when it is legal: a server that has not been restarted yet does not know
+// the b64 prefix, and a browser whose offers are all unrecognised gets no
+// subprotocol echoed back and drops the socket.
+const wsDeviceSubprotocols = (token) => {
+  if (!token) return null;
+  const offers = [`${WS_DEVICE_TOKEN_SUBPROTOCOL_B64}${wsBase64Url(token)}`];
+  if (WS_TCHAR_ONLY.test(token)) offers.push(`${WS_DEVICE_TOKEN_SUBPROTOCOL}${token}`);
+  return offers;
+};
 
 const ServerStore = {
   current: () => API_BASE, // '' = same-origin
@@ -470,15 +529,25 @@ class StateBus {
     // credential on a WebSocket handshake — it cannot set a header, and a
     // query string would end up in every access log.
     const device = deviceToken();
+    const protocols = wsDeviceSubprotocols(device);
     let ws;
     try {
-      ws = device
-        ? new WebSocket(url, [`${WS_DEVICE_TOKEN_SUBPROTOCOL}${device}`])
-        : new WebSocket(url);
+      ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
     } catch (e) {
-      console.warn('ws connect failed:', e);
-      this._scheduleReconnect();
-      return;
+      // The constructor throws a SyntaxError whose MESSAGE contains the
+      // whole subprotocol string — i.e. the household token. Never log the
+      // exception, and do not schedule a reconnect that will throw again
+      // forever: retry once with no subprotocol, which still authenticates
+      // a signed-in browser by its cookie (a kiosk, which has only the
+      // token, is then refused by the server rather than silently looping).
+      console.warn('ws connect failed with a device subprotocol — retrying without one');
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        console.warn('ws connect failed');
+        this._scheduleReconnect();
+        return;
+      }
     }
     this.ws = ws;
 

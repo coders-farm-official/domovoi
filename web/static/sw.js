@@ -17,7 +17,16 @@
  * for anything it doesn't recognise.
  */
 
-const SHELL_CACHE = 'domovoi-shell-v2';
+// BUMP THIS whenever a shell asset's CONTRACT with the server changes.
+// Same-origin static is cache-first with no revalidation (below), and the
+// install handler that repopulates the cache only fires when this file's
+// own bytes change — so a warm browser keeps the auth.js and data.js it
+// installed with, forever, until the name moves. v3: auth.js stores the
+// household token verbatim and data.js offers it base64url-encoded on the
+// /ws/state handshake. A v2 browser still works against a v3 server (the
+// server reads the legacy raw subprotocol too) but cannot pair with a
+// token an admin chose, because its auth.js lowercases it first.
+const SHELL_CACHE = 'domovoi-shell-v3';
 const AUDIO_CACHE = 'domovoi-audio-v1';   // shared with player.jsx OfflineCache
 const RUNTIME_CACHE = 'domovoi-runtime-v1';
 
