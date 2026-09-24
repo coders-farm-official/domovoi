@@ -206,7 +206,7 @@
           "auth"
         ],
         "summary": "Auth Change Password",
-        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only.",
+        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only. Every OTHER session is revoked: a token\nminted under the old password does not survive it; the calling\nsession stays logged in.",
         "operationId": "auth_change_password_api_auth_password_post",
         "requestBody": {
           "content": {
@@ -237,6 +237,96 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/device-token": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Device Token",
+        "description": "The household device token for the settings page and for enrolling\na phone. Same table and same gate as the core's\n``GET /v1/admin/device-token``: Bearer or cookie renders it, 401\notherwise, 501 before setup.",
+        "operationId": "auth_device_token_api_auth_device_token_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Device Token Api Auth Device Token Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Set Device Token",
+        "description": "Replace the household device token with one an admin chose\n(Bearer-only, 501 before setup \u2014 setting a token IS a rotation).\n\nAt least 12 characters of printable ASCII, stored verbatim with the\nouter whitespace trimmed. The previous token is refused from now on,\nevery other device must be given the new one, and the file mirror is\nrewritten.",
+        "operationId": "auth_set_device_token_api_auth_device_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Set Device Token Api Auth Device Token Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/device-token/rotate": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Rotate Device Token",
+        "description": "Replace the household device token (Bearer-only, 501 before\nsetup). The previous token is refused from now on; the file mirror\nis rewritten.",
+        "operationId": "auth_rotate_device_token_api_auth_device_token_rotate_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Rotate Device Token Api Auth Device Token Rotate Post"
                 }
               }
             }
@@ -918,7 +1008,7 @@
           "music"
         ],
         "summary": "Patch Track",
-        "description": "Partial update of a library_tracks row. Today only ``favorited``\nis editable; the PATCH shape is general so future per-field edits\n(title/artist tweaks, etc.) won't need a new endpoint.",
+        "description": "Partial update of a library_tracks row: ``favorited`` and, from\nthe track drawer's edit mode (F-024), title / artist / album. Column\nnames come from the schema's fields only, values are bound. A\nmetadata edit stamps ``enriched_at`` so the enricher (unenriched\nrows only) leaves the hand correction alone.",
         "operationId": "patch_track_api_music_library__track_id__patch",
         "parameters": [
           {
@@ -1064,7 +1154,7 @@
           "music"
         ],
         "summary": "Upload To Library",
-        "description": "Upload audio into the library from the browser.\n\nAccepts one or more audio files directly, and/or ``.zip`` archives\n(each unpacked, with audio members extracted and non-audio members\n\u2014 cover art, ``.txt`` \u2014 ignored). Everything lands in\n``MUSIC_DIR/uploads/``; a library reindex is then triggered on the\nDomovoi server, which indexes the new rows and tells each room's MPD\nto rescan so the tracks are playable right away.\n\nSupported extensions: mp3, m4a, mp4, flac, ogg, oga, opus, wav,\nwma, aac, alac. Standalone files of any other type are reported in\n``skipped``; if nothing supported is found, returns 400.\n\nIf the Domovoi server is unreachable the files are still saved\n(``reindex_triggered=false``) and get picked up by the indexer on\nits next startup sweep.",
+        "description": "Upload audio into the library from the browser.\n\nAccepts one or more audio files directly, and/or ``.zip`` archives\n(each unpacked, with audio members extracted and non-audio members\n\u2014 cover art, ``.txt`` \u2014 ignored). Everything lands in\n``MUSIC_DIR/uploads/``; the files just written are then indexed into\n``library_tracks`` in-process and each room's MPD is asked to rescan,\nso the tracks are listed and playable right away. Neither step is the\nadmin-gated library-wide sweep \u2014 see the comment at the call site.\n\nSupported extensions: mp3, m4a, mp4, flac, ogg, oga, opus, wav,\nwma, aac, alac. Standalone files of any other type are reported in\n``skipped``; if nothing supported is found, returns 400.\n\nIf the index cannot run the files are still saved\n(``reindex_triggered=false``) and get picked up by the indexer on\nits next startup sweep.",
         "operationId": "upload_to_library_api_music_library_upload_post",
         "requestBody": {
           "content": {
@@ -1570,6 +1660,7 @@
           "music"
         ],
         "summary": "Reindex",
+        "description": "Re-walk the music library. Admin tier at both hops \u2014 the core\nroute this proxies to is admin-gated, so the web hop names the same\ntier rather than forwarding a refusal from one process later.",
         "operationId": "reindex_api_music_library_reindex_post",
         "responses": {
           "200": {
@@ -1589,6 +1680,7 @@
           "music"
         ],
         "summary": "Enrich",
+        "description": "Backfill library metadata from the tagging providers. Admin tier\nat both hops, like the reindex it follows.",
         "operationId": "enrich_api_music_library_enrich_post",
         "responses": {
           "200": {
@@ -2145,7 +2237,7 @@
           "devices"
         ],
         "summary": "Rename Device",
-        "description": "Rename a device. Open under LAN trust, like registration \u2014 and\nharmless for the blocklist, which matches ids too.",
+        "description": "Rename a device. Device tier, like registration \u2014 and harmless for\nthe blocklist, which matches ids too.",
         "operationId": "rename_device_api_devices__device_id__patch",
         "parameters": [
           {
@@ -3366,6 +3458,7 @@
           "satellite-media"
         ],
         "summary": "Media Download",
+        "description": "The built overlay, for the operator to unzip onto a flashed card.\n\nAdmin-gated with the rest of the router, and since WEB-1 the zip no\nlonger carries the setup-AP or console passwords \u2014 those are shown\nonce in the dashboard instead (see ``builder.build``).",
         "operationId": "media_download_api_satellites_media_jobs__job_id__download_get",
         "parameters": [
           {
@@ -3532,7 +3625,7 @@
           "satellites"
         ],
         "summary": "List Approvals",
-        "description": "Satellites waiting on a human. Declared BEFORE /{room_id} so the\npath parameter can't shadow it.",
+        "description": "Satellites waiting on a human. Declared BEFORE /{room_id} so the\npath parameter can't shadow it. Codes are not part of the response:\nthe operator reads the code off the device.",
         "operationId": "list_approvals_api_satellites_approvals_get",
         "responses": {
           "200": {
@@ -3552,7 +3645,7 @@
           "satellites"
         ],
         "summary": "Approve Satellite",
-        "description": "Approve a pending satellite \u2014 writes the pairing that binds this room\nto this device. Admin-gated at both hops.",
+        "description": "Approve a pending satellite \u2014 writes the pairing that binds this room\nto this device. Admin-gated at both hops, and the core compares the\ncode the operator typed before it binds anything (400 without one, 403\non a mismatch, 429 once a room has been tried too often).",
         "operationId": "approve_satellite_api_satellites_approvals__room_id__approve_post",
         "parameters": [
           {
@@ -3565,6 +3658,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SatelliteApproveRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3683,7 +3786,7 @@
           "satellites"
         ],
         "summary": "Update Satellite",
-        "description": "Update a satellite's display room label (grouping tag). Daily-tier\ncosmetic metadata, like volume.",
+        "description": "Update a satellite's display room label (grouping tag). Daily-tier\ncosmetic metadata, like volume. The core route is on the device tier,\nso the caller's credentials ride along.",
         "operationId": "update_satellite_api_satellites__room_id__patch",
         "parameters": [
           {
@@ -4273,7 +4376,7 @@
           "satellites"
         ],
         "summary": "Dropin Phone Info",
-        "description": "Connection info for a phone client that wants to drop in on\n``room_id`` itself (phone \u2194 room audio, domovoi\n``/v1/dropin/{room_id}`` WebSocket \u2014 see domovoi/phone_dropin.py).\n\nThe phone only knows this web backend's address; the streaming socket\nlives on the Domovoi server process. Return the Domovoi server's port (and\nhost when it isn't the loopback shorthand) so the client can derive\n``ws://<host>:<port>/v1/dropin/{room_id}``. No domovoi round-trip\n\u2014 this is static config.",
+        "description": "Connection info for a phone client that wants to drop in on\n``room_id`` itself (phone \u2194 room audio, domovoi\n``/v1/dropin/{room_id}`` WebSocket \u2014 see domovoi/phone_dropin.py).\n\nThe phone only knows this web backend's address; the streaming socket\nlives on the Domovoi server process. Return the Domovoi server's port (and\nhost when it isn't the loopback shorthand) so the client can derive\n``ws://<host>:<port>/v1/dropin/{room_id}``. No domovoi round-trip\n\u2014 this is static config.\n\nRequires the household device token (or an admin Bearer); the phone\npresents the same token again on the WebSocket upgrade.",
         "operationId": "dropin_phone_info_api_satellites__room_id__dropin_phone_info_get",
         "parameters": [
           {
@@ -4365,7 +4468,7 @@
           "satellites"
         ],
         "summary": "Restart",
-        "description": "Ask a satellite to restart its own service. The Pi drains playback\nthen runs a sudo'ed systemctl restart (needs the self-restart sudoers\nentry from PROVISIONING.md). 404 if the room isn't connected.",
+        "description": "Ask a satellite to restart its own service. The Pi drains playback\nthen runs a sudo'ed systemctl restart (needs the self-restart sudoers\nentry from PROVISIONING.md). 404 if the room isn't connected. Admin tier\nhere and at the core, and the caller's credentials are forwarded so the\ncore can apply its own gate too.",
         "operationId": "restart_api_satellites__room_id__restart_post",
         "parameters": [
           {
@@ -4406,7 +4509,7 @@
           "satellites"
         ],
         "summary": "Set Display",
-        "description": "Drive a video satellite's screen from the drawer's Display block:\npanel on/off or a kiosk-browser restart. Daily-tier device control,\nlike volume/restart. Proxies to the Domovoi server, which sends the\n``set_display`` frame to the live session. 404 when the room isn't\nconnected, 409 when it isn't a video satellite, 503 when nothing is.",
+        "description": "Drive a video satellite's screen from the drawer's Display block:\npanel on/off or a kiosk-browser restart. Admin tier, like the satellite\nrestart beside it. Proxies to the Domovoi server, which sends the\n``set_display`` frame to the live session. 404 when the room isn't\nconnected, 409 when it isn't a video satellite, 503 when nothing is.",
         "operationId": "set_display_api_satellites__room_id__display_post",
         "parameters": [
           {
@@ -4952,14 +5055,42 @@
           "config"
         ],
         "summary": "Get Editable Config",
-        "description": "Editable domovoi settings \u2014 the FieldSpec registry joined with\ncurrent values \u2014 for the settings gear. Passes through to the\nDomovoi server so values are LIVE; the web process holds its own separate\n``settings`` copy that goes stale the moment a save mutates the\nDomovoi server's singleton, so we must not read it here. Credentials are\nforwarded \u2014 the core applies its own \u00a77.3 gate.",
+        "description": "Editable domovoi settings \u2014 the FieldSpec registry joined with\ncurrent values \u2014 for the settings gear. Passes through to the\nDomovoi server so values are LIVE; the web process holds its own separate\n``settings`` copy that goes stale the moment a save mutates the\nDomovoi server's singleton, so we must not read it here. Credentials are\nforwarded \u2014 the core applies its own \u00a77.3 gate, and decides from them\nwhat the answer contains: secret values (the database URL, API keys)\nread back masked, and the ``advanced`` section comes back only for a\ncaller holding an admin Bearer (``advanced_available`` says which).\n``section=advanced`` asks for that block alone and is a 401 for a\ncookie-only caller.",
         "operationId": "get_editable_config_api_config_editable_get",
+        "parameters": [
+          {
+            "name": "section",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Section"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -4973,14 +5104,14 @@
         "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected}``. The web process never mutates\nits own settings copy \u2014 every write fans out to :6370.",
         "operationId": "patch_editable_config_api_config_editable_patch",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ConfigUpdateRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -5012,6 +5143,26 @@
         "summary": "Get Version",
         "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. Read-only proxy to the Domovoi server, which\nowns the git working tree; the web process can't see it.",
         "operationId": "get_version_api_config_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/server-identity": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Server Identity",
+        "description": "This server's fingerprint \u2014 the string a satellite is prepared with.\n\nShown under Settings \u2192 About so a person can read it off the screen\nand compare it with the one printed on a prepared card, which is the\nwhole point of a fingerprint: it turns \"is this the right server?\"\ninto something a human can answer. Read-only proxy of the core's\n``/v1/health`` identity block; the public key never implies anything\nthe core did not already publish there.",
+        "operationId": "get_server_identity_api_config_server_identity_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5070,7 +5221,7 @@
           "config"
         ],
         "summary": "Pull Version",
-        "description": "`git pull --ff-only` on the Domovoi server \u2014 a deliberate, separate\naction never triggered by the check. A dirty or diverged tree returns\npulled=False; the Domovoi server process is not restarted.",
+        "description": "`git pull --ff-only` on the Domovoi server \u2014 a deliberate, separate\naction never triggered by the check. Admin tier, like the core route it\nproxies to. A dirty or diverged tree returns pulled=False; the Domovoi\nserver process is not restarted.",
         "operationId": "pull_version_api_config_version_pull_post",
         "responses": {
           "200": {
@@ -5114,7 +5265,7 @@
           "playlists"
         ],
         "summary": "Create Playlist",
-        "description": "Create a new playlist. Case-insensitive duplicate names are\nrejected by the ``idx_playlists_name_ci`` unique index \u2014 we\npre-check here to return a friendly 409 instead of an IntegrityError.",
+        "description": "Create a new playlist \u2014 name plus the optional description /\ncover colour / emoji in one request (F-021). Case-insensitive\nduplicate names are rejected by the ``idx_playlists_name_ci`` unique\nindex \u2014 we pre-check here to return a friendly 409 instead of an\nIntegrityError.",
         "operationId": "create_playlist_api_playlists_post",
         "requestBody": {
           "content": {
@@ -5681,7 +5832,7 @@
           "voices"
         ],
         "summary": "Upload Piper Voice",
-        "description": "Upload a Piper voice: the ``.onnx`` model and its ``.onnx.json``\nconfig. Saved under the voice-models dir as ``<slug>.onnx`` /\n``<slug>.onnx.json``; the row's ``model_ref`` is the slug.",
+        "description": "Upload a Piper voice: the ``.onnx`` model and its ``.onnx.json``\nconfig. Saved under the voice-models dir as ``<slug>.onnx`` /\n``<slug>.onnx.json``; the row's ``model_ref`` is the slug.\n\nAdmin-gated, and both files are streamed to disk under a byte budget\n(model ``_MAX_ONNX_BYTES``, config ``_MAX_CONFIG_BYTES``) rather than\nread into memory \u2014 an oversized upload is answered 413 while it is\nstill arriving.",
         "operationId": "upload_piper_voice_api_voices_piper_post",
         "requestBody": {
           "content": {
@@ -7077,7 +7228,7 @@
           "documents"
         ],
         "summary": "Serve Raw",
-        "description": "Serve a file's bytes to the BROWSER (plain ``window.open`` works)\nwith the right ``Content-Type`` and an inline ``Content-Disposition``.\nRead scope is bounded entirely by the containment check.",
+        "description": "Serve a file's bytes to the BROWSER (plain ``window.open`` works)\nwith the right ``Content-Type``. PDFs and pictures render inline \u2014\nthat is what the New-tab affordance is for \u2014 but a document that the\nbrowser would treat as CODE comes back as a download instead, under\nthe headers in :mod:`web.backend.api.inline_serve`. A ``.html`` or\n``.svg`` saved in this folder is a document, not a page of the\ndashboard, and must never run on the dashboard's origin.\n\nRead scope is bounded entirely by the containment check.",
         "operationId": "serve_raw_api_documents_raw__rel_path__get",
         "parameters": [
           {
@@ -7301,7 +7452,7 @@
           "files"
         ],
         "summary": "Download",
-        "description": "Download a file (as an attachment) or a directory (server-built zip with\na member cap). Audio uses ``serve_audio_range`` (Range/206); everything else\nis a plain attachment ``FileResponse``.",
+        "description": "Download a file (as an attachment) or a directory (server-built zip with\na member cap). Audio uses ``serve_audio_range`` (Range/206); everything else\nis a plain attachment ``FileResponse``.\n\nA FILE is device tier. A DIRECTORY is not: the zip is built in memory\nand hands back a whole tree in one request, so it asks for an admin\nsession (REV-1).",
         "operationId": "download_api_files_download_get",
         "parameters": [
           {
@@ -7643,7 +7794,7 @@
           "podcasts"
         ],
         "summary": "Subscribe",
-        "description": "Subscribe by RSS URL, or by name via iTunes discovery (network).",
+        "description": "Subscribe by RSS URL, or by name via iTunes discovery (network).\n\nDevice tier: ``X-Device-Token`` or an admin Bearer. The feed URL \u2014\ntyped in or returned by discovery \u2014 must be an http(s) URL outside\nthe house's own address space.",
         "operationId": "subscribe_api_podcasts_subscriptions_post",
         "requestBody": {
           "content": {
@@ -7829,7 +7980,7 @@
           "podcasts"
         ],
         "summary": "Poll Now",
-        "description": "Run one feed-poll + download + keep-N pass immediately (network).\nThe web process runs the poller functions directly against the shared DB\n\u2014 the same code the background worker ticks.",
+        "description": "Run one feed-poll + download + keep-N pass immediately (network).\nThe web process runs the poller functions directly against the shared DB\n\u2014 the same code the background worker ticks.\n\nDevice tier: it makes the server fetch every subscribed feed now.",
         "operationId": "poll_now_api_podcasts_poll_post",
         "responses": {
           "200": {
@@ -8760,7 +8911,7 @@
           "images"
         ],
         "summary": "Raw",
-        "description": "The original image, served inline (the Files tab's Open target).",
+        "description": "The original image, served inline (the Files tab's Open target).\n\nWith one exception: an **SVG is a document a browser executes**, not a\npicture it decodes, so it comes back as a download with the inert\nheaders rather than rendering on the dashboard's origin (WEB-3). Every\nother image type renders inline as before.",
         "operationId": "raw_api_images_raw_get",
         "parameters": [
           {
@@ -9383,7 +9534,7 @@
           "models"
         ],
         "summary": "Delete Installed",
-        "description": "Delete an installed Ollama model from disk (``/api/delete``).",
+        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.",
         "operationId": "delete_installed_api_models__name__delete",
         "parameters": [
           {
@@ -9448,7 +9599,7 @@
           "models"
         ],
         "summary": "Start Pull",
-        "description": "Start (or attach to) a background pull for ``model``. Idempotent per\nmodel: if a pull is already in flight the existing job is returned rather\nthan starting a duplicate transfer (enforced by the partial unique\nindex).",
+        "description": "Start (or attach to) a background pull for ``model``. Idempotent per\nmodel: if a pull is already in flight the existing job is returned rather\nthan starting a duplicate transfer (enforced by the partial unique\nindex).\n\nAdmin tier, and a model reference that names its own registry host is\nchecked against the outbound-URL rules first.",
         "operationId": "start_pull_api_models_pull_post",
         "requestBody": {
           "content": {
@@ -9492,7 +9643,7 @@
           "models"
         ],
         "summary": "Cancel Pull",
-        "description": "Request cancellation of an in-flight pull. Cooperative: the streaming\ntask checks the cancel flag between progress lines, aborts the transfer,\nand marks the job ``cancelled``.",
+        "description": "Request cancellation of an in-flight pull. Cooperative: the streaming\ntask checks the cancel flag between progress lines, aborts the transfer,\nand marks the job ``cancelled``. Admin tier, like the pull it stops.",
         "operationId": "cancel_pull_api_models_pull__job_id__cancel_post",
         "parameters": [
           {
@@ -9738,6 +9889,7 @@
           "news"
         ],
         "summary": "Add Topic Feed",
+        "description": "Attach a feed to a topic. Device tier: ``X-Device-Token`` or an\nadmin Bearer \u2014 attaching makes the server fetch the URL.",
         "operationId": "add_topic_feed_api_news_topics__topic_id__feeds_post",
         "parameters": [
           {
@@ -9834,7 +9986,7 @@
           "news"
         ],
         "summary": "Validate Feed",
-        "description": "Re-check a feed's validity by parsing it now; update the validity dot.",
+        "description": "Re-check a feed's validity by parsing it now; update the validity\ndot. Device tier \u2014 it fetches the feed.",
         "operationId": "validate_feed_api_news_feeds__feed_id__validate_post",
         "parameters": [
           {
@@ -10918,6 +11070,7 @@
           "changes": {
             "additionalProperties": true,
             "type": "object",
+            "maxProperties": 500,
             "title": "Changes"
           }
         },
@@ -11242,6 +11395,19 @@
           "name"
         ],
         "title": "DeviceRename"
+      },
+      "DeviceTokenRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "DeviceTokenRequest"
       },
       "DisplayRequest": {
         "properties": {
@@ -12946,13 +13112,50 @@
             "maxLength": 120,
             "minLength": 1,
             "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "cover_color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Color"
+          },
+          "cover_emoji": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Emoji"
           }
         },
         "type": "object",
         "required": [
           "name"
         ],
-        "title": "PlaylistCreate"
+        "title": "PlaylistCreate",
+        "description": "Create takes the same presentation fields PATCH edits, so the\ndashboard's new-playlist form posts once instead of create-then-edit\n(F-021)."
       },
       "PlaylistPatch": {
         "properties": {
@@ -13815,6 +14018,23 @@
         ],
         "title": "Satellite"
       },
+      "SatelliteApproveRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "pattern": "^[0-9]+$",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "SatelliteApproveRequest",
+        "description": "Approve a parked satellite by the code it is showing and saying.\n\nThe dashboard never renders the code, so this is the operator copying\nit off the device in the room \u2014 which is what makes the approval a\nstatement about a device rather than about a room name. The core\ncompares it in constant time and counts the attempt."
+      },
       "SatelliteDisplay": {
         "properties": {
           "on": {
@@ -14383,11 +14603,47 @@
               }
             ],
             "title": "Favorited"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "artist": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist"
+          },
+          "album": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Album"
           }
         },
         "type": "object",
         "title": "TrackPatch",
-        "description": "Partial update for a ``library_tracks`` row. Today only the\n``favorited`` flag is editable from the dashboard \u2014 exposed as a\nPATCH so future per-field tweaks (manual title/artist edits etc.)\nplug into the same surface without a new endpoint."
+        "description": "Partial update for a ``library_tracks`` row: the ``favorited``\nflag, and the title / artist / album a person corrects from the\ntrack drawer (F-024). Only fields actually sent are written; a\nmetadata edit also stamps ``enriched_at`` so the enricher's next\nsweep (which touches unenriched rows only) can't overwrite a hand\ncorrection."
       },
       "UploadResponse": {
         "properties": {
@@ -14852,6 +15108,7 @@
             "type": "string",
             "maxLength": 120,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9 ,.'-]+$",
             "title": "Phrase"
           },
           "threshold": {
