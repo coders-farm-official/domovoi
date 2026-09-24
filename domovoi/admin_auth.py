@@ -680,22 +680,27 @@ async def set_device_token(session: AsyncSession, value: str | None) -> str:
 _NO_CANONICAL_FORM = _sha256("\x00no-canonical-form\x00" + secrets.token_hex(32))
 
 # `stored == normalize(stored)` is secret-dependent work, so it is done
-# ONCE per stored token rather than on every compare: (token_hash,
-# canonical hash or None). One row per install means one entry; a rotation
-# changes token_hash, which misses the cache and recomputes, so there is
-# nothing to invalidate by hand.
-_canonical_hash_cache: tuple[str, str | None] | None = None
+# ONCE per stored token rather than on every compare: (token_hash, the hash
+# the canonical branch compares against). One row per install means one
+# entry; a rotation changes token_hash, which misses the cache and
+# recomputes, so there is nothing to invalidate by hand.
+_canonical_hash_cache: tuple[str, str] | None = None
 
 
-def _canonical_token_hash(stored: str | None, stored_hash: str) -> str | None:
-    """The hash a canonicalised candidate may be compared against, or
-    ``None`` when the stored token is not itself canonical (and so is
-    matched only by its exact characters)."""
+def _canonical_token_hash(stored: str | None, stored_hash: str) -> str:
+    """The hash a canonicalised candidate is compared against: the stored
+    hash when the stored token is itself canonical, and
+    :data:`_NO_CANONICAL_FORM` when it is not.
+
+    A sentinel rather than ``None`` so the caller has no branch at all —
+    ``x or SENTINEL`` at the compare would still be one secret-dependent
+    step, and the whole point is that the compare looks identical either
+    way."""
     global _canonical_hash_cache
     cached = _canonical_hash_cache
     if cached is not None and cached[0] == stored_hash:
         return cached[1]
-    result: str | None = None
+    result = _NO_CANONICAL_FORM
     if stored is not None and normalize_device_token(stored) == stored:
         result = stored_hash
     _canonical_hash_cache = (stored_hash, result)
@@ -742,9 +747,7 @@ async def validate_device_token(session: AsyncSession, candidate: str | None) ->
         return False
     canonical_hash = _canonical_token_hash(getattr(row, "token", None), stored_hash)
     exact_ok = secrets.compare_digest(_sha256(exact), stored_hash)
-    canonical_ok = secrets.compare_digest(
-        _sha256(canonical), canonical_hash or _NO_CANONICAL_FORM
-    )
+    canonical_ok = secrets.compare_digest(_sha256(canonical), canonical_hash)
     # Bitwise, not `or`: no short-circuit, so which form matched is not
     # readable from the timing.
     return bool(exact_ok | canonical_ok)
