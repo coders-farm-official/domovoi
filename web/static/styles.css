@@ -669,6 +669,21 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 .cal-modal .err   { font-size: 11px; color: var(--err); font-family: var(--ff-mono); }
 .cal-modal .hint  { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
 .cal-modal .hint code { background: var(--sunken); padding: 1px 4px; border-radius: 3px; }
+/* The pair-this-browser modal's two ways in. The sign-in is the way out
+   for someone who has never heard of the household token, so it gets the
+   full width of the modal; "or paste the household token" is the fork to
+   the field below it. */
+.cal-modal .pair-signin { display: flex; }
+.cal-modal .pair-signin .btn { flex: 1; height: 34px; justify-content: center; }
+.cal-modal .pair-or {
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center; gap: 10px;
+}
+.cal-modal .pair-or span { height: 1px; background: var(--border-soft); }
+.cal-modal .pair-or .lab {
+  height: auto; background: none;
+  font-size: 10px; color: var(--fg-faint); text-transform: lowercase;
+}
 .cal-source-pick { display: inline-flex; gap: 6px; }
 .cal-source-pick .opt {
   appearance: none; border: 1px solid var(--border);

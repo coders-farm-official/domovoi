@@ -14,7 +14,9 @@
  * login fetches it (`GET /api/auth/device-token`) and stores it
  * silently, or a request refused for want of it pops the "pair this
  * browser" modal, where the household token (Settings → Devices on an
- * admin's dashboard) is pasted once.
+ * admin's dashboard) is pasted once. Nobody is cornered by that modal:
+ * it also offers "sign in as an admin instead" (signInInstead) — the
+ * first way, spelled as a button.
  *
  * `Auth` is a tiny global store: components.jsx's <AuthModalHost/>
  * subscribes and shows the login/setup modal whenever an API call
@@ -129,6 +131,12 @@ const Auth = (() => {
       if (data && data.token) {
         writeDeviceToken(normalizeDeviceToken(data.token));
         credentialVersion += 1;
+        // If the "pair this browser" prompt is standing, it has just
+        // been answered without anyone typing (or seeing) the token —
+        // take it down. Nothing about the pairing itself changes:
+        // ensurePaired still resolves off the stored token and data.js
+        // still replays the refused request exactly once.
+        pairModalOpen = false;
         return true;
       }
     } catch { /* stays unpaired; the pair modal covers it */ }
@@ -193,6 +201,26 @@ const Auth = (() => {
     requestPairing() {
       if (pairModalOpen) return;
       pairModalOpen = true;
+      notify();
+    },
+
+    // The pair modal's way out for someone who does NOT have the
+    // household token — the case that made this exist: a browser with
+    // cleared storage 401s on its first device-tier request and is
+    // shown a prompt asking for a secret it has never heard of.
+    // Signing in as an admin is the answer, because login() fetches the
+    // household token itself (autoPair), so it is offered as an action
+    // rather than described in a hint.
+    //
+    // The pair modal deliberately STAYS open underneath:
+    // <AuthModalHost/> renders the login modal in preference to it, so
+    // only one is ever on screen, and dismissing the login falls back
+    // to the pairing prompt instead of a dead end — the flow waiting on
+    // ensurePaired is still waiting, and can still be answered with the
+    // token or cancelled.
+    signInInstead() {
+      if (modalOpen) return;
+      modalOpen = true;
       notify();
     },
 
