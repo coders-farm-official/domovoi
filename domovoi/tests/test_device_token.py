@@ -8,9 +8,9 @@ mirroring the row to ``~/.domovoi/device-token.txt``, and the
 ``require_device`` matrix through a mini app over fake primitives.
 
 DB-backed (``requires_db``): a token row + file after the first boot of
-EITHER process, the admin read / rotate endpoints on the core and their
-web mirror against the same table, rotation at setup, and a route wearing
-``require_device`` against the real tables.
+EITHER process, the admin read / set / rotate endpoints on the core and
+their web mirror against the same table, rotation at setup, and a route
+wearing ``require_device`` against the real tables.
 """
 
 from __future__ import annotations
@@ -268,12 +268,15 @@ async def test_core_device_token_read_and_rotate(_db) -> None:
 @pytest.mark.asyncio
 async def test_device_token_endpoints_are_closed_before_setup(_db) -> None:
     await admin_auth.ensure_device_token()
+    body = {"token": "a-perfectly-fine-token"}
     async with core_client() as core:
         assert (await core.get("/v1/admin/device-token")).status_code == 501
         assert (await core.post("/v1/admin/device-token/rotate")).status_code == 501
+        assert (await core.post("/v1/admin/device-token", json=body)).status_code == 501
     async with web_client() as web:
         assert (await web.get("/api/auth/device-token")).status_code == 501
         assert (await web.post("/api/auth/device-token/rotate")).status_code == 501
+        assert (await web.post("/api/auth/device-token", json=body)).status_code == 501
 
 
 @requires_db
@@ -382,6 +385,152 @@ async def test_a_phrase_pairs_however_it_was_typed(_db) -> None:
         for typed in (phrase, phrase.upper(), phrase.replace("-", " "),
                       phrase.replace("-", "_"), f"  {phrase}  "):
             assert (await c.post("/device", headers={HEADER: typed})).status_code == 200
+
+
+# ─── An admin SETS the token (2026-09-24) ────────────────────────────────
+
+# Spaces, a comma, digits and punctuation: illegal in the raw WebSocket
+# subprotocol, silently truncated by the server's own comma split, and
+# perfectly fine now that the token is base64url-encoded on that transport.
+CHOSEN = "Maple Street, 1984!"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_core_set_stores_the_chosen_token_verbatim(_db) -> None:
+    async with web_client() as web:
+        admin = await claim_admin(web)
+    before = await db_device_token()
+    async with core_client() as core:
+        # Same tier as rotate: Bearer-only.
+        assert (await core.post("/v1/admin/device-token", json={"token": CHOSEN})).status_code == 401
+        r = await core.post(
+            "/v1/admin/device-token", json={"token": CHOSEN}, headers=bearer(admin)
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"token": CHOSEN, "header": HEADER, "rotated": True}
+        # Read back through the OTHER endpoint: same row, same bytes.
+        r = await core.get("/v1/admin/device-token", headers=bearer(admin))
+        assert r.json()["token"] == CHOSEN
+    assert await db_device_token() == CHOSEN != before
+    assert admin_auth.read_device_token_file() == CHOSEN
+    # Setting IS a rotation: the previous token is refused from now on.
+    async with mini_client() as c:
+        assert (await c.post("/device", headers={HEADER: CHOSEN})).status_code == 200
+        assert (await c.post("/device", headers={HEADER: before})).status_code == 401
+        # ...and it is matched EXACTLY — it is not canonical, so no
+        # re-spelling of it opens the door.
+        assert (await c.post("/device", headers={HEADER: CHOSEN.lower()})).status_code == 401
+        assert (await c.post("/device", headers={HEADER: f"  {CHOSEN}  "})).status_code == 200
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_web_set_behaves_identically_and_hits_the_same_row(_db) -> None:
+    async with web_client() as web:
+        admin = await claim_admin(web)
+    # A FRESH client: claim_admin leaves the session cookie on its own, and
+    # the cookie is a 403 on this tier rather than the 401 a caller with no
+    # credential at all gets.
+    async with web_client() as fresh:
+        assert (await fresh.post("/api/auth/device-token", json={"token": CHOSEN})).status_code == 401
+        r = await fresh.post(
+            "/api/auth/device-token", json={"token": CHOSEN}, headers=bearer(admin)
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"token": CHOSEN, "header": HEADER, "rotated": True}
+    # The core serves what the web set — one table, two processes.
+    async with core_client() as core:
+        r = await core.get("/v1/admin/device-token", headers=bearer(admin))
+        assert r.json()["token"] == CHOSEN
+    assert admin_auth.read_device_token_file() == CHOSEN
+    # The cookie renders the read, never the write (the security tier).
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app), base_url="http://test",
+        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin}
+    ) as web:
+        assert (await web.get("/api/auth/device-token")).status_code == 200
+        r = await web.post("/api/auth/device-token", json={"token": "another-fine-token"})
+        assert r.status_code == 403
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bad", "says"),
+    [
+        ("hunter2", "at least 12 characters"),
+        ("   zebra   ", "at least 12 characters"),        # trimmed to 5
+        ("x" * 129, "at most 128 characters"),
+        ("cafe\u0301-token-abcdef", "non-ASCII"),
+        ("cat-\U0001f431-token", "non-ASCII"),
+        ("tab\there-token", "control characters"),
+        ("line\nbreak-token", "control characters"),
+        ("- - - - - - -", "spaces, hyphens and underscores"),
+    ],
+)
+async def test_both_SET_endpoints_400_with_a_usable_message(_db, bad, says) -> None:
+    """400, a message a person can act on, the row unchanged — and the
+    offending value NOT echoed back (a pydantic constrained field would put
+    it in the 422 body as `input`, which is why the body is a plain str)."""
+    async with web_client() as web:
+        admin = await claim_admin(web)
+    good = await db_device_token()
+    for client_factory, path in ((core_client, "/v1/admin/device-token"),
+                                 (web_client, "/api/auth/device-token")):
+        async with client_factory() as c:
+            r = await c.post(path, json={"token": bad}, headers=bearer(admin))
+            assert r.status_code == 400, (path, r.status_code, r.text)
+            detail = r.json()["detail"]
+            assert says in detail, (path, detail)
+            assert bad not in r.text and bad.strip() not in r.text, (path, r.text)
+            assert "Traceback" not in r.text
+        assert await db_device_token() == good
+        assert admin_auth.read_device_token_file() == good
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_set_token_survives_the_file_mirror_round_trip(_db) -> None:
+    """The mirror is read back with .strip() by every harness and by the
+    boot hook, so a stored token with edge whitespace would make
+    `ensure_device_token` rewrite the file on every boot. The SET endpoint
+    trims, so the row and the file agree and the second boot is a no-op."""
+    async with web_client() as web:
+        admin = await claim_admin(web)
+        r = await web.post(
+            "/api/auth/device-token",
+            json={"token": f"   {CHOSEN}   "},
+            headers=bearer(admin),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["token"] == CHOSEN
+    assert await db_device_token() == CHOSEN
+    assert admin_auth.read_device_token_file() == CHOSEN
+    mtime = admin_auth.device_token_path().stat().st_mtime_ns
+    assert await admin_auth.ensure_device_token() == CHOSEN
+    assert admin_auth.device_token_path().stat().st_mtime_ns == mtime
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_chosen_token_can_be_replaced_by_a_generated_one_again(_db) -> None:
+    """rotate still mints a phrase, so a household that regrets its custom
+    token has a way back that does not need the dialog."""
+    async with web_client() as web:
+        admin = await claim_admin(web)
+        r = await web.post(
+            "/api/auth/device-token", json={"token": CHOSEN}, headers=bearer(admin)
+        )
+        assert r.json()["token"] == CHOSEN
+        r = await web.post("/api/auth/device-token/rotate", headers=bearer(admin))
+        back = r.json()["token"]
+    assert len(back.split("-")) == admin_auth.DEVICE_TOKEN_WORDS
+    assert admin_auth.normalize_device_token(back) == back
+    async with mini_client() as c:
+        assert (await c.post("/device", headers={HEADER: CHOSEN})).status_code == 401
+        # ...and the phrase is forgiving again.
+        assert (await c.post("/device", headers={HEADER: back.upper()})).status_code == 200
 
 
 # ─── The web mirror ───────────────────────────────────────────────────────

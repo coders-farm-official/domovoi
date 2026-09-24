@@ -22,6 +22,7 @@ check already relies on) and fails, not skips, without it.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
@@ -69,9 +70,23 @@ const run = async ({ storage: seed, responses, script }) => {
              text: async () => text, json: async () => JSON.parse(text) };
   };
   const sockets = [];
+  // RFC 9110 tchar. A real browser validates EVERY element of `protocols`
+  // and throws a SyntaxError before a byte is sent; without this the stub
+  // happily accepts a spaced subprotocol and the test proves nothing.
+  const TCHAR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
   class WebSocket {
     constructor(url, protocols) {
-      this.url = url; this.protocols = protocols || []; this.sent = [];
+      const offered = protocols === undefined ? []
+        : (Array.isArray(protocols) ? protocols : [protocols]);
+      for (const p of offered) {
+        if (!TCHAR.test(String(p))) {
+          const e = new Error(
+            `Failed to construct 'WebSocket': The subprotocol '${p}' is invalid.`);
+          e.name = 'SyntaxError';
+          throw e;
+        }
+      }
+      this.url = url; this.protocols = offered; this.sent = [];
       this.handlers = {}; sockets.push(this);
     }
     addEventListener(ev, fn) { this.handlers[ev] = fn; }
@@ -251,21 +266,47 @@ SCENARIOS = {
           return { before, url: h.calls[0].url, header: h.calls[0].headers['X-Device-Token'], stored: h.storage.dump() };
         """,
     },
-    # An eight-word phrase typed by a person: however it was spelled, one
-    # canonical value is stored, sent and offered on the socket.
-    "a_typed_phrase_is_canonicalised_before_it_is_stored": {
+    # A token is stored EXACTLY as it was typed, bar the outer whitespace:
+    # an admin may set the household token to any printable ASCII, so
+    # lowercasing it here would pair the browser to a token that does not
+    # exist. Offered on the socket base64url-encoded.
+    "a_typed_token_is_stored_verbatim": {
         "responses": [OK],
         "script": r"""
-          h.Auth.pair('  Acorn  Maple_River-Thistle   HARBOR quartz willow ember ');
+          h.Auth.pair('  MyT0ken!!going  ');
           await h.w.apiGet('/api/x');
           h.w.stateBus.subscribe(() => {});
           return { stored: h.storage.dump(), header: h.calls[0].headers['X-Device-Token'],
                    protocols: h.sockets[0].protocols, url: h.sockets[0].url };
         """,
     },
+    # ...including one that is ILLEGAL in a raw subprotocol. A real browser
+    # throws on `new WebSocket(url, ['domovoi.device-token.a b c'])`, so the
+    # b64 element has to be the only one offered for this token.
+    "a_token_with_spaces_and_a_comma_still_opens_a_socket": {
+        "responses": [OK],
+        "script": r"""
+          h.Auth.pair('Maple Street, 1984!');
+          await h.w.apiGet('/api/x');
+          h.w.stateBus.subscribe(() => {});
+          return { stored: h.Auth.deviceToken(), header: h.calls[0].headers['X-Device-Token'],
+                   protocols: h.sockets[0].protocols, sockets: h.sockets.length };
+        """,
+    },
+    # A phrase is a legal RFC 9110 token, so BOTH elements are offered —
+    # b64 first, legacy second — and a server that has not been restarted
+    # yet still has something it recognises to echo back.
+    "a_phrase_offers_both_the_b64_and_the_legacy_element": {
+        "responses": [OK],
+        "script": r"""
+          h.Auth.pair('acorn-maple-river-thistle-harbor-quartz-willow-ember');
+          h.w.stateBus.subscribe(() => {});
+          return { protocols: h.sockets[0].protocols };
+        """,
+    },
     # A 64-hex token from an install that predates the phrase survives the
     # same canonicalisation untouched, so an upgraded browser stays paired.
-    "a_legacy_hex_token_is_untouched": {
+    "a_legacy_hex_token_is_stored_unchanged": {
         "responses": [OK],
         "script": r"""
           const hex = 'a3f0'.repeat(16);
@@ -504,25 +545,59 @@ def test_the_pair_modal_names_where_an_admin_finds_the_token():
     assert "Auth.pairModalOpen" in host and "PairModal" in host
 
 
-# ── the phrase format ───────────────────────────────────────────────────
+# ── the token format ────────────────────────────────────────────────────
 
 CANONICAL_PHRASE = "acorn-maple-river-thistle-harbor-quartz-willow-ember"
 
 
-def test_a_typed_phrase_is_canonicalised_before_it_is_stored(outcomes):
-    """People TYPE the household token now, so auth.js canonicalises it the
-    same way the server does. This is not cosmetic: what gets stored is
-    what rides the WebSocket handshake as a subprotocol, and a subprotocol
-    with a space in it makes the WebSocket constructor throw — the token
-    would pair over HTTP and then silently kill the live state stream."""
-    o = outcomes["a_typed_phrase_is_canonicalised_before_it_is_stored"]
-    assert o["stored"]["domovoi-device-token"] == CANONICAL_PHRASE
-    assert o["header"] == CANONICAL_PHRASE
-    assert o["protocols"] == [f"domovoi.device-token.{CANONICAL_PHRASE}"]
-    assert " " not in o["protocols"][0]
+def _b64url(token: str) -> str:
+    return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def test_a_legacy_hex_token_is_untouched_by_canonicalisation(outcomes):
-    o = outcomes["a_legacy_hex_token_is_untouched"]
+def test_a_typed_token_is_stored_verbatim(outcomes):
+    r"""auth.js used to canonicalise before storing — trim, LOWERCASE,
+    collapse every run of [\s_-] to one hyphen. An admin may now set the
+    household token to any printable ASCII, so that would have paired this
+    browser to a token that does not exist: `MyT0ken!!going` stored as
+    `myt0ken!!going`, 401 on everything, and the settings card reporting
+    "not paired" right after a successful save."""
+    o = outcomes["a_typed_token_is_stored_verbatim"]
+    assert o["stored"]["domovoi-device-token"] == "MyT0ken!!going"
+    assert o["header"] == "MyT0ken!!going"
+    # It is itself a legal RFC 9110 token, so both elements are offered.
+    assert o["protocols"][0] == f"domovoi.device-token-b64.{_b64url('MyT0ken!!going')}"
+    assert o["protocols"][1] == "domovoi.device-token.MyT0ken!!going"
+
+
+def test_a_token_with_spaces_and_a_comma_still_opens_a_socket(outcomes):
+    """The reason the whole transport changed. This token is illegal in a
+    raw subprotocol — the stub now throws exactly as Chromium does — and
+    the comma would be truncated by the server's own header split even if
+    it got through. base64url carries it, and it is the ONLY element
+    offered, because the constructor validates every element."""
+    o = outcomes["a_token_with_spaces_and_a_comma_still_opens_a_socket"]
+    token = "Maple Street, 1984!"
+    assert o["stored"] == token
+    assert o["header"] == token
+    assert o["sockets"] == 1                       # constructed, not thrown
+    assert o["protocols"] == [f"domovoi.device-token-b64.{_b64url(token)}"]
+    assert " " not in o["protocols"][0] and "," not in o["protocols"][0]
+
+
+def test_a_phrase_offers_both_the_b64_and_the_legacy_element(outcomes):
+    """Mid-rollout safety in both directions. A browser whose offers are
+    ALL unrecognised gets no subprotocol echoed back and drops the socket,
+    so a new data.js against a not-yet-restarted server must still offer
+    something that server knows — and it can, because a phrase is a legal
+    token."""
+    o = outcomes["a_phrase_offers_both_the_b64_and_the_legacy_element"]
+    assert o["protocols"] == [
+        f"domovoi.device-token-b64.{_b64url(CANONICAL_PHRASE)}",
+        f"domovoi.device-token.{CANONICAL_PHRASE}",
+    ]
+
+
+def test_a_legacy_hex_token_is_stored_unchanged(outcomes):
+    o = outcomes["a_legacy_hex_token_is_stored_unchanged"]
     assert o["stored"] == o["hex"]
     assert o["header"] == o["hex"]

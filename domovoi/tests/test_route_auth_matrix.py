@@ -189,6 +189,7 @@ SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/satellites/{room_id}/pairing/preseed"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}/pairing"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}"),
+    ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
     ("web", "PATCH", "/api/config/editable"),
     ("web", "POST", "/api/config/version/restart"),
@@ -196,6 +197,7 @@ SECURITY_TIER_ROUTES = [
     ("web", "POST", "/api/satellites/{room_id}/pairing/reset"),
     ("web", "POST", "/api/satellites/pending/{pending_id}/adopt"),
     ("web", "DELETE", "/api/satellites/{room_id}"),
+    ("web", "POST", "/api/auth/device-token"),
     ("web", "POST", "/api/auth/device-token/rotate"),
 ]
 

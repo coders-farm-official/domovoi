@@ -30,6 +30,25 @@ SETTINGS = "web/static/settings.jsx"
 
 TOKEN = "hh-0123456789abcdef"
 ROTATED = "hh-rotated-fedcba9876543210"
+# A token an admin chose: spaces, a comma and punctuation, none of which
+# the old lowercase-and-hyphens rule would have allowed through.
+CHOSEN = "Maple Street, 1984!"
+SET_OK = {"token": CHOSEN, "header": "X-Device-Token", "rotated": True}
+
+SAVE_SCRIPT = (
+    """
+          h.render();
+          await h.click({ type: 'button', text: 'set\u2026' });
+          await h.type({ placeholder: 'at least 12 characters' }, '  """
+    + CHOSEN
+    + """  ');
+          await h.click({ type: 'button', text: 'Save token' });
+          return { calls: h.calls.map((c) => `${c.method} ${c.path}`),
+                   body: h.calls[0] && h.calls[0].body,
+                   paired: h.global('window').__paired,
+                   dialog: !!h.find({ text: 'Set a custom household token' }) };
+    """
+)
 
 # The harness's default Auth is a signed-in admin. These `setup` snippets
 # replace it for the other cases; they run inside the sandbox before the
@@ -89,7 +108,8 @@ SCENARIOS = {
           await h.click({ type: 'button', text: 'copy' });
           return { token: code && code.text, texts: h.text(), hookCalls: h.hookCalls,
                    copied: h.global('window').__copied, hasCopy: !!copy,
-                   hasRotate: !!h.find({ type: 'button', text: 'rotate' }) };
+                   hasRotate: !!h.find({ type: 'button', text: 'rotate' }),
+                   hasSet: !!h.find({ type: 'button', text: 'set…' }) };
         """,
     },
     "cookie_session_sees_the_token": {
@@ -133,6 +153,70 @@ SCENARIOS = {
           await h.click({ type: 'button', text: 'Rotate' });
           return { afterAsk, afterCancel, calls: h.calls.map((c) => `${c.method} ${c.path}`),
                    paired: h.global('window').__paired, texts: h.text() };
+        """,
+    },
+    # ── the set dialog ────────────────────────────────────────────────
+    "set_asks_first_and_posts_nothing_until_it_is_saved": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token": SET_OK},
+        "script": r"""
+          h.render();
+          const before = h.calls.length;
+          await h.click({ type: 'button', text: 'set\u2026' });
+          const dialog = h.find({ text: 'Set a custom household token' });
+          const afterOpen = { dialog: !!dialog, calls: h.calls.length,
+                              counter: h.text().some((t) => t.includes('0 characters.')) };
+          await h.click({ type: 'button', text: 'Cancel' });
+          const afterCancel = { dialog: !!h.find({ text: 'Set a custom household token' }),
+                                calls: h.calls.length };
+          return { before, afterOpen, afterCancel };
+        """,
+    },
+    "eleven_characters_leaves_the_save_button_disabled": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token": SET_OK},
+        "script": r"""
+          h.render();
+          await h.click({ type: 'button', text: 'set\u2026' });
+          const at = async (v) => {
+            await h.type({ placeholder: 'at least 12 characters' }, v);
+            const btn = h.find({ type: 'button', text: 'Save token' });
+            return { disabled: !!btn.props.disabled,
+                     counter: h.text().some((t) => t.includes(v.trim().length + ' characters.')) };
+          };
+          const eleven = await at('12345678901');
+          // Padding does not buy length: the counter counts the STORED form.
+          const padded = await at('   12345678901   ');
+          const twelve = await at('123456789012');
+          return { eleven, padded, twelve, calls: h.calls.length };
+        """,
+    },
+    "saving_posts_the_token_and_re_pairs_this_browser": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token": SET_OK},
+        "script": SAVE_SCRIPT,
+    },
+    "a_server_refusal_lands_inline_next_to_the_field": {
+        "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
+        "setup": ADMIN_SETUP,
+        "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"},
+                "POST /api/auth/device-token":
+                    {"__error": {"status": 400, "message": "at least 12 characters"}}},
+        "script": r"""
+          h.render();
+          await h.click({ type: 'button', text: 'set\u2026' });
+          await h.type({ placeholder: 'at least 12 characters' }, 'not-a-good-one');
+          await h.click({ type: 'button', text: 'Save token' });
+          return { dialog: !!h.find({ text: 'Set a custom household token' }),
+                   inline: h.text().some((t) => t.includes('at least 12 characters')),
+                   paired: h.global('window').__paired,
+                   calls: h.calls.map((c) => `${c.method} ${c.path}`) };
         """,
     },
     "switcher_asks_before_trusting_a_manual_server": {
@@ -189,7 +273,7 @@ def test_admin_session_sees_the_household_token_with_copy_and_rotate(outcomes):
     o = outcomes["admin_sees_the_token"]
     assert o["token"] == TOKEN
     assert "/api/auth/device-token" in o["hookCalls"]
-    assert o["hasCopy"] and o["hasRotate"]
+    assert o["hasCopy"] and o["hasRotate"] and o["hasSet"]
     assert o["copied"] == TOKEN
     assert any("Settings → Connection → Household token" in t for t in o["texts"])
 
@@ -219,6 +303,45 @@ def test_rotate_confirms_first_then_posts_and_re_pairs_this_browser(outcomes):
     assert o["afterCancel"] == {"dialog": False, "calls": 0}
     assert o["calls"] == ["POST /api/auth/device-token/rotate"]
     assert o["paired"] == ROTATED
+
+
+# ── the set dialog ──────────────────────────────────────────────────────
+
+
+def test_set_asks_first_and_posts_nothing_until_it_is_saved(outcomes):
+    o = outcomes["set_asks_first_and_posts_nothing_until_it_is_saved"]
+    assert o["afterOpen"] == {"dialog": True, "calls": 0, "counter": True}
+    assert o["afterCancel"] == {"dialog": False, "calls": 0}
+
+
+def test_the_twelve_character_floor_is_a_hard_block_on_the_save_button(outcomes):
+    o = outcomes["eleven_characters_leaves_the_save_button_disabled"]
+    assert o["eleven"] == {"disabled": True, "counter": True}
+    # Padding does not buy length — the counter and the gate both measure
+    # the STORED form, because that is what the server measures.
+    assert o["padded"] == {"disabled": True, "counter": True}
+    assert o["twelve"] == {"disabled": False, "counter": True}
+    assert o["calls"] == 0
+
+
+def test_saving_posts_the_trimmed_token_and_re_pairs_this_browser(outcomes):
+    o = outcomes["saving_posts_the_token_and_re_pairs_this_browser"]
+    assert o["calls"] == ["POST /api/auth/device-token"]
+    assert o["body"] == {"token": CHOSEN}        # trimmed, nothing else
+    # Re-paired from the RESPONSE, exactly as rotate does, so the card does
+    # not turn round and claim this browser is unpaired.
+    assert o["paired"] == CHOSEN
+    assert o["dialog"] is False
+
+
+def test_a_server_refusal_lands_inline_and_leaves_the_dialog_open(outcomes):
+    """Inline next to the field, not as a toast: the server's message is
+    the actionable part and the dialog is still standing."""
+    o = outcomes["a_server_refusal_lands_inline_next_to_the_field"]
+    assert o["dialog"] is True
+    assert o["inline"] is True
+    assert o["paired"] is None                    # nothing was re-paired
+    assert o["calls"] == ["POST /api/auth/device-token"]
 
 
 # ── 3. the switcher's trust prompt ──────────────────────────────────────

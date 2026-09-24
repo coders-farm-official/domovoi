@@ -1,10 +1,12 @@
-"""The household device token is a phrase a person can read out, and
-wrong guesses are slowed down.
+"""The household device token is a phrase a person can read out — or
+anything printable they chose instead — and wrong guesses are slowed down.
 
-Two halves that only make sense together. The token dropped from 256 bits
+Three halves that only make sense together. The token dropped from 256 bits
 of hex to a 64-bit eight-word phrase so somebody can say it across a room
-to a phone, and 64 bits is only comfortable because presenting a wrong one
-now costs an exponential per-source backoff. Test both or neither.
+to a phone; an admin may replace that with any printable ASCII of 12
+characters or more, which is why the alphabet lives at the SET endpoint and
+not in the transports; and both are only comfortable because presenting a
+wrong one costs an exponential per-source backoff. Test all three or none.
 
 Everything here is DB-FREE: the shape and alphabet tests are pure, the
 normalisation tests drive ``validate_device_token`` over a stub session
@@ -14,6 +16,7 @@ that answers with one stored hash, and the gate tests go through
 
 from __future__ import annotations
 
+import base64
 import re
 import urllib.parse
 
@@ -85,41 +88,125 @@ _TCHAR = set("!#$%&'*+-.^_`|~0123456789"
              "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
-@pytest.mark.parametrize("token", [admin_auth.generate_device_token() for _ in range(5)])
+def _b64url(token: str) -> str:
+    """What ``data.js`` puts in the subprotocol: base64url of the UTF-8
+    token, ``=`` padding stripped."""
+    return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+# A token an admin may now choose. Every awkward character in the printable
+# ASCII range, including the ones that are illegal in an RFC 9110 token and
+# the comma that the subprotocol header is split on.
+CUSTOM_TOKENS = [
+    "MyT0ken!!going",
+    "a token with spaces",
+    "p@ss,word,12345",
+    '100% "safe", really!',
+    "back\\slash;colon:slash/x",
+    "=equals=and=more=",
+    "~!#$&*+^_`|.-tchar",
+    " " .join(["word"] * 8),
+    "".join(chr(c) for c in range(0x20, 0x7F)).strip(),   # every printable one
+]
+
+
+@pytest.mark.parametrize(
+    "token",
+    [admin_auth.generate_device_token() for _ in range(3)] + CUSTOM_TOKENS,
+)
 def test_the_token_survives_every_transport_it_travels_on(token: str) -> None:
-    """Header value, query parameter and WebSocket subprotocol. The
-    subprotocol is the strict one and it is why the canonical form has no
-    spaces: a space there is not merely ugly, it is illegal, and the
-    browser throws on the WebSocket constructor before the socket opens."""
+    """Header value, query parameter, file mirror and WebSocket
+    subprotocol — for ARBITRARY printable ASCII, not only for a generated
+    phrase. The subprotocol used to be the strict one and it is why the
+    canonical form had no spaces; it is now base64url-encoded, which is what
+    lets the token be anything."""
     # 1. `X-Device-Token` header value: printable ASCII, no CTLs, no
-    #    leading/trailing whitespace that a proxy would trim away.
+    #    leading/trailing whitespace that a proxy (or OkHttp, or the
+    #    server's own .strip()) would trim away.
     assert token == token.strip()
-    assert all(0x21 <= ord(c) <= 0x7E for c in token)
-    # It also has to fit through the header encoder unchanged.
+    assert all(0x20 <= ord(c) <= 0x7E for c in token)
+    # It also has to fit through the header encoder unchanged. Starlette
+    # decodes header bytes as latin-1; for ASCII that is the identity, and
+    # for anything else it would arrive mojibake'd and silently never match
+    # — which is exactly why non-ASCII is refused at the SET endpoint.
     assert token.encode("latin-1").decode("latin-1") == token
 
-    # 2. `?device_token=` query: hyphens and lowercase letters are
-    #    unreserved, so the URL carries the token verbatim.
-    assert urllib.parse.quote(token, safe="") == token
-    parsed = urllib.parse.parse_qs(f"{admin_auth.DEVICE_TOKEN_QUERY}={token}")
+    # 2. `?device_token=` query: percent-encoded by data.js, decoded back
+    #    to the same bytes by Starlette.
+    quoted = urllib.parse.quote(token, safe="")
+    parsed = urllib.parse.parse_qs(f"{admin_auth.DEVICE_TOKEN_QUERY}={quoted}")
     assert parsed[admin_auth.DEVICE_TOKEN_QUERY] == [token]
 
-    # 3. `domovoi.device-token.<token>` WebSocket subprotocol: every
-    #    character must be an RFC 9110 tchar, and the value must not
-    #    contain the comma that separates offers in the header.
-    subprotocol = f"domovoi.device-token.{token}"
+    # 3. `~/.domovoi/device-token.txt`, written as `token + "\n"` and read
+    #    back with .strip(): a round trip must be lossless.
+    assert (token + "\n").strip() == token
+
+    # 4. `domovoi.device-token-b64.<base64url>` WebSocket subprotocol:
+    #    every character of the ELEMENT must be an RFC 9110 tchar, and it
+    #    must not contain the comma that separates offers in the header.
+    subprotocol = f"domovoi.device-token-b64.{_b64url(token)}"
     assert set(subprotocol) <= _TCHAR
     assert "," not in subprotocol and " " not in subprotocol
+    # ...and it has to decode back to the token the browser started with.
+    payload = subprotocol[len("domovoi.device-token-b64."):]
+    pad = "=" * (-len(payload) % 4)
+    assert base64.urlsafe_b64decode(payload + pad).decode("utf-8") == token
 
-    # And it stays short enough to read out and to store: the longest
-    # possible phrase from this bank is 71 characters.
+    # The cap is what keeps that element a knowable size.
+    assert len(token) <= admin_auth.DEVICE_TOKEN_MAX_LEN
+
+
+@pytest.mark.parametrize("token", [admin_auth.generate_device_token() for _ in range(5)])
+def test_a_generated_phrase_is_also_legal_in_the_raw_subprotocol(token: str) -> None:
+    """Split out from the transport test on purpose: this is a property of
+    the GENERATOR, not of the token rule. It is what lets the dashboard
+    offer the legacy raw element alongside the b64 one during a rollout,
+    and it is why an install upgrading from before this change keeps its
+    live state stream."""
+    assert set(f"domovoi.device-token.{token}") <= _TCHAR
+    # The longest possible phrase from this bank is 71 characters.
     assert len(token) <= 71
+    assert len(token) >= admin_auth.DEVICE_TOKEN_MIN_LEN
 
 
-def test_the_web_subprotocol_prefix_is_still_a_legal_token() -> None:
-    from web.backend.main import WS_DEVICE_TOKEN_SUBPROTOCOL
+# Which chosen tokens the LEGACY raw element can still carry, and which
+# it cannot. This is the partition data.js branches on: it adds the raw
+# element only for the first group, because the WebSocket constructor
+# validates every element and one illegal one throws the whole call away.
+RAW_LEGAL = ["MyT0ken!!going", "~!#$&*+^_`|.-tchar"]
+RAW_ILLEGAL = [t for t in CUSTOM_TOKENS if t not in RAW_LEGAL]
+
+
+@pytest.mark.parametrize("token", RAW_ILLEGAL)
+def test_most_chosen_tokens_are_ILLEGAL_in_the_raw_subprotocol(token: str) -> None:
+    """The negative half, and the reason the b64 element exists. Each of
+    these would make `new WebSocket(...)` throw before a byte left the tab
+    (and uvicorn answer the handshake 400 before any ASGI code ran), so the
+    dashboard must NOT offer the raw form for them."""
+    assert not set(f"domovoi.device-token.{token}") <= _TCHAR
+
+
+@pytest.mark.parametrize("token", RAW_LEGAL)
+def test_some_chosen_tokens_are_legal_raw_too(token: str) -> None:
+    r"""The illegal set is space plus " ( ) , / : ; < = > ? @ [ \ ] { } —
+    NOT "anything but lowercase letters and hyphens". `MyT0ken!!going` was
+    always a legal subprotocol; it was auth.js lowercasing it and the SET
+    endpoint not existing that made it unusable. These are the tokens for
+    which data.js offers BOTH elements, so a server that has not been
+    restarted yet still has something it recognises to echo back."""
+    assert set(f"domovoi.device-token.{token}") <= _TCHAR
+
+
+def test_both_web_subprotocol_prefixes_are_legal_tokens() -> None:
+    from web.backend.main import (
+        WS_DEVICE_TOKEN_SUBPROTOCOL,
+        WS_DEVICE_TOKEN_SUBPROTOCOL_B64,
+    )
 
     assert set(WS_DEVICE_TOKEN_SUBPROTOCOL) <= _TCHAR
+    assert set(WS_DEVICE_TOKEN_SUBPROTOCOL_B64) <= _TCHAR
+    # base64url's whole alphabet is tchar, so ANY token's encoding is legal.
+    assert set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") <= _TCHAR
 
 
 # ═══ Forgiving input, canonical storage ═══════════════════════════════════
@@ -163,16 +250,22 @@ def test_normalising_a_legacy_hex_token_leaves_it_alone() -> None:
 
 class _StoredToken:
     """A stand-in ``AsyncSession`` that answers the one SELECT
-    ``validate_device_token`` makes, with the hash of ``token``."""
+    ``validate_device_token`` makes: the stored plaintext and its hash.
+
+    The plaintext is in the row because the "is the stored token itself
+    canonical" test is derived from it — that is what makes the two-form
+    match need no migration and no flag column."""
 
     def __init__(self, token: str) -> None:
+        self.token = token
         self.hash = admin_auth.token_sha256(token)
 
     async def execute(self, *_a, **_kw):
-        stored = self.hash
+        stored_token, stored_hash = self.token, self.hash
 
         class _Row:
-            token_hash = stored
+            token = stored_token
+            token_hash = stored_hash
 
         class _Result:
             def first(self_inner):
@@ -208,6 +301,201 @@ async def test_a_legacy_hex_token_still_validates() -> None:
     assert await admin_auth.validate_device_token(session, LEGACY_HEX) is True
     assert await admin_auth.validate_device_token(session, f" {LEGACY_HEX} ") is True
     assert await admin_auth.validate_device_token(session, LEGACY_HEX.upper()) is True
+
+
+# ═══ A token an admin CHOSE ═══════════════════════════════════════════════
+#
+# The rule, all in `validate_custom_device_token`: trim the outer
+# whitespace and change nothing else; printable ASCII 0x20-0x7E; 12 to 128
+# characters on the trimmed form; not an all-separator string.
+
+CUSTOM = "MyT0ken!!going"
+
+
+@pytest.mark.parametrize("token", CUSTOM_TOKENS)
+def test_a_chosen_token_is_stored_exactly_as_it_was_typed(token: str) -> None:
+    assert admin_auth.validate_custom_device_token(token) == token
+
+
+@pytest.mark.parametrize(
+    ("typed", "stored"),
+    [
+        ("  MyT0ken!!going  ", "MyT0ken!!going"),
+        ("\tMyT0ken!!going\n", "MyT0ken!!going"),
+        ("two  spaces  inside", "two  spaces  inside"),   # interior is KEPT
+        ("MyT0ken!!going\r\n", "MyT0ken!!going"),
+    ],
+)
+def test_only_the_OUTER_whitespace_is_trimmed(typed: str, stored: str) -> None:
+    """Not cosmetic. The mirror file is read back with .strip() and OkHttp
+    trims a header value, so a stored token with edge whitespace could never
+    be presented back — and `ensure_device_token` would rewrite the mirror
+    on every boot because the file and the row would never agree."""
+    assert admin_auth.validate_custom_device_token(typed) == stored
+    # ...and the stored form is a fixed point of the round trip.
+    assert (stored + "\n").strip() == stored
+
+
+def test_the_alphabet_boundary_is_exactly_0x20_through_0x7E() -> None:
+    def ok(ch: str) -> bool:
+        try:
+            admin_auth.validate_custom_device_token(f"abcdef{ch}ghijkl")
+            return True
+        except admin_auth.DeviceTokenRejected:
+            return False
+
+    assert not ok("\x1f")          # last control character
+    assert ok("\x20")              # SP — the first legal one
+    assert ok("\x7e")              # ~ — the last legal one
+    assert not ok("\x7f")          # DEL is a control character, not printable
+    assert not ok("\u00e9")        # non-ASCII: latin-1-decoded to nonsense on
+    assert not ok("\u00a0")        # the header, UnicodeEncodeError on the proxy
+    # Every printable ASCII character is accepted somewhere in a token.
+    every = "".join(chr(c) for c in range(0x20, 0x7F)).strip()
+    assert admin_auth.validate_custom_device_token(every) == every
+
+
+def test_non_ascii_is_refused_because_it_would_fail_SILENTLY() -> None:
+    """Starlette decodes header bytes as latin-1, so a UTF-8 token arrives
+    mojibake'd and merely never compares equal — it looks like a wrong
+    token, not like a bad one. Refuse it where a person can read why."""
+    with pytest.raises(admin_auth.DeviceTokenRejected) as e:
+        admin_auth.validate_custom_device_token("cat-\U0001f431-token")
+    assert "non-ASCII" in str(e.value)
+    # The proof of the mechanism, so the reason does not rot:
+    mojibake = "caf\u00e9-token".encode("utf-8").decode("latin-1")
+    assert mojibake != "caf\u00e9-token"
+
+
+def test_the_floor_is_twelve_measured_on_the_STORED_form() -> None:
+    assert admin_auth.DEVICE_TOKEN_MIN_LEN == 12
+    with pytest.raises(admin_auth.DeviceTokenRejected) as e:
+        admin_auth.validate_custom_device_token("a" * 11)
+    assert "at least 12 characters" in str(e.value)
+    assert admin_auth.validate_custom_device_token("a" * 12) == "a" * 12
+    # Padding does not buy length: the count is on what is stored.
+    with pytest.raises(admin_auth.DeviceTokenRejected):
+        admin_auth.validate_custom_device_token("   " + "a" * 11 + "   ")
+
+
+def test_the_cap_is_a_hundred_and_twenty_eight() -> None:
+    assert admin_auth.DEVICE_TOKEN_MAX_LEN == 128
+    assert len(admin_auth.validate_custom_device_token("x" * 128)) == 128
+    with pytest.raises(admin_auth.DeviceTokenRejected) as e:
+        admin_auth.validate_custom_device_token("x" * 129)
+    assert "at most 128 characters" in str(e.value)
+
+
+@pytest.mark.parametrize("token", ["- - - - - - -", "-" * 12, "_" * 14, " - _ - _ - _ - _ "])
+def test_an_all_separator_token_is_refused(token: str) -> None:
+    """It passes the alphabet and (mostly) the floor, and normalises to
+    None — so storing it would leave the household matchable only by the
+    exact string, with the canonical branch dead. Pure footgun."""
+    with pytest.raises(admin_auth.DeviceTokenRejected):
+        admin_auth.validate_custom_device_token(token)
+
+
+@pytest.mark.parametrize("bad", [None, 12, b"abcdefghijkl", ""])
+def test_a_non_string_or_empty_token_is_refused(bad) -> None:
+    with pytest.raises(admin_auth.DeviceTokenRejected):
+        admin_auth.validate_custom_device_token(bad)
+
+
+def test_a_rejection_never_quotes_the_offending_value() -> None:
+    """The message travels back to the client as a 400 detail and into
+    whatever it logs. A near-miss household token must not ride along."""
+    for bad in ("hunter2", "cat-\U0001f431-token", "x" * 129, "\x01\x02abcdefghijkl"):
+        try:
+            admin_auth.validate_custom_device_token(bad)
+        except admin_auth.DeviceTokenRejected as e:
+            assert bad not in str(e), str(e)
+            assert bad.strip() not in str(e), str(e)
+        else:  # pragma: no cover — every one of these must be refused
+            raise AssertionError(bad)
+
+
+# ─── …and how it is matched ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_token_is_matched_EXACTLY() -> None:
+    session = _StoredToken(CUSTOM)
+    assert await admin_auth.validate_device_token(session, CUSTOM) is True
+    # Trimming the candidate is the one liberty taken — OkHttp and the
+    # header parser already do it.
+    assert await admin_auth.validate_device_token(session, f"  {CUSTOM}  ") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "respelled",
+    [
+        "myt0ken!!going",                 # lowercased
+        "MYT0KEN!!GOING",
+        "MyT0ken!!-going",
+        "MyT0ken!! going",
+    ],
+)
+async def test_a_chosen_token_is_NOT_matched_case_insensitively(respelled: str) -> None:
+    """The whole point of storing it verbatim: `MyT0ken!!going` is not
+    canonical, so the canonical branch does not apply to it and its
+    capitals carry their entropy."""
+    session = _StoredToken(CUSTOM)
+    assert admin_auth.normalize_device_token(CUSTOM) != CUSTOM
+    assert await admin_auth.validate_device_token(session, respelled) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", CUSTOM_TOKENS)
+async def test_every_chosen_token_matches_itself_and_nothing_near_it(token: str) -> None:
+    session = _StoredToken(token)
+    assert await admin_auth.validate_device_token(session, token) is True
+    assert await admin_auth.validate_device_token(session, token + "x") is False
+    assert await admin_auth.validate_device_token(session, token[:-1]) is False
+
+
+@pytest.mark.asyncio
+async def test_a_generated_phrase_is_STILL_matched_forgivingly() -> None:
+    """Nothing is taken away from the household that never sets a custom
+    token: a generated phrase is canonical, so the canonical branch applies
+    and typing it back is as forgiving as it ever was."""
+    session = _StoredToken(CANONICAL)
+    assert admin_auth.normalize_device_token(CANONICAL) == CANONICAL
+    for typed in (
+        CANONICAL.upper(),
+        CANONICAL.replace("-", " "),
+        CANONICAL.replace("-", "_"),
+        "Acorn Maple River Thistle Harbor Quartz Willow Ember",
+    ):
+        assert await admin_auth.validate_device_token(session, typed) is True
+
+
+@pytest.mark.asyncio
+async def test_an_all_separator_candidate_cannot_open_a_canonical_token() -> None:
+    """`normalize_device_token` returns None for these, and the old code
+    returned False on that before it looked at anything. The exact compare
+    now runs first and unconditionally, which is what stops a stored token
+    that normalises to None locking the household out — and this is the
+    other side of that coin."""
+    session = _StoredToken(CANONICAL)
+    for candidate in ("---", "   ", " _ - _ ", ""):
+        assert await admin_auth.validate_device_token(session, candidate) is False
+
+
+@pytest.mark.asyncio
+async def test_the_canonical_branch_is_dead_for_a_non_canonical_stored_token() -> None:
+    """Stated as a property rather than as an implementation detail: for a
+    stored token that is not canonical, the ONLY accepted candidate is the
+    stored value (after trimming)."""
+    session = _StoredToken("Maple Street, 1984!")
+    assert await admin_auth.validate_device_token(session, "Maple Street, 1984!") is True
+    for near in (
+        "maple-street,-1984!",                    # its canonical form
+        "maple street, 1984!",
+        "MAPLE STREET, 1984!",
+        "Maple_Street,_1984!",
+    ):
+        assert await admin_auth.validate_device_token(session, near) is False
 
 
 # ═══ The throttle — the half that makes 64 bits comfortable ═══════════════
