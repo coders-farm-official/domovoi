@@ -1522,6 +1522,39 @@ async def admin_get_device_token() -> dict[str, Any]:
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER}
 
 
+class _AdminDeviceTokenBody(BaseModel):
+    # A PLAIN str, deliberately: a pydantic constraint (min_length, a
+    # pattern) reports the rejected value back as `input` in FastAPI's 422
+    # body, and a near-miss household token must never travel back out.
+    # Every check lives in admin_auth.validate_custom_device_token, which
+    # raises a message written for the person at the dialog.
+    token: str
+
+
+@app.post(
+    "/v1/admin/device-token",
+    # Same tier as rotate: setting a token IS a rotation. Bearer-only,
+    # 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_set_device_token(body: _AdminDeviceTokenBody) -> dict[str, Any]:
+    """Replace the household device token with one an admin chose.
+
+    At least 12 characters of printable ASCII, stored verbatim (outer
+    whitespace trimmed and nothing else). Every other phone and browser in
+    the household must be given the new one, exactly as after a rotate, and
+    ``~/.domovoi/device-token.txt`` is rewritten."""
+    try:
+        async with session_scope() as s:
+            token = await admin_auth_mod.set_device_token(s, body.token)
+    except admin_auth_mod.DeviceTokenRejected as e:
+        # The message, never the value.
+        raise HTTPException(status_code=400, detail=str(e))
+    admin_auth_mod.write_device_token_file(token)
+    log.info("device token set by an admin")
+    return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
+
+
 @app.post(
     "/v1/admin/device-token/rotate",
     # Security tier: every household client has to be re-enrolled after

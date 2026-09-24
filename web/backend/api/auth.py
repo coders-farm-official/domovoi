@@ -19,10 +19,10 @@ v1 runs over plain LAN HTTP (TLS is on the documented hardening
 backlog), so the cookie is NOT marked ``Secure``.
 
 The household **device token** (device tier, ``X-Device-Token``) is
-served and rotated here too — ``GET/POST /api/auth/device-token[/rotate]``
-work against the same ``household_device_tokens`` table as the core's
-``/v1/admin/device-token`` endpoints, so either process answers
-identically.
+served, set and rotated here too — ``GET/POST
+/api/auth/device-token[/rotate]`` work against the same
+``household_device_tokens`` table as the core's ``/v1/admin/device-token``
+endpoints, so either process answers identically.
 """
 
 from __future__ import annotations
@@ -233,6 +233,38 @@ async def auth_device_token() -> dict:
     async with session_scope() as s:
         token = await admin_auth.ensure_device_token_row(s)
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER}
+
+
+class DeviceTokenRequest(BaseModel):
+    # A PLAIN str, deliberately: a pydantic constraint (min_length, a
+    # pattern) reports the rejected value back as `input` in FastAPI's 422
+    # body, and a near-miss household token must never travel back out.
+    # The rule lives once, in admin_auth.validate_custom_device_token, so
+    # this endpoint and the core's cannot drift apart.
+    token: str
+
+
+@router.post(
+    "/device-token",
+    dependencies=[Depends(admin_auth.require_admin_security)],
+)
+async def auth_set_device_token(body: DeviceTokenRequest) -> dict:
+    """Replace the household device token with one an admin chose
+    (Bearer-only, 501 before setup — setting a token IS a rotation).
+
+    At least 12 characters of printable ASCII, stored verbatim with the
+    outer whitespace trimmed. The previous token is refused from now on,
+    every other device must be given the new one, and the file mirror is
+    rewritten."""
+    try:
+        async with session_scope() as s:
+            token = await admin_auth.set_device_token(s, body.token)
+    except admin_auth.DeviceTokenRejected as e:
+        # The message, never the value.
+        raise HTTPException(status_code=400, detail=str(e))
+    admin_auth.write_device_token_file(token)
+    log.info("device token set by an admin (web)")
+    return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}
 
 
 @router.post(
