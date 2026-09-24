@@ -1,7 +1,16 @@
 """Satellite tests run against fixtures, never against a real installation.
 
-Two guarantees, for every test in this package, whether or not the test
+Three guarantees, for every test in this package, whether or not the test
 asked for them:
+
+* **Collectable without the audio stack.** ``satellite/client.py`` imports
+  ``sounddevice`` and ``webrtcvad`` at module scope, and a dev box has
+  neither. A test module that imports the client therefore does not fail —
+  it fails to be COLLECTED, and one collection error ends the whole pytest
+  run, every other package with it. Stand-ins go in here, before pytest
+  imports a single module from this directory, and come out again the
+  moment collection is over. Which module is collected first stops
+  mattering.
 
 * **No real config.** ``HOME`` points at a tmp dir, and every module-level
   path in the ``satellite`` package that pointed inside the developer's
@@ -30,6 +39,11 @@ from pathlib import Path
 
 import pytest
 
+from satellite.tests._client_import import (
+    install_audio_stand_ins,
+    remove_audio_stand_ins,
+)
+
 # Resolved once, at import, while the environment is still the real one.
 REAL_HOME = Path.home()
 REAL_CONFIG_DIR = REAL_HOME / ".domovoi"
@@ -46,6 +60,20 @@ def real_install_paths():
     test's environment says — which is the tmp home, making the assertion
     it was written for pass no matter what."""
     return {"home": REAL_HOME, "config_dir": REAL_CONFIG_DIR}
+
+
+# ─── collectable without the audio stack ──────────────────────────────────
+#
+# Removed again in `pytest_collection_finish`, which runs after every module
+# has been imported and before the first test does anything. Run-time code
+# therefore sees the real `sys.modules`: `test_devices.py` asks
+# `pytest.importorskip("sounddevice")` for the truth and still gets it.
+
+_AUDIO_STAND_INS = install_audio_stand_ins()
+
+
+def pytest_collection_finish(session):
+    remove_audio_stand_ins(_AUDIO_STAND_INS)
 
 
 # ─── no real config, and no real home ─────────────────────────────────────

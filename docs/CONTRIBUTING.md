@@ -108,9 +108,11 @@ pytest
 
 Facts about the suite you should know before touching it:
 
-* `pytest` runs from the repo root; `testpaths` covers **both**
-  `domovoi/tests` and `plugins/radio/tests` (the bundled plugin's suite is
-  part of the repo suite).
+* `pytest` runs from the repo root; `testpaths` covers **all three** test
+  trees in the repo — `domovoi/tests`, `plugins/radio/tests` and
+  `satellite/tests`. The bundled plugin's suite and the Pi client's suite
+  are part of the repo suite. There is no fourth: `web/` has no test
+  directory of its own, the dashboard is tested from `domovoi/tests`.
 * `domovoi/tests/conftest.py` runs at import time and, before any other
   domovoi import: forces `USE_STUBS=true`, derives the test database URL by
   appending `_test` to the `DATABASE_URL` dbname, and **refuses to run** if

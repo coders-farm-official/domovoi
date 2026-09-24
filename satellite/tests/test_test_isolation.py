@@ -9,12 +9,13 @@ but loopback.
 from __future__ import annotations
 
 import socket
+import sys
 from pathlib import Path
 
 import pytest
 
 from satellite import server_identity
-from satellite.tests._client_import import import_client
+from satellite.tests._client_import import AUDIO_MODULES, import_client
 
 client = import_client()
 
@@ -108,3 +109,23 @@ def test_every_loopback_spelling_is_allowed(host, network_guard):
 )
 def test_everything_else_is_not_loopback(host, network_guard):
     assert network_guard.is_loopback(host) is False
+
+
+# ─── the audio stand-ins do not outlive collection ────────────────────────
+
+def test_a_stand_in_never_survives_into_the_run():
+    """conftest makes ``sounddevice`` and ``webrtcvad`` importable only
+    while this package is being COLLECTED.
+
+    If one survived into the run, ``test_devices.py``'s
+    ``pytest.importorskip("sounddevice")`` would answer yes, and its nine
+    Config-precedence tests would exercise a module that does nothing
+    instead of skipping. Trading a loud collection error for a quiet wrong
+    answer is not a fix."""
+    for name in AUDIO_MODULES:
+        module = sys.modules.get(name)
+        if module is None:
+            continue        # not installed on this box, and nothing faked it
+        assert module.__spec__ is not None, (
+            f"{name} in sys.modules is a test stand-in, not the real module"
+        )
