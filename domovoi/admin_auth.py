@@ -166,7 +166,15 @@ def write_private_file(path: Path, content: str) -> Path:
     to 0600 before it is rewritten, so a file left over from an older
     build is tightened too. On Windows the mode bits only carry the
     read-only flag — best effort; the per-user profile directory is what
-    keeps ``~/.domovoi`` private there."""
+    keeps ``~/.domovoi`` private there.
+
+    ``newline="\\n"`` because these files are read by shells as well as by
+    Python. Text mode on a Windows host would end the file ``\\r\\n``, and
+    while every Python reader here ``.strip()``s that away,
+    ``TOKEN=$(cat ~/.domovoi/device-token.txt)`` does not: ``$(...)``
+    strips trailing newlines but not the CR, so the token would go into
+    ``X-Device-Token`` with a stray carriage return and simply never
+    match."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if path.exists():
@@ -174,7 +182,7 @@ def write_private_file(path: Path, content: str) -> Path:
     except OSError as e:  # pragma: no cover — FS trouble
         log.warning("could not chmod %s: %s", path, e)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
     return path
 

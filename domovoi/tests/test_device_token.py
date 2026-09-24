@@ -50,6 +50,24 @@ from web.backend.domovoi_client import auth_forward_headers
 # ═══ DB-FREE ══════════════════════════════════════════════════════════════
 
 
+def test_the_mirror_file_ends_with_one_bare_LF(tmp_path, monkeypatch) -> None:
+    """Not cosmetic on a Windows dev host. Text mode ends the file
+    ``\r\n`` there; every Python reader ``.strip()``s that away, but the
+    documented shell idiom does not — ``TOKEN=$(cat
+    ~/.domovoi/device-token.txt)`` strips trailing newlines and NOT the CR,
+    so the token would ride in ``X-Device-Token`` with a stray carriage
+    return and never match (docs/SETUP_RUNBOOK.md,
+    docs/PLUGIN_DEVELOPMENT.md)."""
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    admin_auth.write_device_token_file("Maple Street, 1984!")
+    raw = admin_auth.device_token_path().read_bytes()
+    assert raw == b"Maple Street, 1984!\n"
+    assert b"\r" not in raw
+    # ...and the value survives the shell idiom byte for byte.
+    assert raw.decode("utf-8").rstrip("\n") == "Maple Street, 1984!"
+    assert admin_auth.read_device_token_file() == "Maple Street, 1984!"
+
+
 def test_write_private_file_asks_for_0600(tmp_path, monkeypatch) -> None:
     """The file is CREATED with mode 0600 (never world-readable for an
     instant) and an existing one is tightened before the rewrite."""
