@@ -185,6 +185,53 @@ async def test_ensure_device_token_mirrors_the_row_to_the_file(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_ensure_device_token_repairs_a_CRLF_mirror_from_an_older_build(
+    tmp_path, monkeypatch
+) -> None:
+    """The fix above only helps a file that gets REWRITTEN.
+
+    Every host that already runs Domovoi on Windows has a mirror file
+    ending ``\r\n``, because the old writer used text mode. The boot hook
+    compared ``read_device_token_file() != token`` — and that reader
+    ``.strip()``s — so the comparison said "same", the file was never
+    rewritten, and the CR survived every boot until the next rotation.
+    The upgrade has to repair it once, by itself, or the trap the newline
+    fix closes stays open on exactly the hosts that hit it."""
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    install_fake_db(monkeypatch, admin=False)
+    token = "Maple Street, 1984!"
+
+    async def fake_ensure_row(_s):
+        return token
+
+    monkeypatch.setattr(admin_auth, "ensure_device_token_row", fake_ensure_row)
+
+    path = admin_auth.device_token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((token + "\r\n").encode("utf-8"))
+    # The reader cannot see the problem: this is why a stripped comparison
+    # was never going to fix it.
+    assert admin_auth.read_device_token_file() == token
+
+    writes = []
+    real_write = admin_auth.write_device_token_file
+    monkeypatch.setattr(
+        admin_auth,
+        "write_device_token_file",
+        lambda t: (writes.append(t), real_write(t))[1],
+    )
+
+    assert await admin_auth.ensure_device_token() == token
+    assert path.read_bytes() == (token + "\n").encode("utf-8")
+    assert writes == [token]
+
+    # ...and ONE write: the next boot finds the bytes it wanted and leaves
+    # the file alone.
+    assert await admin_auth.ensure_device_token() == token
+    assert writes == [token]
+
+
+@pytest.mark.asyncio
 async def test_ensure_device_token_is_never_fatal(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
 

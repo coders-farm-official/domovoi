@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import re
+import secrets
 import urllib.parse
 
 import pytest
@@ -272,6 +273,97 @@ class _StoredToken:
                 return _Row()
 
         return _Result()
+
+
+class _MismatchedRow(_StoredToken):
+    """A row whose ``token_hash`` is NOT the hash of its ``token``.
+
+    Not a shape the current writers can produce — every one of them stores
+    ``sha256(token)``. It is the shape the PREVIOUS writer produced for a
+    non-canonical token, and the one a future "optimisation" would
+    reintroduce by hashing the canonical form again."""
+
+    def __init__(self, token: str, hashed: str) -> None:
+        super().__init__(token)
+        self.hash = admin_auth.token_sha256(hashed)
+
+
+@pytest.mark.asyncio
+async def test_the_canonical_guard_changes_no_answer_while_the_row_is_consistent() -> None:
+    """``_canonical_token_hash`` is provably redundant for every row the
+    current code can write, and this pins that so nobody has to re-derive
+    it: ``normalize`` is idempotent, so a candidate's canonical form is
+    always canonical and can never equal a NON-canonical stored value —
+    the canonical compare fails on its own, sentinel or no sentinel.
+
+    Measured rather than argued: every stored token below against every
+    respelling below, with the guard and with ``canonical_hash =
+    stored_hash`` unconditionally. Zero differences. The companion test
+    underneath is the reason the guard stays anyway."""
+    stored_tokens = [
+        CANONICAL, LEGACY_HEX, "MyT0ken!!going", "Maple Street, 1984!",
+        "$$bills_yall-market!!1999", "frontdoorcats1999", "a--b", "a__b",
+        "a_-b", "-leading", "trailing-", "My House Is Red",
+    ]
+    differences, pairs = [], 0
+    for stored in stored_tokens:
+        stored_hash = admin_auth.token_sha256(stored)
+        canonical = admin_auth.normalize_device_token(stored)
+        guarded = stored_hash if canonical == stored else admin_auth._NO_CANONICAL_FORM
+        for candidate in [
+            stored, stored.upper(), stored.lower(), f"  {stored}  ",
+            stored.replace("-", "_"), stored.replace("_", "-"),
+            stored.replace("-", " "), stored.replace(" ", "-"),
+            canonical or "", (canonical or "").upper(), stored + "x", stored[:-1],
+            "", "   ", "---", " _ - _ ",
+        ]:
+            pairs += 1
+            exact = admin_auth.token_sha256(candidate.strip())
+            cform = admin_auth.token_sha256(admin_auth.normalize_device_token(candidate) or "")
+            with_guard = secrets.compare_digest(exact, stored_hash) | secrets.compare_digest(cform, guarded)
+            without = secrets.compare_digest(exact, stored_hash) | secrets.compare_digest(cform, stored_hash)
+            if bool(with_guard) != bool(without):
+                differences.append((stored, candidate))
+    assert pairs >= 190, pairs
+    assert differences == []
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_token_stays_closed_to_respellings_on_a_mis_hashed_row(
+    monkeypatch,
+) -> None:
+    """...and THIS is what the guard is for, so do not delete it as dead.
+
+    The two-form rule promises that a token an admin chose is matched
+    character for character and that no RESPELLING of it opens the door.
+    That promise has to rest on the stored plaintext, not on how the row's
+    hash happened to be computed — and this codebase's own writer hashed
+    the canonical form until the custom-token work landed. On a row shaped
+    like that, the guard is the only thing standing between a chosen token
+    and every capitalisation of it.
+
+    The row is broken either way (the chosen token does not open it at
+    all), so this is blast radius, not a rescue: with the guard exactly one
+    string still works, without it a whole family does."""
+    monkeypatch.setattr(admin_auth, "_canonical_hash_cache", None)
+    chosen = "MyT0ken!!going"
+    canonical = admin_auth.normalize_device_token(chosen)
+    assert canonical == "myt0ken!!going" != chosen
+    session = _MismatchedRow(chosen, canonical)
+
+    for respelling in ("MYT0KEN!!GOING", "MyT0ken!!Going", f"  {chosen}  ", "mYt0KEN!!goinG"):
+        monkeypatch.setattr(admin_auth, "_canonical_hash_cache", None)
+        assert await admin_auth.validate_device_token(session, respelling) is False, respelling
+        # Deleting the guard means canonical_hash = stored_hash, and that
+        # is the compare it would then run. It matches. That is the A/B.
+        assert secrets.compare_digest(
+            admin_auth.token_sha256(admin_auth.normalize_device_token(respelling) or ""),
+            session.hash,
+        ), respelling
+
+    # A consistent row is untouched by any of this.
+    monkeypatch.setattr(admin_auth, "_canonical_hash_cache", None)
+    assert await admin_auth.validate_device_token(_StoredToken(chosen), chosen) is True
 
 
 @pytest.mark.asyncio

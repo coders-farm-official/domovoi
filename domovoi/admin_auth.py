@@ -703,7 +703,23 @@ def _canonical_token_hash(stored: str | None, stored_hash: str) -> str:
     A sentinel rather than ``None`` so the caller has no branch at all —
     ``x or SENTINEL`` at the compare would still be one secret-dependent
     step, and the whole point is that the compare looks identical either
-    way."""
+    way.
+
+    **This guard changes no answer while the write path holds.** Every
+    writer stores ``token_hash = sha256(token)``, and
+    :func:`normalize_device_token` is idempotent, so the candidate's
+    canonical form is always canonical and can never equal a NON-canonical
+    stored value: the canonical compare already fails on its own. Measured,
+    not assumed — 192 stored x candidate pairs with and without the guard,
+    zero differences (``domovoi/tests/test_device_token_phrase.py``
+    ``test_the_canonical_guard_changes_no_answer_while_the_row_is_consistent``).
+    Do not read that as "delete it". What it guards is the INVARIANT, not
+    the arithmetic: the moment a writer stores a hash of anything but the
+    verbatim token — hashing the canonical form is exactly what this
+    codebase did before the custom-token work — the canonical branch would
+    open a chosen token to a respelling of itself, which is the one thing
+    the two-form rule promises cannot happen. That case is pinned by
+    ``test_a_chosen_token_stays_closed_to_respellings_on_a_mis_hashed_row``."""
     global _canonical_hash_cache
     cached = _canonical_hash_cache
     if cached is not None and cached[0] == stored_hash:
@@ -788,8 +804,21 @@ async def ensure_device_token() -> str | None:
     except Exception as e:
         log.warning("device-token boot hook skipped (DB unreachable or not migrated): %s", e)
         return None
+    # BYTES, not the stripped string. An older build wrote this file in
+    # text mode, so on a Windows host it already ends CRLF; every Python
+    # reader here strips that away, so a stripped comparison says "same"
+    # and the CR survives the upgrade forever. It is not harmless:
+    # `TOKEN=$(cat ~/.domovoi/device-token.txt)` — the idiom the runbook
+    # publishes — strips the trailing newline but NOT the CR, so the
+    # header carries a stray carriage return and simply never matches.
+    # One rewrite, once, on the first boot after the upgrade.
+    want = (token + "\n").encode("utf-8")
     try:
-        if read_device_token_file() != token:
+        try:
+            have = device_token_path().read_bytes()
+        except OSError:
+            have = None
+        if have != want:
             write_device_token_file(token)
     except OSError as e:  # pragma: no cover — FS trouble
         log.warning("could not write %s: %s", device_token_path(), e)
