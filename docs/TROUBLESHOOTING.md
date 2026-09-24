@@ -179,7 +179,10 @@ device token as `X-Device-Token` (see
 [SETUP_RUNBOOK.md](SETUP_RUNBOOK.md)) — look at `matched_handler` and
 `matched_path`, not the dashboard chat box, which never enters the router.
 A bare `401` from that curl means the header is missing or stale, not that
-routing is broken.
+routing is broken. If an admin set a custom household token, check the
+quoting before you blame the token: `-H "X-Device-Token: $TOKEN"` survives
+spaces, `$` and backticks but not a `"`, and a token pasted into a YAML
+scalar (Home Assistant) needs quotes of its own.
 
 **Fix:** try the other small tool model (`ollama_tool_model`, hot setting —
 see [CPU_HOST.md](CPU_HOST.md)); if one phrasing keeps misrouting, an

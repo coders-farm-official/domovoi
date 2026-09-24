@@ -40,23 +40,34 @@ either process into the `household_device_tokens` table and mirrored to
 `~/.domovoi/device-token.txt` (mode 0600, next to the setup code). Clients
 present it as the `X-Device-Token` header; an admin Bearer always passes the
 same gate. Admins read it from `GET /v1/admin/device-token` /
-`GET /api/auth/device-token` and rotate it from the `/rotate` siblings. It is
-rotated automatically when first-run setup completes, so a token read during
-the pre-setup window does not outlive it — read the file *after* claiming
-admin.
+`GET /api/auth/device-token`, replace it with one of their own on the bare
+`POST` and rotate it from the `/rotate` siblings. It is rotated
+automatically when first-run setup completes, so a token read during the
+pre-setup window does not outlive it — read the file *after* claiming admin.
 
-**Format.** Eight words from a 256-word bank, hyphen-joined and lowercase —
+**Format.** Treat the value as **opaque**. A *generated* token is eight
+words from a 256-word bank, hyphen-joined and lowercase —
 `acorn-maple-river-thistle-harbor-quartz-willow-ember`, 64 bits, the same
-strength and the same bank as the setup code. Lowercase letters and hyphens
-only, because the value must be legal as a header value, as a
-`?device_token=` query and as the `domovoi.device-token.<token>` WebSocket
-subprotocol (RFC 6455 requires that to be a *token*, so no spaces). Input is
-normalised before it is compared — trimmed, lowercased, and every run of
-whitespace / underscores / hyphens collapsed to one hyphen — so a phrase
-typed with spaces or capitals still pairs. A parser should treat the value
-as **opaque**: match `^[a-z-]+$`, never a fixed length. Installs created
-before 2026-09-23 hold a 64-hex token and keep validating unchanged; only a
-rotation issues the new format.
+strength and the same bank as the setup code. An admin may replace it with
+anything they like, so a parser must not assume that shape: the rule the
+server enforces is **printable ASCII (0x20–0x7E), 12 to 128 characters**,
+stored verbatim with the outer whitespace trimmed. `Maple Street, 1984!` is
+a valid household token. Do not match `^[a-z-]+$`, do not assume a fixed
+length, and do not lowercase it.
+
+Non-ASCII is refused at the point it is set, and clients should refuse it
+too: HTTP header values are decoded as latin-1, so a UTF-8 token arrives
+mojibake'd and silently never matches, and OkHttp throws on the request
+builder rather than returning an error.
+
+**Matching.** Two forms are accepted. The *exact* stored value always (after
+trimming what the client sent), and the *canonical* form — trimmed,
+lowercased, every run of whitespace / underscores / hyphens collapsed to one
+hyphen — but only when the stored token is itself canonical. A generated
+phrase is, so typing one back with spaces or capitals still pairs; a
+`MyT0ken!!` an admin chose is not, so it is matched exactly and its capitals
+carry their entropy. Installs created before 2026-09-23 hold a 64-hex token,
+which is canonical and keeps validating unchanged.
 
 **Wrong tokens are throttled.** Presenting a wrong `X-Device-Token` (in the
 header, the query or the WebSocket subprotocol) is charged to a per-source
@@ -204,7 +215,7 @@ which is how satellites and every non-browser client connect.
 
 | Socket | Process | Purpose |
 |---|---|---|
-| `WS /ws/state` | web :6369 | Dashboard state push. **The handshake needs a household credential** — an `X-Device-Token` header, an admin `Bearer`, the dashboard's session cookie, or (for a browser, which can set no header here) the `domovoi.device-token.<token>` subprotocol, which the server echoes back. Without one the upgrade is answered **403** and nothing is ever pushed to that socket. The pre-setup grace applies, so a fresh install's dashboard connects. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...], "device_token": "..."}` (the `device_token` field is accepted and ignored — the credential is settled in the handshake); no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |
+| `WS /ws/state` | web :6369 | Dashboard state push. **The handshake needs a household credential** — an `X-Device-Token` header, an admin `Bearer`, the dashboard's session cookie, or (for a browser, which can set no header here) the `domovoi.device-token-b64.<base64url(token)>` subprotocol, which the server echoes back **exactly as offered** or the browser drops the socket. The token is base64url-encoded (padding stripped) because RFC 6455 requires each subprotocol element to be an RFC 9110 *token*, which a chosen household token need not be; the legacy `domovoi.device-token.<token>` spelling is still accepted for clients on a cached bundle. Every offered element is scanned for the b64 prefix before any is read as the legacy form. Without one the upgrade is answered **403** and nothing is ever pushed to that socket. The pre-setup grace applies, so a fresh install's dashboard connects. Client optionally sends `{"subscribe": ["music.now_playing", "satellites.presence", ...], "device_token": "..."}` (the `device_token` field is accepted and ignored — the credential is settled in the handshake); no frame (or an empty list) means all channels. Server pushes `{"type": "<channel>.changed", "data": <full new snapshot>}` events, driven by a 1.5 s poll loop accelerated by Postgres LISTEN/NOTIFY. Core channels: `music.now_playing`, `acquisitions`, `satellites.presence`, `satellites.wifi`, `people.last_seen`, `calendar.events`, `library.indexer`, `wake_words`. Enabled plugins add their own via manifest `[[realtime]]` entries. |
 | `WS /v1/stream/{room_id}` | core :6370 | The satellite voice stream: bidirectional audio + control frames (hello, wake, audio chunks, transcripts, TTS, music start/stop handshake, drop-in, config/volume/voice status, wake-word recording). The full frame contract is documented in [uml/satellite-protocol.md](uml/satellite-protocol.md); the implementation is `domovoi/streaming.py`. The client's first frame must be `hello`; the server provisions nothing, lists nothing, and sends no `ready` until that `hello` has passed the pairing check (a socket that stays silent for `SATELLITE_HELLO_TIMEOUT_SEC`, default 5 s, or sends any other frame first is closed with nothing created). One session per `room_id` — a second connect with the same id evicts the first for broadcasts (and closes the socket it replaced), but only once its own `hello` is accepted. `Origin`, when present, must be a LAN origin; satellites send none, which passes. |
 | `WS /v1/dropin/{room_id}` | core :6370 | Phone drop-in only: joins the intercom bridge as a call peer *without* registering as a satellite. Query param `phone_id` identifies the caller (auto-prefixed `phone-` so it can never collide with a room). **Device tier, checked on the upgrade:** send the household token as the `X-Device-Token` header, or as `?token=` when the client is a browser and cannot set headers, or an admin `Authorization: Bearer`. Anything else gets `{"type":"error","code":"unauthorized"}` and a `1008` close before any session exists, so the target room is never disturbed and `active_dropins` gains no entry. With `DROPIN_ACCEPT_MODE=ring` the call does not open on connect: the server sends `{"type":"dropin_ringing"}`, rings the room, and only bridges when someone there says yes (`dropin_end` with `reason: "no_answer"` after `DROPIN_RING_TIMEOUT_SEC`). `Origin`, when present, must be a LAN origin. See `domovoi/phone_dropin.py`. |
 
@@ -308,8 +319,9 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | `POST /v1/admin/version/restart` | **Admin, security tier** | — | Bounce `domovoi-core` + `domovoi-web` so pulled code loads. Returns `{ok, units, delay_sec, error}` **before** the restart fires, so the client can tell "restarting" from "the server broke". Needs the sudoers grant in [LINUX_HOST.md](LINUX_HOST.md); without it returns `ok: false` and the reason rather than prompting. |
 | `GET /v1/admin/config` | **Admin read (Bearer or cookie)** | `?section=common\|advanced` (optional) | The editable-config registry joined with live values (`{fields, plugin_fields, advanced_available}`). What comes back depends on how the caller authenticated: a **Bearer** reads everything; a **cookie-only** caller gets the `common` section with every credential value replaced by a mask (`masked: true` on the field) and no `advanced` section at all — `?section=advanced` answers `401` for it. Masked settings: `database_url`, `acoustid_api_key`, `letta_token` (`config_schema.SECRET_SETTING_NAMES`); plugin secrets arrive pre-masked as before. |
 | `POST /v1/admin/config` | **Admin, security tier** | `{"changes": {...}, "plugin": "<slug>"?}` | Validate, persist to `.env` (or the plugin's `~/.domovoi/plugins/<slug>.env`), live-apply `hot`/`reapply` tiers, and report `{applied, restart_required, rejected}`. |
-| `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, an eight-word hyphenated phrase (`header` is `X-Device-Token`). `501` before setup. |
-| `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token in the eight-word phrase format: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. |
+| `GET /v1/admin/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token (`header` is `X-Device-Token`). Opaque: a generated one is an eight-word hyphenated phrase, a chosen one is any printable ASCII. `501` before setup. |
+| `POST /v1/admin/device-token` | **Admin, security tier** | `{"token": "..."}` | Replace the household token with one an admin chose: printable ASCII 0x20–0x7E, 12 to 128 characters, stored verbatim with the outer whitespace trimmed. Returns `{token, header, rotated: true}` — setting IS a rotation. `400` with a message a person can act on (`at least 12 characters`, `at most 128 characters`, `letters, digits, punctuation and spaces only — …`) and the row unchanged; the rejected value is never echoed back. `501` before setup. |
+| `POST /v1/admin/device-token/rotate` | **Admin, security tier** | — | Mint a replacement household token in the eight-word phrase format: `{token, header, rotated: true}`. The previous token is refused from now on; `~/.domovoi/device-token.txt` is rewritten. Every household client has to be re-enrolled. This is also the way back from a chosen token. |
 | `POST /v1/admin/chat-tool` | **Chat callback** | `{tool, args}` + `X-Chat-Callback` | Execute a chat-mode tool call on behalf of the chat agent's sandboxed proxy tools. The header must carry this boot's callback secret, which the generated tool source embeds — `401` otherwise. Degrades to an apology string rather than 500ing; returns `{"text": "..."}`. Regenerate the tools after a core restart (`POST /v1/admin/chat/resync`). |
 | `POST /v1/admin/chat/resync` | **Admin (Bearer)** | — | Rebuild the chat tool surface and re-attach it to every chat agent. The install/enable/disable pipeline runs this automatically; this is the manual trigger. |
 | `GET /v1/admin/hardware` | Open | — | Host hardware snapshot for the Models page: `{gpus, cpu, ram, disk}`; each field degrades to empty/null independently. |
@@ -394,6 +406,7 @@ household device token instead of a caller's credential.
 | `DELETE /api/auth/sessions/{token_hash}` | Bearer only | — | Revoke a session by hash. `404` unknown hash. |
 | `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). Every other session is revoked; returns `{ok, revoked_sessions}`. |
 | `GET /api/auth/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, from the same table the core reads. `401` unauthenticated, `501` before setup. The dashboard calls it right after a login to pair the browser, and Settings → Devices renders it for an admin. |
+| `POST /api/auth/device-token` | **Admin, security tier** | `{"token": "..."}` | Set the household token to one an admin chose — the web mirror of the core's `POST /v1/admin/device-token`, same table, same rule, same 400s. Settings → Devices → Household token → `set…` calls this. |
 | `POST /api/auth/device-token/rotate` | **Admin, security tier** | — | Rotate the household token (`{token, header, rotated}`); the core sees the new one immediately and the file mirror is rewritten. |
 
 ### 3.2 Plugins (management proxies + host)

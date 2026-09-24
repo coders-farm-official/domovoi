@@ -150,6 +150,12 @@ household device token. Read it from the dashboard (Settings) or from
 `secrets.yaml` as `domovoi_device_token`: it is a credential, and rotating
 it in Domovoi means updating it here too.
 
+A household token an admin chose may hold any printable ASCII, so **quote
+the value in `secrets.yaml`** — `domovoi_device_token: "Maple Street, 1984!"`.
+An unquoted YAML scalar that begins with `#`, `&`, `*`, `{`, `[`, `!` or `%`,
+or that contains `: `, is not the string you think it is, and edge
+whitespace is silently dropped.
+
 ```yaml
 # configuration.yaml
 rest_command:

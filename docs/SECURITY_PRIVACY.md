@@ -75,18 +75,43 @@ One secret per install, minted at the first boot of either process into the
 send it as the `X-Device-Token` header; an admin Bearer always passes the
 same gate, so an operator never needs both.
 
-**It is an eight-word phrase**, hyphen-joined, drawn from the same 256-word
-bank the setup code uses — `acorn-maple-river-thistle-harbor-quartz-willow-ember`.
-That is **64 bits**, the same strength as the setup code, chosen so a person
-can read the household token out loud to somebody holding a phone instead
-of mailing 64 hex characters around. Input is forgiving and storage is
-canonical: case, spaces, underscores and repeated hyphens all normalise to
-the one hyphenated lowercase form, so typing it with spaces pairs fine. The
-alphabet is lowercase letters and hyphens because the token has to survive
-all three transports it travels on — the header value, the `?device_token=`
-query, and the `domovoi.device-token.<token>` WebSocket subprotocol, which
-RFC 6455 requires to be a *token* and where a space is not merely ugly but
-illegal.
+**By default it is an eight-word phrase**, hyphen-joined, drawn from the
+same 256-word bank the setup code uses —
+`acorn-maple-river-thistle-harbor-quartz-willow-ember`. That is **64 bits**,
+the same strength as the setup code, chosen so a person can read the
+household token out loud to somebody holding a phone instead of mailing 64
+hex characters around. A generated phrase is *canonical*, and typing one
+back is forgiving: case, spaces, underscores and repeated hyphens all
+normalise to the one hyphenated lowercase form.
+
+**An admin may choose their own instead** (Settings → Devices → Household
+token → `set…`, or `POST /v1/admin/device-token`). The rule is **printable
+ASCII, 0x20 through 0x7E, 12 to 128 characters**, stored verbatim with the
+outer whitespace trimmed — `Maple Street, 1984!` is a valid household token.
+A chosen token is matched **exactly**: it is not canonical, so its capitals
+and punctuation carry their entropy and no re-spelling of it opens the door.
+
+That alphabet used to be lowercase-and-hyphens, and the reason was never a
+property of the token. It was the one transport that could not carry
+anything else: the `domovoi.device-token.<token>` WebSocket subprotocol,
+which RFC 6455 requires to be an RFC 9110 *token*. A browser handed a
+subprotocol with a space in it throws inside `new WebSocket(...)` before a
+byte is sent, and uvicorn answers such a handshake `400` before the
+application is called at all — so it bound every client, not just browsers.
+The token is now base64url-encoded into
+`domovoi.device-token-b64.<base64url(token)>`, whose alphabet is a legal
+token for any value, and the restriction is gone. The other transports never
+needed it: a header value carries any printable ASCII (control characters
+are what a header may not hold), and the `?device_token=` query is
+percent-encoded.
+
+**Why non-ASCII is still refused.** Not aesthetics. HTTP header bytes are
+decoded as latin-1, so a UTF-8 token arrives mojibake'd and simply never
+compares equal — it looks like a *wrong* token rather than a bad one, with
+nothing in any log to say why. On the web→core hop it is worse: the HTTP
+client raises an encoding error and the caller gets a 500 instead of a 401.
+Refusing it at the point it is set is the only place the person can read the
+reason.
 
 **Wrong tokens cost time.** 64 bits is comfortable only because guessing is
 priced: a source that presents wrong household tokens gets five free
@@ -102,12 +127,30 @@ household-wide 429 that any host on the LAN could trigger would be a worse
 failure than the guessing it prevents. Every transport goes through the
 same throttle, including the WebSocket subprotocol.
 
-**Upgrading an existing install.** A Domovoi that was set up before this
-change still holds a 64-hex token, and it keeps working — nothing is
-invalidated and no client has to be re-paired. Only a **rotation** issues
-the new format, so moving to a phrase is a deliberate act: rotate under
-Settings → Devices → Household token, then pair each browser and phone
-again with the new phrase (an admin login re-pairs a browser by itself). An admin reads it from the
+**What that means for a token you chose.** The backoff is the *only* thing
+standing behind it. A generated phrase is 64 bits and no guesser reaches it;
+a memorable one may be in the first million a wordlist tries, and while the
+per-source ladder caps one address at roughly a dozen tries an hour, it
+caps a /24 at about three thousand and nothing raises an alert. The 12
+character floor does not fix that — it is a floor, not a strength test. Pick
+something a wordlist has not seen, and know that this is a choice Domovoi
+lets you make rather than one it checks.
+
+**And it is stored in the clear.** The plaintext token is in Postgres, in
+`~/.domovoi/device-token.txt`, in the settings page's DOM, in every paired
+browser's `localStorage`, in the phone's DataStore — and, because media
+loads carry it as `?device_token=`, in the server's own access log. Anyone
+already signed in on a browser in the house can read it without re-entering
+a password. **Do not reuse a password from anywhere else as the household
+token.**
+
+**Upgrading an existing install.** A Domovoi that was set up before the
+phrase change still holds a 64-hex token, and it keeps working — hex is
+canonical, so it validates by both paths, nothing is invalidated and no
+client has to be re-paired. Only a **rotation** or a **set** issues a new
+value, so moving is a deliberate act: `rotate` (a fresh phrase) or `set…` (a
+token you choose) under Settings → Devices → Household token, then pair each
+browser and phone again (an admin login re-pairs a browser by itself). An admin reads it from the
 dashboard (`GET /api/auth/device-token`, or `GET /v1/admin/device-token` on
 the core) to enrol a new phone, and rotates it from the `/rotate` sibling —
 after which every household client has to be re-enrolled. It is rotated
@@ -178,10 +221,11 @@ queue's does.
 **How a client gets it.** The dashboard keeps the token in `localStorage`,
 per server, and sends it on every request; a refusal that names the header
 opens a *pair this browser* prompt (the phrase is typed or pasted once — the
-browser canonicalises it before storing it — and the refused request is
-replayed), and an admin login pairs the browser without a prompt by reading
-`GET /api/auth/device-token`. An admin sees the token
-under **Settings → Devices → Household token**, with copy and rotate.
+browser stores it verbatim, bar the outer whitespace — and the refused
+request is replayed), and an admin login pairs the browser without a prompt
+by reading `GET /api/auth/device-token`. An admin sees the token
+under **Settings → Devices → Household token**, with copy, `set…` and
+rotate.
 The Android app asks for it once under **Settings → Connection**, stores it
 in `EncryptedSharedPreferences` (outside Android backups) and sends it on
 every HTTP request, on `/ws/state` and on the drop-in call socket; a
@@ -474,7 +518,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite code push** (makes a Pi download and run fresh code) | Core: `POST /v1/admin/satellite/upgrade`. Dashboard: `POST /api/satellites/{room_id}/upgrade`. | **Fails closed** — 501 until setup. |
 | **Satellite pairing reset / preseed / delete** (lets the next device re-pair as a room; mints a room's token; frees a room name) | Core: `DELETE /v1/admin/satellites/{room_id}/pairing`, `POST .../pairing/preseed`, `DELETE /v1/admin/satellites/{room_id}`. Dashboard: `POST /api/satellites/{room_id}/pairing/reset`, `POST /api/satellites/pending/{id}/adopt`, `DELETE /api/satellites/{room_id}`. | **Fails closed** — 501 until setup. |
 | **Satellite media preparation** (builds the code and the first-boot scripts a Pi will run as root) | Dashboard: the whole `/api/satellites/media/*` router. Reads (`/status`, `/targets`, `/jobs`, `/jobs/{id}/download`, `/jobs/{id}/credentials`) take an admin **read** — the artifact is the code a satellite will run, `/jobs` lists the ids that name it, and `/targets` enumerates the drives plugged into this server. Writes (`/prepare`, `/cancel`, `/cache/refresh`) stay Bearer-only. | Pre-setup grace. The **downloadable zip carries no plaintext passwords**: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard from process memory. A card written directly to a **drive** still carries `domovoi/ap.json` and `domovoi/console.json` — stage 1 reads the first to raise its setup network, and anyone holding the card can read either anyway. |
-| **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token/rotate`. Dashboard: `GET/POST /api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). |
+| **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Setting and rotating are Bearer-only; the cookie renders the read and nothing else. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
 | **Documents** (the operator's own `~/Documents`, not a shared media library) | Dashboard: `POST /api/documents/create`, `/delete`, `/upload`, `/download-zip`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`, and the same writes through `/api/files` when the target library is `core:documents`. The **reads** (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`) are device tier. | Pre-setup grace. A folder of personal files is a tier above the music library: the household may read it, only the operator changes it or takes a zip of it. |
@@ -984,12 +1028,15 @@ needs a household credential on the **handshake**:
 * an admin `Bearer`, or the dashboard's `SameSite=Strict` session cookie —
   this socket renders state and nothing more, which is the read tier's bar,
   and a page on another site cannot bring that cookie to the handshake;
-* `Sec-WebSocket-Protocol: domovoi.device-token.<token>` — a browser can
-  set no header on a WebSocket handshake, and a query string would print
-  the token into every access log, so a paired-but-not-signed-in browser
-  (a kiosk) offers it as a subprotocol instead. The server echoes the
-  subprotocol back, which is what keeps the browser from dropping the
-  connection.
+* `Sec-WebSocket-Protocol: domovoi.device-token-b64.<base64url(token)>` —
+  a browser can set no header on a WebSocket handshake, and a query string
+  would print the token into every access log, so a paired-but-not-signed-in
+  browser (a kiosk) offers it as a subprotocol instead. It is base64url
+  with the padding stripped because RFC 6455 requires each element to be an
+  RFC 9110 *token*, which a household token an admin chose need not be; the
+  legacy `domovoi.device-token.<token>` spelling is still accepted for a
+  browser on a cached bundle. The server echoes back exactly the element it
+  chose, which is what keeps the browser from dropping the connection.
 
 Anything else is refused: the socket is closed before it is accepted (the
 server answers the upgrade **403**), so it is never registered with the

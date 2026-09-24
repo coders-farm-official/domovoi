@@ -257,6 +257,12 @@ TOKEN=$(cat ~/.domovoi/device-token.txt)
 curl -s -X POST http://localhost:6370/v1/intent -H 'Content-Type: application/json' -H "X-Device-Token: $TOKEN" -d '{"transcript":"set a timer for 2 minutes","room_id":"kitchen"}'
 ```
 
+> A household token an admin chose may hold any printable ASCII, including
+> spaces, `$`, a backtick or a `"`. `"X-Device-Token: $TOKEN"` is safe for
+> all of those *except* a double quote, which ends the argument. If yours
+> has one, use `--header` with a here-string instead:
+> `curl --header @- ... <<< "X-Device-Token: $TOKEN"`.
+
 A routed turn through the tool model and then the Q&A model — slower, and
 the one that proves your model settings are actually working:
 

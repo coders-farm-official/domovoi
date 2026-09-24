@@ -237,6 +237,10 @@ curl -X POST http://localhost:6370/v1/intent \
   -d '{"transcript":"give me a compliment","room_id":"kitchen"}'
 ```
 
+> If the household token an admin set contains a `"`, the double-quoted
+> header argument above breaks — read it into a variable and pass it with
+> `--header @-` instead. Spaces, `$` and backticks survive the quoting.
+
 > `/v1/intent` is on the device tier: pass the household token from
 > `~/.domovoi/device-token.txt` as `X-Device-Token` (an admin Bearer works
 > too). Before first-run setup the call needs no header at all.
