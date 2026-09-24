@@ -148,6 +148,56 @@ class DeviceAuthTest {
         assertFalse(api.pairingRequired.value)
     }
 
+    // ---- a token an admin CHOSE ------------------------------------------
+
+    @Test fun aChosenTokenWithSpacesAndPunctuationGoesOutVerbatim() = runBlocking {
+        token = "Maple Street, 1984!"
+        server.enqueue(MockResponse().setBody("{}"))
+        api.get("/api/health")
+        assertEquals("Maple Street, 1984!", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals("Maple Street, 1984!", api.wsRequest("ws://host/ws/state").header(DEVICE_TOKEN_HEADER))
+    }
+
+    @Test fun everyPrintableAsciiCharacterSurvivesTheHeader() = runBlocking {
+        token = (0x20..0x7E).map { it.toChar() }.joinToString("").trim()
+        server.enqueue(MockResponse().setBody("{}"))
+        api.get("/api/health")
+        assertEquals(token, server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+    }
+
+    @Test fun aNonAsciiTokenIsDroppedRatherThanThrown() = runBlocking {
+        // OkHttp's Headers.checkValue would throw IllegalArgumentException —
+        // on EVERY request, with the token in the message (X-Device-Token is
+        // not in its isSensitiveHeader set). Drop it instead: the server
+        // answers 401 and the phone is sent to the pairing screen.
+        token = "caf\u00E9-token-abcdef"
+        server.enqueue(MockResponse().setBody("{}"))
+        api.get("/api/health")
+        assertNull(server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull(api.wsRequest("ws://host/ws/state").header(DEVICE_TOKEN_HEADER))
+    }
+
+    @Test fun theStorableRuleMatchesTheServersAtEveryBoundary() {
+        assertEquals(12, DEVICE_TOKEN_MIN_LEN)
+        assertEquals(128, DEVICE_TOKEN_MAX_LEN)
+        // length floor and cap, measured on the trimmed form
+        assertFalse(isStorableDeviceToken("a".repeat(11)))
+        assertTrue(isStorableDeviceToken("a".repeat(12)))
+        assertTrue(isStorableDeviceToken("a".repeat(128)))
+        assertFalse(isStorableDeviceToken("a".repeat(129)))
+        // alphabet: 0x1F out, 0x20 in, 0x7E in, 0x7F out, non-ASCII out
+        assertFalse(isStorableDeviceToken("abcdef\u001Fghijkl"))
+        assertTrue(isStorableDeviceToken("abcdef ghijkl"))
+        assertTrue(isStorableDeviceToken("abcdef~ghijkl"))
+        assertFalse(isStorableDeviceToken("abcdef\u007Fghijkl"))
+        assertFalse(isStorableDeviceToken("abcdef\u00E9ghijkl"))
+        assertFalse(isStorableDeviceToken("abcdef\uD83D\uDC31ghijkl"))
+        assertFalse(isStorableDeviceToken("abcdef\tghijkl"))
+        // the shapes a real server mints
+        assertTrue(isStorableDeviceToken("acorn-maple-river-thistle-harbor-quartz-willow-ember"))
+        assertTrue(isStorableDeviceToken("a3f0".repeat(16)))
+    }
+
     @Test fun refusalClassificationIsAboutTheTierNotTheStatus() {
         assertTrue(isDeviceTokenRefusal(401, """{"detail":"X-Device-Token or admin session required"}"""))
         assertTrue(isDeviceTokenRefusal(403, """{"detail":"device token required"}"""))

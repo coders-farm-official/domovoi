@@ -33,9 +33,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.DEVICE_TOKEN_MIN_LEN
+import com.domovoi.app.net.isStorableDeviceToken
 import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -104,7 +107,16 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
     }
 }
 
-/** The paste-and-pair row, shared by the screen and the Connection panel. */
+/** The paste-and-pair row, shared by the screen and the Connection panel.
+ *
+ *  The pair button is gated on [isStorableDeviceToken] rather than on
+ *  "not blank": a value OkHttp would refuse used to be saved unchecked and
+ *  then threw an `IllegalArgumentException` — carrying the token in its
+ *  message — on every request the app made afterwards. Autocorrect is off
+ *  and the keyboard is ASCII because a token an admin chose can carry
+ *  capitals and punctuation, which a soft keyboard would otherwise
+ *  "helpfully" rewrite.
+ */
 @Composable
 internal fun PairingField(
     token: String,
@@ -112,31 +124,50 @@ internal fun PairingField(
     onPair: () -> Unit,
     label: String = "pair",
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        OutlinedTextField(
-            value = token,
-            onValueChange = onTokenChange,
-            placeholder = { Text("household token", color = Domovoi.colors.fgSubtle) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            modifier = Modifier.weight(1f),
-        )
-        Button(
-            onClick = onPair,
-            enabled = token.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Domovoi.colors.brand,
-                contentColor = Domovoi.colors.brandFg,
-            ),
+    val trimmed = token.trim()
+    val usable = isStorableDeviceToken(trimmed)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.size(6.dp))
-            Text(label)
+            OutlinedTextField(
+                value = token,
+                onValueChange = onTokenChange,
+                placeholder = { Text("household token", color = Domovoi.colors.fgSubtle) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false,
+                    keyboardType = KeyboardType.Ascii,
+                ),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = { if (usable) onPair() },
+                enabled = usable,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Domovoi.colors.brand,
+                    contentColor = Domovoi.colors.brandFg,
+                ),
+            ) {
+                Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(label)
+            }
+        }
+        if (trimmed.isNotEmpty() && !usable) {
+            Text(
+                if (trimmed.any { it.code !in 0x20..0x7E }) {
+                    "letters, digits, punctuation and spaces only"
+                } else {
+                    "at least $DEVICE_TOKEN_MIN_LEN characters"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgSubtle,
+            )
         }
     }
 }
