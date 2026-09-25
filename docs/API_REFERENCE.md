@@ -1000,7 +1000,7 @@ server holds the fix, the browser runs the old file, and nothing says so.
 
 | What is asked for | What comes back |
 |---|---|
-| `GET /` or any `*.html` | The page, with every same-origin `<script src>` / `<link href>` / `<img src>` rewritten to carry `?v=<that file's token>`. `Cache-Control: no-cache` and an `ETag` computed over the REWRITTEN bytes. |
+| `GET /` or any `*.html` | The page, with every same-origin `<script src>` / `<link href>` / `<img src>` rewritten to carry `?v=<that file's token>`, plus `window.__DOMOVOI_BUNDLE__` set to a digest of the bytes being sent. `Cache-Control: no-cache` and an `ETag` computed over the REWRITTEN bytes. A conditional request for a page is answered **here**, against those bytes — see "The 304 that ate the deploy" below. |
 | `GET /files.jsx?v=<current token>` | The file, `Cache-Control: public, max-age=31536000, immutable`. No revalidation, no round trip. |
 | `GET /files.jsx` (no token, or a stale one) | The file, `Cache-Control: no-cache`. Store it, but ask before reusing it. |
 
@@ -1024,10 +1024,83 @@ Cost, on the LAN this runs on: one conditional `GET` per page load (the
 page, `304`, no body) and a full download of exactly the files that
 changed. Not the ~35 revalidations a uniform `no-cache` would have cost.
 
+#### The 304 that ate the deploy
+
+A release almost never changes `index.html` — the point of the rewrite is
+that it does not have to — and `git pull --ff-only` rewrites only files
+whose content changed, so the page keeps its size and its mtime.
+`StaticFiles` derives its `ETag` from exactly those two things and answers
+`304` from `file_response()`, before the rewrite is consulted at all. A
+warm browser would send the stat `ETag` it stored under the old regime, get
+a `304`, and keep the page with no `?v=` on anything — every URL of which
+it already holds. **The versioned HTML never arrives because the HTML
+carrying it never arrives.**
+
+So the mount drops `If-None-Match` / `If-Modified-Since` / `If-Range` from
+a request whose path names a page, and compares against the bytes it is
+about to send. Assets keep their `304`s: an asset's stat `ETag` does
+describe what it sends, and that is what holds a warm reload to one round
+trip instead of thirty-five.
+
+#### How a release actually reaches each browser
+
+| The operator does this | A browser that has fetched the page since 2026-09-25 | A browser whose copy predates it |
+|---|---|---|
+| Reload (Ctrl-R) | New | **New** — this is the one that works |
+| Bookmark / pinned tab / typed address / link | New | Old, until it reloads once or its heuristic window lapses |
+| Leaves the tab open | The dashboard says it is behind and offers a reload | Nothing; that page has no such check in it |
+
+The second column is the steady state and it is what this section
+promises. The third is a **one-time** cost and it is not fixable from the
+server: a copy stored under the old header-less regime has no explicit
+freshness, falls to the RFC 9111 §4.2.2 heuristic, and is served straight
+out of the browser's own cache with **no request made at all**. Nothing a
+server sends can reach a request that is never made. The window is about
+10% of the gap between when that browser last fetched the page and when
+`index.html` was last written — hours on this box, not days.
+
+**So the release note for 2026-09-25 has to say: reload the dashboard once
+(plain Ctrl-R is enough — no hard refresh, no clearing) on each browser and
+phone. Every release after this one arrives on an ordinary open.** Measured
+on the real dashboard, all four arrivals, in a real headless Chrome:
+`functional-testing/plan-20260922/reach-real-20260925/`.
+
+#### `GET /api/bundle` — is this tab running what the box has?
+
+| Method & path | Auth | Response / purpose |
+|---|---|---|
+| `GET /api/bundle` | Open | `{bundle: "<hex>" \| null}` — a digest of the page the mount would serve right now. |
+
+The one staleness no cache header can reach: headers govern the NEXT
+request, and a tab that has finished loading makes none. A dashboard left
+open on a tablet runs last week's bundle until somebody closes it, and
+nothing says so. The page carries the same digest in
+`window.__DOMOVOI_BUNDLE__`; the page polls this route (20 s after load,
+on becoming visible, and every 10 minutes) and shows a reload notice when
+the two differ. Open, because a dashboard that cannot tell it is stale is
+the thing this exists to stop, and the digest describes a page anyone on
+the LAN can already `GET`. `null` means there is no static tree, and the
+browser-side check treats that as no opinion.
+
+#### Plugin assets are the same door
+
+`GET /plugins/<slug>/static/<path>` (section 4.1) carries
+`Cache-Control: no-cache` for the same reason. A plugin upgrade changes
+those files WITHOUT changing their names — the manifest a plugin author
+writes has no version in it — so they are revalidated rather than
+versioned: one conditional `GET` per declared script per page load,
+answered `304` with no body until the operator actually upgrades
+something. `index.html`'s own loader asks with `cache: 'no-cache'` as
+well, because the server header only governs a copy stored WITH it and a
+browser warmed under the old regime is not reached by it at all.
+
 `web/static/sw.js` is the other half. A service worker answers before the
 HTTP cache is consulted, so it is network-first for the shell and re-fetches
 with `cache: 'no-cache'`; its cache is the offline fallback, not the source
-of truth. Note the asymmetry worth knowing at deploy time: a service worker
+of truth. After each successful store it drops the other copies of that
+same path, so the shell cache holds one entry per file rather than one per
+file per deploy — `activate` only ever deletes whole caches by name, so
+without that a phone would carry every copy of every file it ever fetched. Note the asymmetry worth knowing at deploy time: a service worker
 only registers on a secure context, so on a plain-HTTP LAN install
 (`http://<host>:6369`) there is no worker at all and the static mount is
 the only layer there is. A browser still running a PRE-2026-09-25 worker
@@ -1073,8 +1146,11 @@ for how to declare them.
   sign-in modal on a `401`, so a signed-in operator never notices the gate.
   The pre-setup grace applies here too.
 * Static assets serve from `GET /plugins/<slug>/static/<path>` (containment-
-  checked). Pages, nav entries, and realtime channels are announced through
-  `GET /api/plugins/manifest` so the frontend needs no rebuild.
+  checked), with `Cache-Control: no-cache` — an upgrade changes these files
+  without changing their names, so they have to be revalidated or the old
+  panel keeps running (§3.22). Pages, nav entries, and realtime channels are
+  announced through `GET /api/plugins/manifest` so the frontend needs no
+  rebuild.
 * Plugin web code runs under an import guard: it can never pull core runtime
   modules into the web process.
 

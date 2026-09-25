@@ -116,6 +116,26 @@ The dashboard (port 6369) is a separate process that reads the shared Postgres a
 | Dashboard unreachable from another device on the LAN | Bind/firewall | The web backend binds `0.0.0.0:6369` by default (`WEB_HOST` / `WEB_PORT`); allow inbound 6369 in Windows Defender Firewall |
 | Dashboard up but every page errors | Postgres down | See [Docker issues](#docker-issues) — both processes need the `domovoi-postgres` container |
 
+## I deployed, and the dashboard still shows the old thing
+
+The dashboard is static files, and a browser is allowed to reuse a file it
+already has without asking. Before 2026-09-25 it was allowed to do that for
+days: the static mount sent no `Cache-Control` at all, so freshness fell to
+the RFC 9111 heuristic. That is fixed, but the fix arrives the same way
+every other front-end change does, so it takes one reload to land.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| You pulled and restarted, opened the dashboard from a bookmark or a pinned tab, and it is unchanged | That browser's copy of the page predates 2026-09-25, so it is still heuristically fresh and the browser did not ask the box anything | **Reload once** — plain Ctrl-R (Cmd-R, or pull-to-refresh on a phone). No hard refresh, no clearing site data. Do it once per browser and phone; every release after that arrives on an ordinary open |
+| A tab you left open all day is running yesterday's dashboard | Nothing re-fetches a page that has already loaded, and no cache header can change that | The dashboard notices this itself now and shows "Domovoi has been updated…" with a reload button. If it is a pre-2026-09-25 page it cannot notice — reload it |
+| A plugin's panel is still the old one after an upgrade | Same disease, second door: plugin scripts have no version in their URL | Reload once. Both the route and the page's loader ask past the cache from 2026-09-25 |
+| Only ONE browser is stale and it has a service worker (a `localhost` or `https://` origin) | A worker registered under the old cache-first rules answers before the network, and it is already in the browser | Reload twice, once. `http://<host>:6369` is not a secure context, so no worker registers there and this cannot happen on the LAN install |
+| Everything is stale on every device and a reload does not help | The box did not actually take the release | `GET /v1/admin/version` on the core: compare `running_sha` with `checkout_sha`. A pull without a restart leaves them different |
+
+To check what a given tab is running rather than guessing: its console has
+`window.__DOMOVOI_BUNDLE__`, and `GET /api/bundle` on the box says what it
+would serve now. Same value = that tab is current.
+
 ## Admin locked out
 
 | Symptom | Likely cause | Fix |

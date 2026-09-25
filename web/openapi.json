@@ -364,7 +364,7 @@
           "plugins"
         ],
         "summary": "Plugin Static",
-        "description": "Serve a plugin's ``web/static`` assets. Containment-checked so a\ncrafted path can't escape the plugin's static dir.",
+        "description": "Serve a plugin's ``web/static`` assets. Containment-checked so a\ncrafted path can't escape the plugin's static dir.\n\n``Cache-Control: no-cache`` \u2014 the second door of the delivery bug\nweb/backend/static_cache.py exists for, and the same disease. A\nbare ``FileResponse`` sends ``ETag`` and ``Last-Modified`` and NO\nfreshness at all, so a browser falls to the RFC 9111 \u00a74.2.2\nheuristic and reuses a panel script for days without asking. These\nURLs cannot be versioned the way the dashboard's are \u2014 they come\nout of the plugin manifest, which a plugin author writes by hand \u2014\nso they are revalidated instead: one conditional GET per declared\nscript per page load, answered 304 with no body until the operator\nactually upgrades the plugin. That is the whole cost of a plugin\nupgrade being visible on the next reload rather than next week.",
         "operationId": "plugin_static_plugins__slug__static__path__get",
         "parameters": [
           {
@@ -10221,6 +10221,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/bundle": {
+      "get": {
+        "summary": "Bundle",
+        "description": "What the box would serve as the dashboard page right now.\n\nOpen, like ``/api/plugins/manifest``: the answer is a digest of a\npage anyone on the LAN can already GET, it names no file and no\nversion, and the browser has to be able to ask it before it holds a\ncredential or after one has expired \u2014 a dashboard that cannot tell it\nis stale is exactly the thing this release exists to stop.\n\nThe page carries the same value in ``window.__DOMOVOI_BUNDLE__``\n(web/backend/static_cache.py). A tab comparing the two is asking one\nquestion: am I running what is on the box? That is the only kind of\nstaleness no cache header can reach \u2014 the tab stopped asking for\nthe page the moment it finished loading it.\n\n``None`` when there is no static tree (a backend-only deployment,\nand the tests that run one): the browser-side check treats a missing\nanswer as \"no opinion\" and stays quiet rather than nagging.",
+        "operationId": "bundle_api_bundle_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object",
+                  "title": "Response Bundle Api Bundle Get"
                 }
               }
             }
