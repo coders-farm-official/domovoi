@@ -128,9 +128,17 @@ self.addEventListener('fetch', (event) => {
 
   // Plugin static assets: network-first (they change on install/upgrade
   // without a filename bump); cache fallback keeps offline boots working.
+  //
+  // fetchFresh, not a bare fetch(req). "Network-first" in a worker only
+  // means the worker asks the network before it reads its OWN cache — the
+  // browser's HTTP cache still sits between the two, and a plugin asset
+  // has no version in its URL to keep it honest, so a default-mode fetch
+  // was answered out of that cache and the upgraded panel never ran. The
+  // server now sends these no-cache (web/backend/plugin_host.py); this
+  // holds anyway, because a worker outlives the box it first spoke to.
   if (isPluginAsset(url)) {
     event.respondWith(
-      fetch(req).then((resp) => {
+      fetchFresh(req).then((resp) => {
         const copy = resp.clone();
         caches.open(RUNTIME_CACHE).then((c) => c.put(req, copy)).catch(() => {});
         return resp;
@@ -239,7 +247,11 @@ function shellNetworkFirst(req) {
       const network = fetchFresh(req).then((resp) => {
         // Only cache a real answer: a 404 or a 500 stored here would be
         // served for as long as the box stays offline.
-        if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
+        if (resp && resp.ok) {
+          cache.put(req, resp.clone())
+            .then(() => dropOlderCopies(cache, req))
+            .catch(() => {});
+        }
         return resp;
       });
       if (!hit) {
@@ -256,6 +268,30 @@ function shellNetworkFirst(req) {
       });
     })
   );
+}
+
+/* One entry per shell file, not one per file per deploy.
+ *
+ * The URLs the server stamps (`data.js?v=…`) are new on every release that
+ * touches that file, so `cache.put` was ADDING a key each time and the
+ * activate handler only ever deletes whole caches by NAME. A phone that
+ * lives through a year of deploys would carry every copy of every file it
+ * ever fetched, and nothing would read the old ones: the lookup is
+ * ignoreSearch, so it takes whichever copy it finds first, and the network
+ * wins whenever the box is up.
+ *
+ * So after a successful put, the other copies of that same PATH go. Same
+ * pathname, different query = a previous release's copy of this file.
+ * Best-effort and deliberately unawaited by the response: a failed prune
+ * costs disk, a prune that blocked the page would cost the page. */
+function dropOlderCopies(cache, req) {
+  const keep = new URL(req.url);
+  return cache.keys().then((keys) => Promise.all(
+    keys.filter((k) => {
+      const u = new URL(k.url);
+      return u.pathname === keep.pathname && u.search !== keep.search;
+    }).map((k) => cache.delete(k))
+  )).catch(() => {});
 }
 
 function staleWhileRevalidate(req, cacheName) {

@@ -52,6 +52,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from web.backend.db import session_scope
+from web.backend.static_cache import STATIC_CACHE_CONTROL
 
 log = logging.getLogger(__name__)
 
@@ -595,6 +596,11 @@ HOST = PluginHost()
 
 router = APIRouter(tags=["plugins"])
 
+# The same answer web/static gives an unversioned name, and imported from
+# there rather than spelled again, so the two doors a front-end change
+# comes through cannot drift apart.
+PLUGIN_ASSET_CACHE_CONTROL = STATIC_CACHE_CONTROL
+
 
 @router.get("/api/plugins/manifest")
 async def plugins_manifest() -> dict[str, Any]:
@@ -606,7 +612,20 @@ async def plugins_manifest() -> dict[str, Any]:
 @router.get("/plugins/{slug}/static/{path:path}")
 async def plugin_static(slug: str, path: str) -> FileResponse:
     """Serve a plugin's ``web/static`` assets. Containment-checked so a
-    crafted path can't escape the plugin's static dir."""
+    crafted path can't escape the plugin's static dir.
+
+    ``Cache-Control: no-cache`` — the second door of the delivery bug
+    web/backend/static_cache.py exists for, and the same disease. A
+    bare ``FileResponse`` sends ``ETag`` and ``Last-Modified`` and NO
+    freshness at all, so a browser falls to the RFC 9111 §4.2.2
+    heuristic and reuses a panel script for days without asking. These
+    URLs cannot be versioned the way the dashboard's are — they come
+    out of the plugin manifest, which a plugin author writes by hand —
+    so they are revalidated instead: one conditional GET per declared
+    script per page load, answered 304 with no body until the operator
+    actually upgrades the plugin. That is the whole cost of a plugin
+    upgrade being visible on the next reload rather than next week.
+    """
     root = HOST.static_root(slug)
     if root is None or not HOST.enabled(slug):
         raise HTTPException(status_code=404, detail=f"plugin {slug!r} not enabled")
@@ -618,4 +637,6 @@ async def plugin_static(slug: str, path: str) -> FileResponse:
         raise HTTPException(status_code=400, detail="path escapes plugin static dir")
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"no such asset: {path}")
-    return FileResponse(str(target))
+    return FileResponse(
+        str(target), headers={"Cache-Control": PLUGIN_ASSET_CACHE_CONTROL}
+    )

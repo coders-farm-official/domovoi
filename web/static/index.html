@@ -132,7 +132,14 @@
       for (const plugin of manifest.plugins || []) {
         for (const url of plugin.scripts || []) {
           try {
-            const r = await fetch(url.startsWith('http') ? url : `${API_BASE}${url}`);
+            // `no-cache`, not a bare fetch. A plugin upgrade changes these
+            // files WITHOUT changing their names — the manifest an author
+            // writes has no version in it — so a default fetch is answered
+            // from the browser's own cache and the upgraded panel never
+            // runs. The server sends no-cache too (plugin_host.py), and
+            // this holds even against a box that predates that.
+            const r = await fetch(url.startsWith('http') ? url : `${API_BASE}${url}`,
+                                  { cache: 'no-cache' });
             if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
             const src = await r.text();
             const wrapped = `(function(){\n${src}\n})();`;
@@ -313,6 +320,95 @@
       ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 
     bootstrap();
+  </script>
+
+  <!-- Is this tab running the files the box is serving?
+   *
+   * The one staleness no cache header can ever reach. Headers govern the
+   * NEXT request; a tab that finished loading has stopped making any, so a
+   * dashboard left open on the kitchen tablet goes on running last week's
+   * bundle for as long as nobody closes it, and nothing tells anyone. That
+   * is precisely how a deployed fix gets reported as "did not work".
+   *
+   * web/backend/static_cache.py stamps the page it sends with a digest of
+   * exactly those bytes; GET /api/bundle reports the digest of what the box
+   * would send now. Different means this tab is behind.
+   *
+   * Plain <script>, not type="text/babel", and plain DOM, not React: the
+   * whole point is to still speak up on a page whose own bundle is old
+   * enough to be broken. If anything here is missing - no marker (served by
+   * something that does not stamp), no /api/bundle (an older box), no
+   * answer at all - it says nothing rather than guessing.
+   *
+   * It does NOT rescue a browser still holding a page from before this
+   * release: that page has no marker in it, because the marker ships inside
+   * the file that is not arriving. Those browsers need one ordinary reload,
+   * once. See the release notes.
+   -->
+  <script>
+  (function () {
+    var mine = window.__DOMOVOI_BUNDLE__;
+    if (!mine || !window.fetch) return;
+
+    var IDLE_MS = 10 * 60 * 1000;   // a pinned tab nobody touches
+    var FOCUS_GAP_MS = 60 * 1000;   // tab-switching must not become polling
+    var FIRST_MS = 20 * 1000;       // let the dashboard finish booting first
+    var last = 0;
+    var done = false;
+
+    function show() {
+      if (done || document.getElementById('bundle-stale')) return;
+      done = true;
+      var bar = document.createElement('div');
+      bar.id = 'bundle-stale';
+      bar.setAttribute('role', 'status');
+      bar.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:120;' +
+        'max-width:min(420px,calc(100vw - 48px));background:var(--overlay,#222);' +
+        'color:var(--fg,#eee);border:1px solid var(--border,#444);' +
+        'border-radius:var(--r-md,10px);box-shadow:var(--shadow-md,0 6px 24px rgba(0,0,0,.35));' +
+        'padding:12px 14px;font-size:13px;line-height:1.45;display:flex;' +
+        'flex-wrap:wrap;align-items:center;gap:10px;';
+      var text = document.createElement('span');
+      text.style.cssText = 'flex:1 1 200px;';
+      text.textContent = 'Domovoi has been updated. This tab is still running the ' +
+        'dashboard files it opened with \u2014 reload to pick up the new ones.';
+      var reload = document.createElement('button');
+      reload.type = 'button';
+      reload.textContent = 'reload';
+      reload.style.cssText = 'cursor:pointer;border-radius:var(--r-sm,8px);' +
+        'border:1px solid var(--brand,#e8a33d);background:var(--brand,#e8a33d);' +
+        'color:var(--brand-fg,#1b1b1b);padding:6px 12px;font:inherit;font-weight:600;';
+      reload.addEventListener('click', function () { window.location.reload(); });
+      var later = document.createElement('button');
+      later.type = 'button';
+      later.textContent = 'not now';
+      later.style.cssText = 'cursor:pointer;border-radius:var(--r-sm,8px);' +
+        'border:1px solid var(--border,#444);background:transparent;color:inherit;' +
+        'padding:6px 12px;font:inherit;';
+      later.addEventListener('click', function () { bar.remove(); });
+      bar.appendChild(text);
+      bar.appendChild(reload);
+      bar.appendChild(later);
+      document.body.appendChild(bar);
+    }
+
+    function check() {
+      if (done) return;
+      last = Date.now();
+      // no-store, so this question is never answered by the cache that is
+      // the subject of the question.
+      fetch('/api/bundle', { cache: 'no-store', credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d && d.bundle && d.bundle !== mine) show(); })
+        .catch(function () { /* offline, or a box without the route */ });
+    }
+
+    setTimeout(check, FIRST_MS);
+    setInterval(check, IDLE_MS);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && Date.now() - last > FOCUS_GAP_MS) check();
+    });
+  })();
   </script>
 </body>
 </html>

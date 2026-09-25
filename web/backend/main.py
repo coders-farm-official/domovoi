@@ -59,7 +59,11 @@ from web.backend.api import satellites as satellites_api
 from web.backend.api import videos as videos_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
-from web.backend.static_cache import RevalidatingStaticFiles
+from web.backend.static_cache import (
+    BUNDLE_ROUTE,
+    RevalidatingStaticFiles,
+    current_bundle,
+)
 from web.backend import plugin_host
 from web.backend import realtime as realtime_mod
 from web.backend.middleware import (
@@ -365,6 +369,29 @@ app.include_router(images_api.router)
 app.include_router(chat_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
+
+
+@app.get(BUNDLE_ROUTE)
+async def bundle() -> dict[str, str | None]:
+    """What the box would serve as the dashboard page right now.
+
+    Open, like ``/api/plugins/manifest``: the answer is a digest of a
+    page anyone on the LAN can already GET, it names no file and no
+    version, and the browser has to be able to ask it before it holds a
+    credential or after one has expired — a dashboard that cannot tell it
+    is stale is exactly the thing this release exists to stop.
+
+    The page carries the same value in ``window.__DOMOVOI_BUNDLE__``
+    (web/backend/static_cache.py). A tab comparing the two is asking one
+    question: am I running what is on the box? That is the only kind of
+    staleness no cache header can reach — the tab stopped asking for
+    the page the moment it finished loading it.
+
+    ``None`` when there is no static tree (a backend-only deployment,
+    and the tests that run one): the browser-side check treats a missing
+    answer as "no opinion" and stays quiet rather than nagging.
+    """
+    return {"bundle": current_bundle(_STATIC_DIR)}
 
 
 @app.get("/api/health", response_model=HealthResponse)
