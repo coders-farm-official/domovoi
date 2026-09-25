@@ -17,16 +17,28 @@ Two things to keep straight:
   short timeout, and **never raises into the caller** — a missing git binary,
   a timeout, or any other failure collapses into a structured result so an
   admin endpoint can report "unknown / offline" instead of 500ing.
+
+On a Linux host with the update unit installed (docs/LINUX_HOST.md,
+"Updates from the dashboard") this module is also the core's half of that
+pipeline: :func:`pull` records the SHA to roll back to, and
+:func:`version_state` reports the unit's last result.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import os
+import re
 import subprocess
 import time
+from pathlib import Path
 
 from domovoi import self_restart
 from domovoi.config import settings
+
+log = logging.getLogger(__name__)
 
 # git is fast on a local clone; if it hasn't answered in 10s something is
 # wedged (lock contention, network for fetch) and we'd rather report an
@@ -168,6 +180,7 @@ async def version_state() -> dict:
     # Whether the dashboard can offer a working "restart to apply" button, or
     # has to fall back to printing the command.
     can_restart, restart_hint = await self_restart.capable_async()
+    last = await asyncio.to_thread(read_last_update)
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
@@ -181,7 +194,132 @@ async def version_state() -> dict:
         "uptime_sec": uptime_sec(),
         "restart_capable": can_restart,
         "restart_hint": restart_hint,
+        # "update" when the restart starts domovoi-update.service (sync,
+        # migrate, health-check, roll back); "restart" when it only bounces
+        # core and web, as every host did before that unit existed.
+        "restart_mode": self_restart.restart_mode(),
+        # The update unit's last run, or None on a host without one.
+        "last_update": last,
+        # A commit that failed to apply and was rolled back. The panel stops
+        # offering a pull while the upstream still points at it.
+        "bad_sha": _bad_sha(last),
     }
+
+
+def _bad_sha(last: dict | None) -> str | None:
+    bad = (last or {}).get("bad_sha")
+    return bad if isinstance(bad, str) and _FULL_SHA_RE.match(bad) else None
+
+
+# ─── The update unit's side of the story ─────────────────────────────────
+#
+# apply-update.sh (run as root by domovoi-update.service) needs to know what
+# to roll back to. It keeps its own record of the last SHA it applied, but
+# before its first run the only witness is this process: record it at pull
+# time, in a file the script reads (settings.update_state_dir/prev_sha).
+#
+# ORIG_HEAD is not good enough on its own: git rewrites it on every pull, so
+# after two pulls without a restart it names the middle commit, while the
+# process, its venv and its database are still at the first. The SHA to roll
+# back to is the one this process is RUNNING, whenever the tree has moved
+# ahead of it.
+
+PREV_SHA_FILE = "prev_sha"
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{4,64}$")
+
+
+def _full_sha(rev: str) -> str | None:
+    """Blocking. ``rev`` as a full commit SHA, or None."""
+    proc = _run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    sha = proc.stdout.strip() if proc.returncode == 0 else ""
+    return sha if _FULL_SHA_RE.match(sha) else None
+
+
+def _rollback_baseline() -> str | None:
+    """Blocking. The SHA an update applied after this pull should roll back
+    to: the running code when the tree is already ahead of it (an earlier
+    pull is still waiting for its restart), else the current HEAD. None when
+    git can't say."""
+    head = _full_sha("HEAD")
+    if head is None:
+        return None
+    running = boot_sha().removesuffix("-dirty")
+    if _SHORT_SHA_RE.match(running):
+        full_running = _full_sha(running)
+        if full_running and full_running != head:
+            ancestor = _run("merge-base", "--is-ancestor", full_running, head)
+            if ancestor.returncode == 0:
+                return full_running
+    return head
+
+
+def _write_prev_sha(sha: str) -> None:
+    """Blocking. Atomically record ``sha`` for the update unit. Best-effort:
+    a host without the unit never reads it, so a failure is logged, never
+    raised."""
+    state_dir = Path(settings.update_state_dir).expanduser()
+    tmp = state_dir / f".{PREV_SHA_FILE}.{os.getpid()}.tmp"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        # Bytes, so Windows doesn't turn the newline into CRLF.
+        tmp.write_bytes(f"{sha}\n".encode("ascii"))
+        # Read by the update unit as the service user; nothing secret.
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, state_dir / PREV_SHA_FILE)
+    except OSError as e:
+        log.warning("could not record the pre-pull SHA for the update unit: %s", e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+# The result file is small; anything bigger is not ours.
+_LAST_UPDATE_MAX_BYTES = 256 * 1024
+# What GET /v1/admin/version passes through. It's an open endpoint, so the
+# script's full record (backup paths, raw step output) stays on the box.
+_LAST_UPDATE_FIELDS = (
+    "status", "mode", "from_sha", "to_sha", "prev_source", "bad_sha",
+    "started_at", "finished_at", "duration_sec", "deps_changed",
+    "mpd_changed", "migrations_before", "migrations_after", "db_restored",
+    "error",
+)
+_STEP_FIELDS = ("name", "status", "duration_sec")
+_ERROR_MAX_CHARS = 500
+
+
+def read_last_update() -> dict | None:
+    """Blocking. The update unit's last result (``settings.update_result_file``),
+    trimmed to the fields the dashboard needs, or None when there is no
+    readable result. Never raises."""
+    path = Path(settings.update_result_file).expanduser()
+    try:
+        with path.open("rb") as f:
+            raw = f.read(_LAST_UPDATE_MAX_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _LAST_UPDATE_MAX_BYTES:
+        return None
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("status"), str):
+        return None
+    out = {k: doc[k] for k in _LAST_UPDATE_FIELDS if k in doc}
+    for k in ("from_sha", "to_sha", "bad_sha"):
+        if k in out and not (isinstance(out[k], str) and _FULL_SHA_RE.match(out[k])):
+            out[k] = None
+    if isinstance(out.get("error"), str):
+        out["error"] = out["error"][:_ERROR_MAX_CHARS]
+    steps = doc.get("steps")
+    out["steps"] = [
+        {k: s.get(k) for k in _STEP_FIELDS}
+        for s in (steps if isinstance(steps, list) else [])
+        if isinstance(s, dict)
+    ]
+    return out
 
 
 async def fetch() -> dict:
@@ -204,9 +342,12 @@ async def fetch() -> dict:
 async def commits_behind() -> dict:
     """Fetch, then count how far HEAD is behind/ahead of its upstream.
 
-    Returns ``{"behind": int, "ahead": int, "upstream": bool, "error":
-    str|None}``. No tracking branch or an offline fetch → ``upstream=False``
-    plus an error string and zeroed counts. Never raises."""
+    Returns ``{"behind": int, "ahead": int, "upstream": bool,
+    "upstream_sha": str|None, "error": str|None}``. ``upstream_sha`` is the
+    full SHA a pull would move to, which the version panel compares with a
+    rolled-back ``bad_sha``. No tracking branch or an offline fetch →
+    ``upstream=False`` plus an error string and zeroed counts. Never
+    raises."""
     fetched = await fetch()
     try:
         behind = await asyncio.to_thread(
@@ -215,8 +356,10 @@ async def commits_behind() -> dict:
         ahead = await asyncio.to_thread(
             _run, "rev-list", "--count", "@{u}..HEAD"
         )
+        upstream_sha = await asyncio.to_thread(_full_sha, "@{u}")
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
-        return {"behind": 0, "ahead": 0, "upstream": False, "error": str(e)}
+        return {"behind": 0, "ahead": 0, "upstream": False,
+                "upstream_sha": None, "error": str(e)}
 
     # A missing upstream makes rev-list exit non-zero ("no upstream
     # configured" / "unknown revision @{u}"). Report it as upstream=False
@@ -229,6 +372,7 @@ async def commits_behind() -> dict:
             "behind": 0,
             "ahead": 0,
             "upstream": False,
+            "upstream_sha": None,
             "error": fetched["error"] or err,
         }
     try:
@@ -236,18 +380,28 @@ async def commits_behind() -> dict:
             "behind": int(behind.stdout.strip() or 0),
             "ahead": int(ahead.stdout.strip() or 0),
             "upstream": True,
+            "upstream_sha": upstream_sha,
             "error": fetched["error"],
         }
     except ValueError as e:
-        return {"behind": 0, "ahead": 0, "upstream": False, "error": str(e)}
+        return {"behind": 0, "ahead": 0, "upstream": False,
+                "upstream_sha": None, "error": str(e)}
 
 
 async def pull() -> dict:
     """`git pull --ff-only` — a deliberate, separate admin action (never run
     by a check). Returns ``{"pulled": bool, "new_sha": str|None, "error":
-    str|None}``. A dirty or diverged tree fails the fast-forward and comes
-    back ``pulled=False`` with the git stderr as ``error`` — we never force a
-    merge or reset. Never raises."""
+    str|None, "prev_sha": str|None}``. A dirty or diverged tree fails the
+    fast-forward and comes back ``pulled=False`` with the git stderr as
+    ``error`` — we never force a merge or reset. Never raises.
+
+    A successful pull also records ``prev_sha``, the full SHA an update
+    should roll back to, for the Linux update unit (see
+    :func:`_rollback_baseline`)."""
+    try:
+        baseline = await asyncio.to_thread(_rollback_baseline)
+    except Exception:  # noqa: BLE001 — the pull matters more than the record
+        baseline = None
     try:
         proc = await asyncio.to_thread(_run, "pull", "--ff-only")
     except FileNotFoundError:
@@ -264,4 +418,11 @@ async def pull() -> dict:
             "error": (proc.stderr or "git pull failed").strip(),
         }
     invalidate_sha_cache()
-    return {"pulled": True, "new_sha": await current_sha(), "error": None}
+    if baseline is not None:
+        await asyncio.to_thread(_write_prev_sha, baseline)
+    return {
+        "pulled": True,
+        "new_sha": await current_sha(),
+        "error": None,
+        "prev_sha": baseline,
+    }

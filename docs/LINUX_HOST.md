@@ -90,7 +90,15 @@ The version panel's **Restart to apply changes** button bounces both
 services so pulled code actually loads. The service user can't do that
 unaided, so grant exactly that one command — the same single-command
 pattern the satellite uses for its own self-restart
-([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1):
+([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1).
+
+> **Prefer the update unit.** A bare bounce loads new code but does not
+> install new dependencies, run new migrations or rebuild the MPD image.
+> With `domovoi-update.service` installed ([Updates from the
+> dashboard](#updates-from-the-dashboard)) the same button does all of
+> that, health-checks the result and rolls back if it fails. It needs its
+> own one-line grant, shown there. What follows is the plain bounce, which
+> is what the button does on a host without the unit.
 
 ```bash
 sudo visudo -f /etc/sudoers.d/domovoi-restart
@@ -451,6 +459,215 @@ tell you so.
 whole house returns — Docker, Postgres, both services, every satellite —
 without you logging in. That's the difference between a demo and an
 appliance, and it's the thing Linux makes genuinely easy.
+
+---
+
+## Updates from the dashboard
+
+The version panel pulls with `git pull --ff-only`. A pull can bring new
+Python dependencies, a new Flyway migration or a new MPD image, and a bare
+restart of core and web applies none of them: `domovoi-db` runs Flyway only
+when *it* starts. A migration that never ran looks like a broken release
+(the V013 device-token table was the first time this bit).
+
+A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
+that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
+Once it's installed, the panel's **Restart to apply changes** starts it
+instead of bouncing core and web, and each run does this:
+
+1. Work out what changed since the last SHA it applied and saw healthy.
+   If nothing did, it's a plain restart: stop web and core, restart
+   `domovoi-db` (a cheap no-op Flyway run), start core and web, and
+   health-check them. The button stays fast.
+2. Refuse, touching nothing, if tracked files have uncommitted changes. A
+   rollback could not restore that tree. Untracked files are fine.
+3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
+   `/var/lib/domovoi-update/backups/` (the newest 5 are kept). If the backup
+   fails, the update stops there and nothing has been stopped.
+4. Stop `domovoi-web` and `domovoi-core`.
+5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
+   changed: re-sync the venv the way [Install](#install) builds it (CPU
+   torch first, then `pip install -e ".[dev,real-clients,voice-profile]"`).
+6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
+   `domovoi-mpd:latest` exactly as the core does, and remove the room
+   containers. The core recreates each one at startup from its `mpd_rooms`
+   row, with the same data volume, so playlists and queues survive.
+7. `systemctl restart domovoi-db`: compose up plus Flyway.
+8. Start core and web. Both must answer `/v1/health` (core, :6370) and
+   `/api/health` (web, :6369) within 120 s.
+
+If any of 4-8 fails, it rolls back: `git reset --keep` to the previous SHA
+(never `--hard`), the venv re-synced and every package put back at its
+exact pre-update version, the old MPD image rebuilt, and, if
+`flyway_schema_history` grew, the pre-update dump restored. The restore goes
+into a fresh database that is then renamed to `domovoi`; the replaced one
+is kept as `domovoi_failed_<timestamp>` for inspection, and you drop it by
+hand when you're done with it. Then it restarts and health-checks again, and
+records the commit it rolled back as `bad_sha`. The panel stops offering a
+pull while upstream still points at that commit, and offers the next one.
+
+Every run writes `/var/lib/domovoi-update/last-result.json` (status,
+from/to SHA, each step with its timing, the error). The version panel shows
+it as **last update**, and `GET /v1/admin/version` serves it as
+`last_update`. Everything the script prints goes to the journal:
+
+```bash
+journalctl -u domovoi-update -n 200
+```
+
+**`/etc/systemd/system/domovoi-update.service`**:
+
+```ini
+[Unit]
+Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/domovoi-update
+ExecStart=/bin/bash /opt/domovoi/scripts/linux/apply-update.sh
+TimeoutStartSec=30min
+```
+
+No `User=`: it runs as root, because it has to stop and start the other
+units and read the database dump. It has no `[Install]` section either:
+nothing starts it at boot, only the button or you.
+
+Root runs the script straight from the checkout, which the service user can
+write. That doesn't give the service user anything new: it is already in
+the `docker` group, which is root-equivalent. The script also keeps root
+away from the tree: git and pip run as the service user through
+`runuser`, and root's own files live in `/var/lib/domovoi-update`, which the
+service user can read but not write.
+
+**`/etc/default/domovoi-update`** is optional. Every setting defaults to the
+layout on this page, so you only need the file to change one:
+
+```bash
+# Service user. Default: User= of domovoi-core.service, else the owner of the checkout.
+# DOMOVOI_USER=domovoi
+# Default: the checkout the script lives in.
+# DOMOVOI_REPO_DIR=/opt/domovoi
+# DOMOVOI_VENV=/opt/domovoi/.venv
+# Extras for the venv re-sync. An NVIDIA host adds cuda: dev,real-clients,voice-profile,cuda
+# DOMOVOI_PIP_EXTRAS=dev,real-clients,voice-profile
+# CPU torch index, used first when the extras include voice-profile. Empty: skip that step.
+# DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
+# DOMOVOI_UPDATE_KEEP_BACKUPS=5
+# 0 lets an update go ahead when the pre-update backup fails (then no restore is possible).
+# DOMOVOI_UPDATE_REQUIRE_BACKUP=1
+# DOMOVOI_UPDATE_HEALTH_TIMEOUT=120
+# DOMOVOI_CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
+# DOMOVOI_WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
+# DOMOVOI_PG_CONTAINER=domovoi-postgres
+# DOMOVOI_PG_USER=domovoi
+# DOMOVOI_PG_DB=domovoi
+# Where the core records the pre-pull SHA (its UPDATE_STATE_DIR). Default: ~<service user>/.domovoi/update
+# DOMOVOI_CORE_STATE_DIR=/home/domovoi/.domovoi/update
+# Default: MPD_IMAGE_TAG / MPD_CONTAINER_PREFIX from domovoi/.env, else these.
+# DOMOVOI_MPD_IMAGE_TAG=domovoi-mpd:latest
+# DOMOVOI_MPD_CONTAINER_PREFIX=domovoi-mpd-
+```
+
+**The sudoers grant.** The button needs one more single-command rule,
+alongside (not instead of) the restart rule in [2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line):
+
+```bash
+sudo visudo -f /etc/sudoers.d/domovoi-update
+```
+
+```
+domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service
+```
+
+Check it as the service user, without starting anything:
+
+```bash
+sudo -u domovoi sudo -n -l /usr/bin/systemctl --no-block start domovoi-update.service
+```
+
+How the core decides which restart to run: it looks for
+`domovoi-update.service` in the systemd unit directories (a plain file
+check, no sudo). Found, the button starts the unit, and only if the rule
+above exists. Without that rule the panel says so and shows the manual
+command; it does not fall back to a plain bounce, which would skip the
+migrations. Not found, the button bounces core and web exactly as before.
+`systemctl mask domovoi-update.service` switches back to the plain bounce.
+
+### One-time upgrade for existing installs
+
+For a box already running the three units above, such as the household's
+first server. Run these over SSH, as your admin user, in this order.
+
+1. Record the SHA the box is **running** now as the last known-good one.
+   Do this first, before you pull. The `/v1/admin/version` endpoint is
+   open, so no login is needed:
+
+   ```bash
+   sudo install -d -m 0755 /var/lib/domovoi-update
+   RUNNING=$(curl -s http://127.0.0.1:6370/v1/admin/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["running_sha"].removesuffix("-dirty"))')
+   sudo -u domovoi git -C /opt/domovoi rev-parse --verify "$RUNNING^{commit}" | sudo tee /var/lib/domovoi-update/applied_sha
+   ```
+
+   `tee` must print a 40-character SHA. If it prints an error, stop there.
+
+2. Pull, but don't press Restart yet. Use **Pull the latest** in the
+   dashboard, or:
+
+   ```bash
+   sudo -u domovoi git -C /opt/domovoi pull --ff-only
+   ```
+
+3. Install the unit and the grant:
+
+   ```bash
+   sudo tee /etc/systemd/system/domovoi-update.service >/dev/null <<'EOF'
+   [Unit]
+   Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)
+   After=docker.service network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=oneshot
+   EnvironmentFile=-/etc/default/domovoi-update
+   ExecStart=/bin/bash /opt/domovoi/scripts/linux/apply-update.sh
+   TimeoutStartSec=30min
+   EOF
+   echo 'domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service' | sudo tee /etc/sudoers.d/domovoi-update >/dev/null
+   sudo chmod 0440 /etc/sudoers.d/domovoi-update
+   sudo visudo -c
+   sudo systemctl daemon-reload
+   ```
+
+   `visudo -c` must report every file `parsed OK`. A broken file under
+   `/etc/sudoers.d` can lock you out of `sudo`, so fix it before going on.
+
+4. Apply the pull with the new pipeline. Without `--no-block`,
+   `systemctl start` waits until the run finishes:
+
+   ```bash
+   sudo systemctl start domovoi-update.service
+   cat /var/lib/domovoi-update/last-result.json
+   ```
+
+   Expect `"status": "ok"` and `"mode": "update"`. If it says `rolled_back`,
+   the box is back on the old SHA and the `error` field says why.
+   `journalctl -u domovoi-update -n 200` has the detail. This first run also
+   recreates the `domovoi-postgres` container once, to pick up its new
+   `restart: unless-stopped` policy. The data volume is untouched.
+
+5. Check the grant the button will use:
+
+   ```bash
+   sudo -u domovoi sudo -n -l /usr/bin/systemctl --no-block start domovoi-update.service
+   ```
+
+From then on, **Pull the latest** followed by **Restart to apply changes**
+runs the whole pipeline, and **last update** in the version panel shows how
+it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
+It's used only if the unit is ever removed or masked.
 
 ---
 

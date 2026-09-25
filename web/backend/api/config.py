@@ -119,8 +119,10 @@ async def get_version(request: Request):
     the code actually loaded), ``checkout_sha`` (read live from the working
     tree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two
     SHAs diverge after a ``git pull`` without a restart — the case this panel
-    most needs to get right. Read-only proxy to the Domovoi server, which
-    owns the git working tree; the web process can't see it."""
+    most needs to get right. On a Linux host with the update unit it also
+    carries ``restart_mode``, ``last_update`` (that unit's last run) and
+    ``bad_sha`` (a commit it rolled back). Read-only proxy to the Domovoi
+    server, which owns the git working tree; the web process can't see it."""
     return bridge_response(
         *await get_admin("/v1/admin/version", headers=auth_forward_headers(request))
     )
@@ -167,7 +169,9 @@ async def check_version(request: Request):
     dependencies=[Depends(require_admin_security)],
 )
 async def restart_version(request: Request):
-    """Bounce the Domovoi services so pulled code actually loads.
+    """Bounce the Domovoi services so pulled code actually loads (or, where
+    domovoi-update.service is installed, start it: sync, migrate, restart,
+    roll back on failure).
 
     Admin-gated at both hops. The response comes back before the restart
     fires, so a client that then sees the connection drop should treat that

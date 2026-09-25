@@ -5141,7 +5141,7 @@
           "config"
         ],
         "summary": "Get Version",
-        "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. Read-only proxy to the Domovoi server, which\nowns the git working tree; the web process can't see it.",
+        "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. On a Linux host with the update unit it also\ncarries ``restart_mode``, ``last_update`` (that unit's last run) and\n``bad_sha`` (a commit it rolled back). Read-only proxy to the Domovoi\nserver, which owns the git working tree; the web process can't see it.",
         "operationId": "get_version_api_config_version_get",
         "responses": {
           "200": {
@@ -5201,7 +5201,7 @@
           "config"
         ],
         "summary": "Restart Version",
-        "description": "Bounce the Domovoi services so pulled code actually loads.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
+        "description": "Bounce the Domovoi services so pulled code actually loads (or, where\ndomovoi-update.service is installed, start it: sync, migrate, restart,\nroll back on failure).\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
         "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {
