@@ -61,7 +61,7 @@ def next_boot_value(name: str, current: object, env_path: Path | None = None) ->
         for env_key, value in dotenv_values(path).items():
             if env_key.upper() == key and value is not None:
                 return value
-    except OSError:
+    except (OSError, ValueError):  # unreadable, or not UTF-8
         pass
     return current
 

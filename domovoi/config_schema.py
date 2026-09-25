@@ -466,9 +466,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "What startup loads instead — on cpu, at int8 — when the configured "
         "Whisper can't load (no NVIDIA GPU, too big to fit, a compute type "
         "the device can't run). small.en suits an English-speaking household; "
-        "use small for other languages. If this fails too, the Domovoi "
-        "server starts without speech recognition. Takes effect after a "
-        "restart.",
+        "use small for other languages; blank turns the fallback off. If "
+        "this fails too, the Domovoi server starts without speech "
+        "recognition. Takes effect after a restart.",
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(

@@ -468,8 +468,13 @@ const ModelsPanel = () => {
       return res;
     }, (res) => {
       const rejected = Object.entries((res && res.rejected) || {});
-      if (rejected.length) return `not saved: ${rejected.map(([k, v]) => `${k} (${v})`).join('; ')}`;
       const restart = res && res.restart_required && res.restart_required.length;
+      if (rejected.length) {
+        // The model can be saved while its compute type is refused (e.g. a
+        // core too old to know whisper_compute_type) — say which half landed.
+        const why = rejected.map(([k, v]) => `${k} (${v})`).join('; ');
+        return restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}`;
+      }
       return restart ? `saved — restart the Domovoi server to apply ${model}` : `switched to ${model}`;
     });
 
