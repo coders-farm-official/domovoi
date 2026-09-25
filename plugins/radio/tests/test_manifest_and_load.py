@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from domovoi.plugins_runtime.lockfile import normalize_name, parse_lockfile
 from domovoi.plugins_runtime.manifest import (
     check_web_import_hygiene,
     parse_manifest_dir,
@@ -62,6 +63,37 @@ def test_lockfile_pins_match_manifest() -> None:
     for req in manifest.python_requirements:
         name, _, version = req.partition("==")
         assert f"{name.lower()}=={version}" in lock_text.lower().replace(" ", "")
+
+
+def test_direct_pins_shared_with_the_core_lock_match_it() -> None:
+    """A direct pin the core's requirements.lock also pins must be the same
+    version with the same hashes: the installer's dry-run refuses a lock that
+    would change a dist already in the core's environment
+    (requirements_conflict), and the sleep plugin's tests hold its numpy pin
+    to this lock as well as the core's."""
+    manifest = parse_manifest_dir(PLUGIN_DIR)
+    core_lock = PLUGIN_DIR.parents[1] / "requirements.lock"
+    core = {
+        r.key: r for r in parse_lockfile(core_lock.read_text(encoding="utf-8"))
+    }
+    ours = {
+        r.key: r
+        for r in parse_lockfile(
+            (PLUGIN_DIR / "requirements.lock").read_text(encoding="utf-8")
+        )
+    }
+    direct = (
+        normalize_name(req.split("[")[0].split("==")[0])
+        for req in manifest.python_requirements
+    )
+    shared = [key for key in direct if key in core]
+    assert "numpy" in shared
+    for key in shared:
+        assert ours[key].version == core[key].version, (
+            f"{key}: radio pins {ours[key].version}, core lock "
+            f"{core[key].version}"
+        )
+        assert set(ours[key].hashes) == set(core[key].hashes), key
 
 
 def test_migrations_pass_sql_lint() -> None:
