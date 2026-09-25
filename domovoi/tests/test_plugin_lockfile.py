@@ -321,6 +321,43 @@ def test_preview_shows_each_requirement_origin_and_flags_off_index(
     assert resolved[1]["origin_ok"] is False
 
 
+def _dist(name: str, version: str) -> dict:
+    return {
+        "metadata": {"name": name, "version": version},
+        "download_info": {
+            "url": f"https://files.pythonhosted.org/packages/x/{name}.whl",
+            "archive_info": {"hashes": {"sha256": "0" * 64}},
+        },
+    }
+
+
+def test_dry_run_refuses_a_lock_that_would_change_an_installed_dist(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A plugin pin that differs from the version already installed in the
+    core's environment (a plugin numpy behind the core lock's) is refused
+    before the trust screen; a dist new to the environment is not."""
+    from importlib import metadata
+
+    installed = metadata.version("pytest")
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(f"pytest==0.0.1 {H1}\nzz-never-installed==1.0 {H1}\n", encoding="utf-8")
+    _fake_pip(monkeypatch, {
+        "install": [_dist("pytest", "0.0.1"), _dist("zz-never-installed", "1.0")]
+    })
+    with pytest.raises(InstallError) as exc:
+        pip_dry_run(lock)
+    assert exc.value.code == "requirements_conflict"
+    assert exc.value.details["conflicts"] == [{
+        "package": "pytest", "installed": installed, "requested": "0.0.1",
+        "required_by": "requirements.lock",
+    }]
+
+    lock.write_text(f"zz-never-installed==1.0 {H1}\n", encoding="utf-8")
+    _fake_pip(monkeypatch, {"install": [_dist("zz-never-installed", "1.0")]})
+    assert [d["name"] for d in pip_dry_run(lock)["resolved"]] == ["zz-never-installed"]
+
+
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"
 LC08_OPTION_ZIP = Path(
     "C:/Users/Kamron/claude-exp/domovoi-project/functional-testing/"

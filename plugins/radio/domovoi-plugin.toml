@@ -18,7 +18,7 @@ consumes = ["media-acquisition-queue"]     # a core service — always satisfied
 consumes_optional = []                     # detection→download degrades if no fulfiller enabled
 
 [requirements]
-python = ["shazamio==0.7.0", "numpy==2.4.4", "scipy==1.15.2", "librosa==0.11.0", "httpx==0.28.1"]
+python = ["shazamio==0.7.0", "numpy==2.4.6", "scipy==1.15.2", "librosa==0.11.0", "httpx==0.28.1"]
 lockfile = "requirements.lock"    # pip-compile --generate-hashes output (full transitive tree)
 system = [
   { tool = "ffmpeg", required = true,  help = "Stream sampling and SDR audio bridging." },

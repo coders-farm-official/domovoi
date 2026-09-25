@@ -406,7 +406,7 @@ consumes_optional = []
 
 ```toml
 [requirements]
-python = ["httpx==0.28.1", "numpy==2.1.2"]
+python = ["httpx==0.28.1", "numpy==2.4.6"]
 lockfile = "requirements.lock"
 system = [
   { tool = "ffmpeg", required = true,  help = "Stream sampling." },
@@ -430,6 +430,14 @@ system = [
   sdist fails the staged dry-run with a "publish wheels or vendor it"
   message). The dry-run itself is inert and runs in a throwaway subprocess
   *before* the trust screen, so no build backend ever executes.
+
+  The dry-run also refuses a lockfile that would **change the version of a
+  dist already installed** in the core's environment
+  (`requirements_conflict`), because other code there depends on it. A
+  dist the core already has (`numpy`, `httpx`, `pydantic`, …) must be
+  pinned at the version in the core's `requirements.lock` at the repo root,
+  and that includes transitive pins in your lockfile. A dist pinned at the
+  installed version is simply "already satisfied".
 
   The lockfile is **parsed, line by line**, before pip ever sees it, and
   the only shape a line may take is `name[extras]==version` followed by
