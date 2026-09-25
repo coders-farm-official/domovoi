@@ -1351,10 +1351,58 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
  */
 const APPROVAL_CODE_LEN = 6;
 
-const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
+/* Which refusals belong BESIDE THE CODE BOX rather than in a toast.
+ *
+ * The approve route is admin-gated at both hops, so data.js's generic
+ * auth retry treats any 401/403 on it as "sign in again" — it opens the
+ * admin-password modal and replays once a bearer exists. That is right
+ * for a refusal about WHO is asking and wrong for a refusal about WHAT
+ * was typed: one mistyped digit used to throw Kamron out of the approval
+ * he was standing in front of and into the password prompt, and the
+ * first refusal arrived as `approve failed: 403 Forbidden:
+ * {"detail":"…"}` — a status line and a JSON blob — in a toast (F-050).
+ *
+ * The core answers every refusal about the request itself on a status
+ * that is not about credentials — 422 wrong code, 400 no code or
+ * non-digits, 409 nothing pending / no code on file, 429 the room's
+ * budget for the moment. Those land here, at the field, in the server's
+ * own words. Anything else — an unreachable core, a real 401 — is not
+ * this field's business and keeps the toast (and, for a genuine sign-in
+ * problem, the modal data.js opens for it).
+ *
+ * `tone` is the difference between "that did not work" and "not just
+ * yet": a 429 is a WAIT. Nothing was lost, nothing is banned, and the
+ * satellite is still asking — so it must not be painted as a failure.
+ *
+ * `marksTheCode` is narrower still, and only true when the DIGITS are
+ * what was wrong (422, 400). A 409 says the request is no longer there
+ * — someone else approved it, or it was rejected — and a 429 says not
+ * yet; reddening the box in either case would accuse the operator of a
+ * typo he did not make.
+ */
+const APPROVAL_REFUSALS = {
+  400: { tone: 'err', marksTheCode: true },    // nothing typed, or not digits
+  422: { tone: 'err', marksTheCode: true },    // wrong code
+  409: { tone: 'err', marksTheCode: false },   // nothing pending / no code on file
+  429: { tone: 'wait', marksTheCode: false },  // the room's budget, for now
+};
+const approvalFieldError = (e) => {
+  const shape = APPROVAL_REFUSALS[(e && e.status) || 0];
+  if (!shape) return null;
+  return { ...shape, text: apiErrorText(e, 400) };
+};
+
+const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => {
   const [code, setCode] = React.useState('');
   const ready = code.length >= 4 && !busy;
   const submit = () => { if (ready) onApprove(a, code); };
+  // Typing is the operator answering the message, so it goes. The digits
+  // stay: fixing the one that was wrong beats retyping all six, and the
+  // budget is five tries.
+  const retype = (v) => {
+    setCode(v);
+    if (error && onClearError) onClearError();
+  };
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
@@ -1365,19 +1413,31 @@ const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
             {a.board || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
             {' · '}{a.sat_type || 'voice'}
-            {a.attempts > 1 ? ` · ${a.attempts} attempts` : ''}
+            {/* How many times the DEVICE has re-announced itself, which is
+              * not a budget and not the approval-code attempt counter
+              * (that one is the server's, 5 per room per 5 minutes, and
+              * lives nowhere on this page). "N attempts" next to a code
+              * box read as a limit running down — F-049. */}
+            {a.attempts > 1
+              ? <span title="times this satellite has asked to be approved — not a limit">
+                  {' · '}asked {a.attempts} times
+                </span>
+              : null}
           </div>
         </div>
         <input value={code}
-               onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
+               onChange={e => retype(e.target.value.replace(/\D/g, '').slice(0, 10))}
                onKeyDown={e => { if (e.key === 'Enter') submit(); }}
                inputMode="numeric" autoComplete="off" spellCheck={false}
                aria-label={`approval code for ${a.room_id}`}
+               aria-invalid={error && error.marksTheCode ? true : undefined}
                placeholder={'0'.repeat(APPROVAL_CODE_LEN)} disabled={busy}
                className="mono"
                style={{ width: 130, fontSize: 20, letterSpacing: '0.16em', height: 38,
                         textAlign: 'center', padding: '0 10px',
-                        borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                        borderRadius: 'var(--r-sm)',
+                        border: `1px solid ${error && error.marksTheCode
+                                   ? 'var(--err)' : 'var(--border)'}`,
                         background: 'var(--card)', color: 'var(--fg)',
                         boxShadow: 'var(--inner-highlight)' }}/>
         <Button variant="primary" icon="check" disabled={!ready}
@@ -1385,10 +1445,17 @@ const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
         <Button variant="ghost" icon="x" disabled={busy}
                 onClick={() => onReject(a)}>reject</Button>
       </div>
+      {error && (
+        <div role="alert"
+             style={{ padding: '0 16px 10px', fontSize: 12,
+                      color: error.tone === 'wait' ? 'var(--warn)' : 'var(--err)' }}>
+          {error.text}
+        </div>
+      )}
       <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
         {a.has_code === false
           ? `This request arrived without a code — power-cycle the satellite so it asks again with one.`
-          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you.`}
+          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you. Missed them? The code never changes — the satellite says it again every time it retries, and it is on the Pi in ~/.domovoi/approval_code.`}
       </div>
     </Card>
   );
@@ -1446,6 +1513,9 @@ const SatellitesPage = () => {
   });
   const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
   const [approvalBusy, setApprovalBusy] = React.useState('');
+  // {room_id, tone, text} — the refusal that belongs beside THAT room's
+  // code box. One at a time: the operator is standing at one satellite.
+  const [approvalError, setApprovalError] = React.useState(null);
 
   // The satellite retries on its own, so this list settles without a push
   // channel; poll while the page is open.
@@ -1460,6 +1530,7 @@ const SatellitesPage = () => {
       `approved or powered off — this clears the request, it doesn't ban the device.`
     )) return;
     setApprovalBusy(a.room_id);
+    setApprovalError(null);
     try {
       // The code rides with the approval: the server compares it before it
       // binds the room to that device, so an approve without one is refused.
@@ -1468,7 +1539,17 @@ const SatellitesPage = () => {
       fire(action === 'approve' ? `${a.room_id} approved` : `${a.room_id} rejected`);
       refreshApprovals();
     } catch (e) {
-      fire(`${action} failed: ${e.message}`);
+      // A refusal about the code stays on the card the operator is
+      // looking at, in the server's own words (F-050). Everything else
+      // is a page-level problem and keeps the toast — and a genuine
+      // sign-in refusal says nothing here at all, because data.js has
+      // already put the password modal on screen for it (F-006).
+      const field = action === 'approve' ? approvalFieldError(e) : null;
+      if (field) setApprovalError({ room_id: a.room_id, ...field });
+      else {
+        const said = mutationErrorText(e, action, { kept: false });
+        if (said) fire(said);
+      }
     } finally {
       setApprovalBusy('');
     }
@@ -1515,6 +1596,9 @@ const SatellitesPage = () => {
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
             <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
+                          error={approvalError && approvalError.room_id === a.room_id
+                                 ? approvalError : null}
+                          onClearError={() => setApprovalError(null)}
                           onApprove={(x, code) => decide(x, 'approve', code)}
                           onReject={x => decide(x, 'reject')}/>
           ))}

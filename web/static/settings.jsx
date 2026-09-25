@@ -432,7 +432,7 @@ const AdminSection = () => {
   const signedIn = Auth.isLoggedIn() || !!(st && st.authenticated);
   return (
     <Card title="Admin"
-          sub="Gates settings edits, plugin management, satellite upgrades, and file writes. Everyday playback and browsing never need it.">
+          sub="Gates settings edits, plugin management, satellite upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
                     gap: 12, flexWrap: 'wrap' }}>
         {st === null

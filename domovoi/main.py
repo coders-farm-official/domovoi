@@ -2067,9 +2067,21 @@ async def admin_satellite_approve(
     compares it in constant time and counts the attempt:
 
     * 400 — no code sent, or not digits;
-    * 403 — wrong code (the request stays parked for the real device);
+    * 422 — wrong code (the request stays parked for the real device);
     * 409 — nothing pending, or the pending row predates codes;
     * 429 — too many attempts for that room in the window.
+
+    NONE of those is 401 or 403, and that is deliberate. The route is
+    admin-gated, so an admin refusal here really does mean "sign in" —
+    which is why the dashboard's generic auth retry turns a 401/403 on
+    any mutation into the admin-password modal, and replays the request
+    once a bearer exists (``web/static/data.js`` ``_isAuthStatus`` /
+    ``_sendWithAuthRetry``). A mistyped digit is not a missing
+    credential. While this answered 403, one wrong digit at a satellite
+    threw the operator into the password prompt instead of telling him
+    the code was wrong, and every retry cost a re-login against a budget
+    of five (F-050). The refusals about what was SENT therefore stay off
+    the two statuses that mean who the caller IS.
     """
     code = (body.code or "").strip()
     if not code or not code.isdigit():
@@ -2079,11 +2091,26 @@ async def admin_satellite_approve(
         )
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
+        # Never offer a power-cycle here (F-049). The code is pinned at
+        # BOTH ends on purpose: the upsert in
+        # SatelliteApprovalRepository.request COALESCEs the code already on
+        # file, and the Pi replays its own from ~/.domovoi/approval_code.
+        # Restarting the satellite — or rejecting the row on the dashboard
+        # — therefore re-announces the SAME six digits. What recovers a
+        # missed code is one of the three routes named below.
         raise HTTPException(
             status_code=429,
             detail=(
-                "too many approval attempts for that room — wait a few "
-                "minutes, or power-cycle the satellite for a fresh code"
+                "that room has had its "
+                f"{APPROVAL_CODE_MAX_ATTEMPTS} tries for the moment — wait "
+                f"up to {int(APPROVAL_CODE_WINDOW_SEC)} seconds and type the "
+                "code again. Nothing is lost and nothing is banned: the "
+                "satellite is still waiting, and the count is kept in "
+                "memory, so the limit clears itself with no action from "
+                "anyone. The code does not change: the satellite says it "
+                "again on every retry, it is on the Pi in "
+                "~/.domovoi/approval_code, and it is the code column of "
+                "that room's satellite_approvals row"
             ),
         )
     async with session_scope() as s:
@@ -2100,7 +2127,17 @@ async def admin_satellite_approve(
         )
     if result != "approved":
         log.warning("pairing: room=%s approval code did not match", room_id)
-        raise HTTPException(status_code=403, detail="that code does not match")
+        # 422, not 403: a wrong code is a wrong VALUE in the body, not a
+        # missing credential. See this handler's docstring — the status is
+        # what decides whether the dashboard asks for the admin password
+        # or tells the operator to check the digits.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "that code does not match — check the six digits the "
+                "satellite is showing and saying, and try again"
+            ),
+        )
     log.info("pairing: room=%s APPROVED by an operator", room_id)
     return {"approved": True, "room_id": room_id}
 
