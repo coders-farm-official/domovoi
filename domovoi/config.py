@@ -160,6 +160,17 @@ class Settings(BaseSettings):
     # or every switch between routing and answering reloads it.
     ollama_num_ctx: int = 0
     ollama_tool_num_ctx: int = 0
+
+    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", mode="before")
+    @classmethod
+    def _blank_num_ctx_is_unset(cls, value: object) -> object:
+        """A blank ``OLLAMA_NUM_CTX=`` means "don't send it", the same as 0
+        (as a blank OLLAMA_KEEP_ALIVE does), rather than an int parse error
+        that stops the server from booting."""
+        if isinstance(value, str) and not value.strip():
+            return 0
+        return value
+
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
     ollama_vision_model: str = "qwen2.5vl:7b"

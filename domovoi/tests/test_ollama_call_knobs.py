@@ -418,6 +418,15 @@ def test_num_ctx_env(monkeypatch):
     assert (s.ollama_num_ctx, s.ollama_tool_num_ctx) == (8192, 16384)
 
 
+def test_blank_num_ctx_env_means_unset_not_a_failed_boot(monkeypatch):
+    """0 is "don't send it", and a blank value reads the same way — as a
+    blank OLLAMA_KEEP_ALIVE does — instead of failing Settings() at boot."""
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "")
+    monkeypatch.setenv("OLLAMA_TOOL_NUM_CTX", "  ")
+    s = Settings(_env_file=None)
+    assert (s.ollama_num_ctx, s.ollama_tool_num_ctx) == (0, 0)
+
+
 def test_knobs_are_editable_next_to_the_other_ollama_settings():
     think = FIELD_BY_NAME["ollama_qa_think"]
     assert (think.group, think.section, think.tier, think.type) == ("Models", "common", "reapply", "choice")
@@ -435,3 +444,129 @@ def test_dashboard_refuses_a_think_value_outside_the_choices():
     with pytest.raises(ValueError):
         coerce_and_validate(FIELD_BY_NAME["ollama_qa_think"], "maybe")
     assert coerce_and_validate(FIELD_BY_NAME["ollama_qa_think"], "false") == "false"
+
+
+def test_no_qa_model_call_skips_the_qa_knobs():
+    """Belt and braces for _QA_PATHS: a QA-model call added later that went
+    straight to ``_chat`` would silently lose num_ctx and think. Every
+    method that calls the QA model must go through ``_qa_chat`` or add
+    ``_qa_extras()`` itself."""
+    import inspect
+
+    callers = {
+        name: inspect.getsource(fn)
+        for name, fn in vars(RealOllamaClient).items()
+        if inspect.isfunction(fn) and "model=self._qa_model" in inspect.getsource(fn)
+    }
+    assert set(_QA_IDS) <= set(callers)                   # the guard isn't vacuous
+    for name, src in callers.items():
+        assert "self._qa_chat(" in src or "self._qa_extras()" in src, name
+
+
+# ─── on the wire: what the installed ollama client actually POSTs ─────────
+#
+# The tests above stop at the kwargs handed to ollama-python's chat(). These
+# run the real AsyncClient against a fake server, so a client release that
+# dropped or renamed a field — or reworded the rejection the retry keys on —
+# fails here instead of quietly changing what goes out.
+
+
+class _FakeOllamaServer:
+    """Records each /api/chat body. With ``reject_think`` it answers a body
+    carrying ``think: true`` the way Ollama answers it for a model with no
+    thinking mode (HTTP 400 with an error message)."""
+
+    def __init__(self, *, reject_think: bool = False) -> None:
+        self.bodies: list[dict] = []
+        self.reject_think = reject_think
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.bodies.append(body)
+        if self.reject_think and body.get("think") is True:
+            return httpx.Response(
+                400, json={"error": f'"{body["model"]}" does not support thinking'}
+            )
+        if body.get("stream"):
+            lines = [
+                json.dumps({"model": body["model"], "done": False,
+                            "message": {"role": "assistant", "content": "hel"}}),
+                json.dumps({"model": body["model"], "done": True,
+                            "message": {"role": "assistant", "content": "lo"}}),
+            ]
+            return httpx.Response(200, content=("\n".join(lines) + "\n").encode())
+        message = {"role": "assistant", "content": _CONTENT}
+        if body.get("tools"):
+            message["tool_calls"] = [{"function": {"name": "music", "arguments": {}}}]
+        return httpx.Response(200, json={"model": body["model"], "message": message, "done": True})
+
+
+def _wired_client(
+    monkeypatch, server: _FakeOllamaServer, *,
+    qa_think: str = "default", num_ctx: int = 0, tool_num_ctx: int = 0,
+) -> RealOllamaClient:
+    from ollama import AsyncClient  # a core dependency: no skip if it's missing
+
+    monkeypatch.setattr(settings, "ollama_keep_alive", "24h")
+    monkeypatch.setattr(settings, "ollama_tool_think", False)
+    monkeypatch.setattr(settings, "ollama_qa_think", qa_think)
+    monkeypatch.setattr(settings, "ollama_num_ctx", num_ctx)
+    monkeypatch.setattr(settings, "ollama_tool_num_ctx", tool_num_ctx)
+    c = RealOllamaClient(url="http://ollama.test:11434", qa_model="llama3.2:3b", tool_model="qwen3:8b")
+    c._client = AsyncClient(host="http://ollama.test:11434", transport=httpx.MockTransport(server))
+    return c
+
+
+async def test_wire_defaults_are_the_payloads_every_call_always_sent(monkeypatch):
+    server = _FakeOllamaServer()
+    c = _wired_client(monkeypatch, server)
+
+    await c.qa("hi")
+    await c.route("play jazz", TOOLS)
+    assert await _drain(c.stream_qa("hi")) == ["hel", "lo"]
+    await c.extract_memories("user: I like jazz")
+
+    qa, route, stream, memories = server.bodies
+    for body in (qa, stream, memories):
+        assert "options" not in body and "think" not in body, body
+        assert body["keep_alive"] == "24h"
+    assert route["options"] == {"temperature": 0}
+    assert route["think"] is False
+
+
+async def test_wire_carries_each_knob_to_its_own_role(monkeypatch):
+    server = _FakeOllamaServer()
+    c = _wired_client(monkeypatch, server, qa_think="false", num_ctx=8192, tool_num_ctx=16384)
+
+    await c.qa("hi")
+    await c.route("play jazz", TOOLS)
+    await _drain(c.stream_qa("hi"))
+    await c.qa_with_uncertainty("who won in 1998")
+
+    qa, route, stream, uncertainty = server.bodies
+    for body in (qa, stream, uncertainty):
+        assert body["model"] == "llama3.2:3b"
+        assert body["options"] == {"num_ctx": 8192}
+        assert body["think"] is False
+    assert uncertainty["format"] == "json"
+    assert route["model"] == "qwen3:8b"
+    assert route["options"] == {"temperature": 0, "num_ctx": 16384}
+    assert route["think"] is False                         # ollama_tool_think, not QA's
+
+
+async def test_wire_rejection_is_recognised_and_latched(monkeypatch):
+    """Ollama's 400 for ``think`` on a model without a thinking mode, as the
+    installed client raises it, trips the QA retry — non-streamed and
+    streamed — and the flag stays off afterwards."""
+    server = _FakeOllamaServer(reject_think=True)
+    c = _wired_client(monkeypatch, server, qa_think="true")
+
+    assert await c.qa("hi") == _CONTENT
+    assert ["think" in b for b in server.bodies] == [True, False]
+    assert c._send_qa_think is False
+
+    server.bodies.clear()
+    c = _wired_client(monkeypatch, server, qa_think="true")
+    assert await _drain(c.stream_qa("hi")) == ["hel", "lo"]
+    assert ["think" in b for b in server.bodies] == [True, False]
+    assert c._send_qa_think is False
