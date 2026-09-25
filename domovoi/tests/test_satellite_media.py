@@ -202,6 +202,53 @@ def test_the_overlay_zip_carries_no_plaintext_passwords(tmp_path, monkeypatch):
     assert creds["ap"]["psk"] not in readme
 
 
+def _zip_readme(tmp_path, monkeypatch, setup_transport: str) -> str:
+    """README.txt of a zip build, with payload assembly faked as above."""
+    async def _assemble(workspace, **kw):
+        payload_dir = Path(workspace) / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        return {"dir": payload_dir, "warnings": [], "plugins": []}
+
+    def _finalize(workspace, payload_dir, stage2, status_helper=None):
+        tar = Path(workspace) / "payload.tar.gz"
+        tar.write_bytes(b"not really a tar")
+        return {"tar": tar, "sha256": "0" * 64, "bytes": tar.stat().st_size}
+
+    monkeypatch.setattr(payload, "assemble", _assemble)
+    monkeypatch.setattr(payload, "finalize", _finalize)
+    monkeypatch.setattr(builder, "BUILDS_ROOT", tmp_path / "builds")
+    result = asyncio.run(
+        builder.build(
+            board_id="pi02w",
+            mic_profile="respeaker_2mic_hat_v2",
+            setup_transport=setup_transport,
+            target_kind="zip",
+            target_mount=None,
+            job_id=f"zip-{setup_transport}",
+            offline=False,
+        )
+    )
+    import zipfile
+
+    with zipfile.ZipFile(Path(result["artifact_path"])) as zf:
+        return zf.read("README.txt").decode("utf-8")
+
+
+def test_the_zip_readme_follows_the_setup_route(tmp_path, monkeypatch):
+    """A portal card is set up from a phone; only a USB card is plugged
+    into the server. The README used to tell every zip to plug in — the
+    one thing a Windows (WSL) install, where the zip is the only way to
+    build a card, can't do."""
+    portal = _zip_readme(tmp_path / "portal", monkeypatch, "portal")
+    assert "set it up from a phone" in portal
+    assert "plug it into the Domovoi server's USB" not in portal
+
+    usb = _zip_readme(tmp_path / "usb", monkeypatch, "usb")
+    assert "plug it into the Domovoi server's USB" in usb
+    assert "from a phone" not in usb
+    assert "domovoi/ap.json" not in usb
+
+
 def test_builder_refuses_non_boot_target(tmp_path):
     with pytest.raises(ValueError, match="boot partition"):
         asyncio.run(
