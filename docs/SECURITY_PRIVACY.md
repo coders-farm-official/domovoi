@@ -939,10 +939,22 @@ a **boot-time** gate and the edges matter:
   hazard of its own and buys nothing that the closed socket has not
   already bought. **Reboot the unit (or restart `domovoi-satellite`) if
   you want it deaf immediately.** The one exception is a device whose
-  config dir refuses writes: there the refusal cannot be recorded, so a
-  restart would not settle it, and capture is stopped immediately instead.
-  That unit logs at ERROR and will not answer its wake word again — even
-  if you approve it — until it restarts with a writable config dir.
+  refusal **cannot be written down** — a full or read-only config dir, or
+  anything else that stops the record being replaced. There no restart
+  would settle it, so capture is stopped on the spot instead, and that
+  unit logs at ERROR and answers no wake word for the rest of the session.
+  It is not bricked and needs no reflash: **approving the room again gives
+  the microphone straight back**, because the `ready` frame that accepts a
+  session is the core's acceptance and is obeyed exactly as its refusal
+  was. Restarting the unit is the other way back, and on a device whose
+  disk is still broken it lands wherever the record on that disk says.
+* **Nothing in this gate needs a person at the device.** Every deaf state
+  it can produce is healed either by one `ready` frame — approve the room
+  on the dashboard — or by a restart the core can command remotely. A
+  satellite whose config dir refuses writes cannot make a refusal survive a
+  reboot, so it re-derives its answer at every boot and is re-shut the
+  moment its core answers; that is noisy on purpose, and a card that
+  refuses writes is worth replacing, but it never costs you the room.
 * A satellite already installed when this landed had no record to read, so
   the client accepts the receipts the old code left — a synced-sha
   sidecar, a pending-upgrade marker, a dashboard-pushed wake word or voice

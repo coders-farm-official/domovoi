@@ -112,7 +112,9 @@ class Sat:
         self.open_raises: BaseException | None = None
 
 
-def make_sat(monkeypatch, *, mic_enabled: bool = True) -> Sat:
+def make_sat(
+    monkeypatch, *, mic_enabled: bool = True, arms_wake_word: bool = False,
+) -> Sat:
     sat = object.__new__(client.Satellite)
     rec = Sat(sat)
 
@@ -185,6 +187,18 @@ def make_sat(monkeypatch, *, mic_enabled: bool = True) -> Sat:
         # `test_the_wake_model_has_exactly_one_door_and_it_is_the_mic_thread`.
         rec.mic_thread_bodies += 1
         sat._load_wake_model()
+        if not arms_wake_word:
+            # The default stops HERE, mid-load, which is the state most of
+            # this file is about: the ~10-15 s of ONNX during which the
+            # device cannot answer and the ring must not say it can.
+            return
+        # The rest of `_mic_thread_run`'s arming sequence, copied because a
+        # reconnect behaves differently before and after it and a test that
+        # cannot say which side it is on cannot pin either.
+        sat._wake_armed.set()
+        if sat._ring_handoff_pending:
+            sat._ring_handoff_pending = False
+            sat._leds.resync()
 
     def load_wake_model():
         rec.wake_models_loaded += 1
@@ -269,6 +283,24 @@ def unreachable():
     def attempt(sat) -> None:
         raise OSError("[Errno 111] Connection refused")
     return attempt
+
+
+def armed(attempt):
+    """`attempt`, but not until the mic thread has finished arming.
+
+    The wake model load is a real thread here as it is on the Pi, so
+    "reconnects after the ring handoff" and "reconnects during it" are the
+    same scripted list unless a test says which it means. Only useful with
+    `make_sat(..., arms_wake_word=True)`; without it the wait would never
+    return, so it fails loudly instead of hanging the suite."""
+    async def waited(sat):
+        assert sat._wake_armed.wait(5.0), (
+            "the mic thread never armed — arms_wake_word=True?"
+        )
+        outcome = attempt(sat)
+        if inspect.isawaitable(outcome):
+            await outcome
+    return waited
 
 
 def run_sessions(rec: Sat, attempts: list, monkeypatch) -> None:
@@ -947,11 +979,43 @@ def test_the_ring_waits_for_the_wake_word_on_the_first_approval(monkeypatch):
 def test_a_reconnect_still_resyncs_the_ring_immediately(monkeypatch):
     """Which is what the resync was added for: a satellite that was parked,
     then approved, then reconnects must not go on advertising that it is
-    waiting for approval."""
-    rec = make_sat(monkeypatch)
-    run_sessions(rec, [accepted(), accepted(), accepted()], monkeypatch)
+    waiting for approval. Once the wake word is ARMED — the mic thread has
+    taken the handoff and painted the ring — every later `ready` resyncs on
+    the spot, exactly as it did before the gate existed."""
+    rec = make_sat(monkeypatch, arms_wake_word=True)
+    run_sessions(
+        rec, [accepted(), armed(accepted()), armed(accepted())], monkeypatch,
+    )
     assert rec.mic_opens == 1
-    assert rec.s._leds.resyncs == 2, "every ready but the one that opened it"
+    # 1 from the mic thread's own handoff, then one per later `ready`.
+    assert rec.s._leds.resyncs == 3, "every ready but the one that opened it"
+    assert rec.s._ring_handoff_pending is False
+
+
+def test_a_reconnect_inside_the_onnx_load_leaves_the_ring_to_the_mic_thread(
+    monkeypatch,
+):
+    """The same reconnect, a few seconds earlier — and it must do nothing.
+
+    The first `ready` after approval hands the ring to the mic thread and
+    deliberately leaves the awaiting-approval violet showing until the wake
+    model is loaded. A second `ready` inside that ~10-15 s window (a Wi-Fi
+    hiccup, the core restarting, any reconnect at all) used to clear the
+    handoff flag and resync on the spot: the ring went to the controller's
+    cached `idle` while the device still could not hear, AND the thread's
+    own repaint was cancelled because the flag it was handed had been taken
+    away, so nothing ever corrected it. That is round 1's finding 4 — click
+    Approve, ring goes idle, say the wake word, nothing happens — coming
+    back through the fix for it."""
+    rec = make_sat(monkeypatch)      # the thread stops mid-load and stays there
+
+    run_sessions(rec, [accepted(), accepted(), accepted()], monkeypatch)
+
+    assert rec.mic_opens == 1
+    assert rec.s._leds.resyncs == 0, (
+        "the ring belongs to the mic thread until the wake word is armed"
+    )
+    assert rec.s._ring_handoff_pending is True, "and the handoff is still on"
 
 
 def test_a_mic_less_build_resyncs_the_ring_exactly_as_before(monkeypatch):
@@ -1468,7 +1532,7 @@ def test_a_refusal_that_cannot_be_written_does_not_erase_the_record(
         "and the refusal reached the microphone another way"
     )
     said = " ".join(r.getMessage() for r in caplog.records)
-    assert "could not record that the core is NOT approving" in said
+    assert "could not write 'not-approved' to the approval record" in said
 
 
 def test_no_stray_temp_file_is_left_behind_when_a_write_fails(monkeypatch):
@@ -1504,7 +1568,15 @@ def test_a_write_that_lands_says_so_and_one_that_does_not_says_so(monkeypatch):
     assert client._remember_approved() is False
     # ...and the refusal already on disk is left exactly where it is.
     assert client._read_approval_record() == client._APPROVAL_NO
-    assert client._forget_approved() is True, "already recorded, nothing to do"
+    # And `_forget_approved` says NO even though the file already says the
+    # right word, because what the caller reads out of it is "will the next
+    # boot be shut", not "does the file spell not-approved". On this disk
+    # the answer is no: nothing could ever have corrected that word, so
+    # `_approval_decision` stops treating it as a verdict.
+    assert client._forget_approved() is False, (
+        "the refusal is on disk but nothing can be written there, so it is "
+        "not a refusal the next boot will obey"
+    )
 
 
 def test_the_record_is_written_by_rename_not_in_place():
@@ -1518,3 +1590,278 @@ def test_the_record_is_written_by_rename_not_in_place():
     # sibling), which is what used to hand a refused device back to the
     # receipts bridge on the next boot.
     assert "APPROVED_MARKER.unlink" not in src
+
+
+# ─── the refusal reaches the mic on the devices it was written for ────────
+#
+# Round 3 shipped `_close_voice_gate` and a failure table promising that a
+# device whose core is parking it stops capturing. On the one row the
+# teardown was written for it never ran, because `_forget_approved` reported
+# a refusal as recorded when it had merely FOUND one on disk — true about
+# the file, false about the outcome. And where it did run it never came
+# back, so a genuine re-approval left an online, approved room permanently
+# deaf. The two are the same interaction and are pinned together.
+
+
+def _watch_the_stream(rec, monkeypatch) -> list[tuple[str, bool, bool]]:
+    """Sample the capture stream every time the setup indicator is written.
+
+    `run()`'s teardown calls `_stop_mic()` on its way out, so a post-run
+    `_input_stream is None` cannot tell a device that was torn down from one
+    that was listening the whole time and then shut down normally. These
+    samples are taken WHILE the session that provoked them is live."""
+    snaps: list[tuple[str, bool, bool]] = []
+    recorder = client._setup_status
+
+    def spy(state, *args):
+        snaps.append(
+            (state, rec.s._input_stream is not None, rec.s._voice_gate_closed)
+        )
+        return recorder(state, *args)
+
+    monkeypatch.setattr(client, "_setup_status", spy)
+    return snaps
+
+
+def accepted_watching(snaps: list):
+    """`accepted()`, sampling the capture stream while the session is up."""
+    async def attempt(sat) -> None:
+        await _deliver(sat, [{
+            "type": "ready", "protocol_version": "1", "bot_name": "Domovoi",
+        }])
+        snaps.append(sat._input_stream is not None)
+        sat._on_session_ended()
+    return attempt
+
+
+def test_a_no_it_could_not_have_corrected_still_reaches_the_microphone(
+    monkeypatch, caplog,
+):
+    """Failure-table row 5, which used to be the worst cell in the branch.
+
+    Record `not-approved`, config dir refusing writes, a receipt on disk: the
+    NO is not a verdict — nothing could ever have corrected it — so the
+    microphone opens at boot, which is the point of that row. Then its core
+    answers `awaiting_approval`. The old `_forget_approved` read the record,
+    saw `not-approved` already there and returned True without attempting
+    anything, so the caller took the "a restart settles it" branch. The
+    restart settled nothing: the next boot read the same word off the same
+    unwritable disk, found the same receipt, and opened the microphone
+    again. The room answered its wake word through every session its core
+    refused, on every boot, for ever — F-V013 reached through the gate's own
+    memory, in a cell the branch documented as handled."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text("not-approved\n", encoding="utf-8")
+    _receipt(client.SYNCED_SHA_SIDECAR)
+    _refuse_writes(
+        monkeypatch, only_the_marker=False,
+        exc=OSError(30, "Read-only file system"),
+    )
+    snaps = _watch_the_stream(rec, monkeypatch)
+
+    with caplog.at_level("ERROR", logger="satellite"):
+        run_sessions(rec, [parked(), parked(), parked()], monkeypatch)
+
+    # The behaviour first: the stream is gone before the device is told to
+    # show the awaiting-approval colour, on the first refusal and every one
+    # after it.
+    listening = [live for state, live, _ in snaps if state == "awaiting-approval"]
+    assert listening == [False, False, False], (
+        "a device its core is refusing does not keep capturing the room"
+    )
+    assert rec.mic_opens == 1, "row 5 still opens at boot — the NO is no verdict"
+    assert rec.mic_stops >= 1
+    assert rec.s._voice_gate_closed is True
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "will not answer its wake word" in said
+
+    # And the next boot over the same disk does the same thing rather than
+    # inheriting the deafness: it opens (row 5), and is shut again the
+    # moment its core answers. Bounded per boot, never permanent.
+    again = make_sat(monkeypatch)
+    again_snaps = _watch_the_stream(again, monkeypatch)
+    run_sessions(again, [parked(), parked()], monkeypatch)
+    assert again.mic_opens == 1
+    assert [live for s, live, _ in again_snaps if s == "awaiting-approval"] == [
+        False, False,
+    ]
+    assert again.s._voice_gate_closed is True
+
+
+def test_a_no_it_could_have_corrected_still_leaves_the_mic_alone(monkeypatch):
+    """The control, and the branch of this that must NOT change.
+
+    Same shape, writable disk, record `approved`. The refusal lands, so the
+    next restart genuinely settles it, and tearing capture down underneath a
+    running wake loop buys nothing the closed socket has not already bought.
+    The mic stays open for the rest of this boot and says so — round 2's
+    finding 7, kept deliberately. The only variable between this test and
+    the one above is whether the disk accepts the write."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text("approved\n", encoding="utf-8")
+    snaps = _watch_the_stream(rec, monkeypatch)
+
+    run_sessions(rec, [parked(), parked()], monkeypatch)
+
+    assert [live for s, live, _ in snaps if s == "awaiting-approval"] == [
+        True, True,
+    ], "the documented, deliberate path is untouched"
+    assert rec.s._voice_gate_closed is False
+    assert client._read_approval_record() == client._APPROVAL_NO
+    # ...and the restart really does settle it, which is what earns it.
+    again = make_sat(monkeypatch)
+    run_sessions(again, [unreachable(), unreachable(), unreachable()], monkeypatch)
+    assert again.mic_opens == 0
+
+
+def test_a_core_that_accepts_it_again_gives_the_microphone_back(monkeypatch):
+    """`_close_voice_gate` latched for the life of the process and nothing
+    cleared it, so the admin who reset a room's pairing and then approved it
+    again got a satellite that was ONLINE, approved on the dashboard, and
+    could not hear a wake word — with `fatal_error` None and
+    `shutdown_event` unset, so systemd never intervened either. The branch's
+    own reason for not latching the sibling path says this must not happen:
+    the only frame that reopens the gate is `ready`, and a `ready` IS the
+    core accepting the device."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text("approved\n", encoding="utf-8")
+    _receipt(client.SYNCED_SHA_SIDECAR)
+    _refuse_writes(
+        monkeypatch, only_the_marker=False,
+        exc=OSError(30, "Read-only file system"),
+    )
+    parked_snaps = _watch_the_stream(rec, monkeypatch)
+    live: list[bool] = []
+
+    run_sessions(
+        rec,
+        [parked(), accepted_watching(live), accepted_watching(live)],
+        monkeypatch,
+    )
+
+    assert live == [True, True], "approved again, and hearing again"
+    assert [s for st, s, _ in parked_snaps if st == "awaiting-approval"] == [
+        False,
+    ], "and it really was torn down first"
+    assert rec.s._voice_gate_closed is False
+    assert rec.mic_opens == 2, "boot, then the stream the acceptance gave back"
+    assert rec.mic_thread_bodies == 1, (
+        "one wake loop — a second thread on one raw_q would see half the audio"
+    )
+    assert rec.s.fatal_error is None
+    # The ring follows the microphone rather than staying on whatever the
+    # awaiting-approval frame painted, which it did while the latch held.
+    assert rec.s._leds.resyncs == 2
+
+
+def test_the_writability_question_is_asked_by_performing_the_write(monkeypatch):
+    """The predictor used to create and delete a ZERO-BYTE `approved.probe`
+    and call that an answer about a ~250-byte `approved.tmp` renamed over an
+    existing file. A card out of data blocks with inodes still free takes
+    the first and refuses the second — the ordinary end of a Pi that has
+    logged to a small card for months — so the gate believed a later
+    `approved` could have replaced the `not-approved` on disk, obeyed the
+    NO, and left the room deaf for the whole of any outage its core could
+    not answer. The question is now asked by doing the thing."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text("not-approved\n", encoding="utf-8")
+    _receipt(client.SYNCED_SHA_SIDECAR)
+
+    real = client.Path.write_text
+    written: list[str] = []
+
+    def guarded(self, data="", *a, **kw):
+        written.append(self.name)
+        if self.name == client.APPROVED_MARKER.name + ".tmp" and data:
+            raise OSError(28, "No space left on device")
+        return real(self, data, *a, **kw)
+
+    monkeypatch.setattr(client.Path, "write_text", guarded)
+
+    run_sessions(rec, [unreachable(), unreachable(), unreachable()], monkeypatch)
+
+    assert rec.mic_opens == 1, (
+        "no verdict can land on this card, so the NO on it is not one"
+    )
+    assert ("no-server",) in rec.setup_status
+    assert not any(name.endswith(".probe") for name in written), (
+        f"the record is the only file the gate writes, got {written}"
+    )
+    assert not hasattr(client, "_approval_record_can_be_rewritten"), (
+        "a predictor that does not predict is worse than none"
+    )
+    assert client._write_approval_record(client._APPROVAL_YES) is False
+
+
+def test_a_directory_where_the_record_should_be_reaches_the_mic_both_ways(
+    monkeypatch,
+):
+    """The same three bugs on a card with nothing else wrong with it.
+
+    No write is refused here: `~/.domovoi` is ordinary and writable. There
+    is simply a DIRECTORY where `approved` should be, so `read_text` cannot
+    parse a verdict (DAMAGED) and `os.replace` cannot step over it however
+    healthy the disk is. The old probe wrote its zero-byte `approved.probe`
+    beside it and answered yes. This device therefore reaches the whole
+    interaction — open from a receipt, torn down when its core parks it,
+    given back when its core accepts it — without a broken SD card anywhere
+    in the story."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.mkdir(parents=True, exist_ok=True)
+    _receipt(client.SYNCED_SHA_SIDECAR)
+    parked_snaps = _watch_the_stream(rec, monkeypatch)
+    live: list[bool] = []
+
+    run_sessions(
+        rec, [accepted_watching(live), parked(), accepted_watching(live)],
+        monkeypatch,
+    )
+
+    assert live == [True, True]
+    assert [s for st, s, _ in parked_snaps if st == "awaiting-approval"] == [
+        False,
+    ], "the refusal reached the microphone"
+    assert client._read_approval_record() == client._APPROVAL_DAMAGED
+    assert rec.mic_opens == 2
+    assert rec.mic_thread_bodies == 1
+    assert rec.s._voice_gate_closed is False
+    assert rec.s.fatal_error is None
+
+
+def test_the_gate_reopens_only_for_the_core_and_not_for_anything_else(
+    monkeypatch,
+):
+    """The latch is still a latch. `_start_voice_input` — the door every
+    other caller uses, including a reconnect — refuses while the gate is
+    closed; only `_reopen_voice_gate`, which `_note_session_accepted` calls
+    on a `ready` frame, opens it."""
+    rec = make_sat(monkeypatch)
+    sat = rec.s
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text("approved\n", encoding="utf-8")
+    _refuse_writes(
+        monkeypatch, only_the_marker=False,
+        exc=OSError(30, "Read-only file system"),
+    )
+    sat._start_voice_input(fatal=True)
+    assert rec.mic_opens == 1
+
+    sat._close_voice_gate()
+    assert sat._voice_gate_closed is True
+    assert sat._start_voice_input(fatal=False) is False, "not through that door"
+    assert sat._input_stream is None
+    assert rec.mic_opens == 1
+
+    sat._reopen_voice_gate()
+    assert sat._voice_gate_closed is False
+    assert sat._input_stream is not None
+    assert rec.mic_opens == 2
+    assert rec.mic_thread_bodies == 1
+    # Idempotent from both sides: the core repeats itself on every
+    # reconnect, and a reopen must not stack streams or threads.
+    sat._reopen_voice_gate()
+    assert rec.mic_opens == 2
