@@ -925,8 +925,8 @@ const LoginModal = ({ onClose }) => {
           )}
           {err && <div className="err">{err}</div>}
           <div className="hint">
-            Admin actions (settings, plugins, satellite upgrades) need this;
-            everyday playback and browsing never do.
+            Admin actions (deleting files, settings, plugins, satellite
+            upgrades) need this; saving, playback and browsing never do.
           </div>
         </div>
         <div className="cal-modal-foot">

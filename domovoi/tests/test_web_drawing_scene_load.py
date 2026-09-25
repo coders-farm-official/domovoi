@@ -89,7 +89,7 @@ window.__lib = {
   },
   getSceneVersion: (els) => (els || []).reduce((a, e) => a + (e.version || 0), 0),
   restoreElements: (els) => (els || []).map((e) => Object.assign({}, e, { version: e.version || 1 })),
-  serializeAsJSON: () => '{"elements":[]}',
+  serializeAsJSON: (els) => JSON.stringify({ elements: els || [] }),
   exportToSvg: () => Promise.resolve({}),
 };
 """
@@ -141,6 +141,37 @@ def _scenario(*, rel_path: str | None, read: object, script: str) -> dict:
 
 OK_READ = {"content": json.dumps(SAVED_SCENE)}
 
+# The compound case, as the operator lives it: open a board that already
+# has something on it, draw ONE stroke, press Close. Both bugs had to be
+# fixed for this to end well — if the canvas mounts before the read
+# lands, the original is already gone; if the first onChange is eaten as
+# the baseline, the stroke goes when Close does.
+#
+# `w.__scene` is what the live canvas would hand back, so setting it
+# alongside the onChange is the fake bundle's way of saying "this is on
+# the board now".
+COMPOUND = r"""
+  const wrote = () => h.calls.filter((c) => c.path === '/api/documents/drawings/write');
+  w.__scene = """ + json.dumps(STROKE) + r""";
+  await h.fire({ name: 'excalidraw-canvas' }, 'onChange', """ + json.dumps(STROKE) + r""");
+  const drawn = { unsaved: h.text().some((t) => String(t).includes('unsaved')),
+                  mounts: w.__mounts.slice(), writes: wrote().length };
+  await h.click({ type: 'button', text: 'Close' });
+  const refused = { confirms: w.__confirms.slice(),
+                    closed: h.fnCalls.filter((c) => c.name === 'onClose').length,
+                    writes: wrote().length,
+                    mounts: w.__mounts.slice(),
+                    unsaved: h.text().some((t) => String(t).includes('unsaved')),
+                    onCanvas: w.__scene.map((e) => e.id) };
+  await h.click({ type: 'button', text: 'Save' });
+  const saved = { body: wrote().map((c) => c.body),
+                  unsaved: h.text().some((t) => String(t).includes('unsaved')) };
+  await h.click({ type: 'button', text: 'Close' });
+  const closing = { confirms: w.__confirms.slice(),
+                    closed: h.fnCalls.filter((c) => c.name === 'onClose').length };
+  return { loaded, drawn, refused, saved, closing };
+"""
+
 SCENARIOS = {
     # Bug 1: what is on the canvas while the read is in flight.
     "reopen_saved_board": _scenario(
@@ -177,6 +208,9 @@ SCENARIOS = {
     "read_is_not_json": _scenario(
         rel_path="board.excalidraw", read={"content": "not json at all"},
         script=LOAD + "  return { loaded };"),
+    # The compound case end to end: the guard fires AND nothing is lost.
+    "saved_board_one_stroke_close": _scenario(
+        rel_path="board.excalidraw", read=OK_READ, script=LOAD + COMPOUND),
     # The save path still works and still re-baselines.
     "save_rebaselines": _scenario(
         rel_path="board.excalidraw", read=OK_READ,
@@ -298,3 +332,56 @@ def test_a_save_makes_the_saved_scene_the_new_baseline(driven):
     assert r["afterSave"]["unsaved"] is False, "the save did not clear the flag"
     assert r["closing"]["confirms"] == []
     assert r["closing"]["closed"] == 1
+
+
+# ── 4. the compound case, which needed both fixes ────────────────────
+
+
+def test_the_saved_board_is_on_the_canvas_before_the_stroke(driven):
+    """Half of the loss: if the canvas mounted while the read was in
+    flight, the rectangle was never there to lose."""
+    r = driven["saved_board_one_stroke_close"]
+    # The fake records initialData on every render; the real Excalidraw
+    # consumes only the first, so what matters is that they all say the
+    # same thing and that thing is the scene that was read.
+    assert r["loaded"]["mounts"][0] == "a@7", r["loaded"]["mounts"]
+    assert set(r["drawn"]["mounts"]) == {"a@7"}, (
+        "the canvas was handed a different scene while the stroke was drawn: "
+        f"{r['drawn']['mounts']}")
+
+
+def test_one_stroke_on_a_saved_board_stops_close(driven):
+    r = driven["saved_board_one_stroke_close"]
+    assert r["drawn"]["unsaved"] is True, "the stroke read as saved"
+    assert r["refused"]["confirms"] == [CONFIRM], r["refused"]
+    assert r["refused"]["closed"] == 0, "Close threw the stroke away"
+
+
+def test_the_refused_close_loses_neither_the_stroke_nor_the_scene(driven):
+    """Answering "no" to the prompt has to leave the board exactly as it
+    was — both elements still on it, still flagged unsaved, and nothing
+    written to the file in the meantime."""
+    r = driven["saved_board_one_stroke_close"]["refused"]
+    assert r["onCanvas"] == ["a", "b"], r["onCanvas"]
+    assert r["unsaved"] is True, "the flag was cleared by a close nobody completed"
+    assert r["writes"] == 0, "a cancelled close still wrote to the file"
+    assert set(r["mounts"]) == {"a@7"}, r["mounts"]
+
+
+def test_saving_then_writes_both_the_original_and_the_stroke(driven):
+    """The file that comes out the other end is the point: the rectangle
+    that was already there AND the stroke just drawn."""
+    r = driven["saved_board_one_stroke_close"]
+    assert len(r["saved"]["body"]) == 1, r["saved"]["body"]
+    body = r["saved"]["body"][0]
+    assert body["rel_path"] == "board.excalidraw"
+    assert body["fmt"] == "excalidraw"
+    written = [e["id"] for e in json.loads(body["content"])["elements"]]
+    assert written == ["a", "b"], written
+    assert r["saved"]["unsaved"] is False, "the save did not clear the flag"
+
+
+def test_and_then_it_closes_without_asking(driven):
+    r = driven["saved_board_one_stroke_close"]["closing"]
+    assert r["confirms"] == [CONFIRM], "the second Close asked again after a save"
+    assert r["closed"] == 1, "Close did not close after the work was saved"
