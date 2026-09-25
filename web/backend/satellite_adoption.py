@@ -37,7 +37,11 @@ from urllib.parse import urlsplit
 from domovoi.config import settings as core_settings
 from satellite import provisioning_protocol as proto
 
-from web.backend.api.files_security import detect_removable, drive_token
+from web.backend.api.files_security import (
+    detect_removable,
+    drive_token,
+    removable_drives_visible,
+)
 
 log = logging.getLogger(__name__)
 
@@ -210,11 +214,17 @@ def scan_pending() -> list[dict[str, Any]]:
 
 async def snapshot_pending() -> list[dict[str, Any]]:
     """Async, TTL-cached wrapper — what the realtime channel and the API
-    route call. Returns [] instantly when adoption is disabled. Sorted and
+    route call. Returns [] instantly when adoption is disabled, and when
+    the host can't see removable drives (inside WSL no gadget volume ever
+    appears; the Satellites page says why). Sorted and
     time-stripped-stable so the realtime differ only fires on real
     changes."""
     global _cache_at, _cache_value
     if not core_settings.satellite_adoption_enabled:
+        return []
+    if not removable_drives_visible() and _scan_dirs_override() is None:
+        # The SCAN_DIRS dev harness still works here: it reads plain
+        # folders, not drives.
         return []
     now = time.monotonic()
     if _cache_value is not None and (now - _cache_at) < _CACHE_TTL_SEC:

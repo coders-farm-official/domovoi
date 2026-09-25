@@ -9,7 +9,12 @@
  * Legacy note: flash stock OS with any tool → insert the card into THIS machine
  * (or pick the zip download) → prepare → boot the device → plug it into
  * this machine's USB → adopt. Build progress rides the satellites.media
- * realtime channel (satellite_media_jobs, V004). */
+ * realtime channel (satellite_media_jobs, V004).
+ *
+ * Inside WSL (a Windows install) the server sees no removable drives, so
+ * /status answers drive_targets: false: the card drops the USB transport
+ * and the drive targets, stops polling for cards, and says why — the zip
+ * plus the Wi-Fi portal is the whole route there. */
 
 const smInput = {
   font: 'inherit', fontSize: 13, height: 32, padding: '0 8px',
@@ -187,13 +192,23 @@ const PrepareMediaCard = ({ fire }) => {
     }
   };
 
+  // False only inside WSL, where no drive ever appears. Unknown (status
+  // still loading, or an older server) counts as visible, which is how
+  // the card has always behaved.
+  const drivesVisible = status?.drive_targets !== false;
+
   // Re-scan drives while the section is open (a just-inserted card should
   // appear without a manual refresh).
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || !drivesVisible) return;
     const t = setInterval(refreshTargets, 4000);
     return () => clearInterval(t);
-  }, [open, refreshTargets]);
+  }, [open, drivesVisible, refreshTargets]);
+
+  // Nothing but the portal can finish setup here; don't send a stale pick.
+  React.useEffect(() => {
+    if (!drivesVisible) { setTransport('portal'); setTarget('zip'); }
+  }, [drivesVisible]);
 
   const boards = status?.boards || [];
   const plugins = status?.plugins || [];
@@ -279,10 +294,12 @@ const PrepareMediaCard = ({ fire }) => {
                        catch (err) { /* private window — session only */ }
                      }}/>
             </label>
-            <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
-              <option value="portal">wi-fi setup portal</option>
-              <option value="usb">usb adoption (plug into this server)</option>
-            </select>
+            {drivesVisible && (
+              <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
+                <option value="portal">wi-fi setup portal</option>
+                <option value="usb">usb adoption (plug into this server)</option>
+              </select>
+            )}
             <select value={target} onChange={e => setTarget(e.target.value)} style={smInput}>
               <option value="zip">download overlay zip</option>
               {bootTargets.map(t => (
@@ -294,6 +311,21 @@ const PrepareMediaCard = ({ fire }) => {
             <Button variant="primary" icon="hammer" disabled={busy} onClick={prepare}>Prepare</Button>
             <Button icon="refresh-cw" disabled={busy} onClick={refreshCache}>Refresh caches</Button>
           </div>
+
+          {!drivesVisible && (
+            <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
+                          alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
+                          background: 'var(--sunken)' }}>
+              <Icon name="info" size={13}/>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                Domovoi is running inside WSL on Windows, which can't see USB
+                drives or SD cards, so USB adoption and writing straight to a
+                card aren't available here. Download the zip, unzip it onto the
+                card's boot partition, and set the satellite up from a phone
+                over its own Wi-Fi.
+              </span>
+            </div>
+          )}
 
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
                                          display: 'flex', gap: 12, flexWrap: 'wrap' }}>

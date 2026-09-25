@@ -201,6 +201,12 @@ class Settings(BaseSettings):
     # and git_version.py (version label + behind/ahead checks run with this
     # as cwd).
     repo_dir: str = str(Path(__file__).resolve().parents[1])
+    # What kind of machine this is: auto | linux | wsl | windows | darwin.
+    # "auto" reads the kernel (domovoi/host_kind.py) and is right on every
+    # normal install. Inside WSL the dashboard explains that USB satellite
+    # adoption and writing a card aren't available, because WSL sees no
+    # removable drives. Set it only if detection gets your host wrong.
+    domovoi_host_kind: str = "auto"
     # How long a satellite gets to reconnect after an upgrade+self-restart
     # before its on-Pi watchdog rolls back to the pre-upgrade tarball. Bounds
     # the window an import-clean-but-behaviourally-broken upgrade can wedge a

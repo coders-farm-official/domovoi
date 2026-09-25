@@ -50,6 +50,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from domovoi.config import settings as core_settings
+from domovoi.host_kind import host_kind
 
 log = logging.getLogger(__name__)
 
@@ -390,6 +391,18 @@ def detect_removable() -> list[dict[str, Any]]:
     except Exception as e:  # noqa: BLE001 — never let detection 500 the registry
         log.warning("removable detection failed: %s", e)
         return []
+
+
+def removable_drives_visible() -> bool:
+    """Whether this host can see removable drives at all. False inside WSL
+    (the Windows installer's host): Windows keeps USB sticks and SD cards
+    to itself and WSL automounts none of them, so :func:`detect_removable`
+    comes back empty whatever is plugged in. The satellite surfaces that
+    depend on a drive — USB adoption, writing a card from media prep — read
+    this to explain the gap instead of offering a list that is always
+    empty. Detection itself still runs everywhere: a drive someone attached
+    to WSL and mounted by hand still shows on the Files page."""
+    return host_kind() != "wsl"
 
 
 # ─── Plugin config (.env) single-key reader ──────────────────────────────────

@@ -3249,7 +3249,7 @@
           "satellite-media"
         ],
         "summary": "Media Targets",
-        "description": "Removable drives that look like a flashed Pi boot partition.",
+        "description": "Removable drives that look like a flashed Pi boot partition. Always\nempty inside WSL, which sees no removable drives (``/status`` says\nso with ``drive_targets: false``).",
         "operationId": "media_targets_api_satellites_media_targets_get",
         "responses": {
           "200": {
@@ -13391,7 +13391,7 @@
           "setup_transport": {
             "type": "string",
             "title": "Setup Transport",
-            "default": "usb"
+            "description": "usb | portal. Omitted: usb, or portal when the server runs inside WSL (no removable drives there)."
           },
           "wifi_country": {
             "type": "string",
