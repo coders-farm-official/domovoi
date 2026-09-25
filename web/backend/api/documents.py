@@ -86,6 +86,7 @@ import mimetypes
 import os
 import re
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -106,7 +107,11 @@ from pydantic import BaseModel, Field
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
-from web.backend.api.files_security import is_sensitive_name
+from web.backend.api.files_security import (
+    assert_storable,
+    is_sensitive_name,
+    unstorable_reason,
+)
 from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
@@ -242,6 +247,15 @@ def _safe_target(rel_path: str) -> Path:
                 f"DOCUMENTS_DIR, not absolute."
             ),
         )
+    # Normalise before deciding, and refuse what cannot be normalised. Three
+    # shapes reach the filesystem as a DIFFERENT path than the one named, and
+    # every gate below this line is asking about the name that was sent:
+    # a control character (which ``stat()`` answers with an exception, i.e. an
+    # unhandled 500), an NTFS stream separator (``tax.pdf:stash.md`` wrote
+    # bytes nothing could list while the extension gate read ``.md``), and a
+    # trailing dot or space (``.env.`` landed on disk as ``.env``). See
+    # files_security.unstorable_reason.
+    assert_storable(normalized)
     cleaned = normalized
     base = _documents_dir()
     target = (base / cleaned).resolve(strict=False)
@@ -304,6 +318,33 @@ def _ensure_parent_dir(target: Path) -> None:
         raise HTTPException(
             status_code=404, detail=f"{shown}: no such folder in Documents"
         )
+
+
+@contextmanager
+def _usable_path(rel: str):
+    """Turn an OS-level complaint about a PATH into a 4xx instead of a 500.
+
+    ``_safe_target`` refuses the shapes it can recognise, but the OS has
+    limits this process cannot enumerate — a name past MAX_PATH, a reserved
+    device name, a volume that disagrees — and every one of them arrives as
+    an ``OSError`` or a ``ValueError`` out of ``stat()``, ``read_bytes()`` or
+    ``write_text()``. Escaping the handler, that is a 500 in the log for an
+    input any paired phone can send, and 500s that are really 400s are how
+    real 500s go unnoticed. Nothing is written in any of these cases; only
+    the status code and the log line change.
+
+    ``HTTPException`` passes straight through: the refusals inside this block
+    are answers, not accidents.
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except (OSError, ValueError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{rel}: not a usable document path ({type(e).__name__})",
+        ) from None
 
 
 # ─── What each editor is allowed to save ────────────────────────────
@@ -606,11 +647,12 @@ async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
         raw = f"{raw}{ext}"
     target = _safe_target(raw)
     _assert_saveable_name(target)
-    if target.exists():
-        raise HTTPException(status_code=409, detail=f"{raw} already exists")
-    _ensure_parent_dir(target)
-    target.write_bytes(_blank_content(ext))
-    st = target.stat()
+    with _usable_path(raw):
+        if target.exists():
+            raise HTTPException(status_code=409, detail=f"{raw} already exists")
+        _ensure_parent_dir(target)
+        target.write_bytes(_blank_content(ext))
+        st = target.stat()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,
@@ -728,10 +770,11 @@ async def write_text_file(
     await _assert_files_policy(request, req.device_id)
     target = _safe_target(rel_path)
     _assert_saveable_name(target)
-    _assert_text_editor_may_write(target)
-    _ensure_parent_dir(target)
-    target.write_text(req.text, encoding="utf-8", newline="")
-    st = target.stat()
+    with _usable_path(rel_path):
+        _assert_text_editor_may_write(target)
+        _ensure_parent_dir(target)
+        target.write_text(req.text, encoding="utf-8", newline="")
+        st = target.stat()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name,
@@ -858,9 +901,10 @@ async def write_sheet(
     _assert_sheet_editor_may_write(target)
     if any(len(row) > _SHEET_MAX_COLS for row in req.rows):
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
-    _ensure_parent_dir(target)
-    _write_sheet_grid(target, req.rows)
-    st = target.stat()
+    with _usable_path(rel_path):
+        _ensure_parent_dir(target)
+        _write_sheet_grid(target, req.rows)
+        st = target.stat()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name, name=target.stem, ext=ext,
@@ -1055,6 +1099,13 @@ async def upload_documents(
         if is_sensitive_name(name):
             skipped.append(f"{name}: that name is reserved and is never saved here")
             continue
+        # The upload door does not go through _safe_target (it basenames its
+        # input instead), so it asks the same question here: a name this
+        # filesystem would store under a DIFFERENT name, or not at all.
+        unstorable = unstorable_reason(name)
+        if unstorable is not None:
+            skipped.append(f"{name}: {unstorable}")
+            continue
         data = await up.read()
         target = _unique_path(base, name)
         try:
@@ -1128,9 +1179,10 @@ async def write_drawing(request: Request, req: DrawingWriteRequest) -> DocumentR
             status_code=400, detail="drawing must be .excalidraw or .svg"
         )
     _assert_saveable_name(target)
-    _ensure_parent_dir(target)
-    target.write_text(req.content, encoding="utf-8")
-    st = target.stat()
+    with _usable_path(req.rel_path):
+        _ensure_parent_dir(target)
+        target.write_text(req.content, encoding="utf-8")
+        st = target.stat()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,

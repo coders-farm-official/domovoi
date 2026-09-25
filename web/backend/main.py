@@ -19,7 +19,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from domovoi import admin_auth
 from domovoi.config import settings
@@ -60,6 +59,7 @@ from web.backend.api import satellites as satellites_api
 from web.backend.api import videos as videos_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
+from web.backend.static_cache import RevalidatingStaticFiles
 from web.backend import plugin_host
 from web.backend import realtime as realtime_mod
 from web.backend.middleware import (
@@ -564,9 +564,20 @@ async def websocket_state(ws: WebSocket) -> None:
 # Mounted last so /api and /ws routes win when paths overlap. The
 # directory may be empty during early development; FastAPI handles
 # that fine and just returns 404 for any path under /.
+#
+# RevalidatingStaticFiles, not StaticFiles: this mount is how EVERY
+# front-end change reaches a browser, and plain StaticFiles sends no
+# Cache-Control at all, so a browser that opened the dashboard before
+# keeps serving the old bundle out of its own HTTP cache for days
+# after a deploy. See web/backend/static_cache.py for what that costs
+# and what it buys.
 
 if _STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")
+    app.mount(
+        "/",
+        RevalidatingStaticFiles(directory=str(_STATIC_DIR), html=True),
+        name="static",
+    )
 else:
     log.warning("static dir %s does not exist; frontend not served", _STATIC_DIR)
 

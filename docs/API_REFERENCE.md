@@ -789,12 +789,33 @@ the tier alone is not the whole rule:
   `editable` flag, and the secret-shaped-name filter that skips `.env`,
   `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
   `setup-code.txt`. A name one door refuses is refused by the other
-  (`400`, or `skipped` on an upload). The one asymmetry left: `device_id`
-  is **required** on `/api/files` writes and **optional** on
-  `/api/documents` saves, because the in-app editors and the Android
-  Documents screen do not send one yet. A documents save that names a
-  device is held to the block exactly as `/api/files` would hold it; one
-  that omits the field is not.
+  (`400`, or `skipped` on an upload).
+* **Who the caller is does not depend on the caller mentioning it.**
+  `device_id` in the body is still required on `/api/files` writes and
+  optional on `/api/documents` saves — no client sends it there, and
+  requiring it would `422` every Save — but it is no longer what decides.
+  The server takes the first well-formed id it finds in the body, the
+  `X-Device-Id` header, `?device_id=`, or the `domovoi-device-id` cookie
+  it sets itself on `POST /api/devices/register`, which every browser
+  calls on every dashboard load. A device an admin blocked in Settings is
+  therefore refused on both doors from a browser, with no client change.
+  Still open, and stated rather than implied: the Android app builds its
+  HTTP client with no cookie jar, so it is unidentified on these routes
+  until it sends `X-Device-Id`; and within the household an id is
+  self-asserted either way, which is why this is household policy rather
+  than a security boundary.
+* **A path is normalised before it is judged, and refused when it cannot
+  be.** Every gate above asks about the name the caller SENT, and the
+  filesystem may store the bytes under a different one. `400` for: a
+  control character anywhere in the path (a percent-encoded NUL or tab
+  — previously an unhandled `500` out of `stat()`); on a Windows host, a
+  `:` anywhere (`tax.pdf:stash.md` wrote into an NTFS alternate data
+  stream that no listing, zip or export could see, while the extension
+  gate read `.md`); and, on a Windows host, a path segment with a trailing
+  dot or space (`.env.` and `.env ` are stored as `.env`, which is how
+  they slipped the reserved-name filter on all four doors). The
+  reserved-name filter itself now judges every name a name could become,
+  on every platform.
 
 The former OnlyOffice/Collabora sidecars — and
 with them the open/close locks, JWT capability tokens, save callbacks, and
@@ -808,12 +829,12 @@ row's `category` tells the UI how to open it
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name; `409` if it already exists. |
+| `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name (including one wearing a trailing dot or space), for a stream separator or a control character; `409` if it already exists. |
 | `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
 | `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
 | `POST /api/documents/download-zip` | **Admin (mutation)** · `ZipRequest` | Zip + download a selection. |
 | `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` (optional `device_id`) | Write a text/markdown file. `415` — with the bytes untouched — for a target another editor owns, for a binary, or for one over the editor's read limit; `400` for a secret-shaped name; `404` when the parent folder does not exist. |
+| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` (optional `device_id`) | Write a text/markdown file. `415` — with the bytes untouched — for a target another editor owns, for a binary, or for one over the editor's read limit; `400` for a secret-shaped name, for a path the filesystem would store elsewhere (stream separator, trailing dot/space) or one it cannot use at all; `404` when the parent folder does not exist. |
 | `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
 | `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` (optional `device_id`) | Write the grid back (.xlsx keeps formulas as formulas). `415` for anything outside .xlsx/.csv, raised before anything is created. |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
@@ -968,6 +989,51 @@ fetching runs in a core background worker.
 | Method & path | Auth | Response / purpose |
 |---|---|---|
 | `GET /api/health` | Open | `{status: "ok"\|"degraded", db_reachable, domovoi_reachable}`. Returns `200` even when degraded so the UI can render a partial-degradation banner. |
+
+### 3.22 The static mount, and how a front-end change reaches a browser
+
+Everything under `/` that is not `/api` or `/ws` is the dashboard itself,
+served from `web/static` by `web.backend.static_cache.RevalidatingStaticFiles`.
+It is worth a section because it is the delivery mechanism for every
+front-end change in the product, and getting it wrong is invisible: the
+server holds the fix, the browser runs the old file, and nothing says so.
+
+| What is asked for | What comes back |
+|---|---|
+| `GET /` or any `*.html` | The page, with every same-origin `<script src>` / `<link href>` / `<img src>` rewritten to carry `?v=<that file's token>`. `Cache-Control: no-cache` and an `ETag` computed over the REWRITTEN bytes. |
+| `GET /files.jsx?v=<current token>` | The file, `Cache-Control: public, max-age=31536000, immutable`. No revalidation, no round trip. |
+| `GET /files.jsx` (no token, or a stale one) | The file, `Cache-Control: no-cache`. Store it, but ask before reusing it. |
+
+The token is that one file's size and mtime, **per file, not per tree**:
+`web/static` is 12 MB, 11 of it vendored bundles that change only when
+somebody re-vendors them, and a tree-wide token would re-download all of
+it on every release.
+
+Why not simply `Cache-Control: no-cache` on everything? Because it was
+measured not to work. `StaticFiles` used to send no `Cache-Control` at
+all, so freshness was heuristic (RFC 9111 §4.2.2: about 10% of the age
+since `Last-Modified`), and a browser that had opened the dashboard held
+non-revalidating copies for days. A browser only learns a new header by
+making a request, and the whole problem is that it does not make one:
+driven in a real headless Chrome with a warm cache, one ordinary reload
+after a deploy served the OLD bundle both with the header fix and without
+it. Changing the URL is what makes a deploy arrive, because a URL the
+browser has never seen has nothing to serve from cache.
+
+Cost, on the LAN this runs on: one conditional `GET` per page load (the
+page, `304`, no body) and a full download of exactly the files that
+changed. Not the ~35 revalidations a uniform `no-cache` would have cost.
+
+`web/static/sw.js` is the other half. A service worker answers before the
+HTTP cache is consulted, so it is network-first for the shell and re-fetches
+with `cache: 'no-cache'`; its cache is the offline fallback, not the source
+of truth. Note the asymmetry worth knowing at deploy time: a service worker
+only registers on a secure context, so on a plain-HTTP LAN install
+(`http://<host>:6369`) there is no worker at all and the static mount is
+the only layer there is. A browser still running a PRE-2026-09-25 worker
+takes one extra reload on that one upgrade — the code deciding what to
+serve on the first one is already in the browser, and no server change can
+reach it.
 
 ---
 

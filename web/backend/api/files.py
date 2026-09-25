@@ -109,6 +109,7 @@ from web.backend.api.documents import (
     _SHEET_EXTS,
     _TEXT_EXTS,
 )
+from web.backend.api.devices import DEVICE_ID_COOKIE, valid_device_id
 from web.backend.api.files_security import (
     DOCUMENTS_LIBRARY_ID,
     INDEXED_KINDS,
@@ -117,6 +118,7 @@ from web.backend.api.files_security import (
     core_library,
     is_sensitive_name,
     safe_join,
+    unstorable_reason,
 )
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.api.music import _safe_basename, _unique_path
@@ -395,6 +397,64 @@ async def _assert_can_write(device_id: str) -> None:
         raise HTTPException(status_code=403, detail=reason)
 
 
+def caller_device_id(request: Request, body_device_id: Optional[str] = None) -> Optional[str]:
+    """Which device is making this request, from everything the caller
+    actually sent — not only from the body.
+
+    The per-device block used to be one JSON field away from meaningless on
+    the documents door: the field was optional (no client sends it there),
+    so a tablet an admin had blocked in Settings kept saving simply by
+    leaving it out, while the Files page on that same tablet showed the
+    banner saying it could not. Requiring the field instead would have
+    422'd every Save in the dashboard and in the Android app, so the
+    previous pass left it optional and said so out loud. That was the right
+    call with the information it had, and it is not the only option: the
+    server knows more about the caller than the body does.
+
+    Four places are consulted, most explicit first:
+
+    1. the request body — a caller that names itself is taken at its word,
+       exactly as ``/api/files`` takes it;
+    2. ``X-Device-Id`` — one header, set once in a client's HTTP layer,
+       covers every route at once. Nothing sends it yet; it is here so the
+       Android app's fix is one line in ``DeviceAuthInterceptor`` rather
+       than a per-screen edit;
+    3. ``?device_id=`` — what ``/api/files/browse`` already carries, so a
+       caller that identifies itself while reading is identified when it
+       writes from the same URL shape;
+    4. the ``domovoi-device-id`` COOKIE, which the server itself sets on
+       ``POST /api/devices/register`` — the call every browser makes on
+       every dashboard load, holding the very id the blocklist is keyed on.
+       No client change, no new field, and it arrives on every request the
+       browser makes for as long as the device exists.
+
+    What that closes: a blocked BROWSER cannot write through the documents
+    door any more, because the identity does not depend on the request
+    body naming it. What it does not close, and this is stated rather than
+    implied: the native Android app builds its OkHttp client with no cookie
+    jar, so it stays unidentified on these routes until it sends the id
+    (one header, item 2). And within the household an id is self-asserted
+    either way — the module docstring has always said so — so this is
+    household policy made to work on the clients people actually use, not
+    a security boundary. The difference from before is the DEFAULT: a
+    normal client now carries its name without being asked, instead of
+    omitting it without being noticed.
+
+    A malformed value is ignored rather than refused: an unreadable cookie
+    from some older build must not turn into a 400 on a legitimate save.
+    """
+    for candidate in (
+        body_device_id,
+        request.headers.get("X-Device-Id"),
+        request.query_params.get("device_id"),
+        request.cookies.get(DEVICE_ID_COOKIE),
+    ):
+        ident = valid_device_id(candidate)
+        if ident is not None:
+            return ident
+    return None
+
+
 async def assert_documents_write_allowed(
     request: Request, device_id: Optional[str] = None
 ) -> None:
@@ -421,20 +481,31 @@ async def assert_documents_write_allowed(
        ever changes, instead of silently staying open;
     3. the library's own ``editable`` flag — 403.
 
-    ``device_id`` is OPTIONAL here and REQUIRED on ``/api/files``. That is
-    the one rule the two doors still do not share, and it is a client
-    limitation, not a decision: the in-app editors and the Android
-    Documents screen do not name a device on these routes yet, so
-    requiring one would break Save for every existing client. A caller
-    that DOES name itself is held to the block exactly as it would be on
-    ``/api/files``. Note what this costs, honestly: within the household
-    the id is self-asserted on both doors (the module docstring says so),
-    so the block is household policy, not a security boundary — the gap
-    an optional field leaves is that a blocked device's own app keeps
-    working here until its client learns to send the field.
+    ``device_id`` in the BODY is still optional here and required on
+    ``/api/files`` — no client sends it on these routes, and requiring it
+    would 422 every Save. It no longer decides anything on its own:
+    :func:`caller_device_id` also reads the ``X-Device-Id`` header, the
+    ``?device_id=`` query and the ``domovoi-device-id`` cookie the server
+    sets on every device registration, so a browser is identified here
+    whether or not the JSON says who it is. Read that function for what
+    that closes and what it leaves open (the Android app, which keeps no
+    cookie jar).
     """
-    if device_id:
-        await _assert_can_write(device_id)
+    caller = caller_device_id(request, device_id)
+    if caller:
+        await _assert_can_write(caller)
+    # The admin-write test is applied to the library ID, BEFORE the record
+    # is resolved. ``core_library`` answers None whenever ``root_rejection``
+    # turns documents_dir down — most often "does not exist" on a headless
+    # install — and the save that CREATES the folder is exactly the save
+    # that hit that window, so the one save on a fresh install skipped the
+    # library rules entirely. Nothing was open in practice (the set is
+    # empty and core:documents is editable), but this function is what the
+    # branch offers as proof that the documents door follows the hook if
+    # the policy ever changes, and the proof had a hole in it that the
+    # test could not see, because the test runs with the folder present.
+    if DOCUMENTS_LIBRARY_ID in ADMIN_WRITE_LIBRARY_IDS:
+        await require_admin_mutation(request)
     lib = core_library(DOCUMENTS_LIBRARY_ID)
     if lib is None:
         # Documents is not on the Files surface at all right now — almost
@@ -638,7 +709,17 @@ async def upload(
     for up in files:
         raw = up.filename or "upload"
         name = _safe_basename(raw)
-        if not name or name in (".", "..") or is_sensitive_name(name):
+        # ``is_sensitive_name`` now asks about every name this one could
+        # turn into on disk (".env." and ".env " both land as ".env" on
+        # Windows), and ``unstorable_reason`` refuses the shapes that would
+        # be stored somewhere other than where they say — a stream
+        # separator, a trailing dot or space, a control character.
+        if (
+            not name
+            or name in (".", "..")
+            or is_sensitive_name(name)
+            or unstorable_reason(name) is not None
+        ):
             skipped.append(f"{raw}: bad filename")
             continue
         data = await up.read()
