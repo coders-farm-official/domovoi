@@ -198,11 +198,18 @@ def _isolate_admin_config_dir(tmp_path, monkeypatch):
 def _isolate_update_state(tmp_path, monkeypatch):
     """Same idea for the update unit's files: a test that pulls must not
     record a prev_sha in the developer's real ~/.domovoi/update, and the
-    version panel must not report a real host's last update."""
+    version panel must not report a real host's last update. Nor may a
+    real domovoi-update.service on the machine running pytest (a Linux
+    server that has it installed) flip every restart test into update
+    mode: the unit search path points at an empty dir unless a test sets
+    its own."""
+    from domovoi import self_restart
+
     monkeypatch.setattr(settings, "update_state_dir", str(tmp_path / "update-state"))
     monkeypatch.setattr(
         settings, "update_result_file", str(tmp_path / "update-unit" / "last-result.json")
     )
+    monkeypatch.setattr(self_restart, "_UNIT_DIRS", (str(tmp_path / "no-systemd-units"),))
 
 
 @pytest_asyncio.fixture

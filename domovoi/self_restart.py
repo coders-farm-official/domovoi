@@ -82,15 +82,23 @@ def _sudo() -> str | None:
 
 def update_unit_installed() -> bool:
     """Whether ``domovoi-update.service`` is installed, by looking for its
-    unit file. A masked unit (a link to /dev/null) counts as not installed:
-    masking is how an admin switches it off."""
+    unit file. A masked unit (a link to /dev/null, or an empty file, which
+    systemd also reads as masked) counts as not installed: masking is how
+    an admin switches it off."""
     if _WINDOWS:
         return False
     for unit_dir in _UNIT_DIRS:
         path = os.path.join(unit_dir, UPDATE_UNIT)
         if not os.path.lexists(path):
             continue
-        return os.path.realpath(path) != os.devnull and os.path.isfile(path)
+        try:
+            return (
+                os.path.realpath(path) != os.devnull
+                and os.path.isfile(path)
+                and os.path.getsize(path) > 0
+            )
+        except OSError:
+            return False
     return False
 
 

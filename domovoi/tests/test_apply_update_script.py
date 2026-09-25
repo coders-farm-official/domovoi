@@ -64,5 +64,5 @@ def test_apply_update_harness():
         timeout=600,
         env={**os.environ, "HARNESS_PYTHON": sys.executable},
     )
-    assert proc.returncode == 0, proc.stdout[-8000:] + proc.stderr[-2000:]
+    assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
     assert " 0 failed" in proc.stdout

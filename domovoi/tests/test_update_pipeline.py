@@ -253,6 +253,24 @@ def test_a_masked_unit_is_not_installed(unit_dirs):
     assert self_restart.update_unit_installed() is False
 
 
+def test_an_empty_unit_file_is_masked_too(unit_dirs):
+    """systemd reads a zero-byte unit file as masked, like a /dev/null
+    link, and so must the button."""
+    etc, lib = unit_dirs
+    _install_unit(lib)
+    (etc / self_restart.UPDATE_UNIT).write_bytes(b"")
+    assert self_restart.update_unit_installed() is False
+    assert self_restart.restart_mode() == "restart"
+
+
+def test_the_suite_never_sees_the_hosts_real_unit():
+    """conftest points the unit search path at an empty dir, so a Linux
+    box with domovoi-update.service installed can still run the restart
+    tests that expect today's plain bounce."""
+    assert all("no-systemd-units" in d for d in self_restart._UNIT_DIRS)
+    assert self_restart.restart_mode() == "restart"
+
+
 def test_detection_never_runs_sudo_or_systemctl(unit_dirs, monkeypatch):
     _install_unit(unit_dirs[0])
 
@@ -425,6 +443,25 @@ def test_a_broken_result_file_never_breaks_the_panel(stub_version_probes, conten
     assert state["bad_sha"] is None
     last = state["last_update"]
     assert last is None or last["status"] == "rolled_back"
+
+
+def test_a_stray_byte_in_the_error_keeps_the_result_and_its_bad_sha(stub_version_probes):
+    """The script cuts pip/docker output to length with cut(1), which on
+    Ubuntu counts bytes, so pip's "╰─>" can be split mid-character. That
+    must cost one replacement character, not the whole result: losing
+    bad_sha would put the rolled-back commit back on offer."""
+    doc = json.dumps({**ROLLED_BACK, "error": "sync-deps failed (exit 1): XX"})
+    # "─" is three bytes; keep two of them, as a byte-counting cut would.
+    raw = doc.encode("utf-8").replace(b"XX", "× ╰─".encode("utf-8")[:-1])
+    path = Path(settings.update_result_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+    state = asyncio.run(git_version.version_state())
+
+    assert state["bad_sha"] == "b" * 40
+    assert state["last_update"]["status"] == "rolled_back"
+    assert state["last_update"]["error"].startswith("sync-deps failed (exit 1): ×")
 
 
 def test_an_oversized_result_is_ignored(stub_version_probes):

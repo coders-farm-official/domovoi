@@ -301,9 +301,13 @@ def read_last_update() -> dict | None:
         return None
     if len(raw) > _LAST_UPDATE_MAX_BYTES:
         return None
+    # "replace", not strict: the error and step text are the tail of pip,
+    # docker or git output, cut to length by the script. One stray byte
+    # there must not hide the whole result, and with it the bad_sha that
+    # stops the panel offering a rolled-back commit again.
     try:
-        doc = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+        doc = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
         return None
     if not isinstance(doc, dict) or not isinstance(doc.get("status"), str):
         return None
