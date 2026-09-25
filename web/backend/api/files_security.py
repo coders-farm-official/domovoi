@@ -429,6 +429,13 @@ CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
     ("core:pictures", "Pictures", "image", "pictures_dir", True, True, "pictures", False),
 )
 
+# The Documents library's id, named once. ``/api/files`` and
+# ``/api/documents`` are TWO DOORS into this one folder, and both have to
+# ask the same questions about it (see ``core_library`` below and
+# :func:`web.backend.api.files.assert_documents_write_allowed`), so the id
+# is a constant rather than a string literal repeated in two routers.
+DOCUMENTS_LIBRARY_ID = "core:documents"
+
 # reindex_kind values that trigger a post-write reindex.
 INDEXED_KINDS: frozenset[str] = frozenset({"music", "audiobooks", "podcasts"})
 
@@ -662,6 +669,29 @@ def build_core_libraries(allowed_under_config: set[Path]) -> list[MediaLibrary]:
             )
         )
     return libs
+
+
+def core_library(library_id: str) -> MediaLibrary | None:
+    """The record for ONE core library, resolved from config alone.
+
+    :func:`build_libraries` is the full registry: it also reads the
+    plugins table and scans removable mounts. A core library needs
+    neither — its root comes straight from ``core_settings`` — and
+    :mod:`web.backend.api.documents` has to ask for ``core:documents`` on
+    every save, so it gets a database-free way to do it.
+
+    ``None`` means the library is not on the surface at all right now
+    (:func:`root_rejection` turned its configured root down — most often
+    "does not exist" on a headless install that has no ``~/Documents``
+    yet). Callers must treat that as "no library-level rule to apply",
+    NOT as "denied": the documents router creates that folder on first
+    save, and refusing the first save would make the library unreachable
+    forever.
+    """
+    for lib in build_core_libraries(_allowed_under_config()):
+        if lib.id == library_id:
+            return lib
+    return None
 
 
 def build_plugin_libraries(

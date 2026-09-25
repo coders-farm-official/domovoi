@@ -6765,7 +6765,7 @@
           "documents"
         ],
         "summary": "Create Document",
-        "description": "Create a new blank file for a view. Name is a bare filename (any\ndirectory component is stripped). For doc/sheet/drawing the kind's\ndefault extension is appended when the user didn't type a recognized\none; the ``text`` kind takes the name VERBATIM.",
+        "description": "Create a new blank file for a view. Name is a bare filename (any\ndirectory component is stripped). For doc/sheet/drawing the kind's\ndefault extension is appended when the user didn't type a recognized\none; the ``text`` kind takes the name VERBATIM.\n\nDevice tier, and held to the same write policy ``/api/files``\napplies to this library \u2014 see the module docstring's \"two doors\".",
         "operationId": "create_document_api_documents_create_post",
         "requestBody": {
           "content": {
@@ -6930,7 +6930,7 @@
           "documents"
         ],
         "summary": "Write Text File",
-        "description": "Write text back to a file as UTF-8. Containment-checked; newlines\npreserved verbatim.",
+        "description": "Write text back to a file as UTF-8. Containment-checked; newlines\npreserved verbatim.\n\nRefuses \u2014 with 415, and without touching the disk \u2014 any target the\ntext editor could not have opened; see\n:func:`_assert_text_editor_may_write`, which is what keeps a\nhousehold save from being an overwrite primitive over the\noperator's ``~/Documents``.",
         "operationId": "write_text_file_api_documents_text__rel_path__put",
         "parameters": [
           {
@@ -7026,7 +7026,7 @@
           "documents"
         ],
         "summary": "Write Sheet",
-        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl).",
+        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl). A non-sheet target is refused with 415 up\nfront, so a save the server will not do leaves nothing behind.",
         "operationId": "write_sheet_api_documents_sheet__rel_path__put",
         "parameters": [
           {
@@ -7186,7 +7186,7 @@
           "documents"
         ],
         "summary": "Upload Documents",
-        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped.",
+        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped \u2014\nand secret-shaped names are skipped exactly as\n``POST /api/files/upload`` skips them, so the two doors into this\none folder cannot be played off against each other.",
         "operationId": "upload_documents_api_documents_upload_post",
         "requestBody": {
           "content": {
@@ -10502,6 +10502,19 @@
             },
             "type": "array",
             "title": "Files"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -11192,6 +11205,19 @@
               "text"
             ],
             "title": "Kind"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -11508,6 +11534,19 @@
             ],
             "title": "Fmt",
             "default": "excalidraw"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -14300,6 +14339,19 @@
             "type": "array",
             "maxItems": 1000,
             "title": "Rows"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -14346,6 +14398,19 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",

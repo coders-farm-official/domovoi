@@ -37,6 +37,18 @@ is on ``/api/documents``. What still answers to the operator is deleting
 one — and deletes go through ``/delete`` above, wherever the target
 lives.
 
+**Two doors, one room.** ``/api/files`` and ``/api/documents`` write into
+the SAME folder. While the documents door was admin-only that did not
+matter; now that both are device tier, any rule only one of them keeps is
+a rule neither of them keeps, because a caller picks the door. So the
+rules live here and the documents router calls them:
+:func:`assert_documents_write_allowed` is the per-device block, the
+admin-write library list and the ``editable`` flag as one entry point,
+and the secret-shaped-name filter both doors apply is the shared
+:func:`~web.backend.api.files_security.is_sensitive_name`. Adding a rule
+to one door means adding it to that shared code, not to one handler —
+the drift is what made the gap.
+
 The device model the room queue uses (:mod:`web.backend.api.music_queue`)
 still rides on top: every write names the calling ``device_id`` (required
 — a blocklist anyone evades by omitting the field is no blocklist), and an
@@ -98,9 +110,11 @@ from web.backend.api.documents import (
     _TEXT_EXTS,
 )
 from web.backend.api.files_security import (
+    DOCUMENTS_LIBRARY_ID,
     INDEXED_KINDS,
     MediaLibrary,
     build_libraries,
+    core_library,
     is_sensitive_name,
     safe_join,
 )
@@ -379,6 +393,59 @@ async def _assert_can_write(device_id: str) -> None:
     reason = await _block_status(device_id)
     if reason is not None:
         raise HTTPException(status_code=403, detail=reason)
+
+
+async def assert_documents_write_allowed(
+    request: Request, device_id: Optional[str] = None
+) -> None:
+    """Apply THIS module's write policy for ``core:documents`` to a caller
+    arriving through the other door.
+
+    ``/api/files`` and ``/api/documents`` both write into the Documents
+    folder — two doors, one room. Until 2026-09-24 the difference between
+    them could not be exploited, because every ``/api/documents`` write
+    needed an admin Bearer while ``/api/files`` was device tier: the
+    stricter door could not be routed around. Both doors are device tier
+    now, and two doors with different locks means the WEAKER one decides
+    the policy. So the documents router asks the module that owns these
+    rules rather than carrying a copy of them, because a copy drifts and
+    the drift is invisible until somebody probes for it.
+
+    The rules, in the order ``POST /api/files/upload`` applies them:
+
+    1. the per-device block (:func:`_assert_can_write`) — 403;
+    2. :func:`_assert_admin_for` — 401 when the resolved library is an
+       admin-write one (a removable drive, or anything named in
+       :data:`ADMIN_WRITE_LIBRARY_IDS`). ``core:documents`` is in neither
+       today; this call is what makes the documents door follow if either
+       ever changes, instead of silently staying open;
+    3. the library's own ``editable`` flag — 403.
+
+    ``device_id`` is OPTIONAL here and REQUIRED on ``/api/files``. That is
+    the one rule the two doors still do not share, and it is a client
+    limitation, not a decision: the in-app editors and the Android
+    Documents screen do not name a device on these routes yet, so
+    requiring one would break Save for every existing client. A caller
+    that DOES name itself is held to the block exactly as it would be on
+    ``/api/files``. Note what this costs, honestly: within the household
+    the id is self-asserted on both doors (the module docstring says so),
+    so the block is household policy, not a security boundary — the gap
+    an optional field leaves is that a blocked device's own app keeps
+    working here until its client learns to send the field.
+    """
+    if device_id:
+        await _assert_can_write(device_id)
+    lib = core_library(DOCUMENTS_LIBRARY_ID)
+    if lib is None:
+        # Documents is not on the Files surface at all right now — almost
+        # always because ``documents_dir`` does not exist yet on a
+        # headless install. There is no library-level rule to apply, and
+        # the first save is what creates the folder: refusing here would
+        # leave the library permanently unreachable.
+        return
+    await _assert_admin_for(lib, request)
+    if not lib.editable:
+        raise HTTPException(status_code=403, detail="library is not editable")
 
 
 # ─── GET /libraries ──────────────────────────────────────────────────────────

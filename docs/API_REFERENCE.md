@@ -763,7 +763,40 @@ folder), and a mutation never reads `?device_token=`. **`/delete` and
 `/download-zip` are admin tier** (`Authorization: Bearer`): delete is the
 verb that destroys something, and `/download-zip` is the one request that
 turns "can read the library" into "holds a copy of the library". All three
-keep the pre-setup grace. The former OnlyOffice/Collabora sidecars — and
+keep the pre-setup grace.
+
+**A save writes only what its editor edits, and this is one of TWO DOORS
+into the same folder.** `documents_dir` defaults to the operator's real
+`~/Documents` and one household token is shared by every paired client, so
+the tier alone is not the whole rule:
+
+* `PUT /text` writes markdown and text — the kinds of file the text editor
+  opens. A target that belongs to another editor (`.xlsx`, `.csv`,
+  `.excalidraw`), to no editor (`.pdf`, an image, a legacy office format),
+  or that is binary / larger than the editor's read limit is refused `415`
+  and **nothing on disk changes**. `PUT /sheet` likewise refuses anything
+  outside `.xlsx`/`.csv` with `415` before it creates anything, and
+  `/drawings/write` refuses anything outside `.excalidraw`/`.svg` with
+  `400`. Without these, a household save would be a general-purpose
+  overwrite primitive over the operator's documents — a delete with extra
+  steps, and delete is the verb that stayed admin.
+* A save may create `documents_dir` itself but never a folder tree inside
+  it: a path whose parent folder does not exist is `404`, matching
+  `POST /api/files/upload`.
+* `/api/documents/*` and `/api/files/*` both write into `core:documents`,
+  so **both enforce the same rules**: the per-device write block
+  (`files_device_blocks`), the admin-write library list, the library's
+  `editable` flag, and the secret-shaped-name filter that skips `.env`,
+  `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
+  `setup-code.txt`. A name one door refuses is refused by the other
+  (`400`, or `skipped` on an upload). The one asymmetry left: `device_id`
+  is **required** on `/api/files` writes and **optional** on
+  `/api/documents` saves, because the in-app editors and the Android
+  Documents screen do not send one yet. A documents save that names a
+  device is held to the block exactly as `/api/files` would hold it; one
+  that omits the field is not.
+
+The former OnlyOffice/Collabora sidecars — and
 with them the open/close locks, JWT capability tokens, save callbacks, and
 WOPI routes — are retired. Editing is homegrown/in-page: a markdown doc editor
 (`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
@@ -775,19 +808,19 @@ row's `category` tells the UI how to open it
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | **Device** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
-| `POST /api/documents/upload` | **Device** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
+| `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name; `409` if it already exists. |
+| `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
 | `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
 | `POST /api/documents/download-zip` | **Admin (mutation)** · `ZipRequest` | Zip + download a selection. |
 | `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` | Write a text/markdown file. |
+| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` (optional `device_id`) | Write a text/markdown file. `415` — with the bytes untouched — for a target another editor owns, for a binary, or for one over the editor's read limit; `400` for a secret-shaped name; `404` when the parent folder does not exist. |
 | `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
-| `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` (optional `device_id`) | Write the grid back (.xlsx keeps formulas as formulas). `415` for anything outside .xlsx/.csv, raised before anything is created. |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
 | `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
 | `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
-| `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` | Save a drawing. |
+| `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` (optional `device_id`) | Save a drawing. `400` for anything outside .excalidraw/.svg. |
 
 ### 3.15 Podcasts and audiobooks
 
