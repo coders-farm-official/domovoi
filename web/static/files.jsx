@@ -1045,8 +1045,8 @@ const FilesPage = () => {
     ? (view.blocked_reason || 'this device is blocked from changing files') : null;
   const canWrite = !!view?.editable && !blocked;
   const canUpload = !!activeLib?.editable && !blocked;
-  const uploadTitle = blocked ? (view.blocked_reason || 'this device is blocked from changing files')
-    : canUpload ? 'upload into this folder' : 'this library is read-only';
+  const uploadTitle = blockedReason
+    || (canUpload ? 'upload into this folder' : 'this library is read-only');
 
   return (
     /* The desktop-file drop is handled ONCE, here on the page root: without
