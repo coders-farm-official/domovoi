@@ -498,10 +498,13 @@ const isAuthFailure = (e) => !!(e && e.loginPrompted);
  *     stay quiet, the modal IS the message (F-006).
  *   * anything else — a real error, with the server's own detail rather
  *     than a bare status line. */
-const mutationErrorText = (e, verb = 'Save') => {
+const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
   if (e && e.authCancelled) {
     const what = e.deviceTokenRequired ? 'this browser is not paired' : 'not signed in';
-    return `${verb} cancelled — ${what}. Your changes are still here.`;
+    // `kept` is for the callers that hold an editor buffer: the whole
+    // point of saying cancelled is that the typing is still on screen.
+    // A page action that had nothing to keep passes kept: false.
+    return `${verb} cancelled — ${what}.${kept ? ' Your changes are still here.' : ''}`;
   }
   if (isAuthFailure(e)) return null;
   return `${verb} failed: ${apiErrorText(e, 120)}`;

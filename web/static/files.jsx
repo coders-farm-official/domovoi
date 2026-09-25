@@ -833,7 +833,7 @@ const FilesPage = () => {
       else if (row.category === 'drawing') setDrawing(row);
       else if (row.category === 'text') setTextRel(row.rel_path);
     } catch (e) {
-      const msg = mutationErrorText(e, 'Create');
+      const msg = mutationErrorText(e, 'Create', { kept: false });
       if (msg) fire(msg);
     }
   };
@@ -859,7 +859,7 @@ const FilesPage = () => {
       fire(parts.join(' · '));
       refresh();
     } catch (e) {
-      const msg = mutationErrorText(e, 'upload');
+      const msg = mutationErrorText(e, 'upload', { kept: false });
       if (msg) fire(msg);
     } finally {
       setUploading(false);
@@ -968,7 +968,7 @@ const FilesPage = () => {
       clearSelection();
       refresh();
     } catch (e) {
-      const msg = mutationErrorText(e, 'move');
+      const msg = mutationErrorText(e, 'move', { kept: false });
       if (msg) fire(msg);
     } finally { setBusy(null); }
   };
@@ -1008,7 +1008,7 @@ const FilesPage = () => {
       if (res.reindex_triggered) parts.push('reindexing');
       fire(parts.join(' · '));
     } catch (e) {
-      const msg = mutationErrorText(e, 'import');
+      const msg = mutationErrorText(e, 'import', { kept: false });
       if (msg) fire(msg);
     } finally { setBusy(null); }
   };

@@ -160,6 +160,8 @@ const run = async (scenario) => {
       deviceTokenRequired: !!e.deviceTokenRequired,
       isAuthFailure: w.isAuthFailure(e),
       toast: w.mutationErrorText(e),
+      // A page action with no buffer to keep must not promise one.
+      toastNoBuffer: w.mutationErrorText(e, 'upload', { kept: false }),
       message: e.message,
     };
   }
@@ -255,6 +257,8 @@ def test_a_dismissed_sign_in_reports_cancelled_not_failed(store):
     assert "failed" not in toast.lower()
     assert "403" not in toast                   # no raw status line
     assert "Authorization: Bearer" not in toast  # nor the server's plumbing
+    # The Files page's own actions have no buffer, so they promise none.
+    assert o["toastNoBuffer"] == "upload cancelled — not signed in."
 
 
 def test_a_prompt_that_is_still_on_screen_gets_no_toast(store):
