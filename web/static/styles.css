@@ -607,6 +607,7 @@ table.tbl .actions { text-align: right; }
        80        full-screen takeovers (doc, sheet, drawings, files)
        90        files modal, video player
       100        modals — here
+      110        toasts (useToast, components.jsx)
    A modal is a BLOCKING dialog, so it belongs above whatever it was opened
    from. At 30 it sat under all of them: the admin sign-in prompt appeared
    BEHIND the satellite drawer, leaving a gated action impossible to finish
