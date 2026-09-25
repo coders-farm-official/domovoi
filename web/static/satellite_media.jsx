@@ -139,7 +139,10 @@ const MediaJobRow = ({ j, onShowCredentials }) => {
           eject the card, then boot the device to finish setup
         </div>
       )}
-      {j.status === 'done' && j.target_kind === 'drive' && onShowCredentials && (
+      {/* Zip builds too: their passwords are in no file at all (WEB-1), so
+          this is the only place a portal card's setup key can be read —
+          and inside WSL the zip is the only way to build a card. */}
+      {j.status === 'done' && onShowCredentials && (
         <div style={{ marginTop: 6 }}>
           <Button variant="ghost" icon="key" onClick={() => onShowCredentials(j)}>
             show setup details
