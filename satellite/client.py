@@ -159,11 +159,25 @@ APPROVAL_CODE_SIDECAR = CONFIG_DIR / "approval_code"
 # produce. Without that, an upgrade would make three working rooms deaf
 # until their core answered, and a core that is down would keep them deaf
 # for the whole outage.
+#
+# FOUR states, because "there is a file and it says neither word" is a
+# real one too and used to be read as a YES. Every one of them is named,
+# and the decision is a table in `_approval_decision` rather than a string
+# comparison with a default: both mistakes this gate has already made were
+# defaults. A record that could not be parsed defaulted to approved; a
+# record that could not be written defaulted to whatever unlinking left
+# behind. The rule now is fail CLOSED on a record that is damaged, absent
+# or uncorrectable, and fail OPEN only where a RECEIPT agrees.
 APPROVED_MARKER = CONFIG_DIR / "approved"
 # The first line of that file. `provisioning_mode._write_not_approved()`
 # writes the same word when it re-provisions a device — keep them in step.
 _APPROVAL_YES = "approved"
 _APPROVAL_NO = "not-approved"
+# Not a word in the file: what `_read_approval_record` returns when there
+# IS a file and it carries neither verdict — truncated, corrupt, or
+# unreadable. Distinct from None ("there is no file") so the log can say
+# which, and so a damaged record gets repaired rather than merely obeyed.
+_APPROVAL_DAMAGED = "damaged"
 
 # Self-upgrade (Feature 10). The satellite mirrors the server's
 # `satellite/` source tree on an `upgrade` frame, verifying each file body
@@ -884,6 +898,27 @@ class Satellite:
         # opens.
         self._voice_input_lock = threading.Lock()
         self._voice_input_started = False
+        # Latched when the core parks this device and the refusal CANNOT be
+        # written down. "Reset pairing" has to reach the microphone, and on
+        # a device whose config dir refuses writes it cannot reach it
+        # through the record — the record still says whatever it said
+        # before, so the next boot would come up listening. So it reaches
+        # it here instead: capture stops now and nothing reopens it for the
+        # rest of this process. See the `awaiting_approval` branch.
+        self._voice_gate_closed = False
+        # Set by `_note_session_accepted` when its own call is the one that
+        # opened the voice stack, and cleared by the mic thread when it
+        # repaints the ring. It is what keeps the mic thread's `resync()`
+        # to the ONE transition it exists for — "the person just clicked
+        # Approve, don't say idle until the wake word is armed". On the
+        # BOOT path nothing sets it, so the mic thread never repaints, and
+        # a ring already showing `no-server`, `no-microphone` or
+        # `startup-failed` — colours written straight to the hardware,
+        # which the controller's cached state knows nothing about — is
+        # left exactly where it was. Repainting those from the cache is
+        # how an approved satellite booting into a dead core ended up
+        # looking idle for the whole outage.
+        self._ring_handoff_pending = False
         # Set by the mic thread once the wake model is loaded, the mic is
         # calibrated and the wake loop is about to run — i.e. the first
         # moment the device can actually answer. The LED ring waits on
@@ -991,7 +1026,7 @@ class Satellite:
         if not self.cfg.mic_enabled:
             return False
         with self._voice_input_lock:
-            if self._voice_input_started:
+            if self._voice_input_started or self._voice_gate_closed:
                 return False
             try:
                 self._start_mic()
@@ -1027,6 +1062,41 @@ class Satellite:
             self._mic_thread = thread
             self._voice_input_started = True
             return True
+
+    def _close_voice_gate(self) -> None:
+        """Take the microphone away now, and keep it away for this process.
+
+        The escape hatch for the one case the record cannot cover: the core
+        has parked this device and `_write_approval_record` could not land
+        the refusal, so a restart would bring it back up listening from a
+        record nothing could correct. The gate is a boot-time gate
+        everywhere else — tearing capture down underneath a running wake
+        loop is a hazard of its own, and while the record CAN be written a
+        restart settles it properly — but "reset pairing does not reach the
+        microphone" is not an answer, so here it reaches it directly.
+
+        Stopping the capture stream starves the mic thread rather than
+        killing it: every consumer reads `raw_q.get(timeout=0.1)` and
+        `continue`s on `queue.Empty`, so the thread idles instead of
+        wedging, and no wake word can fire because no frame arrives. The
+        latch is what stops a later `ready` from reopening it — this device
+        needs a restart with a writable config dir before its microphone
+        means anything, and saying so is better than half-obeying the core.
+        """
+        with self._voice_input_lock:
+            if self._voice_gate_closed:
+                return
+            self._voice_gate_closed = True
+            self._stop_mic()
+        log.error(
+            "the core is not approving this device and the refusal could "
+            "not be written to %s, so a restart alone would bring it back "
+            "up listening. Capture has been stopped for the rest of this "
+            "process instead. This satellite will not answer its wake word "
+            "again — even if it is approved — until it is restarted with a "
+            "writable config dir.",
+            APPROVED_MARKER,
+        )
 
     def _request_async_shutdown(self) -> None:
         """Poke the asyncio side so `run`'s loop stops waiting on the network."""
@@ -3890,6 +3960,24 @@ class Satellite:
             self.fatal_error = f"wake-word model {self._wake_word!r}: {e}"
             _setup_status("startup-failed")
             self.shutdown_event.set()
+            # And poke the ASYNCIO side, which is the half that is asleep.
+            # `shutdown_event` is a threading.Event; the only thing waiting
+            # on it is the worker threads. `run()` is parked in
+            # `asyncio.wait({sender, receiver, shutdown_watch})`, and
+            # `shutdown_watch` waits on `_async_shutdown` — see the signal
+            # handler, which carries the same comment for the same reason.
+            # This used to be harmless: the mic thread started at BOOT, so
+            # a model that will not load failed before `run()` ever entered
+            # its session loop, `main()` returned non-zero and
+            # `Restart=on-failure` brought the satellite back. Now the
+            # thread can only start from the `ready` frame, so the failure
+            # lands inside a live, healthy session that nothing ends — and
+            # without this line `run()` never returns, systemd never
+            # restarts, and the room sits ONLINE on the dashboard holding
+            # the startup-failed colour and never hearing another word. A
+            # satellite that exits gets restarted; one that hangs is a
+            # brick with no keyboard port.
+            self._request_async_shutdown()
             return
 
         # Boot-time calibration. Mic gain (hardware ALSA PGA) runs
@@ -3911,9 +3999,24 @@ class Satellite:
         # does not resync when it is the call that opened the mic; this
         # does it instead, so the colour changes when the wake word works
         # and not a quarter of a minute earlier.
+        #
+        # ONLY for that handoff, though. `resync()` re-renders the
+        # controller's CACHED state, and the setup indicator writes some
+        # colours STRAIGHT to the hardware where the controller cannot see
+        # them: `no-server`, `no-microphone`, `startup-failed`. On the BOOT
+        # path — an already-approved satellite coming up while its core is
+        # down, which is the case this whole gate exists to keep working —
+        # `run()` says `no-server` once at about t+3 s and then relies on
+        # the ring holding it. An unconditional resync here landed ten
+        # seconds later and painted the cached `idle` (i.e. off) over the
+        # orange, and nothing ever said it again: the device listened
+        # through the whole outage looking exactly like a healthy one, on
+        # the only surface left when the network is what is broken.
         self._wake_armed.set()
         log.info("wake word armed (listening for %r)", self._wake_word)
-        self._leds.resync()
+        if self._ring_handoff_pending:
+            self._ring_handoff_pending = False
+            self._leds.resync()
 
         while not self.shutdown_event.is_set():
             # Wake-clip recording (Feature #5): the dashboard asked this
@@ -4368,8 +4471,8 @@ class Satellite:
                 # gated on. The socket closes cleanly after this frame, so
                 # the reconnect that follows is not counted as a failure
                 # either.
-                _forget_approved()
-                if self._voice_input_started:
+                recorded = _forget_approved()
+                if self._voice_input_started and recorded:
                     # The gate is a BOOT-time gate, and someone debugging
                     # this deserves to be told so rather than inferring it.
                     # Tearing capture down underneath a running wake loop is
@@ -4386,6 +4489,22 @@ class Satellite:
                         "from the next restart. Restart "
                         "domovoi-satellite to make it deaf now."
                     )
+                elif self._voice_input_started:
+                    # The refusal did NOT land on disk, so "deaf from the
+                    # next restart" is a promise this device cannot keep:
+                    # the record still says whatever it said before, and
+                    # the next boot would open the microphone again. A
+                    # reset pairing has to reach the microphone, so when it
+                    # cannot reach it through the record it reaches it
+                    # directly.
+                    self._close_voice_gate()
+                # A device that is NOT listening needs nothing done to it
+                # here even when the write failed: it is already shut, and
+                # the only frame that can reopen it is a `ready`, which is
+                # the core accepting it — i.e. the approval itself. The
+                # failed write is logged at ERROR by
+                # `_write_approval_record`; latching the gate on this path
+                # would only make a genuine approval need a restart.
                 _setup_status("awaiting-approval")
                 # The server sends the code that is ON FILE for this
                 # request, which is what the operator will be asked for.
@@ -4663,13 +4782,21 @@ class Satellite:
         listening since boot — resyncs right here, exactly as before.
         """
         _remember_approved()
+        # Hand the ring to the mic thread BEFORE starting it, not after:
+        # the thread reaches its repaint as soon as the wake model is
+        # loaded, and setting the flag on the way back would be a race the
+        # 10-15 s ONNX load only usually wins. Cleared again below when
+        # this call was not the one that started the stack, so a reconnect
+        # cannot leave it armed for a thread that is already past the check.
+        self._ring_handoff_pending = True
         if self._start_voice_input(fatal=False):
             log.info(
                 "session accepted — microphone open, wake word arming "
                 "(the ring stays on the setup colour until it is)"
             )
             return
-        if self.fatal_error is None:
+        self._ring_handoff_pending = False
+        if self.fatal_error is None and not self._voice_gate_closed:
             self._leds.resync()
 
     def _on_session_ended(self) -> None:
@@ -5289,26 +5416,58 @@ def _remember_approval_code(offered: object) -> str | None:
 
 
 def _read_approval_record() -> str | None:
-    """The core's last verdict about this device, or None for "never asked".
+    """The core's last verdict about this device — one of four answers.
 
-    Three states, not two, and the third is the one that matters. Every
-    satellite already installed in a house restarts into this code having
-    never run the line that writes this file — so "the file is absent"
-    cannot be allowed to mean "not approved", or an upgrade would make
-    three working rooms deaf at once. Absent means UNDECIDED, and
-    :func:`_was_ever_approved` settles it exactly once.
+    ``_APPROVAL_YES``      the first line is exactly ``approved``
+    ``_APPROVAL_NO``       the first line is exactly ``not-approved``
+    ``_APPROVAL_DAMAGED``  there is a file and it says neither
+    ``None``               there is no file
 
-    A file that exists but does not say `not-approved` reads as approved:
-    the first build of this gate wrote a sentence rather than a verdict,
-    and it only ever wrote it on an acceptance.
+    Absent means UNDECIDED, not "no". Every satellite already installed in
+    a house restarts into this code having never run the line that writes
+    this file, so "absent = not approved" would make three working rooms
+    deaf at once; :func:`_approval_decision` settles that case from the
+    receipts an older build left behind.
+
+    DAMAGED is the change, and it is a fail-CLOSED one. This used to read
+    "anything that is not ``not-approved`` is approved", for compatibility
+    with the first build of this gate (995c3cf), which wrote a sentence
+    instead of a verdict — a build that ``git merge-base --is-ancestor
+    995c3cf main`` says has never been on main, so no device in the field
+    can be carrying such a file. The rule cost something real: the write
+    truncates before it writes, and a Pi loses power mid-write far more
+    often than a server does — which happens exactly when someone
+    power-cycles a satellite that "isn't doing anything yet". A torn
+    ``not-approv`` therefore read as APPROVED and opened the microphone on
+    a device no core had ever accepted, which is F-V013 itself coming back
+    through the gate's own memory. A damaged record is now worth what it
+    is: no evidence. The device falls through to the receipts, which can
+    only ever speak for a unit that was previously in service.
     """
     try:
-        lines = APPROVED_MARKER.read_text(encoding="utf-8").strip().splitlines()
-    except (OSError, UnicodeDecodeError):
+        text = APPROVED_MARKER.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
-    if not lines or not lines[0].strip():
-        return None
-    return _APPROVAL_NO if lines[0].strip() == _APPROVAL_NO else _APPROVAL_YES
+    except (OSError, UnicodeDecodeError) as e:
+        # A record we cannot read is not a record that says yes.
+        log.warning(
+            "the approval record %s exists but cannot be read (%s) — "
+            "treating it as no evidence rather than as an acceptance",
+            APPROVED_MARKER, e,
+        )
+        return _APPROVAL_DAMAGED
+    stripped = text.strip()
+    first = stripped.splitlines()[0].strip() if stripped else ""
+    if first == _APPROVAL_YES:
+        return _APPROVAL_YES
+    if first == _APPROVAL_NO:
+        return _APPROVAL_NO
+    log.warning(
+        "the approval record %s begins %r, which is neither %r nor %r — "
+        "treating it as no evidence rather than as an acceptance",
+        APPROVED_MARKER, first[:32], _APPROVAL_YES, _APPROVAL_NO,
+    )
+    return _APPROVAL_DAMAGED
 
 
 def _prior_acceptance_evidence() -> str | None:
@@ -5353,46 +5512,160 @@ def _prior_acceptance_evidence() -> str | None:
     return None
 
 
-def _was_ever_approved() -> bool:
-    """Has a core ever accepted a session from this device?
+def _approval_record_can_be_rewritten() -> bool:
+    """Could this process land a NEW verdict over the one on disk?
 
-    The question the microphone is gated on at BOOT. Answered from disk
-    rather than from the session that is about to be opened, because a
-    satellite whose server is unreachable never gets an answer from the
-    core at all — and an already-approved one has to keep working through
-    exactly that, which is the whole point of the network-degraded canned
-    clip.
+    Not a question about the file's mode. :func:`_write_approval_record`
+    replaces the record by renaming a sibling over it, which needs write
+    permission on the DIRECTORY and none at all on the target — deliberate,
+    because provisioning runs as root (`domovoi-provisioning.service`,
+    `User=root`) while the client runs as the satellite user, so the
+    `not-approved` provisioning writes is root-owned 0644 and an ordinary
+    `open(..., 'w')` on it fails for the client forever.
 
-    An undecided device is settled here, once, from
-    :func:`_prior_acceptance_evidence`, and the answer is written down —
-    so the migration happens on the first boot into this code and never
-    again. Writing it down is not bookkeeping: it is what stops a later
-    `awaiting_approval` from being undone by the same evidence on the
-    next boot, which is how an admin's "reset pairing" would otherwise
-    have failed to reach the microphone.
+    What the answer is FOR: a `not-approved` on disk is evidence of the
+    core's verdict only if a later `approved` COULD have replaced it. On a
+    device where nothing can be written, the last word that happened to
+    land is not a decision — it is an accident of when the disk broke —
+    and obeying it is how a satellite gets pinned deaf for good with no way
+    back but a reflash.
     """
-    record = _read_approval_record()
-    if record is not None:
-        return record == _APPROVAL_YES
-    evidence = _prior_acceptance_evidence()
-    if evidence is None:
+    probe = APPROVED_MARKER.with_name(APPROVED_MARKER.name + ".probe")
+    try:
+        APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+    except OSError:
         return False
-    log.info(
-        "no approval record yet, but %s — so a core has accepted this "
-        "device before and the microphone may open at boot. Recording it.",
-        evidence,
-    )
-    _write_approval_record(_APPROVAL_YES)
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
     return True
 
 
-def _write_approval_record(verdict: str) -> None:
-    """Best-effort, like every other sidecar write: a read-only config dir
-    costs this device the gate's memory across a reboot, not its
-    microphone this boot."""
+def _approval_decision() -> tuple[bool, str]:
+    """May the microphone open at BOOT, and why — written out as a table.
+
+    Answered from disk rather than from the session about to be opened,
+    because a satellite whose server is unreachable never gets an answer
+    from the core at all, and an already-approved one has to keep working
+    through exactly that: the network-degraded canned clip is reached
+    THROUGH the wake word, so a deaf device cannot even say it is offline.
+
+    | record on disk        | receipts | microphone at boot          |
+    |-----------------------|----------|-----------------------------|
+    | `approved`            | —        | opens                       |
+    | `not-approved`, and   | —        | stays shut (the core said   |
+    |   the record can be   |          | so, and it could have been  |
+    |   rewritten           |          | corrected since)            |
+    | `not-approved`, and   | yes      | opens — previously in       |
+    |   it CANNOT be        |          | service, and nothing could  |
+    |   rewritten           |          | ever have corrected the no  |
+    | `not-approved`, and   | no       | stays shut                  |
+    |   it CANNOT be        |          |                             |
+    |   rewritten           |          |                             |
+    | damaged (torn,        | yes      | opens, and the record is    |
+    |   corrupt, unreadable)|          | repaired                    |
+    | damaged               | no       | stays shut — fail CLOSED    |
+    | absent (never         | yes      | opens, and the record is    |
+    |   decided)            |          | written, once               |
+    | absent                | no       | stays shut                  |
+
+    A receipt is a file only a core-ACCEPTED session can have produced
+    (:func:`_prior_acceptance_evidence`), so the fail-open half can never
+    speak for a device nobody has approved. Returns (open, reason).
+    """
+    record = _read_approval_record()
+
+    if record == _APPROVAL_YES:
+        return True, "its approval record says a core has accepted it"
+
+    if record == _APPROVAL_NO:
+        if _approval_record_can_be_rewritten():
+            return False, (
+                "its approval record says no core has accepted it — a "
+                "fresh unit, or one whose pairing an admin has reset"
+            )
+        # The one case where a decided NO is not a decision.
+        log.error(
+            "the approval record %s says %r and this device cannot write "
+            "that file or its directory, so an acceptance could never have "
+            "replaced it. Falling back to the receipts a core-accepted "
+            "session leaves behind rather than obeying a word nothing "
+            "could have corrected — a satellite pinned at 'not approved' "
+            "with no way back is worse than one the core re-parks.",
+            APPROVED_MARKER, _APPROVAL_NO,
+        )
+
+    # Absent, damaged, or an uncorrectable no: there is no usable verdict.
+    # Only a receipt can speak now, and a receipt can only ever say yes.
+    evidence = _prior_acceptance_evidence()
+    if evidence is None:
+        if record is None:
+            return False, (
+                "no core has ever accepted a session from it, and none of "
+                "the receipts a core-accepted session leaves behind is on "
+                "disk"
+            )
+        return False, (
+            "its approval record carries no verdict this device can act "
+            "on, and none of the receipts a core-accepted session leaves "
+            "behind is on disk, so the gate stays shut"
+        )
+    if _write_approval_record(_APPROVAL_YES):
+        return True, f"{evidence} — now recorded, so this is settled once"
+    return True, (
+        f"{evidence} (it could not be recorded, so this is re-derived at "
+        f"every boot)"
+    )
+
+
+def _was_ever_approved() -> bool:
+    """Has a core ever accepted a session from this device?
+
+    The question the microphone is gated on at BOOT. The reasoning is in
+    :func:`_approval_decision`; this logs the answer, because "why is this
+    room deaf" is the question someone will be asking when they read it.
+    """
+    opened, why = _approval_decision()
+    log.info(
+        "approval gate: the microphone %s at boot — %s",
+        "may open" if opened else "stays shut", why,
+    )
+    return opened
+
+
+def _write_approval_record(verdict: str) -> bool:
+    """Record the core's verdict, atomically. Returns whether it landed.
+
+    Atomic for two separate reasons, each of which has already cost
+    something:
+
+    * ``write_text`` TRUNCATES and then writes. A Pi that loses power in
+      that window leaves a first line that is a PREFIX of a verdict, and
+      that window is exactly when someone power-cycles a satellite that
+      "isn't doing anything yet". Writing a sibling and renaming means the
+      record is the old word or the new one, never half of either.
+    * A rename needs permission on the DIRECTORY, not on the target file.
+      Provisioning writes this record as root and hands it over with a
+      best-effort chown; when that chown fails the client can read the file
+      and not write it, and ``write_text`` would raise PermissionError for
+      the rest of the device's life — pinning a working satellite at
+      ``not-approved`` where even the receipts bridge could not reach it.
+      ``os.replace`` steps over that.
+
+    A failure is NOT quietly converted into some other verdict. This used
+    to unlink the record when it could not write ``not-approved``, which
+    left the device UNDECIDED — and the receipts bridge in this same file
+    then re-approved it on the next boot, undoing the refusal the write was
+    trying to record. Nothing is unlinked now: the caller is told, and the
+    two callers do something about it where it matters.
+    """
+    tmp = APPROVED_MARKER.with_name(APPROVED_MARKER.name + ".tmp")
     try:
         APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
-        APPROVED_MARKER.write_text(
+        tmp.write_text(
             f"{verdict}\n"
             "# Written by satellite/client.py. `approved` lets the "
             "microphone open at boot; `not-approved` keeps it shut until a "
@@ -5400,43 +5673,64 @@ def _write_approval_record(verdict: str) -> None:
             "decide again from scratch.\n",
             encoding="utf-8",
         )
+        os.replace(tmp, APPROVED_MARKER)
+        return True
     except OSError as e:
-        log.debug("could not persist the approval record %r: %s", verdict, e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         if verdict == _APPROVAL_NO:
-            # Second best: with the file gone the device is undecided
-            # again, which is still better than leaving a stale `approved`
-            # where the core has just said otherwise.
-            try:
-                APPROVED_MARKER.unlink(missing_ok=True)
-            except OSError:
-                pass
+            # The one write in this file whose failure WEAKENS the gate,
+            # so it is the one that is loudest.
+            log.error(
+                "could not record that the core is NOT approving this "
+                "device (%s): %s. The record on disk is unchanged, so this "
+                "refusal does not survive a restart on its own.",
+                APPROVED_MARKER, e,
+            )
+        else:
+            log.warning(
+                "could not record that the core accepted this device "
+                "(%s): %s. The microphone is open for this boot; at the "
+                "next one the gate falls back to the receipts an accepted "
+                "session leaves behind.",
+                APPROVED_MARKER, e,
+            )
+        return False
 
 
-def _remember_approved() -> None:
-    """Record that a session was accepted."""
+def _remember_approved() -> bool:
+    """Record that a session was accepted. True when the record says so."""
     if _read_approval_record() == _APPROVAL_YES:
-        return
-    _write_approval_record(_APPROVAL_YES)
+        return True
+    return _write_approval_record(_APPROVAL_YES)
 
 
-def _forget_approved() -> None:
+def _forget_approved() -> bool:
     """The core says this device is waiting for approval, so it is not
-    approved — whatever a record from an earlier life says.
+    approved — whatever a record from an earlier life says. Returns
+    whether the refusal is now on disk.
 
     Written as an explicit `not-approved` rather than deleted, because
     deleting it would leave the device UNDECIDED and the upgrade bridge in
     :func:`_prior_acceptance_evidence` would cheerfully re-approve it from
     a synced-sha sidecar its old core left behind. The negative is what
     makes an admin's "reset pairing" reach the microphone on the next
-    boot, and makes it stay reached.
+    boot, and makes it stay reached. There is no deletion fallback for the
+    same reason: a refusal that cannot be written must not silently become
+    the one state the receipts are allowed to override.
 
-    A mic already open in THIS process is left alone: tearing capture down
-    underneath a running wake loop is its own hazard, and the device
-    cannot transmit anyway (the core closed the socket). See
-    docs/SECURITY_PRIVACY.md — the gate is a boot-time gate."""
+    A mic already open in THIS process is left alone WHEN the refusal
+    landed: tearing capture down underneath a running wake loop is its own
+    hazard, the device cannot transmit anyway (the core closed the
+    socket), and the restart settles it. When the refusal did NOT land the
+    caller stops capture instead — see
+    :meth:`Satellite._close_voice_gate` — because there is no restart that
+    would settle it. See docs/SECURITY_PRIVACY.md."""
     if _read_approval_record() == _APPROVAL_NO:
-        return
-    _write_approval_record(_APPROVAL_NO)
+        return True
+    return _write_approval_record(_APPROVAL_NO)
 
 
 # Set once per process when an unpinned device meets a core that has no

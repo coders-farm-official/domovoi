@@ -911,17 +911,38 @@ def _write_not_approved() -> None:
     """Tell the client this device has not been approved by the core it is
     now pointed at. Best-effort: a failure here costs the gate a boot, not
     a provision, and the core still parks the device either way."""
+    tmp = APPROVED_MARKER_PATH.with_name(APPROVED_MARKER_PATH.name + ".tmp")
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        APPROVED_MARKER_PATH.write_text(
+        # Written to a sibling and renamed, exactly as the client writes
+        # it (`client._write_approval_record`). A plain write truncates
+        # first, and a customer who power-cycles a Pi that "isn't doing
+        # anything yet" can leave a first line that is a PREFIX of the
+        # verdict. The client reads anything that is neither word as no
+        # evidence at all and keeps the microphone shut, so a torn record
+        # is not dangerous — but it is also not informative, and a rename
+        # costs nothing.
+        tmp.write_text(
             f"{APPROVAL_NOT_APPROVED}\n"
             "# Written by provisioning: a fresh pairing token is a fresh "
             "identity, so this device must be approved again before its "
             "microphone opens at boot.\n",
             encoding="utf-8",
         )
+        os.replace(tmp, APPROVED_MARKER_PATH)
+        # Best-effort, and it no longer decides anything: this file is
+        # written as root and read by the satellite user, and when the
+        # chown fails the client used to be unable to rewrite it for the
+        # life of the device — a working satellite pinned at "not
+        # approved". The client replaces the record by rename now, which
+        # needs the DIRECTORY and not the file, so a failed chown here
+        # costs the record nothing.
         give_to_satellite_user(APPROVED_MARKER_PATH)
     except OSError as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         log.warning("could not reset the approval record: %s", e)
 
 

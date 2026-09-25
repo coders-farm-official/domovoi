@@ -923,6 +923,14 @@ a **boot-time** gate and the edges matter:
   `not-approved`. The core is authoritative: an `awaiting_approval` answer
   writes `not-approved`, and re-provisioning a device writes it too, so a
   re-homed unit is deaf again on its next boot.
+* **A file on an SD card is not a source of truth, and the gate does not
+  treat it as one.** The record is written to a sibling and renamed over
+  the old one, so a power cut mid-write leaves the previous verdict rather
+  than half of the new one. A record that says neither word — torn,
+  corrupt, unreadable — is read as *no evidence at all* and the microphone
+  stays shut, unless the device also carries a receipt that only a
+  core-accepted session can have produced. Fail closed on damage; fail
+  open only where a receipt agrees.
 * A device that is **already listening** when its core parks it (an admin
   pressing **Reset pairing** while it is up) keeps its microphone open for
   the rest of that boot. Nothing it hears can go anywhere — the core has
@@ -930,7 +938,11 @@ a **boot-time** gate and the edges matter:
   restarts. Tearing capture down underneath a running wake loop is a
   hazard of its own and buys nothing that the closed socket has not
   already bought. **Reboot the unit (or restart `domovoi-satellite`) if
-  you want it deaf immediately.**
+  you want it deaf immediately.** The one exception is a device whose
+  config dir refuses writes: there the refusal cannot be recorded, so a
+  restart would not settle it, and capture is stopped immediately instead.
+  That unit logs at ERROR and will not answer its wake word again — even
+  if you approve it — until it restarts with a writable config dir.
 * A satellite already installed when this landed had no record to read, so
   the client accepts the receipts the old code left — a synced-sha
   sidecar, a pending-upgrade marker, a dashboard-pushed wake word or voice
