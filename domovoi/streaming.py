@@ -271,7 +271,7 @@ from sqlalchemy import text
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
-from domovoi.clients.whisper import get_whisper_client
+from domovoi.clients.whisper import SttUnavailableError, get_whisper_client
 from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
 from domovoi.db.repositories import (
@@ -1486,6 +1486,43 @@ class StreamSession:
             "I'm having trouble hearing you over the background noise — "
             "give it another try."
         )
+        await self._speak_system_line(text, matched_handler="noisy_capture")
+
+    async def _respond_stt_unavailable(self, error: SttUnavailableError) -> None:
+        """Speech recognition failed to load at boot (see
+        domovoi/clients/whisper.py), so there is no transcript to route.
+
+        Say so out loud rather than ending the turn in silence — a room
+        that just goes quiet after its wake word reads as a broken
+        satellite, when the fix is a setting on the Domovoi server. Like
+        the noisy-capture apology this is a system message: no router, no
+        ``intents_log`` row, no follow-up armed. The turn always ends with
+        ``response_end`` — including when TTS fails too — so the Pi's mic
+        is never left parked."""
+        log.warning(
+            "stream %s: speech recognition is unavailable — dropping the "
+            "utterance (fix the Whisper settings and restart the core): %s",
+            self.room_id, str(error).splitlines()[0] if str(error) else "",
+        )
+        text = (
+            "Sorry, I can't understand speech right now. Speech recognition "
+            "didn't start on the Domovoi server. The Models page in the "
+            "dashboard says why."
+        )
+        if not await self._speak_system_line(text, matched_handler="stt_unavailable"):
+            await self._safe_send_text({
+                "type": "response_end",
+                "interrupted": True,
+                "expect_followup": False,
+            })
+
+    async def _speak_system_line(self, text: str, *, matched_handler: str) -> bool:
+        """Speak a fixed line that isn't an intent's answer (the
+        noisy-capture apology, the STT-unavailable notice): response_start,
+        the audio, response_end. Returns False when TTS failed — an
+        ``error`` frame has been sent and the caller decides how to end
+        the turn; True otherwise (including a Pi that went away
+        mid-broadcast, where there is nobody left to tell)."""
         try:
             tts = get_tts_client()
             n_engine, n_voice = await resolve_voice(
@@ -1495,14 +1532,17 @@ class StreamSession:
                 await tts.synthesize(text, engine=n_engine, voice=n_voice)
             )
         except Exception as e:
-            log.warning("stream %s: noisy-capture TTS failed: %s", self.room_id, e)
+            log.warning(
+                "stream %s: %s TTS failed: %s",
+                self.room_id, matched_handler.replace("_", "-"), e,
+            )
             await self._safe_send_text({"type": "error", "message": str(e)})
-            return
+            return False
 
         await self._safe_send_text({
             "type": "response_start",
             "text": text,
-            "matched_handler": "noisy_capture",
+            "matched_handler": matched_handler,
             "matched_path": "system",
             "session_id": str(self.session_id) if self.session_id else None,
             "online": True,
@@ -1512,12 +1552,13 @@ class StreamSession:
             try:
                 await self.ws.send_bytes(chunk)
             except Exception:
-                return  # Pi went away mid-broadcast
+                return True  # Pi went away mid-broadcast
         await self._safe_send_text({
             "type": "response_end",
             "interrupted": False,
             "expect_followup": False,
         })
+        return True
 
     async def _process_utterance(
         self,
@@ -1529,7 +1570,14 @@ class StreamSession:
         interrupted = False
         response = None
         try:
-            transcript = await get_whisper_client().transcribe(pcm_bytes)
+            try:
+                whisper = get_whisper_client()
+            except SttUnavailableError as e:
+                # Whisper didn't load at boot. Explain out loud and end the
+                # turn; the helper sends its own response_end.
+                await self._respond_stt_unavailable(e)
+                return
+            transcript = await whisper.transcribe(pcm_bytes)
             # If the Pi played a wake greeting this turn, the array's AEC may
             # have let it bleed into the capture ("Hi there. Say something
             # mean." → greeting + command). Strip a known leading greeting so

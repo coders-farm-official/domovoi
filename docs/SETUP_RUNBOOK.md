@@ -216,10 +216,11 @@ That clears the password and prints a fresh setup code.
 
 **If your server has no NVIDIA GPU, do this before anything else.** Open
 [CPU_HOST.md](CPU_HOST.md) and apply its settings table — four values in
-the dashboard's gear menu. The default `whisper_device = cuda` will fail
-STT at startup on a machine without one, and the second-most-common
-mistake (setting `device = cpu` but leaving `compute_type = float16`)
-produces a system that works and feels broken.
+the dashboard's gear menu. The default `whisper_device = cuda` can't load
+on a machine without one: the core then falls back to `small.en` on the
+CPU (`whisper_cpu_fallback_model`) and the Models page shows a banner until
+you set the CPU values yourself. `whisper_compute_type` defaults to `auto`,
+which follows the device, so setting `device = cpu` is enough.
 
 Whisper settings are restart-tier: change them, then restart the core.
 Ollama model settings are hot and take effect on the next turn.

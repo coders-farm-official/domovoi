@@ -48,7 +48,7 @@ from domovoi.db.repositories import SatelliteApprovalRepository
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi.clients.ollama import get_ollama_client  # noqa: E402
 from domovoi.clients.tts import get_tts_client  # noqa: E402
-from domovoi.clients.whisper import get_whisper_client  # noqa: E402
+from domovoi.clients.whisper import load_whisper_client, stt_status  # noqa: E402
 from domovoi.config import settings  # noqa: E402
 from domovoi.connectivity import ConnectivityProbe  # noqa: E402
 from domovoi.db.session import session_scope  # noqa: E402
@@ -194,32 +194,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     install_signal_handlers()
     _register_core_reapply_hooks()
 
-    # Pre-warm the clients so first-request latency is bounded.
-    # In stub mode these are instant; with real clients this blocks for
-    # Whisper load (~30 s on large-v3).
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.
     await git_version.capture_boot_state()
-
-    log.info("warming clients (use_stubs=%s)", settings.use_stubs)
-    get_ollama_client()
-    get_tts_client()
-    if not settings.use_stubs:
-        # Whisper is the slow one; load before accepting traffic.
-        get_whisper_client()
-
-    # Seed the voice registry from the live TTS settings if it's empty, so
-    # the per-voice clip renderer and the streaming voice resolver have a
-    # default to work from. DB-only + idempotent — safe under stubs.
-    try:
-        await seed_voices()
-    except Exception as e:
-        log.warning("voice registry seed raised: %s", e)
 
     # First-run admin setup code (design §7.2): while no admin credential
     # exists, write the 8-word code to ~/.domovoi/setup-code.txt and print
     # it to this console — proof of possession of the server for
     # POST /api/auth/setup. Deleted automatically once setup completes.
+    # Runs BEFORE any model loads: the admin claim is how a bad model
+    # setting gets fixed from the dashboard, so nothing that can fail or
+    # hang in a model load may stand between a fresh box and its code.
     try:
         await admin_auth_mod.ensure_setup_code_if_unclaimed()
     except Exception as e:
@@ -228,11 +213,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Household device token (device tier): make sure the single row
     # exists and mirror it to ~/.domovoi/device-token.txt (0600) next to
     # the setup code. The web process runs the same hook; whichever boots
-    # first mints, the other reads it back.
+    # first mints, the other reads it back. Ahead of the model loads for
+    # the same reason as the setup code.
     try:
         await admin_auth_mod.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # Pre-warm the clients so first-request latency is bounded.
+    # In stub mode these are instant; with real clients this blocks for
+    # Whisper load (~30 s on large-v3).
+    log.info("warming clients (use_stubs=%s)", settings.use_stubs)
+    get_ollama_client()
+    get_tts_client()
+    # Whisper is the slow one; load before accepting traffic. Never fatal:
+    # a config that can't load falls back to whisper_cpu_fallback_model on
+    # cpu, and failing that the core runs without speech recognition (the
+    # Models page shows why) — see domovoi/clients/whisper.py.
+    load_whisper_client()
+
+    # Seed the voice registry from the live TTS settings if it's empty, so
+    # the per-voice clip renderer and the streaming voice resolver have a
+    # default to work from. DB-only + idempotent — safe under stubs.
+    try:
+        await seed_voices()
+    except Exception as e:
+        log.warning("voice registry seed raised: %s", e)
 
     # Enabled greeting texts, for stripping a bled-in wake greeting out of
     # transcripts (greeting_filter). Refreshed by the regenerate endpoint
@@ -643,6 +649,13 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
+
+    ``stt`` is the speech-recognition state alone (``ok`` / ``fallback`` /
+    ``unavailable`` / ...; see ``clients.whisper.stt_status``). The core
+    is healthy either way — it deliberately boots without STT rather than
+    not at all — so this is a signal for the installer and tray, never a
+    503. The details (models, the load error) are on
+    ``/v1/admin/hardware``.
     """
     try:
         async with session_scope() as s:
@@ -655,6 +668,7 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
         "status": "ok",
         "bot_name": settings.bot_name,
         "use_stubs": "true" if settings.use_stubs else "false",
+        "stt": stt_status()["state"],
     }
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
@@ -3531,6 +3545,64 @@ async def admin_get_config(
     }
 
 
+_WHISPER_PAIR = ("whisper_device", "whisper_compute_type")
+
+
+def _guard_whisper_pair(
+    persist: dict[str, Any],
+    restart_required: list[str],
+    rejected: dict[str, str],
+) -> dict[str, str]:
+    """Whisper's device and compute type are one decision: a GPU compute
+    type (float16) can't run on cpu, and a core that boots on that pair
+    has no configured speech recognition. Checked against the pair as the
+    NEXT boot will read it — both fields are restart-tier, so the live
+    singleton still holds the boot values after an earlier save.
+
+    * The write names a compute type that doesn't fit: refuse it, and the
+      device beside it in the same write, so the pair is never half-saved.
+    * The write changes only the device and the compute type already
+      saved can't run there: set the compute type to ``auto`` (it follows
+      the device) and say so — picking cpu in the dashboard is exactly how
+      float16 used to get stranded on a CPU.
+
+    Mutates the three collections in place; returns ``{field: note}`` for
+    what it adjusted."""
+    from domovoi.clients.whisper import compute_pair_problem
+    from domovoi.config_env_writer import next_boot_value
+
+    if not any(name in persist for name in _WHISPER_PAIR):
+        return {}
+
+    def _pending(name: str) -> str:
+        if name in persist:
+            return str(persist[name])
+        return str(next_boot_value(name, getattr(settings, name)))
+
+    device = _pending("whisper_device")
+    compute = _pending("whisper_compute_type")
+    problem = compute_pair_problem(device, compute)
+    if problem is None:
+        return {}
+    if "whisper_compute_type" in persist:
+        for name in _WHISPER_PAIR:
+            if name in persist:
+                persist.pop(name)
+                if name in restart_required:
+                    restart_required.remove(name)
+                rejected[name] = problem
+        return {}
+    persist["whisper_compute_type"] = "auto"
+    if "whisper_compute_type" not in restart_required:
+        restart_required.append("whisper_compute_type")
+    return {
+        "whisper_compute_type": (
+            f"set to auto — the saved {compute} can't run on {device}; "
+            "auto follows the device"
+        )
+    }
+
+
 class _AdminConfigUpdateBody(BaseModel):
     # CORE-7: a config push is a handful of keys, not a payload. The
     # bound is on the NUMBER of keys (pydantic's max_length for a dict);
@@ -3619,6 +3691,9 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
             if spec.tier == "reapply":
                 reapply_fields.append(name)
 
+        # Cross-field: a Whisper device + compute type that can't load.
+        normalized = _guard_whisper_pair(persist, restart_required, rejected)
+
         # Persist every accepted change (incl. restart-tier) to .env.
         if persist:
             try:
@@ -3651,6 +3726,9 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
         "applied": applied,
         "restart_required": restart_required,
         "rejected": rejected,
+        # Accepted-but-adjusted fields and why (today only the Whisper
+        # compute type following a device change); {} when nothing was.
+        "normalized": normalized,
     }
 
 
@@ -3668,6 +3746,10 @@ async def admin_hardware() -> dict[str, Any]:
     absent) → empty ``gpus``; psutil missing → null cpu/ram/disk. The page's
     fit math treats a missing GPU set as "no VRAM denominator" and labels its
     badges as estimates.
+
+    ``stt`` is what speech recognition actually loaded at boot next to what
+    was configured (``clients.whisper.stt_status``): the Models page shows
+    a banner when it is running on the cpu fallback or not at all.
     """
     from domovoi.handlers.homelab import _query_gpus
 
@@ -3719,7 +3801,7 @@ async def admin_hardware() -> dict[str, Any]:
     except Exception as e:  # psutil missing or a probe raised — degrade.
         log.warning("hardware probe (psutil) failed: %s", e)
 
-    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk}
+    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk, "stt": stt_status()}
 
 
 class _AdminPlayPlaylistBody(BaseModel):

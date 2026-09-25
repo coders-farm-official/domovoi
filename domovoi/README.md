@@ -75,10 +75,12 @@ load:
 pip install -e ".[real-clients,cuda]"
 ```
 
-Without an NVIDIA GPU, skip it and set `whisper_device=cpu` +
-`whisper_compute_type=int8` — see
+Without an NVIDIA GPU, skip it and set `whisper_device=cpu`
+(`whisper_compute_type=auto` then runs int8) — see
 [docs/CPU_HOST.md](../docs/CPU_HOST.md). A `cuda` device on a machine that
-can't do CUDA now fails at startup with a message naming the fix.
+can't do CUDA logs a message naming the fix and starts on
+`whisper_cpu_fallback_model` (`small.en`, cpu, int8) instead; the Models
+page shows a banner until the settings are fixed.
 
 ### Voice-profile install (Windows quirk)
 

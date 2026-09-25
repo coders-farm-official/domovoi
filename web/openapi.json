@@ -9474,7 +9474,7 @@
           "models"
         ],
         "summary": "Set Active",
-        "description": "Switch the model in a role slot. Writes the mapped config field through\nthe Domovoi server (validate \u2192 persist \u2192 live-apply where the tier allows).\n``ollama_model``/``ollama_tool_model`` apply instantly (reapply);\n``whisper_model`` needs a restart (surfaced in ``restart_required``).\n\nGuard rail: refuse to activate an Ollama model that isn't installed \u2014\nthe caller should pull it first. Whisper is exempt (faster-whisper cold-\ndownloads from HuggingFace on first use; the page offers an explicit\npre-fetch, but activation without it is still valid).",
+        "description": "Switch the model in a role slot. Writes the mapped config field through\nthe Domovoi server (validate \u2192 persist \u2192 live-apply where the tier allows).\n``ollama_model``/``ollama_tool_model`` apply instantly (reapply);\n``whisper_model`` needs a restart (surfaced in ``restart_required``).\n\nGuard rail: refuse to activate an Ollama model that isn't installed \u2014\nthe caller should pull it first. Whisper is exempt (faster-whisper cold-\ndownloads from HuggingFace on first use; the page offers an explicit\npre-fetch, but activation without it is still valid).\n\nFor ``stt``, ``compute_type`` (optional) is written with the model as\n``whisper_compute_type`` in the same config write, so the core checks\nit against the device and refuses the pair together (``rejected``).",
         "operationId": "set_active_api_models_active_post",
         "requestBody": {
           "content": {
@@ -14292,6 +14292,19 @@
             "maxLength": 200,
             "minLength": 1,
             "title": "Model"
+          },
+          "compute_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compute Type"
           }
         },
         "type": "object",

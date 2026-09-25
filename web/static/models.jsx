@@ -145,6 +145,48 @@ const HardwarePanel = ({ data, loading }) => {
   );
 };
 
+/* ---- speech-to-text status ------------------------------------- */
+/* Boot never stops on a Whisper that won't load: it drops to the CPU
+ * fallback model, and failing that runs with no speech recognition at all
+ * (satellites then hear a spoken "can't understand speech"). This says
+ * which, from the `stt` block of /api/models/hardware, and stays out of
+ * the way when the configured Whisper loaded. */
+const _sttDesc = (m) => (m ? `${m.model} · ${m.device} · ${m.compute_type}` : '—');
+
+const SttStatusBanner = ({ stt }) => {
+  if (!stt || (stt.state !== 'fallback' && stt.state !== 'unavailable')) return null;
+  const off = stt.state === 'unavailable';
+  const c = stt.configured || {};
+  const configured = { model: c.model, device: c.device, compute_type: c.compute_type_resolved };
+  const detail = off ? stt.error : stt.fallback_reason;
+  return (
+    <div role="status"
+         style={{ padding: '10px 14px', borderRadius: 'var(--r-md)', fontSize: 12, lineHeight: 1.5,
+                  color: 'var(--fg)', background: off ? 'var(--err-soft)' : 'var(--warn-soft)',
+                  border: `1px solid var(${off ? '--err' : '--warn'})` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, marginBottom: 4 }}>
+        <Icon name="alert-triangle" size={14}/>
+        {off ? 'speech recognition is off' : 'speech recognition is on the cpu fallback'}
+      </div>
+      <div>
+        {off
+          ? <>Whisper didn't load at startup, so satellites can't be understood. Configured: </>
+          : <>The configured Whisper didn't load at startup; <span className="mono">{_sttDesc(stt.loaded)}</span> is
+              transcribing instead. Configured: </>}
+        <span className="mono">{_sttDesc(configured)}</span>.
+        {' '}Fix the Speech-to-text settings (Configuration → Advanced), then restart the Domovoi server.
+      </div>
+      {detail && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--fg-muted)' }}>load error</summary>
+          <pre className="mono" style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', fontSize: 11,
+                                          color: 'var(--fg-muted)' }}>{detail}</pre>
+        </details>
+      )}
+    </div>
+  );
+};
+
 /* ---- active model rows ---------------------------------------- */
 
 const ROLE_LABEL = { qa: 'Q&A', tool: 'Tool routing', vision: 'Vision', stt: 'Speech-to-text' };
@@ -300,18 +342,28 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
 
 /* ---- STT catalog rows ---------------------------------------- */
 
+/* A row runs at its compute type; 'auto' follows the device (float16 on a
+ * GPU, int8 on the CPU), the same rule the core applies. */
+const _resolveCompute = (compute, device) =>
+  (!compute || compute === 'auto') ? (device === 'cpu' ? 'int8' : 'float16') : compute;
+
 const SttRow = ({ m, hw, active, onSelect }) => {
-  const isActive = active === m.name;
+  // `active` is the stt role row: model plus the device/compute pair (an
+  // older core sends no pair, and then the name alone decides).
+  const isActive = !!active && active.model === m.name
+    && (active.compute_type == null
+        || _resolveCompute(m.compute, active.device) === _resolveCompute(active.compute_type, active.device));
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       <span className="mono" style={{ fontSize: 13, fontWeight: 500, minWidth: 130 }}>{m.name}</span>
-      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.compute}</span>
+      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+            title={m.compute === 'auto' ? 'float16 on a GPU, int8 on the CPU' : undefined}>{m.compute}</span>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', flex: 1, minWidth: 140 }}>{m.accuracy}</span>
       <FitBadge estGb={m.est_vram_gb} hw={hw}/>
       {isActive
         ? <Pill tone="live">active</Pill>
-        : <Button variant="secondary" onClick={() => onSelect(m.name)}>Use (restart)</Button>}
+        : <Button variant="secondary" onClick={() => onSelect(m)}>Use (restart)</Button>}
     </div>
   );
 };
@@ -387,7 +439,7 @@ const ModelsPanel = () => {
   const catalogByName = {};
   catOllama.forEach((m) => { catalogByName[m.name] = m; });
 
-  const sttActive = (roles.find((r) => r.role === 'stt') || {}).model;
+  const sttActive = roles.find((r) => r.role === 'stt');
   const whisperNames = Array.from(new Set(catWhisper.map((m) => m.name)));
 
   // Models with a live/recent pull job, so catalog cards show "installing…".
@@ -404,12 +456,19 @@ const ModelsPanel = () => {
     }
   };
 
-  const switchModel = (r, model) =>
+  // `compute` (STT catalog rows only) goes with the model, so a row that
+  // says int8 really runs int8. The core refuses a pair the device can't
+  // run and lists it in `rejected` — say that rather than "switched".
+  const switchModel = (r, model, compute) =>
     guard(async () => {
-      const res = await apiPost('/api/models/active', { role: r.role, model });
+      const body = { role: r.role, model };
+      if (compute) body.compute_type = compute;
+      const res = await apiPost('/api/models/active', body);
       await refreshActive();
       return res;
     }, (res) => {
+      const rejected = Object.entries((res && res.rejected) || {});
+      if (rejected.length) return `not saved: ${rejected.map(([k, v]) => `${k} (${v})`).join('; ')}`;
       const restart = res && res.restart_required && res.restart_required.length;
       return restart ? `saved — restart the Domovoi server to apply ${model}` : `switched to ${model}`;
     });
@@ -443,6 +502,7 @@ const ModelsPanel = () => {
 
   return (
     <React.Fragment>
+      <SttStatusBanner stt={hwData && hwData.stt}/>
       <HardwarePanel data={hw} loading={hwLoading}/>
 
       <Card title="Active models" sub="One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.">
@@ -495,10 +555,10 @@ const ModelsPanel = () => {
       </Card>
 
       <Card title="Speech-to-text (Whisper)"
-            sub="Selecting a size writes whisper_model — a restart-tier change. int8 halves VRAM at near-identical accuracy.">
+            sub="Selecting a row writes whisper_model and its compute type — a restart-tier change. auto runs float16 on a GPU and int8 on the CPU; int8 halves VRAM at near-identical accuracy.">
         {catWhisper.map((m, i) => (
           <SttRow key={`${m.name}-${m.compute}-${i}`} m={m} hw={hw} active={sttActive}
-                  onSelect={(name) => switchModel({ role: 'stt' }, name)}/>
+                  onSelect={(row) => switchModel({ role: 'stt' }, row.name, row.compute)}/>
         ))}
       </Card>
 

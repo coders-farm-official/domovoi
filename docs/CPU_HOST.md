@@ -20,7 +20,7 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | Setting | Default (NVIDIA) | CPU host |
 |---|---|---|
 | `whisper_device` | `cuda` | **`cpu`** |
-| `whisper_compute_type` | `float16` | **`int8`** |
+| `whisper_compute_type` | `auto` (runs `float16`) | `auto` (runs **`int8`**) — or `int8` explicitly |
 | `whisper_model` | `large-v3` | **`small.en`**, or `medium` if you need the accuracy |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
@@ -33,6 +33,16 @@ restart-tier (the model loads once at boot). The Ollama model settings are
 hot — they take effect on the next turn with no restart, which makes them
 cheap to experiment with. Try a model, say something, try another.
 
+**Forgot to change them?** The core still starts. When the configured
+Whisper can't load — `cuda` on a machine with no NVIDIA GPU is the usual
+reason — it retries with `whisper_cpu_fallback_model` (default `small.en`)
+on `cpu` at `int8`, which is this page's recommended setup anyway, and the
+dashboard's **Models** page shows a banner saying so. If even that fails,
+the core runs without speech recognition (satellites answer "I can't
+understand speech right now") and the banner shows the load error. Either
+way the first-run setup code is written first, so you can always sign in
+and fix the settings.
+
 ---
 
 ## Why these values
@@ -40,13 +50,16 @@ cheap to experiment with. Try a model, say something, try another.
 ### `whisper_compute_type = int8`, not `float16`
 
 `float16` is a GPU compute type. CTranslate2 (the engine under
-faster-whisper) will either fall back or crawl if you ask a CPU for it.
-`int8` is the CPU quantization, and on any recent AMD or Intel core with
-AVX2 — AVX-512 better still — it's genuinely fast.
+faster-whisper) refuses it on a CPU. `int8` is the CPU quantization, and on
+any recent AMD or Intel core with AVX2 — AVX-512 better still — it's
+genuinely fast.
 
-**This is the single most common CPU-host misconfiguration.** Setting
-`whisper_device = cpu` and leaving `compute_type` at `float16` produces a
-system that technically works and feels broken.
+The default, `auto`, follows the device: `int8` on `cpu`, `float16` on
+`cuda`. So setting `whisper_device = cpu` is enough. The dashboard also
+refuses `cpu` together with a GPU type, and saving `cpu` over a saved
+`float16` resets the compute type to `auto` (the save says so). Only a
+hand-edited `.env` can still pair them, and then startup falls back as
+described above.
 
 ### A smaller Whisper model
 
