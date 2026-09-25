@@ -1,32 +1,45 @@
-"""The document editors must survive the refresh that drops the bearer.
+"""The document editors must survive a browser that is missing a credential.
 
+Neither credential the dashboard mutates with survives a page load intact.
 The admin Bearer lives in the dashboard's memory only (web/backend/api/
-auth.py); the ``HttpOnly`` cookie survives a reload and renders GET state.
-So an admin who refreshes is silently read-only until the first write, and
-every document write is ADMIN tier (``web/backend/api/documents.py`` —
-``PUT /text``, ``PUT /sheet``, ``/create``, ``/delete``, ``/download-zip``,
-``/upload``, ``/drawings/write``).
+auth.py) while the ``HttpOnly`` cookie survives a reload and renders GET
+state, so an operator who refreshes is silently read-only until the first
+write; and a browser that was never paired (or whose household token was
+rotated) holds no ``X-Device-Token`` either. Either way the file OPENS and
+only Save is refused.
+
+Since 2026-09-24 the two refusals differ, and so must the prompt:
+SAVING a document is DEVICE tier (``PUT /text``, ``PUT /sheet``,
+``/create``, ``/upload``, ``/drawings/write`` — a household token is
+enough), while ``/delete`` and ``/download-zip`` stay ADMIN tier. A
+device-tier refusal has to open the PAIRING modal and an admin-tier one
+the sign-in; offering the admin password to somebody whose browser simply
+needs pairing is a dead end.
 
 ``data.js`` ``_sendWithAuthRetry`` exists for exactly that: a 401/403 on a
-mutation with a replayable body opens the sign-in and REPLAYS the request
-once a bearer exists. The text editor never reached it. ``.txt`` does not
-open the markdown editor — ``files.jsx`` routes ``.md``/``.markdown`` to
-'doc' and everything else to 'text' — and ``TextEditorOverlay``'s Save was
-a bare ``fetch()``. One red PUT, no prompt, no replay, the typing lost.
+mutation with a replayable body opens the right prompt and REPLAYS the
+request once the missing credential exists. The text editor never reached
+it. ``.txt`` does not open the markdown editor — ``files.jsx`` routes
+``.md``/``.markdown`` to 'doc' and everything else to 'text' — and
+``TextEditorOverlay``'s Save was a bare ``fetch()``. One red PUT, no
+prompt, no replay, the typing lost.
 
 What this module pins:
 
 * the transport — no ``web/static`` mutation may hand-build its request;
   apiFetch / apiUpload / apiFetchRaw are the only ways out (the exact
   root cause, as a grep that cannot be argued with);
-* the retry — a cookie-only 403 on a PUT with a JSON body opens the LOGIN
-  (not the pairing modal), replays ONCE, and the replay carries the fresh
-  bearer and the identical body;
-* the words — a dismissed sign-in is CANCELLED with the work still in the
-  buffer, a prompt still on screen gets silence, and a refusal that
-  survived a fresh bearer is a visible failure carrying the detail;
+* the routing — a DEVICE-tier cookie-only 403 (a document save) opens the
+  PAIRING modal, an ADMIN-tier one (a delete, a zip) opens the LOGIN, and
+  neither ever opens the other;
+* the retry — each replays ONCE, carrying the credential the first attempt
+  lacked and the identical body;
+* the words — a dismissed prompt is CANCELLED with the work still in the
+  buffer and names which credential was wanted, a prompt still on screen
+  gets silence, and a refusal that survived a fresh credential is a
+  visible failure carrying the detail;
 * the editors — ``TextEditorOverlay`` driven for real: type, press Save,
-  sign in at the prompt, and the save completes with the typed text;
+  pair at the prompt, and the save completes with the typed text;
 * the layer — a toast fired from inside an editor has to be ABOVE the
   opaque full-screen overlay that fired it, or the editor says nothing at
   all (which is what "pressing Save did nothing" actually was).
@@ -53,13 +66,15 @@ INTERACT_HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = "web/static/components.jsx"
 
 # The ADMIN tier's cookie-only refusal, verbatim from
-# domovoi/admin_auth.py require_admin_mutation — and verbatim from the
-# body the fullstack harness returned for PUT /api/documents/text/notes.txt.
+# domovoi/admin_auth.py require_admin_mutation. What POST
+# /api/documents/delete and /download-zip answer a cookie-only browser.
 ADMIN_COOKIE_ONLY = (
     "mutations require Authorization: Bearer — "
     "the dashboard cookie only renders GET state"
 )
-# The DEVICE tier's, which must route to the PAIRING modal instead.
+# The DEVICE tier's, verbatim from require_device, which must route to the
+# PAIRING modal instead. Since 2026-09-24 this is what a SAVE answers —
+# PUT /api/documents/text/{p} and the rest of the editors' writes.
 DEVICE_COOKIE_ONLY = (
     "X-Device-Token required — the dashboard cookie does not "
     "authorize device-tier actions"
@@ -84,7 +99,7 @@ const resp = (status, body) => ({
 });
 
 const run = async (scenario) => {
-  const { call, sequence, signIn, refusal } = scenario;
+  const { call, sequence, signIn, pair, refusal } = scenario;
   const calls = [];
   let requestLoginCalls = 0;
   let requestPairingCalls = 0;
@@ -107,7 +122,7 @@ const run = async (scenario) => {
       this.token = 'fresh-bearer';
       return Promise.resolve(true);
     },
-    ensurePaired() { ensurePairedCalls += 1; return Promise.resolve(false); },
+    ensurePaired() { ensurePairedCalls += 1; return Promise.resolve(!!pair); },
   };
   const fetch = async (url, opts) => {
     const o = opts || {};
@@ -133,12 +148,19 @@ const run = async (scenario) => {
   vm.runInContext(src, sandbox, { filename: 'data.js' });
   const w = sandbox.window;
 
+  // Three real call shapes, each against the route that really wears that
+  // tier: 'save' is the editors' DEVICE-tier write, 'delete' and 'raw' are
+  // the two ADMIN-tier ones (a destroy and a bulk export).
   const body = JSON.stringify({ text: 'shopping list\n- milk\n- oats\n' });
   const invoke = call === 'raw'
     ? () => w.apiFetchRaw('/api/documents/download-zip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rel_paths: ['notes.txt'] }),
+      })
+    : call === 'delete'
+    ? () => w.apiFetch('/api/documents/delete', {
+        method: 'POST', body: JSON.stringify({ rel_paths: ['notes.txt'] }),
       })
     : () => w.apiFetch('/api/documents/text/notes.txt', { method: 'PUT', body });
 
@@ -180,21 +202,27 @@ const run = async (scenario) => {
 """
 
 STORE_SCENARIOS = {
-    # Kamron's state: cookie, no bearer. Sign in at the prompt.
-    "put_signed_in": {"call": "put", "sequence": [403, 200], "signIn": True,
-                      "refusal": ADMIN_COOKIE_ONLY},
+    # An unpaired browser SAVING: the device-tier refusal, pair at the
+    # prompt, and the save goes through. No admin password involved.
+    "save_paired": {"call": "save", "sequence": [403, 200], "pair": True,
+                    "refusal": DEVICE_COOKIE_ONLY},
+    # Same, but whoever is at the keyboard closes the pairing modal.
+    "save_dismissed": {"call": "save", "sequence": [403], "pair": False,
+                       "refusal": DEVICE_COOKIE_ONLY},
+    # A DELETE on the same folder is the admin tier: cookie, no bearer,
+    # sign in at the prompt. (Kamron's state, on the verb that still asks.)
+    "delete_signed_in": {"call": "delete", "sequence": [403, 200], "signIn": True,
+                         "refusal": ADMIN_COOKIE_ONLY},
     # Same, but the operator changes their mind at the password prompt.
-    "put_dismissed": {"call": "put", "sequence": [403], "signIn": False,
-                      "refusal": ADMIN_COOKIE_ONLY},
+    "delete_dismissed": {"call": "delete", "sequence": [403], "signIn": False,
+                         "refusal": ADMIN_COOKIE_ONLY},
     # The replay is refused too — a real bug, and the toast is all there is.
-    "put_refused_twice": {"call": "put", "sequence": [403, 403], "signIn": True,
-                          "refusal": ADMIN_COOKIE_ONLY},
-    # The streamed twin: same prompt, same replay, raw Response back.
+    "delete_refused_twice": {"call": "delete", "sequence": [403, 403],
+                             "signIn": True, "refusal": ADMIN_COOKIE_ONLY},
+    # The streamed twin (download-zip, also admin): same prompt, same
+    # replay, raw Response back.
     "raw_signed_in": {"call": "raw", "sequence": [403, 200], "signIn": True,
                       "refusal": ADMIN_COOKIE_ONLY},
-    # A DEVICE-tier refusal must open the pairing modal, not the login.
-    "put_device_refusal": {"call": "put", "sequence": [403], "signIn": True,
-                           "refusal": DEVICE_COOKIE_ONLY},
 }
 
 
@@ -223,30 +251,65 @@ def test_the_helpers_the_editors_need_are_exported(store):
                                 "mutationErrorText": "function"}, name
 
 
-def test_a_cookie_only_403_on_a_put_opens_the_login_and_replays(store):
-    o = store["put_signed_in"]
+def test_a_device_tier_403_on_a_save_opens_the_pairing_modal_and_replays(store):
+    """The save's own refusal: the household token is what was missing, so
+    the browser is offered PAIRING and the PUT is replayed after it. The
+    admin login is never opened — the operator has no password to give
+    that would help."""
+    o = store["save_paired"]
+    assert o["resolved"] is True
+    assert o["ensurePairedCalls"] == 1          # the PAIR modal, once
+    assert o["ensureLoggedInCalls"] == 0        # never the admin login
+    assert o["requestPairingCalls"] == 0        # ...and never re-opened
+    assert len(o["calls"]) == 2                 # refused, then replayed
+
+
+def test_the_replayed_save_carries_the_same_body(store):
+    first, second = store["save_paired"]["calls"]
+    assert first["method"] == second["method"] == "PUT"
+    assert first["body"] == second["body"]                  # nothing retyped
+    assert json.loads(second["body"])["text"].startswith("shopping list")
+    # Both attempts keep the CSRF backstop and the household token, and
+    # neither needs a Bearer: saving is not the admin tier's business.
+    for call in (first, second):
+        assert call["requestedWith"] == "XMLHttpRequest"
+        assert call["deviceToken"] == "household-token"
+        assert call["auth"] is None
+
+
+def test_a_dismissed_pairing_says_cancelled_and_names_the_pairing(store):
+    o = store["save_dismissed"]
+    assert o["resolved"] is False
+    assert len(o["calls"]) == 1                 # nothing replayed
+    assert o["ensurePairedCalls"] == 1
+    assert o["ensureLoggedInCalls"] == 0
+    assert o["authCancelled"] is True
+    assert o["isAuthFailure"] is True
+    toast = o["toast"]
+    assert "cancelled" in toast
+    assert "not paired" in toast                # which credential was wanted
+    assert "still here" in toast                # the work was not lost
+    assert "failed" not in toast.lower()
+    assert "403" not in toast                   # no raw status line
+
+
+def test_a_cookie_only_403_on_a_delete_opens_the_login_and_replays(store):
+    o = store["delete_signed_in"]
     assert o["resolved"] is True
     assert o["ensureLoggedInCalls"] == 1        # the sign-in prompt, once
     assert o["ensurePairedCalls"] == 0          # not the pairing modal
     assert o["requestLoginCalls"] == 0          # ...and never re-opened
     assert len(o["calls"]) == 2                 # refused, then replayed
-
-
-def test_the_replay_carries_the_fresh_bearer_and_the_same_body(store):
-    first, second = store["put_signed_in"]["calls"]
-    assert first["method"] == second["method"] == "PUT"
+    first, second = o["calls"]
+    assert first["method"] == second["method"] == "POST"
     assert first["auth"] is None                            # the refusal
     assert second["auth"] == "Bearer fresh-bearer"          # the replay
-    assert first["body"] == second["body"]                  # nothing retyped
-    assert json.loads(second["body"])["text"].startswith("shopping list")
-    # Both attempts keep the CSRF backstop and the household token.
-    for call in (first, second):
-        assert call["requestedWith"] == "XMLHttpRequest"
-        assert call["deviceToken"] == "household-token"
+    assert first["body"] == second["body"]
+    assert json.loads(second["body"])["rel_paths"] == ["notes.txt"]
 
 
 def test_a_dismissed_sign_in_reports_cancelled_not_failed(store):
-    o = store["put_dismissed"]
+    o = store["delete_dismissed"]
     assert o["resolved"] is False
     assert len(o["calls"]) == 1                 # nothing replayed
     assert o["authCancelled"] is True
@@ -261,18 +324,8 @@ def test_a_dismissed_sign_in_reports_cancelled_not_failed(store):
     assert o["toastNoBuffer"] == "upload cancelled — not signed in."
 
 
-def test_a_prompt_that_is_still_on_screen_gets_no_toast(store):
-    # loginPrompted without authCancelled: the modal owns the story (F-006).
-    o = store["put_device_refusal"]
-    assert o["deviceTokenRequired"] is True
-    assert o["ensurePairedCalls"] == 1          # the PAIR modal...
-    assert o["ensureLoggedInCalls"] == 0        # ...not the admin login
-    assert o["authCancelled"] is True           # ensurePaired resolved false
-    assert "not paired" in o["toast"]
-
-
 def test_a_refusal_that_survives_a_fresh_bearer_is_a_visible_failure(store):
-    o = store["put_refused_twice"]
+    o = store["delete_refused_twice"]
     assert o["resolved"] is False
     assert len(o["calls"]) == 2                 # one replay, never a loop
     assert o["calls"][1]["auth"] == "Bearer fresh-bearer"
@@ -299,7 +352,7 @@ def test_the_streamed_call_prompts_replays_and_returns_the_response(store):
 
 EDITOR_SETUP = r"""
 globalThis.__net = [];
-globalThis.__prompts = { login: 0, pair: 0, ensure: 0 };
+globalThis.__prompts = { login: 0, pair: 0, ensure: 0, ensurePair: 0 };
 const __resp = (status, body) => ({
   ok: status >= 200 && status < 300,
   status,
@@ -308,15 +361,21 @@ const __resp = (status, body) => ({
   text: async () => body,
   json: async () => JSON.parse(body),
 });
+// The browser Kamron actually has: the cookie renders GET state, and it
+// holds NEITHER the household token (never paired, or it was rotated) nor
+// a Bearer. Pairing is what a save needs; signing in is what a delete or
+// a zip needs.
 globalThis.Auth = {
   token: null,
+  paired: false,
   status: { setup_complete: true, authenticated: false },
   headers() {
-    const h = { 'X-Device-Token': 'household-token' };
+    const h = {};
+    if (this.paired) h['X-Device-Token'] = 'household-token';
     if (this.token) h.Authorization = 'Bearer ' + this.token;
     return h;
   },
-  deviceToken() { return 'household-token'; },
+  deviceToken() { return this.paired ? 'household-token' : null; },
   requestLogin() { globalThis.__prompts.login += 1; },
   requestPairing() { globalThis.__prompts.pair += 1; },
   ensureLoggedIn() {
@@ -325,7 +384,12 @@ globalThis.Auth = {
     this.token = 'fresh-bearer';
     return Promise.resolve(true);
   },
-  ensurePaired() { return Promise.resolve(false); },
+  ensurePaired() {
+    globalThis.__prompts.ensurePair += 1;
+    if (!globalThis.__PAIR) return Promise.resolve(false);
+    this.paired = true;
+    return Promise.resolve(true);
+  },
 };
 globalThis.fetch = async (url, opts) => {
   const o = opts || {};
@@ -333,11 +397,16 @@ globalThis.fetch = async (url, opts) => {
   const headers = o.headers || {};
   globalThis.__net.push({ method, url: String(url),
                           auth: headers.Authorization || null,
+                          deviceToken: headers['X-Device-Token'] || null,
                           body: typeof o.body === 'string' ? o.body : null });
   if (method === 'GET') {
+    // Reads take the cookie — which is why the file OPENS and only Save
+    // is refused.
     return __resp(200, JSON.stringify({ text: 'shopping list\n- milk\n- oats\n' }));
   }
-  if (!headers.Authorization) {
+  // A save is satisfied by EITHER credential (device tier); the admin
+  // Bearer passes everywhere.
+  if (!headers['X-Device-Token'] && !headers.Authorization) {
     return __resp(403, JSON.stringify({ detail: globalThis.__REFUSAL }));
   }
   return __resp(200, '{"rel_path":"notes.txt","category":"text"}');
@@ -360,7 +429,8 @@ EDITOR_SCRIPT = r"""
   return {
     loadedText: loaded ? loaded.props.value : null,
     beforeSave,
-    net: h.global('__net').map((c) => ({ method: c.method, auth: c.auth, body: c.body })),
+    net: h.global('__net').map((c) => ({ method: c.method, auth: c.auth,
+                                        deviceToken: c.deviceToken, body: c.body })),
     prompts: h.global('__prompts'),
     toasts: h.fnCalls.filter((c) => c.name === 'fire').map((c) => c.args[0]),
     unsavedAfter: h.text().some((t) => String(t).includes('unsaved')),
@@ -369,9 +439,10 @@ EDITOR_SCRIPT = r"""
 """
 
 
-def _editor_scenario(component: str, page: str, sign_in: bool,
-                     refusal: str = ADMIN_COOKIE_ONLY) -> dict:
-    setup = (f"globalThis.__SIGN_IN = {json.dumps(sign_in)};\n"
+def _editor_scenario(component: str, page: str, pair: bool,
+                     refusal: str = DEVICE_COOKIE_ONLY) -> dict:
+    setup = (f"globalThis.__PAIR = {json.dumps(pair)};\n"
+             f"globalThis.__SIGN_IN = false;\n"
              f"globalThis.__REFUSAL = {json.dumps(refusal)};\n" + EDITOR_SETUP)
     return {
         "files": ["web/static/data.js", COMPONENTS, page],
@@ -384,9 +455,9 @@ def _editor_scenario(component: str, page: str, sign_in: bool,
 
 
 EDITOR_SCENARIOS = {
-    "text_signed_in": _editor_scenario("TextEditorOverlay", "web/static/files.jsx", True),
+    "text_paired": _editor_scenario("TextEditorOverlay", "web/static/files.jsx", True),
     "text_dismissed": _editor_scenario("TextEditorOverlay", "web/static/files.jsx", False),
-    "doc_signed_in": _editor_scenario("DocEditorOverlay", "web/static/doc_editor.jsx", True),
+    "doc_paired": _editor_scenario("DocEditorOverlay", "web/static/doc_editor.jsx", True),
     "doc_dismissed": _editor_scenario("DocEditorOverlay", "web/static/doc_editor.jsx", False),
 }
 
@@ -404,9 +475,9 @@ def editors(node_bin) -> dict:
     return out
 
 
-@pytest.mark.parametrize("name", ["text_signed_in", "doc_signed_in"])
+@pytest.mark.parametrize("name", ["text_paired", "doc_paired"])
 def test_the_editor_reads_the_file_on_the_cookie_alone(editors, name):
-    # Reads are DAILY tier: the drifted admin can still open the file,
+    # Reads are DAILY tier: an unpaired browser can still open the file,
     # which is why the failure only shows up on Save.
     o = editors[name]
     assert o["loadedText"].startswith("shopping list")
@@ -414,15 +485,21 @@ def test_the_editor_reads_the_file_on_the_cookie_alone(editors, name):
     assert o["beforeSave"]["unsaved"] is True
 
 
-@pytest.mark.parametrize("name", ["text_signed_in", "doc_signed_in"])
-def test_pressing_save_prompts_and_then_completes_the_save(editors, name):
+@pytest.mark.parametrize("name", ["text_paired", "doc_paired"])
+def test_pressing_save_offers_pairing_and_then_completes_the_save(editors, name):
+    """Saving is DEVICE tier, so what the editor asks for is PAIRING, and
+    the replay goes out on the household token — no admin password is
+    requested anywhere in this flow."""
     o = editors[name]
     writes = [c for c in o["net"] if c["method"] == "PUT"]
     assert len(writes) == 2, o["net"]              # refused, then replayed
+    assert writes[0]["deviceToken"] is None
     assert writes[0]["auth"] is None
-    assert writes[1]["auth"] == "Bearer fresh-bearer"
-    assert o["prompts"]["ensure"] == 1             # the password prompt
-    assert o["prompts"]["pair"] == 0
+    assert writes[1]["deviceToken"] == "household-token"
+    assert writes[1]["auth"] is None               # never needed a Bearer
+    assert o["prompts"]["ensurePair"] == 1         # the pairing prompt
+    assert o["prompts"]["ensure"] == 0             # NOT the password prompt
+    assert o["prompts"]["login"] == 0
     # The typed text is what was saved, and the editor stops saying unsaved.
     assert "TXT-EDIT" in json.loads(writes[1]["body"])["text"]
     assert o["toasts"] == ["Saved"]
@@ -434,10 +511,12 @@ def test_dismissing_the_prompt_keeps_the_text_and_says_cancelled(editors, name):
     o = editors[name]
     writes = [c for c in o["net"] if c["method"] == "PUT"]
     assert len(writes) == 1                        # nothing replayed
-    assert o["prompts"]["ensure"] == 1
+    assert o["prompts"]["ensurePair"] == 1
+    assert o["prompts"]["ensure"] == 0
     assert len(o["toasts"]) == 1
     toast = o["toasts"][0]
     assert "cancelled" in toast and "failed" not in toast.lower()
+    assert "not paired" in toast                   # which credential was wanted
     assert "TXT-EDIT" in o["bufferAfter"]          # the typing is still there
     assert o["unsavedAfter"] is True               # ...and still flagged
 

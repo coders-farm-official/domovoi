@@ -17,17 +17,25 @@ and a ``?device_token=`` query because an ``<img src>`` cannot set a
 header. The pre-setup grace is kept throughout, so a fresh install still
 works before an admin password exists.
 
-Three things sit a tier above that (REV-1, resolved 2026-09-22):
+Three things sit a tier above that (resolved 2026-09-22, revised
+2026-09-24):
 
 * ``/delete`` — the one verb that destroys something;
 * a ``/download`` whose path is a **directory** — the server builds the
   zip in memory, and handing a whole tree to anything on the LAN is not
   an ordinary daily action;
-* any write whose target library is **``core:documents``** (the
-  operator's own ``~/Documents``, see :mod:`web.backend.api.documents`)
-  or a **removable drive**.
+* any write whose target library is a **removable drive** — writing onto
+  a stick somebody plugged into the server is a different risk from
+  saving into the household's own libraries.
 
 Each of those takes the admin tier instead.
+
+**``core:documents`` is NOT one of them.** Saving a document, a
+spreadsheet, a drawing or an image is a household action (2026-09-24),
+so a write into the Documents library is device tier here exactly as it
+is on ``/api/documents``. What still answers to the operator is deleting
+one — and deletes go through ``/delete`` above, wherever the target
+lives.
 
 The device model the room queue uses (:mod:`web.backend.api.music_queue`)
 still rides on top: every write names the calling ``device_id`` (required
@@ -110,13 +118,19 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 _MAX_TREE_MEMBERS = 5000
 _MAX_IMPORT_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB total per import
 
-# Libraries a household device may READ but not write into: the operator's
-# personal Documents folder, and every removable drive. A write here needs
-# the admin tier even from a paired device (REV-1).
-ADMIN_WRITE_LIBRARY_IDS: frozenset[str] = frozenset({"core:documents"})
+# Named libraries a household device may READ but not write into. EMPTY,
+# and deliberately so: it held ``core:documents`` until 2026-09-24, when
+# Kamron settled that saving documents, spreadsheets and images is a
+# household action and only deleting needs admin. Putting an id back here
+# reverses that decision — the hook stays for a library that genuinely
+# needs it, not as a place to restore Documents to.
+ADMIN_WRITE_LIBRARY_IDS: frozenset[str] = frozenset()
 
 
 def _needs_admin_write(lib: MediaLibrary) -> bool:
+    """Removable drives only: a stick somebody plugged into the server is
+    not one of the household's own libraries, and nobody asked for the
+    household to be able to write onto it."""
     return lib.id in ADMIN_WRITE_LIBRARY_IDS or lib.kind == "removable"
 
 

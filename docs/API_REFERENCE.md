@@ -694,8 +694,13 @@ src>` can't set a header) with three exceptions that take **admin
 - `POST /delete` — the one verb that destroys something;
 - `GET /download` when the path is a **directory** — the server builds the
   zip in memory and hands back a whole tree in one request;
-- any write whose target library is **`core:documents`** (§3.14) or a
-  **removable drive**.
+- any write whose target library is a **removable drive** — writing onto a
+  stick somebody plugged into the server is a different risk from saving
+  into the household's own libraries.
+
+`core:documents` (§3.14) is **not** one of them: saving into the Documents
+library through `/api/files` is device tier, exactly as it is on
+`/api/documents`.
 
 Everything else — browsing, downloading a file, uploading, moving,
 importing — belongs to the household: a paired phone shouldn't need the
@@ -732,7 +737,7 @@ every listing/serve/copy.
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
 | `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
-| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or an admin-write library (Documents / removable) without an admin session · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
+| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or a **removable** target without an admin session (Documents is device tier like any other core library) · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
 | `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path, device_id }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only **or device blocked** · `404` missing target dir · `422` no `device_id`. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path, device_id }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `403` device blocked · `409` source not removable / target not importable · `410` ejected source · `404` missing · `422` no `device_id`. |
@@ -747,14 +752,20 @@ credentials forwarded; `audiobooks` runs the in-process indexer; `podcasts` /
 
 ### 3.14 Documents (homegrown editors)
 
-**Reads are device tier** (`X-Device-Token`, an admin Bearer, the dashboard
-cookie, or `?device_token=` for the browser-fetched `/raw` and `/export`
-URLs); **writes and `/download-zip` are admin tier** (`Authorization:
-Bearer`). `documents_dir` is the operator's own `~/Documents`, so the
-household reads it and the operator changes it. Both keep the pre-setup
-grace. The former OnlyOffice/Collabora sidecars — and with them the
-open/close locks, JWT capability tokens, save callbacks, and WOPI routes —
-are retired. Editing is homegrown/in-page: a markdown doc editor
+**Saving is a household action; deleting is an admin action.** **Reads are
+device tier** (`X-Device-Token`, an admin Bearer, the dashboard cookie, or
+`?device_token=` for the browser-fetched `/raw` and `/export` URLs).
+**Saves — `/create`, `/upload`, `PUT /text`, `PUT /sheet`,
+`/drawings/write` — are device tier too**: a valid `X-Device-Token` or an
+admin Bearer. The dashboard cookie *alone* is still refused `403` on any of
+them (that split is the CSRF backstop, not a claim about who owns the
+folder), and a mutation never reads `?device_token=`. **`/delete` and
+`/download-zip` are admin tier** (`Authorization: Bearer`): delete is the
+verb that destroys something, and `/download-zip` is the one request that
+turns "can read the library" into "holds a copy of the library". All three
+keep the pre-setup grace. The former OnlyOffice/Collabora sidecars — and
+with them the open/close locks, JWT capability tokens, save callbacks, and
+WOPI routes — are retired. Editing is homegrown/in-page: a markdown doc editor
 (`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
 .xlsx/.csv round-trip via openpyxl), and Excalidraw for drawings. Every
 row's `category` tells the UI how to open it
@@ -764,19 +775,19 @@ row's `category` tells the UI how to open it
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | **Admin** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
-| `POST /api/documents/upload` | **Admin** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
-| `POST /api/documents/delete` | **Admin** · `DeleteRequest` | Delete documents. |
-| `POST /api/documents/download-zip` | **Admin** · `ZipRequest` | Zip + download a selection. |
+| `POST /api/documents/create` | **Device** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
+| `POST /api/documents/upload` | **Device** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
+| `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
+| `POST /api/documents/download-zip` | **Admin (mutation)** · `ZipRequest` | Zip + download a selection. |
 | `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | **Admin** · `TextWriteRequest` | Write a text/markdown file. |
+| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` | Write a text/markdown file. |
 | `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
-| `PUT /api/documents/sheet/{rel_path}` | **Admin** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
 | `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
 | `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
-| `POST /api/documents/drawings/write` | **Admin** · `DrawingWriteRequest` | Save a drawing. |
+| `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` | Save a drawing. |
 
 ### 3.15 Podcasts and audiobooks
 

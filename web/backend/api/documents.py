@@ -24,19 +24,31 @@ listed, uploaded, and downloaded — but not edited in-app (category
 EVERY served/saved path is validated inside ``documents_dir`` via the same
 realpath / ``relative_to()`` containment check ``music.py`` uses.
 
-**Trust posture (two tiers, WEB-2 / REV-1, 2026-09-22).** ``documents_dir``
-is the operator's own ``~/Documents``, not a shared media library, so it
-sits a tier above Music:
+**Trust posture (WEB-2, revised 2026-09-24): saving is a household action,
+deleting is an admin action.** Writing a document, a spreadsheet or a
+drawing is ordinary daily use — the household does it from a phone, a
+tablet or the dashboard — so it asks only for the household credential.
+Destroying one, or taking a copy of the whole folder in a single request,
+answers to the operator.
 
 * **reads** (list, text, sheet, raw, export, drawing load) take the DEVICE
-  tier — a household client presenting ``X-Device-Token``, an admin, or
-  the dashboard cookie;
-* **writes** (create, upload, text/sheet save, drawing save, delete) and
-  the bulk ``/download-zip`` take the ADMIN tier: ``Authorization: Bearer``,
-  never the cookie alone.
+  READ tier — a household client presenting ``X-Device-Token``, an admin,
+  the dashboard cookie, or ``?device_token=`` for the URLs a browser
+  fetches itself;
+* **saves** (create, upload, text/sheet save, drawing save) take the
+  DEVICE tier: a valid ``X-Device-Token`` or an admin Bearer. The
+  dashboard cookie ALONE is still refused (403) — that split is the CSRF
+  backstop, not a statement about who owns the folder — and a mutation
+  never reads ``?device_token=``;
+* **``/delete`` and the bulk ``/download-zip``** take the ADMIN tier:
+  ``Authorization: Bearer``, never the cookie alone. Delete is the verb
+  that destroys something; ``/download-zip`` is the one request that turns
+  "can read the library" into "holds a copy of the library".
 
-Both keep the pre-setup grace, so a fresh install's first-run flow works
-before an admin password exists.
+All three keep the pre-setup grace, so a fresh install's first-run flow
+works before an admin password exists. Every mutating ``/api/*`` route
+also keeps the ``X-Requested-With`` requirement enforced by middleware
+ahead of auth: device tier is not cross-site-form-reachable.
 """
 
 from __future__ import annotations
@@ -62,10 +74,12 @@ from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
 
-# The two tiers this router serves under, as reusable dependency lists.
-# ``DAILY`` reads, ``ADMIN`` changes (or hands back an archive of) the
-# operator's Documents folder.
+# The three tiers this router serves under, as reusable dependency lists.
+# ``DAILY`` reads, ``DEVICE`` saves, ``ADMIN`` deletes (or hands back an
+# archive of the whole folder). A household device holds DEVICE; only the
+# operator holds ADMIN.
 DAILY = [Depends(require_device_read)]
+DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -370,7 +384,7 @@ _KIND_NEW_EXT = {
 }
 
 
-@router.post("/create", response_model=DocumentRow, dependencies=ADMIN)
+@router.post("/create", response_model=DocumentRow, dependencies=DEVICE)
 async def create_document(req: CreateRequest) -> DocumentRow:
     """Create a new blank file for a view. Name is a bare filename (any
     directory component is stripped). For doc/sheet/drawing the kind's
@@ -491,7 +505,7 @@ async def read_text_file(rel_path: str) -> Any:
     }
 
 
-@router.put("/text/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
+@router.put("/text/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
 async def write_text_file(rel_path: str, req: TextWriteRequest) -> DocumentRow:
     """Write text back to a file as UTF-8. Containment-checked; newlines
     preserved verbatim."""
@@ -611,7 +625,7 @@ async def read_sheet(rel_path: str) -> dict[str, Any]:
     }
 
 
-@router.put("/sheet/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
+@router.put("/sheet/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
 async def write_sheet(rel_path: str, req: SheetWriteRequest) -> DocumentRow:
     """Write the editor grid back: .csv gets values (formula strings kept
     verbatim as text), .xlsx gets formulas as formulas and numbers as
@@ -777,7 +791,7 @@ async def export_sheet(
     "/upload",
     response_model=UploadResult,
     # Multipart, so the preflight-forcing header rides along (WEB-6).
-    dependencies=[*ADMIN, Depends(require_requested_with)],
+    dependencies=[*DEVICE, Depends(require_requested_with)],
 )
 async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
     """Upload one or more files straight into ``documents_dir`` from the
@@ -863,7 +877,7 @@ async def read_drawing(req: DrawingReadRequest) -> dict[str, str]:
     }
 
 
-@router.post("/drawings/write", dependencies=ADMIN)
+@router.post("/drawings/write", dependencies=DEVICE)
 async def write_drawing(req: DrawingWriteRequest) -> DocumentRow:
     """Save an Excalidraw scene / exported SVG into ``documents_dir``."""
     target = _safe_target(req.rel_path)
