@@ -536,13 +536,6 @@ const apiFetchRaw = (path, opts = {}) => {
   return _sendWithAuthRetry(send, { method: opts.method, body: opts.body, raw: true });
 };
 
-/* The human-readable half of a rejected apiFetch.
- *
- * `err.detail` is the PARSED RESPONSE BODY, not a string — FastAPI's is
- * `{detail: "..."}`, so the useful text is one level down. Reaching for
- * `e.detail` directly renders "[object Object]" in a toast, which is how this
- * helper came to exist. Falls back to the message (which already carries
- * "<status> <statusText>: <body>") and finally to String(e). */
 /* Fit a sentence into somewhere that has a size, WITHOUT stopping
  * mid-word.
  *
@@ -567,6 +560,15 @@ const clipSentence = (s, max) => {
   return kept.replace(/[\s.,;:—-]+$/, '') + '…';
 };
 
+/* The human-readable half of a rejected apiFetch.
+ *
+ * `err.detail` is the PARSED RESPONSE BODY, not a string — FastAPI's is
+ * `{detail: "..."}`, so the useful text is one level down. Reaching for
+ * `e.detail` directly renders "[object Object]" in a toast, which is how this
+ * helper came to exist. Falls back to the message (which already carries
+ * "<status> <statusText>: <body>") and finally to String(e).
+ *
+ * `max` is a size, not a policy: pass 0 where the text can wrap. */
 const apiErrorText = (e, max = 160) => {
   const nested = e && e.detail && e.detail.detail;
   const text = (typeof nested === 'string' && nested)
