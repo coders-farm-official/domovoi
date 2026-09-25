@@ -39,6 +39,28 @@ _DUAL_STACK_LOOPBACK_NAMES = frozenset({
     "[::1]",
 })
 
+# The values of `ollama_qa_think`. "default" sends no `think` flag at all
+# (the model's own default applies); "false" / "true" send it.
+QA_THINK_CHOICES = ("default", "false", "true")
+
+
+def normalize_think_setting(value: object) -> str:
+    """One of :data:`QA_THINK_CHOICES` for a raw setting value: a bool, the
+    usual boolean spellings in any case, or blank / "auto" / "none" for
+    "default". Anything else raises ``ValueError``."""
+    if value is None:
+        return "default"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip().lower()
+    if text in ("", "default", "auto", "none"):
+        return "default"
+    if text in ("true", "1", "yes", "on"):
+        return "true"
+    if text in ("false", "0", "no", "off"):
+        return "false"
+    raise ValueError(f"expected default, true or false, got {value!r}")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore")
@@ -106,6 +128,38 @@ class Settings(BaseSettings):
     # accept it, so leaving it False is always safe. Turn it ON only if you
     # have GPU headroom and find your model routes materially better with it.
     ollama_tool_think: bool = False
+    # The same flag for the Q&A model's calls (answers, streamed answers,
+    # the uncertainty check, subject and memory extraction). Unlike the
+    # router's it defaults to NOT sending anything — "default" — which is
+    # how every QA call has always gone out, so the model's own default
+    # applies (a hybrid model such as qwen3 then reasons before each
+    # answer). "false" stops a hybrid QA model from reasoning first, which
+    # is what a CPU host wants; "true" asks for it. Sent and degraded
+    # exactly like ollama_tool_think: omitted when the installed client
+    # can't take it, dropped for good if the server rejects it.
+    ollama_qa_think: str = "default"
+
+    @field_validator("ollama_qa_think", mode="before")
+    @classmethod
+    def _spell_qa_think_one_way(cls, value: object) -> str:
+        """Read the usual boolean spellings (``OLLAMA_QA_THINK=false``,
+        ``0``, ``off``) as "false"/"true", and blank as "default", so the
+        value the client and the dashboard see is always one of three."""
+        return normalize_think_setting(value)
+
+    # Context window (Ollama's options.num_ctx) for the Q&A calls above plus
+    # the dashboard's text chat, and separately for the tool-routing call.
+    # 0 = don't send it, so the Ollama server's default (OLLAMA_CONTEXT_LENGTH
+    # in its unit, else 4096 on most hosts) governs, which is how every call
+    # has always gone out. The router's prompt carries every handler's tool
+    # schema (~3.4k tokens before plugins), so a 4096 window leaves little
+    # room: set ollama_tool_num_ctx to 8192 if routing degrades as plugins
+    # are added. A bigger window costs memory for as long as the model
+    # stays loaded, and Ollama reloads a model whose num_ctx changes — so
+    # when one model serves both roles, give both settings the same value
+    # or every switch between routing and answering reloads it.
+    ollama_num_ctx: int = 0
+    ollama_tool_num_ctx: int = 0
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
     ollama_vision_model: str = "qwen2.5vl:7b"
