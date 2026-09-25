@@ -76,6 +76,8 @@ class FakeNM:
         echo_psk_in_errors: bool = False,
         timeout_on: str | None = None,
         stale: tuple[tuple[str, str], ...] = (),
+        undeletable: tuple[str, ...] = (),
+        silent_add: bool = False,
     ):
         self.ssid = ssid
         self.security = security
@@ -88,6 +90,13 @@ class FakeNM:
         self.add_error = add_error
         self.echo = echo_psk_in_errors
         self.timeout_on = timeout_on
+        # Deletes are best-effort on real hardware: root can refuse, NM can
+        # be mid reload. These uuids survive a delete that reports failure,
+        # which is the state the activation defect needed.
+        self.undeletable = set(undeletable)
+        # An nmcli whose successful add prints nothing we can parse.
+        self.silent_add = silent_add
+        self.last_added_uuid: str | None = None
         self.scans = 0
         self.connected: str | None = None
         self.calls: list[list[str]] = []
@@ -106,7 +115,11 @@ class FakeNM:
 
     def _store(self, name, ssid, key_mgmt, *, hidden, psk) -> str:
         self._seq += 1
-        uuid = f"uuid-{self._seq}"
+        # Shaped like a real one on purpose: nmcli prints a 36-character
+        # RFC 4122 uuid, and apply_wifi parses that shape out of the add
+        # output. A fake that printed "uuid-1" would let a parser that
+        # cannot read real nmcli output pass this suite.
+        uuid = f"{self._seq:08d}-0000-4000-8000-000000000000"
         self.profiles[uuid] = {
             "name": name, "ssid": ssid, "key_mgmt": key_mgmt,
             "hidden": hidden, "psk": psk,
@@ -174,6 +187,9 @@ class FakeNM:
                 hidden=args.get("802-11-wireless.hidden") == "yes",
                 psk=args.get("wifi-sec.psk", ""),
             )
+            self.last_added_uuid = uuid
+            if self.silent_add:
+                return self._ok(cmd, text=text)
             return self._ok(
                 cmd, f"Connection '{args.get('con-name')}' ({uuid}) added.\n",
                 text=text,
@@ -181,6 +197,11 @@ class FakeNM:
 
         if cmd[1:3] == ["connection", "delete"]:
             self.deleted.append(cmd[-1])
+            if cmd[-1] in self.undeletable:
+                return self._fail(
+                    cmd, 4, "Error: not authorized to delete connection.",
+                    text=text,
+                )
             self.profiles.pop(cmd[-1], None)
             return self._ok(cmd, text=text)
 
@@ -239,6 +260,10 @@ def blind(monkeypatch):
 
 def _join(nm, *, ssid=SSID, psk=PSK, hidden=False, country=None):
     return pm.apply_wifi(ssid, psk, country, hidden, 30.0, run=nm)
+
+
+# The first profile FakeNM stores — a leftover from an earlier attempt.
+STALE_UUID = "00000001-0000-4000-8000-000000000000"
 
 
 def _km(add: dict) -> str:
@@ -641,3 +666,43 @@ def test_retries_are_paused_not_back_to_back(monkeypatch, tmp_path):
     assert not ok
     # Two pauses between three attempts, none after the last.
     assert pauses.count(pm._WIFI_RETRY_PAUSE_SEC) == 2
+
+
+# ─── the profile we activate is the one we just built ────────────────────
+
+
+def test_a_stale_profile_that_survives_the_delete_pass_is_not_the_one_brought_up(blind):
+    """The delete pass is best-effort — root can refuse, NM can be mid
+    reload, something else can recreate a profile between the list and the
+    add. When it fails, activating by connection NAME resolves to whichever
+    profile owns that name, which can be the broken leftover, and the
+    customer gets back the exact `key-mgmt: property is missing` this whole
+    change exists to remove. Activation goes by the uuid `connection add`
+    printed, so a survivor cannot be picked."""
+    nm = FakeNM(stale=((SSID, ""),), undeletable=(STALE_UUID,))
+    ok, err = _join(nm)
+
+    assert ok, err
+    ups = [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+    assert len(ups) == 1, ups
+    # By uuid, never by `id <ssid>` — that is the whole defect.
+    assert ups[0][3] == "uuid", ups[0]
+    assert ups[0][4] != STALE_UUID
+    assert ups[0][4] == nm.last_added_uuid
+    assert "id" not in ups[0]
+
+
+def test_an_unparseable_add_with_an_ambiguous_listing_refuses_to_guess(blind):
+    """If nmcli's add output cannot be parsed AND more than one saved
+    profile carries this ssid, there is no way to tell ours from the
+    leftover. Refusing is correct: bringing up the wrong one is what
+    produced the original hardware failure, and it would be reported as a
+    successful join."""
+    nm = FakeNM(stale=((SSID, ""),), undeletable=(STALE_UUID,),
+                silent_add=True)
+    ok, err = _join(nm)
+
+    assert not ok
+    assert "could not be identified" in (err or "")
+    assert not [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+    assert PSK not in (err or "")

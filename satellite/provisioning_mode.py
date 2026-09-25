@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -406,6 +407,31 @@ def _key_mgmt_candidates(security: str | None) -> list[str]:
     return [_KEY_MGMT_PSK, _KEY_MGMT_SAE]
 
 
+_ADDED_UUID = re.compile(r"\(([0-9a-fA-F-]{36})\)")
+
+
+def _uuid_from_add(proc) -> str | None:
+    """The UUID ``nmcli connection add`` just printed, or ``None``.
+
+    nmcli answers a successful add with
+    ``Connection '<name>' (<uuid>) successfully added.`` — the only
+    identifier that names the profile WE built rather than one that
+    merely shares its SSID or its name. Everything else is a guess:
+    activating by ``id <ssid>`` resolves by connection NAME, so if a
+    stale profile survived the delete pass (root refused it, NM was mid
+    reload, it was created by something else) nmcli can bring up the
+    broken one and hand the customer back the exact
+    ``key-mgmt: property is missing`` this whole change exists to remove.
+    """
+    # The add call is not text-mode (the PSK is on its argv and we keep
+    # every nmcli invocation uniform), so stdout arrives as bytes here and
+    # as str from a text-mode caller. Handle both rather than assuming.
+    out = getattr(proc, "stdout", "") or ""
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    m = _ADDED_UUID.search(out)
+    return m.group(1) if m else None
+
 def _wifi_profiles_for_ssid(nmcli: str, ssid: str, run) -> list[str]:
     """UUIDs of every saved Wi-Fi profile whose SSID is ``ssid``.
 
@@ -533,9 +559,31 @@ def _nmcli_join(
                 f"{detail or 'the connection could not be created'}"
             )
 
-        uuids = _wifi_profiles_for_ssid(nmcli, ssid, run)
-        up = [nmcli, "connection", "up"]
-        up += ["uuid", uuids[0]] if len(uuids) == 1 else ["id", ssid]
+        # Activate THE PROFILE WE JUST MADE, by the uuid nmcli printed for
+        # it. Re-deriving it from a fresh listing and falling back to
+        # `id <ssid>` when the listing is ambiguous was wrong in exactly
+        # the case this function exists for: `id` resolves by connection
+        # NAME, so a stale profile that survived the delete pass gets
+        # activated instead and the customer sees the original error again.
+        uuid = _uuid_from_add(r)
+        if uuid is None:
+            # An nmcli whose add output we cannot parse. One saved profile
+            # for this ssid can only be the one just added, so use it;
+            # more than one means we cannot tell ours from the leftover,
+            # and guessing is what we are here to stop doing.
+            uuids = _wifi_profiles_for_ssid(nmcli, ssid, run)
+            if len(uuids) != 1:
+                log.warning(
+                    "nmcli did not name the profile it created for %r and "
+                    "%d saved profiles carry that ssid - refusing to guess "
+                    "which one to bring up", ssid, len(uuids),
+                )
+                return False, (
+                    f"wifi setup failed for {ssid!r}: the connection could "
+                    f"not be identified after it was created"
+                )
+            uuid = uuids[0]
+        up = [nmcli, "connection", "up", "uuid", uuid]
         try:
             r = run(up, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
