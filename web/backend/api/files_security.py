@@ -40,6 +40,7 @@ the ``config`` base reads a single declared key from
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -68,12 +69,122 @@ DENY_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
+# True when this host's filesystem gives a name meanings the name does not
+# obviously carry: on NTFS a colon opens an ALTERNATE DATA STREAM
+# ("tax.pdf:stash.md" is bytes hanging off tax.pdf that no listing shows),
+# and a trailing dot or space is silently trimmed (".env." is stored as
+# ".env"). On POSIX all three are ordinary filename characters and nothing
+# here fires. Module-level so a test can exercise the Windows rules on a
+# Linux runner and the POSIX rules on this Windows dev box.
+WINDOWS_NAME_RULES = os.name == "nt"
+
+# Characters no legitimate caller puts in a path and that the OS answers with
+# an exception rather than an error: NUL, tab, the rest of C0, and DEL.
+_CONTROL_CHARS = frozenset(chr(c) for c in range(0x20)) | {chr(0x7F)}
+
+
+def effective_names(name: str) -> set[str]:
+    """Every name this one could actually BE once the filesystem is done
+    with it — including itself.
+
+    A filter that inspects the string the caller typed decides about a file
+    that may not be the file that gets created. ``.env.`` and ``.env `` are
+    both stored as ``.env`` on Windows, and ``.env:x`` creates ``.env`` with
+    a stream hanging off it. Every one of those IS the reserved name the
+    filter exists to refuse, and every one of them used to pass it.
+
+    The trailing dot/space trim is applied on BOTH platforms deliberately.
+    On POSIX ``.env.`` really is a different, ordinary file — but nothing
+    legitimate is called that, and a filter that over-matches by one absurd
+    name is worth more than one whose answer depends on which host the
+    server happens to be running on. The colon split is NOT applied on
+    POSIX: a colon is an ordinary character in a filename there
+    ("Meeting: notes.md"), and refusing it would break a real name to fix a
+    problem that does not exist.
+    """
+    out = {name}
+    for cand in (name, name.split(":", 1)[0] if WINDOWS_NAME_RULES else name):
+        out.add(cand)
+        out.add(cand.rstrip(" ."))
+    out.discard("")
+    return out
+
+
 def is_sensitive_name(name: str) -> bool:
-    """True for a secret-shaped entry name (denylisted at listing/serve)."""
-    lower = name.lower()
-    if name in DENY_NAMES or lower in DENY_NAMES:
-        return True
-    return Path(name).suffix.lower() in DENY_SUFFIXES
+    """True for a secret-shaped entry name (denylisted at listing/serve).
+
+    Asks about every name ``name`` could turn into on disk, not only the
+    spelling the caller sent — see :func:`effective_names`.
+    """
+    for candidate in effective_names(name):
+        lower = candidate.lower()
+        if candidate in DENY_NAMES or lower in DENY_NAMES:
+            return True
+        if Path(candidate).suffix.lower() in DENY_SUFFIXES:
+            return True
+    return False
+
+
+def unstorable_reason(rel_path: str) -> str | None:
+    """Why this path cannot be stored AS WRITTEN, or ``None`` when it can.
+
+    Normalise before deciding, and refuse what cannot be normalised. Three
+    shapes are refused here, all of them cases where the path a caller sent
+    and the path the filesystem would use are not the same thing:
+
+    * **control characters** (a percent-decoded NUL or tab, anything else
+      below 0x20, DEL). Not a hole on their own — nothing is written — but
+      ``stat()`` answers a NUL with ``ValueError`` and a tab with
+      ``OSError``, and that escapes the handler as an unhandled **500**. A
+      malformed path from a phone belongs in the 4xx range; a 500 in the log
+      is noise that hides the real ones.
+    * **a stream separator** on an NTFS host. ``PUT /text/tax.pdf:stash.md``
+      passed the text editor's extension gate (``.md``), passed containment
+      (it IS inside Documents) and wrote bytes into an alternate data stream
+      on the PDF: invisible to the Documents list, to the Files page, to the
+      directory zip, to ``media_walk`` and to ``os.listdir``, yet readable
+      straight back through ``/raw``. That is persistent storage inside the
+      operator's Documents that the operator cannot see, list, export or
+      delete. ``::$INDEX_ALLOCATION`` is the same syntax and answers a
+      ``stat()`` with ``NotADirectoryError``.
+    * **a trailing dot or space** on an NTFS host, which Windows trims at
+      the filesystem layer — so the caller names one file and a different
+      one is written. That is how ``.env.`` got past the reserved-name
+      filter and landed on disk as ``.env``.
+
+    Length is deliberately NOT checked: the limit is not a constant this
+    module can know, and an over-long name fails on the write with an
+    ``OSError`` the save routes now turn into a 4xx.
+    """
+    if any(ch in _CONTROL_CHARS for ch in rel_path):
+        return "control characters are not allowed in a path"
+    if not WINDOWS_NAME_RULES:
+        return None
+    if ":" in rel_path:
+        return (
+            "':' opens an alternate data stream on this server's filesystem, "
+            "so a file saved there would be invisible to every listing"
+        )
+    for segment in rel_path.replace("\\", "/").split("/"):
+        # "." and ".." are dot SEGMENTS, not names with a trailing dot:
+        # they are relative-path syntax, they never reach the filesystem as
+        # a filename, and containment already deals with them.
+        if not segment or not segment.strip("."):
+            continue
+        if segment != segment.rstrip(" ."):
+            return (
+                f"{segment!r} cannot be stored as written — this server's "
+                "filesystem drops a trailing dot or space, so the file would "
+                "land under a different name"
+            )
+    return None
+
+
+def assert_storable(rel_path: str) -> None:
+    """``400`` when :func:`unstorable_reason` has one."""
+    reason = unstorable_reason(rel_path)
+    if reason is not None:
+        raise HTTPException(status_code=400, detail=f"{rel_path}: {reason}")
 
 
 # ─── Containment ─────────────────────────────────────────────────────────────
@@ -96,6 +207,10 @@ def safe_join(root: Path, rel: str | None) -> Path:
     # form (stripped below, stays contained), matching documents.py.
     if re.match(r"^[A-Za-z]:", norm) or norm.startswith("//"):
         raise HTTPException(status_code=400, detail="absolute path rejected")
+    # Normalise before deciding, and refuse what cannot be normalised: a NUL
+    # or a tab escapes the handler as a 500, and on an NTFS host a colon or
+    # a trailing dot addresses a file other than the one named.
+    assert_storable(rel)
     cleaned = norm.lstrip("/")
     # Defense in depth — the realpath check below is the true guard.
     if any(seg == ".." for seg in cleaned.split("/")):
@@ -429,6 +544,13 @@ CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
     ("core:pictures", "Pictures", "image", "pictures_dir", True, True, "pictures", False),
 )
 
+# The Documents library's id, named once. ``/api/files`` and
+# ``/api/documents`` are TWO DOORS into this one folder, and both have to
+# ask the same questions about it (see ``core_library`` below and
+# :func:`web.backend.api.files.assert_documents_write_allowed`), so the id
+# is a constant rather than a string literal repeated in two routers.
+DOCUMENTS_LIBRARY_ID = "core:documents"
+
 # reindex_kind values that trigger a post-write reindex.
 INDEXED_KINDS: frozenset[str] = frozenset({"music", "audiobooks", "podcasts"})
 
@@ -662,6 +784,29 @@ def build_core_libraries(allowed_under_config: set[Path]) -> list[MediaLibrary]:
             )
         )
     return libs
+
+
+def core_library(library_id: str) -> MediaLibrary | None:
+    """The record for ONE core library, resolved from config alone.
+
+    :func:`build_libraries` is the full registry: it also reads the
+    plugins table and scans removable mounts. A core library needs
+    neither — its root comes straight from ``core_settings`` — and
+    :mod:`web.backend.api.documents` has to ask for ``core:documents`` on
+    every save, so it gets a database-free way to do it.
+
+    ``None`` means the library is not on the surface at all right now
+    (:func:`root_rejection` turned its configured root down — most often
+    "does not exist" on a headless install that has no ``~/Documents``
+    yet). Callers must treat that as "no library-level rule to apply",
+    NOT as "denied": the documents router creates that folder on first
+    save, and refusing the first save would make the library unreachable
+    forever.
+    """
+    for lib in build_core_libraries(_allowed_under_config()):
+        if lib.id == library_id:
+            return lib
+    return None
 
 
 def build_plugin_libraries(

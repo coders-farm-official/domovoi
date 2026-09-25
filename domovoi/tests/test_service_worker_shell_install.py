@@ -1,19 +1,28 @@
 """The service worker's shell install has to reach the server, not the
 browser's own HTTP cache.
 
-`SHELL_CACHE`'s name is the only thing that makes the install handler run
-again, and this release bumped it to `domovoi-shell-v3` precisely because a
-v2 browser's `auth.js` canonicalises the household token before storing it
-and so cannot pair with a token an admin chose. That bump is defeated if
-the install fetches are answered out of the HTTP cache: the new cache fills
-with the old bundle, `sw.js` will not change again, and the browser is
-stuck there with no way out but a hard reload.
+WHAT CHANGED, AND WHY THIS MODULE'S PREMISE MOVED. Until 2026-09-25 the
+static mount sent NO `Cache-Control` at all, so freshness was heuristic and
+a recently-opened dashboard held a warm, non-revalidating copy of every
+shell file — which is exactly what `cache: 'reload'` in the install
+handler was written to get past. That is no longer the state of the world:
+`web/backend/static_cache.py` now stamps each asset URL in the page with
+that file's own token and serves the page itself `no-cache`, because the
+header alone was measured NOT to reach a browser that already holds a
+heuristically-fresh copy. See `test_web_static_cache_headers`.
 
-It is not a hypothetical. The SPA is mounted with Starlette's
-`StaticFiles`, whose `FileResponse` sets `last-modified` and `etag` and
-nothing else — no `Cache-Control` anywhere in `web/backend` for the static
-mount — so freshness is heuristic and a recently-opened dashboard has a
-warm, non-revalidating copy of every shell file.
+`cache: 'reload'` is kept, and still asserted here. An install is the one
+fetch that must not depend on the server's headers being right, because
+what it stores is what a browser will live on when the network is gone;
+and the install fetches the SHELL_ASSETS list by its plain, unversioned
+names, which is precisely the class of URL the new mount answers
+`no-cache` rather than `immutable`.
+
+`SHELL_CACHE`'s name is what makes the install handler run again on a
+browser that already has a worker. It moved to `domovoi-shell-v4` in the
+same release, so that a browser holding the v3 cache — filled under the
+OLD cache-first, never-revalidate rules — throws those entries away on
+the upgrade instead of serving them one more time.
 
 DB-free: one runs `web/static/sw.js` in node against a fake Cache Storage,
 the other reads response headers off static files.
@@ -61,21 +70,38 @@ def test_the_install_handler_fetches_the_shell_past_the_http_cache(install) -> N
 
 
 def test_the_shell_cache_name_still_matches_the_bundle_it_installs(install) -> None:
-    """The name is the whole upgrade mechanism: it is what makes install
-    run again on a browser that already has a worker."""
-    assert install["shellCache"] == "domovoi-shell-v3"
+    """The name is what makes install run again on a browser that already
+    has a worker, and what makes that browser drop the entries it filled
+    under the previous rules. It is no longer the ONLY upgrade mechanism
+    — the shell is network-first now and the mount versions its URLs —
+    but it is what covers the one browser no server change can reach: the
+    one still running the pre-fix, cache-first worker."""
+    assert install["shellCache"] == "domovoi-shell-v4"
 
 
 @pytest.mark.asyncio
-async def test_static_shell_files_carry_no_cache_control() -> None:
-    """The premise of the fix above, pinned so it cannot go stale. If a
-    `Cache-Control` ever does appear on the static mount, this fails and
-    whoever added it can decide whether the `reload` is still needed —
-    rather than the comment quietly becoming untrue."""
+async def test_the_shell_names_the_install_fetches_are_never_served_stale() -> None:
+    """The premise of `cache: 'reload'`, restated for the world as it is
+    now rather than deleted.
+
+    This module used to assert that the static mount sends NO
+    `Cache-Control`, which was true and was the reason `reload` had to
+    exist. It sends one now. What matters to THIS file is unchanged and is
+    what is pinned: the PLAIN, unversioned names in `SHELL_ASSETS` — the
+    ones the install handler fetches — are answered `no-cache`, never
+    with a long lifetime, so a browser can never install a shell out of a
+    cache it was told it could keep. (`immutable` is reserved for a URL
+    carrying the file's current token, and an install never asks for one.)
+    """
+    from web.backend.static_cache import REVALIDATE
+
     async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
-        for path in ("/auth.js", "/sw.js"):
+        for path in ("/auth.js", "/sw.js", "/data.js", "/settings.jsx"):
             r = await c.get(path)
             assert r.status_code == 200, path
-            assert "cache-control" not in r.headers, (path, r.headers.get("cache-control"))
-            # ...which is why the browser falls back to heuristic freshness.
+            assert r.headers.get("cache-control") == REVALIDATE, (
+                path, r.headers.get("cache-control")
+            )
+            # The revalidation stays cheap: a 304 with no body, not a
+            # re-download of the whole shell on every load.
             assert "last-modified" in r.headers or "etag" in r.headers, path

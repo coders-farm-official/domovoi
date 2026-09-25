@@ -50,7 +50,7 @@ flowchart TB
         v1["The household token every dashboard, phone<br/>and satellite presents"]
         v2["A turn (/v1/intent), announce,<br/>the drop-in WebSocket"]
         v3["Play/queue music, the room queue,<br/>volume, add-by-query"]
-        v4["Documents, Files, Images and Videos:<br/>list, read, upload, move, import"]
+        v4["Documents, Files, Images and Videos:<br/>list, read, SAVE, upload, move, import"]
         v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
         v6["On the dashboard: the calendar, playlists,<br/>chat, news, podcasts and audiobooks,<br/>a person's memories and favorites"]
         v7["Satellite room label, timer cancel,<br/>announce and volume"]
@@ -162,10 +162,13 @@ before setup.
 The ordinary actions now sit behind it: a text or voice turn
 (`POST /v1/intent`), announcements and drop-in, playback and the room
 queue, per-room volume, add-by-query. So do the media surfaces: reading
-the Documents folder, and browsing / downloading / uploading / moving /
-importing across Files, Images and Videos. So do the routes that make
-the server go and fetch something a caller chose — podcast subscribe
-and poll, news feed attach and re-test.
+AND saving in the Documents folder — creating, uploading, and writing a
+document, a spreadsheet or a drawing, each editor limited to the kinds of
+file it actually opens so that a save can never quietly replace a PDF, a
+photo or a spreadsheet with text — and browsing / downloading /
+uploading / moving / importing across Files, Images and Videos. So do the
+routes that make the server go and fetch something a caller chose —
+podcast subscribe and poll, news feed attach and re-test.
 
 The **dashboard's** ordinary mutations are on it too, which is what closed
 the last of them: playing, queueing, tagging and uploading music; the
@@ -217,6 +220,20 @@ unpaired device can't write regardless of what it calls itself, while
 within the household the id stays self-asserted and the block stays
 *household policy* rather than a security boundary, exactly as the room
 queue's does.
+
+The block covers the Documents folder through **both** doors into it.
+`/api/files` and `/api/documents` write into the same directory
+(`core:documents`), and since saving became a household action both are
+device tier — so a rule only one of them kept would be a rule neither
+kept, because a caller picks the door. The documents saves therefore call
+the files module's own check rather than carrying a copy of it, and they
+apply the same secret-shaped-name filter. One difference remains, and it
+is a client limitation rather than a decision: `device_id` is **required**
+on an `/api/files` write and **optional** on a documents save, because the
+in-app editors and the Android Documents screen do not name a device on
+those routes yet. A documents save that does name one is blocked exactly
+as the files door would block it; a blocked device whose client omits the
+field still saves. Requiring it is a client change first.
 
 **How a client gets it.** The dashboard keeps the token in `localStorage`,
 per server, and sends it on every request; a refusal that names the header
@@ -521,9 +538,9 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Setting and rotating are Bearer-only; the cookie renders the read and nothing else. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
-| **Documents** (the operator's own `~/Documents`, not a shared media library) | Dashboard: `POST /api/documents/create`, `/delete`, `/upload`, `/download-zip`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`, and the same writes through `/api/files` when the target library is `core:documents`. The **reads** (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`) are device tier. | Pre-setup grace. A folder of personal files is a tier above the music library: the household may read it, only the operator changes it or takes a zip of it. |
+| **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
-| **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
+| **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. The block also covers `/api/documents` saves — the same folder through the other door. The caller is identified from the request, not only from the body: body `device_id`, `X-Device-Id`, `?device_id=`, or the `domovoi-device-id` cookie the server sets on `POST /api/devices/register`. A browser is therefore covered without any client change; the Android app keeps no cookie jar and stays unidentified there until it sends the header. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |

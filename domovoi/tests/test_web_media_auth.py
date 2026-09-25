@@ -1,14 +1,19 @@
-"""Who may read and who may change the media surfaces (WEB-2, REV-1,
-WEB-1) — the two-tier posture taken on 2026-09-22.
+"""Who may read, who may save and who may delete on the media surfaces
+(WEB-2, WEB-1) — the posture taken 2026-09-22 and revised 2026-09-24:
+**saving is a household action, deleting is an admin action.**
 
-* **Daily (device) tier** — a household client presenting
-  ``X-Device-Token``, an admin Bearer, or (for reads the browser fetches
-  by URL) the dashboard cookie / ``?device_token=``: browsing, streaming
-  and downloading single files across Files, Images, Videos and
-  Documents, and the ordinary Files writes.
-* **Admin tier** — ``Authorization: Bearer``: everything that changes the
-  operator's Documents folder, deletes, hands back a whole directory as
-  a zip, or touches satellite media preparation.
+* **Daily read tier** — a household client presenting ``X-Device-Token``,
+  an admin Bearer, or (for the reads a browser fetches by URL) the
+  dashboard cookie / ``?device_token=``: browsing, streaming and
+  downloading single files across Files, Images, Videos and Documents.
+* **Device tier** — ``X-Device-Token`` or an admin Bearer, and NEITHER
+  the cookie alone nor ``?device_token=``: the ordinary Files writes, and
+  every SAVE in the Documents folder — create, upload, write a text file,
+  write a sheet, save a drawing.
+* **Admin tier** — ``Authorization: Bearer``: deletes, the requests that
+  hand back a whole tree in one response (``/api/documents/download-zip``
+  and a directory ``/api/files/download``), writes onto a removable
+  drive, and satellite media preparation.
 
 DB-FREE by construction: the auth primitives are faked
 (``auth_testkit.install_fake_db``) so the REAL routers, wearing their
@@ -84,45 +89,79 @@ def _client() -> TestClient:
 # ═══ WEB-2 · Documents ════════════════════════════════════════════════
 
 
-DOC_WRITES = [
-    ("post", "/api/documents/create", {"json": {"name": "x", "kind": "text"}}),
+# ── Saving: the household verb ──
+#
+# Create, write text, write a sheet, save a drawing. Upload is the same
+# tier and is exercised separately because it is multipart.
+DOC_SAVES = [
+    ("post", "/api/documents/create", {"json": {"name": "shopping.txt", "kind": "text"}}),
+    ("put", "/api/documents/text/notes.md", {"json": {"text": "milk, oats"}}),
+    ("put", "/api/documents/sheet/budget.csv", {"json": {"rows": []}}),
+    ("post", "/api/documents/drawings/write",
+     {"json": {"rel_path": "plan.svg", "content": "<svg/>"}}),
+]
+DOC_SAVE_IDS = [f"{m.upper()} {p}" for m, p, _ in DOC_SAVES]
+
+# Delete, and the request that hands back the whole selection as one zip.
+DOC_ADMIN_WRITES = [
     ("post", "/api/documents/delete", {"json": {"rel_paths": ["notes.md"]}}),
     ("post", "/api/documents/download-zip", {"json": {"rel_paths": ["notes.md"]}}),
-    ("put", "/api/documents/text/notes.md", {"json": {"text": "owned"}}),
-    ("put", "/api/documents/sheet/t.csv", {"json": {"rows": []}}),
-    ("post", "/api/documents/drawings/write",
-     {"json": {"rel_path": "d.svg", "content": "<svg/>"}}),
 ]
-DOC_WRITE_IDS = [f"{m.upper()} {p}" for m, p, _ in DOC_WRITES]
+DOC_ADMIN_WRITE_IDS = [f"{m.upper()} {p}" for m, p, _ in DOC_ADMIN_WRITES]
 
 
-@pytest.mark.parametrize(("method", "path", "kw"), DOC_WRITES, ids=DOC_WRITE_IDS)
-def test_changing_documents_needs_an_admin_session(claimed, docs_dir, method, path, kw):
-    """Nothing in ``~/Documents`` changes — and no archive of it comes
-    back — for a caller with no credential, and a household device token
-    is not enough either: this is the operator's own folder."""
+@pytest.mark.parametrize(("method", "path", "kw"), DOC_SAVES, ids=DOC_SAVE_IDS)
+def test_saving_a_document_needs_a_device_token_or_a_session(
+    claimed, docs_dir, method, path, kw
+):
+    """Nothing in the Documents folder changes for a caller with no
+    credential, or one presenting a token this household never minted."""
     c = _client()
     assert getattr(c, method)(path, **kw).status_code == 401
-    assert getattr(c, method)(path, headers=DEVICE, **kw).status_code == 401
+    assert getattr(c, method)(path, headers={HEADER: "stale"}, **kw).status_code == 401
     assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+    assert sorted(p.name for p in docs_dir.iterdir()) == ["notes.md"]
 
 
-def test_uploading_a_document_needs_an_admin_session_and_a_preflight(claimed, docs_dir):
-    """The multipart upload is the one route here a cross-site form could
-    otherwise submit, so it wants the preflight-forcing header as well as
-    the admin session."""
+def test_a_paired_device_saves_a_document(claimed, docs_dir):
+    """The household verb: a phone holding ``X-Device-Token`` writes the
+    shopping list, and the bytes are on disk afterwards. No admin
+    password anywhere in this test."""
+    c = _client()
+    r = c.put("/api/documents/text/notes.md", json={"text": "milk, oats"}, headers=DEVICE)
+    assert r.status_code == 200, r.text
+    assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "milk, oats"
+
+
+def test_a_paired_device_creates_a_document_and_saves_a_drawing(claimed, docs_dir):
+    c = _client()
+    made = c.post(
+        "/api/documents/create", json={"name": "shopping.txt", "kind": "text"},
+        headers=DEVICE,
+    )
+    assert made.status_code == 200, made.text
+    assert (docs_dir / "shopping.txt").exists()
+    drew = c.post(
+        "/api/documents/drawings/write",
+        json={"rel_path": "plan.svg", "content": "<svg/>"}, headers=DEVICE,
+    )
+    assert drew.status_code == 200, drew.text
+    assert (docs_dir / "plan.svg").read_text(encoding="utf-8") == "<svg/>"
+
+
+def test_uploading_a_document_needs_a_device_token_and_a_preflight(claimed, docs_dir):
+    """Upload is the household verb too — but it is multipart, the one
+    shape here a cross-site form could otherwise submit, so it wants the
+    preflight-forcing header as well as the household token."""
     files = [("files", ("dropped.txt", b"x", "text/plain"))]
     c = _client()
     assert c.post("/api/documents/upload", files=files).status_code == 401
-    assert c.post(
-        "/api/documents/upload", files=files, headers={**DEVICE, **XRW}
-    ).status_code == 401
-    # Admin, but sent the way a cross-site form would — no preflight header.
+    # Paired, but sent the way a cross-site form would — no preflight header.
     assert _no_preflight_client().post(
-        "/api/documents/upload", files=files, headers=ADMIN
+        "/api/documents/upload", files=files, headers=DEVICE
     ).status_code == 403
     assert not (docs_dir / "dropped.txt").exists()
-    ok = c.post("/api/documents/upload", files=files, headers={**ADMIN, **XRW})
+    ok = c.post("/api/documents/upload", files=files, headers={**DEVICE, **XRW})
     assert ok.status_code == 200, ok.text
     assert (docs_dir / "dropped.txt").read_bytes() == b"x"
 
@@ -134,14 +173,52 @@ def test_an_admin_session_still_changes_documents(claimed, docs_dir):
     assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "owned"
 
 
-def test_the_dashboard_cookie_alone_never_changes_documents(claimed, docs_dir):
+@pytest.mark.parametrize(("method", "path", "kw"), DOC_SAVES + DOC_ADMIN_WRITES,
+                         ids=DOC_SAVE_IDS + DOC_ADMIN_WRITE_IDS)
+def test_the_dashboard_cookie_alone_never_changes_documents(
+    claimed, docs_dir, method, path, kw
+):
     """A cookie renders state; it does not authorize a write (that is the
-    whole point of the split — a cross-site POST carries the cookie)."""
-    r = _client().put(
-        "/api/documents/text/notes.md", json={"text": "owned"}, headers=COOKIE_ONLY
-    )
-    assert r.status_code == 403
+    whole point of the split — a cross-site POST carries the cookie).
+    Widening SAVE to the device tier did not widen it to the cookie: the
+    refusal is 403 on the saves and on the admin verbs alike."""
+    r = getattr(_client(), method)(path, headers=COOKIE_ONLY, **kw)
+    assert r.status_code == 403, r.text
     assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+    assert sorted(p.name for p in docs_dir.iterdir()) == ["notes.md"]
+
+
+# ── Deleting, and zipping the folder: the admin verbs ──
+
+
+@pytest.mark.parametrize(("method", "path", "kw"), DOC_ADMIN_WRITES,
+                         ids=DOC_ADMIN_WRITE_IDS)
+def test_deleting_or_zipping_documents_needs_an_admin_session(
+    claimed, docs_dir, method, path, kw
+):
+    """A household device saves; it does not destroy, and it does not
+    walk away with the whole selection in one response. The file is still
+    on disk after every refusal."""
+    c = _client()
+    assert getattr(c, method)(path, **kw).status_code == 401
+    assert getattr(c, method)(path, headers=DEVICE, **kw).status_code == 401
+    assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "# hello\n"
+
+
+def test_an_admin_deletes_a_document(claimed, docs_dir):
+    r = _client().post(
+        "/api/documents/delete", json={"rel_paths": ["notes.md"]}, headers=ADMIN
+    )
+    assert r.status_code == 200, r.text
+    assert not (docs_dir / "notes.md").exists()
+
+
+def test_an_admin_takes_the_zip(claimed, docs_dir):
+    r = _client().post(
+        "/api/documents/download-zip", json={"rel_paths": ["notes.md"]}, headers=ADMIN
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/zip"
 
 
 DOC_READS = [
@@ -197,13 +274,14 @@ def test_a_fresh_install_can_still_use_documents_before_setup(unclaimed, docs_di
     assert r.status_code == 200, r.text
 
 
-# ═══ REV-1 · Files, Images, Videos ════════════════════════════════════
+# ═══ Files, Images, Videos ════════════════════════════════════════════
 
 
 @pytest.fixture
 def libraries(monkeypatch, tmp_path):
-    """A music library (ordinary), the Documents library (admin writes)
-    and a removable drive, each rooted in a tmp dir. The device-block
+    """A music library (ordinary), the Documents library (saves are the
+    household's, like any other core library) and a removable drive
+    (writes stay admin), each rooted in a tmp dir. The device-block
     lookup is stubbed to "not blocked" — whose writes are blocked is
     test_files_api.py's subject, not this module's."""
     roots = {}
@@ -364,9 +442,9 @@ def test_downloading_a_whole_directory_needs_an_admin_session(claimed, libraries
     assert ok.headers["content-type"] == "application/zip"
 
 
-def test_writing_into_documents_through_files_needs_an_admin_session(claimed, libraries):
-    """The Documents library is the operator's own folder wherever it is
-    reached from — the Files page included."""
+def test_a_paired_device_saves_into_documents_through_files(claimed, libraries):
+    """The Documents library is the household's to save into wherever it
+    is reached from — the Files page included, not only the editors."""
     c = _client()
     up = c.post(
         "/api/files/upload",
@@ -374,21 +452,51 @@ def test_writing_into_documents_through_files_needs_an_admin_session(claimed, li
         files=[("files", ("n.txt", b"hi", "text/plain"))],
         headers={**DEVICE, **XRW},
     )
-    assert up.status_code == 401
-    assert not (libraries["documents"] / "n.txt").exists()
+    assert up.status_code == 200, up.text
+    assert (libraries["documents"] / "n.txt").read_bytes() == b"hi"
     mv = c.post("/api/files/move", json={
         "source_library_id": "core:music", "paths": ["song.mp3"],
         "target_library_id": "core:documents", "target_path": "",
         "device_id": "browser-test",
     }, headers=DEVICE)
-    assert mv.status_code == 401
-    ok = c.post(
+    assert mv.status_code == 200, mv.text
+    assert (libraries["documents"] / "song.mp3").exists()
+
+
+def test_deleting_from_documents_through_files_still_needs_an_admin_session(
+    claimed, libraries
+):
+    """Saving got easier; deleting did not. The file survives the
+    household's attempt and only goes when an admin asks."""
+    (libraries["documents"] / "n.txt").write_bytes(b"hi")
+    c = _client()
+    body = {"library_id": "core:documents", "paths": ["n.txt"]}
+    assert c.post("/api/files/delete", json=body).status_code == 401
+    assert c.post("/api/files/delete", json=body, headers=DEVICE).status_code == 401
+    assert (libraries["documents"] / "n.txt").exists()
+    assert c.post("/api/files/delete", json=body, headers=ADMIN).status_code == 200
+    assert not (libraries["documents"] / "n.txt").exists()
+
+
+def test_a_paired_device_still_cannot_write_onto_a_removable_drive(claimed, libraries):
+    """A stick somebody plugged into the server is not one of the
+    household's libraries: writing onto it was never what was widened."""
+    c = _client()
+    up = c.post(
         "/api/files/upload",
-        data={"library_id": "core:documents", "path": "", "device_id": "browser-test"},
+        data={"library_id": "removable:E", "path": "", "device_id": "browser-test"},
         files=[("files", ("n.txt", b"hi", "text/plain"))],
-        headers={**ADMIN, **XRW},
+        headers={**DEVICE, **XRW},
     )
-    assert ok.status_code == 200, ok.text
+    assert up.status_code == 401, up.text
+    mv = c.post("/api/files/move", json={
+        "source_library_id": "core:music", "paths": ["song.mp3"],
+        "target_library_id": "removable:E", "target_path": "",
+        "device_id": "browser-test",
+    }, headers=DEVICE)
+    assert mv.status_code == 401, mv.text
+    assert not (libraries["usb"] / "n.txt").exists()
+    assert (libraries["music"] / "song.mp3").exists()
 
 
 def test_a_paired_device_still_reads_documents_through_files(claimed, libraries):

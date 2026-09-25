@@ -694,8 +694,13 @@ src>` can't set a header) with three exceptions that take **admin
 - `POST /delete` — the one verb that destroys something;
 - `GET /download` when the path is a **directory** — the server builds the
   zip in memory and hands back a whole tree in one request;
-- any write whose target library is **`core:documents`** (§3.14) or a
-  **removable drive**.
+- any write whose target library is a **removable drive** — writing onto a
+  stick somebody plugged into the server is a different risk from saving
+  into the household's own libraries.
+
+`core:documents` (§3.14) is **not** one of them: saving into the Documents
+library through `/api/files` is device tier, exactly as it is on
+`/api/documents`.
 
 Everything else — browsing, downloading a file, uploading, moving,
 importing — belongs to the household: a paired phone shouldn't need the
@@ -732,7 +737,7 @@ every listing/serve/copy.
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
 | `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
-| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or an admin-write library (Documents / removable) without an admin session · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
+| `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or a **removable** target without an admin session (Documents is device tier like any other core library) · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
 | `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path, device_id }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only **or device blocked** · `404` missing target dir · `422` no `device_id`. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path, device_id }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `403` device blocked · `409` source not removable / target not importable · `410` ejected source · `404` missing · `422` no `device_id`. |
@@ -747,14 +752,74 @@ credentials forwarded; `audiobooks` runs the in-process indexer; `podcasts` /
 
 ### 3.14 Documents (homegrown editors)
 
-**Reads are device tier** (`X-Device-Token`, an admin Bearer, the dashboard
-cookie, or `?device_token=` for the browser-fetched `/raw` and `/export`
-URLs); **writes and `/download-zip` are admin tier** (`Authorization:
-Bearer`). `documents_dir` is the operator's own `~/Documents`, so the
-household reads it and the operator changes it. Both keep the pre-setup
-grace. The former OnlyOffice/Collabora sidecars — and with them the
-open/close locks, JWT capability tokens, save callbacks, and WOPI routes —
-are retired. Editing is homegrown/in-page: a markdown doc editor
+**Saving is a household action; deleting is an admin action.** **Reads are
+device tier** (`X-Device-Token`, an admin Bearer, the dashboard cookie, or
+`?device_token=` for the browser-fetched `/raw` and `/export` URLs).
+**Saves — `/create`, `/upload`, `PUT /text`, `PUT /sheet`,
+`/drawings/write` — are device tier too**: a valid `X-Device-Token` or an
+admin Bearer. The dashboard cookie *alone* is still refused `403` on any of
+them (that split is the CSRF backstop, not a claim about who owns the
+folder), and a mutation never reads `?device_token=`. **`/delete` and
+`/download-zip` are admin tier** (`Authorization: Bearer`): delete is the
+verb that destroys something, and `/download-zip` is the one request that
+turns "can read the library" into "holds a copy of the library". All three
+keep the pre-setup grace.
+
+**A save writes only what its editor edits, and this is one of TWO DOORS
+into the same folder.** `documents_dir` defaults to the operator's real
+`~/Documents` and one household token is shared by every paired client, so
+the tier alone is not the whole rule:
+
+* `PUT /text` writes markdown and text — the kinds of file the text editor
+  opens. A target that belongs to another editor (`.xlsx`, `.csv`,
+  `.excalidraw`), to no editor (`.pdf`, an image, a legacy office format),
+  or that is binary / larger than the editor's read limit is refused `415`
+  and **nothing on disk changes**. `PUT /sheet` likewise refuses anything
+  outside `.xlsx`/`.csv` with `415` before it creates anything, and
+  `/drawings/write` refuses anything outside `.excalidraw`/`.svg` with
+  `400`. Without these, a household save would be a general-purpose
+  overwrite primitive over the operator's documents — a delete with extra
+  steps, and delete is the verb that stayed admin.
+* A save may create `documents_dir` itself but never a folder tree inside
+  it: a path whose parent folder does not exist is `404`, matching
+  `POST /api/files/upload`.
+* `/api/documents/*` and `/api/files/*` both write into `core:documents`,
+  so **both enforce the same rules**: the per-device write block
+  (`files_device_blocks`), the admin-write library list, the library's
+  `editable` flag, and the secret-shaped-name filter that skips `.env`,
+  `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
+  `setup-code.txt`. A name one door refuses is refused by the other
+  (`400`, or `skipped` on an upload).
+* **Who the caller is does not depend on the caller mentioning it.**
+  `device_id` in the body is still required on `/api/files` writes and
+  optional on `/api/documents` saves — no client sends it there, and
+  requiring it would `422` every Save — but it is no longer what decides.
+  The server takes the first well-formed id it finds in the body, the
+  `X-Device-Id` header, `?device_id=`, or the `domovoi-device-id` cookie
+  it sets itself on `POST /api/devices/register`, which every browser
+  calls on every dashboard load. A device an admin blocked in Settings is
+  therefore refused on both doors from a browser, with no client change.
+  Still open, and stated rather than implied: the Android app builds its
+  HTTP client with no cookie jar, so it is unidentified on these routes
+  until it sends `X-Device-Id`; and within the household an id is
+  self-asserted either way, which is why this is household policy rather
+  than a security boundary.
+* **A path is normalised before it is judged, and refused when it cannot
+  be.** Every gate above asks about the name the caller SENT, and the
+  filesystem may store the bytes under a different one. `400` for: a
+  control character anywhere in the path (a percent-encoded NUL or tab
+  — previously an unhandled `500` out of `stat()`); on a Windows host, a
+  `:` anywhere (`tax.pdf:stash.md` wrote into an NTFS alternate data
+  stream that no listing, zip or export could see, while the extension
+  gate read `.md`); and, on a Windows host, a path segment with a trailing
+  dot or space (`.env.` and `.env ` are stored as `.env`, which is how
+  they slipped the reserved-name filter on all four doors). The
+  reserved-name filter itself now judges every name a name could become,
+  on every platform.
+
+The former OnlyOffice/Collabora sidecars — and
+with them the open/close locks, JWT capability tokens, save callbacks, and
+WOPI routes — are retired. Editing is homegrown/in-page: a markdown doc editor
 (`/text` + `/export/doc`), a spreadsheet grid (`/sheet` + `/export/sheet`,
 .xlsx/.csv round-trip via openpyxl), and Excalidraw for drawings. Every
 row's `category` tells the UI how to open it
@@ -764,19 +829,19 @@ row's `category` tells the UI how to open it
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
-| `POST /api/documents/create` | **Admin** · `CreateRequest` | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). |
-| `POST /api/documents/upload` | **Admin** · multipart · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. |
-| `POST /api/documents/delete` | **Admin** · `DeleteRequest` | Delete documents. |
-| `POST /api/documents/download-zip` | **Admin** · `ZipRequest` | Zip + download a selection. |
+| `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name (including one wearing a trailing dot or space), for a stream separator or a control character; `409` if it already exists. |
+| `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
+| `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
+| `POST /api/documents/download-zip` | **Admin (mutation)** · `ZipRequest` | Zip + download a selection. |
 | `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
-| `PUT /api/documents/text/{rel_path}` | **Admin** · `TextWriteRequest` | Write a text/markdown file. |
+| `PUT /api/documents/text/{rel_path}` | **Device** · `TextWriteRequest` (optional `device_id`) | Write a text/markdown file. `415` — with the bytes untouched — for a target another editor owns, for a binary, or for one over the editor's read limit; `400` for a secret-shaped name, for a path the filesystem would store elsewhere (stream separator, trailing dot/space) or one it cannot use at all; `404` when the parent folder does not exist. |
 | `GET /api/documents/sheet/{rel_path}` | **Device** | The sheet grid model (`rows[[{v,f}]]`); 415 for non-.xlsx/.csv. |
-| `PUT /api/documents/sheet/{rel_path}` | **Admin** · `SheetWriteRequest` | Write the grid back (.xlsx keeps formulas as formulas). |
+| `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` (optional `device_id`) | Write the grid back (.xlsx keeps formulas as formulas). `415` for anything outside .xlsx/.csv, raised before anything is created. |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
 | `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
 | `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
-| `POST /api/documents/drawings/write` | **Admin** · `DrawingWriteRequest` | Save a drawing. |
+| `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` (optional `device_id`) | Save a drawing. `400` for anything outside .excalidraw/.svg. |
 
 ### 3.15 Podcasts and audiobooks
 
@@ -924,6 +989,51 @@ fetching runs in a core background worker.
 | Method & path | Auth | Response / purpose |
 |---|---|---|
 | `GET /api/health` | Open | `{status: "ok"\|"degraded", db_reachable, domovoi_reachable}`. Returns `200` even when degraded so the UI can render a partial-degradation banner. |
+
+### 3.22 The static mount, and how a front-end change reaches a browser
+
+Everything under `/` that is not `/api` or `/ws` is the dashboard itself,
+served from `web/static` by `web.backend.static_cache.RevalidatingStaticFiles`.
+It is worth a section because it is the delivery mechanism for every
+front-end change in the product, and getting it wrong is invisible: the
+server holds the fix, the browser runs the old file, and nothing says so.
+
+| What is asked for | What comes back |
+|---|---|
+| `GET /` or any `*.html` | The page, with every same-origin `<script src>` / `<link href>` / `<img src>` rewritten to carry `?v=<that file's token>`. `Cache-Control: no-cache` and an `ETag` computed over the REWRITTEN bytes. |
+| `GET /files.jsx?v=<current token>` | The file, `Cache-Control: public, max-age=31536000, immutable`. No revalidation, no round trip. |
+| `GET /files.jsx` (no token, or a stale one) | The file, `Cache-Control: no-cache`. Store it, but ask before reusing it. |
+
+The token is that one file's size and mtime, **per file, not per tree**:
+`web/static` is 12 MB, 11 of it vendored bundles that change only when
+somebody re-vendors them, and a tree-wide token would re-download all of
+it on every release.
+
+Why not simply `Cache-Control: no-cache` on everything? Because it was
+measured not to work. `StaticFiles` used to send no `Cache-Control` at
+all, so freshness was heuristic (RFC 9111 §4.2.2: about 10% of the age
+since `Last-Modified`), and a browser that had opened the dashboard held
+non-revalidating copies for days. A browser only learns a new header by
+making a request, and the whole problem is that it does not make one:
+driven in a real headless Chrome with a warm cache, one ordinary reload
+after a deploy served the OLD bundle both with the header fix and without
+it. Changing the URL is what makes a deploy arrive, because a URL the
+browser has never seen has nothing to serve from cache.
+
+Cost, on the LAN this runs on: one conditional `GET` per page load (the
+page, `304`, no body) and a full download of exactly the files that
+changed. Not the ~35 revalidations a uniform `no-cache` would have cost.
+
+`web/static/sw.js` is the other half. A service worker answers before the
+HTTP cache is consulted, so it is network-first for the shell and re-fetches
+with `cache: 'no-cache'`; its cache is the offline fallback, not the source
+of truth. Note the asymmetry worth knowing at deploy time: a service worker
+only registers on a secure context, so on a plain-HTTP LAN install
+(`http://<host>:6369`) there is no worker at all and the static mount is
+the only layer there is. A browser still running a PRE-2026-09-25 worker
+takes one extra reload on that one upgrade — the code deciding what to
+serve on the first one is already in the browser, and no server change can
+reach it.
 
 ---
 

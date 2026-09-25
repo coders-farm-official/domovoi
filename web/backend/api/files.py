@@ -17,17 +17,37 @@ and a ``?device_token=`` query because an ``<img src>`` cannot set a
 header. The pre-setup grace is kept throughout, so a fresh install still
 works before an admin password exists.
 
-Three things sit a tier above that (REV-1, resolved 2026-09-22):
+Three things sit a tier above that (resolved 2026-09-22, revised
+2026-09-24):
 
 * ``/delete`` — the one verb that destroys something;
 * a ``/download`` whose path is a **directory** — the server builds the
   zip in memory, and handing a whole tree to anything on the LAN is not
   an ordinary daily action;
-* any write whose target library is **``core:documents``** (the
-  operator's own ``~/Documents``, see :mod:`web.backend.api.documents`)
-  or a **removable drive**.
+* any write whose target library is a **removable drive** — writing onto
+  a stick somebody plugged into the server is a different risk from
+  saving into the household's own libraries.
 
 Each of those takes the admin tier instead.
+
+**``core:documents`` is NOT one of them.** Saving a document, a
+spreadsheet, a drawing or an image is a household action (2026-09-24),
+so a write into the Documents library is device tier here exactly as it
+is on ``/api/documents``. What still answers to the operator is deleting
+one — and deletes go through ``/delete`` above, wherever the target
+lives.
+
+**Two doors, one room.** ``/api/files`` and ``/api/documents`` write into
+the SAME folder. While the documents door was admin-only that did not
+matter; now that both are device tier, any rule only one of them keeps is
+a rule neither of them keeps, because a caller picks the door. So the
+rules live here and the documents router calls them:
+:func:`assert_documents_write_allowed` is the per-device block, the
+admin-write library list and the ``editable`` flag as one entry point,
+and the secret-shaped-name filter both doors apply is the shared
+:func:`~web.backend.api.files_security.is_sensitive_name`. Adding a rule
+to one door means adding it to that shared code, not to one handler —
+the drift is what made the gap.
 
 The device model the room queue uses (:mod:`web.backend.api.music_queue`)
 still rides on top: every write names the calling ``device_id`` (required
@@ -89,12 +109,16 @@ from web.backend.api.documents import (
     _SHEET_EXTS,
     _TEXT_EXTS,
 )
+from web.backend.api.devices import DEVICE_ID_COOKIE, valid_device_id
 from web.backend.api.files_security import (
+    DOCUMENTS_LIBRARY_ID,
     INDEXED_KINDS,
     MediaLibrary,
     build_libraries,
+    core_library,
     is_sensitive_name,
     safe_join,
+    unstorable_reason,
 )
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.api.music import _safe_basename, _unique_path
@@ -110,13 +134,19 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 _MAX_TREE_MEMBERS = 5000
 _MAX_IMPORT_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB total per import
 
-# Libraries a household device may READ but not write into: the operator's
-# personal Documents folder, and every removable drive. A write here needs
-# the admin tier even from a paired device (REV-1).
-ADMIN_WRITE_LIBRARY_IDS: frozenset[str] = frozenset({"core:documents"})
+# Named libraries a household device may READ but not write into. EMPTY,
+# and deliberately so: it held ``core:documents`` until 2026-09-24, when
+# Kamron settled that saving documents, spreadsheets and images is a
+# household action and only deleting needs admin. Putting an id back here
+# reverses that decision — the hook stays for a library that genuinely
+# needs it, not as a place to restore Documents to.
+ADMIN_WRITE_LIBRARY_IDS: frozenset[str] = frozenset()
 
 
 def _needs_admin_write(lib: MediaLibrary) -> bool:
+    """Removable drives only: a stick somebody plugged into the server is
+    not one of the household's own libraries, and nobody asked for the
+    household to be able to write onto it."""
     return lib.id in ADMIN_WRITE_LIBRARY_IDS or lib.kind == "removable"
 
 
@@ -367,6 +397,128 @@ async def _assert_can_write(device_id: str) -> None:
         raise HTTPException(status_code=403, detail=reason)
 
 
+def caller_device_id(request: Request, body_device_id: Optional[str] = None) -> Optional[str]:
+    """Which device is making this request, from everything the caller
+    actually sent — not only from the body.
+
+    The per-device block used to be one JSON field away from meaningless on
+    the documents door: the field was optional (no client sends it there),
+    so a tablet an admin had blocked in Settings kept saving simply by
+    leaving it out, while the Files page on that same tablet showed the
+    banner saying it could not. Requiring the field instead would have
+    422'd every Save in the dashboard and in the Android app, so the
+    previous pass left it optional and said so out loud. That was the right
+    call with the information it had, and it is not the only option: the
+    server knows more about the caller than the body does.
+
+    Four places are consulted, most explicit first:
+
+    1. the request body — a caller that names itself is taken at its word,
+       exactly as ``/api/files`` takes it;
+    2. ``X-Device-Id`` — one header, set once in a client's HTTP layer,
+       covers every route at once. Nothing sends it yet; it is here so the
+       Android app's fix is one line in ``DeviceAuthInterceptor`` rather
+       than a per-screen edit;
+    3. ``?device_id=`` — what ``/api/files/browse`` already carries, so a
+       caller that identifies itself while reading is identified when it
+       writes from the same URL shape;
+    4. the ``domovoi-device-id`` COOKIE, which the server itself sets on
+       ``POST /api/devices/register`` — the call every browser makes on
+       every dashboard load, holding the very id the blocklist is keyed on.
+       No client change, no new field, and it arrives on every request the
+       browser makes for as long as the device exists.
+
+    What that closes: a blocked BROWSER cannot write through the documents
+    door any more, because the identity does not depend on the request
+    body naming it. What it does not close, and this is stated rather than
+    implied: the native Android app builds its OkHttp client with no cookie
+    jar, so it stays unidentified on these routes until it sends the id
+    (one header, item 2). And within the household an id is self-asserted
+    either way — the module docstring has always said so — so this is
+    household policy made to work on the clients people actually use, not
+    a security boundary. The difference from before is the DEFAULT: a
+    normal client now carries its name without being asked, instead of
+    omitting it without being noticed.
+
+    A malformed value is ignored rather than refused: an unreadable cookie
+    from some older build must not turn into a 400 on a legitimate save.
+    """
+    for candidate in (
+        body_device_id,
+        request.headers.get("X-Device-Id"),
+        request.query_params.get("device_id"),
+        request.cookies.get(DEVICE_ID_COOKIE),
+    ):
+        ident = valid_device_id(candidate)
+        if ident is not None:
+            return ident
+    return None
+
+
+async def assert_documents_write_allowed(
+    request: Request, device_id: Optional[str] = None
+) -> None:
+    """Apply THIS module's write policy for ``core:documents`` to a caller
+    arriving through the other door.
+
+    ``/api/files`` and ``/api/documents`` both write into the Documents
+    folder — two doors, one room. Until 2026-09-24 the difference between
+    them could not be exploited, because every ``/api/documents`` write
+    needed an admin Bearer while ``/api/files`` was device tier: the
+    stricter door could not be routed around. Both doors are device tier
+    now, and two doors with different locks means the WEAKER one decides
+    the policy. So the documents router asks the module that owns these
+    rules rather than carrying a copy of them, because a copy drifts and
+    the drift is invisible until somebody probes for it.
+
+    The rules, in the order ``POST /api/files/upload`` applies them:
+
+    1. the per-device block (:func:`_assert_can_write`) — 403;
+    2. :func:`_assert_admin_for` — 401 when the resolved library is an
+       admin-write one (a removable drive, or anything named in
+       :data:`ADMIN_WRITE_LIBRARY_IDS`). ``core:documents`` is in neither
+       today; this call is what makes the documents door follow if either
+       ever changes, instead of silently staying open;
+    3. the library's own ``editable`` flag — 403.
+
+    ``device_id`` in the BODY is still optional here and required on
+    ``/api/files`` — no client sends it on these routes, and requiring it
+    would 422 every Save. It no longer decides anything on its own:
+    :func:`caller_device_id` also reads the ``X-Device-Id`` header, the
+    ``?device_id=`` query and the ``domovoi-device-id`` cookie the server
+    sets on every device registration, so a browser is identified here
+    whether or not the JSON says who it is. Read that function for what
+    that closes and what it leaves open (the Android app, which keeps no
+    cookie jar).
+    """
+    caller = caller_device_id(request, device_id)
+    if caller:
+        await _assert_can_write(caller)
+    # The admin-write test is applied to the library ID, BEFORE the record
+    # is resolved. ``core_library`` answers None whenever ``root_rejection``
+    # turns documents_dir down — most often "does not exist" on a headless
+    # install — and the save that CREATES the folder is exactly the save
+    # that hit that window, so the one save on a fresh install skipped the
+    # library rules entirely. Nothing was open in practice (the set is
+    # empty and core:documents is editable), but this function is what the
+    # branch offers as proof that the documents door follows the hook if
+    # the policy ever changes, and the proof had a hole in it that the
+    # test could not see, because the test runs with the folder present.
+    if DOCUMENTS_LIBRARY_ID in ADMIN_WRITE_LIBRARY_IDS:
+        await require_admin_mutation(request)
+    lib = core_library(DOCUMENTS_LIBRARY_ID)
+    if lib is None:
+        # Documents is not on the Files surface at all right now — almost
+        # always because ``documents_dir`` does not exist yet on a
+        # headless install. There is no library-level rule to apply, and
+        # the first save is what creates the folder: refusing here would
+        # leave the library permanently unreachable.
+        return
+    await _assert_admin_for(lib, request)
+    if not lib.editable:
+        raise HTTPException(status_code=403, detail="library is not editable")
+
+
 # ─── GET /libraries ──────────────────────────────────────────────────────────
 @router.get("/libraries", dependencies=[Depends(require_device_read)])
 async def list_libraries() -> dict[str, Any]:
@@ -557,7 +709,17 @@ async def upload(
     for up in files:
         raw = up.filename or "upload"
         name = _safe_basename(raw)
-        if not name or name in (".", "..") or is_sensitive_name(name):
+        # ``is_sensitive_name`` now asks about every name this one could
+        # turn into on disk (".env." and ".env " both land as ".env" on
+        # Windows), and ``unstorable_reason`` refuses the shapes that would
+        # be stored somewhere other than where they say — a stream
+        # separator, a trailing dot or space, a control character.
+        if (
+            not name
+            or name in (".", "..")
+            or is_sensitive_name(name)
+            or unstorable_reason(name) is not None
+        ):
             skipped.append(f"{raw}: bad filename")
             continue
         data = await up.read()

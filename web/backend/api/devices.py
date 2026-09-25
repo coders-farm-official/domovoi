@@ -30,7 +30,7 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -84,6 +84,64 @@ def _clean_name(raw: str | None) -> str | None:
     return collapsed[:_MAX_NAME] or None
 
 
+# ─── The id the server hands back to the browser ─────────────────────────────
+#
+# A cookie, set by the server on every registration, carrying nothing but the
+# id the client just told us. It is NOT a credential: it confers no access, it
+# is not checked for authenticity, and losing it only means the caller goes
+# back to being anonymous. Its whole job is to make a browser CARRY ITS NAME on
+# requests whose body does not mention it.
+#
+# That is what the per-device files block needed. Every ``/api/documents`` save
+# takes ``device_id`` in the body as an optional field, no client sends it, and
+# so a tablet an admin had blocked in Settings kept saving through that door by
+# doing nothing at all. Requiring the field would 422 every Save in the
+# dashboard and in the app. A cookie the SERVER sets asks the client for
+# nothing: the dashboard already calls ``POST /api/devices/register`` on every
+# load (web/static/index.html, in bootstrap()), and from then on the browser
+# repeats the id on every request it makes, including the five documents saves.
+#
+# ``httponly`` because no page script has any reason to read it — the id is
+# already in localStorage, where the client minted it. ``samesite=lax`` rather
+# than the admin cookie's ``strict``: this value can only ever NARROW what a
+# caller may do, so the failure to avoid is the cookie not arriving, and Lax
+# arrives in every case Strict does plus the first navigation. No ``secure``,
+# for the same reason the session cookie has none — v1 runs over plain LAN
+# HTTP, and a Secure cookie would simply never be sent.
+DEVICE_ID_COOKIE = "domovoi-device-id"
+
+# Chrome caps cookie lifetime at 400 days; asking for more just gets trimmed.
+DEVICE_ID_COOKIE_MAX_AGE_SEC = 400 * 86400
+
+
+def valid_device_id(raw: str | None) -> str | None:
+    """``raw`` if it is a well-formed device id, else ``None``.
+
+    The non-raising twin of :func:`_validate_id`, for the callers that are
+    READING an id out of a request (a cookie, a header, a query string)
+    rather than being told one. A malformed value there means "this caller
+    did not identify itself", never "400" — an old cookie must not be able
+    to turn a legitimate save into an error.
+    """
+    if not raw:
+        return None
+    ident = raw.strip()
+    return ident if _DEVICE_ID_RE.match(ident) else None
+
+
+def _remember_device(response: Response, ident: str) -> None:
+    """Hand the id back as :data:`DEVICE_ID_COOKIE` so the browser repeats
+    it on requests that have nowhere to put it."""
+    response.set_cookie(
+        DEVICE_ID_COOKIE,
+        ident,
+        max_age=DEVICE_ID_COOKIE_MAX_AGE_SEC,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
 def _validate_id(device_id: str) -> str:
     ident = device_id.strip()
     if not _DEVICE_ID_RE.match(ident):
@@ -108,7 +166,7 @@ _COLUMNS = "device_id, name, platform, user_agent, first_seen_at, last_seen_at"
 
 
 @router.post("/register", response_model=Device, dependencies=DEVICE)
-async def register_device(payload: DeviceRegistration) -> Device:
+async def register_device(payload: DeviceRegistration, response: Response) -> Device:
     """Upsert this client's row and bump ``last_seen_at``.
 
     Idempotent and cheap — clients call it on every boot. ``name`` is only
@@ -143,6 +201,9 @@ async def register_device(payload: DeviceRegistration) -> Device:
         result = row.first()
     if result is None:  # pragma: no cover — RETURNING always yields on upsert
         raise HTTPException(status_code=500, detail="upsert returned no row")
+    # From here the browser carries its own name on every request, including
+    # the ones whose body has no field for it. See DEVICE_ID_COOKIE.
+    _remember_device(response, ident)
     return _row_to_device(result)
 
 

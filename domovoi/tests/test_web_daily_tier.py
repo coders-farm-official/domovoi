@@ -1,6 +1,7 @@
-"""REV-1 (and the web half of CORE-4) — the dashboard's ordinary
-mutations answer to a HOUSEHOLD credential, and the code-adjacent ones to
-the admin tier.
+"""The web half of CORE-4 — the dashboard's ordinary mutations answer to a
+HOUSEHOLD credential, and the code-adjacent or destructive ones to the
+admin tier. Saving a document is on the household side (2026-09-24);
+deleting one, and zipping a whole selection, are not.
 
 Two halves, both DB-free:
 
@@ -113,6 +114,18 @@ DEVICE_TIER = [
     ("DELETE", "/api/news/topics/{topic_id}/feeds/{feed_id}"),
     ("POST", "/api/news/items/{item_id}/favorite"),
     ("POST", "/api/news/poll"),
+    # documents: SAVING is a household action (2026-09-24) — creating a
+    # file, uploading one, writing a text file or a sheet, saving a
+    # drawing. Deleting one is not; it is in ADMIN_TIER below.
+    ("POST", "/api/documents/create"),
+    ("POST", "/api/documents/upload"),
+    ("PUT", "/api/documents/text/{rel_path:path}"),
+    ("PUT", "/api/documents/sheet/{rel_path:path}"),
+    ("POST", "/api/documents/drawings/write"),
+    # files: the ordinary writes, including into core:documents
+    ("POST", "/api/files/upload"),
+    ("POST", "/api/files/import"),
+    ("POST", "/api/files/move"),
 ]
 
 ADMIN_TIER = [
@@ -124,6 +137,11 @@ ADMIN_TIER = [
     ("POST", "/api/satellites/{room_id}/display"),
     ("PATCH", "/api/satellites/{room_id}/config"),
     ("POST", "/api/config/version/pull"),
+    # the verbs that destroy something, or hand back a whole library in
+    # one response. Widening SAVE to the household did not widen these.
+    ("POST", "/api/documents/delete"),
+    ("POST", "/api/documents/download-zip"),
+    ("POST", "/api/files/delete"),
 ]
 
 # FE-3: the video satellite's kiosk renders unattended, so its transport

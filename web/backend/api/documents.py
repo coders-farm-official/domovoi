@@ -24,19 +24,57 @@ listed, uploaded, and downloaded — but not edited in-app (category
 EVERY served/saved path is validated inside ``documents_dir`` via the same
 realpath / ``relative_to()`` containment check ``music.py`` uses.
 
-**Trust posture (two tiers, WEB-2 / REV-1, 2026-09-22).** ``documents_dir``
-is the operator's own ``~/Documents``, not a shared media library, so it
-sits a tier above Music:
+**Trust posture (WEB-2, revised 2026-09-24): saving is a household action,
+deleting is an admin action.** Writing a document, a spreadsheet or a
+drawing is ordinary daily use — the household does it from a phone, a
+tablet or the dashboard — so it asks only for the household credential.
+Destroying one, or taking a copy of the whole folder in a single request,
+answers to the operator.
 
 * **reads** (list, text, sheet, raw, export, drawing load) take the DEVICE
-  tier — a household client presenting ``X-Device-Token``, an admin, or
-  the dashboard cookie;
-* **writes** (create, upload, text/sheet save, drawing save, delete) and
-  the bulk ``/download-zip`` take the ADMIN tier: ``Authorization: Bearer``,
-  never the cookie alone.
+  READ tier — a household client presenting ``X-Device-Token``, an admin,
+  the dashboard cookie, or ``?device_token=`` for the URLs a browser
+  fetches itself;
+* **saves** (create, upload, text/sheet save, drawing save) take the
+  DEVICE tier: a valid ``X-Device-Token`` or an admin Bearer. The
+  dashboard cookie ALONE is still refused (403) — that split is the CSRF
+  backstop, not a statement about who owns the folder — and a mutation
+  never reads ``?device_token=``;
+* **``/delete`` and the bulk ``/download-zip``** take the ADMIN tier:
+  ``Authorization: Bearer``, never the cookie alone. Delete is the verb
+  that destroys something; ``/download-zip`` is the one request that turns
+  "can read the library" into "holds a copy of the library".
 
-Both keep the pre-setup grace, so a fresh install's first-run flow works
-before an admin password exists.
+All three keep the pre-setup grace, so a fresh install's first-run flow
+works before an admin password exists. Every mutating ``/api/*`` route
+also keeps the ``X-Requested-With`` requirement enforced by middleware
+ahead of auth: device tier is not cross-site-form-reachable.
+
+**A tier is not a licence, and there are TWO DOORS into this folder.**
+Two things follow from the tier change, and both are enforced below
+rather than assumed:
+
+* **A save writes only what its editor edits.** ``PUT /text`` writes the
+  kinds of file the text/markdown editor opens, ``PUT /sheet`` writes
+  ``.xlsx``/``.csv``, ``/drawings/write`` writes ``.excalidraw``/``.svg``
+  — each refuses anything else with 415/400 and touches nothing on disk.
+  Without that, "a household device may save a document" would really
+  mean "a household device may overwrite any file in the operator's
+  ``~/Documents`` with arbitrary text", which is a delete with extra
+  steps and is NOT what was decided. ``documents_dir`` defaults to the
+  operator's real ``~/Documents``, and one household token is shared by
+  every paired phone, tablet and satellite, so the guard is the
+  difference between saving and shredding.
+* **This router and** :mod:`web.backend.api.files` **write into the same
+  directory** (``core:documents``), so they must enforce the same rules
+  or the weaker door sets the policy for both. The per-device write
+  block, the admin-write library list and the library's ``editable``
+  flag come from
+  :func:`web.backend.api.files.assert_documents_write_allowed`; the
+  secret-shaped-name filter is the shared
+  :func:`web.backend.api.files_security.is_sensitive_name`. Both are
+  CALLED, not copied — a copy drifts, and the drift is what let a device
+  blocked in Settings → Devices keep writing here.
 """
 
 from __future__ import annotations
@@ -48,24 +86,42 @@ import mimetypes
 import os
 import re
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
+from web.backend.api.files_security import (
+    assert_storable,
+    is_sensitive_name,
+    unstorable_reason,
+)
 from web.backend.api.inline_serve import disposition_for, inert_headers
 
 log = logging.getLogger(__name__)
 
-# The two tiers this router serves under, as reusable dependency lists.
-# ``DAILY`` reads, ``ADMIN`` changes (or hands back an archive of) the
-# operator's Documents folder.
+# The three tiers this router serves under, as reusable dependency lists.
+# ``DAILY`` reads, ``DEVICE`` saves, ``ADMIN`` deletes (or hands back an
+# archive of the whole folder). A household device holds DEVICE; only the
+# operator holds ADMIN.
 DAILY = [Depends(require_device_read)]
+DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -191,6 +247,15 @@ def _safe_target(rel_path: str) -> Path:
                 f"DOCUMENTS_DIR, not absolute."
             ),
         )
+    # Normalise before deciding, and refuse what cannot be normalised. Three
+    # shapes reach the filesystem as a DIFFERENT path than the one named, and
+    # every gate below this line is asking about the name that was sent:
+    # a control character (which ``stat()`` answers with an exception, i.e. an
+    # unhandled 500), an NTFS stream separator (``tax.pdf:stash.md`` wrote
+    # bytes nothing could list while the extension gate read ``.md``), and a
+    # trailing dot or space (``.env.`` landed on disk as ``.env``). See
+    # files_security.unstorable_reason.
+    assert_storable(normalized)
     cleaned = normalized
     base = _documents_dir()
     target = (base / cleaned).resolve(strict=False)
@@ -229,6 +294,192 @@ def _unique_path(dirpath: Path, name: str) -> Path:
         i += 1
 
 
+def _ensure_parent_dir(target: Path) -> None:
+    """Give a save somewhere to land WITHOUT letting it invent a folder
+    tree inside the operator's Documents.
+
+    ``documents_dir`` itself is still created on demand: a fresh install
+    has no ``~/Documents`` until the first save, and refusing that save
+    would leave the library permanently unreachable. Anything deeper has
+    to exist already — which is exactly the rule ``POST /api/files/upload``
+    follows on this same directory ("destination directory not found",
+    404). The save routes used to call ``mkdir(parents=True)``, so a
+    device-tier ``PUT /text/a/b/c.txt`` conjured ``a/b`` out of nothing,
+    and ``PUT /sheet`` did it even for a save it was about to refuse.
+    """
+    base = _documents_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    parent = target.parent
+    if not parent.is_dir():
+        try:
+            shown = parent.relative_to(base).as_posix()
+        except ValueError:                       # pragma: no cover — _safe_target
+            shown = parent.name                  # already guarantees containment
+        raise HTTPException(
+            status_code=404, detail=f"{shown}: no such folder in Documents"
+        )
+
+
+@contextmanager
+def _usable_path(rel: str):
+    """Turn an OS-level complaint about a PATH into a 4xx instead of a 500.
+
+    ``_safe_target`` refuses the shapes it can recognise, but the OS has
+    limits this process cannot enumerate — a name past MAX_PATH, a reserved
+    device name, a volume that disagrees — and every one of them arrives as
+    an ``OSError`` or a ``ValueError`` out of ``stat()``, ``read_bytes()`` or
+    ``write_text()``. Escaping the handler, that is a 500 in the log for an
+    input any paired phone can send, and 500s that are really 400s are how
+    real 500s go unnoticed. Nothing is written in any of these cases; only
+    the status code and the log line change.
+
+    ``HTTPException`` passes straight through: the refusals inside this block
+    are answers, not accidents.
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except (OSError, ValueError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{rel}: not a usable document path ({type(e).__name__})",
+        ) from None
+
+
+# ─── What each editor is allowed to save ────────────────────────────
+# ``_doc_category`` already answers "which editor opens this?" for the
+# LIST view. The save routes ask it the mirror question — "did the editor
+# that is saving actually open this?" — and refuse when the answer is no.
+# One table, so an extension can never be openable by one editor and
+# writable by another.
+_TEXT_EDITOR_CATEGORIES = frozenset({"doc", "text"})
+
+
+def _assert_saveable_name(target: Path) -> None:
+    """Refuse a save whose FILENAME ``/api/files`` would refuse.
+
+    ``POST /api/files/upload`` skips secret-shaped names
+    (``.env``, ``*.key``, ``*.pem``, ``*.crt``, ``*.p12``, ``*.pfx``,
+    ``pairing_token``, ``setup-code.txt``, …) before writing them, and
+    every ``/api/files`` listing, download and zip then pretends such a
+    file does not exist. A name this router will happily write but that
+    router will never show again is a file hidden from the Files page in
+    the library the Files page owns, so both doors call the same
+    :func:`~web.backend.api.files_security.is_sensitive_name`.
+    """
+    if is_sensitive_name(target.name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{target.name}: that name is reserved and is never saved here",
+        )
+
+
+def _assert_text_editor_may_write(target: Path) -> None:
+    """Refuse a ``PUT /text`` at a target the text editor could not open —
+    BEFORE anything is created or overwritten.
+
+    The save routes are device tier now, ``documents_dir`` defaults to the
+    operator's real ``~/Documents``, and one household token is shared by
+    every paired client. Without this check ``PUT /text`` is a
+    general-purpose overwrite primitive: ``{"text": ""}`` at
+    ``tax-return-2025.pdf`` truncates the PDF, at 200, with no delete verb
+    and no admin anywhere in the request. Deleting is the one thing that
+    stayed admin, so a save that can destroy an arbitrary file is the
+    decision inverted, not implemented.
+
+    Two questions, both answered from the file the caller named:
+
+    * does the extension belong to THIS editor? ``_doc_category`` routes
+      ``.xlsx``/``.csv`` to the sheet editor, ``.excalidraw`` to the
+      whiteboard, ``.docx``/``.odt``/``.rtf``/``.xls``/``.ods`` to
+      download-only and PDFs/images to a new tab — none of those are the
+      text editor's to write;
+    * if the file already exists, would :func:`read_text_file` have
+      handed it over? It answers 415 for anything above
+      ``_TEXT_MAX_BYTES`` or that is not valid UTF-8, which is what
+      catches the binaries that wear an unrecognized extension
+      (``backup.dat``, a ``.zip``, a keyfile with no suffix at all).
+
+    The legitimate editor loses nothing: it only ever PUTs back a buffer
+    it just GET'd from ``/text``, and ``/text`` already refused
+    everything refused here. Creating a NEW file is untouched as long as
+    the name is one the editor could open afterwards.
+    """
+    ext = target.suffix.lower()
+    if _doc_category(ext) not in _TEXT_EDITOR_CATEGORIES:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"{ext or target.name} isn't editable in the text editor"
+                " — open it with the editor that owns it"
+            ),
+        )
+    if not target.exists():
+        return
+    if not target.is_file():
+        raise HTTPException(
+            status_code=415, detail=f"{_rel_of(target)} is a folder, not a document"
+        )
+    st = target.stat()
+    if st.st_size > _TEXT_MAX_BYTES:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"{target.name} is {st.st_size} bytes — larger than the"
+                f" {_TEXT_MAX_BYTES}-byte limit the text editor opens"
+            ),
+        )
+    try:
+        target.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"{target.name} isn't a text file — the text editor will not"
+                " overwrite it"
+            ),
+        ) from None
+
+
+def _assert_sheet_editor_may_write(target: Path) -> None:
+    """Refuse a ``PUT /sheet`` at a non-sheet target BEFORE any directory
+    is created or any byte written.
+
+    ``_write_sheet_grid`` already raises this 415, but it raised it AFTER
+    ``write_sheet`` had run ``mkdir(parents=True)``, so a refused request
+    still left new folders behind. Asking first means a save the server
+    will not do changes nothing at all.
+    """
+    ext = target.suffix.lower()
+    if ext not in _EDITABLE_SHEET_EXTS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext or target.name} isn't editable in the sheet editor (xlsx/csv only)",
+        )
+
+
+async def _assert_files_policy(request: Request, device_id: Optional[str]) -> None:
+    """Run :mod:`web.backend.api.files`'s write policy for
+    ``core:documents`` — the per-device block, the admin-write library
+    list and the library's ``editable`` flag.
+
+    ``/api/files`` and this router are two doors into one folder; see
+    :func:`web.backend.api.files.assert_documents_write_allowed` for what
+    it checks and for the one rule the doors still do not share.
+
+    Imported inside the call because ``files`` imports THIS module at
+    import time (for the extension tables), so the dependency can only
+    run one way at module level. By call time both modules are loaded,
+    and the late attribute lookup is also what lets a test stub the
+    block on ``files`` and have it bite here too — proving the doors
+    really share the check rather than each holding a copy.
+    """
+    from web.backend.api import files as files_api
+
+    await files_api.assert_documents_write_allowed(request, device_id)
+
+
 # ─── Schemas ────────────────────────────────────────────────────────
 class DocumentRow(BaseModel):
     rel_path: str
@@ -248,6 +499,10 @@ class CreateRequest(BaseModel):
     # "text" is the free-form kind: the name is taken VERBATIM — no
     # extension is forced. The others get their default ext appended.
     kind: Literal["doc", "sheet", "drawing", "text"]
+    # Optional here, required on /api/files — see
+    # files.assert_documents_write_allowed for why, and for what the
+    # difference costs. When present, the same per-device block applies.
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
 
 
 class DrawingReadRequest(BaseModel):
@@ -258,10 +513,12 @@ class DrawingWriteRequest(BaseModel):
     rel_path: str
     content: str
     fmt: Literal["excalidraw", "svg"] = "excalidraw"
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
 
 
 class TextWriteRequest(BaseModel):
     text: str
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
 
 
 class SheetCell(BaseModel):
@@ -271,6 +528,7 @@ class SheetCell(BaseModel):
 
 class SheetWriteRequest(BaseModel):
     rows: list[list[Optional[SheetCell]]] = Field(..., max_length=_SHEET_MAX_ROWS)
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
 
 
 class UploadResult(BaseModel):
@@ -370,12 +628,16 @@ _KIND_NEW_EXT = {
 }
 
 
-@router.post("/create", response_model=DocumentRow, dependencies=ADMIN)
-async def create_document(req: CreateRequest) -> DocumentRow:
+@router.post("/create", response_model=DocumentRow, dependencies=DEVICE)
+async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
     """Create a new blank file for a view. Name is a bare filename (any
     directory component is stripped). For doc/sheet/drawing the kind's
     default extension is appended when the user didn't type a recognized
-    one; the ``text`` kind takes the name VERBATIM."""
+    one; the ``text`` kind takes the name VERBATIM.
+
+    Device tier, and held to the same write policy ``/api/files``
+    applies to this library — see the module docstring's "two doors"."""
+    await _assert_files_policy(request, req.device_id)
     raw = os.path.basename(req.name.replace("\\", "/")).strip()
     if not raw:
         raise HTTPException(status_code=400, detail="empty file name")
@@ -384,11 +646,13 @@ async def create_document(req: CreateRequest) -> DocumentRow:
         ext = _KIND_NEW_EXT[req.kind]
         raw = f"{raw}{ext}"
     target = _safe_target(raw)
-    if target.exists():
-        raise HTTPException(status_code=409, detail=f"{raw} already exists")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(_blank_content(ext))
-    st = target.stat()
+    _assert_saveable_name(target)
+    with _usable_path(raw):
+        if target.exists():
+            raise HTTPException(status_code=409, detail=f"{raw} already exists")
+        _ensure_parent_dir(target)
+        target.write_bytes(_blank_content(ext))
+        st = target.stat()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,
@@ -491,14 +755,26 @@ async def read_text_file(rel_path: str) -> Any:
     }
 
 
-@router.put("/text/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
-async def write_text_file(rel_path: str, req: TextWriteRequest) -> DocumentRow:
+@router.put("/text/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
+async def write_text_file(
+    request: Request, rel_path: str, req: TextWriteRequest
+) -> DocumentRow:
     """Write text back to a file as UTF-8. Containment-checked; newlines
-    preserved verbatim."""
+    preserved verbatim.
+
+    Refuses — with 415, and without touching the disk — any target the
+    text editor could not have opened; see
+    :func:`_assert_text_editor_may_write`, which is what keeps a
+    household save from being an overwrite primitive over the
+    operator's ``~/Documents``."""
+    await _assert_files_policy(request, req.device_id)
     target = _safe_target(rel_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(req.text, encoding="utf-8", newline="")
-    st = target.stat()
+    _assert_saveable_name(target)
+    with _usable_path(rel_path):
+        _assert_text_editor_may_write(target)
+        _ensure_parent_dir(target)
+        target.write_text(req.text, encoding="utf-8", newline="")
+        st = target.stat()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name,
@@ -611,17 +887,24 @@ async def read_sheet(rel_path: str) -> dict[str, Any]:
     }
 
 
-@router.put("/sheet/{rel_path:path}", response_model=DocumentRow, dependencies=ADMIN)
-async def write_sheet(rel_path: str, req: SheetWriteRequest) -> DocumentRow:
+@router.put("/sheet/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
+async def write_sheet(
+    request: Request, rel_path: str, req: SheetWriteRequest
+) -> DocumentRow:
     """Write the editor grid back: .csv gets values (formula strings kept
     verbatim as text), .xlsx gets formulas as formulas and numbers as
-    numbers (openpyxl)."""
+    numbers (openpyxl). A non-sheet target is refused with 415 up
+    front, so a save the server will not do leaves nothing behind."""
+    await _assert_files_policy(request, req.device_id)
     target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    _assert_sheet_editor_may_write(target)
     if any(len(row) > _SHEET_MAX_COLS for row in req.rows):
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _write_sheet_grid(target, req.rows)
-    st = target.stat()
+    with _usable_path(rel_path):
+        _ensure_parent_dir(target)
+        _write_sheet_grid(target, req.rows)
+        st = target.stat()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name, name=target.stem, ext=ext,
@@ -777,12 +1060,20 @@ async def export_sheet(
     "/upload",
     response_model=UploadResult,
     # Multipart, so the preflight-forcing header rides along (WEB-6).
-    dependencies=[*ADMIN, Depends(require_requested_with)],
+    dependencies=[*DEVICE, Depends(require_requested_with)],
 )
-async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
+async def upload_documents(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    device_id: Optional[str] = Form(None, min_length=3, max_length=64),
+) -> UploadResult:
     """Upload one or more files straight into ``documents_dir`` from the
     browser. Filenames are sanitized to a bare basename (defanging
-    ``../`` / zip-slip traversal across both separators), then deduped."""
+    ``../`` / zip-slip traversal across both separators), then deduped —
+    and secret-shaped names are skipped exactly as
+    ``POST /api/files/upload`` skips them, so the two doors into this
+    one folder cannot be played off against each other."""
+    await _assert_files_policy(request, device_id)
     base = _documents_dir()
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -799,6 +1090,21 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> UploadResult:
         name = os.path.basename(raw.replace("\\", "/")).strip()
         if not name or name in (".", ".."):
             skipped.append(f"{raw!r}: bad filename")
+            continue
+        # The same filter, from the same module, that
+        # POST /api/files/upload applies to this very directory: a name
+        # that door refuses must not land through this one, or the Files
+        # page ends up owning a library holding a file it will never
+        # list, serve or include in an export.
+        if is_sensitive_name(name):
+            skipped.append(f"{name}: that name is reserved and is never saved here")
+            continue
+        # The upload door does not go through _safe_target (it basenames its
+        # input instead), so it asks the same question here: a name this
+        # filesystem would store under a DIFFERENT name, or not at all.
+        unstorable = unstorable_reason(name)
+        if unstorable is not None:
+            skipped.append(f"{name}: {unstorable}")
             continue
         data = await up.read()
         target = _unique_path(base, name)
@@ -863,17 +1169,20 @@ async def read_drawing(req: DrawingReadRequest) -> dict[str, str]:
     }
 
 
-@router.post("/drawings/write", dependencies=ADMIN)
-async def write_drawing(req: DrawingWriteRequest) -> DocumentRow:
+@router.post("/drawings/write", dependencies=DEVICE)
+async def write_drawing(request: Request, req: DrawingWriteRequest) -> DocumentRow:
     """Save an Excalidraw scene / exported SVG into ``documents_dir``."""
+    await _assert_files_policy(request, req.device_id)
     target = _safe_target(req.rel_path)
     if target.suffix.lower() not in _DRAWING_EXTS:
         raise HTTPException(
             status_code=400, detail="drawing must be .excalidraw or .svg"
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(req.content, encoding="utf-8")
-    st = target.stat()
+    _assert_saveable_name(target)
+    with _usable_path(req.rel_path):
+        _ensure_parent_dir(target)
+        target.write_text(req.content, encoding="utf-8")
+        st = target.stat()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,

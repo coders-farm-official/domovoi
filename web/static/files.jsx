@@ -70,10 +70,11 @@ const downloadDoc = (rel) => {
  * real progress (download-zip sets Content-Length). `onProgress` gets a
  * 0..1 fraction, or null when the length is unknown. */
 const downloadDocsZip = async (relPaths, onProgress) => {
-  // Bulk-archiving the operator's Documents folder is the admin tier, so
-  // this goes through apiFetchRaw: the same headers a plain apiFetch
-  // sends, the same sign-in prompt and replay on a 403, and the streamed
-  // Response handed back so the progress bar can still move.
+  // Saving a document is device tier, but taking a zip of a whole
+  // selection in one request is still the admin tier — so this goes
+  // through apiFetchRaw: the same headers a plain apiFetch sends, the
+  // same sign-in prompt and replay on a 403, and the streamed Response
+  // handed back so the progress bar can still move.
   const r = await apiFetchRaw('/api/documents/download-zip', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -138,12 +139,14 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
     return () => { cancelled = true; };
   }, [rel_path]);
 
-  /* Through apiFetch, never a bare fetch: writing a document is the ADMIN
-   * tier, the dashboard holds that bearer in memory only, and a page
-   * refresh therefore leaves an admin who can still READ every file.
-   * apiFetch answers that 403 with the sign-in prompt and replays the PUT
-   * once a bearer exists, so the save the operator asked for happens. A
-   * raw fetch skipped all of it: one red PUT, no prompt, the typing lost. */
+  /* Through apiFetch, never a bare fetch. Saving is DEVICE tier, so this
+   * PUT carries the household token this browser stored — but a browser
+   * that has never been paired (or whose token was rotated) is refused
+   * 403, and the dashboard cookie alone is refused too. apiFetch answers
+   * a device-tier refusal with the PAIR prompt and an admin-tier one with
+   * the sign-in prompt, then replays the PUT once the missing credential
+   * exists, so the save the household asked for happens. A raw fetch
+   * skipped all of it: one red PUT, no prompt, the typing lost. */
   const onSave = async () => {
     setSaving(true);
     try {
