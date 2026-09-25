@@ -403,12 +403,17 @@ const VoicesPanel = () => {
  * else "Check for updates". The restart is replaced by the manual command
  * on a host without the sudoers grant (see restart_capable).
  *
+ * On a Linux host with domovoi-update.service (restart_mode "update") the
+ * restart also backs up, syncs dependencies, migrates and rolls back on
+ * failure; the panel shows that unit's last result, and stops offering a
+ * pull while the upstream is the commit it rolled back (bad_sha).
+ *
  * Data:
  *   GET   /api/config              · web build (web_version)
- *   GET   /api/config/version      · domovoi git SHA → { sha }
- *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, error }
+ *   GET   /api/config/version      · domovoi git SHA → { sha, restart_mode, last_update, bad_sha, … }
+ *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error }
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
- *   POST  /api/config/version/restart · bounce core+web → { ok, units, error }
+ *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
  *   GET   /api/config/editable     · the field set + current values
  *   PATCH /api/config/editable     · { changes } → { applied, rejected, restart_required }
  */
@@ -472,6 +477,18 @@ const fmtUptime = (sec) => {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 };
 
+// The update unit's last result (last_update.status) → pill.
+const UPDATE_RESULT_PILL = {
+  ok:              { tone: 'ok',   label: 'applied' },
+  running:         { tone: 'live', label: 'in progress' },
+  rolled_back:     { tone: 'warn', label: 'rolled back' },
+  rollback_failed: { tone: 'err',  label: 'rollback failed' },
+  failed:          { tone: 'err',  label: 'failed' },
+  aborted:         { tone: 'warn', label: 'not applied' },
+  refused:         { tone: 'warn', label: 'not applied' },
+};
+const shortCommit = (s) => (s ? String(s).slice(0, 7) : '');
+
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   const { data: core, refresh: refreshCore } = useApiObject('/api/config/version');
@@ -528,13 +545,29 @@ const VersionSection = () => {
 
   // After the bounce the server is briefly gone; a failed poll is the
   // expected middle of a successful restart, not an error to report.
-  const waitForServer = async () => {
-    const deadline = Date.now() + 90000;
+  //
+  // With the update unit the wait is longer (a backup, maybe a dependency
+  // sync, a migration and a health check), and it ends early when the unit
+  // records a result for THIS run: a refused or rolled-back update never
+  // clears restart_required the way a successful one does, or it clears it
+  // by going BACK, which must not read as "restarted onto the new code".
+  const waitForServer = async (kind, previousRun) => {
+    const deadline = Date.now() + (kind === 'update' ? 15 * 60000 : 90000);
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
       try {
         const v = await apiGet('/api/config/version');
-        if (v && !v.restart_required) {
+        const run = v && v.last_update;
+        const newRun = run && run.started_at !== previousRun && run.status !== 'running';
+        if (kind === 'update' && newRun && run.status !== 'ok') {
+          refreshCore();
+          setStatus(null);
+          // The script's error already says what happened ("update to … failed
+          // at health and was rolled back to …").
+          fire(run.error || `update ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
+          return false;
+        }
+        if (v && !v.restart_required && (kind !== 'update' || newRun)) {
           refreshCore();
           setStatus(null);
           fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
@@ -542,23 +575,34 @@ const VersionSection = () => {
         }
       } catch (e) { /* still down — keep waiting */ }
     }
-    fire('restart is taking longer than expected — check the service by hand');
+    fire(kind === 'update'
+      ? 'the update is taking longer than expected — check journalctl -u domovoi-update'
+      : 'restart is taking longer than expected — check the service by hand');
     refreshCore();
     return false;
   };
 
   const restart = async () => {
-    if (!window.confirm(
-      'Restart the Domovoi services to load the pulled code?\n\n' +
-      'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
-      'a few seconds and connected satellites reconnect on their own.'
+    const updating = core && core.restart_mode === 'update';
+    if (!window.confirm(updating
+      ? 'Apply the pulled code?\n\n' +
+        'This backs up the database, updates dependencies and migrations if ' +
+        'they changed, and restarts domovoi-core and domovoi-web. If they ' +
+        'don’t come back healthy it rolls everything back. Voice is ' +
+        'unavailable meanwhile, usually for under a minute, longer when ' +
+        'dependencies change.'
+      : 'Restart the Domovoi services to load the pulled code?\n\n' +
+        'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
+        'a few seconds and connected satellites reconnect on their own.'
     )) return;
+    const kind = updating ? 'update' : 'restart';
+    const previousRun = core && core.last_update ? core.last_update.started_at : null;
     setRestarting(true);
     try {
       const res = await apiPost('/api/config/version/restart', {});
       if (res && res.ok) {
-        fire('restarting…');
-        await waitForServer();
+        fire(kind === 'update' ? 'updating…' : 'restarting…');
+        await waitForServer(res.mode || kind, previousRun);
       } else {
         fire(`restart failed: ${(res && res.error) || 'unknown'}`);
       }
@@ -577,8 +621,8 @@ const VersionSection = () => {
       } else if (e && e.status) {
         fire(`restart failed: ${e.message}`);
       } else {
-        fire('restarting…');
-        await waitForServer();
+        fire(kind === 'update' ? 'updating…' : 'restarting…');
+        await waitForServer(kind, previousRun);
       }
     } finally {
       setRestarting(false);
@@ -595,10 +639,20 @@ const VersionSection = () => {
   const behind = status && status.upstream ? status.behind : null;
   const restartCapable = !!(core && core.restart_capable);
   const restartHint = core && core.restart_hint;
+  const updateUnit = !!(core && core.restart_mode === 'update');
+  const lastUpdate = core && core.last_update;
+  const lastPill = lastUpdate && (UPDATE_RESULT_PILL[lastUpdate.status]
+                                  || { tone: 'idle', label: lastUpdate.status });
+  // The update unit rolled this commit back. Pulling it again would only
+  // repeat that, so while the upstream still points at it there is nothing
+  // to offer but another check later.
+  const badSha = core && core.bad_sha;
+  const upstreamIsBad = !!(badSha && status && status.upstream_sha === badSha);
   // One action at a time, in the order the operator actually needs them:
   // code already on disk beats fetching more of it, and "check" is only
   // honest when we have no reason to think anything is pending.
-  const mode = restartPending ? 'restart' : ((behind || 0) > 0 ? 'pull' : 'check');
+  const mode = restartPending ? 'restart'
+    : ((behind || 0) > 0 ? (upstreamIsBad ? 'held' : 'pull') : 'check');
 
   return (
     <Card title="Version"
@@ -627,7 +681,31 @@ const VersionSection = () => {
             </div>
           </React.Fragment>
         )}
+        {lastUpdate && (
+          <React.Fragment>
+            <div className="label">last update</div>
+            <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Pill tone={lastPill.tone}>{lastPill.label}</Pill>
+              <span>
+                {lastUpdate.mode === 'update' && lastUpdate.from_sha !== lastUpdate.to_sha
+                  ? `${shortCommit(lastUpdate.from_sha)} → ${shortCommit(lastUpdate.to_sha)}`
+                  : `restart at ${shortCommit(lastUpdate.to_sha)}`}
+              </span>
+              {lastUpdate.finished_at && (
+                <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+                  {new Date(lastUpdate.finished_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+          </React.Fragment>
+        )}
       </div>
+      {lastUpdate && lastUpdate.error && lastUpdate.status !== 'ok' && lastUpdate.status !== 'running' && (
+        <div className="mono" style={{ padding: '0 16px 12px', fontSize: 11, color: 'var(--fg-muted)',
+                                       overflowWrap: 'anywhere' }}>
+          {lastUpdate.error}
+        </div>
+      )}
       {restartPending && (
         <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
           New code is on disk but this process is still running the old
@@ -638,7 +716,7 @@ const VersionSection = () => {
       <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {mode === 'restart' && restartCapable && (
           <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
-            {restarting ? 'Restarting…' : 'Restart to apply changes'}
+            {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to apply changes'}
           </Button>
         )}
         {mode === 'pull' && (
@@ -646,7 +724,7 @@ const VersionSection = () => {
             {pulling ? 'Pulling…' : 'Pull the latest'}
           </Button>
         )}
-        {mode === 'check' && (
+        {(mode === 'check' || mode === 'held') && (
           <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
             {checking ? 'Checking…' : 'Check for updates'}
           </Button>
@@ -664,11 +742,19 @@ const VersionSection = () => {
           Pull updates the host files only — this panel will then offer the restart that loads them.
         </div>
       )}
+      {mode === 'held' && (
+        <div style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--warn)' }}>
+          The latest commit ({shortCommit(badSha)}) failed to apply on this server
+          and was rolled back, so it isn’t offered again. The next commit
+          upstream will be.
+        </div>
+      )}
       {mode === 'restart' && !restartCapable && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           {restartHint || 'This host can’t restart itself.'} Run by hand:
           <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
-            sudo systemctl restart domovoi-core domovoi-web
+            {updateUnit ? 'sudo systemctl start domovoi-update.service'
+                        : 'sudo systemctl restart domovoi-core domovoi-web'}
           </div>
         </div>
       )}

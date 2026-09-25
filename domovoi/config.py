@@ -212,6 +212,16 @@ class Settings(BaseSettings):
     # and git_version.py (version label + behind/ahead checks run with this
     # as cwd).
     repo_dir: str = str(Path(__file__).resolve().parents[1])
+    # Where a dashboard pull records the SHA to roll back to (`prev_sha`).
+    # The Linux update unit (scripts/linux/apply-update.sh, run as root by
+    # domovoi-update.service) reads it before its first run; afterwards it
+    # keeps its own record. See docs/LINUX_HOST.md "Updates from the
+    # dashboard".
+    update_state_dir: str = str(Path.home() / ".domovoi" / "update")
+    # The update unit's last result, written as root and read-only here.
+    # GET /v1/admin/version serves it as `last_update`. A host without the
+    # unit simply has no file, and the field is null.
+    update_result_file: str = "/var/lib/domovoi-update/last-result.json"
     # How long a satellite gets to reconnect after an upgrade+self-restart
     # before its on-Pi watchdog rolls back to the pre-upgrade tarball. Bounds
     # the window an import-clean-but-behaviourally-broken upgrade can wedge a

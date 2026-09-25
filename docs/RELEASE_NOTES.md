@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-25 — Restart can apply an update, and undo it
+
+### Do this once, after upgrading (Linux, optional)
+
+Nothing changes until you install `domovoi-update.service`: without it,
+**Restart to apply changes** bounces `domovoi-core` and `domovoi-web`
+exactly as before. To have it also back up the database, re-sync
+dependencies, rebuild the MPD image, run Flyway, health-check and roll back
+on failure, follow [LINUX_HOST.md, "One-time upgrade for existing
+installs"](LINUX_HOST.md#one-time-upgrade-for-existing-installs). Its
+step 1 records the SHA the box is running, so do it **before** anything
+restarts onto this release.
+
+### What changed
+
+* `docker-compose.yml` gives `postgres` `restart: unless-stopped`. The next
+  `docker compose up -d postgres` (a `domovoi-db` restart, a reboot,
+  `dev.sh`/`dev.ps1`) recreates the `domovoi-postgres` container once to
+  pick it up: a few seconds without the database, data volume kept.
+* `GET /v1/admin/version` gains `restart_mode`, `last_update` and
+  `bad_sha`; `POST /v1/admin/version/check` gains `upstream_sha`;
+  `POST /v1/admin/version/pull` gains `prev_sha` and records it in
+  `~/.domovoi/update/prev_sha`. Existing fields are unchanged.
+* With the unit installed, the version panel shows the last update's
+  result, and stops offering a pull while upstream still points at a
+  commit that was rolled back.
+
 ## 2026-09-25 — a deploy reaches the browser
 
 ### Do this once, after upgrading
