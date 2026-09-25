@@ -7,16 +7,18 @@
 # numpy and httpx carry the same versions as the core's requirements.lock
 # (repo root): the plugin installer refuses a lock that would change a dist
 # already installed in the core's environment (requirements_conflict). The
-# sleep plugin derives its numpy pin from this lock, so when the core lock
-# moves numpy, move it here and in the sleep plugin too.
+# sleep plugin's tests hold its numpy pin to the core lock and to this
+# lock, so when the core lock moves numpy, move it here and in the sleep
+# plugin too.
 #
 # Known gap: shazamio 0.7.0 declares exact pins of its own (numpy==2.1.2,
 # anyio==4.3.0, pydantic==2.9.2), so this set does not resolve as a whole,
 # and the lock's anyio/pydantic/pydantic-core trail the core lock. shazamio
 # 0.8.1 relaxes those to ranges; moving to it means regenerating the lock
-# against the core lock's versions. The bundled plugin never installs from
-# this lock (its heavy deps are imported lazily and degrade when absent),
-# so only a zip install of radio meets the gap.
+# against the core lock's versions. scipy 1.15.2 and shazamio-core 1.1.2
+# also publish no CPython 3.14 wheels. The bundled plugin never installs
+# from this lock (its heavy deps are imported lazily and degrade when
+# absent), so only a zip install of radio meets the gap.
 shazamio==0.7.0
 numpy==2.4.6
 scipy==1.15.2

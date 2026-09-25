@@ -336,7 +336,8 @@ def test_dry_run_refuses_a_lock_that_would_change_an_installed_dist(
 ) -> None:
     """A plugin pin that differs from the version already installed in the
     core's environment (a plugin numpy behind the core lock's) is refused
-    before the trust screen; a dist new to the environment is not."""
+    before the trust screen; a dist new to the environment, or one pinned at
+    the installed version, is not."""
     from importlib import metadata
 
     installed = metadata.version("pytest")
@@ -353,9 +354,15 @@ def test_dry_run_refuses_a_lock_that_would_change_an_installed_dist(
         "required_by": "requirements.lock",
     }]
 
-    lock.write_text(f"zz-never-installed==1.0 {H1}\n", encoding="utf-8")
-    _fake_pip(monkeypatch, {"install": [_dist("zz-never-installed", "1.0")]})
-    assert [d["name"] for d in pip_dry_run(lock)["resolved"]] == ["zz-never-installed"]
+    lock.write_text(
+        f"pytest=={installed} {H1}\nzz-never-installed==1.0 {H1}\n", encoding="utf-8"
+    )
+    _fake_pip(monkeypatch, {
+        "install": [_dist("pytest", installed), _dist("zz-never-installed", "1.0")]
+    })
+    assert [d["name"] for d in pip_dry_run(lock)["resolved"]] == [
+        "pytest", "zz-never-installed",
+    ]
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"

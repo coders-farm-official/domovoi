@@ -437,7 +437,12 @@ system = [
   dist the core already has (`numpy`, `httpx`, `pydantic`, …) must be
   pinned at the version in the core's `requirements.lock` at the repo root,
   and that includes transitive pins in your lockfile. A dist pinned at the
-  installed version is simply "already satisfied".
+  installed version is simply "already satisfied". The comparison is with
+  what the host actually has installed, not with the lock file, so on a
+  host whose environment was not installed from the lock (an unlocked
+  `pip install -e ".[…]"`) the versions can differ and a plugin pinned at
+  the lock's version is refused there until that environment matches the
+  lock.
 
   The lockfile is **parsed, line by line**, before pip ever sees it, and
   the only shape a line may take is `name[extras]==version` followed by

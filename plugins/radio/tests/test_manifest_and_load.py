@@ -69,8 +69,8 @@ def test_direct_pins_shared_with_the_core_lock_match_it() -> None:
     """A direct pin the core's requirements.lock also pins must be the same
     version with the same hashes: the installer's dry-run refuses a lock that
     would change a dist already in the core's environment
-    (requirements_conflict), and the sleep plugin derives its numpy pin from
-    this lock."""
+    (requirements_conflict), and the sleep plugin's tests hold its numpy pin
+    to this lock as well as the core's."""
     manifest = parse_manifest_dir(PLUGIN_DIR)
     core_lock = PLUGIN_DIR.parents[1] / "requirements.lock"
     core = {
