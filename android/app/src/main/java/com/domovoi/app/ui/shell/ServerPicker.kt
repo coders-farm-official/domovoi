@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -379,7 +380,11 @@ fun ServerSwitcherDialog(onDismiss: () -> Unit) {
  */
 @Composable
 fun StartupScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Same early-return story as PairingScreen: OfflineShell returns this
+    // before its own Scaffold, so it carries the keyboard inset itself. This
+    // is the first screen a new phone ever shows with a keyboard up, and the
+    // manual-address field is the LAST thing in the column.
+    Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center) {
         Column(
             Modifier
                 .widthIn(max = 480.dp)

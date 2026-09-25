@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -60,7 +61,13 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
     val serverUrl by app.prefs.serverUrl.collectAsState()
     var token by remember { mutableStateOf("") }
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // ShellContent returns this screen BEFORE either Scaffold is composed, so
+    // the shells' keyboard handling cannot reach it. Without imePadding the
+    // content is centred in a box that is still the full window height — the
+    // token field lands low, the helper text under it is clipped, and the
+    // verticalScroll has a range of ZERO (the content fits the too-tall box),
+    // so scrolling to reveal it is a genuine no-op.
+    Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center) {
         Column(
             Modifier
                 .widthIn(max = 480.dp)

@@ -191,7 +191,21 @@ internal fun SheetEditorOverlay(relPath: String, onClose: () -> Unit) {
                 )
                 else -> {
                     val hScroll = rememberScrollState()
-                    LazyColumn(Modifier.fillMaxSize().horizontalScroll(hScroll)) {
+                    // Slack at the bottom of the GRID'S VIEWPORT, not in its
+                    // content. The shell ends this grid at the top of the
+                    // keyboard and LazyColumn brings a tapped cell into view
+                    // against its own bounds, so the row lands flush on that
+                    // edge — and then grows ~50px as it takes focus, which put
+                    // the caret's bottom pixel exactly ON the keyboard
+                    // (measured: cell 1437..1563 against an IME top of 1517).
+                    // contentPadding does NOT help: it only adds space after
+                    // the last item, and bring-into-view aims at the item.
+                    // Ending the viewport 32dp short does, because that is the
+                    // rectangle the scroll is aiming at.
+                    LazyColumn(
+                        Modifier.fillMaxSize().padding(bottom = 32.dp)
+                            .horizontalScroll(hScroll),
+                    ) {
                         itemsIndexed(grid) { r, row ->
                             Row {
                                 Text(

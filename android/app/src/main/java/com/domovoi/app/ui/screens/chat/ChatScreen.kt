@@ -42,6 +42,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +64,7 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -325,6 +327,27 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 transcript.add(LiveMessage(it.role, it.content, it.images.orEmpty(), it.model, it.error))
             }
         }
+    }
+    // Keep the newest message pinned to the bottom. Two triggers, because the
+    // list loses its anchor for two different reasons:
+    //
+    //  * the transcript GREW — animate, so the arrival reads as movement;
+    //  * the VIEWPORT SHRANK — the shell hands this body the space above the
+    //    keyboard, so opening the keyboard shortens the list without touching
+    //    the transcript. LazyColumn keeps its first-visible-item anchor, and
+    //    the tail (with 16 messages: 15 and 16 entirely, 14 down to 5px) slides
+    //    out of the bottom and stays there.
+    //
+    // Keying the second case on a keyboard-up BOOLEAN does not work, and that
+    // is the bug this replaces: WindowInsets.ime goes non-zero at the START of
+    // the ~250ms IME animation, so the scroll ran while the body was still
+    // full height and nothing re-ran after the shrink. viewportEndOffset is
+    // the settled fact — it changes once per animation frame and the LAST
+    // change is the one that re-pins.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.viewportEndOffset }
+            .distinctUntilChanged()
+            .collect { if (transcript.isNotEmpty()) listState.scrollToItem(transcript.size - 1) }
     }
     LaunchedEffect(transcript.size) {
         if (transcript.isNotEmpty()) listState.animateScrollToItem(transcript.size - 1)

@@ -41,6 +41,7 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +91,44 @@ private fun applyMdTool(value: androidx.compose.ui.text.input.TextFieldValue, to
             selection = androidx.compose.ui.text.TextRange(s + tool.before.length, s + tool.before.length + sel.length),
         )
     }
+}
+
+/**
+ * The markdown formatting row — and nothing at all in a window the keyboard
+ * has left too short for it.
+ *
+ * Measured on a landscape phone (1080px tall, IME 686 of it): the shell ends
+ * this editor at the top of the keyboard, the editor's own header and this
+ * toolbar take 330 of the 394px that leaves, and the body gets 63px — less
+ * than the TextField's own 16dp+16dp padding, so NOT ONE LINE of the document
+ * renders and the caret is behind the keyboard. The toolbar is chrome; the
+ * document is the point. It returns the instant the keyboard closes, and in
+ * portrait (578dp left) it never goes.
+ *
+ * It is its own composable so the `keyboardCrowdsTheWindow()` read — a
+ * snapshot state that changes on every frame of the IME animation — sits in a
+ * leaf instead of invalidating the whole editor, caret and all.
+ */
+@Composable
+private fun MarkdownToolbar(onTool: (MdTool) -> Unit) {
+    if (keyboardCrowdsTheWindow()) return
+    Row(
+        Modifier.fillMaxWidth()
+            .background(Domovoi.colors.card)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        MD_TOOLS.forEach { tool ->
+            androidx.compose.material3.TextButton(onClick = { onTool(tool) }) {
+                Text(
+                    tool.label,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFamily),
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
+        }
+    }
+    HorizontalDivider(color = Domovoi.colors.borderSoft)
 }
 
 /**
@@ -208,26 +247,10 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
             HorizontalDivider(color = Domovoi.colors.border)
 
             if (isMarkdown && status == EditorStatus.Ready) {
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(Domovoi.colors.card)
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    MD_TOOLS.forEach { tool ->
-                        androidx.compose.material3.TextButton(onClick = {
-                            field = applyMdTool(field, tool)
-                            dirty = true
-                        }) {
-                            Text(
-                                tool.label,
-                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFamily),
-                                color = Domovoi.colors.fgMuted,
-                            )
-                        }
-                    }
+                MarkdownToolbar { tool ->
+                    field = applyMdTool(field, tool)
+                    dirty = true
                 }
-                HorizontalDivider(color = Domovoi.colors.borderSoft)
             }
 
             when (val st = status) {

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
@@ -51,6 +53,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
@@ -94,9 +98,16 @@ fun AppShell() {
             } else {
                 ShellContent()
             }
-            // toasts overlay
+            // Toasts overlay. This Column is a SIBLING of the shells, so the
+            // shells' own consumption of WindowInsets.ime cannot reach it —
+            // without imePadding() here a "saved" or "save failed" message
+            // renders 252px up a 2400px screen, i.e. squarely behind the
+            // keyboard, and auto-dismisses after 2.4s unseen. Which is exactly
+            // the message you need while typing. The root Box consumes
+            // nothing, so this is a single consumption and cannot double-count
+            // with BottomChrome.
             Column(
-                Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
+                Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 96.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -187,6 +198,137 @@ private fun ShellContent() {
 }
 
 // ---------------------------------------------------------------------------
+// The soft keyboard, and why the shells have to deal with it
+//
+// MainActivity calls enableEdgeToEdge(), so the window is NEVER resized for
+// the IME — android:windowSoftInputMode="adjustResize" is inert on targetSdk
+// 35 and doubly so under edge-to-edge. (Leave the manifest line alone anyway:
+// minSdk is 26, and on API 26-29 the legacy resize path is what makes the
+// inset observable at all.) Nothing in the app consumed WindowInsets.ime, so
+// the keyboard was simply painted over the bottom of every screen: the docked
+// player and the nav bar did not move, and a scroll container believed its
+// viewport was the full window, which is why the tail of a long document
+// could not be scrolled up past the keyboard either.
+//
+// The cure is to make the shells' BOTTOM CHROME exactly as tall as the
+// keyboard. Scaffold gives its body a bottom padding equal to the MEASURED
+// height of the bottomBar slot whenever that slot is non-empty — material3
+// 1.3.1 ScaffoldLayout computes
+//     if (bottomBarPlaceables.isEmpty() || bottomBarHeight == null)
+//         contentWindowInsets.calculateBottomPadding() else bottomBarHeight
+// — which is also why passing `contentWindowInsets = systemBars.union(ime)`
+// here would move exactly zero pixels: these shells always have a bottomBar,
+// so the inset's bottom component is discarded. Sizing the SLOT instead is
+// exact and needs no arithmetic in app code: the body ends where the keyboard
+// begins, every scroll container inside it learns its real height, and
+// Compose's existing caret bring-into-view starts doing real work.
+//
+// While the keyboard is up the docked player and the nav bar are dropped
+// rather than lifted above it. They are not visible in that state today
+// either (measured: the nav bar stays put and the IME covers it), nobody
+// switches tab mid-word, and a player plus a nav bar wedged between the caret
+// and the keyboard would eat ~130dp of the ~900px an editor has left. Both
+// come back the moment the keyboard closes.
+//
+// The tablet shells (RailShell, DrawerShell) have no Scaffold, so their root
+// Row carries imePadding() instead — and a phone in LANDSCAPE is one of them,
+// because landscape is width class EXPANDED. There the keyboard leaves only
+// ~150dp, so ending the shell above it is necessary but not sufficient: the
+// topbar has to go too, or the caret gets no line. TopChrome does that, on a
+// measured threshold rather than on a guess about form factor.
+//
+// Not reachable from here, by construction: Dialog/AlertDialog are separate
+// windows that the platform still resizes for the IME (verified on the
+// emulator — they already work, and adding imePadding inside one would
+// double-count), and PairingScreen/StartupScreen render behind an early
+// return before any shell exists, so they carry their own imePadding().
+// ---------------------------------------------------------------------------
+
+// A phone in LANDSCAPE is the hard case and it is not exotic — it is width
+// class EXPANDED, so it gets DrawerShell, and the keyboard takes 64% of the
+// screen (measured: 686px of 1080). Ending the shell at the top of the
+// keyboard is still right — the caret has to be somewhere visible — but 150dp
+// is not enough to also spend on a breadcrumb bar, so in a window that short
+// the topbar goes with the bottom chrome and the space goes to the field.
+// See [TopChrome].
+private val CONTENT_FLOOR = 260.dp
+
+/** True while the soft keyboard is on screen (or animating in). */
+@Composable
+private fun keyboardUp(): Boolean =
+    WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
+/**
+ * True when the keyboard has left the window too short to spend on chrome.
+ *
+ * Internal rather than private because a screen whose OWN chrome is the last
+ * thing between the caret and the keyboard needs the same answer — see
+ * DocumentsEditor's formatting toolbar. Read it inside a small composable:
+ * WindowInsets.ime changes every frame of the IME animation, so the read site
+ * is the invalidation scope.
+ */
+@Composable
+internal fun keyboardCrowdsTheWindow(): Boolean {
+    val density = LocalDensity.current
+    val ime = WindowInsets.ime.getBottom(density)
+    if (ime <= 0) return false
+    // targetSdk 35: Configuration reports the whole window, system bars
+    // included, which is the number the IME inset is measured against.
+    val left = LocalConfiguration.current.screenHeightDp.dp - with(density) { ime.toDp() }
+    return left < CONTENT_FLOOR
+}
+
+/**
+ * The compact shells' bottomBar slot: the chrome when there is no keyboard,
+ * and the keyboard's own height when there is.
+ */
+@Composable
+private fun BottomChrome(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.ime)) {
+        if (!keyboardUp()) Column { content() }
+    }
+}
+
+/**
+ * The tablet shells' bottom chrome. Same decision as [BottomChrome] — player
+ * and navigation-bar spacer are dropped while the keyboard is up — but those
+ * shells have no Scaffold slot to put it in, so it is its own composable for
+ * a second reason: `keyboardUp()` reads a snapshot state that Compose updates
+ * on EVERY frame of the ~250ms IME animation, and its read site is the
+ * invalidation scope. Called inline, that scope was the whole shell (rail and
+ * drawer item lambdas, the ScreenRouter call site) about 15 times per
+ * animation. Here it is a leaf that composes nothing when the keyboard is up.
+ */
+@Composable
+private fun BottomChromeColumn() {
+    if (!keyboardUp()) {
+        DockedPlayer()
+        Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+    }
+}
+
+/**
+ * The top chrome, in every shell. Normally just [content]; in a window the
+ * keyboard has left shorter than [CONTENT_FLOOR] it collapses to the status
+ * bar inset alone, handing those ~56dp to whatever is being typed into.
+ *
+ * Collapsing to a status-bar-height Box rather than to nothing is deliberate:
+ * in the Scaffold shells an empty topBar slot makes Scaffold fall back to its
+ * own content insets for the body's top padding (the mirror of the bottomBar
+ * rule this whole fix rests on), and in the tablet shells nothing else
+ * consumes statusBars, so content would slide under the clock. Same leaf-scope
+ * reasoning as [BottomChromeColumn].
+ */
+@Composable
+private fun TopChrome(content: @Composable () -> Unit) {
+    if (keyboardCrowdsTheWindow()) {
+        Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars))
+    } else {
+        content()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Offline/local mode: no domovoi configured. Music + Videos are the only
 // tabs, backed by on-device media (MediaStore); "connect" opens the
 // discovery/startup screen. Connecting flips prefs.serverUrl, which
@@ -220,6 +362,7 @@ private fun OfflineShell() {
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = {
+          TopChrome {
             Surface(color = Domovoi.colors.canvas) {
                 Row(
                     Modifier
@@ -255,9 +398,10 @@ private fun OfflineShell() {
                     }
                 }
             }
+          }
         },
         bottomBar = {
-            Column {
+            BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
                     listOf(Route.Music, Route.Videos).forEachIndexed { i, r ->
@@ -296,9 +440,9 @@ private fun OfflineShell() {
 private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     Scaffold(
         containerColor = Domovoi.colors.canvas,
-        topBar = { Topbar(route, navigate) },
+        topBar = { TopChrome { Topbar(route, navigate) } },
         bottomBar = {
-            Column {
+            BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
                     CompactRoutes.forEach { r ->
@@ -333,7 +477,9 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
 @Composable
 private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
-    Row(Modifier.fillMaxSize()) {
+    // No Scaffold here, so the shrink is on the root: imePadding() ends the
+    // whole shell — rail included — at the top of the keyboard.
+    Row(Modifier.fillMaxSize().imePadding()) {
         NavigationRail(containerColor = Domovoi.colors.card) {
             Box(Modifier.padding(vertical = 10.dp)) { DomovoiGlyph(24) }
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
@@ -348,10 +494,9 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
             }
         }
         Column(Modifier.weight(1f)) {
-            Topbar(route, navigate)
+            TopChrome { Topbar(route, navigate) }
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            DockedPlayer()
-            Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            BottomChromeColumn()
         }
     }
 }
@@ -362,7 +507,8 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
 @Composable
 private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
-    Row(Modifier.fillMaxSize()) {
+    // As RailShell: no Scaffold, so the root carries the keyboard inset.
+    Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
             Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -389,10 +535,9 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
             }
         }
         Column(Modifier.weight(1f)) {
-            Topbar(route, navigate)
+            TopChrome { Topbar(route, navigate) }
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            DockedPlayer()
-            Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            BottomChromeColumn()
         }
     }
 }
