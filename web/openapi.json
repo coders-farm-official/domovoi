@@ -3368,7 +3368,7 @@
           "satellite-media"
         ],
         "summary": "Media Job Credentials",
-        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. The\ncard always has them, so the message says where to look rather than\npretending they're gone for good.",
+        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again.",
         "operationId": "media_job_credentials_api_satellites_media_jobs__job_id__credentials_get",
         "parameters": [
           {

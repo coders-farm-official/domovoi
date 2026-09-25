@@ -390,17 +390,19 @@ async def media_jobs(limit: int = 10) -> list[dict[str, Any]]:
 async def media_job_credentials(job_id: int) -> dict[str, Any]:
     """The setup-AP and console credentials for a prepared card.
 
-    404 once the web process has restarted — they live in memory only. The
-    card always has them, so the message says where to look rather than
-    pretending they're gone for good."""
+    404 once the web process has restarted — they live in memory only. A
+    card written straight to a drive still has them, so the message says
+    where to look; a zip never carried them (WEB-1), so it says to build
+    it again."""
     creds = _JOB_CREDENTIALS.get(job_id)
     if creds is None:
         raise HTTPException(
             status_code=404,
             detail=(
                 "credentials aren't in memory any more (the dashboard was "
-                "restarted). Read domovoi/ap.json and domovoi/console.json "
-                "from the card."
+                "restarted). A card written from here has them in "
+                "domovoi/ap.json and domovoi/console.json; a zip never "
+                "did, so prepare it again."
             ),
         )
     return creds

@@ -185,10 +185,13 @@ const PrepareMediaCard = ({ fire }) => {
       // A zip build's passwords exist nowhere else, so the modal says so.
       setCreds({ ...c, zip: job.target_kind === 'zip' });
     } catch (e) {
-      // 404 is the normal case after a dashboard restart, not a fault.
-      fire(e.status === 404
-        ? 'setup details are no longer in memory — read domovoi/ap.json from the card'
-        : `couldn't load setup details: ${e.message}`);
+      // 404 is the normal case after a dashboard restart, not a fault. A
+      // card written from here still carries the files; a zip never did.
+      fire(e.status !== 404
+        ? `couldn't load setup details: ${e.message}`
+        : job.target_kind === 'zip'
+          ? 'setup details are no longer in memory, and the zip never had them — prepare the zip again'
+          : 'setup details are no longer in memory — read domovoi/ap.json from the card');
     }
   };
 
@@ -321,8 +324,10 @@ const PrepareMediaCard = ({ fire }) => {
                 Domovoi is running inside WSL on Windows, which can't see USB
                 drives or SD cards, so USB adoption and writing straight to a
                 card aren't available here. Download the zip, unzip it onto the
-                card's boot partition, and set the satellite up from a phone
-                over its own Wi-Fi.
+                card's boot partition, and add{' '}
+                <span className="mono">domovoi/ap.json</span> with the key from
+                "show setup details" (the zip's README has the line) — then set
+                the satellite up from a phone over its own Wi-Fi.
               </span>
             </div>
           )}
