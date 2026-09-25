@@ -473,7 +473,7 @@ TYPED = "000001"
 # The 429 is the REAL sentence, imported, not a stand-in. It used to be
 # a 68-character paraphrase, and that is exactly why nobody saw that the
 # dashboard was clipping the real 433-character one at 400 and handing
-# the operator "…it is the code column of th" (F-051). A scenario that
+# the operator "…it is the code column of th". A scenario that
 # shortens the copy it is testing cannot see a length bug.
 SAID = {
     422: "that code does not match — check the six digits",
