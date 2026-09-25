@@ -140,6 +140,16 @@ PAIRING_TOKEN_SIDECAR = CONFIG_DIR / "pairing_token"
 # The dashboard asks them to match it before this satellite is trusted,
 # which is what turns trust-on-first-use into an actual decision.
 APPROVAL_CODE_SIDECAR = CONFIG_DIR / "approval_code"
+# Written the first time a session is ACCEPTED, and removed again whenever
+# the core answers `awaiting_approval`. Approval gates the microphone (see
+# `_start_voice_input`), and the gate has to survive a reboot in BOTH
+# directions. A satellite approved months ago must not come up deaf because
+# its server happens to be down while it boots — that is precisely when the
+# network-degraded canned clip is the only useful thing it can say — and a
+# satellite nobody has approved yet must not start listening merely because
+# it restarted. Only the core can settle which of those a device is, so its
+# verdict is what gets written down.
+APPROVED_MARKER = CONFIG_DIR / "approved"
 
 # Self-upgrade (Feature 10). The satellite mirrors the server's
 # `satellite/` source tree on an `upgrade` frame, verifying each file body
@@ -850,6 +860,17 @@ class Satellite:
         self._mic_thread: threading.Thread | None = None
         self._playback_thread: threading.Thread | None = None
 
+        # Approval gates the microphone. Both halves of the voice-input
+        # stack — the capture stream and the mic thread, which is also the
+        # only place the wake model is ever loaded — start together in
+        # `_start_voice_input`, once, either at boot on an already-approved
+        # device or on the `ready` frame that accepts a session. The lock
+        # and the flag are what make "once" true: `ready` arrives on every
+        # reconnect, and a flapping link delivers them faster than a mic
+        # opens.
+        self._voice_input_lock = threading.Lock()
+        self._voice_input_started = False
+
         # Set whenever the playback thread is NOT holding the output device.
         # Cleared when it opens a stream; re-set when it closes one. The
         # music deferral (_start_music_when_idle) waits on this so mpg123
@@ -916,6 +937,66 @@ class Satellite:
         self._kiosk_thread: threading.Thread | None = None
 
     # ── Mic ingestion ─────────────────────────────────────────────────
+
+    def _start_voice_input(self, *, fatal: bool) -> bool:
+        """Open the microphone and start the mic thread — at most once.
+
+        The approval gate's one door. A satellite waiting for a human to
+        approve it on the dashboard used to run the whole voice stack
+        anyway: the wake word fired, the greeting played, an utterance was
+        captured and streamed into a socket the core had already closed.
+        Nothing was transmitted, but the device recorded a room while
+        nobody had approved it — a false affordance, and the wrong answer
+        to "is this thing on yet?".
+
+        So neither half starts until a session has been accepted. The mic
+        thread is the only place `_load_wake_model` runs, so gating it also
+        means an unapproved device never loads the model.
+
+        `fatal` says what a microphone that will not open means. At boot it
+        means what it always did — raise, and let the process die so
+        `Restart=on-failure` brings it back. On the `ready` frame we are on
+        the event loop inside the receiver task, where a raise would be
+        swallowed and the client would reconnect forever with no mic, so
+        the same outcome is arranged the way the wake-model failure
+        arranges it: set `fatal_error`, ask for shutdown, exit non-zero.
+
+        Returns True only when this call is the one that started it.
+        """
+        if not self.cfg.mic_enabled:
+            return False
+        with self._voice_input_lock:
+            if self._voice_input_started:
+                return False
+            try:
+                self._start_mic()
+            except Exception as e:
+                # `_start_mic` has already logged what it could not open and
+                # written "no-microphone" to the ring; don't say it twice.
+                if fatal:
+                    raise
+                self.fatal_error = f"microphone: {e}"
+                self.shutdown_event.set()
+                self._request_async_shutdown()
+                return False
+            # Set between the two starts, not after: the stream is open now,
+            # and a second caller must not open a second one even if the
+            # thread start below raises.
+            self._voice_input_started = True
+            self._mic_thread = threading.Thread(
+                target=self._mic_thread_run, daemon=True, name="mic"
+            )
+            self._mic_thread.start()
+            return True
+
+    def _request_async_shutdown(self) -> None:
+        """Poke the asyncio side so `run`'s loop stops waiting on the network."""
+        if self.loop is None or self._async_shutdown is None:
+            return
+        try:
+            self.loop.call_soon_threadsafe(self._async_shutdown.set)
+        except RuntimeError:
+            pass  # loop already closed; the threading event is enough
 
     def _start_mic(self) -> None:
         # Capture format depends on the device profile. The HAT codec gives
@@ -3993,6 +4074,11 @@ class Satellite:
             # we can reach. A Pi has no battery clock, NTP needs internet
             # the house may not have, and nothing else ever sets the zone.
             self._sync_time_with_server()
+            # Last, because it can take a moment to open a USB array and
+            # everything above is what the person in the room is watching:
+            # this frame is the core accepting the session, which is the
+            # one thing that opens the microphone.
+            self._note_session_accepted()
         elif t == "transcript":
             log.info("heard: %s", payload.get("text"))
         elif t == "response_start":
@@ -4186,6 +4272,18 @@ class Satellite:
             # and hearing it FROM the device is what proves the approval on
             # screen belongs to the unit in front of them.
             if payload.get("reason") == "awaiting_approval":
+                # Not approved — said by the only party that can know. A
+                # marker from an earlier life (a pairing the admin has
+                # since reset) must not outlive this answer, or the next
+                # boot would open the microphone for a device the core is
+                # parking. Nothing here claims a network problem: this
+                # branch returns before the degraded flag or the
+                # unreachable counter is touched, and both are what the
+                # canned network clip and the no-server ring colour are
+                # gated on. The socket closes cleanly after this frame, so
+                # the reconnect that follows is not counted as a failure
+                # either.
+                _forget_approved()
                 _setup_status("awaiting-approval")
                 # The server sends the code that is ON FILE for this
                 # request, which is what the operator will be asked for.
@@ -4433,6 +4531,24 @@ class Satellite:
         finally:
             self._on_session_ended()
 
+    def _note_session_accepted(self) -> None:
+        """The core accepted a session: remember it, and open the mic.
+
+        `ready` is the only frame the core sends once it has decided this
+        device may stream, so it is the approval gate's only opener. It
+        also arrives on EVERY reconnect, which is deliberate here: the
+        write is a no-op when the marker exists, `_start_voice_input`
+        starts the stack at most once, and nothing in `_on_session_ended`
+        takes the microphone away again. A satellite that has been
+        approved therefore keeps listening through an outage — including
+        the genuine network-degraded canned clip, which only exists for
+        that case — and only a device that has never been accepted is
+        deaf.
+        """
+        _remember_approved()
+        if self._start_voice_input(fatal=False):
+            log.info("session accepted — microphone open, wake word arming")
+
     def _on_session_ended(self) -> None:
         """Wake any thread waiting on a response that's not coming.
 
@@ -4556,22 +4672,32 @@ class Satellite:
         # openWakeWord/ONNX load entirely. TTS playback, announce, music,
         # volume, config, and upgrade all live on other threads and keep
         # working unchanged.
-        if self.cfg.mic_enabled:
-            self._start_mic()
-        else:
+        #
+        # Approval seam: a device no one has ever approved gets no capture
+        # stream and no mic thread either — `_start_voice_input` explains
+        # why. It is not dark while it waits: every connection attempt
+        # announces its approval code through the setup helper, which is
+        # the feedback channel, and the ring holds the awaiting-approval
+        # colour. The mic opens on the `ready` frame that accepts it.
+        if not self.cfg.mic_enabled:
             log.info(
                 "voice input disabled ([mic] enabled=false) — wake word/VAD/"
                 "capture not started; TTS, announce, and music remain active"
+            )
+        elif _was_ever_approved():
+            self._start_voice_input(fatal=True)
+        else:
+            log.info(
+                "microphone held shut until this satellite is approved on "
+                "the dashboard — it has never had a session accepted, so "
+                "answering a wake word would be a promise it cannot keep. "
+                "The approval code is announced on each attempt; the wake "
+                "word starts the moment a session is accepted."
             )
         self._playback_thread = threading.Thread(
             target=self._playback_thread_run, daemon=True, name="playback"
         )
         self._playback_thread.start()
-        if self.cfg.mic_enabled:
-            self._mic_thread = threading.Thread(
-                target=self._mic_thread_run, daemon=True, name="mic"
-            )
-            self._mic_thread.start()
         # Video satellites: watch the kiosk browser service and report
         # liveness flips so the dashboard can flag a dead kiosk.
         if self.cfg.sat_type == "video":
@@ -5034,6 +5160,51 @@ def _remember_approval_code(offered: object) -> str | None:
         except OSError as e:
             log.debug("could not persist the approval code: %s", e)
     return code
+
+
+def _was_ever_approved() -> bool:
+    """Has a core ever accepted a session from this device?
+
+    The question the microphone is gated on at BOOT. Answered from the
+    marker rather than from the session that is about to be opened,
+    because a satellite whose server is unreachable never gets an answer
+    from the core at all — and an already-approved one has to keep
+    working through exactly that.
+    """
+    try:
+        return APPROVED_MARKER.is_file()
+    except OSError:
+        return False
+
+
+def _remember_approved() -> None:
+    """Record that a session was accepted. Best-effort, like every other
+    sidecar write: a read-only config dir costs this device the gate's
+    memory across a reboot, not its microphone this boot."""
+    if _was_ever_approved():
+        return
+    try:
+        APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        APPROVED_MARKER.write_text(
+            "the core accepted a session from this device; the microphone "
+            "may open at boot\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        log.debug("could not persist the approval marker: %s", e)
+
+
+def _forget_approved() -> None:
+    """The core says this device is waiting for approval, so it is not
+    approved — whatever a marker from an earlier life says. Removing it is
+    what makes an admin's "reset pairing" reach the microphone on the next
+    boot. A mic already open in THIS process is left alone: tearing capture
+    down underneath a running wake loop is its own hazard, and the device
+    cannot transmit anyway (the core closed the socket)."""
+    try:
+        APPROVED_MARKER.unlink(missing_ok=True)
+    except OSError as e:
+        log.debug("could not clear the approval marker: %s", e)
 
 
 # Set once per process when an unpinned device meets a core that has no
