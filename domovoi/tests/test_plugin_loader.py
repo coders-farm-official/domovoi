@@ -313,6 +313,69 @@ async def test_discovery_heals_stale_bundled_install_dir(
         await reg.delete_plugin(slug)
 
 
+@requires_db
+async def test_a_bundled_plugin_that_cannot_register_does_not_stop_the_rest(
+    tmp_path: Path, monkeypatch, caplog,
+) -> None:
+    """Auto-registering a bundled plugin with no registry row applies its
+    migrations first. That used to run outside the per-plugin isolation,
+    so one failure — a missing ``<db>_test`` database was the real one —
+    raised out of discover_and_load_all and NO plugin loaded, on every
+    boot. Now the failing plugin is skipped with a log line, the rest
+    load, and the next boot tries it again."""
+    import logging
+
+    from domovoi.plugins_runtime import loader as loader_mod
+    from domovoi.plugins_runtime.migrations import MigrationError
+
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    monkeypatch.setattr(loader_mod, "installed_root", lambda: installed)
+    monkeypatch.setattr(loader_mod, "bundled_root", lambda: bundled)
+
+    # Slug order puts the broken one FIRST, so the old code would have
+    # aborted before ever reaching the healthy one.
+    broken, fine = "aaa_nomigrate", "zzz_healthy"
+    make_plugin(bundled, broken)
+    make_plugin(bundled, fine)
+
+    real_apply_all = loader_mod.PluginMigrationRunner.apply_all
+
+    async def apply_all(self):
+        if self.slug == broken:
+            raise MigrationError('database "domovoi_test" does not exist')
+        return await real_apply_all(self)
+
+    monkeypatch.setattr(loader_mod.PluginMigrationRunner, "apply_all", apply_all)
+    try:
+        with caplog.at_level(logging.ERROR, logger=loader_mod.__name__):
+            await LOADER.discover_and_load_all()
+
+        assert fine in LOADER.loaded
+        row = await reg.get_plugin(fine)
+        assert row is not None and row.bundled and row.enabled
+
+        assert broken not in LOADER.loaded
+        assert await reg.get_plugin(broken) is None   # no row → retried
+        said = [r.getMessage() for r in caplog.records if broken in r.getMessage()]
+        assert said and "not loaded this boot" in said[0], said
+        assert "does not exist" in said[0]
+
+        # Next boot, with the cause fixed: it registers and loads.
+        monkeypatch.setattr(
+            loader_mod.PluginMigrationRunner, "apply_all", real_apply_all
+        )
+        await LOADER.discover_and_load_all()
+        assert broken in LOADER.loaded
+        assert await reg.get_plugin(broken) is not None
+    finally:
+        await LOADER.shutdown()
+        for slug in (broken, fine):
+            await reg.delete_plugin(slug)
+
+
 async def test_discovery_loads_in_slug_order_and_honors_tombstone(
     tmp_path: Path, monkeypatch,
 ) -> None:

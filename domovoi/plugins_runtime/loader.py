@@ -378,7 +378,11 @@ class PluginLoader:
 
         # 1. Bundled plugins with NO registry row at all → auto-register
         #    (enabled, migrations applied). A status='uninstalled' tombstone
-        #    is respected — never auto-re-registered (§3.5/§3.7).
+        #    is respected — never auto-re-registered (§3.5/§3.7). Isolated
+        #    per plugin like step 3: one plugin whose migrations can't
+        #    apply (a missing ``<db>_test`` database, a lint refusal) is
+        #    skipped for this boot and retried on the next, and every
+        #    other plugin still loads.
         broot = bundled_root()
         if broot.is_dir():
             for child in sorted(broot.iterdir()):
@@ -398,24 +402,35 @@ class PluginLoader:
                 row = rows.get(manifest.slug)
                 if row is None:
                     log.info("auto-registering bundled plugin %s", manifest.slug)
-                    runner = PluginMigrationRunner(
-                        manifest.slug, child / manifest.migrations_dir
-                    )
-                    await runner.apply_all()
-                    await reg.insert_plugin(
-                        slug=manifest.slug,
-                        name=manifest.name,
-                        version=manifest.version,
-                        publisher=manifest.publisher,
-                        license=manifest.license,
-                        domovoi_api=manifest.domovoi_api,
-                        enabled=True,
-                        bundled=True,
-                        install_source="bundled",
-                        source_ref=None,
-                        install_dir=str(child.resolve()),
-                        manifest=manifest.raw,
-                    )
+                    try:
+                        runner = PluginMigrationRunner(
+                            manifest.slug, child / manifest.migrations_dir
+                        )
+                        await runner.apply_all()
+                        await reg.insert_plugin(
+                            slug=manifest.slug,
+                            name=manifest.name,
+                            version=manifest.version,
+                            publisher=manifest.publisher,
+                            license=manifest.license,
+                            domovoi_api=manifest.domovoi_api,
+                            enabled=True,
+                            bundled=True,
+                            install_source="bundled",
+                            source_ref=None,
+                            install_dir=str(child.resolve()),
+                            manifest=manifest.raw,
+                        )
+                    except Exception as e:  # noqa: BLE001 — per-plugin isolation
+                        # No registry row is written, so the dashboard has
+                        # nothing to show: this log line is the record.
+                        log.error(
+                            "bundled plugin %s could not be registered, so it "
+                            "is not loaded this boot (retried next boot; other "
+                            "plugins are unaffected): %s: %s",
+                            manifest.slug, type(e).__name__, e,
+                        )
+                        continue
                     rows = {r.slug: r for r in await reg.list_plugins()}
 
         # 2. Installed dirs with no registry row → ignored + flagged
