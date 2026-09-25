@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import kotlin.math.abs
 
@@ -168,6 +169,21 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * The screen's own title block — and nothing at all in a window the keyboard
+ * has left too short for it.
+ *
+ * Sixteen screens use this, which is why the rule lives here rather than in
+ * each of them. Measured on a landscape phone: the window is 1080px tall, the
+ * keyboard takes 686, and on Settings the headline, its subtitle and the tab
+ * row ate 260 of the 394 that left — so the server field lifted to the fold
+ * and showed nothing but its top border. A title you can re-read by closing
+ * the keyboard is worth less than the line you are typing.
+ *
+ * It costs a recomposition of this header per frame of the IME animation
+ * (the inset is snapshot state and this is its read site), which is why the
+ * read is here, in a leaf, and not in the screens that call it.
+ */
 @Composable
 fun PageHeader(
     title: String,
@@ -175,6 +191,7 @@ fun PageHeader(
     modifier: Modifier = Modifier,
     actions: (@Composable () -> Unit)? = null,
 ) {
+    if (keyboardCrowdsTheWindow()) return
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,

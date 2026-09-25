@@ -53,6 +53,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
@@ -97,9 +98,16 @@ fun AppShell() {
             } else {
                 ShellContent()
             }
-            // toasts overlay
+            // Toasts overlay. This Column is a SIBLING of the shells, so the
+            // shells' own consumption of WindowInsets.ime cannot reach it —
+            // without imePadding() here a "saved" or "save failed" message
+            // renders 252px up a 2400px screen, i.e. squarely behind the
+            // keyboard, and auto-dismisses after 2.4s unseen. Which is exactly
+            // the message you need while typing. The root Box consumes
+            // nothing, so this is a single consumption and cannot double-count
+            // with BottomChrome.
             Column(
-                Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
+                Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 96.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -222,6 +230,13 @@ private fun ShellContent() {
 // and the keyboard would eat ~130dp of the ~900px an editor has left. Both
 // come back the moment the keyboard closes.
 //
+// The tablet shells (RailShell, DrawerShell) have no Scaffold, so their root
+// Row carries imePadding() instead — and a phone in LANDSCAPE is one of them,
+// because landscape is width class EXPANDED. There the keyboard leaves only
+// ~150dp, so ending the shell above it is necessary but not sufficient: the
+// topbar has to go too, or the caret gets no line. TopChrome does that, on a
+// measured threshold rather than on a guess about form factor.
+//
 // Not reachable from here, by construction: Dialog/AlertDialog are separate
 // windows that the platform still resizes for the IME (verified on the
 // emulator — they already work, and adding imePadding inside one would
@@ -229,10 +244,39 @@ private fun ShellContent() {
 // return before any shell exists, so they carry their own imePadding().
 // ---------------------------------------------------------------------------
 
+// A phone in LANDSCAPE is the hard case and it is not exotic — it is width
+// class EXPANDED, so it gets DrawerShell, and the keyboard takes 64% of the
+// screen (measured: 686px of 1080). Ending the shell at the top of the
+// keyboard is still right — the caret has to be somewhere visible — but 150dp
+// is not enough to also spend on a breadcrumb bar, so in a window that short
+// the topbar goes with the bottom chrome and the space goes to the field.
+// See [TopChrome].
+private val CONTENT_FLOOR = 260.dp
+
 /** True while the soft keyboard is on screen (or animating in). */
 @Composable
 private fun keyboardUp(): Boolean =
     WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
+/**
+ * True when the keyboard has left the window too short to spend on chrome.
+ *
+ * Internal rather than private because a screen whose OWN chrome is the last
+ * thing between the caret and the keyboard needs the same answer — see
+ * DocumentsEditor's formatting toolbar. Read it inside a small composable:
+ * WindowInsets.ime changes every frame of the IME animation, so the read site
+ * is the invalidation scope.
+ */
+@Composable
+internal fun keyboardCrowdsTheWindow(): Boolean {
+    val density = LocalDensity.current
+    val ime = WindowInsets.ime.getBottom(density)
+    if (ime <= 0) return false
+    // targetSdk 35: Configuration reports the whole window, system bars
+    // included, which is the number the IME inset is measured against.
+    val left = LocalConfiguration.current.screenHeightDp.dp - with(density) { ime.toDp() }
+    return left < CONTENT_FLOOR
+}
 
 /**
  * The compact shells' bottomBar slot: the chrome when there is no keyboard,
@@ -242,6 +286,45 @@ private fun keyboardUp(): Boolean =
 private fun BottomChrome(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.ime)) {
         if (!keyboardUp()) Column { content() }
+    }
+}
+
+/**
+ * The tablet shells' bottom chrome. Same decision as [BottomChrome] — player
+ * and navigation-bar spacer are dropped while the keyboard is up — but those
+ * shells have no Scaffold slot to put it in, so it is its own composable for
+ * a second reason: `keyboardUp()` reads a snapshot state that Compose updates
+ * on EVERY frame of the ~250ms IME animation, and its read site is the
+ * invalidation scope. Called inline, that scope was the whole shell (rail and
+ * drawer item lambdas, the ScreenRouter call site) about 15 times per
+ * animation. Here it is a leaf that composes nothing when the keyboard is up.
+ */
+@Composable
+private fun BottomChromeColumn() {
+    if (!keyboardUp()) {
+        DockedPlayer()
+        Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+    }
+}
+
+/**
+ * The top chrome, in every shell. Normally just [content]; in a window the
+ * keyboard has left shorter than [CONTENT_FLOOR] it collapses to the status
+ * bar inset alone, handing those ~56dp to whatever is being typed into.
+ *
+ * Collapsing to a status-bar-height Box rather than to nothing is deliberate:
+ * in the Scaffold shells an empty topBar slot makes Scaffold fall back to its
+ * own content insets for the body's top padding (the mirror of the bottomBar
+ * rule this whole fix rests on), and in the tablet shells nothing else
+ * consumes statusBars, so content would slide under the clock. Same leaf-scope
+ * reasoning as [BottomChromeColumn].
+ */
+@Composable
+private fun TopChrome(content: @Composable () -> Unit) {
+    if (keyboardCrowdsTheWindow()) {
+        Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars))
+    } else {
+        content()
     }
 }
 
@@ -279,6 +362,7 @@ private fun OfflineShell() {
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = {
+          TopChrome {
             Surface(color = Domovoi.colors.canvas) {
                 Row(
                     Modifier
@@ -314,6 +398,7 @@ private fun OfflineShell() {
                     }
                 }
             }
+          }
         },
         bottomBar = {
             BottomChrome {
@@ -355,7 +440,7 @@ private fun OfflineShell() {
 private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     Scaffold(
         containerColor = Domovoi.colors.canvas,
-        topBar = { Topbar(route, navigate) },
+        topBar = { TopChrome { Topbar(route, navigate) } },
         bottomBar = {
             BottomChrome {
                 DockedPlayer()
@@ -409,12 +494,9 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
             }
         }
         Column(Modifier.weight(1f)) {
-            Topbar(route, navigate)
+            TopChrome { Topbar(route, navigate) }
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            if (!keyboardUp()) {
-                DockedPlayer()
-                Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
-            }
+            BottomChromeColumn()
         }
     }
 }
@@ -453,12 +535,9 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
             }
         }
         Column(Modifier.weight(1f)) {
-            Topbar(route, navigate)
+            TopChrome { Topbar(route, navigate) }
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            if (!keyboardUp()) {
-                DockedPlayer()
-                Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
-            }
+            BottomChromeColumn()
         }
     }
 }
