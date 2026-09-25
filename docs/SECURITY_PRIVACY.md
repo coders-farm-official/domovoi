@@ -913,6 +913,55 @@ any LAN host could mint rooms (and their MPD ports) by opening a bare
 socket, or bump a live satellite out of its slot, without ever presenting
 a token.
 
+**Approval gates the microphone — at boot.** A satellite that no core has
+ever accepted opens no capture stream, starts no mic thread, and never
+loads the wake model: it answers no wake word at all, and says only its
+approval code (F-V013). Read that claim exactly as written, because it is
+a **boot-time** gate and the edges matter:
+
+* The verdict lives in `~/.domovoi/approved` — `approved` or
+  `not-approved`. The core is authoritative: an `awaiting_approval` answer
+  writes `not-approved`, and re-provisioning a device writes it too, so a
+  re-homed unit is deaf again on its next boot.
+* **A file on an SD card is not a source of truth, and the gate does not
+  treat it as one.** The record is written to a sibling and renamed over
+  the old one, so a power cut mid-write leaves the previous verdict rather
+  than half of the new one. A record that says neither word — torn,
+  corrupt, unreadable — is read as *no evidence at all* and the microphone
+  stays shut, unless the device also carries a receipt that only a
+  core-accepted session can have produced. Fail closed on damage; fail
+  open only where a receipt agrees.
+* A device that is **already listening** when its core parks it (an admin
+  pressing **Reset pairing** while it is up) keeps its microphone open for
+  the rest of that boot. Nothing it hears can go anywhere — the core has
+  closed the socket — but the wake word still answers until the unit
+  restarts. Tearing capture down underneath a running wake loop is a
+  hazard of its own and buys nothing that the closed socket has not
+  already bought. **Reboot the unit (or restart `domovoi-satellite`) if
+  you want it deaf immediately.** The one exception is a device whose
+  refusal **cannot be written down** — a full or read-only config dir, or
+  anything else that stops the record being replaced. There no restart
+  would settle it, so capture is stopped on the spot instead, and that
+  unit logs at ERROR and answers no wake word for the rest of the session.
+  It is not bricked and needs no reflash: **approving the room again gives
+  the microphone straight back**, because the `ready` frame that accepts a
+  session is the core's acceptance and is obeyed exactly as its refusal
+  was. Restarting the unit is the other way back, and on a device whose
+  disk is still broken it lands wherever the record on that disk says.
+* **Nothing in this gate needs a person at the device.** Every deaf state
+  it can produce is healed either by one `ready` frame — approve the room
+  on the dashboard — or by a restart the core can command remotely. A
+  satellite whose config dir refuses writes cannot make a refusal survive a
+  reboot, so it re-derives its answer at every boot and is re-shut the
+  moment its core answers; that is noisy on purpose, and a card that
+  refuses writes is worth replacing, but it never costs you the room.
+* A satellite already installed when this landed had no record to read, so
+  the client accepts the receipts the old code left — a synced-sha
+  sidecar, a pending-upgrade marker, a dashboard-pushed wake word or voice
+  — as proof that a core once accepted it, and writes the record once.
+  None of those can exist on a parked device: the core refuses an unpaired
+  room's `hello` before the socket carries anything it could act on.
+
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard
