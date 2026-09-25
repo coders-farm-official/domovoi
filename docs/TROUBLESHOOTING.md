@@ -136,6 +136,11 @@ To check what a given tab is running rather than guessing: its console has
 `window.__DOMOVOI_BUNDLE__`, and `GET /api/bundle` on the box says what it
 would serve now. Same value = that tab is current.
 
+The mechanism, and what it does and does not promise:
+[API_REFERENCE §3.22](API_REFERENCE.md#322-the-static-mount-and-how-a-front-end-change-reaches-a-browser).
+The one-time action after the 2026-09-25 upgrade:
+[RELEASE_NOTES](RELEASE_NOTES.md).
+
 ## Admin locked out
 
 | Symptom | Likely cause | Fix |
