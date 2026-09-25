@@ -1049,7 +1049,9 @@ variables shadow the file**.
 `sdk.core_config` is a read-only whitelist of core facts: `bot_name`,
 `music_dir`, `podcasts_dir`, `audiobooks_dir`, `mpd_host`,
 `mpd_port_base_control`, `mpd_port_base_http`, `mpd_http_base`, `use_stubs`,
-`log_level`. Anything else raises — and it's read-only.
+`log_level`. Anything else raises — and it's read-only. `mpd_http_base`
+reads back as a usable URL prefix (`http://<host>`) even when the setting
+is `auto`, which the core resolves to its current LAN address.
 
 ### 4.14 Sounds, HTTP, state, logging
 

@@ -136,6 +136,30 @@ rejects it for a model with no thinking mode, the turn is retried once
 without it and the flag latches off for the process. Neither case costs
 you a failed route.
 
+The Q&A model has its own switch, `ollama_qa_think` (dashboard →
+**Models** → *Q&A model thinks first*). Its default, `default`, sends no
+flag at all, which is how Q&A calls have always gone out, so a hybrid
+model such as `qwen3` reasons before every answer. If your Q&A model has a
+thinking mode, set it to `false` here. It degrades the same way as the
+router's flag. It covers the voice pipeline's Q&A calls; the dashboard's
+text chat still sends no `think` flag.
+
+### Context window
+
+Domovoi sends no `num_ctx` unless you set one, so every call gets the
+Ollama server's default window: 4096 tokens on most hosts, or whatever
+`OLLAMA_CONTEXT_LENGTH` says in Ollama's unit. The routing prompt alone is
+roughly 3.4k tokens before plugins and grows with every plugin, so a
+router that starts missing commands as plugins are added may be running
+out of room. `ollama_tool_num_ctx` (the router) and `ollama_num_ctx` (Q&A
+and the dashboard's text chat) set it per role, under dashboard →
+**Models**; 8192 is a sensible first step. Voice picks a change up at
+once; the text chat runs in the dashboard's process and picks it up when
+the dashboard restarts. A blank value or 0 sends nothing. A bigger window
+costs memory for as long as the model stays loaded, and Ollama reloads a
+model whenever its window changes, so if one model serves both roles,
+give both the same value.
+
 ### Leave chat mode off
 
 Open-mic conversational mode routes every turn through Letta and a 14B

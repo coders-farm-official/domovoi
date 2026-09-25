@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from domovoi import lan_address
 from domovoi.config import settings
 
 # The plugin-visible core settings. Extending this list is a MINOR
@@ -36,6 +37,10 @@ class CoreConfigView:
                 f"core setting {name!r} is not plugin-visible; whitelisted: "
                 f"{sorted(CORE_CONFIG_WHITELIST)}"
             )
+        if name == "mpd_http_base":
+            # Always a usable URL prefix: the setting's default is the
+            # literal "auto", which only the core knows how to resolve.
+            return lan_address.mpd_http_base()
         return getattr(settings, name)
 
     def __setattr__(self, name: str, value: Any) -> None:

@@ -50,6 +50,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from domovoi.config import QA_THINK_CHOICES
+
 Tier = Literal["hot", "reapply", "restart"]
 Section = Literal["common", "advanced"]
 FieldType = Literal["int", "float", "bool", "str", "choice"]
@@ -173,6 +175,38 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "default — leave it off on a CPU host. Ignored by models without a "
         "thinking mode. Applies immediately.",
         "bool", tier="reapply",
+    ),
+    FieldSpec(
+        "ollama_qa_think", "Q&A model thinks first", "Models",
+        "Whether the Q&A model may emit reasoning tokens before it answers. "
+        "'default' sends nothing and leaves it to the model, so a hybrid "
+        "model such as qwen3 reasons before every answer; 'false' makes it "
+        "answer straight away (the right choice on a CPU host); 'true' asks "
+        "it to reason. Ignored by models without a thinking mode. Applies "
+        "immediately.",
+        "choice", tier="reapply", choices=list(QA_THINK_CHOICES),
+    ),
+    FieldSpec(
+        "ollama_num_ctx", "Q&A context window", "Models",
+        "The context window (in tokens) Ollama gives the Q&A model and the "
+        "text chat. 0 sends nothing, so the Ollama server's own default "
+        "applies (usually 4096). Bigger remembers more of a conversation but "
+        "uses more memory while the model is loaded. If one model serves "
+        "both roles, set this and the tool-routing window to the same value, "
+        "or Ollama reloads the model every time it switches. Applies "
+        "immediately to voice; the text chat picks it up when the dashboard "
+        "restarts.",
+        "int", tier="reapply", min=0, max=262144,
+    ),
+    FieldSpec(
+        "ollama_tool_num_ctx", "Tool-routing context window", "Models",
+        "The context window (in tokens) Ollama gives the tool-routing model. "
+        "0 sends nothing, so the Ollama server's own default applies "
+        "(usually 4096). The routing prompt lists every command's tool "
+        "description, and grows with each plugin; if routing gets worse as "
+        "plugins are added, try 8192. Uses more memory while the model is "
+        "loaded. Applies immediately.",
+        "int", tier="reapply", min=0, max=262144,
     ),
     FieldSpec(
         "ollama_vision_model", "Vision model", "Models",
@@ -512,9 +546,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_advertise_url", "Adoption server URL", "Security",
         "The core WebSocket URL written into adopted satellites' config "
-        "(e.g. ws://192.168.1.50:6370). Leave empty to autodetect the LAN "
-        "address — set it only when the server has several network "
-        "interfaces and autodetection picks the wrong one.",
+        "(e.g. ws://192.168.1.50:6370). 'auto' (or empty) detects the LAN "
+        "address at adopt time — set a URL only when the server has several "
+        "network interfaces and autodetection picks the wrong one.",
         "str", section="advanced", tier="hot",
     ),
 ]

@@ -26,7 +26,6 @@ import ctypes
 import json
 import logging
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -34,6 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from domovoi import lan_address
 from domovoi.config import settings as core_settings
 from satellite import provisioning_protocol as proto
 
@@ -315,12 +315,13 @@ def _flush_volume(mount: Path) -> None:
 
 
 def advertised_domovoi_url() -> str:
-    """The core WS URL adopted devices should dial. The setting wins when
-    set; otherwise derive the LAN IP via the UDP-connect trick (no packet
-    is sent). Never hands out a loopback address — a satellite dialing
-    localhost would dial itself."""
+    """The core WS URL adopted devices should dial. An explicit setting
+    wins; ``auto`` (the default) or blank derives the LAN IP at adopt time
+    via the UDP-connect trick (no packet is sent). That only falls back to
+    loopback when no LAN address can be found at all — a satellite dialing
+    it would dial itself — and a multi-NIC box should set the override."""
     override = (core_settings.satellite_adoption_advertise_url or "").strip()
-    if override:
+    if not lan_address.is_auto(override):
         parts = urlsplit(override if "//" in override else f"ws://{override}")
         scheme = parts.scheme if parts.scheme in ("ws", "wss") else "ws"
         host = parts.hostname or override
@@ -331,20 +332,6 @@ def advertised_domovoi_url() -> str:
 
 
 def _lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("192.0.2.1", 9))  # TEST-NET; nothing is sent
-        ip = s.getsockname()[0]
-    except OSError:
-        ip = ""
-    finally:
-        s.close()
-    if not ip or ip.startswith("127."):
-        # Last resort: resolve the hostname. Still never loopback — a
-        # multi-NIC box that lands here should set the advertise-url
-        # override instead.
-        try:
-            ip = socket.gethostbyname(socket.gethostname())
-        except OSError:
-            ip = ""
-    return ip or "127.0.0.1"
+    # The lookup is shared with the core's MPD stream URLs; the 127.0.0.1
+    # last resort is this flow's own. Uncached: adoption is rare.
+    return lan_address.probe_lan_ipv4() or "127.0.0.1"

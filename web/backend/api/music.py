@@ -1387,9 +1387,13 @@ async def _list_provisioned_rooms() -> list[tuple[str, int, int]]:
 
 async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
     room_id, control_port, http_port = room
+    from domovoi import lan_address
     from domovoi.config import settings as core_settings
 
-    stream_url = f"{core_settings.mpd_http_base.rstrip('/')}:{http_port}"
+    # Built the way the core builds the URL it hands the satellite
+    # (clients/mpd.py:mpd_stream_url_for), so MPD_HTTP_BASE=auto shows the
+    # same LAN address here.
+    stream_url = f"{lan_address.mpd_http_base().rstrip('/')}:{http_port}"
 
     state, song_dict, elapsed = await _read_mpd(core_settings.mpd_host, control_port)
 

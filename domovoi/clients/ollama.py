@@ -11,7 +11,10 @@ Three entry points:
 
 Every real chat call carries ``keep_alive`` (``settings.ollama_keep_alive``)
 so Ollama doesn't unload the models between sporadic turns — see
-``RealOllamaClient._chat`` for why that matters on a CPU host.
+``RealOllamaClient._chat`` for why that matters on a CPU host. Two more
+knobs ride along only when set, per role: ``think`` (``ollama_tool_think``
+for routing, ``ollama_qa_think`` for the QA-model calls) and
+``options.num_ctx`` (``ollama_tool_num_ctx`` / ``ollama_num_ctx``).
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
 
-from domovoi.config import settings
+from domovoi.config import normalize_think_setting, settings
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +51,24 @@ log = logging.getLogger(__name__)
 
 def _ollama_base(base_url: str | None) -> str:
     return (base_url or settings.ollama_url).rstrip("/")
+
+
+def _positive_int(value: Any) -> int | None:
+    """``value`` as a positive int, else None. 0 (the setting default),
+    negatives and junk all mean "not set"."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _num_ctx_options(value: Any) -> dict[str, int]:
+    """The ``options`` entry for an ``ollama_num_ctx`` / ``ollama_tool_num_ctx``
+    value: ``{"num_ctx": n}`` when set, ``{}`` when not — and then the call
+    goes out exactly as it did before the setting existed."""
+    n = _positive_int(value)
+    return {"num_ctx": n} if n is not None else {}
 
 
 async def list_models(base_url: str | None = None, timeout: float = 5.0) -> list[dict[str, Any]]:
@@ -160,11 +181,15 @@ async def chat_stream(
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
+    body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    # Same context window as the voice pipeline's QA calls; unset (0)
+    # sends nothing, as before.
+    options = _num_ctx_options(settings.ollama_num_ctx)
+    if options:
+        body["options"] = options
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
     async with httpx.AsyncClient(timeout=timeout) as c:
-        async with c.stream(
-            "POST", url, json={"model": model, "messages": messages, "stream": True}
-        ) as resp:
+        async with c.stream("POST", url, json=body) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 line = line.strip()
@@ -602,6 +627,20 @@ def _normalize_keep_alive(value: str | None) -> str | int | float | None:
         return text
 
 
+def _qa_think_value(value: Any) -> bool | None:
+    """``settings.ollama_qa_think`` as it goes on the wire: None (leave the
+    field out, the default), True or False. A value that is none of the
+    setting's spellings is treated as the default rather than failing every
+    QA call; the settings validator and the dashboard refuse such values
+    before they can get here."""
+    try:
+        choice = normalize_think_setting(value)
+    except ValueError:
+        log.warning("ignoring ollama_qa_think=%r: expected default, true or false", value)
+        return None
+    return None if choice == "default" else choice == "true"
+
+
 class RealOllamaClient:
     """Async Ollama client with tool-calling + streaming.
 
@@ -616,6 +655,14 @@ class RealOllamaClient:
     # / `missing unit in duration`; a too-old client raises
     # `unexpected keyword argument 'keep_alive'`.
     _KEEP_ALIVE_UNSUPPORTED_HINTS = ("keep_alive", "keepalive", "duration")
+
+    # The optional per-role knobs, bound in __init__. Declared here as well
+    # so a client assembled without __init__ (the tests build one that way)
+    # sends exactly what every call sent before these knobs existed.
+    _qa_think: bool | None = None
+    _send_qa_think: bool = False
+    _num_ctx: int | None = None
+    _tool_num_ctx: int | None = None
 
     def __init__(
         self,
@@ -652,6 +699,15 @@ class RealOllamaClient:
         # setting means never send it (the Ollama server's default governs).
         self._keep_alive = _normalize_keep_alive(settings.ollama_keep_alive)
         self._send_keep_alive = self._keep_alive is not None and _client_accepts_keep_alive()
+        # The QA-model calls' `think`. None (the default) leaves the field
+        # out, as every QA call always has. Otherwise it's sent and degrades
+        # exactly like the router's, on a latch of its own: the QA model
+        # rejecting the flag says nothing about the tool model.
+        self._qa_think = _qa_think_value(settings.ollama_qa_think)
+        self._send_qa_think = self._qa_think is not None and _client_accepts_think()
+        # options.num_ctx per role; None sends none (the server's default).
+        self._num_ctx = _positive_int(settings.ollama_num_ctx)
+        self._tool_num_ctx = _positive_int(settings.ollama_tool_num_ctx)
 
     def _system_prompt(self, override: str | None) -> str:
         if override:
@@ -787,9 +843,45 @@ class RealOllamaClient:
             # others). temperature=0 makes a transcript route the same
             # way every time and biases toward acting on borderline
             # commands instead of randomly bailing to the QA fallthrough.
-            options={"temperature": 0},
+            # num_ctx only when ollama_tool_num_ctx is set.
+            options={"temperature": 0, **_num_ctx_options(self._tool_num_ctx)},
             **extra,
             )
+
+    # ── the QA-model calls' optional knobs ───────────────────────────────
+
+    def _qa_extras(self) -> dict[str, Any]:
+        """``options.num_ctx`` and ``think`` for a QA-model call — each only
+        when its setting asks for it, so with both unset the call is exactly
+        what it was before they existed."""
+        extra: dict[str, Any] = {}
+        options = _num_ctx_options(self._num_ctx)
+        if options:
+            extra["options"] = options
+        if self._send_qa_think:
+            extra["think"] = self._qa_think
+        return extra
+
+    def _disable_qa_think(self, exc: Exception) -> None:
+        log.info(
+            "QA model %s rejected the 'think' flag (%s) — retrying without it "
+            "and disabling it for this client",
+            self._qa_model, exc,
+        )
+        self._send_qa_think = False
+
+    async def _qa_chat(self, **kwargs: Any) -> Any:
+        """A non-streaming QA-model call: ``_chat`` plus :meth:`_qa_extras`,
+        with the router's one-time retry when the server rejects ``think``
+        (see ``_route_chat``). ``stream_qa`` carries its own retry, because
+        a streamed rejection only surfaces once the stream is iterated."""
+        try:
+            return await self._chat(**kwargs, **self._qa_extras())
+        except Exception as e:
+            if not self._send_qa_think or not self._looks_like_think_rejection(e):
+                raise
+            self._disable_qa_think(e)
+            return await self._chat(**kwargs, **self._qa_extras())
 
     def _build_messages(
         self,
@@ -816,7 +908,7 @@ class RealOllamaClient:
         system_prompt: str | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> str:
-        response = await self._chat(
+        response = await self._qa_chat(
             model=self._qa_model,
             messages=self._build_messages(transcript, system_prompt, history),
             stream=False,
@@ -830,27 +922,33 @@ class RealOllamaClient:
         history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         messages = self._build_messages(transcript, system_prompt, history)
-        stream = await self._chat(model=self._qa_model, messages=messages, stream=True)
         yielded = False
-        try:
-            async for chunk in stream:
-                content = self._chunk_content(chunk)
-                if content:
-                    yielded = True
-                    yield content
-        except Exception as e:
-            # ollama-python only opens the HTTP stream on first iteration, so
-            # a keep_alive rejection lands here, not in `_chat`. Retrying is
-            # safe only before the first chunk — after that the caller
-            # already holds partial text and a restart would duplicate it.
-            if yielded or not self._send_keep_alive or not self._looks_like_keep_alive_rejection(e):
-                raise
-            self._disable_keep_alive(e)
-            stream = await self._chat(model=self._qa_model, messages=messages, stream=True)
-            async for chunk in stream:
-                content = self._chunk_content(chunk)
-                if content:
-                    yield content
+        while True:
+            stream = await self._chat(
+                model=self._qa_model, messages=messages, stream=True, **self._qa_extras()
+            )
+            try:
+                async for chunk in stream:
+                    content = self._chunk_content(chunk)
+                    if content:
+                        yielded = True
+                        yield content
+                return
+            except Exception as e:
+                # ollama-python only opens the HTTP stream on first iteration,
+                # so a keep_alive or think rejection lands here, not in
+                # `_chat`. Retrying is safe only before the first chunk —
+                # after that the caller already holds partial text and a
+                # restart would duplicate it. Each retry latches one flag
+                # off, so this goes round at most twice more.
+                if yielded:
+                    raise
+                if self._send_keep_alive and self._looks_like_keep_alive_rejection(e):
+                    self._disable_keep_alive(e)
+                elif self._send_qa_think and self._looks_like_think_rejection(e):
+                    self._disable_qa_think(e)
+                else:
+                    raise
 
     @staticmethod
     def _chunk_content(chunk: Any) -> str:
@@ -887,7 +985,7 @@ class RealOllamaClient:
             system_prompt = profile_prefix.rstrip() + "\n\n" + system_prompt
         messages = self._build_messages(transcript, system_prompt, history)
         try:
-            response = await self._chat(
+            response = await self._qa_chat(
                 model=self._qa_model,
                 messages=messages,
                 stream=False,
@@ -929,7 +1027,7 @@ class RealOllamaClient:
             transcript, _EXTRACT_SUBJECT_SYSTEM_PROMPT, history
         )
         try:
-            response = await self._chat(
+            response = await self._qa_chat(
                 model=self._qa_model,
                 messages=messages,
                 stream=False,
@@ -965,7 +1063,7 @@ class RealOllamaClient:
         """
         system_prompt = _EXTRACT_MEMORIES_SYSTEM_PROMPT
         try:
-            response = await self._chat(
+            response = await self._qa_chat(
                 model=self._qa_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1012,7 +1110,8 @@ def reset_ollama_client() -> None:
     """Drop the cached client so the next ``get_ollama_client()`` rebuilds it
     from the current ``settings``. This is the 'reapply' hook for a live
     ``ollama_model`` / ``ollama_tool_model`` switch from the web Models page
-    (and for ``ollama_tool_think`` / ``ollama_keep_alive``, bound alongside):
+    (and for ``ollama_tool_think`` / ``ollama_qa_think`` / ``ollama_keep_alive``
+    / ``ollama_num_ctx`` / ``ollama_tool_num_ctx``, bound alongside):
     the RealOllamaClient binds its qa/tool model names at construction, so a
     settings mutation alone wouldn't take — clearing the singleton makes every
     call site (all of which go through ``get_ollama_client()`` per-use) pick up

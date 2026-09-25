@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Protocol
 
+from domovoi import lan_address
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -793,9 +794,12 @@ def iter_mpd_clients() -> list[tuple[str, MPDClient]]:
 
 
 def mpd_stream_url_for(room_id: str | None) -> str | None:
-    """Per-room HTTP stream URL the satellite consumes. ``None`` when unprovisioned."""
+    """Per-room HTTP stream URL the satellite consumes. ``None`` when unprovisioned.
+
+    The host part comes from ``MPD_HTTP_BASE``; its default, ``auto``, is
+    this host's LAN address as of now (see domovoi/lan_address.py)."""
     key = _resolve_room(room_id)
     if key is None:
         return None
     _, http = _room_ports[key]
-    return f"{settings.mpd_http_base.rstrip('/')}:{http}"
+    return f"{lan_address.mpd_http_base().rstrip('/')}:{http}"

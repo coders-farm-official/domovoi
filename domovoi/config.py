@@ -39,6 +39,28 @@ _DUAL_STACK_LOOPBACK_NAMES = frozenset({
     "[::1]",
 })
 
+# The values of `ollama_qa_think`. "default" sends no `think` flag at all
+# (the model's own default applies); "false" / "true" send it.
+QA_THINK_CHOICES = ("default", "false", "true")
+
+
+def normalize_think_setting(value: object) -> str:
+    """One of :data:`QA_THINK_CHOICES` for a raw setting value: a bool, the
+    usual boolean spellings in any case, or blank / "auto" / "none" for
+    "default". Anything else raises ``ValueError``."""
+    if value is None:
+        return "default"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip().lower()
+    if text in ("", "default", "auto", "none"):
+        return "default"
+    if text in ("true", "1", "yes", "on"):
+        return "true"
+    if text in ("false", "0", "no", "off"):
+        return "false"
+    raise ValueError(f"expected default, true or false, got {value!r}")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore")
@@ -106,6 +128,49 @@ class Settings(BaseSettings):
     # accept it, so leaving it False is always safe. Turn it ON only if you
     # have GPU headroom and find your model routes materially better with it.
     ollama_tool_think: bool = False
+    # The same flag for the Q&A model's calls (answers, streamed answers,
+    # the uncertainty check, subject and memory extraction). Unlike the
+    # router's it defaults to NOT sending anything — "default" — which is
+    # how every QA call has always gone out, so the model's own default
+    # applies (a hybrid model such as qwen3 then reasons before each
+    # answer). "false" stops a hybrid QA model from reasoning first, which
+    # is what a CPU host wants; "true" asks for it. Sent and degraded
+    # exactly like ollama_tool_think: omitted when the installed client
+    # can't take it, dropped for good if the server rejects it.
+    ollama_qa_think: str = "default"
+
+    @field_validator("ollama_qa_think", mode="before")
+    @classmethod
+    def _spell_qa_think_one_way(cls, value: object) -> str:
+        """Read the usual boolean spellings (``OLLAMA_QA_THINK=false``,
+        ``0``, ``off``) as "false"/"true", and blank as "default", so the
+        value the client and the dashboard see is always one of three."""
+        return normalize_think_setting(value)
+
+    # Context window (Ollama's options.num_ctx) for the Q&A calls above plus
+    # the dashboard's text chat, and separately for the tool-routing call.
+    # 0 = don't send it, so the Ollama server's default (OLLAMA_CONTEXT_LENGTH
+    # in its unit, else 4096 on most hosts) governs, which is how every call
+    # has always gone out. The router's prompt carries every handler's tool
+    # schema (~3.4k tokens before plugins), so a 4096 window leaves little
+    # room: set ollama_tool_num_ctx to 8192 if routing degrades as plugins
+    # are added. A bigger window costs memory for as long as the model
+    # stays loaded, and Ollama reloads a model whose num_ctx changes — so
+    # when one model serves both roles, give both settings the same value
+    # or every switch between routing and answering reloads it.
+    ollama_num_ctx: int = 0
+    ollama_tool_num_ctx: int = 0
+
+    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", mode="before")
+    @classmethod
+    def _blank_num_ctx_is_unset(cls, value: object) -> object:
+        """A blank ``OLLAMA_NUM_CTX=`` means "don't send it", the same as 0
+        (as a blank OLLAMA_KEEP_ALIVE does), rather than an int parse error
+        that stops the server from booting."""
+        if isinstance(value, str) and not value.strip():
+            return 0
+        return value
+
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
     ollama_vision_model: str = "qwen2.5vl:7b"
@@ -256,12 +321,14 @@ class Settings(BaseSettings):
     satellite_hello_timeout_sec: float = 5.0
     # USB satellite adoption: the web backend scans removable volumes for
     # unprovisioned satellites presenting a DOMOVOI-SET gadget drive and
-    # surfaces them as pending on the Satellites page. Kill switch below;
-    # the advertise URL overrides the ws://<lan-ip>:6370 the adopt flow
-    # derives for the device (set it when the server has several NICs and
-    # the autodetected address is the wrong one).
+    # surfaces them as pending on the Satellites page. Kill switch below.
+    # The advertise URL is what the adopt flow writes into the device:
+    # "auto" (the default; blank means the same) derives ws://<lan-ip>:6370
+    # at adopt time (domovoi/lan_address.py); any other value overrides
+    # it (set one when the server has several NICs and the autodetected
+    # address is the wrong one).
     satellite_adoption_enabled: bool = True
-    satellite_adoption_advertise_url: str = ""
+    satellite_adoption_advertise_url: str = "auto"
     # On startup, pre-populate the voices registry with the curated catalog
     # (domovoi/voice_catalog.py) of Edge cloud + Piper local voices, so
     # they're available to list/sample/switch without manual registration.
@@ -332,9 +399,14 @@ class Settings(BaseSettings):
     # validator below, which pins a loopback name to it.
     # mpd_http_base is the URL prefix the Pi uses to reach the per-room
     # HTTP stream — needs a LAN-routable hostname (not localhost, which
-    # resolves to the Pi itself).
+    # resolves to the Pi itself). "auto" (the default; blank means the
+    # same) builds it from this host's LAN IPv4 each time a stream URL is
+    # handed out, so it follows a DHCP address change — see
+    # domovoi/lan_address.py, which falls back to "http://localhost" when
+    # no LAN address can be found. Any other value is used as written:
+    # set one on a multi-NIC host, or to hand out a hostname instead.
     mpd_host: str = MPD_CONTROL_BIND
-    mpd_http_base: str = "http://localhost"
+    mpd_http_base: str = "auto"
 
     @field_validator("mpd_host")
     @classmethod
@@ -676,9 +748,10 @@ class Settings(BaseSettings):
     # 0.0.0.0 (so any consumer on the LAN can reach it), but the URL
     # we hand to MPD must resolve from MPD's perspective. For Docker
     # Desktop on Windows the container's localhost != Domovoi's
-    # localhost, so 127.0.0.1 won't work — use the same LAN hostname
-    # MPD_HTTP_BASE uses. Default keeps the simplest dev case
-    # (domovoi + MPD both on the host without Docker) working.
+    # localhost, so 127.0.0.1 won't work — use this host's LAN name or
+    # address (the one MPD_HTTP_BASE=auto resolves to). Default keeps
+    # the simplest dev case (domovoi + MPD both on the host without
+    # Docker) working.
     radio_sdr_stream_base: str = "http://127.0.0.1"
 
     # ─── Implicit memory extraction ────────────────────────
