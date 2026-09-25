@@ -92,13 +92,16 @@ def ladder(monkeypatch):
     monkeypatch.setattr("domovoi.bootstrap.register_nvidia_dlls", lambda: ())
 
     def configure(model="large-v3", device="cuda", compute="auto", fallback="small.en",
-                  recorder: _Recorder | None = None) -> _Recorder:
+                  recorder: _Recorder | None = None, cuda_devices: int | None = None) -> _Recorder:
         monkeypatch.setattr(settings, "whisper_model", model)
         monkeypatch.setattr(settings, "whisper_device", device)
         monkeypatch.setattr(settings, "whisper_compute_type", compute)
         monkeypatch.setattr(settings, "whisper_cpu_fallback_model", fallback)
         rec = recorder or _Recorder()
         monkeypatch.setattr(whisper_mod, "FasterWhisperClient", rec)
+        # None = "CTranslate2 can't be asked" (it isn't installed in the
+        # test venv): the configured rung is simply tried.
+        monkeypatch.setattr(whisper_mod, "_cuda_device_count", lambda: cuda_devices)
         return rec
 
     return configure
@@ -223,6 +226,68 @@ def test_a_cuda_failure_falls_back_to_the_cpu_model_at_int8(ladder, caplog) -> N
     assert "running on the cpu fallback" in log_text
     # The streaming layer gets the fallback client.
     assert whisper_mod.get_whisper_client() is client
+
+
+def test_cuda_with_no_visible_gpu_skips_straight_to_the_fallback(ladder) -> None:
+    """faster-whisper downloads before it touches the device: on a machine
+    with no NVIDIA GPU the configured cuda rung would pull all of large-v3
+    just to fail. When CTranslate2 reports zero CUDA devices it isn't tried."""
+    rec = ladder(model="large-v3", device="cuda", compute="auto", cuda_devices=0)
+    assert whisper_mod.load_whisper_client() is not None
+    assert rec.attempts == [("small.en", "cpu", "int8")]
+    st = whisper_mod.stt_status()
+    assert st["state"] == "fallback"
+    assert "no CUDA device" in st["fallback_reason"]
+    assert "whisper_device=cpu" in st["fallback_reason"]
+
+
+def test_a_visible_gpu_or_an_unknown_count_still_tries_cuda(ladder) -> None:
+    for count in (1, None):
+        rec = ladder(model="large-v3", device="cuda", cuda_devices=count)
+        whisper_mod._client = whisper_mod._status = None
+        assert whisper_mod.load_whisper_client() is not None
+        assert rec.attempts == [("large-v3", "cuda", "float16")], count
+
+
+def test_a_cpu_config_never_probes_cuda(ladder, monkeypatch) -> None:
+    rec = ladder(model="small.en", device="cpu", compute="int8")
+
+    def _probe():
+        raise AssertionError("a cpu config must not probe CUDA")
+
+    monkeypatch.setattr(whisper_mod, "_cuda_device_count", _probe)
+    assert whisper_mod.load_whisper_client() is not None
+    assert rec.attempts == [("small.en", "cpu", "int8")]
+
+
+def test_the_cuda_probe_asks_ctranslate2(monkeypatch) -> None:
+    import sys
+
+    fake = types.SimpleNamespace(get_cuda_device_count=lambda: 2)
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake)
+    assert whisper_mod._cuda_device_count() == 2
+
+    def _boom():
+        raise RuntimeError("driver probe blew up")
+
+    fake.get_cuda_device_count = _boom
+    assert whisper_mod._cuda_device_count() is None
+
+
+def test_the_cuda_probe_degrades_to_unknown_without_ctranslate2(monkeypatch) -> None:
+    import builtins
+    import sys
+
+    monkeypatch.delitem(sys.modules, "ctranslate2", raising=False)
+    real_import = builtins.__import__
+
+    def _no_ct2(name, *a, **k):
+        if name == "ctranslate2":
+            raise ImportError("no ctranslate2")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_ct2)
+    assert whisper_mod._cuda_device_count() is None
 
 
 def test_the_fallback_model_is_a_setting(ladder) -> None:
@@ -544,6 +609,26 @@ async def test_a_turn_without_stt_is_told_why_and_the_mic_is_released(no_stt, ca
     assert ends[0]["expect_followup"] is False
     assert kinds[-1] == "response_end"
     assert "speech recognition is unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_barge_in_turn_without_stt_ends_quietly(no_stt, monkeypatch) -> None:
+    """A barge-in capture opens over the speaker — most likely over the
+    notice itself — and with no transcript there is no self-echo check, so
+    speaking again could loop. It ends with no speech and a released mic."""
+    class _NoTTS:
+        async def synthesize(self, *_a, **_k):
+            raise AssertionError("a barge-in turn must not speak the notice again")
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: _NoTTS())
+    ws = _FakeWS()
+    sess = StreamSession(ws, "office")  # type: ignore[arg-type]
+    await sess._process_utterance(b"\x00" * 3_200, trigger="barge_in")
+
+    assert ws.sent_text == [
+        {"type": "response_end", "interrupted": True, "expect_followup": False}
+    ]
+    assert ws.sent_bytes == []
 
 
 @pytest.mark.asyncio

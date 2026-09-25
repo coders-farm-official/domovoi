@@ -37,7 +37,9 @@ cheap to experiment with. Try a model, say something, try another.
 Whisper can't load — `cuda` on a machine with no NVIDIA GPU is the usual
 reason — it retries with `whisper_cpu_fallback_model` (default `small.en`)
 on `cpu` at `int8`, which is this page's recommended setup anyway, and the
-dashboard's **Models** page shows a banner saying so. If even that fails,
+dashboard's **Models** page shows a banner saying so. When no CUDA device
+is visible at all it goes straight to the fallback, without first
+downloading the configured `cuda` model. If even that fails,
 the core runs without speech recognition (satellites answer "I can't
 understand speech right now") and the banner shows the load error. Either
 way the first-run setup code is written first, so you can always sign in

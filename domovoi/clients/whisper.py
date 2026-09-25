@@ -235,10 +235,24 @@ def _status_doc(
     }
 
 
+def _cuda_device_count() -> int | None:
+    """How many CUDA devices CTranslate2 can see, or None when it can't be
+    asked (CTranslate2 missing, or the probe itself failed) — in which case
+    the load just tries. 0 means CTranslate2 reaches no GPU at all (no
+    NVIDIA card, or no driver), and a cuda load would fail the same way."""
+    try:
+        import ctranslate2
+
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception:
+        return None
+
+
 def _load_real_client() -> WhisperClient | None:
     """Walk the load ladder once and record the outcome. Never raises.
 
-    1. The configured model/device/compute type (``auto`` resolved).
+    1. The configured model/device/compute type (``auto`` resolved) —
+       skipped when it asks for cuda and CTranslate2 sees no CUDA device.
     2. On failure, ``whisper_cpu_fallback_model`` on cpu at int8 — unless
        that is exactly what step 1 just tried, or faster-whisper itself is
        missing (every rung would fail the same way).
@@ -265,20 +279,35 @@ def _load_real_client() -> WhisperClient | None:
         # Tried anyway — CTranslate2 decides, and a version that quietly
         # converts keeps working — but the reason is on record if it fails.
         log.warning("Whisper: the configured pair looks wrong: %s", problem)
-    try:
-        _client = FasterWhisperClient(model=model, device=device, compute_type=compute)
-        _status = _status_doc("ok", loaded=(model, device, compute))
-        return _client
-    except ImportError as e:
-        reason = (
-            f"faster-whisper is not installed ({e}). Install the real clients: "
-            'pip install -e ".[real-clients]"'
+    if _norm(device).startswith("cuda") and _cuda_device_count() == 0:
+        # faster-whisper downloads the model BEFORE it touches the device,
+        # so trying anyway would pull every byte of (by default) large-v3
+        # just to fail on a machine with no NVIDIA GPU — minutes of boot
+        # with the core's port still closed. Skip straight to the fallback.
+        first_error = (
+            f"Whisper not loaded (model={model} device={device} "
+            f"compute={compute}): CTranslate2 sees no CUDA device, so this "
+            "machine has no NVIDIA GPU or its driver isn't installed.\n"
+            "  Set whisper_device=cpu (whisper_compute_type=auto then runs "
+            "int8) in the dashboard gear -> Advanced, then restart. See "
+            "docs/CPU_HOST.md."
         )
-        log.error("Whisper: %s", reason)
-        return _mark_unavailable(reason)
-    except Exception as e:
-        first_error = str(e)
-        log.error("Whisper: the configured model failed to load: %s", first_error)
+        log.error("Whisper: %s", first_error)
+    else:
+        try:
+            _client = FasterWhisperClient(model=model, device=device, compute_type=compute)
+            _status = _status_doc("ok", loaded=(model, device, compute))
+            return _client
+        except ImportError as e:
+            reason = (
+                f"faster-whisper is not installed ({e}). Install the real clients: "
+                'pip install -e ".[real-clients]"'
+            )
+            log.error("Whisper: %s", reason)
+            return _mark_unavailable(reason)
+        except Exception as e:
+            first_error = str(e)
+            log.error("Whisper: the configured model failed to load: %s", first_error)
 
     fb_model = (settings.whisper_cpu_fallback_model or "").strip()
     rung = (fb_model, FALLBACK_DEVICE, FALLBACK_COMPUTE_TYPE)

@@ -1488,7 +1488,9 @@ class StreamSession:
         )
         await self._speak_system_line(text, matched_handler="noisy_capture")
 
-    async def _respond_stt_unavailable(self, error: SttUnavailableError) -> None:
+    async def _respond_stt_unavailable(
+        self, error: SttUnavailableError, *, trigger: str | None = None
+    ) -> None:
         """Speech recognition failed to load at boot (see
         domovoi/clients/whisper.py), so there is no transcript to route.
 
@@ -1498,12 +1500,25 @@ class StreamSession:
         the noisy-capture apology this is a system message: no router, no
         ``intents_log`` row, no follow-up armed. The turn always ends with
         ``response_end`` — including when TTS fails too — so the Pi's mic
-        is never left parked."""
+        is never left parked.
+
+        A barge-in turn ends quietly instead. Its capture opened while the
+        speaker was playing — most likely this very notice — and with no
+        transcript the self-echo guard can't tell the satellite hearing
+        itself from a person, so speaking again would let the echo re-trip
+        barge-in and replay the notice in a loop."""
         log.warning(
             "stream %s: speech recognition is unavailable — dropping the "
             "utterance (fix the Whisper settings and restart the core): %s",
             self.room_id, str(error).splitlines()[0] if str(error) else "",
         )
+        if trigger == "barge_in":
+            await self._safe_send_text({
+                "type": "response_end",
+                "interrupted": True,
+                "expect_followup": False,
+            })
+            return
         text = (
             "Sorry, I can't understand speech right now. Speech recognition "
             "didn't start on the Domovoi server. The Models page in the "
@@ -1575,7 +1590,7 @@ class StreamSession:
             except SttUnavailableError as e:
                 # Whisper didn't load at boot. Explain out loud and end the
                 # turn; the helper sends its own response_end.
-                await self._respond_stt_unavailable(e)
+                await self._respond_stt_unavailable(e, trigger=trigger)
                 return
             transcript = await whisper.transcribe(pcm_bytes)
             # If the Pi played a wake greeting this turn, the array's AEC may
