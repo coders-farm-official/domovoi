@@ -32,7 +32,8 @@ const STATUS_PILL = {
  * reaches Phase B. Shows the standing trust statement, permission
  * rows, free-text warnings, the satellite payload (apt packages, the
  * root post-install script, pips, file count + size) in its own panel,
- * the routes the plugin opted out of the admin gate, the pinned direct
+ * the routes the plugin moved off the admin gate (open to anyone, and
+ * — in their own panel — open to any paired device), the pinned direct
  * requirements AND the resolved transitive tree with each dist's
  * origin, handlers + bands, publisher/license, and (github installs)
  * the source URL verbatim. */
@@ -47,6 +48,14 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
   const openEndpoints = Array.isArray(p.open_endpoints)
     ? p.open_endpoints.filter((e) => e && typeof e === 'object')
     : [];
+  const deviceEndpoints = Array.isArray(p.device_endpoints)
+    ? p.device_endpoints.filter((e) => e && typeof e === 'object')
+    : [];
+  // "POST /api/plugins/radio/play  · domovoi_plugin_radio.web.play_station"
+  const endpointLine = (e) => (
+    `${e.method || '?'} ${(e.process === 'web' ? '/api/plugins/' : '/v1/plugins/') + (p.slug || '<slug>') + (e.path || ' (path not a literal)')}`
+    + (e.function ? `  · ${e.module || ''}.${e.function}` : '')
+  );
   const confirm = async () => {
     setBusy(true); setErr(null);
     try {
@@ -147,10 +156,23 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
                 <Icon name="unlock" size={13}/> endpoints anyone on your network can call without signing in
               </div>
               {openEndpoints.map((e, i) => (
-                <div key={i} className="mono">
-                  {(e.method || '?')} {(e.process === 'web' ? '/api/plugins/' : '/v1/plugins/') + (p.slug || '<slug>') + (e.path || ' (path not a literal)')}
-                  {e.function ? `  · ${e.module || ''}.${e.function}` : ''}
-                </div>
+                <div key={i} className="mono">{endpointLine(e)}</div>
+              ))}
+            </div>
+          )}
+
+          {/* Routes on the household device tier: no admin sign-in, but the
+            * caller has to hold the household token (any paired browser,
+            * phone or satellite). Its own panel, so "anyone" and "any
+            * paired device" are never read as the same thing. */}
+          {deviceEndpoints.length > 0 && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+                          padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="smartphone" size={13}/> routes any paired household device can call (no admin sign-in)
+              </div>
+              {deviceEndpoints.map((e, i) => (
+                <div key={i} className="mono">{endpointLine(e)}</div>
               ))}
             </div>
           )}

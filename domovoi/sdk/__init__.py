@@ -19,7 +19,9 @@ from __future__ import annotations
 # 1.1.0: added sdk.speech (out-of-turn room announcements for plugins).
 # 1.2.0: added net_safety (the shared outbound-URL check every fetcher
 #        of a caller-chosen URL goes through).
-API_VERSION = "1.2.0"
+# 1.3.0: added device_endpoint (a plugin route on the household device
+#        tier — any paired device — instead of the admin default).
+API_VERSION = "1.3.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -50,7 +52,7 @@ from domovoi.sdk.observability import get_logger  # noqa: E402,F401
 from domovoi.sdk.playback import PlaybackAPI  # noqa: E402,F401
 from domovoi.sdk.realtime import RealtimeAPI  # noqa: E402,F401
 from domovoi.sdk.sessions import SessionAPI  # noqa: E402,F401
-from domovoi.plugin_http import open_endpoint  # noqa: E402,F401
+from domovoi.plugin_http import device_endpoint, open_endpoint  # noqa: E402,F401
 
 # Imported LAST: plugins_runtime modules read domovoi.sdk.API_VERSION at
 # import time, which is defined above — keep these below it so the
@@ -93,5 +95,6 @@ __all__ = [
     "StreamingSearchProvider",
     "build_sdk",
     "get_logger",
+    "device_endpoint",
     "open_endpoint",
 ]

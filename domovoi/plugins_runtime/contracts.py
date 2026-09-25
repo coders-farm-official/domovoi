@@ -20,6 +20,9 @@ Checks:
 5. Import-time budget (< 10 s) + best-effort CUDA-init check.
 6. Router auth audit — plugin routers mounted through the SDK are gated
    by construction (§4.11); anything mounted around it is warn-flagged.
+   A route function may carry at most one tier marker: one wearing both
+   ``@open_endpoint`` and ``@device_endpoint`` is a load failure, not a
+   precedence puzzle (:func:`check_route_tiers`).
 7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
    and collides with neither a core dashboard route nor another enabled
    plugin's page (F-026 — the shell resolves core-first, so a colliding
@@ -438,6 +441,22 @@ def check_web_routes(
                 )
 
 
+def check_route_tiers(routers: list[Any], report: ContractReport) -> None:
+    """Check 6 — every core route the plugin registered names at most one
+    tier. ``@open_endpoint`` (no credential) and ``@device_endpoint`` (any
+    paired device) on the same function contradict each other; the
+    decorators already refuse to stack, so this catches markers copied
+    across by a wrapper or set by hand. The web process refuses the same
+    routes when it mounts them."""
+    from domovoi.webkit import tier_conflicts
+
+    for conflict in tier_conflicts(routers):
+        report.errors.append(
+            f"route {conflict} carries both @open_endpoint and "
+            f"@device_endpoint — pick one tier"
+        )
+
+
 def run_contract_checks(
     *,
     slug: str,
@@ -451,11 +470,13 @@ def run_contract_checks(
     foreign_web_routes: list[tuple[str, str]] | None = None,
     import_seconds: float = 0.0,
     cuda_initialized: bool = False,
+    routers: list[Any] | None = None,
 ) -> ContractReport:
     """Run every §13.2 check; returns a report (caller raises
     :class:`ContractError` / sets ``load_error`` on ``errors``)."""
     report = ContractReport()
     check_handlers(slug, handlers, report)
+    check_route_tiers(list(routers or []), report)
     check_consumes(manifest, report)
     check_manifest_drift(
         slug, manifest, handlers, worker_names, hook_names,

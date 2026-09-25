@@ -17,10 +17,12 @@ live here:
   ``/api/plugins/<slug>`` behind a per-slug gate dependency that 404s
   while the slug is disabled (FastAPI can't remove routes; the gate is
   the unmount) and that applies the same default-deny auth rule as the
-  core's ``domovoi.plugin_http``: every non-GET route requires an admin
-  session unless its function is decorated ``@domovoi.webkit.
-  open_endpoint``. Static assets serve from ``<install_dir>/web/static``
-  via a single parameterized route with a containment check.
+  core's ``domovoi.plugin_http`` (``webkit.enforce_route_tier``): every
+  non-GET route requires an admin session unless its function is
+  decorated ``@domovoi.webkit.device_endpoint`` (household token or admin
+  Bearer) or ``@domovoi.webkit.open_endpoint`` (no credential). Static
+  assets serve from ``<install_dir>/web/static`` via a single
+  parameterized route with a containment check.
 * **Frontend manifest** (§5.2) — ``GET /api/plugins/manifest`` payload:
   scripts, pages, player sources, realtime channels, and the published
   core nav orders, all derived from registry JSONB.
@@ -334,23 +336,22 @@ class PluginHost:
     def _slug_gate(self, slug: str):
         """The per-router dependency every plugin web route runs behind.
         Mirrors ``domovoi.plugin_http._make_gate``: 404 while the plugin
-        is disabled; GET/HEAD/OPTIONS pass; any other method requires an
-        admin session (``webkit.admin_required`` — Bearer-only for
-        mutations, 401 with no credential, 403 cookie-only) unless the
-        route function carries the ``@webkit.open_endpoint`` marker."""
-        from domovoi.webkit import admin_required, is_open_endpoint
+        is disabled, then the tier rule both processes share
+        (``webkit.enforce_route_tier``) — GET/HEAD/OPTIONS pass; any other
+        method requires an admin session (``webkit.admin_required`` —
+        Bearer-only for mutations, 401 with no credential, 403
+        cookie-only), unless the route function carries
+        ``@webkit.device_endpoint`` (the household token or an admin
+        Bearer, exactly ``admin_auth.require_device``) or
+        ``@webkit.open_endpoint`` (no credential)."""
+        from domovoi.webkit import enforce_route_tier
 
         async def gate(request: Request) -> None:
             if not self.enabled(slug):
                 raise HTTPException(
                     status_code=404, detail=f"plugin {slug!r} is not enabled"
                 )
-            if request.method in ("GET", "HEAD", "OPTIONS"):
-                return
-            endpoint = request.scope.get("endpoint")
-            if endpoint is not None and is_open_endpoint(endpoint):
-                return
-            await admin_required(request)
+            await enforce_route_tier(request)
 
         return gate
 
@@ -376,6 +377,17 @@ class PluginHost:
             ctx = WebPluginContext(slug)
             register_web(ctx)
             assert self.app is not None
+            from domovoi.webkit import tier_conflicts
+
+            # A route that says both "any paired device" and "no credential"
+            # is refused whole rather than resolved by a precedence rule —
+            # the core's contract check refuses the same plugin at load.
+            conflicts = tier_conflicts(ctx.routers)
+            if conflicts:
+                raise RuntimeError(
+                    "route(s) carry both @open_endpoint and @device_endpoint: "
+                    + "; ".join(conflicts)
+                )
             from fastapi import Depends
 
             for router in ctx.routers:

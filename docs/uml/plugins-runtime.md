@@ -218,8 +218,10 @@ Loader guarantees worth naming:
 * **HTTP mounting:** plugin routers mount at `/v1/plugins/<slug>/…` behind an
   enable gate (disabled ⇒ 404, router object reused on re-enable) and a
   default-DENY auth gate — every non-GET route requires an admin session
-  unless the author opted out with `@open_endpoint` (each opt-out is listed
-  on the install preview).
+  unless the author put it on the household device tier with
+  `@device_endpoint` or opened it with `@open_endpoint` (both are listed on
+  the install preview, each under its own heading; a route may carry only
+  one — the contract check refuses both).
 * **Teardown** (`unload_plugin` → `PluginSDK.teardown()` + owner-keyed
   deregistration): handlers out of the registry, workers stopped in reverse
   order, event subscriptions dropped, capabilities and now-playing sources

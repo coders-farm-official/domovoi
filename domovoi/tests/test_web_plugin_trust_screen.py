@@ -4,8 +4,9 @@ domovoi/tests/jsx_render_harness.js (the same vendored Babel, a
 plain-object React), so the assertions run without Postgres or a server.
 
 Covers: each resolved dependency's origin and the off-index flag (PLG-2),
-the satellite root-payload panel (PLG-1) and the open-endpoints list
-(PLG-1).
+the satellite root-payload panel (PLG-1), the open-endpoints list (PLG-1)
+and, in a panel of its own, the device-tier routes any paired household
+device can call.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ BASE_PREVIEW = {
     "description": "a demo", "permissions": {"warnings": []},
     "requirements": {"direct": [], "transitive": []},
     "handlers": [], "migration_count": 0, "capabilities": [],
-    "open_endpoints": [], "satellite": None,
+    "open_endpoints": [], "device_endpoints": [], "satellite": None,
     "trust_statement": "This plugin runs with full access to your Domovoi server.",
 }
 
@@ -88,6 +89,16 @@ SCENARIOS = {
              "function": "play", "process": "web"},
         ],
     }),
+    "device_endpoints": _modal({
+        "device_endpoints": [
+            {"method": "POST", "path": "/play", "module": "domovoi_plugin_demo.web",
+             "function": "play_station", "process": "web"},
+            {"method": "POST", "path": "/stations/{station_id}/resolve-simulcast",
+             "module": "domovoi_plugin_demo.core", "function": "resolve", "process": "core"},
+        ],
+    }),
+    # A preview from a core older than the device tier has no such key.
+    "no_device_key": _modal({"device_endpoints": None}),
 }
 
 
@@ -156,3 +167,28 @@ def test_open_endpoints_are_listed_with_their_full_paths(rendered) -> None:
     assert any("POST /v1/plugins/demo/tune" in t for t in texts), texts
     assert any("POST /api/plugins/demo/play" in t for t in texts), texts
     assert any("without signing in" in t for t in texts), texts
+
+
+# ─── device-tier routes: their own panel, never folded into "anyone" ─────
+
+
+def test_device_endpoints_are_listed_in_their_own_panel(rendered) -> None:
+    texts = _texts(rendered["device_endpoints"])
+    assert any("any paired household device" in t for t in texts), texts
+    assert any("POST /api/plugins/demo/play" in t and "play_station" in t for t in texts), texts
+    assert any(
+        "POST /v1/plugins/demo/stations/{station_id}/resolve-simulcast" in t for t in texts
+    ), texts
+    # Not presented as open to anyone on the network.
+    assert not any("without signing in" in t for t in texts), texts
+
+
+def test_open_endpoints_alone_show_no_device_panel(rendered) -> None:
+    texts = _texts(rendered["open_endpoints"])
+    assert not any("any paired household device" in t for t in texts), texts
+
+
+def test_a_preview_without_the_device_key_still_renders(rendered) -> None:
+    texts = _texts(rendered["no_device_key"])
+    assert any("full access to your Domovoi server" in t for t in texts), texts
+    assert not any("any paired household device" in t for t in texts), texts

@@ -7,14 +7,20 @@ APIRouter at ``/v1/plugins/<slug>/...`` behind two gate dependencies:
   plugin's routes 404 via a per-slug flag (``set_plugin_enabled``) and
   the router object is reused on re-enable.
 * **Auth gate (default DENY for mutations)** — every non-GET route
-  requires an admin session unless the endpoint author opted OUT with
-  :func:`open_endpoint` (for genuinely daily-use actions; every opt-out
-  is listed on the install preview, found by an AST scan of the staged
-  package). GETs are open unless the plugin adds its own
-  ``Depends(admin_required)``. The marker, the predicate and the gate
-  dependency live in :mod:`domovoi.webkit` — the web dashboard process
-  mounts plugin routers behind the very same rule (``web.backend.
-  plugin_host``), so one decorator means one thing in both processes.
+  requires an admin session unless the endpoint author put it on another
+  tier: :func:`device_endpoint` (daily household actions — the household
+  ``X-Device-Token`` or an admin Bearer, exactly the core's own
+  ``require_device``) or, rarely, :func:`open_endpoint` (no credential at
+  all). Both kinds are listed on the install preview, found by an AST
+  scan of the staged package. GETs are open unless the plugin adds its
+  own ``Depends(admin_required)`` or marks the GET ``@device_endpoint``.
+  The markers, the predicate and the gate body
+  (:func:`~domovoi.webkit.enforce_route_tier`) live in
+  :mod:`domovoi.webkit` — the web dashboard process mounts plugin routers
+  behind the very same rule (``web.backend.plugin_host``), so one
+  decorator means one thing in both processes. A route carrying both
+  markers is refused (decorator, load-time contract check, and
+  :func:`mount_plugin_router` itself).
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -35,10 +41,17 @@ from sqlalchemy import text
 from domovoi.admin_auth import check_admin_request
 from domovoi.db.session import session_scope
 from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
+    _DEVICE_MARKER,
     _OPEN_MARKER,
+    EndpointTierConflict,
     admin_required,
+    device_endpoint,
+    endpoint_tier,
+    enforce_route_tier,
+    is_device_endpoint,
     is_open_endpoint,
     open_endpoint,
+    tier_conflicts,
 )
 
 log = logging.getLogger(__name__)
@@ -87,13 +100,9 @@ def _make_gate(slug: str):
     async def _gate(request: Request) -> None:
         if not _plugin_enabled.get(slug, False):
             raise HTTPException(status_code=404, detail=f"plugin {slug!r} disabled")
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            return
-        # Default-DENY for mutations: allow only explicit opt-outs.
-        endpoint = request.scope.get("endpoint")
-        if endpoint is not None and is_open_endpoint(endpoint):
-            return
-        await admin_required(request)
+        # Default-DENY for mutations: the admin tier unless the route
+        # function carries a tier marker (shared body with the web gate).
+        await enforce_route_tier(request)
     return _gate
 
 
@@ -107,6 +116,14 @@ def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
     if slug in _mounted:
         set_plugin_enabled(slug, True)
         return
+    conflicts = tier_conflicts([router])
+    if conflicts:
+        # The loader's contract check refuses these first (load_error);
+        # this is the last door, for any other caller.
+        raise EndpointTierConflict(
+            f"plugin {slug!r}: route(s) carry both @open_endpoint and "
+            f"@device_endpoint: {'; '.join(conflicts)}"
+        )
     app.include_router(
         router,
         prefix=f"/v1/plugins/{slug}",

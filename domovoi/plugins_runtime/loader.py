@@ -284,6 +284,7 @@ class PluginLoader:
             else await self._foreign_web_routes(exclude=slug),
             import_seconds=import_seconds,
             cuda_initialized=cuda_initialized,
+            routers=ctx.routers,
         )
         for warning in report.warnings:
             log.warning("plugin %s: %s", slug, warning)

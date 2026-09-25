@@ -1,6 +1,8 @@
 """Plugin HTTP mounting (design §4.11): /v1/plugins/<slug> prefix,
 disabled ⇒ 404 gate, default-DENY mutations once admin auth is set up,
-open_endpoint opt-out, and the introspection endpoints."""
+the device_endpoint tier (household token), the open_endpoint opt-out,
+and the introspection endpoints. The device tier's full matrix, in both
+processes, is ``test_plugin_device_tier.py``."""
 
 from __future__ import annotations
 
@@ -13,7 +15,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from domovoi import plugin_http
+from domovoi import admin_auth
 from domovoi.plugin_http import (
+    device_endpoint,
     mount_plugin_router,
     open_endpoint,
     set_plugin_enabled,
@@ -48,6 +52,11 @@ def _make_app() -> FastAPI:
     @open_endpoint
     async def tune():
         return {"tuned": True}
+
+    @router.post("/play")
+    @device_endpoint
+    async def play():
+        return {"played": True}
 
     # open_endpoint must be applied to the FUNCTION the route wraps —
     # declare it as the inner decorator (closest to the def).
@@ -107,7 +116,9 @@ async def test_mutations_denied_after_admin_setup(db_session) -> None:
         ),
         {"h": token_hash},
     )
+    device_token = await admin_auth.ensure_device_token_row(db_session)
     await db_session.commit()
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
     try:
         app = _make_app()
         async with await _client(app) as client:
@@ -129,9 +140,23 @@ async def test_mutations_denied_after_admin_setup(db_session) -> None:
             assert r.status_code == 401
             # Explicit opt-out (daily-use action) stays open.
             assert (await client.post("/v1/plugins/demo/tune")).status_code == 200
+            # Device tier: nothing is 401, the household token or the
+            # Bearer passes — and the token does not open the admin tier.
+            assert (await client.post("/v1/plugins/demo/play")).status_code == 401
+            header = {admin_auth.DEVICE_TOKEN_HEADER: device_token}
+            r = await client.post("/v1/plugins/demo/play", headers=header)
+            assert r.status_code == 200, r.text
+            r = await client.post(
+                "/v1/plugins/demo/play",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert r.status_code == 200, r.text
+            r = await client.post("/v1/plugins/demo/things", headers=header)
+            assert r.status_code == 401, r.text
     finally:
         await db_session.execute(text("DELETE FROM admin_sessions"))
         await db_session.execute(text("DELETE FROM admin_auth"))
+        await db_session.execute(text("DELETE FROM household_device_tokens"))
         await db_session.commit()
 
 

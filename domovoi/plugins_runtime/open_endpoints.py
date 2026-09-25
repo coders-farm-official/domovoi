@@ -1,14 +1,19 @@
-"""Find a staged plugin's ``@open_endpoint`` routes for the install
-preview (design §4.11 / §5.1, PLG-1).
+"""Find a staged plugin's ``@open_endpoint`` and ``@device_endpoint``
+routes for the install preview (design §4.11 / §5.1, PLG-1).
 
-Both processes gate plugin mutations by default; a route author opts a
-route out with ``@open_endpoint`` (``domovoi.sdk`` / ``domovoi.webkit``).
-The trust screen promises to list every such opt-out, so the admin sees
-the plugin's open surface BEFORE confirming. That list has to come from
-the staged source without importing it — importing runs plugin code, and
-nothing runs pre-confirm — so this module walks the package's Python
-files with :mod:`ast` and reports every function that carries the
-decorator together with the router decorator on the same ``def``.
+Both processes gate plugin mutations on the admin tier by default; a
+route author moves a route off it with ``@device_endpoint`` (any paired
+household device — the household token or an admin Bearer) or, rarely,
+``@open_endpoint`` (no credential at all), both from ``domovoi.sdk`` /
+``domovoi.webkit``. The trust screen promises to list every such route,
+each tier under its own heading, so the admin sees who can call the
+plugin BEFORE confirming. That list has to come from the staged source
+without importing it — importing runs plugin code, and nothing runs
+pre-confirm — so this module walks the package's Python files with
+:mod:`ast` and reports every function that carries a marker together
+with the router decorator on the same ``def``. A function carrying BOTH
+markers is reported as a conflict, which the installer refuses (the
+runtime refuses to load it too).
 
 The walk runs in a **throwaway subprocess** (``python -I open_endpoints.py
 <package dir>`` — this file imports only the stdlib): ``ast.parse`` never
@@ -20,9 +25,10 @@ describe).
 
 Static best effort, by construction: a router decorator whose path is
 not a string literal reports ``path: None``; a decorator spelled through
-an alias other than ``open_endpoint`` is not recognised. A plugin author
-follows the documented shape (``@router.post("/x")`` over
-``@open_endpoint`` over the ``def``) and gets an accurate list.
+an alias other than ``open_endpoint`` / ``device_endpoint`` is not
+recognised. A plugin author follows the documented shape
+(``@router.post("/x")`` over the marker over the ``def``) and gets an
+accurate list.
 """
 
 from __future__ import annotations
@@ -34,7 +40,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-__all__ = ["scan_open_endpoints", "collect_open_endpoints", "OpenEndpointScanError"]
+__all__ = [
+    "scan_marked_endpoints",
+    "scan_open_endpoints",
+    "scan_device_endpoints",
+    "collect_marked_endpoints",
+    "collect_open_endpoints",
+    "OpenEndpointScanError",
+]
+
+# Decorator name → the tier it puts a route on.
+MARKERS = {"open_endpoint": "open", "device_endpoint": "device"}
 
 _ROUTE_METHODS = {
     "get": "GET", "post": "POST", "put": "PUT", "patch": "PATCH",
@@ -99,17 +115,19 @@ def _module_name(package_dir: Path, file: Path) -> str:
     return ".".join(parts)
 
 
-def scan_open_endpoints(package_dir: Path) -> list[dict[str, Any]]:
+def scan_marked_endpoints(package_dir: Path) -> dict[str, list[dict[str, Any]]]:
     """Walk every ``.py`` under ``package_dir`` (the plugin's
-    ``domovoi_plugin_<slug>`` package) and return one record per
-    function decorated ``@open_endpoint``:
+    ``domovoi_plugin_<slug>`` package) and return
+    ``{"open": [...], "device": [...], "conflicts": [...]}`` — one record
+    per route of every function decorated ``@open_endpoint``,
+    ``@device_endpoint``, or (a conflict) both:
     ``{method, path, module, function, process, line}``. ``process`` is
     ``"web"`` for the package's ``web`` module (and modules under a
     ``web`` subpackage), else ``"core"`` — the two mount prefixes the
     trust screen renders. Raises ``SyntaxError`` (propagated) for a file
     the parser cannot read."""
     package_dir = Path(package_dir)
-    found: list[dict[str, Any]] = []
+    found: dict[str, list[dict[str, Any]]] = {"open": [], "device": [], "conflicts": []}
     for file in sorted(package_dir.rglob("*.py")):
         if "__pycache__" in file.parts:
             continue
@@ -120,14 +138,16 @@ def scan_open_endpoints(package_dir: Path) -> list[dict[str, Any]]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            names = [_decorator_name(d) for d in node.decorator_list]
-            if "open_endpoint" not in names:
+            names = {_decorator_name(d) for d in node.decorator_list}
+            tiers = {MARKERS[n] for n in names if n in MARKERS}
+            if not tiers:
                 continue
+            bucket = "conflicts" if len(tiers) > 1 else tiers.pop()
             routes = [r for r in (_route_decorator(d) for d in node.decorator_list) if r]
             if not routes:
                 routes = [(None, None)]
             for method, path in routes:
-                found.append(
+                found[bucket].append(
                     {
                         "method": method,
                         "path": path,
@@ -140,12 +160,30 @@ def scan_open_endpoints(package_dir: Path) -> list[dict[str, Any]]:
     return found
 
 
+def scan_open_endpoints(package_dir: Path) -> list[dict[str, Any]]:
+    """The ``@open_endpoint`` routes of :func:`scan_marked_endpoints`."""
+    return scan_marked_endpoints(package_dir)["open"]
+
+
+def scan_device_endpoints(package_dir: Path) -> list[dict[str, Any]]:
+    """The ``@device_endpoint`` routes of :func:`scan_marked_endpoints`."""
+    return scan_marked_endpoints(package_dir)["device"]
+
+
 def collect_open_endpoints(
     package_dir: Path, *, timeout: float = SCAN_TIMEOUT_SEC
 ) -> list[dict[str, Any]]:
-    """Run :func:`scan_open_endpoints` in a throwaway subprocess and
-    return its records. Raises :class:`OpenEndpointScanError` when the
-    scan fails, times out, or reports a file it could not parse."""
+    """The ``open`` half of :func:`collect_marked_endpoints`."""
+    return collect_marked_endpoints(package_dir, timeout=timeout)["open"]
+
+
+def collect_marked_endpoints(
+    package_dir: Path, *, timeout: float = SCAN_TIMEOUT_SEC
+) -> dict[str, list[dict[str, Any]]]:
+    """Run :func:`scan_marked_endpoints` in a throwaway subprocess and
+    return its ``{"open", "device", "conflicts"}`` records. Raises
+    :class:`OpenEndpointScanError` when the scan fails, times out, or
+    reports a file it could not parse."""
     # Run THIS file as a plain script: it imports only the stdlib, so the
     # child needs no domovoi on its path, and -I (isolated: no env vars,
     # no site customisation, no cwd on sys.path) keeps the walk inert.
@@ -175,7 +213,11 @@ def collect_open_endpoints(
             "open-endpoint scan failed: "
             + (proc.stderr or proc.stdout or "").strip()[-1500:]
         )
-    return list(payload.get("endpoints") or [])
+    return {
+        "open": list(payload.get("endpoints") or []),
+        "device": list(payload.get("device_endpoints") or []),
+        "conflicts": list(payload.get("conflicts") or []),
+    }
 
 
 def _main(argv: list[str]) -> int:
@@ -187,14 +229,20 @@ def _main(argv: list[str]) -> int:
         print(json.dumps({"error": f"{package_dir} is not a directory"}))
         return 1
     try:
-        endpoints = scan_open_endpoints(package_dir)
+        marked = scan_marked_endpoints(package_dir)
     except SyntaxError as e:
         print(json.dumps({"error": f"cannot parse {e.filename} line {e.lineno}: {e.msg}"}))
         return 1
     except RecursionError:
         print(json.dumps({"error": "source too deeply nested to parse"}))
         return 1
-    print(json.dumps({"endpoints": endpoints}))
+    # ``endpoints`` keeps its name (the open list); the device tier and
+    # any conflicts ride beside it.
+    print(json.dumps({
+        "endpoints": marked["open"],
+        "device_endpoints": marked["device"],
+        "conflicts": marked["conflicts"],
+    }))
     return 0
 
 

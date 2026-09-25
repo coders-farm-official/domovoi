@@ -1,6 +1,7 @@
 """The install preview (design §3.2 step 8 / §7.5 — PLG-1): the satellite
-root payload as its own section, and the plugin's ``@open_endpoint``
-routes found by the subprocess AST scan.
+root payload as its own section, and the plugin's ``@open_endpoint`` and
+``@device_endpoint`` routes found by the subprocess AST scan — each tier
+in its own list, and a route carrying both refused.
 
 DB-free: ``stage_zip`` reaches the registry only at step 6, which is
 faked here (no existing row, no orphan schema); the preview itself is
@@ -23,7 +24,10 @@ from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.installer import InstallError, stage_zip
 from domovoi.plugins_runtime.open_endpoints import (
     OpenEndpointScanError,
+    collect_marked_endpoints,
     collect_open_endpoints,
+    scan_device_endpoints,
+    scan_marked_endpoints,
     scan_open_endpoints,
 )
 
@@ -103,6 +107,56 @@ async def create_station():
 
 def register_web(ctx):
     ctx.add_router(router)
+'''
+
+
+WEB_WITH_DEVICE_ROUTES = '''
+from fastapi import APIRouter
+import domovoi.webkit as webkit
+from domovoi.webkit import device_endpoint, open_endpoint
+
+router = APIRouter()
+
+
+@router.post("/play")
+@device_endpoint
+async def play():
+    return {}
+
+
+@router.patch("/stations/{station_id}")
+@webkit.device_endpoint
+async def edit_station(station_id: int):
+    return {}
+
+
+@router.post("/ping")
+@open_endpoint
+async def ping():
+    return {}
+
+
+@router.post("/fcc-import")
+async def fcc_import():
+    return {}
+
+
+def register_web(ctx):
+    ctx.add_router(router)
+'''
+
+BOTH_MARKERS = '''
+from fastapi import APIRouter
+from domovoi.webkit import device_endpoint, open_endpoint
+
+router = APIRouter()
+
+
+@router.post("/both")
+@open_endpoint
+@device_endpoint
+async def both():
+    return {}
 '''
 
 
@@ -232,6 +286,32 @@ def test_scan_times_out_instead_of_hanging(tmp_path: Path, monkeypatch) -> None:
         collect_open_endpoints(pkg, timeout=1)
 
 
+def test_scan_lists_device_endpoints_in_their_own_list(tmp_path: Path) -> None:
+    pkg = _write_package(tmp_path, "scandemo", CORE_WITH_OPEN_ROUTES, WEB_WITH_DEVICE_ROUTES)
+    marked = scan_marked_endpoints(pkg)
+    device = {(e["process"], e["method"], e["path"], e["function"]) for e in marked["device"]}
+    assert device == {
+        ("web", "POST", "/play", "play"),
+        ("web", "PATCH", "/stations/{station_id}", "edit_station"),
+    }
+    # The open list is unchanged by the device markers beside it, and a
+    # route on the admin default is in neither.
+    assert {e["function"] for e in marked["open"]} == {"tune", "multi", "nested", "ping"}
+    assert not any(
+        e["function"] == "fcc_import" for e in marked["open"] + marked["device"]
+    )
+    assert marked["conflicts"] == []
+    assert scan_device_endpoints(pkg) == marked["device"]
+    assert collect_marked_endpoints(pkg) == marked
+
+
+def test_scan_reports_both_markers_as_a_conflict(tmp_path: Path) -> None:
+    pkg = _write_package(tmp_path, "scandemo", "x = 1\n", BOTH_MARKERS)
+    marked = collect_marked_endpoints(pkg)
+    assert [e["function"] for e in marked["conflicts"]] == ["both"]
+    assert marked["open"] == [] and marked["device"] == []
+
+
 def test_bundled_radio_opts_nothing_out() -> None:
     assert scan_open_endpoints(REPO_ROOT / "plugins" / "radio" / "domovoi_plugin_radio") == []
 
@@ -269,13 +349,45 @@ async def test_preview_lists_the_open_endpoints_in_the_zip(staging) -> None:
     assert preview["slug"] == "compliments"
     listed = {(e["process"], e["method"], e["path"]) for e in preview["open_endpoints"]}
     assert listed == {("core", "POST", "/compliment-now"), ("web", "POST", "/play")}
+    assert preview["device_endpoints"] == []
     assert preview["satellite"] is None
+
+
+def _compliments_with_web(web: str) -> dict[str, bytes]:
+    files = _compliments_files()
+    files["domovoi-plugin.toml"] = files["domovoi-plugin.toml"].decode("utf-8").replace(
+        'core = "domovoi_plugin_compliments.core"',
+        'core = "domovoi_plugin_compliments.core"\n'
+        'web = "domovoi_plugin_compliments.web"',
+    ).encode("utf-8")
+    files["domovoi_plugin_compliments/web.py"] = textwrap.dedent(web).encode("utf-8")
+    return files
+
+
+@pytest.mark.asyncio
+async def test_preview_lists_the_device_endpoints_apart_from_the_open_ones(staging) -> None:
+    staged = await stage_zip(_zip_of(_compliments_with_web(WEB_WITH_DEVICE_ROUTES)))
+    preview = staged.preview
+    device = {(e["process"], e["method"], e["path"]) for e in preview["device_endpoints"]}
+    assert device == {("web", "POST", "/play"), ("web", "PATCH", "/stations/{station_id}")}
+    opened = {(e["process"], e["method"], e["path"]) for e in preview["open_endpoints"]}
+    assert opened == {("web", "POST", "/ping")}
+
+
+@pytest.mark.asyncio
+async def test_both_markers_on_one_route_refuse_the_install(staging) -> None:
+    with pytest.raises(InstallError) as exc:
+        await stage_zip(_zip_of(_compliments_with_web(BOTH_MARKERS)))
+    assert exc.value.code == "endpoint_tier_conflict"
+    assert "/both" in str(exc.value)
+    assert list(staging.iterdir()) == []
 
 
 @pytest.mark.asyncio
 async def test_preview_of_the_plain_fixture_has_no_open_endpoints(staging) -> None:
     staged = await stage_zip(_zip_of(_compliments_files()))
     assert staged.preview["open_endpoints"] == []
+    assert staged.preview["device_endpoints"] == []
     assert staged.preview["slug"] == "compliments"
 
 

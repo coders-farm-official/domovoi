@@ -59,7 +59,7 @@ from domovoi.plugins_runtime.migrations import (
 )
 from domovoi.plugins_runtime.open_endpoints import (
     OpenEndpointScanError,
-    collect_open_endpoints,
+    collect_marked_endpoints,
 )
 
 log = logging.getLogger(__name__)
@@ -607,7 +607,7 @@ async def stage_zip(
 
         tree_hash = hash_tree(stage_dir)          # step 8
 
-        open_mutations = _collect_open_endpoints(stage_dir, manifest)
+        marked = _collect_marked_endpoints(stage_dir, manifest)
         preview = {
             "slug": manifest.slug,
             "name": manifest.name,
@@ -632,7 +632,11 @@ async def stage_zip(
                 discover_migrations(stage_dir / manifest.migrations_dir)
             ),
             "capabilities": list(manifest.provides),
-            "open_endpoints": open_mutations,
+            # Who can call the plugin without an admin session, one list
+            # per tier: open_endpoints answer with no credential at all,
+            # device_endpoints to any paired household device.
+            "open_endpoints": marked["open"],
+            "device_endpoints": marked["device"],
             # What lands on every satellite, as root, if the admin confirms
             # (§7.5): the package list, the script, the pinned pips and the
             # size of the file payload — its own panel on the trust screen,
@@ -670,21 +674,40 @@ async def stage_zip(
         raise
 
 
-def _collect_open_endpoints(
+def _collect_marked_endpoints(
     stage_dir: Path, manifest: PluginManifest
-) -> list[dict[str, Any]]:
-    """The install preview lists every route the plugin opted out of the
-    default admin gate with ``@open_endpoint`` — found by an AST walk of
-    the staged package in a throwaway subprocess (nothing is imported;
-    :mod:`domovoi.plugins_runtime.open_endpoints`). Each record is
-    ``{method, path, module, function, process, line}``; ``process`` says
-    which mount prefix applies (``core`` → ``/v1/plugins/<slug>``, ``web``
-    → ``/api/plugins/<slug>``). A package the scanner cannot read refuses
-    the install (fail closed — the trust screen cannot describe it)."""
+) -> dict[str, list[dict[str, Any]]]:
+    """The install preview lists every route the plugin moved off the
+    default admin gate — ``@device_endpoint`` (any paired household
+    device) and ``@open_endpoint`` (no credential) — found by an AST walk
+    of the staged package in a throwaway subprocess (nothing is imported;
+    :mod:`domovoi.plugins_runtime.open_endpoints`). Returns
+    ``{"open": [...], "device": [...]}``; each record is
+    ``{method, path, module, function, process, line}``, where
+    ``process`` says which mount prefix applies (``core`` →
+    ``/v1/plugins/<slug>``, ``web`` → ``/api/plugins/<slug>``).
+
+    Refuses the install (fail closed — the trust screen cannot describe
+    it) when the scanner cannot read the package, and when a route
+    carries BOTH markers: the runtime would refuse to load it anyway, and
+    the admin should not be asked to confirm a route whose tier is a
+    contradiction."""
     try:
-        return collect_open_endpoints(stage_dir / manifest.package_name)
+        marked = collect_marked_endpoints(stage_dir / manifest.package_name)
     except OpenEndpointScanError as e:
         raise InstallError("open_endpoint_scan_failed", str(e))
+    if marked["conflicts"]:
+        where = "; ".join(
+            f"{c.get('method') or '?'} {c.get('path') or '(path not a literal)'} "
+            f"({c.get('module')}.{c.get('function')})"
+            for c in marked["conflicts"]
+        )
+        raise InstallError(
+            "endpoint_tier_conflict",
+            f"route(s) carry both @open_endpoint and @device_endpoint: {where} "
+            "— a route names one tier",
+        )
+    return {"open": marked["open"], "device": marked["device"]}
 
 
 def _satellite_preview(
