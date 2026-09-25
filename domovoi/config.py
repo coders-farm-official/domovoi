@@ -235,12 +235,14 @@ class Settings(BaseSettings):
     satellite_hello_timeout_sec: float = 5.0
     # USB satellite adoption: the web backend scans removable volumes for
     # unprovisioned satellites presenting a DOMOVOI-SET gadget drive and
-    # surfaces them as pending on the Satellites page. Kill switch below;
-    # the advertise URL overrides the ws://<lan-ip>:6370 the adopt flow
-    # derives for the device (set it when the server has several NICs and
-    # the autodetected address is the wrong one).
+    # surfaces them as pending on the Satellites page. Kill switch below.
+    # The advertise URL is what the adopt flow writes into the device:
+    # "auto" (the default; blank means the same) derives ws://<lan-ip>:6370
+    # at adopt time (domovoi/lan_address.py); any other value overrides
+    # it (set one when the server has several NICs and the autodetected
+    # address is the wrong one).
     satellite_adoption_enabled: bool = True
-    satellite_adoption_advertise_url: str = ""
+    satellite_adoption_advertise_url: str = "auto"
     # On startup, pre-populate the voices registry with the curated catalog
     # (domovoi/voice_catalog.py) of Edge cloud + Piper local voices, so
     # they're available to list/sample/switch without manual registration.
@@ -311,9 +313,14 @@ class Settings(BaseSettings):
     # validator below, which pins a loopback name to it.
     # mpd_http_base is the URL prefix the Pi uses to reach the per-room
     # HTTP stream — needs a LAN-routable hostname (not localhost, which
-    # resolves to the Pi itself).
+    # resolves to the Pi itself). "auto" (the default; blank means the
+    # same) builds it from this host's LAN IPv4 each time a stream URL is
+    # handed out, so it follows a DHCP address change — see
+    # domovoi/lan_address.py, which falls back to "http://localhost" when
+    # no LAN address can be found. Any other value is used as written:
+    # set one on a multi-NIC host, or to hand out a hostname instead.
     mpd_host: str = MPD_CONTROL_BIND
-    mpd_http_base: str = "http://localhost"
+    mpd_http_base: str = "auto"
 
     @field_validator("mpd_host")
     @classmethod
@@ -655,9 +662,10 @@ class Settings(BaseSettings):
     # 0.0.0.0 (so any consumer on the LAN can reach it), but the URL
     # we hand to MPD must resolve from MPD's perspective. For Docker
     # Desktop on Windows the container's localhost != Domovoi's
-    # localhost, so 127.0.0.1 won't work — use the same LAN hostname
-    # MPD_HTTP_BASE uses. Default keeps the simplest dev case
-    # (domovoi + MPD both on the host without Docker) working.
+    # localhost, so 127.0.0.1 won't work — use this host's LAN name or
+    # address (the one MPD_HTTP_BASE=auto resolves to). Default keeps
+    # the simplest dev case (domovoi + MPD both on the host without
+    # Docker) working.
     radio_sdr_stream_base: str = "http://127.0.0.1"
 
     # ─── Implicit memory extraction ────────────────────────

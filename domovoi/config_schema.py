@@ -478,9 +478,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_advertise_url", "Adoption server URL", "Security",
         "The core WebSocket URL written into adopted satellites' config "
-        "(e.g. ws://192.168.1.50:6370). Leave empty to autodetect the LAN "
-        "address — set it only when the server has several network "
-        "interfaces and autodetection picks the wrong one.",
+        "(e.g. ws://192.168.1.50:6370). 'auto' (or empty) detects the LAN "
+        "address at adopt time — set a URL only when the server has several "
+        "network interfaces and autodetection picks the wrong one.",
         "str", section="advanced", tier="hot",
     ),
 ]
