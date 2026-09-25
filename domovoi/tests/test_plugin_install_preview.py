@@ -316,6 +316,23 @@ def test_bundled_radio_opts_nothing_out() -> None:
     assert scan_open_endpoints(REPO_ROOT / "plugins" / "radio" / "domovoi_plugin_radio") == []
 
 
+def test_bundled_radio_lists_its_device_tier_routes() -> None:
+    """What the trust screen would show for radio: the everyday mutations
+    on the device tier, the FCC import absent (admin default)."""
+    found = {
+        (e["process"], e["method"], e["path"])
+        for e in scan_device_endpoints(REPO_ROOT / "plugins" / "radio" / "domovoi_plugin_radio")
+    }
+    assert found == {
+        ("web", "POST", "/play"),
+        ("web", "POST", "/stations"),
+        ("web", "PATCH", "/stations/{station_id}"),
+        ("web", "DELETE", "/stations/{station_id}"),
+        ("web", "POST", "/stations/{station_id}/resolve-simulcast"),
+        ("core", "POST", "/stations/{station_id}/resolve-simulcast"),
+    }
+
+
 # ─── the preview ──────────────────────────────────────────────────────────
 
 

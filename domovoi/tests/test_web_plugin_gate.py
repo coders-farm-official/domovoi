@@ -2,8 +2,10 @@
 
 Every non-GET route on a plugin router mounted by ``web.backend.
 plugin_host`` requires an admin session unless the route function is
-decorated ``@domovoi.webkit.open_endpoint`` — the same default-deny rule
-the core applies in ``domovoi.plugin_http``. These tests are DB-free by
+decorated ``@domovoi.webkit.device_endpoint`` (the household device tier —
+exercised in both processes by ``test_plugin_device_tier.py``) or
+``@domovoi.webkit.open_endpoint`` — the same default-deny rule the core
+applies in ``domovoi.plugin_http``. These tests are DB-free by
 construction: the admin check is faked at the seam both gates share
 (``webkit.check_admin_request``), the plugin rows are handed to a fresh
 ``PluginHost`` directly, and no route body that touches Postgres is ever
@@ -241,18 +243,41 @@ async def test_disabled_plugin_is_404_for_every_method(
             assert r.status_code == 404, (method, path)
 
 
+
+
 # ─── the bundled radio plugin under the gate ──────────────────────────────
+#
+# Radio's everyday mutations are @device_endpoint (a paired phone plays
+# the radio without the admin password); the FCC bulk import keeps the
+# admin default. Each route's tier is asserted against the real router
+# mounted through the real PluginHost, with the auth primitives faked
+# (auth_testkit.install_fake_db) and a context whose database and core
+# client answer 418 — so "418" reads "the gate let it through to the
+# handler" and any refusal is the gate's own answer.
+
+RADIO_DEVICE_MUTATIONS = [
+    ("POST", "/play"),
+    ("POST", "/stations"),
+    ("PATCH", "/stations/1"),
+    ("DELETE", "/stations/1"),
+    ("POST", "/stations/1/resolve-simulcast"),
+]
+RADIO_ADMIN_MUTATIONS = [("POST", "/fcc-import")]
+RADIO_ADMIN = "admin-session"
+RADIO_TOKEN = "household-token"
 
 
-class _NeverSession:
-    """A db_session_scope that fails the test if a route body ever runs —
-    the gate must answer before any handler touches the database."""
+class _TeapotSession:
+    """A db_session_scope whose every use answers 418 — proof the route
+    body ran, which only a request the gate admitted can reach."""
 
     def __call__(self):
         return self
 
-    async def __aenter__(self):  # pragma: no cover — a failure path
-        raise AssertionError("route body reached the database")
+    async def __aenter__(self):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=418, detail="handler ran")
 
     async def __aexit__(self, *exc):  # pragma: no cover
         return False
@@ -261,9 +286,11 @@ class _NeverSession:
 @pytest.fixture
 def radio_app(monkeypatch):
     """The real radio web router mounted through the PluginHost, against
-    a context whose database and core client must never be reached."""
+    a context whose database and core client answer 418."""
     if str(RADIO_DIR) not in sys.path:
         sys.path.insert(0, str(RADIO_DIR))
+    from fastapi import HTTPException
+
     from web.backend import plugin_host as ph
 
     class _Ctx:
@@ -272,7 +299,7 @@ def radio_app(monkeypatch):
 
             self.slug = slug
             self.log = logging.getLogger(f"webplugin.{slug}")
-            self.db_session_scope = _NeverSession()
+            self.db_session_scope = _TeapotSession()
             self.routers: list[Any] = []
 
             class _Core:
@@ -280,10 +307,10 @@ def radio_app(monkeypatch):
                     return {"state": "idle"}
 
                 async def post(self, *a, **kw):  # pragma: no cover
-                    raise AssertionError("core reached")
+                    raise HTTPException(status_code=418, detail="core reached")
 
-                async def post_admin(self, *a, **kw):  # pragma: no cover
-                    raise AssertionError("core reached")
+                async def post_admin(self, *a, **kw):
+                    raise HTTPException(status_code=418, detail="core reached")
 
             self.core = _Core()
 
@@ -297,26 +324,78 @@ def radio_app(monkeypatch):
     return app
 
 
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        ("POST", "/stations"),
-        ("PATCH", "/stations/1"),
-        ("DELETE", "/stations/1"),
-        ("POST", "/fcc-import"),
-        ("POST", "/play"),
-        ("POST", "/stations/1/resolve-simulcast"),
-    ],
-)
+def _radio_claimed(monkeypatch) -> None:
+    from domovoi.tests.auth_testkit import install_fake_db
+
+    install_fake_db(
+        monkeypatch, admin=True, sessions={RADIO_ADMIN}, device_token=RADIO_TOKEN
+    )
+
+
+async def _radio_call(c: AsyncClient, method: str, path: str, **kw):
+    return await c.request(
+        method, f"/api/plugins/radio{path}", json={"name": "x", "station_id": 1}, **kw
+    )
+
+
+@pytest.mark.parametrize("method,path", RADIO_DEVICE_MUTATIONS + RADIO_ADMIN_MUTATIONS)
 async def test_radio_mutations_return_401_unauthenticated(
     radio_app, monkeypatch, method: str, path: str
 ) -> None:
-    _fake_admin(monkeypatch, "no-auth")
+    _radio_claimed(monkeypatch)
     async with _client(radio_app) as c:
-        r = await c.request(
-            method, f"/api/plugins/radio{path}", json={"name": "x"}
-        )
+        r = await _radio_call(c, method, path)
         assert r.status_code == 401, (method, path, r.text)
+
+
+@pytest.mark.parametrize("method,path", RADIO_DEVICE_MUTATIONS)
+async def test_radio_daily_mutations_take_the_household_token(
+    radio_app, monkeypatch, method: str, path: str
+) -> None:
+    """Kamron's phone: paired, not signed in as an admin. Play, the star,
+    the edits, forget and the simulcast lookup all go through."""
+    _radio_claimed(monkeypatch)
+    from domovoi.tests.auth_testkit import HEADER
+
+    async with _client(radio_app) as c:
+        r = await _radio_call(c, method, path)
+        assert r.json()["detail"] == f"{HEADER} or admin session required"
+        r = await _radio_call(c, method, path, headers={HEADER: RADIO_TOKEN})
+        assert r.status_code == 418, (method, path, r.text)
+        r = await _radio_call(
+            c, method, path, headers={"Authorization": f"Bearer {RADIO_ADMIN}"}
+        )
+        assert r.status_code == 418, (method, path, r.text)
+
+
+@pytest.mark.parametrize("method,path", RADIO_DEVICE_MUTATIONS)
+async def test_radio_daily_mutations_refuse_the_cookie_alone(
+    radio_app, monkeypatch, method: str, path: str
+) -> None:
+    _radio_claimed(monkeypatch)
+    from domovoi.tests.auth_testkit import COOKIE
+
+    async with _client(radio_app) as c:
+        c.cookies.set(COOKIE, RADIO_ADMIN)
+        r = await _radio_call(c, method, path)
+        assert r.status_code == 403, (method, path, r.text)
+
+
+async def test_radio_fcc_import_stays_admin(radio_app, monkeypatch) -> None:
+    """The bulk import is a long server-side job, like the core's library
+    sweeps: the household token does not start it; an admin Bearer does."""
+    _radio_claimed(monkeypatch)
+    from domovoi.tests.auth_testkit import HEADER
+
+    async with _client(radio_app) as c:
+        r = await c.post("/api/plugins/radio/fcc-import", headers={HEADER: RADIO_TOKEN})
+        assert r.status_code == 401, r.text
+        assert r.json()["detail"] == "admin session required"
+        r = await c.post(
+            "/api/plugins/radio/fcc-import",
+            headers={"Authorization": f"Bearer {RADIO_ADMIN}"},
+        )
+        assert r.status_code == 418, r.text
 
 
 async def test_radio_reads_stay_open(radio_app, monkeypatch) -> None:

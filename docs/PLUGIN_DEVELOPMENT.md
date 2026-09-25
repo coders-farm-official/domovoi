@@ -320,10 +320,12 @@ either upload the zip or paste a GitHub URL
 1. **Stage & preview** — the core validates everything (zip safety caps,
    manifest, layout, migration SQL lint, web-import hygiene, an *inert* pip
    dry-run of the lockfile, an AST scan of the package for `@open_endpoint`
-   routes) and returns a preview: publisher, permissions and warnings, the
-   satellite payload (apt packages, the root post-install script, pips,
-   file count and size) as its own warning panel, every route that opted out
-   of the admin gate, direct + transitive requirements with each resolved
+   and `@device_endpoint` routes) and returns a preview: publisher,
+   permissions and warnings, the satellite payload (apt packages, the root
+   post-install script, pips, file count and size) as its own warning panel,
+   every route moved off the admin gate (the ones any paired household
+   device can call and the ones anyone can call, listed separately),
+   direct + transitive requirements with each resolved
    distribution's origin, handlers and bands, migration count, and the
    trust statement.
 2. **Confirm** — only after you accept the trust screen does anything
@@ -368,7 +370,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.2.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.3.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 
 ### `[entry_points]`
@@ -704,14 +706,16 @@ One import surface:
 ```python
 from domovoi.sdk import (
     PluginSDK, Handler, HandlerDisplay, FastPath, Response,
-    Worker, LongRunWorker, FieldSpec, CannedSound, open_endpoint,
+    Worker, LongRunWorker, FieldSpec, CannedSound, device_endpoint,
+    open_endpoint,
 )
 ```
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.2.0"`) is the semver your
-`domovoi_api` range is checked against.
+`domovoi.sdk.API_VERSION` (currently `"1.3.0"` — 1.3 added
+`device_endpoint`) is the semver your `domovoi_api` range is checked
+against.
 
 ### 4.1 `register(ctx)` — the PluginContext
 
@@ -1102,32 +1106,59 @@ is `auto`, which the core resolves to its current LAN address.
   deletes it; uninstall-keep preserves it.
 * `sdk.connectivity.online` — the shared connectivity probe's current view.
 
-### 4.15 Core-process HTTP routers and `open_endpoint`
+### 4.15 Core-process HTTP routers, `device_endpoint` and `open_endpoint`
 
 Routers added with `ctx.add_router` mount at `/v1/plugins/<slug>/...` behind
 two gates: a 404 gate while disabled, and **default-DENY auth for
-mutations** — every non-GET route requires an admin session unless you opt
-out:
+mutations** — every non-GET route requires an admin session unless you put
+it on another tier:
 
 ```python
-from domovoi.sdk import open_endpoint
+from domovoi.sdk import device_endpoint, open_endpoint
+
+@router.post("/play")
+@device_endpoint        # household action: any paired device; listed on the install preview
+async def play(...): ...
 
 @router.post("/tune")
-@open_endpoint          # genuinely daily-use action; listed on the install preview
+@open_endpoint          # no credential at all — rarely right; listed on the install preview
 async def tune(...): ...
+
+@router.post("/import")  # admin session required (the default)
+async def bulk_import(...): ...
 ```
 
-GETs are open by default (add `Depends(admin_required)` from
-`domovoi.plugin_http` to gate one). Don't register a route at `/status` —
-core already serves `GET /v1/plugins/{slug}/status` and it would shadow
-yours (the radio plugin uses `/state` for exactly this reason).
+**Which tier.** Match the core's own split (the tier tables in
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers)):
 
-`open_endpoint` is applied to the route **function** — put it directly
-above the `def`, under the router decorator. The install preview finds every
-opted-out route by scanning the staged package's source for the decorator
-(`open_endpoints` in the preview; the trust screen lists them as the routes
-anyone on the network can call), so an opt-out is always visible to the
-admin before the plugin lands.
+| Tier | Who passes | Use it for | Core precedents |
+|---|---|---|---|
+| admin (default, no decorator) | an admin Bearer | code-adjacent or physical-effect actions, long server-side jobs, deleting what the household cannot get back | library reindex / enrich, `git pull`, satellite restart, deleting a person or an audio file |
+| `@device_endpoint` | the household `X-Device-Token` (every paired browser, phone and satellite sends it) or an admin Bearer | daily household actions — playing, favoriting, saving and editing the household's own lists, making the server fetch a URL the caller chose (the outbound-URL check still applies) | playback and the room queue, podcast subscribe / unsubscribe / poll, news feeds, playlists, saving a document |
+| `@open_endpoint` | anyone who can reach the port | only what must work with no credential at all | the kiosk transport row |
+
+`@device_endpoint` answers exactly like the core's device-tier routes: `401`
+with nothing, `403` on the dashboard cookie alone (rendering a page is not
+acting), `429` with `Retry-After` once a source keeps presenting wrong
+tokens, and the pre-setup LAN grace. On a GET it gates the read the way the
+core's media reads are gated — the header, the cookie or `?device_token=`
+— for a GET that should not answer strangers; plain GETs stay open.
+
+GETs are open by default (add `Depends(admin_required)` from
+`domovoi.plugin_http` to put one on the admin tier). Don't register a route
+at `/status` — core already serves `GET /v1/plugins/{slug}/status` and it
+would shadow yours (the radio plugin uses `/state` for exactly this reason).
+
+Both decorators are applied to the route **function** — put one directly
+above the `def`, under the router decorator — and a function takes **one**
+of them: stacking both raises `EndpointTierConflict` at import, a function
+that carries both markers anyway fails the load-time contract check, and
+the install refuses it at staging (`endpoint_tier_conflict`). The install
+preview finds every marked route by scanning the staged package's source
+(`device_endpoints` and `open_endpoints` in the preview; the trust screen
+lists them under separate headings — "any paired household device" and
+"anyone on your network"), so a route off the admin tier is always visible
+to the admin before the plugin lands.
 
 ### 4.16 The web entry point — `register_web(ctx)`
 
@@ -1135,43 +1166,57 @@ Runs in the separate dashboard process. Your `web.py` receives a
 `WebPluginContext`:
 
 * `ctx.add_router(router)` — mounts at `/api/plugins/<slug>/...` behind the
-  **same gate as the core**: 404 while disabled, and every non-GET route
-  requires an admin session unless its function is decorated
-  `@open_endpoint`. The decorator and the GET-gating dependency come from
-  the one module a web entry may import:
+  **same gate as the core** (one body, `webkit.enforce_route_tier`): 404
+  while disabled, and every non-GET route requires an admin session unless
+  its function is decorated `@device_endpoint` or `@open_endpoint` — the
+  same tiers, chosen the same way, as [§4.15](#415-core-process-http-routers-device_endpoint-and-open_endpoint).
+  The decorators and the GET-gating dependency come from the one module a
+  web entry may import:
 
   ```python
   from fastapi import APIRouter, Depends
-  from domovoi.webkit import admin_required, open_endpoint
+  from domovoi.webkit import admin_required, device_endpoint, open_endpoint
 
   router = APIRouter()
 
-  @router.post("/stations")            # admin session required (default)
+  @router.post("/stations")
+  @device_endpoint                     # any paired device; listed on the install preview
   async def create_station(...): ...
 
+  @router.post("/fcc-import")          # admin session required (default)
+  async def fcc_import(...): ...
+
   @router.post("/tune")
-  @open_endpoint                       # daily-use; listed on the install preview
+  @open_endpoint                       # no credential; listed on the install preview
   async def tune(...): ...
 
   @router.get("/export", dependencies=[Depends(admin_required)])
-  async def export(...): ...           # a GET that wants gating
+  async def export(...): ...           # a GET that wants the admin tier
   ```
 
   Without a credential a gated mutation answers `401`; with only the
-  dashboard cookie it answers `403` (mutations are Bearer-only, so a
-  cross-site POST carries nothing that authorizes it). The dashboard's
+  dashboard cookie it answers `403` (a cookie never authorizes a change, so
+  a cross-site POST carries nothing that does). The dashboard's
   `apiPost`/`apiPatch`/`apiDelete` helpers attach the operator's Bearer and
-  open the sign-in modal on a `401`, so a page built on them needs nothing
-  extra. Before first-run setup the gate allows everything, exactly like
-  the core.
+  the browser's stored household token to every call, and on a refusal
+  open the right prompt — "pair this browser" (with "sign in as an admin
+  instead") for a device-tier `401`, the admin sign-in for an admin-tier
+  one — then replay the call once the credential exists. So a page built
+  on them needs nothing extra; in its `catch`, report the failure through
+  `mutationErrorText(e, verb, { kept: false })` so a refusal the prompt
+  already answered stays quiet and a dismissed prompt reads "cancelled",
+  not as a raw `401` (the radio Stations page is the worked example). Before
+  first-run setup the gate allows everything, exactly like the core.
 * `ctx.db_session_scope()` — async context manager yielding a session with
   `search_path` preset to your schema.
 * `ctx.core` — a typed `CoreClient` for calling the core service (`:6370`):
   `await ctx.core.get(path)`, `await ctx.core.post(path, json=...)`,
   `await ctx.core.post_admin(path, request=incoming_request)` (forwards the
-  incoming request's admin credential — the web process holds no ambient
-  admin credential, so a proxy to one of your gated core mutations **must**
-  take `request: Request` and pass it along, or the core answers `401`).
+  incoming request's credentials — admin Bearer, cookie and household
+  token — the web process holds no ambient credential, so a proxy to one of
+  your gated core mutations **must** take `request: Request` and pass it
+  along, or the core answers `401`). Give the proxy and the core route it
+  calls the same tier.
   Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory.
 * `domovoi.webkit.net_safety` — the same outbound-URL check the core uses
@@ -1363,11 +1408,15 @@ stream proxy (so the dashboard player dodges CORS/mixed-content — with
 honest 409s for FM stations the browser can't reach). Live-core actions
 (FCC import, simulcast resolve) are **proxied to the plugin's own core
 endpoints** through the context's `CoreClient`, forwarding the caller's
-request so the core's admin gate sees the same Bearer — the web process
-never imports core code. None of the router's mutations opt out of the
-web gate: saving, editing, deleting and playing stations and the two
-proxies all require an admin session (the dashboard signs the operator in
-on the first `401`), while every GET stays open. Writes fire
+request so the core's gate sees the same credential — the web process
+never imports core code. The router shows all three tiers' choices:
+playing, favoriting, editing and forgetting stations and the simulcast
+proxy are `@device_endpoint` (listening is a household action — a paired
+phone does it without the admin password, and an unpaired browser gets the
+"pair this browser" prompt), the FCC import proxy keeps the admin default
+(a bulk server-side job), nothing is `@open_endpoint`, and every GET stays
+open. The simulcast route is device tier on BOTH hops, so the token the
+web gate accepted is the one the core gate sees. Writes fire
 commit-coupled NOTIFYs on the
 `plugin_radio_stations_changed` channel; `SNAPSHOTS` exposes the two
 snapshot functions the manifest names. The JSX page registers itself only as
@@ -1419,9 +1468,9 @@ AST tripwire catches the honest mistakes; the web process's `sys.meta_path`
 import guard blocks the rest at runtime, however the import is spelled.
 Anything needing live core state gets proxied over HTTP to your own core
 endpoints. `domovoi.webkit` carries everything a web router needs for
-auth — `open_endpoint` and `admin_required` are the same objects the core
-hands out from `domovoi.sdk` / `domovoi.plugin_http`, so a mutation is
-gated by one rule wherever it is mounted.
+auth — `device_endpoint`, `open_endpoint` and `admin_required` are the
+same objects the core hands out from `domovoi.sdk` / `domovoi.plugin_http`,
+so a mutation is gated by one rule wherever it is mounted.
 
 Note this guard is an **architectural invariant, not a security boundary.**
 Plugin code is unsandboxed (see [Security & Privacy](SECURITY_PRIVACY.md)) —

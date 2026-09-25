@@ -54,6 +54,7 @@ flowchart TB
         v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
         v6["On the dashboard: the calendar, playlists,<br/>chat, news, podcasts and audiobooks,<br/>a person's memories and favorites"]
         v7["Satellite room label, timer cancel,<br/>announce and volume"]
+        v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -180,6 +181,21 @@ announcing and setting the volume. The rest of the satellite drawer —
 restart, the screen, the config push — is admin tier, because the core route
 behind each of those is. Where the two hops disagreed, the call used to be
 accepted here and refused one process later; now the first hop answers.
+
+**Plugins can put a route on it too.** A plugin route decorated
+`@device_endpoint` (`domovoi.sdk` / `domovoi.webkit`) answers to exactly
+this gate — `require_device`, with the same `401` / cookie-only `403` /
+`429` answers and the same pre-setup grace — in both processes, instead of
+the admin default. The bundled radio plugin uses it for its everyday
+mutations: play, favorite, the interval / stream-URL edit and unfavorite,
+forget, and the simulcast lookup (web and core hop alike — the web hop
+forwards the caller's household token). Its FCC bulk import stays admin.
+Forget sits here because the core's nearest precedent does: unsubscribing
+from a podcast, which drops that show's episode rows, is device tier; a
+station is one search away and its detections are observations the sampler
+makes again, not the kind of row whose loss is permanent (a person, an
+audio file). A stream URL a device sets goes through the outbound-URL
+check on the way in and again at fetch time.
 
 A client that presents nothing gets `401`; the dashboard cookie alone gets
 `403`, because rendering a page is not the same as acting in a room. The web dashboard forwards whatever
@@ -425,8 +441,9 @@ add-by-URL):
   to **10 URL requests per 60 seconds per source IP**.
 - Anything else is refused.
 
-Podcast subscribe/poll and news feed attach/re-test sit on the device tier;
-model pull, cancel and delete on the admin tier.
+Podcast subscribe/poll, news feed attach/re-test and the radio plugin's
+station writes (favorite, play, a stream-URL edit, the simulcast lookup)
+sit on the device tier; model pull, cancel and delete on the admin tier.
 
 **Where the server will go** (`domovoi/net_safety.py`, used by every
 fetcher — the podcast poller, the news fetcher, the radio stream proxy and
@@ -545,6 +562,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
 | **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD. | Pre-setup grace. |
+| **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
@@ -659,10 +677,13 @@ What the install flow *does* do (verified in
   declared permissions and warnings, **the satellite payload in its own
   panel** (the apt packages, the root post-install script by path, the
   pinned pips, and the file count and size — what `apply-payload` will run
-  as root on every satellite), **every HTTP route the plugin opted out of
-  the admin gate** (found by scanning the staged source for
-  `@open_endpoint`, so the list does not depend on the publisher's
-  goodwill), direct **and transitive** Python dependencies with the origin
+  as root on every satellite), **every HTTP route the plugin moved off
+  the admin gate**, in two separately headed lists — the routes anyone on
+  the network can call (`@open_endpoint`) and the routes any paired
+  household device can call (`@device_endpoint`) — found by scanning the
+  staged source for both decorators, so neither list depends on the
+  publisher's goodwill (a route carrying both is refused at staging),
+  direct **and transitive** Python dependencies with the origin
   each resolves from, the handlers it registers, how many database
   migrations it ships, and the trust statement above. A package the
   scanner cannot parse is refused rather than previewed incompletely.
@@ -681,12 +702,19 @@ What the install flow *does* do (verified in
   boundary against malice remains the publisher you trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
-  dashboard (`/api/plugins/<slug>/…`) sit behind the same rule: every
-  non-GET route requires an admin session (Bearer-only — the dashboard
-  cookie alone answers `403`, no credential answers `401`) unless the
-  plugin author decorated that route `@open_endpoint`, and every such
-  opt-out is listed on the trust screen. A plugin cannot ship a mutation
-  the LAN can call unnoticed. The bundled radio plugin opts nothing out.
+  dashboard (`/api/plugins/<slug>/…`) sit behind the same rule
+  (`domovoi.webkit.enforce_route_tier`, one body for both): every non-GET
+  route requires an admin session (Bearer-only — the dashboard cookie
+  alone answers `403`, no credential answers `401`) unless the plugin
+  author put it on another tier. `@device_endpoint` moves it to the
+  **device tier** — the household token or an admin Bearer, exactly the
+  core's `require_device` — for daily household actions; `@open_endpoint`
+  opens it to anyone, with no credential at all. Every route on either is
+  listed on the trust screen under its own heading, so a plugin cannot
+  ship a mutation the household's devices — let alone the LAN — can call
+  unnoticed. The bundled radio plugin opens nothing to the whole LAN: its
+  everyday mutations (play, favorite, edit, forget, simulcast lookup) are
+  `@device_endpoint` and its FCC bulk import keeps the admin default.
 
 And the crucial caveat: **the manifest's permission flags and warnings are
 honesty devices, not enforcement.** A flag like `network = true` is the

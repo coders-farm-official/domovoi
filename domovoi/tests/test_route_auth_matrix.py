@@ -30,6 +30,11 @@ router level, directly or through another dependency):
 
 ``require_admin_read`` deliberately does NOT count for a mutating route:
 the dashboard cookie renders GET state and never authorizes a change.
+
+Plugin routes are not in either static table — they mount at runtime
+behind ``webkit.enforce_route_tier`` — so the last section walks the
+bundled radio plugin's real routers and holds each mutation to its tier
+(``@device_endpoint`` / ``@open_endpoint`` / the admin default).
 """
 
 from __future__ import annotations
@@ -234,3 +239,83 @@ def test_device_token_reads_are_admin_reads_that_fail_closed() -> None:
     assert set(found) == {("core", "/v1/admin/device-token"), ("web", "/api/auth/device-token")}
     for key, calls in found.items():
         assert admin_auth.require_admin_security_read in calls, key
+
+
+# ─── Plugin routes: which tier each bundled-radio mutation answers to ─────
+#
+# Plugin routers are mounted at RUNTIME, so they are not in either app's
+# static route table above. Both processes put them behind one gate body,
+# ``webkit.enforce_route_tier``, which reads the tier off the route
+# function: ``@device_endpoint`` (household token or admin Bearer —
+# ``require_device``), ``@open_endpoint`` (nothing) or the admin default
+# (``admin_required``). ``webkit.endpoint_tier`` is that same predicate,
+# so walking the bundled radio plugin's REAL routers with it is walking
+# what the gate will do. Moving a route between tiers is a deliberate
+# edit here AND in docs/SECURITY_PRIVACY.md / docs/API_REFERENCE.md.
+
+RADIO_ROUTE_TIERS: dict[tuple[str, str, str], str] = {
+    # Listening is a household action (2026-09-25): the nearest core
+    # precedents — podcast subscribe / unsubscribe, news feed attach /
+    # detach, playlist delete — are all device tier.
+    ("web", "POST", "/play"): "device",
+    ("web", "POST", "/stations"): "device",
+    ("web", "PATCH", "/stations/{station_id}"): "device",
+    ("web", "DELETE", "/stations/{station_id}"): "device",
+    ("web", "POST", "/stations/{station_id}/resolve-simulcast"): "device",
+    ("core", "POST", "/stations/{station_id}/resolve-simulcast"): "device",
+    # A long server-side job, like the core's library sweeps.
+    ("web", "POST", "/fcc-import"): "admin",
+    ("core", "POST", "/fcc-import"): "admin",
+}
+
+
+def _radio_mutations() -> dict[tuple[str, str, str], Any]:
+    """``(process, METHOD, path) -> endpoint`` for every mutating route on
+    the radio plugin's web and core routers. A plugin router's own
+    ``routes`` list is flat (nothing is included INTO it), so no
+    version-dependent walk is needed here."""
+    import sys
+    from pathlib import Path
+
+    radio_dir = Path(__file__).resolve().parents[2] / "plugins" / "radio"
+    if str(radio_dir) not in sys.path:
+        sys.path.insert(0, str(radio_dir))
+    from domovoi_plugin_radio import core as radio_core
+    from domovoi_plugin_radio import web as radio_web
+
+    class _Ctx:  # build_router only captures these; nothing is called
+        db_session_scope = None
+        core = None
+
+    routers = {
+        "web": radio_web.build_router(_Ctx()),
+        "core": radio_core._build_core_router(None),
+    }
+    out: dict[tuple[str, str, str], Any] = {}
+    for process, router in routers.items():
+        for route in router.routes:
+            for method in MUTATING_METHODS:
+                if method in (getattr(route, "methods", None) or set()):
+                    out[(process, method, route.path)] = route.endpoint
+    return out
+
+
+def test_every_radio_mutation_sits_on_its_declared_tier() -> None:
+    from domovoi.webkit import endpoint_tier
+
+    found = {key: endpoint_tier(fn) for key, fn in _radio_mutations().items()}
+    assert set(found) == set(RADIO_ROUTE_TIERS), (
+        "radio's mutating routes changed — give each new one a tier in "
+        f"RADIO_ROUTE_TIERS: {sorted(set(found) ^ set(RADIO_ROUTE_TIERS))}"
+    )
+    wrong = {k: (found[k], want) for k, want in RADIO_ROUTE_TIERS.items() if found[k] != want}
+    assert not wrong, f"(found, declared) tier mismatch: {wrong}"
+
+
+def test_radio_opens_nothing_to_the_whole_lan() -> None:
+    """The device tier is the floor for radio: no route answers a caller
+    who holds no credential at all."""
+    from domovoi.webkit import is_open_endpoint
+
+    opened = [k for k, fn in _radio_mutations().items() if is_open_endpoint(fn)]
+    assert opened == []

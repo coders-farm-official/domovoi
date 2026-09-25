@@ -20,11 +20,17 @@ only, never an address inside the house or on the box, and every redirect
 hop re-checked.
 
 Router mounts at ``/api/plugins/radio`` behind the host's default-deny
-gate (design §5.1): every non-GET route here — station create / patch /
-delete, play, the FCC import and simulcast proxies — requires an admin
-session; the dashboard attaches its Bearer and signs the operator in on a
-401. GETs (search, lists, stream, badge) stay open for daily use. Static
-JSX at ``/plugins/radio/static``. ``SNAPSHOTS`` feeds the manifest-declared
+gate (design §5.1). Listening to the radio is a household action, not an
+admin one, so the everyday mutations are ``@device_endpoint`` — play,
+favorite (``POST /stations``), edit / unfavorite (``PATCH``), forget
+(``DELETE``) and the simulcast lookup take the household token any paired
+browser or phone already sends (or an admin Bearer), the same tier the
+core puts podcast subscribe / unsubscribe and news feeds on. The FCC bulk
+import is a long server-side job, like the core's library sweeps, and
+stays on the admin default. An unpaired browser gets the dashboard's
+"pair this browser" prompt from ``apiPost`` and the refused call is
+replayed. GETs (search, lists, stream, badge) stay open. Static JSX at
+``/plugins/radio/static``. ``SNAPSHOTS`` feeds the manifest-declared
 realtime wiring (design §5.3): snapshot functions are called by the web
 state poll loop AND on NOTIFY, and their return value is broadcast
 verbatim on the mapped realtime channel — keep them cheap (and never
@@ -43,7 +49,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.webkit import net_safety
+from domovoi.webkit import device_endpoint, net_safety
 
 from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
@@ -311,6 +317,7 @@ def build_router(ctx: Any) -> APIRouter:
     # ── Play (without favoriting) ─────────────────────────────────────
 
     @router.post("/play", response_model=RadioStation)
+    @device_endpoint
     async def play_station(payload: RadioStationPlay) -> RadioStation:
         """Stamp a station as played NOW and hand back the row to stream.
 
@@ -439,6 +446,7 @@ def build_router(ctx: Any) -> APIRouter:
         return _row_to_station(result)
 
     @router.post("/stations", response_model=RadioStation, status_code=201)
+    @device_endpoint
     async def create_station(payload: RadioStationCreate) -> RadioStation:
         """Favorite a station (or create a manual entry). Idempotent on
         ``external_id``: an existing row just gets ``favorited=TRUE`` —
@@ -507,11 +515,14 @@ def build_router(ctx: Any) -> APIRouter:
         return _row_to_station(result)
 
     @router.patch("/stations/{station_id}", response_model=RadioStation)
+    @device_endpoint
     async def patch_station(
         station_id: int, payload: RadioStationPatch
     ) -> RadioStation:
         """Partial update — most commonly the favorited flag or the
-        per-station sample interval."""
+        per-station sample interval. A new ``stream_url`` is the one field
+        that points the server somewhere, and it goes through the same
+        outbound-URL check as ``POST /stations`` before it is stored."""
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             raise HTTPException(status_code=400, detail="no fields provided")
@@ -548,10 +559,17 @@ def build_router(ctx: Any) -> APIRouter:
         return _row_to_station(result)
 
     @router.delete("/stations/{station_id}", status_code=204)
+    @device_endpoint
     async def delete_station(station_id: int) -> None:
         """Delete outright (cascades to detections via the intra-schema
         FK). "Changed my mind about this favorite" should PATCH
-        ``favorited=false`` instead — that keeps the detection history."""
+        ``favorited=false`` instead — that keeps the detection history.
+
+        Device tier, like the favorite it undoes — the core's podcast
+        unsubscribe (which drops the show's episode rows) sits on the same
+        tier. Nothing here is unrecoverable the way a deleted person or
+        audio file is: the station is one search away and its detections
+        are observations the sampler makes again."""
         async with session_scope() as s:
             result = await s.execute(
                 text("DELETE FROM radio_stations WHERE id = :id"),
@@ -567,12 +585,14 @@ def build_router(ctx: Any) -> APIRouter:
     # ── Proxies to the plugin's CORE endpoints (no core imports) ─────
 
     @router.post("/stations/{station_id}/resolve-simulcast")
+    @device_endpoint
     async def resolve_simulcast(station_id: int, request: Request) -> dict[str, Any]:
         """Look up an FM station's call sign in the online directory and
         persist the best simulcast URL. Proxied to the plugin's core
         endpoint (slug-relative path → /v1/plugins/radio/...) with the
-        caller's admin credential forwarded — the core gates this
-        mutation exactly like the web process does."""
+        caller's credentials forwarded (household token or Bearer) — the
+        core gates this mutation on the same device tier. The page fires
+        it right after an FM favorite, so it lives on the favorite's tier."""
         result = await ctx.core.post_admin(
             f"stations/{station_id}/resolve-simulcast", request=request
         )
@@ -586,7 +606,9 @@ def build_router(ctx: Any) -> APIRouter:
     ) -> dict[str, Any]:
         """Trigger the FCC FM bulk import as a background job on the
         core and return immediately (poll GET /fcc-import for status).
-        The caller's admin credential is forwarded to the core's gate."""
+        Admin tier (the default — no marker): a long server-side sweep,
+        like the core's library reindex. The caller's admin credential is
+        forwarded to the core's gate."""
         path = "fcc-import" + (f"?state={state}" if state else "")
         return await ctx.core.post_admin(path, request=request)
 

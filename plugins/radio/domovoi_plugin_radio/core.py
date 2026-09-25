@@ -10,7 +10,8 @@ here, against the injected :class:`~domovoi.sdk.PluginSDK`:
   (+ an ``sdr_probe`` hook when SDR hardware is enabled),
 * the plugin's core HTTP router (``/v1/plugins/radio/...``) — the FCC
   import runs as a background job behind an admin-gated endpoint, never
-  a blocking ~30 s request (locked 19),
+  a blocking ~30 s request (locked 19); the simulcast lookup is a
+  household action on the device tier,
 * event-bus subscriptions for soft-ref cleanup/correlation — paired
   with the reaper's reconciliation sweep because the bus is
   fire-and-forget (design §4.9).
@@ -28,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK
+from domovoi.sdk import PluginSDK, device_endpoint
 
 from domovoi_plugin_radio import SCHEMA
 from domovoi_plugin_radio.clients.rtl_sdr import SdrTuner
@@ -207,9 +208,12 @@ def _make_matcher(sdk: PluginSDK):
 
 # ─── The plugin's core router (/v1/plugins/radio/...) ────────────────────
 #
-# Mutations are admin-gated BY DEFAULT (design §4.11) — none of these
-# opt out, so the FCC import trigger and the simulcast resolver require
-# an admin session once setup has run. GETs are open reads.
+# Mutations are admin-gated BY DEFAULT (design §4.11). The FCC import
+# trigger keeps that default — a bulk server-side job, like the core's
+# library sweeps. The simulcast resolver is ``@device_endpoint``: the
+# Stations page fires it right after an FM favorite, which is a household
+# action, and the web hop forwards the caller's household token here.
+# GETs are open reads.
 
 
 def _build_core_router(sdk: PluginSDK) -> APIRouter:
@@ -226,6 +230,7 @@ def _build_core_router(sdk: PluginSDK) -> APIRouter:
         return fcc_import.job_status(sdk)
 
     @router.post("/stations/{station_id}/resolve-simulcast")
+    @device_endpoint
     async def resolve_simulcast(station_id: int):
         result = await simulcast.resolve_simulcast_for_station(sdk, station_id)
         return result.to_dict()

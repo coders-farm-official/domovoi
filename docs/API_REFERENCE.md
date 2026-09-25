@@ -263,7 +263,7 @@ upgrade are two-phase: stage → preview → confirm.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `POST /v1/plugins/install` | Admin, fail-closed | multipart zip in field `file`, **or** JSON `{"github_url": "..."}` | Phase A: stage + validate. Returns `{staged_id, preview}` — the trust screen: `{slug, name, version, publisher, license, description, permissions, requirements: {direct, transitive: [{name, version, hashed, origin, origin_ok}]}, handlers, migration_count, capabilities, open_endpoints: [{method, path, module, function, process}], satellite: {apt_packages, post_install, pip_requirements, files_count, payload_mb} \| null, trust_statement}`. `422` with `detail.error.code` on rejection: `lockfile_option` (a global pip option in the lockfile), `lockfile_requirement` (a line that is not an exact `name==version` pin — direct URLs, local paths, ranges), plus the zip / manifest / layout / migration-lint codes. |
+| `POST /v1/plugins/install` | Admin, fail-closed | multipart zip in field `file`, **or** JSON `{"github_url": "..."}` | Phase A: stage + validate. Returns `{staged_id, preview}` — the trust screen: `{slug, name, version, publisher, license, description, permissions, requirements: {direct, transitive: [{name, version, hashed, origin, origin_ok}]}, handlers, migration_count, capabilities, open_endpoints: [{method, path, module, function, process}], device_endpoints: [same shape], satellite: {apt_packages, post_install, pip_requirements, files_count, payload_mb} \| null, trust_statement}`. `422` with `detail.error.code` on rejection: `endpoint_tier_conflict` (a route decorated both `@open_endpoint` and `@device_endpoint`), `lockfile_option` (a global pip option in the lockfile), `lockfile_requirement` (a line that is not an exact `name==version` pin — direct URLs, local paths, ranges), plus the zip / manifest / layout / migration-lint codes. |
 | `POST /v1/plugins/install/{staged_id}/confirm` | Admin, fail-closed | — | Phase B: run pip + plugin migrations + hot-load. Also confirms staged *upgrades*. |
 | `POST /v1/plugins/{slug}/enable` | Admin, fail-closed | — | Enable and hot-load a disabled plugin. |
 | `POST /v1/plugins/{slug}/disable` | Admin, fail-closed | — | Disable: unload handlers/workers; the plugin's HTTP routes start returning `404`. |
@@ -1125,10 +1125,21 @@ for how to declare them.
   remove routes, so a per-slug flag guards them; the router is reused on
   re-enable).
 * **Auth gate, default-deny for mutations**: every non-GET route requires an
-  admin session unless the plugin author explicitly opted out with the
-  `@open_endpoint` decorator (each opt-out is listed on the install preview's
-  trust screen). GETs are open unless the plugin adds its own
-  `Depends(admin_required)`.
+  admin session unless the plugin author put it on another tier with a
+  decorator on the route function:
+  * `@device_endpoint` — the **device tier**: the household `X-Device-Token`
+    or an admin Bearer, answered exactly like the core's own device-tier
+    routes (`401` with nothing, `403` on the dashboard cookie alone, `429`
+    with `Retry-After` once a source keeps presenting wrong tokens). On a GET
+    it gates the read like the core's media reads (header, cookie or
+    `?device_token=`).
+  * `@open_endpoint` — no credential at all.
+
+  Every route on either tier is listed on the install preview's trust screen
+  (`device_endpoints` and `open_endpoints`, under separate headings); a route
+  carrying both is refused at staging and at load. GETs are open unless the
+  plugin adds its own `Depends(admin_required)` or marks the GET
+  `@device_endpoint`.
 * Pre-setup grace applies: until the admin credential exists, the gate
   allows everything (LAN-trust, matching the core's daily-use surfaces).
 * Reserved path: the core itself serves `GET /v1/plugins/{slug}/status`
@@ -1138,14 +1149,19 @@ for how to declare them.
 
 * Routers registered via the plugin's web entry point (`register_web(ctx)`,
   `ctx.add_router(...)`) mount behind a slug-enable gate (`404` when
-  disabled) **and the same default-deny auth gate as the core**: every
-  non-GET route requires an admin session (`401` with no credential, `403`
-  when only the dashboard cookie is present — mutations are Bearer-only)
-  unless its route function carries `@domovoi.webkit.open_endpoint`. GETs
-  are open unless the plugin adds `Depends(domovoi.webkit.admin_required)`.
-  The dashboard attaches its Bearer to every plugin call and opens the
-  sign-in modal on a `401`, so a signed-in operator never notices the gate.
-  The pre-setup grace applies here too.
+  disabled) **and the same default-deny auth gate as the core** (one body,
+  `domovoi.webkit.enforce_route_tier`): every non-GET route requires an
+  admin session (`401` with no credential, `403` when only the dashboard
+  cookie is present — mutations are Bearer-only) unless its route function
+  carries `@domovoi.webkit.device_endpoint` (household token or admin
+  Bearer) or `@domovoi.webkit.open_endpoint`. GETs are open unless the
+  plugin adds `Depends(domovoi.webkit.admin_required)`. The dashboard
+  attaches its Bearer and the stored household token to every plugin call;
+  a device-tier refusal opens the "pair this browser" prompt and an admin
+  one the sign-in modal, and the refused call is replayed once the
+  credential exists. The pre-setup grace applies here too. A plugin web
+  route that proxies to its core routes forwards the caller's Bearer,
+  cookie and household token (`CoreClient.post_admin`).
 * Static assets serve from `GET /plugins/<slug>/static/<path>` (containment-
   checked), with `Cache-Control: no-cache` — an upgrade changes these files
   without changing their names, so they have to be revalidated or the old
@@ -1160,19 +1176,20 @@ for how to declare them.
 `plugins/radio` (publisher Coders Farm) mounts both surfaces and is the
 reference implementation.
 
-Core router → mounted at `/v1/plugins/radio` (mutations admin-gated by
-default — none opt out):
+Core router → mounted at `/v1/plugins/radio` (the FCC import keeps the
+admin default; the simulcast lookup is `@device_endpoint`):
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /v1/plugins/radio/fcc-import` | Admin (default mutation gate) | Start the FCC FM bulk import as a background job (`?state=` optional); returns immediately. |
+| `POST /v1/plugins/radio/fcc-import` | Admin (default mutation gate) | Start the FCC FM bulk import as a background job (`?state=` optional); returns immediately. A long server-side job, like the core's library sweeps. |
 | `GET /v1/plugins/radio/fcc-import` | Open | Import job progress. |
-| `POST /v1/plugins/radio/stations/{station_id}/resolve-simulcast` | Admin (default mutation gate) | Find an online simulcast stream for an FM station. |
+| `POST /v1/plugins/radio/stations/{station_id}/resolve-simulcast` | Device (`@device_endpoint`) | Find an online simulcast stream for an FM station. |
 | `GET /v1/plugins/radio/state` | Open | Live tuner state: `{sdr_available, sdr_frequency_mhz, fcc_import}`. (Named `/state` because the core reserves `/status`.) |
 
 Web router → mounted at `/api/plugins/radio` (slug-enable gate; GETs open
-for the dashboard's daily-use radio pages, every mutation behind the
-default admin gate — none opt out):
+for the dashboard's daily-use radio pages; the everyday mutations are
+device tier — a paired phone plays and favorites without the admin
+password — and the FCC import keeps the admin default; nothing is open):
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
@@ -1180,11 +1197,11 @@ default admin gate — none opt out):
 | `GET /api/plugins/radio/stations` | Open | `?favorited_only=&source=online\|fm&q=&frequency_mhz=&limit=200&offset=0` | Saved stations. |
 | `GET /api/plugins/radio/stations/{station_id}` | Open | — | One station. |
 | `GET /api/plugins/radio/recent` | Open | — | The ten most recently played stations. |
-| `POST /api/plugins/radio/play` | Admin (default mutation gate) | `{source, external_id?, station_id?, ...}` | Stamp a station as played (resolve-or-create, not a favorite) and return the row to stream. |
-| `POST /api/plugins/radio/stations` | Admin (default mutation gate) | station body | Save a station. `201`. |
-| `PATCH /api/plugins/radio/stations/{station_id}` | Admin (default mutation gate) | patch body | Edit / favorite. |
-| `DELETE /api/plugins/radio/stations/{station_id}` | Admin (default mutation gate) | — | Delete. `204`. |
-| `POST /api/plugins/radio/stations/{station_id}/resolve-simulcast` | Admin (default mutation gate) | — | Simulcast resolution from the dashboard; the caller's Bearer is forwarded to the core's own gate. |
+| `POST /api/plugins/radio/play` | Device (`@device_endpoint`) | `{source, external_id?, station_id?, ...}` | Stamp a station as played (resolve-or-create, not a favorite) and return the row to stream. A new `stream_url` passes the outbound-URL check before it becomes a row. |
+| `POST /api/plugins/radio/stations` | Device (`@device_endpoint`) | station body | Save (favorite) a station. `201`. Idempotent on `external_id`. |
+| `PATCH /api/plugins/radio/stations/{station_id}` | Device (`@device_endpoint`) | `{name?, stream_url?, favorited?, sample_interval_sec?, tags?}` | Edit / favorite / unfavorite. A `stream_url` passes the outbound-URL check before it is stored. |
+| `DELETE /api/plugins/radio/stations/{station_id}` | Device (`@device_endpoint`) | — | Forget a station (cascades to its detections). `204`. |
+| `POST /api/plugins/radio/stations/{station_id}/resolve-simulcast` | Device (`@device_endpoint`) | — | Simulcast resolution from the dashboard; the caller's household token (or Bearer) is forwarded to the core's own device-tier gate. |
 | `POST /api/plugins/radio/fcc-import` | Admin (default mutation gate) | `?state=` | Start the FCC import (Bearer forwarded to the core). |
 | `GET /api/plugins/radio/fcc-import` | Open | — | Poll the FCC import. |
 | `GET /api/plugins/radio/detections` | Open | filters | Passive song-detection history. |

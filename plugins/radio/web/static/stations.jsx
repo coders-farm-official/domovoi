@@ -19,6 +19,13 @@
  *   * POST   /api/plugins/radio/fcc-import                     — async import job
  *   * /ws/state · `radio.stations.changed` / `radio.detections.changed`
  *
+ * Who may press what: play, the star, the interval / stream-URL edits,
+ * forget and the simulcast lookup are DEVICE tier — any browser holding
+ * the household token passes, and apiPost/apiPatch/apiDelete already send
+ * it. One that doesn't gets the dashboard's "pair this browser" prompt
+ * (with "sign in as an admin instead") and the refused call is replayed.
+ * The FCC import alone is admin tier and asks for the admin sign-in.
+ *
  * Playing is independent of favoriting: a row click anywhere on this page
  * starts the station in the browser player, and POST /play persists an
  * unsaved directory hit only so the stream proxy has an id to resolve.
@@ -27,7 +34,7 @@
  * Core-bundle globals used (loaded before any plugin script): React,
  * Card, Button, IconButton, Icon, Pill, StatusDot, Empty, PageHeader,
  * SleepingDomovoi, useToast, relTime, apiGet/apiPost/apiPatch/apiDelete,
- * useApiList, useApiObject, usePlayback.
+ * mutationErrorText, useApiList, useApiObject, usePlayback.
  */
 
 const RADIO_API = '/api/plugins/radio';
@@ -54,6 +61,20 @@ const unplayableReason = (st) => (
     ? `${st.name} has no online simulcast yet — resolve one, or play it through a room`
     : `${st?.name || 'that station'} has no browser-playable stream URL`
 );
+
+/* Toast a refused station action — or say nothing. The dashboard's own
+ * rule (data.js mutationErrorText), so this page reads like every core
+ * page: a refusal the pair / sign-in prompt owns stays quiet, a prompt the
+ * listener dismissed says "play cancelled — this browser is not paired"
+ * instead of a status line with raw JSON in it, and a real failure names
+ * the server's reason. The fallback is for a dashboard older than that
+ * helper. */
+const reportFailure = (fire, verb, e) => {
+  const msg = typeof mutationErrorText === 'function'
+    ? mutationErrorText(e, verb, { kept: false })
+    : `${verb} failed: ${e?.message || e}`;
+  if (msg) fire(msg);
+};
 
 /* Build a player queue item for a station against the plugin's own
  * stream proxy route (the manifest's [[web.player_sources]] template). */
@@ -397,7 +418,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
               fire(`no simulcast: ${res.message}`);
             }
           } catch (e) {
-            fire(`simulcast lookup failed: ${e.message}`);
+            reportFailure(fire, 'simulcast lookup', e);
           }
         }
       } else if (!favorited) {
@@ -405,7 +426,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
         setFavorited(true);
       }
     } catch (e) {
-      fire(`favorite failed: ${e.message}`);
+      reportFailure(fire, 'favorite', e);
     } finally {
       setBusy(false);
     }
@@ -535,7 +556,7 @@ const RecentRow = ({ s, onPlay, onFavorite, fire }) => {
       fire(s.favorited ? `unfavorited ${s.name}` : `favorited ${s.name}`);
       onFavorite && onFavorite();
     } catch (e) {
-      fire(`favorite failed: ${e.message}`);
+      reportFailure(fire, 'favorite', e);
     } finally {
       setBusy(false);
     }
@@ -630,7 +651,7 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) =
       setEditing(false);
       refresh();
     } catch (e) {
-      fire(`save failed: ${e.message}`);
+      reportFailure(fire, 'save', e);
     }
   };
 
@@ -780,7 +801,7 @@ const StreamUrlEditor = ({ s, fire }) => {
       fire(v ? 'stream URL saved' : 'stream URL cleared');
       setEditing(false);
     } catch (e) {
-      fire(`save failed: ${e.message}`);
+      reportFailure(fire, 'save', e);
     }
   };
 
@@ -795,7 +816,7 @@ const StreamUrlEditor = ({ s, fire }) => {
         fire(res?.message || 'no simulcast found');
       }
     } catch (e) {
-      fire(`resolve failed: ${e.message}`);
+      reportFailure(fire, 'resolve', e);
     } finally {
       setResolving(false);
     }
@@ -953,7 +974,7 @@ const FccImportButton = ({ fire }) => {
       await apiPost(`${RADIO_API}/fcc-import`, {});
       await poll(45);
     } catch (e) {
-      fire(`fcc import failed: ${e.message}`);
+      reportFailure(fire, 'fcc import', e);
     } finally {
       setRunning(false);
     }
@@ -1008,9 +1029,19 @@ const StationsPage = () => {
   // resolves row ids, and marks it created_by_play so the server's Recent
   // trim reclaims it if it never gets starred.
   const player = usePlayback();
+  // One play request in flight at a time. A tap that shows nothing for a
+  // round trip gets tapped again, and every copy refused for want of a
+  // credential waits on the SAME pair / sign-in prompt — so dismissing it
+  // once used to toast the refusal once per tap (Kamron's phone showed two
+  // identical "play failed: 401" toasts for one station). Later taps are
+  // dropped until the first one settles; that is the one the prompt
+  // answers and replays.
+  const playPending = React.useRef(false);
   const playStation = async (st) => {
+    if (playPending.current) return;
     if (!player.available) { fire('browser player not available'); return; }
     if (!browserPlayable(st)) { fire(unplayableReason(st)); return; }
+    playPending.current = true;
     try {
       const row = await apiPost(`${RADIO_API}/play`, st.id
         ? { station_id: st.id }
@@ -1029,7 +1060,9 @@ const StationsPage = () => {
       // makes the Recent strip move under the click that caused it.
       refreshRecent();
     } catch (e) {
-      fire(`play failed: ${e.message}`);
+      reportFailure(fire, 'play', e);
+    } finally {
+      playPending.current = false;
     }
   };
 
@@ -1056,7 +1089,7 @@ const StationsPage = () => {
       refresh();
       refreshRecent();
     } catch (e) {
-      fire(`forget failed: ${e.message}`);
+      reportFailure(fire, 'forget', e);
     }
   };
 

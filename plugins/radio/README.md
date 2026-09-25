@@ -131,6 +131,10 @@ through — it exercises every extension plane:
 * **UI**: a web router at `/api/plugins/radio`, a zero-build JSX page
   registered through `window.DomovoiPlugins.radio`, manifest-declared
   realtime channels, and a sidebar badge;
+* **auth tiers**: the everyday mutations (play, favorite, edit, forget,
+  simulcast lookup) are `@device_endpoint` — any paired phone or browser —
+  while the FCC bulk import keeps the admin default; nothing is open to
+  the whole LAN;
 * **couplings**: acquisitions via `sdk.acquisition.enqueue` (no
   provider vocabulary anywhere), now-playing stamping via
   `sdk.playback.play_url(source="radio")`, and a favorites matcher via
