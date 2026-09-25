@@ -2079,11 +2079,24 @@ async def admin_satellite_approve(
         )
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
+        # Never offer a power-cycle here (F-049). The code is pinned at
+        # BOTH ends on purpose: the upsert in
+        # SatelliteApprovalRepository.request COALESCEs the code already on
+        # file, and the Pi replays its own from ~/.domovoi/approval_code.
+        # Restarting the satellite — or rejecting the row on the dashboard
+        # — therefore re-announces the SAME six digits. What recovers a
+        # missed code is one of the three routes named below.
         raise HTTPException(
             status_code=429,
             detail=(
-                "too many approval attempts for that room — wait a few "
-                "minutes, or power-cycle the satellite for a fresh code"
+                "too many approval attempts for that room — "
+                f"{APPROVAL_CODE_MAX_ATTEMPTS} per room per "
+                f"{int(APPROVAL_CODE_WINDOW_SEC)} seconds, counted in "
+                "memory, so the limit clears itself with no action. The "
+                "code does not change: the satellite says it again on "
+                "every retry, it is on the Pi in ~/.domovoi/approval_code, "
+                "and it is the code column of that room's "
+                "satellite_approvals row"
             ),
         )
     async with session_scope() as s:

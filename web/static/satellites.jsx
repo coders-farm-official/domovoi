@@ -1365,7 +1365,16 @@ const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
             {a.board || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
             {' · '}{a.sat_type || 'voice'}
-            {a.attempts > 1 ? ` · ${a.attempts} attempts` : ''}
+            {/* How many times the DEVICE has re-announced itself, which is
+              * not a budget and not the approval-code attempt counter
+              * (that one is the server's, 5 per room per 5 minutes, and
+              * lives nowhere on this page). "N attempts" next to a code
+              * box read as a limit running down — F-049. */}
+            {a.attempts > 1
+              ? <span title="times this satellite has asked to be approved — not a limit">
+                  {' · '}asked {a.attempts} times
+                </span>
+              : null}
           </div>
         </div>
         <input value={code}
@@ -1388,7 +1397,7 @@ const ApprovalCard = ({ a, busy, onApprove, onReject }) => {
       <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
         {a.has_code === false
           ? `This request arrived without a code — power-cycle the satellite so it asks again with one.`
-          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you.`}
+          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you. Missed them? The code never changes — the satellite says it again every time it retries, and it is on the Pi in ~/.domovoi/approval_code.`}
       </div>
     </Card>
   );
