@@ -15,5 +15,9 @@ $ErrorActionPreference = "Stop"
 # package. The script lives at web/scripts/, so go up two levels.
 Set-Location (Join-Path $PSScriptRoot "..\..")
 
-Write-Host "Starting Domovoi Web on $($env:WEB_HOST ?? '0.0.0.0'):$($env:WEB_PORT ?? '6369')"
+# Windows PowerShell 5.1 has no `??`, so spell the fallbacks out; they
+# match web/backend/main.py's own defaults.
+$WebHost = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
+$WebPort = if ($env:WEB_PORT) { $env:WEB_PORT } else { "6369" }
+Write-Host "Starting Domovoi Web on ${WebHost}:${WebPort}"
 python -m web.backend.main
