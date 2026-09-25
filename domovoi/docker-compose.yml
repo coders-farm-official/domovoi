@@ -35,6 +35,10 @@ services:
       interval: 2s
       timeout: 2s
       retries: 20
+    # Come back on its own after a crash or a Docker restart, like the MPD
+    # rooms do. Ordering at boot (Postgres + Flyway before the core) stays
+    # with the domovoi-db unit on Linux; this only covers the container.
+    restart: unless-stopped
 
   flyway:
     image: flyway/flyway:10
