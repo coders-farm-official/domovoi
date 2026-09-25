@@ -496,9 +496,13 @@ EDITOR_SAVES = {
 @pytest.mark.parametrize("name", sorted(EDITOR_SAVES))
 def test_every_editor_save_branches_on_the_auth_outcome(name: str):
     src = (STATIC / name).read_text(encoding="utf-8")
-    assert "mutationErrorText" in src, f"{name}: save catch ignores the auth outcome"
-    unguarded = re.findall(r"fire\(`Save failed:", src)
-    assert unguarded == [], f"{name}: unconditional Save-failed toast"
+    # In the editor's OWN body, not merely somewhere in the file.
+    start = src.index(f"const {EDITOR_SAVES[name]} = ")
+    body = src[start:start + 4000]
+    assert "mutationErrorText" in body, f"{name}: save catch ignores the auth outcome"
+    # The words are the helper's to choose now; a literal "Save failed"
+    # here is a catch that decided before it looked.
+    assert "Save failed" not in src, f"{name}: unconditional Save-failed toast"
 
 
 @pytest.mark.parametrize("name", ["doc_editor.jsx", "sheet_editor.jsx"])
