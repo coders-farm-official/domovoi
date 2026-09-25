@@ -79,8 +79,9 @@ const useExcalidraw = () => {
 };
 
 /* The canvas. `apiRef` receives the Excalidraw imperative API so the
- * page can pull scene data out at save time. */
-const DrawingCanvas = ({ lib, initialData, apiRef }) => {
+ * page can pull scene data out at save time; `onChange` is how the
+ * overlay above learns the scene moved (see its dirty guard). */
+const DrawingCanvas = ({ lib, initialData, apiRef, onChange }) => {
   const Excalidraw = lib && lib.Excalidraw;
   if (!Excalidraw && _excalidrawError) {
     return (
@@ -105,6 +106,7 @@ const DrawingCanvas = ({ lib, initialData, apiRef }) => {
       {React.createElement(Excalidraw, {
         initialData: initialData || null,
         excalidrawAPI: (api) => { apiRef.current = api; },
+        onChange,
       })}
     </div>
   );
@@ -115,6 +117,29 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
   const apiRef = React.useRef(null);
   const [initialData, setInitialData] = React.useState(file.rel_path ? undefined : null);
   const [saving, setSaving] = React.useState(false);
+  const [dirty, setDirty] = React.useState(false);
+
+  /* Unsaved-work guard, same contract as doc_editor/sheet_editor/files:
+   * a `dirty` flag, an "unsaved — click Save" hint, and a Close that asks
+   * before throwing the scene away. Excalidraw keeps no dirty flag of its
+   * own, so it is derived from getSceneVersion() — the sum of the
+   * per-element version counters, which moves when elements are drawn,
+   * edited or deleted and stays put for pan, zoom and tool changes. The
+   * first onChange after mount is the baseline (loading a saved scene
+   * must not count as an edit); a successful .excalidraw save makes the
+   * scene as it was at that moment the new baseline. If the bundle ever
+   * ships without getSceneVersion the flag simply stays false and Close
+   * behaves as it did before — no false "discard?" on an untouched page. */
+  const sceneVersion = React.useRef(null);   // latest version seen
+  const savedVersion = React.useRef(null);   // version last written to disk
+  const onSceneChange = React.useCallback((elements) => {
+    const getVersion = lib && lib.getSceneVersion;
+    if (!getVersion) return;
+    const v = getVersion(elements);
+    sceneVersion.current = v;
+    if (savedVersion.current === null) { savedVersion.current = v; return; }
+    setDirty(v !== savedVersion.current);
+  }, [lib]);
 
   // Load an existing scene's JSON when editing a saved file.
   React.useEffect(() => {
@@ -136,6 +161,10 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
     const api = apiRef.current;
     if (!api || !lib) return;
     setSaving(true);
+    // Read the version BEFORE the await: the canvas stays live while the
+    // request is in flight, so anything drawn during it must survive as
+    // still-unsaved rather than be marked clean by the reply.
+    const versionAtSave = sceneVersion.current;
     try {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
@@ -155,6 +184,11 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
           rel = name.replace(/\.excalidraw$/i, '') + '.excalidraw';
         }
         await apiPost('/api/documents/drawings/write', { rel_path: rel, content, fmt: 'excalidraw' });
+        // Only the .excalidraw write clears the flag. An SVG export is a
+        // picture of the scene under a different name; the editable scene
+        // is still unsaved, and Close must still say so.
+        savedVersion.current = versionAtSave;
+        setDirty(sceneVersion.current !== versionAtSave);
       }
       fire('Saved');
       onSaved();
@@ -166,6 +200,11 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
     } finally { setSaving(false); }
   };
 
+  const requestClose = () => {
+    if (dirty && !window.confirm('You have unsaved changes. Discard them and close?')) return;
+    onClose();
+  };
+
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)',
                   display: 'flex', flexDirection: 'column' }}>
@@ -173,15 +212,17 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
                     borderBottom: '1px solid var(--border)', background: 'var(--card)' }}>
         <Icon name="pen-tool" size={16}/>
         <strong style={{ fontSize: 14 }}>{file.rel_path || 'new whiteboard'}</strong>
+        {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
         <Button icon="image" disabled={saving} onClick={() => doSave(true)}>Export SVG</Button>
         <Button variant="primary" icon="save" disabled={saving} onClick={() => doSave(false)}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
-        <Button icon="x" onClick={onClose}>Close</Button>
+        <Button icon="x" onClick={requestClose}>Close</Button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <DrawingCanvas lib={lib} initialData={initialData} apiRef={apiRef}/>
+        <DrawingCanvas lib={lib} initialData={initialData} apiRef={apiRef}
+                       onChange={onSceneChange}/>
       </div>
     </div>
   );
