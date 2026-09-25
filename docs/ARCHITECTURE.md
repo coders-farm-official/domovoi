@@ -99,9 +99,13 @@ prose:
    between `utterance_start` / `utterance_end` frames on
    `WS /v1/stream/{room_id}`.
 2. **STT.** The core transcribes the buffered utterance with Whisper
-   (faster-whisper on CUDA; deterministic stub under `USE_STUBS=true`). If the
+   (faster-whisper on CUDA or CPU; deterministic stub under `USE_STUBS=true`). If the
    Pi flagged `greeting_played`, a wake greeting that bled past the mic
-   array's echo cancellation is stripped from the transcript.
+   array's echo cancellation is stripped from the transcript. Whisper loads
+   once at boot and a failed load is never fatal: the core drops to
+   `whisper_cpu_fallback_model` on cpu/int8, and failing that runs without
+   STT — a turn then gets a spoken "can't understand speech" notice and is
+   not routed (`domovoi/clients/whisper.py`; state on `/v1/admin/hardware`).
 3. **Voice identification** (best-effort, pre-router): the utterance is
    embedded and matched against enrolled voice profiles, yielding
    `person_id` + `presence_tier` in the turn's `Context`.

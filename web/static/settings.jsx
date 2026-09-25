@@ -807,6 +807,10 @@ const ConfigPanel = () => {
             <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>
               rejected: {Object.entries(result.rejected).map(([k, v]) => `${k} (${v})`).join('; ')}
             </div>}
+          {result && result.normalized && Object.keys(result.normalized).length > 0 &&
+            <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>
+              adjusted: {Object.entries(result.normalized).map(([k, v]) => `${k} (${v})`).join('; ')}
+            </div>}
           {result && result.restart_required && result.restart_required.length > 0 &&
             <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>
               saved — restart the Domovoi server to apply: {result.restart_required.join(', ')}

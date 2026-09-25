@@ -41,6 +41,31 @@ def _format_value(value: object) -> str:
     return s
 
 
+def next_boot_value(name: str, current: object, env_path: Path | None = None) -> object:
+    """The value a restart-tier setting will have after the next restart.
+
+    The live ``settings`` singleton still holds the boot-time value of a
+    restart-tier field after a save (it is only persisted, not applied),
+    so a check that has to agree with a PENDING change reads it the way
+    the next boot will: a real environment variable first (it shadows
+    ``.env``, see the module docstring), then the ``.env`` line, and
+    ``current`` when neither sets it."""
+    key = name.upper()
+    for env_key, value in os.environ.items():
+        if env_key.upper() == key:
+            return value
+    path = env_path or _ENV_FILE
+    try:
+        from dotenv import dotenv_values
+
+        for env_key, value in dotenv_values(path).items():
+            if env_key.upper() == key and value is not None:
+                return value
+    except (OSError, ValueError):  # unreadable, or not UTF-8
+        pass
+    return current
+
+
 def write_env_values(
     changes: dict[str, object], env_path: Path | None = None
 ) -> None:

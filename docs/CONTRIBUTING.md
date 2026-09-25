@@ -27,8 +27,8 @@ Prerequisites:
   the CUDA/DLL paths are Windows-specific and stubbed in tests
 * Optional for real voice work: [Ollama](https://ollama.com) on `:11434`,
   plus an NVIDIA GPU if you want Whisper on CUDA — `pip install -e
-  ".[real-clients,cuda]"`. Without one, set `whisper_device=cpu` and
-  `whisper_compute_type=int8` ([CPU_HOST.md](CPU_HOST.md))
+  ".[real-clients,cuda]"`. Without one, set `whisper_device=cpu`
+  (`whisper_compute_type=auto` then runs int8; [CPU_HOST.md](CPU_HOST.md))
 
 One-shot bootstrap (brings up Postgres, runs migrations, starts the core):
 

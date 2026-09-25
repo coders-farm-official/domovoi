@@ -159,20 +159,29 @@ async def get_active(request: Request) -> Any:
     roles = []
     for role, field_name in ROLE_TO_FIELD.items():
         spec = by_name.get(field_name) or {}
-        roles.append(
-            {
-                "role": role,
-                "field": field_name,
-                "model": spec.get("value"),
-                "tier": spec.get("tier"),
-            }
-        )
+        row = {
+            "role": role,
+            "field": field_name,
+            "model": spec.get("value"),
+            "tier": spec.get("tier"),
+        }
+        if role == "stt":
+            # Whisper is a model AND a device/compute pair; the STT catalog
+            # marks the row that matches all of it as active.
+            row["device"] = (by_name.get("whisper_device") or {}).get("value")
+            row["compute_type"] = (by_name.get("whisper_compute_type") or {}).get("value")
+        roles.append(row)
     return {"roles": roles}
 
 
 class SetActiveBody(BaseModel):
     role: str
     model: str = Field(..., min_length=1, max_length=200)
+    # STT only: the Whisper compute type the chosen catalog row runs at
+    # ("auto", "int8", ...). Written alongside whisper_model so a row that
+    # says int8 actually runs int8; the core validates it against the
+    # device. Omitted = leave the compute type as it is.
+    compute_type: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 @router.post("/active")
@@ -185,10 +194,18 @@ async def set_active(body: SetActiveBody, request: Request):
     Guard rail: refuse to activate an Ollama model that isn't installed —
     the caller should pull it first. Whisper is exempt (faster-whisper cold-
     downloads from HuggingFace on first use; the page offers an explicit
-    pre-fetch, but activation without it is still valid)."""
+    pre-fetch, but activation without it is still valid).
+
+    For ``stt``, ``compute_type`` (optional) is written with the model as
+    ``whisper_compute_type`` in the same config write, so the core checks
+    it against the device and refuses the pair together (``rejected``)."""
     field = ROLE_TO_FIELD.get(body.role)
     if field is None:
         raise HTTPException(status_code=400, detail=f"unknown role {body.role!r}")
+    if body.compute_type is not None and body.role != "stt":
+        raise HTTPException(
+            status_code=400, detail="compute_type only applies to the stt role"
+        )
 
     if field in ("ollama_model", "ollama_tool_model", "ollama_vision_model"):
         tags = await ollama_client.list_models()
@@ -201,9 +218,12 @@ async def set_active(body: SetActiveBody, request: Request):
                 detail=f"{body.model} is not installed — pull it first, then switch.",
             )
 
+    changes: dict[str, str] = {field: body.model}
+    if body.compute_type is not None:
+        changes["whisper_compute_type"] = body.compute_type
     status, payload = await post_admin(
         "/v1/admin/config",
-        {"changes": {field: body.model}},
+        {"changes": changes},
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)

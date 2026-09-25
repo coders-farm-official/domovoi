@@ -592,8 +592,10 @@ reason, so a new route cannot quietly ship open.
 - **First run: the setup code.** On boot with no admin credential, the core
   writes an **8-word code** (256-word list, 64 bits of entropy) to
   `~/.domovoi/setup-code.txt` on the server (**mode 0600** — owner-readable
-  only) **and prints it to the server console**. `POST /api/auth/setup`
-  requires that code before it will accept your chosen admin password —
+  only) **and prints it to the server console** — before any model loads,
+  so a Whisper setting that can't load never keeps a fresh box from being
+  claimed and fixed. `POST /api/auth/setup` requires that code before it
+  will accept your chosen admin password —
   this is **proof of possession of the server machine**, and it closes the
   race where some other LAN host claims the admin tier before you do. The
   code is **valid for 24 hours** from when it was written: a restart inside

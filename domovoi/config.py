@@ -163,7 +163,18 @@ class Settings(BaseSettings):
     # ─── Whisper (faster-whisper on CUDA) ──────────────────────────────
     whisper_model: str = "large-v3"
     whisper_device: str = "cuda"
-    whisper_compute_type: str = "float16"
+    # CTranslate2 compute type. "auto" follows the device: float16 on cuda,
+    # int8 on cpu — so switching the device can't strand a GPU-only type on
+    # a CPU (float16 on cpu doesn't load). An explicit value (int8, float16,
+    # int8_float16, float32, ...) is used exactly as written.
+    whisper_compute_type: str = "auto"
+    # The rung the boot-time load drops to when the configured Whisper
+    # can't load (no NVIDIA GPU, a model that won't fit, a compute type
+    # the device can't run): this model on cpu at int8. small.en is the
+    # tuned CPU-host choice (docs/CPU_HOST.md). If this fails too, the
+    # core still boots — without speech recognition — and says why on the
+    # dashboard's Models page instead of never starting.
+    whisper_cpu_fallback_model: str = "small.en"
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on

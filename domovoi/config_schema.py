@@ -118,6 +118,17 @@ OLLAMA_KEEP_ALIVE_PATTERN = (
 )
 
 
+# Every value the dashboard offers for ``whisper_compute_type``: "auto"
+# plus CTranslate2's own compute types. Which of them a device can run is
+# checked as a pair with ``whisper_device`` on save
+# (domovoi/clients/whisper.py ``compute_pair_problem``), not here — a
+# single field can't know the other half.
+WHISPER_COMPUTE_TYPE_CHOICES = (
+    "auto", "int8", "int8_float32", "int8_float16", "int8_bfloat16",
+    "int16", "float16", "bfloat16", "float32",
+)
+
+
 # Order here is the display order within each group.
 EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Identity ──────────────────────────────────────────────────────
@@ -426,16 +437,39 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "whisper_model", "Whisper model", "Speech-to-text",
-        "faster-whisper model used for transcription (e.g. large-v3). A "
-        "model your GPU can't fit fails STT load at startup. Takes effect "
+        "faster-whisper model used for transcription (e.g. large-v3, or "
+        "small.en on a CPU). A model that can't load at startup drops to the "
+        "CPU fallback model below, and the Models page says so. Takes effect "
         "after a restart.",
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(
         "whisper_device", "Whisper device", "Speech-to-text",
-        "Where Whisper runs: 'cuda' (GPU) or 'cpu'. The wrong value (e.g. "
-        "cuda with no GPU) breaks transcription. Takes effect after a restart.",
+        "Where Whisper runs: 'cuda' (NVIDIA GPU) or 'cpu'. cuda on a machine "
+        "without one can't load, so startup drops to the CPU fallback model. "
+        "Saving a device whose saved compute type can't run there (float16 on "
+        "cpu) resets the compute type to 'auto'. Takes effect after a restart.",
         "choice", section="advanced", tier="restart", choices=["cuda", "cpu"],
+    ),
+    FieldSpec(
+        "whisper_compute_type", "Whisper compute type", "Speech-to-text",
+        "The number format Whisper runs in. 'auto' (the default) follows the "
+        "device: float16 on cuda, int8 on cpu. int8 halves memory at "
+        "near-identical accuracy and is the CPU choice; float16, bfloat16 "
+        "and int8_float16 are GPU-only, so they are refused together with "
+        "the cpu device. Takes effect after a restart.",
+        "choice", section="advanced", tier="restart",
+        choices=list(WHISPER_COMPUTE_TYPE_CHOICES),
+    ),
+    FieldSpec(
+        "whisper_cpu_fallback_model", "Whisper CPU fallback model", "Speech-to-text",
+        "What startup loads instead — on cpu, at int8 — when the configured "
+        "Whisper can't load (no NVIDIA GPU, too big to fit, a compute type "
+        "the device can't run). small.en suits an English-speaking household; "
+        "use small for other languages; blank turns the fallback off. If "
+        "this fails too, the Domovoi server starts without speech "
+        "recognition. Takes effect after a restart.",
+        "str", section="advanced", tier="restart",
     ),
     FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
