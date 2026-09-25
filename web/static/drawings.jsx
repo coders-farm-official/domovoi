@@ -143,7 +143,7 @@ const DrawingCanvas = ({ lib, initialData, apiRef, onChange, loadError }) => {
 };
 
 /* Full-screen drawing editor overlay. */
-const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
+const DrawingOverlay = ({ file, lib, onClose, onSaved, fire, blockedReason = null }) => {
   const apiRef = React.useRef(null);
   // undefined = the saved scene is still being read; null = a new blank
   // whiteboard; an object = the scene to mount Excalidraw with. The
@@ -152,6 +152,13 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
   const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
   const [dirty, setDirty] = React.useState(false);
+  /* An admin's per-device block. The Files page passes in what it
+   * already learned from browse; a block applied while the board is
+   * open arrives as a refused save and is kept here. Either way the
+   * answer is a sentence, never the admin-password prompt — no
+   * password lifts a block on the device. */
+  const [refused, setRefused] = React.useState(null);
+  const blocked = refused || blockedReason;
   // A scene is on the canvas, so Save has something true to write. Until
   // then Save and Export SVG would write an empty board over a file that
   // is not empty, so they stay disabled.
@@ -272,9 +279,12 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
         savedVersion.current = versionAtSave;
         setDirty(sceneVersion.current !== versionAtSave);
       }
+      setRefused(null);
       fire('Saved');
       onSaved();
     } catch (e) {
+      const why = deviceBlockReason(e);
+      if (why) { setRefused(why); return; }
       // The scene is still on the canvas after a dismissed sign-in, so
       // say cancelled rather than reporting a failure.
       const msg = mutationErrorText(e);
@@ -296,12 +306,17 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
         <strong style={{ fontSize: 14 }}>{file.rel_path || 'new whiteboard'}</strong>
         {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
-        <Button icon="image" disabled={saving || !ready} onClick={() => doSave(true)}>Export SVG</Button>
-        <Button variant="primary" icon="save" disabled={saving || !ready} onClick={() => doSave(false)}>
+        <Button icon="image" disabled={saving || !ready || !!blocked}
+                title={blocked || undefined} onClick={() => doSave(true)}>Export SVG</Button>
+        <Button variant="primary" icon="save" disabled={saving || !ready || !!blocked}
+                title={blocked || undefined} onClick={() => doSave(false)}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
         <Button icon="x" onClick={requestClose}>Close</Button>
       </div>
+      <WriteBlockedNotice reason={blocked}>
+        {dirty ? ' The board is still on screen — export it before closing.' : ''}
+      </WriteBlockedNotice>
       <div style={{ flex: 1, minHeight: 0 }}>
         <DrawingCanvas lib={lib} initialData={initialData} apiRef={apiRef}
                        onChange={onSceneChange} loadError={loadError}/>

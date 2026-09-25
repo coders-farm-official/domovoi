@@ -58,6 +58,7 @@ from httpx import ASGITransport, AsyncClient
 
 from domovoi import main as core_main
 from domovoi.main import app as core_app
+from domovoi.main import approval_throttled_detail
 from domovoi.tests.auth_testkit import bearer, install_fake_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -170,6 +171,10 @@ async def test_the_throttle_reads_as_a_wait_not_as_a_failure(
     assert "clears itself" in detail, detail
     # …and it is still a 4xx that is not a credential refusal.
     assert r.status_code not in CREDENTIAL_STATUSES
+    # The route serves the shared sentence, so what layer 3 renders and
+    # what the operator gets are the same string by construction rather
+    # than by two people keeping a paraphrase up to date.
+    assert r.json()["detail"] == approval_throttled_detail()
 
 
 # ── layer 2: data.js decides which refusals open the modal ───────────
@@ -190,13 +195,21 @@ const run = async ({ status, detail }) => {
     ensurePaired() { pairCalls += 1; return Promise.resolve(true); },
     deviceToken() { return 'device'; },
   };
-  const fetch = async () => {
-    fetchCalls += 1;
+  // Two kinds of call go out on a refused mutation: the request itself
+  // (and its replay, if a sign-in happened) and ONE read-tier probe
+  // asking the server whether this device is blocked. They are counted
+  // apart so "was the code sent twice?" stays a question about the code.
+  let probeCalls = 0;
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/files/browse') >= 0) { probeCalls += 1; }
+    else { fetchCalls += 1; }
     const body = JSON.stringify({ detail });
     return { ok: false, status, statusText: 'Refused',
              text: async () => body, json: async () => JSON.parse(body) };
   };
-  const sandbox = { window: {}, console, fetch, Auth: auth, setTimeout, clearTimeout };
+  const sandbox = { window: {}, console, fetch, Auth: auth, setTimeout, clearTimeout,
+                    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+                    navigator: { userAgent: 'harness' } };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: 'data.js' });
@@ -209,7 +222,7 @@ const run = async ({ status, detail }) => {
              loginPrompted: !!e.loginPrompted, isAuthFailure: w.isAuthFailure(e),
              said: w.mutationErrorText(e, 'approve', { kept: false }),
              onlyDetail: w.apiErrorText(e), message: e.message,
-             requestLoginCalls, ensureCalls, pairCalls, fetchCalls };
+             requestLoginCalls, ensureCalls, pairCalls, fetchCalls, probeCalls };
   }
 };
 
@@ -251,6 +264,9 @@ def test_a_refusal_about_the_code_never_opens_the_sign_in(data_js, case: str):
     assert o["ensureCalls"] == 0, "data.js tried to sign the operator in again"
     assert o["pairCalls"] == 0
     assert o["fetchCalls"] == 1, "the code was sent twice, spending two of five tries"
+    assert o["probeCalls"] == 0, (
+        "a refusal that is already not a credential problem must not cost a "
+        "round trip asking whether this device is blocked")
     assert o["isAuthFailure"] is False
     assert o["nested"], "the server's own sentence never reached the caller"
 
@@ -262,6 +278,10 @@ def test_a_real_sign_in_problem_still_opens_the_sign_in(data_js):
     o = data_js["really_signed_out_401"]
     assert o["ensureCalls"] == 1, "no sign-in was offered for a real 401"
     assert o["fetchCalls"] == 2, "the request was not replayed after signing in"
+    # The cost of telling a device block from a credential refusal,
+    # stated rather than hidden: ONE read-tier GET, on the refusal path
+    # only, and never more than one.
+    assert o["probeCalls"] == 1
 
 
 def test_the_detail_is_reachable_without_the_status_line(data_js):
@@ -274,6 +294,134 @@ def test_the_detail_is_reachable_without_the_status_line(data_js):
     assert "422" not in o["onlyDetail"] and "{" not in o["onlyDetail"]
 
 
+# ── layer 2b: the refusal arrives WHOLE ──────────────────────────────
+#
+# The second half of the finding, and the one no test could see. The
+# core's throttle sentence is 433 characters and ends by naming the
+# third of three places the six digits can still be read; the dashboard
+# rendered it through a 400-character `slice`, so what Kamron actually
+# read ended "…and it is the code column of th" — mid-word, recovery
+# route gone, looking like a broken dashboard rather than like advice.
+#
+# Two rules come out of that, and both are executed here against the
+# REAL data.js: a place with room to wrap asks for no cap at all, and a
+# place that does have a size (a toast) stops at a word and says so.
+
+CLIP_HARNESS_JS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const dataSrc = fs.readFileSync(process.argv[2], 'utf8');
+const setupSrc = fs.readFileSync(process.argv[3], 'utf8');
+const cases = JSON.parse(process.argv[4]);
+
+const realBox = {
+  window: {}, console, setTimeout, clearTimeout,
+  fetch: async () => { throw new Error('no network here'); },
+  Auth: { headers: () => ({}) },
+  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  navigator: { userAgent: 'harness' },
+};
+realBox.globalThis = realBox;
+vm.createContext(realBox);
+vm.runInContext(dataSrc, realBox, { filename: 'data.js' });
+const real = realBox.window;
+
+// The layer-3 scenario's restatement, in a context of its own.
+const stubBox = { console, setTimeout, clearTimeout };
+stubBox.globalThis = stubBox;
+vm.createContext(stubBox);
+vm.runInContext(setupSrc, stubBox, { filename: 'setup.js' });
+
+const out = cases.map((c) => {
+  const e = { detail: { detail: c.text }, message: 'MESSAGE-FALLBACK' };
+  const call = (fn) => (c.max === 'omit' ? fn(e) : fn(e, c.max));
+  return {
+    name: c.name,
+    real: call(real.apiErrorText),
+    restated: call(stubBox.apiErrorText),
+  };
+});
+process.stdout.write(JSON.stringify(out));
+"""
+
+THROTTLE = approval_throttled_detail()
+
+CLIP_CASES = [
+    # The field: no cap, so nothing is lost however long the copy gets.
+    {"name": "field", "text": THROTTLE, "max": 0},
+    # A toast: a real size, so it clips — but at a word, with a mark.
+    {"name": "toast", "text": THROTTLE, "max": 160},
+    {"name": "default", "text": THROTTLE, "max": "omit"},
+    # Short enough to fit: untouched, no ellipsis bolted on.
+    {"name": "short", "text": "nothing pending for that room", "max": 160},
+    # A single word longer than the cap has no boundary to back up to.
+    {"name": "unbreakable", "text": "x" * 300, "max": 40},
+]
+
+
+@pytest.fixture(scope="module")
+def clipping(tmp_path_factory) -> dict:
+    node = shutil.which("node")
+    assert node, "node is required to exercise web/static/data.js (see jsxcheck)"
+    tmp = tmp_path_factory.mktemp("f051-clip")
+    harness = tmp / "clip.js"
+    harness.write_text(CLIP_HARNESS_JS, encoding="utf-8")
+    setup = tmp / "setup.js"
+    setup.write_text(SETUP, encoding="utf-8")
+    proc = subprocess.run(
+        [node, str(harness), str(DATA_JS), str(setup), json.dumps(CLIP_CASES)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return {row["name"]: row for row in json.loads(proc.stdout)}
+
+
+def test_the_throttle_sentence_is_not_clipped_where_it_is_read(clipping):
+    """The whole of it, character for character. This is the assertion
+    that fails the day somebody puts a number back in
+    ``approvalFieldError`` — or lengthens the core's sentence past a cap
+    somebody else chose."""
+    assert clipping["field"]["real"] == THROTTLE
+    assert len(clipping["field"]["real"]) == len(THROTTLE)
+
+
+def test_a_place_with_a_size_clips_at_a_word_and_says_so(clipping):
+    """A toast does have a width. Stopping mid-word there reads as a
+    crash; stopping at a word with an ellipsis reads as "there is more"."""
+    said = clipping["toast"]["real"]
+    assert said != THROTTLE and len(said) <= 160
+    assert said.endswith("…"), said
+    kept = said[:-1]
+    # Every word kept is a whole word of the original.
+    assert THROTTLE.startswith(kept), said
+    assert THROTTLE[len(kept)] in " ", (
+        f"clipped mid-word: ...{said[-30:]!r}")
+    # The default cap behaves the same way — nothing calls this with a
+    # number and gets a different rule.
+    assert clipping["default"]["real"] == said
+
+
+def test_text_that_already_fits_is_left_alone(clipping):
+    assert clipping["short"]["real"] == "nothing pending for that room"
+    assert "…" not in clipping["short"]["real"]
+
+
+def test_one_unbreakable_word_still_clips(clipping):
+    """No word boundary to back up to must not mean no clip at all —
+    that would put 300 characters through a 40-character hole."""
+    said = clipping["unbreakable"]["real"]
+    assert len(said) <= 40 and said.endswith("…")
+
+
+def test_the_restated_helpers_match_the_real_ones(clipping):
+    """Layer 3 restates ``apiErrorText`` because data.js cannot be loaded
+    beside the page's scripted data layer. A restatement that drifts is
+    how this bug hid — the old one turned "no cap" into 160 — so it is
+    compared with the real function rather than trusted."""
+    for name, row in clipping.items():
+        assert row["restated"] == row["real"], (name, row)
+
+
 # ── layer 3: the real Satellites page, driven ────────────────────────
 
 # `mutationErrorText` and `apiErrorText` live in data.js, which cannot be
@@ -282,11 +430,26 @@ def test_the_detail_is_reachable_without_the_status_line(data_js):
 # network. They are restated with their real precedence — nested detail
 # first, message second — and their real contract is pinned for real in
 # layer 2 and in test_web_auth_failure_toast.py.
+#
+# THE RESTATEMENT IS ITSELF TESTED. `test_the_restated_helpers_match_the
+# _real_ones` runs this source and the real data.js over the same inputs
+# and compares — because a restatement that drifts is how the clipping
+# bug hid: the old one said `slice(0, max || 160)`, which silently made
+# a request for "no cap" into a 160-character cap, and would have gone
+# on passing while the page cut the operator's advice in half.
 SETUP = r"""
+globalThis.clipSentence = (s, max) => {
+  const text = String(s);
+  if (!max || !Number.isFinite(max) || text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  const kept = space > Math.floor(max / 2) ? cut.slice(0, space) : cut;
+  return kept.replace(/[\s.,;:—-]+$/, '') + '…';
+};
 globalThis.apiErrorText = (e, max) => {
   const nested = e && e.detail && e.detail.detail;
   const text = (typeof nested === 'string' && nested) || (e && e.message) || String(e);
-  return String(text).slice(0, max || 160);
+  return clipSentence(text, max === undefined ? 160 : max);
 };
 globalThis.mutationErrorText = (e, verb, o) => {
   if (e && e.authCancelled) return (verb || 'Save') + ' cancelled — not signed in.';
@@ -307,9 +470,14 @@ FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx",
          "web/static/satellites.jsx"]
 
 TYPED = "000001"
+# The 429 is the REAL sentence, imported, not a stand-in. It used to be
+# a 68-character paraphrase, and that is exactly why nobody saw that the
+# dashboard was clipping the real 433-character one at 400 and handing
+# the operator "…it is the code column of th" (F-051). A scenario that
+# shortens the copy it is testing cannot see a length bug.
 SAID = {
     422: "that code does not match — check the six digits",
-    429: "that room has had its 5 tries for the moment — wait up to 300 seconds",
+    429: approval_throttled_detail(),
     409: "nothing pending for that room",
     502: "domovoi unreachable",
     401: "admin session required",
@@ -415,6 +583,22 @@ def test_a_refusal_about_the_code_lands_at_the_field(driven, case: str):
     # the copy, it owns the plumbing.
     assert said == SAID[CASE_STATUS[case]], said
     assert _toasts(after) == [], f"{case}: also shouted in a toast: {_toasts(after)}"
+
+
+def test_the_throttle_reaches_the_field_whole(driven):
+    """The finding, as one assertion, at the last layer: the REAL 433-
+    character sentence goes through the REAL page and comes out entire.
+
+    The three recovery routes are the point of the sentence; the branch
+    that introduced them also pushed it past a 400-character cap in the
+    renderer, and the third one — the row in the database — was the half
+    that fell off. `endswith` is not a copy assertion: it says the
+    sentence has an end."""
+    said = driven["throttled"]["after"]["alerts"][0]["text"]
+    assert len(said) == len(THROTTLE), (len(said), len(THROTTLE), said[-40:])
+    assert said == THROTTLE
+    assert said.endswith(THROTTLE.split()[-1]), said[-40:]
+    assert "…" not in said, "the field clipped a sentence it has room for"
 
 
 @pytest.mark.parametrize("case", ["wrong_code", "throttled", "nothing_pending"])

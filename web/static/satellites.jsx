@@ -1386,10 +1386,24 @@ const APPROVAL_REFUSALS = {
   409: { tone: 'err', marksTheCode: false },   // nothing pending / no code on file
   429: { tone: 'wait', marksTheCode: false },  // the room's budget, for now
 };
+/* NOT CLIPPED, and that is the whole point of the second argument.
+ *
+ * This text lands in a card that wraps, next to the box the operator is
+ * typing into; there is no width it has to fit. It used to be cut at
+ * 400 characters, which was longer than the refusals of the day and
+ * shorter than the throttle sentence that replaced them — so the 429
+ * arrived ending "…and it is the code column of th": mid-word, with the
+ * third of the three recovery routes gone, reading like a broken
+ * dashboard rather than like advice. A cap chosen to be "big enough"
+ * is a cap somebody's next sentence walks past without telling anyone.
+ *
+ * `apiErrorText`'s clipping is fixed too (it now stops at a word and
+ * says it was cut), because a toast still has a size. This one has
+ * none, so it asks for none. */
 const approvalFieldError = (e) => {
   const shape = APPROVAL_REFUSALS[(e && e.status) || 0];
   if (!shape) return null;
-  return { ...shape, text: apiErrorText(e, 400) };
+  return { ...shape, text: apiErrorText(e, 0) };
 };
 
 const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => {
@@ -1447,7 +1461,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
       </div>
       {error && (
         <div role="alert"
-             style={{ padding: '0 16px 10px', fontSize: 12,
+             style={{ padding: '0 16px 10px', fontSize: 12, lineHeight: 1.5,
                       color: error.tone === 'wait' ? 'var(--warn)' : 'var(--err)' }}>
           {error.text}
         </div>

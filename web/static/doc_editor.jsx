@@ -41,12 +41,18 @@ const DOC_TOOLBAR = [
   { icon: 'link', title: 'link', run: (ta) => _mdWrap(ta, '[', '](url)', 'text') },
 ];
 
-const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
+const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => {
   const [state, setState] = React.useState({ status: 'loading' });
   const [text, setText] = React.useState('');
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [preview, setPreview] = React.useState(false);
+  /* The Files page already knows whether this device may write and
+   * passes it in, so Save can be off before anybody presses it; a block
+   * applied while the editor is open still arrives as a refusal, and
+   * that lands here rather than as a password prompt. */
+  const [refused, setRefused] = React.useState(null);
+  const blocked = refused || blockedReason;
   const taRef = React.useRef(null);
 
   React.useEffect(() => {
@@ -84,9 +90,14 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
         method: 'PUT', body: JSON.stringify({ text }),
       });
       setDirty(false);
+      setRefused(null);
       fire && fire('Saved');
       return true;
     } catch (e) {
+      // An admin blocked this DEVICE: no password lifts that, so it is
+      // said here beside Save and left there, not thrown at a prompt.
+      const why = deviceBlockReason(e);
+      if (why) { setRefused(why); return false; }
       // A dismissed sign-in is not a broken endpoint: mutationErrorText
       // says "cancelled" for that (the text is still in the buffer) and
       // stays quiet while the prompt itself is on screen.
@@ -152,12 +163,17 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
         </Button>
         <Button icon="file-down" title="export as .docx" onClick={onExport}>Export</Button>
         {state.status === 'ready' && (
-          <Button variant="primary" icon="save" disabled={saving || !dirty} onClick={onSave}>
+          <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
+                  title={blocked || undefined} onClick={onSave}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
         )}
         <Button icon="x" onClick={requestClose}>Close</Button>
       </div>
+
+      <WriteBlockedNotice reason={blocked}>
+        {dirty ? ' Your changes are still here — copy them somewhere safe before closing.' : ''}
+      </WriteBlockedNotice>
 
       {!preview && state.status === 'ready' && (
         <div style={{ display: 'flex', gap: 2, padding: '6px 14px',

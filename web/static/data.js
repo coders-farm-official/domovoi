@@ -242,6 +242,67 @@ const _authHeaders = () => {
 const _isDeviceTokenRefusal = (status, text) => (
   (status === 401 || status === 403) && /x-device-token|device token/i.test(String(text || ''))
 );
+
+/* ── A device an admin BLOCKED, told apart from a missing credential ──
+ *
+ * An admin can block one device in Settings → Devices; the server then
+ * refuses that device's writes 403, with the block's own reason as the
+ * body. 403 is also what "sign in" looks like, so the retry below used
+ * to open the admin-password modal over the editor and replay the save.
+ * That is useless — the block is on the DEVICE and no password lifts it
+ * — and it is misleading, because being asked implies it would. The
+ * person whose tablet was deliberately blocked ends up typing the
+ * household's admin password to be refused a second time.
+ *
+ * It must not be fixed by matching words in the refusal: the sentence
+ * is copy, and copy moves. Ask the SERVER instead. /api/files/browse
+ * answers `writable` and `blocked_reason` for a named device on the
+ * READ tier (reading is never blocked), and both that field and the
+ * write refusal are rendered by the same function on the server — so a
+ * refusal whose body IS this device's blocked_reason is the block,
+ * however anyone rewords it later.
+ *
+ * Deliberately narrow. Anything else on 401/403 keeps the prompt it
+ * needs, including a DELETE refused for want of an admin bearer on a
+ * device that also happens to be blocked: delete is admin-gated and
+ * does not consult the block, so its refusal is a different sentence
+ * and this comparison says no. */
+const BLOCK_PROBE_LIBRARY = 'core:documents';
+
+// Raw fetch on purpose: apiFetch would come back through the retry
+// below and could open the very modal this exists to avoid.
+const _blockProbeReason = async () => {
+  try {
+    const id = DeviceIdentity.id();
+    if (!id) return null;
+    const r = await fetch(
+      `${API_BASE}/api/files/browse?library_id=${encodeURIComponent(BLOCK_PROBE_LIBRARY)}`
+      + `&path=&device_id=${encodeURIComponent(id)}`,
+      { credentials: 'include', headers: apiHeaders() },
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || j.writable !== false) return null;
+    return (typeof j.blocked_reason === 'string' && j.blocked_reason) ? j.blocked_reason : null;
+  } catch { return null; }
+};
+
+// The refused body as the server's own sentence (FastAPI wraps it in
+// {"detail": …}); null for a body that is not one.
+const _refusalDetail = (text) => {
+  try {
+    const j = JSON.parse(String(text || ''));
+    return typeof j.detail === 'string' ? j.detail : null;
+  } catch { return null; }
+};
+
+const _deviceBlockRefusal = async (text) => {
+  const said = _refusalDetail(text);
+  if (!said) return null;
+  const reason = await _blockProbeReason();
+  return (reason && said.indexOf(reason) === 0) ? reason : null;
+};
+
 // Before first-run setup the security tier (config write, service
 // restart, satellite code push, pairing changes) answers 501 rather than
 // letting the request through — the setup modal is the right prompt for
@@ -380,13 +441,17 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
   let signInDismissed = false;
   let text = null;
   let deviceRefusal = false;
+  let deviceBlock = null;
 
   if (_isAuthStatus(r.status)) {
     text = await r.text().catch(() => '');
     deviceRefusal = _isDeviceTokenRefusal(r.status, text);
+    // Only a mutation can be the block — reads are never blocked — and
+    // probing on every refused GET would cost a request per empty panel.
+    if (!deviceRefusal && _isMutation(method)) deviceBlock = await _deviceBlockRefusal(text);
   }
 
-  if (_isAuthStatus(r.status) && _isMutation(method) && _replayableBody(body)) {
+  if (_isAuthStatus(r.status) && !deviceBlock && _isMutation(method) && _replayableBody(body)) {
     promptedHere = true;
     const again = deviceRefusal ? _pairAgain(refusedDeviceToken) : _signInAgain(refusedToken);
     if (await again) { r = await send(); text = null; }
@@ -395,8 +460,10 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
 
   if (!r.ok) {
     if (text === null) text = await r.text().catch(() => '');
-    // Never re-open a modal we have just come back from — that is the loop.
-    if (!promptedHere) {
+    // Never re-open a modal we have just come back from — that is the
+    // loop. And never open one at all for a device block: no credential
+    // this dashboard can collect will lift it.
+    if (!promptedHere && !deviceBlock) {
       if (_isDeviceTokenRefusal(r.status, text)) _maybeRequestPairing();
       else _maybeRequestLogin(r.status);
     }
@@ -406,12 +473,17 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
     // dismissed the sign-in (or the pairing), they did not hit a broken
     // endpoint.
     if (signInDismissed) err.authCancelled = true;
+    // A refusal no password can lift. The caller renders it where the
+    // button was pressed; nothing here offered a sign-in for it, so it
+    // is NOT a loginPrompted failure and must not be swallowed as one.
+    if (deviceBlock) { err.deviceBlocked = true; err.blockedReason = deviceBlock; }
     // The login (or pair) modal was shown for THIS refusal (and, on a
     // mutation, dismissed) — see isAuthFailure. Deliberately false for a
     // 401 that came back against the fresh credential: no modal was
     // re-opened for it, so the caller's error toast is the only thing
     // the operator will see.
-    err.loginPrompted = signInDismissed || (!promptedHere && _isAuthStatus(r.status));
+    err.loginPrompted = signInDismissed
+      || (!promptedHere && !deviceBlock && _isAuthStatus(r.status));
     err.deviceTokenRequired = _isDeviceTokenRefusal(r.status, text);
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
@@ -464,14 +536,44 @@ const apiFetchRaw = (path, opts = {}) => {
  * `e.detail` directly renders "[object Object]" in a toast, which is how this
  * helper came to exist. Falls back to the message (which already carries
  * "<status> <statusText>: <body>") and finally to String(e). */
+/* Fit a sentence into somewhere that has a size, WITHOUT stopping
+ * mid-word.
+ *
+ * A refusal is advice, and the end of the advice is usually the part
+ * that says how to recover: the core's approval throttle finishes by
+ * naming the three places the six digits can still be read. A bare
+ * `slice(n)` cut that to "…it is the code column of th" in the
+ * operator's face — the recovery route lost, and a sentence stopping
+ * mid-word reads as a broken dashboard rather than as advice. So back
+ * up to the last word boundary and say plainly that it was cut.
+ *
+ * `max` falsy (0, null, Infinity) means DO NOT CLIP. That is the right
+ * answer wherever the text lands somewhere it can wrap — a card, a
+ * field error — and it is why this is a parameter rather than a
+ * constant: a toast has a size, a card does not. */
+const clipSentence = (s, max) => {
+  const text = String(s);
+  if (!max || !Number.isFinite(max) || text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  const kept = space > Math.floor(max / 2) ? cut.slice(0, space) : cut;
+  return kept.replace(/[\s.,;:—-]+$/, '') + '…';
+};
+
 const apiErrorText = (e, max = 160) => {
   const nested = e && e.detail && e.detail.detail;
   const text = (typeof nested === 'string' && nested)
     || (nested && JSON.stringify(nested))
     || (e && e.message)
     || String(e);
-  return String(text).slice(0, max);
+  return clipSentence(text, max);
 };
+
+/* The reason an admin's per-device block refused this write, or null.
+ * A caller that holds the operator's unsent work renders it beside the
+ * button rather than in a toast — the block is not transient and the
+ * sentence names the person's own device. */
+const deviceBlockReason = (e) => ((e && e.deviceBlocked && e.blockedReason) || null);
 
 /* True when the login modal already owns a rejected apiFetch: the request
  * was refused for want of a sign-in and the modal was shown for it. A
@@ -499,6 +601,13 @@ const isAuthFailure = (e) => !!(e && e.loginPrompted);
  *   * anything else — a real error, with the server's own detail rather
  *     than a bare status line. */
 const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
+  // An admin blocked this DEVICE. Say that, and say who can lift it —
+  // never "sign in", which is what a bare 403 used to become.
+  const blocked = deviceBlockReason(e);
+  if (blocked) {
+    return `${verb} refused — ${blocked}. An admin lifts the block in `
+      + `Settings → Devices.${kept ? ' Your changes are still here.' : ''}`;
+  }
   if (e && e.authCancelled) {
     const what = e.deviceTokenRequired ? 'this browser is not paired' : 'not signed in';
     // `kept` is for the callers that hold an editor buffer: the whole
@@ -992,7 +1101,7 @@ Object.assign(window, {
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
   stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
-  mutationErrorText,
+  mutationErrorText, deviceBlockReason, clipSentence,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

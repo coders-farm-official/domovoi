@@ -2052,6 +2052,40 @@ APPROVAL_CODE_LIMITER = SlidingWindowLimiter(
 )
 
 
+def approval_throttled_detail() -> str:
+    """The 429 an operator reads when a room has spent its tries.
+
+    A named function rather than an inline literal so a test can send
+    the REAL sentence through the dashboard's rendering path and check
+    that ALL of it arrives. The previous version of this text reached
+    the operator cut at "…it is the code column of th": the front end
+    clipped the refusal at 400 characters, this sentence grew past it,
+    and the half that was lost was the half naming the third place the
+    code can still be read. No test could see it, because the test fed
+    the component a 68-character stand-in of its own.
+
+    Never offer a power-cycle here (F-049). The code is pinned at BOTH
+    ends on purpose: the upsert in ``SatelliteApprovalRepository.request``
+    COALESCEs the code already on file, and the Pi replays its own from
+    ``~/.domovoi/approval_code``. Restarting the satellite — or
+    rejecting the row on the dashboard — therefore re-announces the SAME
+    six digits. What recovers a missed code is one of the three routes
+    named below.
+    """
+    return (
+        "that room has had its "
+        f"{APPROVAL_CODE_MAX_ATTEMPTS} tries for the moment — wait "
+        f"up to {int(APPROVAL_CODE_WINDOW_SEC)} seconds and type the "
+        "code again. Nothing is lost and nothing is banned: the "
+        "satellite is still waiting, and the count is kept in "
+        "memory, so the limit clears itself with no action from "
+        "anyone. The code does not change: the satellite says it "
+        "again on every retry, it is on the Pi in "
+        "~/.domovoi/approval_code, and it is the code column of "
+        "that room's satellite_approvals row"
+    )
+
+
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/approve",
     # Admin-tier: this is the decision that turns trust-on-first-use into a
@@ -2091,28 +2125,10 @@ async def admin_satellite_approve(
         )
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
-        # Never offer a power-cycle here (F-049). The code is pinned at
-        # BOTH ends on purpose: the upsert in
-        # SatelliteApprovalRepository.request COALESCEs the code already on
-        # file, and the Pi replays its own from ~/.domovoi/approval_code.
-        # Restarting the satellite — or rejecting the row on the dashboard
-        # — therefore re-announces the SAME six digits. What recovers a
-        # missed code is one of the three routes named below.
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                "that room has had its "
-                f"{APPROVAL_CODE_MAX_ATTEMPTS} tries for the moment — wait "
-                f"up to {int(APPROVAL_CODE_WINDOW_SEC)} seconds and type the "
-                "code again. Nothing is lost and nothing is banned: the "
-                "satellite is still waiting, and the count is kept in "
-                "memory, so the limit clears itself with no action from "
-                "anyone. The code does not change: the satellite says it "
-                "again on every retry, it is on the Pi in "
-                "~/.domovoi/approval_code, and it is the code column of "
-                "that room's satellite_approvals row"
-            ),
-        )
+        # The sentence, and why it says what it says, live on
+        # approval_throttled_detail() — one definition the dashboard's
+        # tests can send through the real rendering path.
+        raise HTTPException(status_code=429, detail=approval_throttled_detail())
     async with session_scope() as s:
         result = await SatelliteApprovalRepository(s).approve(room_id, code)
     if result == "not_pending":

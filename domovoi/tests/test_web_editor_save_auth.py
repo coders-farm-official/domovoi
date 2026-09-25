@@ -109,9 +109,20 @@ const run = async (scenario) => {
     },
     ensurePaired() { ensurePairedCalls += 1; return Promise.resolve(false); },
   };
+  let probeCalls = 0;
   const fetch = async (url, opts) => {
     const o = opts || {};
     const headers = o.headers || {};
+    // data.js asks the server whether this device is blocked before it
+    // reads a refused mutation as "sign in" (an admin's per-device file
+    // block is a 403 no password lifts). That probe is a read-tier GET
+    // answered here on its own, so it neither consumes a step of
+    // `sequence` nor lands in `calls` — this module is about the write.
+    if (String(url).indexOf('/api/files/browse') >= 0) {
+      probeCalls += 1;
+      const pb = '{"writable":true,"blocked_reason":null}';
+      return resp(200, pb);
+    }
     const status = sequence[Math.min(calls.length, sequence.length - 1)];
     calls.push({
       url: String(url),
@@ -165,7 +176,7 @@ const run = async (scenario) => {
       message: e.message,
     };
   }
-  return { ...outcome, calls, requestLoginCalls, requestPairingCalls,
+  return { ...outcome, calls, probeCalls, requestLoginCalls, requestPairingCalls,
            ensureLoggedInCalls, ensurePairedCalls,
            exports: { apiFetchRaw: typeof w.apiFetchRaw,
                       mutationErrorText: typeof w.mutationErrorText } };
@@ -230,6 +241,9 @@ def test_a_cookie_only_403_on_a_put_opens_the_login_and_replays(store):
     assert o["ensurePairedCalls"] == 0          # not the pairing modal
     assert o["requestLoginCalls"] == 0          # ...and never re-opened
     assert len(o["calls"]) == 2                 # refused, then replayed
+    # One read-tier probe on the refusal path: the price of not
+    # mistaking an admin's per-device block for a missing password.
+    assert o["probeCalls"] == 1
 
 
 def test_the_replay_carries_the_fresh_bearer_and_the_same_body(store):
