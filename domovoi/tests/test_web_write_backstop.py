@@ -159,15 +159,24 @@ def test_the_dashboard_sends_it_on_every_api_call() -> None:
 
 
 def test_the_raw_fetches_send_it_too() -> None:
-    """The handful of callers that build their own request (streamed
-    download, SSE chat, the auth surface) send the same header."""
+    """The callers that still build their own request — the editors'
+    no-store READS and the auth surface — send the same header.
+
+    Only reads are left here. Every hand-built MUTATION now goes through
+    apiFetch / apiUpload / apiFetchRaw, which carry the whole header set
+    AND the sign-in prompt and replay a raw fetch skipped (see
+    test_web_editor_save_auth.py). chat.jsx is the one that moved: its
+    streamed send is apiFetchRaw now, so it builds nothing itself."""
     static = REPO_ROOT / "web" / "static"
     auth_js = (static / "auth.js").read_text(encoding="utf-8")
     # Login / setup / password change, and logout.
     assert auth_js.count("'X-Requested-With': 'XMLHttpRequest'") == 2
-    for name in ("chat.jsx", "files.jsx", "doc_editor.jsx", "sheet_editor.jsx"):
+    for name in ("files.jsx", "doc_editor.jsx", "sheet_editor.jsx"):
         source = (static / name).read_text(encoding="utf-8")
         assert "apiHeaders()" in source, name
+    chat = (static / "chat.jsx").read_text(encoding="utf-8")
+    assert "apiFetchRaw(" in chat
+    assert "apiHeaders()" not in chat
 
 
 def test_the_android_app_sends_it() -> None:

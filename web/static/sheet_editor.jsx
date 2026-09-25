@@ -112,13 +112,21 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
       });
       setDirty(false);
       fire && fire('Saved');
+      return true;
     } catch (e) {
-      fire && fire(`Save failed: ${String(e.message || e).slice(0, 80)}`);
+      // Same contract as the doc editor: a dismissed sign-in reads as
+      // cancelled (the grid is untouched), and the prompt speaks for
+      // itself while it is up.
+      const msg = mutationErrorText(e);
+      if (msg && fire) fire(msg);
+      return false;
     } finally { setSaving(false); }
   };
 
   const onExport = async (fmt) => {
-    if (dirty) await onSave();
+    // A refused or cancelled save must not be followed by a download of
+    // the stale server-side file.
+    if (dirty && !(await onSave())) return;
     const a = document.createElement('a');
     a.href = withDeviceToken(
       `${API_BASE}/api/documents/export/sheet/${encodeURIComponent(rel_path)}?fmt=${fmt}`);

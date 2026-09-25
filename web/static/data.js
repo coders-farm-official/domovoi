@@ -366,7 +366,13 @@ const _maybeRequestPairing = () => {
 // household token is stored; any other 401/403 opens the admin login
 // and replays once a fresh bearer exists. The replay is the only reason
 // a refused response body is read before the error is built.
-const _sendWithAuthRetry = async (send, { method, body } = {}) => {
+//
+// `raw` hands the Response back instead of the parsed JSON, for the
+// callers that must read the body themselves (a streamed download with a
+// progress bar, an SSE reply that fills in live). They used to call
+// fetch() directly and got none of this: no prompt, no replay, and a
+// thrown "403 Forbidden" with the reason discarded.
+const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
   const refusedToken = _authToken();
   const refusedDeviceToken = _deviceToken();
   let r = await send();
@@ -410,6 +416,7 @@ const _sendWithAuthRetry = async (send, { method, body } = {}) => {
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
   }
+  if (raw) return r;
   if (r.status === 204) return null;
   return r.json();
 };
@@ -426,6 +433,28 @@ const apiFetch = (path, opts = {}) => {
     },
   });
   return _sendWithAuthRetry(send, { method: opts.method, body: opts.body });
+};
+
+/* apiFetch's raw-Response twin, for the calls that read the body
+ * themselves: a zip streamed so a progress bar can move, an SSE reply
+ * rendered token by token. Same headers, same 401/403 prompt, same
+ * replay, same error object — it just hands back the Response rather
+ * than parsed JSON, and leaves Content-Type to the caller (a multipart
+ * body must not have one).
+ *
+ * The rule this exists to make keepable: EVERY mutation in this
+ * dashboard goes through apiFetch, apiUpload or apiFetchRaw. A raw
+ * fetch() sends the right headers but skips the retry, so a refused save
+ * on a browser whose in-memory bearer is gone dies with no prompt and no
+ * replay, taking the operator's typing with it. */
+const apiFetchRaw = (path, opts = {}) => {
+  const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+  const send = () => fetch(url, {
+    credentials: 'include',
+    ...opts,
+    headers: { ...apiHeaders(), ...(opts.headers || {}) },
+  });
+  return _sendWithAuthRetry(send, { method: opts.method, body: opts.body, raw: true });
 };
 
 /* The human-readable half of a rejected apiFetch.
@@ -455,6 +484,31 @@ const apiErrorText = (e, max = 160) => {
  * refused too): that is a real bug — a web→core hop dropping credentials,
  * say — no modal was re-opened for it, and the visible error belongs. */
 const isAuthFailure = (e) => !!(e && e.loginPrompted);
+
+/* What an editor should say when a save (or any other mutation that holds
+ * the operator's unsent work) was refused. Returns null for "say nothing".
+ *
+ * Three outcomes, and only the third is a failure:
+ *   * the sign-in (or pairing) prompt was shown and DISMISSED —
+ *     `authCancelled`. Nothing broke and nothing was lost: the request was
+ *     never authorised, so say cancelled, and say the work is still here.
+ *     Reporting "Save failed: 403 …" for this is how the editor came to
+ *     look broken when the operator simply changed their mind.
+ *   * the prompt owns the story and is still on screen (`isAuthFailure`) —
+ *     stay quiet, the modal IS the message (F-006).
+ *   * anything else — a real error, with the server's own detail rather
+ *     than a bare status line. */
+const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
+  if (e && e.authCancelled) {
+    const what = e.deviceTokenRequired ? 'this browser is not paired' : 'not signed in';
+    // `kept` is for the callers that hold an editor buffer: the whole
+    // point of saying cancelled is that the typing is still on screen.
+    // A page action that had nothing to keep passes kept: false.
+    return `${verb} cancelled — ${what}.${kept ? ' Your changes are still here.' : ''}`;
+  }
+  if (isAuthFailure(e)) return null;
+  return `${verb} failed: ${apiErrorText(e, 120)}`;
+};
 
 const apiGet = (path) => apiFetch(path);
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
@@ -935,8 +989,10 @@ const liveRelTime = (iso) => {
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
+  apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
   stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
+  mutationErrorText,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

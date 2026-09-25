@@ -40,8 +40,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -265,12 +267,83 @@ _WIFI_SCAN_POLL_SEC = 1.0
 # Between join attempts. Three back-to-back identical attempts fail
 # identically; a pause lets NetworkManager's state settle.
 _WIFI_RETRY_PAUSE_SEC = 2.0
+# One radio, always wlan0 — the wpa_supplicant path below has said so since
+# the beginning, and `nmcli connection add` wants the interface named.
+_WIFI_IFACE = "wlan0"
+
+# The two `wifi-sec.key-mgmt` values a home network with a passphrase can
+# want. `wpa-psk` covers WPA2 and WPA2/WPA3 mixed; `sae` is WPA3-only.
+_KEY_MGMT_PSK = "wpa-psk"
+_KEY_MGMT_SAE = "sae"
+# Lowercased fragments of an nmcli failure that mean the join REACHED
+# activation and the AP would not have us — the only kind of failure where
+# trying the other key-mgmt can possibly help. An AP that is not there, or a
+# radio that is not usable, says something else and gets no second attempt.
+_ACTIVATION_FAILURE_MARKERS = (
+    "activation failed",
+    "secrets were required",
+    "no secrets",
+    "authentication",
+)
+_PSK_PLACEHOLDER = "<psk>"
+
+
+def _split_terse(line: str) -> list[str]:
+    """Split one ``nmcli -t`` row into its fields.
+
+    nmcli escapes a colon inside a value as ``\\:``, so splitting on every
+    colon turns ``Guest\\:5G:WPA2`` into three fields and the wrong answer.
+    """
+    fields: list[str] = []
+    cur: list[str] = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and i + 1 < len(line):
+            cur.append(line[i + 1])
+            i += 2
+            continue
+        if ch == ":":
+            fields.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    fields.append("".join(cur))
+    return fields
+
+
+def _scrub(text: str, psk: str) -> str:
+    """The passphrase never leaves this module — not even inside a message
+    another tool handed back to us.
+
+    nmcli normally says nothing about the value of ``wifi-sec.psk``, but
+    "normally" is not a promise we can make to the customer: the error text
+    goes into a log line and onto the setup page, and those are the two
+    places a CORRECT password must never appear.
+    """
+    if psk and len(psk) >= 4 and psk in text:
+        return text.replace(psk, _PSK_PLACEHOLDER)
+    return text
+
+
+def _nmcli_detail(r, psk: str) -> str:
+    """nmcli's own last word about a failure, scrubbed. Empty when it said
+    nothing at all."""
+    out = r.stderr or r.stdout or ""
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    out = _scrub(out, psk).strip()
+    return out.splitlines()[-1].strip() if out else ""
 
 
 def _wait_for_ssid(
     nmcli: str, ssid: str, run, timeout: float, sleep=time.sleep
-) -> bool:
-    """Rescan until NetworkManager can see ``ssid``, or give up.
+) -> tuple[bool, str | None]:
+    """Rescan until NetworkManager can see ``ssid``, or give up. Returns
+    ``(visible, security)`` — the AP's advertised SECURITY field, or None
+    when we never saw it.
 
     Found on hardware, reliably: the first join ALWAYS failed and the second
     always worked, same password pasted both times. The join ran the instant
@@ -279,26 +352,319 @@ def _wait_for_ssid(
     scanning. `nmcli device wifi connect` refuses an SSID it cannot see, and
     the retries that followed were back-to-back with no rescan, so all three
     failed the same way. By the customer's second submission NM had scanned.
+
+    The join no longer DEPENDS on this scan (see :func:`_nmcli_join`) — but
+    the SECURITY field is still the only way to know WPA2 from WPA3-only
+    without guessing, so it is worth the same wait it always was. An AP that
+    answers on both bands contributes both rows' flags.
     """
     deadline = time.monotonic() + timeout
     while True:
         try:
             r = run(
-                [nmcli, "-t", "-f", "SSID", "device", "wifi", "list", "--rescan", "yes"],
+                [nmcli, "-t", "-f", "SSID,SECURITY", "device", "wifi",
+                 "list", "--rescan", "yes"],
                 capture_output=True, text=True, timeout=20,
             )
         except (OSError, subprocess.TimeoutExpired):
             r = None
         if r is not None and r.returncode == 0:
-            seen = {
-                ln.replace("\\:", ":").strip()
-                for ln in (r.stdout or "").splitlines()
-            }
-            if ssid in seen:
-                return True
+            flags: list[str] = []
+            found = False
+            for ln in (r.stdout or "").splitlines():
+                row = _split_terse(ln.strip())
+                if row and row[0].strip() == ssid:
+                    found = True
+                    if len(row) > 1:
+                        flags.append(row[1].strip())
+            if found:
+                return True, " ".join(f for f in flags if f) or None
         if time.monotonic() >= deadline:
-            return False
+            return False, None
         sleep(_WIFI_SCAN_POLL_SEC)
+
+
+def _key_mgmt_candidates(security: str | None) -> list[str]:
+    """Which ``wifi-sec.key-mgmt`` values to try, best first.
+
+    From the scan when there is one. When there is NOT — the blind join this
+    whole path exists to survive — the order is ``wpa-psk`` then ``sae``,
+    because WPA2 and WPA2/WPA3-mixed are what nearly every home AP
+    advertises and ``wpa-psk`` is the single value that joins both of them,
+    while ``sae`` joins only an AP that offers SAE. Getting it wrong costs
+    one extra attempt, never a failure the customer sees.
+
+    An AP the scan says is WPA3 with no WPA2 alongside it gets ``sae`` first
+    — and ``wpa-psk`` still queued behind it, because a scan row read
+    through one rescan of a radio just out of AP mode is evidence, not
+    proof.
+    """
+    tokens = set((security or "").upper().replace(",", " ").split())
+    sae = bool(tokens & {"WPA3", "SAE"})
+    psk = bool(tokens & {"WPA", "WPA1", "WPA2", "PSK", "WPA-PSK"})
+    if sae and not psk:
+        return [_KEY_MGMT_SAE, _KEY_MGMT_PSK]
+    return [_KEY_MGMT_PSK, _KEY_MGMT_SAE]
+
+
+_ADDED_UUID = re.compile(r"\(([0-9a-fA-F-]{36})\)")
+
+
+def _uuid_from_add(proc) -> str | None:
+    """The UUID ``nmcli connection add`` just printed, or ``None``.
+
+    nmcli answers a successful add with
+    ``Connection '<name>' (<uuid>) successfully added.`` — the only
+    identifier that names the profile WE built rather than one that
+    merely shares its SSID or its name. Everything else is a guess:
+    activating by ``id <ssid>`` resolves by connection NAME, so if a
+    stale profile survived the delete pass (root refused it, NM was mid
+    reload, it was created by something else) nmcli can bring up the
+    broken one and hand the customer back the exact
+    ``key-mgmt: property is missing`` this whole change exists to remove.
+    """
+    # The add call is not text-mode (the PSK is on its argv and we keep
+    # every nmcli invocation uniform), so stdout arrives as bytes here and
+    # as str from a text-mode caller. Handle both rather than assuming.
+    out = getattr(proc, "stdout", "") or ""
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    m = _ADDED_UUID.search(out)
+    return m.group(1) if m else None
+
+def _wifi_profiles_for_ssid(nmcli: str, ssid: str, run) -> list[str]:
+    """UUIDs of every saved Wi-Fi profile whose SSID is ``ssid``.
+
+    Matched on the ssid PROPERTY rather than the profile's name, because
+    that is what NetworkManager itself matches on when it decides to reuse a
+    profile: ``Kamber Wifi 2.0 1`` carries the same ssid as
+    ``Kamber Wifi 2.0`` and is just as able to break the next attempt.
+    """
+    try:
+        r = run(
+            [nmcli, "-t", "-f", "UUID,TYPE", "connection", "show"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode != 0:
+        return []
+    wifi_uuids = []
+    for ln in (r.stdout or "").splitlines():
+        row = _split_terse(ln.strip())
+        if len(row) >= 2 and row[1] in ("802-11-wireless", "wifi") and row[0]:
+            wifi_uuids.append(row[0])
+    matches = []
+    for uuid in wifi_uuids:
+        try:
+            g = run(
+                [nmcli, "-t", "-f", "802-11-wireless.ssid", "connection",
+                 "show", "uuid", uuid],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if g.returncode != 0:
+            continue
+        for ln in (g.stdout or "").splitlines():
+            row = _split_terse(ln.strip())
+            if len(row) >= 2 and row[0].strip() == "802-11-wireless.ssid":
+                if row[1].strip() == ssid:
+                    matches.append(uuid)
+                break
+    return matches
+
+
+def _delete_wifi_profiles(nmcli: str, uuids: list[str], run) -> None:
+    """Best-effort removal. A profile we could not delete is reported by the
+    join that follows, in nmcli's words, not guessed at here."""
+    for uuid in uuids:
+        try:
+            run(
+                [nmcli, "connection", "delete", "uuid", uuid],
+                capture_output=True, timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def _nmcli_join(
+    nmcli: str,
+    ssid: str,
+    psk: str,
+    hidden: bool,
+    timeout: float,
+    run,
+    security: str | None,
+) -> tuple[bool, str | None]:
+    """Build the connection profile ourselves, then bring it up.
+
+    The old form — ``nmcli device wifi connect <ssid> password <psk>`` —
+    asks NetworkManager to INFER the security type from a recent scan of
+    that AP. Joining blind, which is exactly what happens when wlan0 has
+    spent the last minute HOSTING the setup AP rather than scanning, leaves
+    nothing to infer from: NM writes a profile carrying a PSK and no
+    key-mgmt, and activation dies on ``802-11-wireless-security.key-mgmt:
+    property is missing`` while the customer stares at a password they typed
+    correctly. Naming key-mgmt ourselves deletes the inference, and with it
+    the dependency on a scan that may never have happened.
+
+    Each candidate key-mgmt starts from a profile WE made this second: see
+    :func:`_wifi_profiles_for_ssid` for why inheriting one is what made
+    every retry fail identically.
+    """
+    first_err: str | None = None
+    tried = False
+    for km in _key_mgmt_candidates(security):
+        # Whatever an earlier attempt left behind goes first — an earlier
+        # submission's half-made profile, or the previous candidate's.
+        # `nmcli device wifi connect` REUSED a matching saved profile, so
+        # one broken profile made every later attempt fail the same way no
+        # matter what was re-typed; and each fresh one is how
+        # `Kamber Wifi 2.0 1`, `... 2` pile up.
+        _delete_wifi_profiles(
+            nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run
+        )
+        add = [
+            nmcli, "connection", "add", "type", "wifi",
+            "con-name", ssid, "ifname", _WIFI_IFACE, "ssid", ssid,
+            "connection.autoconnect", "yes",
+            "wifi-sec.key-mgmt", km,
+            "wifi-sec.psk", psk,
+        ]
+        if hidden:
+            # A hidden AP is in no scan by definition, so the profile has to
+            # say so or NM never probes for it. Same inference hole as the
+            # visible case, same explicit answer.
+            add += ["802-11-wireless.hidden", "yes"]
+        tried = True
+        try:
+            r = run(add, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Never re-raise: the argv of that call holds the passphrase and
+            # TimeoutExpired stringifies the command it was given.
+            return False, f"wifi join timed out for {ssid!r}"
+        except OSError:
+            return False, (
+                f"wifi join failed for {ssid!r}: NetworkManager is not answering"
+            )
+        if r.returncode != 0:
+            detail = _nmcli_detail(r, psk)
+            log.warning(
+                "nmcli profile for %r could not be created (rc=%d): %s",
+                ssid, r.returncode, detail,
+            )
+            return False, (
+                f"wifi setup failed for {ssid!r}: "
+                f"{detail or 'the connection could not be created'}"
+            )
+
+        # Activate THE PROFILE WE JUST MADE, by the uuid nmcli printed for
+        # it. Re-deriving it from a fresh listing and falling back to
+        # `id <ssid>` when the listing is ambiguous was wrong in exactly
+        # the case this function exists for: `id` resolves by connection
+        # NAME, so a stale profile that survived the delete pass gets
+        # activated instead and the customer sees the original error again.
+        uuid = _uuid_from_add(r)
+        if uuid is None:
+            # An nmcli whose add output we cannot parse. One saved profile
+            # for this ssid can only be the one just added, so use it;
+            # more than one means we cannot tell ours from the leftover,
+            # and guessing is what we are here to stop doing.
+            uuids = _wifi_profiles_for_ssid(nmcli, ssid, run)
+            if len(uuids) != 1:
+                log.warning(
+                    "nmcli did not name the profile it created for %r and "
+                    "%d saved profiles carry that ssid - refusing to guess "
+                    "which one to bring up", ssid, len(uuids),
+                )
+                return False, (
+                    f"wifi setup failed for {ssid!r}: the connection could "
+                    f"not be identified after it was created"
+                )
+            uuid = uuids[0]
+        up = [nmcli, "connection", "up", "uuid", uuid]
+        try:
+            r = run(up, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, f"wifi join timed out for {ssid!r}"
+        except OSError:
+            return False, (
+                f"wifi join failed for {ssid!r}: NetworkManager is not answering"
+            )
+        if r.returncode == 0:
+            return True, None
+        # Keep nmcli's own words. Reporting every failure as "wrong
+        # password?" hid a scan-cache problem behind a message that sent
+        # people re-typing a password that was right the first time.
+        detail = _nmcli_detail(r, psk)
+        log.warning(
+            "nmcli join of %r as %s failed (rc=%d): %s",
+            ssid, km, r.returncode, detail,
+        )
+        if first_err is None:
+            # The FIRST candidate's reason is the one the customer gets:
+            # wpa-psk is what their AP almost certainly speaks, so "secrets
+            # were required" from that attempt is the true story, and the
+            # sae attempt behind it is our business, not theirs.
+            first_err = f"wifi join failed for {ssid!r}: {detail or 'wrong password?'}"
+        if not any(m in detail.lower() for m in _ACTIVATION_FAILURE_MARKERS):
+            break
+    if tried:
+        # Don't leave a profile that cannot associate sitting there with
+        # autoconnect on: the next attempt would delete it anyway, and
+        # nothing else on the device wants it.
+        _delete_wifi_profiles(
+            nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run
+        )
+    return False, first_err or f"wifi join failed for {ssid!r}"
+
+
+def _wpa_conf_drop_ssid(ssid: str) -> int:
+    """Remove any ``network={...}`` block this code wrote for ``ssid``
+    before, and say how many went. Rewrites nothing when there are none.
+
+    Same reason the nmcli path replaces its profile: a retry must not
+    inherit a half-made attempt, and three submissions must not leave three
+    blocks for one network — wpa_supplicant takes the first one it likes and
+    the file grows with every try.
+    """
+    conf = WPA_SUPPLICANT_CONF
+    want = f"ssid={ssid.encode('utf-8').hex()}"
+    try:
+        lines = conf.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return 0
+    kept: list[str] = []
+    dropped = 0
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() != "network={":
+            kept.append(lines[i])
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].strip() != "}":
+            j += 1
+        block = lines[i:min(j + 1, len(lines))]
+        if any(ln.strip() == want for ln in block):
+            dropped += 1
+            # The blank line we wrote in front of it goes with it.
+            while kept and not kept[-1].strip():
+                kept.pop()
+        else:
+            kept.extend(block)
+        i = j + 1
+    if not dropped:
+        return 0
+    tmp = conf.with_name(conf.name + ".domovoi.tmp")
+    tmp.write_text("".join(kept), encoding="utf-8")
+    try:
+        os.chmod(tmp, stat.S_IMODE(os.stat(conf).st_mode))
+    except OSError:
+        pass
+    os.replace(tmp, conf)
+    return dropped
 
 
 def apply_wifi(
@@ -311,11 +677,17 @@ def apply_wifi(
 ) -> tuple[bool, str | None]:
     """Join the network and verify reachability. (ok, error). The PSK is
     passed via argv to nmcli (process args are root-only readable here) and
-    NEVER logged — errors mention the ssid only.
+    NEVER logged — errors mention the ssid only, and any text nmcli hands
+    back is scrubbed before it reaches a log line or the setup page.
 
     The network name is checked first, on both paths: it lands in a
     root-owned network configuration, and a name with a newline, a quote
-    or a brace in it is refused rather than written."""
+    or a brace in it is refused rather than written.
+
+    Neither path infers anything: the nmcli profile names its own
+    ``wifi-sec.key-mgmt`` (:func:`_nmcli_join`) and the wpa_supplicant block
+    names its own ``psk=``. An open network has no passphrase and
+    ``validate_wifi_psk`` refuses one, so there is nothing here for it."""
     try:
         proto.validate_wifi_ssid(ssid)
     except proto.ProvisionInvalid as e:
@@ -324,31 +696,21 @@ def apply_wifi(
         run(["iw", "reg", "set", country], capture_output=True, timeout=15)
     nmcli = shutil.which("nmcli")
     if nmcli:
-        # A hidden network never appears in a scan; everything else must be
-        # visible before `connect` has any chance.
-        if not hidden and not _wait_for_ssid(nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC):
-            log.warning(
-                "%r not visible after %.0fs of scanning - trying to join anyway",
-                ssid, _WIFI_SCAN_WAIT_SEC,
+        # A hidden network never appears in a scan. For everything else the
+        # scan is still worth waiting for — it says WPA2 or WPA3 and saves an
+        # attempt — but the join below no longer NEEDS it to have worked.
+        security: str | None = None
+        if not hidden:
+            visible, security = _wait_for_ssid(
+                nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC
             )
-        cmd = [nmcli, "device", "wifi", "connect", ssid, "password", psk]
-        if hidden:
-            cmd += ["hidden", "yes"]
-        try:
-            r = run(cmd, capture_output=True, timeout=timeout)
-            if r.returncode == 0:
-                return True, None
-            # Keep nmcli's own words. Reporting every failure as "wrong
-            # password?" hid a scan-cache problem behind a message that sent
-            # people re-typing a password that was right the first time.
-            detail = r.stderr or r.stdout or b""
-            if isinstance(detail, bytes):
-                detail = detail.decode("utf-8", "replace")
-            detail = detail.strip().splitlines()[-1].strip() if detail.strip() else ""
-            log.warning("nmcli connect %r failed (rc=%d): %s", ssid, r.returncode, detail)
-            return False, f"wifi join failed for {ssid!r}: {detail or 'wrong password?'}"
-        except subprocess.TimeoutExpired:
-            return False, f"wifi join timed out for {ssid!r}"
+            if not visible:
+                log.warning(
+                    "%r not visible after %.0fs of scanning - joining blind "
+                    "with an explicit security type",
+                    ssid, _WIFI_SCAN_WAIT_SEC,
+                )
+        return _nmcli_join(nmcli, ssid, psk, hidden, timeout, run, security)
     # wpa_supplicant fallback: append a network block of our own making
     # (ssid= as hex, psk= as the derived key, no passphrase comment) and
     # reconfigure. Built in Python rather than taken from wpa_passphrase,
@@ -359,6 +721,8 @@ def apply_wifi(
     except proto.ProvisionInvalid as e:
         return False, f"wifi credentials refused: {e}"
     try:
+        # A retry replaces its predecessor rather than stacking behind it.
+        _wpa_conf_drop_ssid(ssid)
         with open(WPA_SUPPLICANT_CONF, "a", encoding="utf-8") as f:
             f.write("\n" + block)
         run(["wpa_cli", "-i", "wlan0", "reconfigure"], capture_output=True, timeout=30)

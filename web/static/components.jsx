@@ -358,10 +358,19 @@ const useToast = () => {
     const ttl = Math.min(12000, 2400 + text.length * 35);
     setTimeout(() => dismiss(id), ttl);
   };
+  /* z-index 110 — ABOVE every layer in the ladder styles.css states
+   * (overlays 80, files modal 90, modals 100). At 60 it sat UNDER the
+   * full-screen editor overlays, which are opaque: every "Saved" and
+   * every "Save failed" fired from inside the document, spreadsheet or
+   * whiteboard editor was painted behind the thing that fired it, so the
+   * editor looked like it had done nothing at all. A toast reports what
+   * just happened to the surface the operator is looking at, so it has to
+   * clear whatever that surface is — the same argument that raised
+   * .cal-modal-bg from 30 to 100. */
   const node = items.length > 0 && (
     <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
-                  gap: 8, zIndex: 60, maxWidth: 'min(90vw, 560px)' }}>
+                  gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (
         <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
              style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
