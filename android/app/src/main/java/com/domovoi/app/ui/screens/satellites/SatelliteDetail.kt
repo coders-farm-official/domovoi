@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
@@ -82,54 +83,8 @@ fun SatelliteDetail(
         border = BorderStroke(1.dp, Domovoi.colors.border),
     ) {
         Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                StatusDot(if (s.online) Tone.Ok else Tone.Idle, live = s.online)
-                Text(
-                    s.room_id,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Domovoi.colors.fg,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Pill(s.status ?: "offline", if (s.online) Tone.Brand else Tone.Idle, live = s.online)
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Filled.Close, contentDescription = "close", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            HorizontalDivider(color = Domovoi.colors.borderSoft)
-
-            Row(Modifier.fillMaxWidth()) {
-                SatTab.entries.forEach { t ->
-                    val selected = t == tab
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { tab = t }
-                            .padding(vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Icon(
-                            t.icon,
-                            contentDescription = t.label,
-                            tint = if (selected) Domovoi.colors.brand else Domovoi.colors.fgMuted,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Box(
-                            Modifier
-                                .padding(top = 6.dp)
-                                .width(18.dp)
-                                .height(2.dp)
-                                .background(if (selected) Domovoi.colors.brand else Color.Transparent),
-                        )
-                    }
-                }
-            }
-            HorizontalDivider(color = Domovoi.colors.borderSoft)
+            CardHeader(s, onClose)
+            CardTabStrip(tab) { tab = it }
 
             Column(
                 Modifier
@@ -149,6 +104,90 @@ fun SatelliteDetail(
             }
         }
     }
+}
+
+/**
+ * The detail card's own title row — and nothing at all in a window the
+ * keyboard has left too short for it.
+ *
+ * Measured on a landscape phone (1080px tall, IME top 394): the card gets
+ * y=116..394, this header takes 129px of it and [CardTabStrip] another 126,
+ * so the tab CONTENT — where every field on this card lives — was left 11px.
+ * With the keyboard up on the overview tab the whole uiautomator dump
+ * contained NO EditText at all: the announce field, the one control in this
+ * app that makes a speaker in the house talk out loud, was simply not on
+ * screen while you typed into it, and neither was 'send'.
+ *
+ * Nothing important is lost: the room name this row shows is repeated by the
+ * field's own label ("announce to kitchen"), and the close button comes back
+ * the instant the keyboard closes. In portrait (578dp left) it never goes.
+ *
+ * A leaf so the `keyboardCrowdsTheWindow()` read — snapshot state that moves
+ * on every frame of the IME animation — cannot invalidate the card body.
+ */
+@Composable
+private fun CardHeader(s: Satellite, onClose: () -> Unit) {
+    if (keyboardCrowdsTheWindow()) return
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        StatusDot(if (s.online) Tone.Ok else Tone.Idle, live = s.online)
+        Text(
+            s.room_id,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Domovoi.colors.fg,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Pill(s.status ?: "offline", if (s.online) Tone.Brand else Tone.Idle, live = s.online)
+        IconButton(onClick = onClose) {
+            Icon(Icons.Filled.Close, contentDescription = "close", tint = Domovoi.colors.fgMuted)
+        }
+    }
+    HorizontalDivider(color = Domovoi.colors.borderSoft)
+}
+
+/**
+ * The seven icon tabs — and nothing at all in a crowded window. See
+ * [CardHeader] for the measurement; this row is the other 126px.
+ *
+ * Switching tab is not something anyone does mid-word: you are typing into
+ * the tab you already chose, and the strip is back before you can reach for
+ * it. Dropping it is what buys the field its pixels.
+ */
+@Composable
+private fun CardTabStrip(tab: SatTab, onTab: (SatTab) -> Unit) {
+    if (keyboardCrowdsTheWindow()) return
+    Row(Modifier.fillMaxWidth()) {
+        SatTab.entries.forEach { t ->
+            val selected = t == tab
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onTab(t) }
+                    .padding(vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    t.icon,
+                    contentDescription = t.label,
+                    tint = if (selected) Domovoi.colors.brand else Domovoi.colors.fgMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+                Box(
+                    Modifier
+                        .padding(top = 6.dp)
+                        .width(18.dp)
+                        .height(2.dp)
+                        .background(if (selected) Domovoi.colors.brand else Color.Transparent),
+                )
+            }
+        }
+    }
+    HorizontalDivider(color = Domovoi.colors.borderSoft)
 }
 
 /** Simple non-experimental dropdown used by the drop-in peer picker and the

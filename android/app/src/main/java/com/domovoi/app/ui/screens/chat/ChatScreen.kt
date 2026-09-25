@@ -61,6 +61,7 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PageHeader
+import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.Dispatchers
@@ -344,10 +345,41 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     // full height and nothing re-ran after the shrink. viewportEndOffset is
     // the settled fact — it changes once per animation frame and the LAST
     // change is the one that re-pins.
+    //
+    // But re-pinning on EVERY viewport change throws away the reader's place:
+    // scroll back through a thread to re-read something, tap the composer, and
+    // the list yanks to the newest message; closing the keyboard yanked it
+    // again, because growth emits the same way a shrink does. So two guards,
+    // and they need each other:
+    //
+    //  * SHRINK ONLY. `end < lastEnd` is the keyboard taking space away. A
+    //    growth (the keyboard leaving, a rotation) restores space the list can
+    //    render into on its own and must not move the reader.
+    //  * ONLY IF THEY WERE ALREADY AT THE NEWEST MESSAGE — decided BEFORE the
+    //    shrink, never after. The tail slides out of view as part of the
+    //    shrink, so asking "is the last item visible?" once the viewport has
+    //    already changed always answers no and would make the pin inert. The
+    //    emissions where viewportEndOffset did NOT change are the reader's own
+    //    scrolling; those, and only those, update the flag.
     LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.viewportEndOffset }
+        var lastEnd = listState.layoutInfo.viewportEndOffset
+        var readerAtNewest = true
+        snapshotFlow {
+            val info = listState.layoutInfo
+            info.viewportEndOffset to (info.visibleItemsInfo.lastOrNull()?.index ?: -1)
+        }
             .distinctUntilChanged()
-            .collect { if (transcript.isNotEmpty()) listState.scrollToItem(transcript.size - 1) }
+            .collect { (end, lastVisible) ->
+                if (end == lastEnd) {
+                    if (lastVisible >= 0) readerAtNewest = lastVisible >= transcript.size - 1
+                    return@collect
+                }
+                val shrank = end < lastEnd
+                lastEnd = end
+                if (shrank && readerAtNewest && transcript.isNotEmpty()) {
+                    listState.scrollToItem(transcript.size - 1)
+                }
+            }
     }
     LaunchedEffect(transcript.size) {
         if (transcript.isNotEmpty()) listState.animateScrollToItem(transcript.size - 1)
@@ -412,19 +444,9 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back", tint = Domovoi.colors.fg)
-            }
-            Text(
-                thread.title ?: "new chat",
-                style = MaterialTheme.typography.titleMedium,
-                color = Domovoi.colors.fg,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        ChatPaneGutter()
+        ThreadTitleRow(thread, onBack)
 
         LazyColumn(
             state = listState,
@@ -488,7 +510,63 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 )
             }
         }
+        ChatPaneGutter()
     }
+}
+
+/**
+ * The thread's own title row — and nothing at all in a window the keyboard
+ * has left too short for it.
+ *
+ * Measured on a landscape phone (1080px tall, IME top 394, so the shell hands
+ * this pane 320px): this row is 126px, its spacer 21px and the composer row
+ * 163px, against 236px of usable height once the pane's own 16dp gutters are
+ * paid. Column measures its non-weighted children in order with whatever
+ * main-axis space is left, so the composer — last, and not weighted — was
+ * handed 89px, below an OutlinedTextField's own minimum. The box still drew
+ * its outline at [793,253][2216,379] and uiautomator still reported the typed
+ * text, but the inner text field had no room to render it: you typed BLIND
+ * into a field that looked like it was working. The message list got 0px.
+ *
+ * Dropping this row hands those 147px to the composer, which then measures at
+ * its natural height and draws the text, and leaves the list a real band.
+ * Nothing is stranded: ChatScreen installs a BackHandler for the same
+ * `onBack`, so system back still leaves the thread, and the row returns the
+ * instant the keyboard closes. In portrait (578dp left) it never goes.
+ *
+ * Its own composable so the `keyboardCrowdsTheWindow()` read — snapshot state
+ * that changes on every frame of the IME animation — sits in a leaf rather
+ * than invalidating the pane, composer and caret included.
+ */
+@Composable
+private fun ThreadTitleRow(thread: ThreadRow, onBack: () -> Unit) {
+    if (keyboardCrowdsTheWindow()) return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back", tint = Domovoi.colors.fg)
+        }
+        Text(
+            thread.title ?: "new chat",
+            style = MaterialTheme.typography.titleMedium,
+            color = Domovoi.colors.fg,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+/**
+ * The pane's vertical breathing room: 16dp, or 2dp in a crowded window.
+ *
+ * The pane used to pay this as `padding(16.dp)` on its Column. That is 84px of
+ * a 320px landscape window spent on whitespace around a composer that had no
+ * room to draw. It is a leaf for the same reason [ThreadTitleRow] is: the
+ * inset read must not invalidate the caret's own node. Horizontal padding
+ * stays on the Column — the window is 2400px wide, width was never scarce.
+ */
+@Composable
+private fun ChatPaneGutter() {
+    Spacer(Modifier.height(if (keyboardCrowdsTheWindow()) 2.dp else 16.dp))
 }
 
 @Composable

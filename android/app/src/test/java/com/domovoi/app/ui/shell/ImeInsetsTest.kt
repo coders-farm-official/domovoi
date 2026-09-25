@@ -75,25 +75,95 @@ class ImeInsetsTest {
         assertTrue(body, body.contains("if (!keyboardUp())") && body.contains("DockedPlayer()"))
     }
 
+    /**
+     * Every file that reads the keyboard inset, and the ONLY functions in each
+     * that are allowed to. A read is an invalidation scope: `WindowInsets.ime`
+     * is snapshot state that Compose rewrites on every frame of the ~250ms IME
+     * animation, so a read in a screen body recomposes that screen — caret and
+     * all — about 15 times per animation. Every one of these is a leaf that
+     * composes only chrome.
+     */
+    private val insetLeavesByFile = mapOf(
+        "ui/shell/AppShell.kt" to
+            setOf("BottomChrome", "BottomChromeColumn", "TopChrome", "keyboardCrowdsTheWindow", "keyboardUp"),
+        "ui/components/Kit.kt" to setOf("PageHeader"),
+        "ui/screens/documents/DocumentsEditor.kt" to setOf("MarkdownToolbar", "EditorHeader"),
+        "ui/screens/chat/ChatScreen.kt" to setOf("ThreadTitleRow", "ChatPaneGutter"),
+        "ui/screens/satellites/SatelliteDetail.kt" to setOf("CardHeader", "CardTabStrip"),
+    )
+
     @Test fun theKeyboardReadsSitInLeafComposablesNotInTheShellBodies() {
         // keyboardUp() reads a snapshot state Compose updates on every frame of
         // the IME animation, so its READ SITE is the invalidation scope. Called
         // inline in RailShell/DrawerShell it invalidated the whole shell —
         // rail/drawer item lambdas and the ScreenRouter call site — about 15
         // times per animation. Every read must live in a small leaf.
-        val leaves = setOf("BottomChrome", "BottomChromeColumn", "TopChrome", "keyboardCrowdsTheWindow", "keyboardUp")
-        var enclosing = "<file>"
+        //
+        // This walks the screen files too, not just the shell: the landscape
+        // fix now lives as much in PageHeader, MarkdownToolbar, EditorHeader,
+        // ThreadTitleRow, ChatPaneGutter, CardHeader and CardTabStrip as it
+        // does in TopChrome, and a read leaking out of any of them costs the
+        // same recompositions.
         val offenders = mutableSetOf<String>()
-        for (line in appShell.lines()) {
-            Regex("fun (\\w+)\\(").find(line)?.let { enclosing = it.groupValues[1] }
-            val reads = line.contains("keyboardUp()") ||
-                line.contains("keyboardCrowdsTheWindow()") ||
-                line.contains("WindowInsets.ime")
-            if (reads && !line.trimStart().startsWith("//") && !line.trimStart().startsWith("*")) {
-                if (enclosing !in leaves) offenders.add("$enclosing: ${line.trim()}")
+        for ((rel, leaves) in insetLeavesByFile) {
+            var enclosing = "<file>"
+            for (line in source(rel).lines()) {
+                Regex("fun (\\w+)\\(").find(line)?.let { enclosing = it.groupValues[1] }
+                val reads = line.contains("keyboardUp()") ||
+                    line.contains("keyboardCrowdsTheWindow()") ||
+                    line.contains("WindowInsets.ime")
+                if (reads && !line.trimStart().startsWith("//") && !line.trimStart().startsWith("*")) {
+                    if (enclosing !in leaves) offenders.add("$rel $enclosing: ${line.trim()}")
+                }
             }
         }
-        assertEquals("a keyboard-inset read escaped into a shell body", emptySet<String>(), offenders)
+        assertEquals("a keyboard-inset read escaped into a screen or shell body", emptySet<String>(), offenders)
+    }
+
+    @Test fun everyChromeCollapseThatBuysLandscapeItsPixelsIsStillThere() {
+        // MEASURED, landscape phone, 1080px tall, IME top 394 — the shell hands
+        // a screen 320px and these collapses are what put a caret in it:
+        //
+        //   PageHeader       16 screens' title+sub block
+        //   MarkdownToolbar  editor body 63px -> line 01 visible
+        //   EditorHeader     editor body 139px -> 238px, and the document
+        //                    finally scrolls by gesture (line 60 reachable)
+        //   ThreadTitleRow   chat composer squashed below its own minimum and
+        //                    drawing NO TEXT -> composer renders, list gets 147px
+        //   ChatPaneGutter   84px of whitespace round a composer with no room
+        //   CardHeader       satellite announce field ABSENT from the dump ->
+        //   CardTabStrip     field 205..352 with 'send' visible
+        //
+        // None of them is guarded by behaviour anywhere: deleting the one line
+        // from PageHeader or MarkdownToolbar used to leave all 117 tests green
+        // while landscape silently went back to unusable. Each looks like a
+        // surprising side effect in a title component, which is exactly how it
+        // gets tidied away.
+        val collapses = listOf(
+            Triple("ui/components/Kit.kt", "PageHeader", "if (keyboardCrowdsTheWindow()) return"),
+            Triple("ui/screens/documents/DocumentsEditor.kt", "MarkdownToolbar", "if (keyboardCrowdsTheWindow()) return"),
+            Triple("ui/screens/documents/DocumentsEditor.kt", "EditorHeader", "if (keyboardCrowdsTheWindow()) {"),
+            Triple("ui/screens/chat/ChatScreen.kt", "ThreadTitleRow", "if (keyboardCrowdsTheWindow()) return"),
+            Triple("ui/screens/chat/ChatScreen.kt", "ChatPaneGutter", "if (keyboardCrowdsTheWindow())"),
+            Triple("ui/screens/satellites/SatelliteDetail.kt", "CardHeader", "if (keyboardCrowdsTheWindow()) return"),
+            Triple("ui/screens/satellites/SatelliteDetail.kt", "CardTabStrip", "if (keyboardCrowdsTheWindow()) return"),
+        )
+        for ((rel, fn, needle) in collapses) {
+            val body = composableBody(fn) ?: error("$rel: fun $fn( is gone")
+            assertTrue("$rel: $fn no longer collapses in a crowded window", body.contains(needle))
+        }
+        // …and the screens still CALL them. A leaf nobody composes collapses
+        // nothing, and inlining the title row back into the pane is exactly
+        // the shape of the bug it was extracted to fix.
+        val chat = source("ui/screens/chat/ChatScreen.kt")
+        assertTrue(chat, chat.contains("ThreadTitleRow(thread, onBack)"))
+        assertEquals(chat, 2, Regex("^\\s*ChatPaneGutter\\(\\)$", RegexOption.MULTILINE).findAll(chat).count())
+        // The pane's own vertical padding moved INTO ChatPaneGutter; left on
+        // the Column it is 84px of a 320px window spent on whitespace.
+        assertTrue(chat, chat.contains("Column(Modifier.fillMaxSize().padding(horizontal = 16.dp))"))
+        val sat = source("ui/screens/satellites/SatelliteDetail.kt")
+        assertTrue(sat, sat.contains("CardHeader(s, onClose)") && sat.contains("CardTabStrip(tab)"))
+        assertTrue(source("ui/screens/documents/DocumentsEditor.kt"), source("ui/screens/documents/DocumentsEditor.kt").contains("EditorHeader("))
     }
 
     @Test fun everyShellRoutesItsTopBarThroughTopChrome() {
@@ -163,12 +233,44 @@ class ImeInsetsTest {
         // shrink — measured, with 16 messages, as 15 and 16 never rendered and
         // 14 clipped to 5px. The viewport is the settled fact.
         val chat = source("ui/screens/chat/ChatScreen.kt")
-        assertTrue(chat, chat.contains("snapshotFlow { listState.layoutInfo.viewportEndOffset }"))
+        assertTrue(chat, chat.contains("info.viewportEndOffset"))
         assertTrue(chat, chat.contains("distinctUntilChanged()"))
         val chatCode = chat.lines()
             .filterNot { it.trimStart().startsWith("//") || it.trimStart().startsWith("*") }
             .joinToString("\n")
         assertFalse("chat is keyed on a keyboard boolean again", chatCode.contains("WindowInsets.ime"))
+    }
+
+    @Test fun chatRepinsOnlyOnAShrinkAndOnlyForAReaderWhoWasAtTheNewest() {
+        // The price of the re-pin, and both halves are load-bearing:
+        //
+        //  * WITHOUT the shrink test, the keyboard CLOSING re-pins too — growth
+        //    emits from the same flow — so dismissing the keyboard to read more
+        //    of the thread throws you back to the newest message.
+        //  * WITHOUT the at-the-newest test, scrolling back to re-read
+        //    something and tapping the composer yanks the list to the end.
+        //
+        // And the flag has to be decided on the emissions where the viewport
+        // did NOT change. Asking "is the last item visible?" AFTER the shrink
+        // always answers no — the tail sliding out is the shrink — so a naive
+        // guard there makes the whole re-pin inert and quietly brings back the
+        // measured 15-and-16-never-rendered bug.
+        val chat = source("ui/screens/chat/ChatScreen.kt")
+        val effect = chat.substringAfter("LaunchedEffect(listState) {").substringBefore("\n    }")
+        assertTrue(effect, effect.contains("var lastEnd"))
+        assertTrue(effect, effect.contains("var readerAtNewest"))
+        assertTrue("the shrink test is gone: closing the keyboard will yank the list", effect.contains("end < lastEnd"))
+        assertTrue(
+            "the reader-position test is gone: tapping the composer will yank a scrolled-back thread",
+            effect.contains("readerAtNewest = lastVisible >= transcript.size - 1"),
+        )
+        assertTrue(
+            "readerAtNewest must be decided while the viewport is UNCHANGED, or the re-pin goes inert",
+            effect.contains("if (end == lastEnd)"),
+        )
+        // Exactly one re-pin, and it is behind both guards.
+        assertEquals(effect, 1, Regex("scrollToItem\\(").findAll(effect).count())
+        assertTrue(effect, effect.contains("if (shrank && readerAtNewest && transcript.isNotEmpty())"))
     }
 
     @Test fun theSheetGridKeepsSlackUnderABroughtIntoViewCell() {

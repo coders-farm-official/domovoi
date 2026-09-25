@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -132,6 +134,116 @@ private fun MarkdownToolbar(onTool: (MdTool) -> Unit) {
 }
 
 /**
+ * The editor's own filename/save/close bar — full width in a normal window, a
+ * 30dp strip with nothing but save and close in one the keyboard has crowded.
+ *
+ * Measured on a landscape phone (1080px tall, IME top 394): the shell ends
+ * the editor at the top of the keyboard, leaving 320px from the status bar
+ * down. This bar in its full form takes 181px of that and the document body
+ * gets 139 — one line, and a band too short to fling, which is Kamron's
+ * original complaint ("I couldn't scroll down to see what I was typing")
+ * still true in landscape after [MarkdownToolbar] had already gone.
+ *
+ * The bar cannot simply vanish the way the toolbar does: SAVE is a control
+ * you need WHILE typing, and the close button is the only way back out of a
+ * full-screen overlay that covers the shell's own chrome. So it collapses
+ * rather than disappearing — the file icon, the path, the markdown pill and
+ * the "unsaved" word are what go, since none of them is something you act on
+ * mid-word, and the two buttons shrink to text labels on a fixed 30dp row.
+ * "unsaved" survives as the save button's own enabled state.
+ *
+ * Portrait keeps the bar exactly as it was: 578dp of window is left there and
+ * `keyboardCrowdsTheWindow()` never fires.
+ *
+ * A leaf, like [MarkdownToolbar], so the inset read does not invalidate the
+ * TextField and its caret once per IME animation frame.
+ */
+@Composable
+private fun EditorHeader(
+    relPath: String,
+    isMarkdown: Boolean,
+    dirty: Boolean,
+    saving: Boolean,
+    ready: Boolean,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
+) {
+    if (keyboardCrowdsTheWindow()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .background(Domovoi.colors.card)
+                .height(30.dp)
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            if (ready) {
+                androidx.compose.material3.TextButton(
+                    onClick = onSave,
+                    enabled = dirty && !saving,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        if (saving) "saving…" else "save",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+            androidx.compose.material3.TextButton(
+                onClick = onClose,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    "close",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
+        }
+        HorizontalDivider(color = Domovoi.colors.border)
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth()
+            .background(Domovoi.colors.card)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Description,
+            contentDescription = null,
+            tint = Domovoi.colors.fgMuted,
+        )
+        Text(
+            relPath,
+            style = MaterialTheme.typography.titleSmall,
+            color = Domovoi.colors.fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Pill(if (isMarkdown) "markdown" else "text", Tone.Idle)
+        if (dirty) {
+            Text(
+                "unsaved",
+                style = MaterialTheme.typography.labelMedium,
+                color = Domovoi.colors.warn,
+            )
+        }
+        if (ready) {
+            Button(onClick = onSave, enabled = dirty && !saving) {
+                Text(if (saving) "saving…" else "save")
+            }
+        }
+        IconButton(onClick = onClose) {
+            Icon(Icons.Outlined.Close, "close", tint = Domovoi.colors.fgMuted)
+        }
+    }
+    HorizontalDivider(color = Domovoi.colors.border)
+}
+
+/**
  * Full-screen in-app text editor (web TextEditorOverlay / DocEditor):
  * GET /text → edit in a monospace field → Save PUTs {text}. Markdown files
  * additionally get a formatting toolbar (the mobile analog of the web
@@ -207,44 +319,15 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
         Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(Domovoi.colors.card)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.Description,
-                    contentDescription = null,
-                    tint = Domovoi.colors.fgMuted,
-                )
-                Text(
-                    relPath,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Domovoi.colors.fg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Pill(if (isMarkdown) "markdown" else "text", Tone.Idle)
-                if (dirty) {
-                    Text(
-                        "unsaved",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Domovoi.colors.warn,
-                    )
-                }
-                if (status == EditorStatus.Ready) {
-                    Button(onClick = { save() }, enabled = dirty && !saving) {
-                        Text(if (saving) "saving…" else "save")
-                    }
-                }
-                IconButton(onClick = { requestClose() }) {
-                    Icon(Icons.Outlined.Close, "close", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            HorizontalDivider(color = Domovoi.colors.border)
+            EditorHeader(
+                relPath = relPath,
+                isMarkdown = isMarkdown,
+                dirty = dirty,
+                saving = saving,
+                ready = status == EditorStatus.Ready,
+                onSave = { save() },
+                onClose = { requestClose() },
+            )
 
             if (isMarkdown && status == EditorStatus.Ready) {
                 MarkdownToolbar { tool ->
