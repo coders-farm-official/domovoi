@@ -18,16 +18,17 @@ const chatUploadUrl = (token) => `${API_BASE}/api/chat/uploads/${token}`;
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
 const chatSendStream = async (threadId, body, onDelta) => {
-  const r = await fetch(`${API_BASE}/api/chat/threads/${threadId}/messages`, {
+  // Streams the reply, so it needs the Response itself rather than parsed
+  // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
+  // gets an unpaired browser the "pair this browser" prompt and one
+  // replay of the message, instead of a red bubble it can do nothing
+  // about; a bare fetch() sends the same headers and none of that.
+  const r = await apiFetchRaw(`/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
-    credentials: 'include',
-    // Streams the reply, so it builds its own request rather than using
-    // apiFetch — and sends what apiFetch would, the bearer plus the
-    // preflight-forcing header.
-    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok || !r.body) throw new Error(`${r.status} ${r.statusText}`);
+  if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
