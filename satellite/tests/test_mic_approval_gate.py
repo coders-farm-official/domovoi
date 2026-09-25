@@ -31,6 +31,26 @@ What is pinned here:
 * ``[mic] enabled = false`` — the video-kiosk build — is untouched by all
   of it.
 
+And — the second half of this file — what the hardening pass added, because
+the worst thing a gate like this can do is not "a new satellite is deaf" but
+"a WORKING satellite is deaf":
+
+* nothing in the ``ready`` branch can cost the microphone by raising above
+  the call that opens it, and one indigestible frame cannot kill the
+  receiver task;
+* a mic thread that will not start rolls the whole thing back instead of
+  latching the gate shut over an open capture stream;
+* a satellite already in service, whose only route into this code is a
+  self-upgrade its core commanded, proves itself from the receipts that
+  upgrade left behind — with no core in sight — while nothing a PARKED
+  device also has counts as proof;
+* a core saying ``awaiting_approval`` outlives those receipts, so an
+  admin's "reset pairing" reaches the microphone and stays reached, and
+  re-provisioning onto a different core does the same;
+* the LED ring does not go idle on the ``ready`` frame that opens the mic:
+  the wake model is ~10-15 s of ONNX, and the mic thread paints the ring
+  when the wake word is genuinely armed.
+
 The satellite here is assembled field by field rather than constructed
 (`test_send_queue_lifecycle` does the same): `Satellite.__init__` builds an
 LED controller and reads a config this test has no use for. `run()`,
@@ -43,6 +63,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import queue
 import threading
 import time
@@ -125,6 +146,7 @@ def make_sat(monkeypatch, *, mic_enabled: bool = True) -> Sat:
     sat._kiosk_thread = None
     sat._voice_input_lock = threading.Lock()
     sat._voice_input_started = False
+    sat._wake_armed = threading.Event()
     sat._network_degraded = threading.Event()
     sat._ws_disconnected_since = None
     sat._upgrade_confirmed = False
@@ -186,29 +208,56 @@ def make_sat(monkeypatch, *, mic_enabled: bool = True) -> Sat:
 # ─── driving `run()` with a scripted server ───────────────────────────────
 
 
+class Socket:
+    """A WebSocket that yields a scripted list of text frames and closes."""
+
+    def __init__(self, payloads) -> None:
+        self._payloads = list(payloads)
+
+    def __aiter__(self):
+        async def gen():
+            for payload in self._payloads:
+                yield json.dumps(payload)
+        return gen()
+
+
+async def _deliver(sat, payloads) -> None:
+    """Hand the frames to the REAL `_receiver_loop`.
+
+    Not to `_handle_text_frame` directly: the per-frame guard that keeps one
+    indigestible frame from killing the whole receiver task lives in the
+    loop, and a harness that skipped it would be testing a session shape
+    production does not have."""
+    sat.ws = Socket(payloads)
+    try:
+        await sat._receiver_loop()
+    finally:
+        sat.ws = None
+
+
 def parked(code: str = "428913"):
     """One connection attempt against a core that parks the device.
 
     Exactly what `domovoi/streaming.py` does: the `awaiting_approval` error
     frame, then the socket closes. `_run_session` returning normally is the
     truth of it — the core was reachable, it just refused."""
-    def attempt(sat) -> None:
-        sat._handle_text_frame({
+    async def attempt(sat) -> None:
+        await _deliver(sat, [{
             "type": "error",
             "reason": "awaiting_approval",
             "message": "waiting for approval on the dashboard",
             "code": code,
-        })
+        }])
         sat._on_session_ended()
     return attempt
 
 
 def accepted():
     """One attempt the core accepts: `ready`, then the link drops."""
-    def attempt(sat) -> None:
-        sat._handle_text_frame({
+    async def attempt(sat) -> None:
+        await _deliver(sat, [{
             "type": "ready", "protocol_version": "1", "bot_name": "Domovoi",
-        })
+        }])
         sat._on_session_ended()
     return attempt
 
@@ -242,7 +291,9 @@ def run_sessions(rec: Sat, attempts: list, monkeypatch) -> None:
         if not left:
             sat.shutdown_event.set()
             return
-        left.pop(0)(sat)
+        outcome = left.pop(0)(sat)
+        if inspect.isawaitable(outcome):
+            await outcome
 
     sat._run_session = fake_session
     asyncio.run(sat.run())
@@ -265,7 +316,11 @@ def test_a_device_that_has_never_been_accepted_opens_no_microphone(monkeypatch):
     assert rec.s._mic_thread is None
     assert rec.s._input_stream is None
     assert rec.s._voice_input_started is False
-    assert not client.APPROVED_MARKER.exists(), "nothing to remember yet"
+    # And the core's verdict is written DOWN as a no, not left as an absent
+    # file. Absent means "never decided", which is what an upgrade looks
+    # like — see the bridge tests further down.
+    assert client._read_approval_record() == client._APPROVAL_NO
+    assert client._was_ever_approved() is False
 
 
 def test_it_never_loads_the_wake_model_while_it_waits(monkeypatch):
@@ -423,7 +478,8 @@ def test_the_core_parking_a_device_again_forgets_the_approval(monkeypatch):
         "type": "error", "reason": "awaiting_approval", "code": "428913",
     })
 
-    assert not client.APPROVED_MARKER.exists()
+    assert client._read_approval_record() == client._APPROVAL_NO
+    assert client._was_ever_approved() is False, "deaf on the next boot"
     assert rec.mic_stops == 0
     assert sat._input_stream is not None
 
@@ -499,3 +555,469 @@ def test_a_dead_microphone_after_approval_exits_non_zero(monkeypatch):
     assert rec.s.shutdown_event.is_set()
     assert rec.s._voice_input_started is False, "so a later attempt may retry"
     assert rec.mic_thread_bodies == 0
+
+
+# ─── the mic opener cannot be skipped by an unrelated failure ─────────────
+#
+# The worst thing this feature can do is not "a new satellite is deaf" — it
+# is "a WORKING satellite is deaf". Four statements used to run ahead of the
+# one call that opens the microphone, inside a `ready` branch with no guard
+# and a receiver loop with no per-frame guard. A raise in any of them left
+# the device reconnecting about once a second forever, approved and deaf,
+# with `fatal_error` unset so systemd never restarted it either.
+
+
+def _ready_branch_raisers():
+    """Raises the housekeeping ahead of the mic can really produce.
+
+    `_promote_pending_server` catches OSError and nothing else, so a
+    config.toml that is not valid UTF-8 comes straight out of its
+    `read_text(encoding="utf-8")`; its function-local `from satellite import
+    config_writer, server_identity` raises ImportError against the
+    half-mirrored tree a self-upgrade briefly leaves behind — the hazard
+    this file already defends against elsewhere.
+    """
+    return [
+        pytest.param(
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+            id="config.toml is not utf-8",
+        ),
+        pytest.param(
+            ImportError("cannot import name 'config_writer'"),
+            id="half-mirrored tree mid-upgrade",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("boom", _ready_branch_raisers())
+def test_a_raise_ahead_of_the_mic_no_longer_costs_the_microphone(
+    monkeypatch, boom,
+):
+    """The acceptance bar for this whole pass. Five accepted sessions, each
+    of which blows up in the housekeeping above the mic — and the microphone
+    is open after the first one."""
+    rec = make_sat(monkeypatch)
+
+    def explode(*a, **kw):
+        raise boom
+
+    monkeypatch.setattr(client, "_promote_pending_server", explode)
+
+    run_sessions(rec, [accepted()] * 5, monkeypatch)
+
+    assert rec.mic_opens == 1, "the mic opens even though the branch raised"
+    assert rec.wake_models_loaded == 1
+    assert rec.s._voice_input_started is True
+    assert client._read_approval_record() == client._APPROVAL_YES
+
+
+@pytest.mark.parametrize("boom", _ready_branch_raisers())
+def test_the_ready_branch_opens_the_mic_even_as_it_unwinds(monkeypatch, boom):
+    """Two independent belts, and this is the inner one. The receiver loop
+    now guards each frame, so the test above would pass even if the mic call
+    were still the last statement of the branch. This one calls
+    `_handle_text_frame` directly and lets the exception out: the `finally`
+    has to have opened the microphone on the way past."""
+    rec = make_sat(monkeypatch)
+
+    def explode(*a, **kw):
+        raise boom
+
+    monkeypatch.setattr(client, "_promote_pending_server", explode)
+
+    with pytest.raises(type(boom)):
+        rec.s._handle_text_frame({"type": "ready", "bot_name": "Domovoi"})
+
+    assert rec.mic_opens == 1
+    assert rec.mic_thread_bodies == 1
+
+
+def test_the_time_sync_failing_does_not_cost_the_microphone(monkeypatch):
+    """`_sync_time_with_server` starts a thread, and `Thread.start` raises
+    `RuntimeError: can't start new thread` under thread pressure — an
+    ordinary Pi Zero 2 W failure, not a hypothetical."""
+    rec = make_sat(monkeypatch)
+
+    def explode() -> None:
+        raise RuntimeError("can't start new thread")
+
+    rec.s._sync_time_with_server = explode
+
+    run_sessions(rec, [accepted(), accepted()], monkeypatch)
+
+    assert rec.mic_opens == 1
+
+
+def test_the_receiver_loop_survives_a_frame_it_cannot_handle(monkeypatch):
+    """The other half of the same defect: `_handle_text_frame` was called
+    with no guard, so one frame it choked on killed the receiver task,
+    `_run_session` returned NORMALLY (backoff reset, `fatal_error` unset)
+    and the client reconnected forever doing less each time. The real
+    `_receiver_loop` here, against a fake socket."""
+    rec = make_sat(monkeypatch)
+    sat = rec.s
+    handled: list[object] = []
+
+    def handle(payload) -> None:
+        handled.append(payload)
+        if isinstance(payload, dict) and payload.get("type") == "poison":
+            raise ValueError("no idea what this is")
+
+    sat._handle_text_frame = handle
+    sat.ws = Socket([
+        {"type": "poison"},
+        [],                                     # not even a dict
+        {"type": "ready"},
+    ])
+    asyncio.run(sat._receiver_loop())
+
+    assert [p.get("type") for p in handled if isinstance(p, dict)] == [
+        "poison", "ready",
+    ], "the loop kept reading after the frame it choked on"
+
+
+# ─── a half-started microphone rolls back instead of wedging ──────────────
+
+
+class _MicThreadRefuses(threading.Thread):
+    def start(self):
+        if self.name == "mic":
+            raise RuntimeError("can't start new thread")
+        return super().start()
+
+
+def test_a_thread_start_failure_rolls_back_instead_of_wedging(monkeypatch):
+    """`Thread.start()` raising left the flag latched True and the capture
+    stream open: PortAudio filling `raw_q` with no consumer, no wake word,
+    no `fatal_error` for systemd, and every later `ready` told the
+    microphone was already up. It must roll all the way back."""
+    rec = make_sat(monkeypatch)
+    sat = rec.s
+    real_thread = threading.Thread
+
+    monkeypatch.setattr(client.threading, "Thread", _MicThreadRefuses)
+
+    assert sat._start_voice_input(fatal=False) is False
+    assert sat._voice_input_started is False, "retryable, not wedged"
+    assert sat._input_stream is None, "no stream left filling raw_q"
+    assert sat._mic_thread is None
+    assert rec.mic_stops == 1, "the stream that did open was closed again"
+    assert rec.mic_thread_bodies == 0
+    # Same outcome as a dead microphone by the other door: exit non-zero so
+    # `Restart=on-failure` tries again.
+    assert sat.fatal_error is not None
+    assert sat.shutdown_event.is_set()
+
+    # And a later attempt really can retry.
+    monkeypatch.setattr(client.threading, "Thread", real_thread)
+    assert sat._start_voice_input(fatal=False) is True
+    assert rec.mic_opens == 2
+    assert rec.mic_thread_bodies == 1
+
+
+def test_a_thread_start_failure_at_boot_still_raises(monkeypatch):
+    """Boot keeps today's behaviour — the process dies — but not with an
+    orphaned capture stream behind it."""
+    rec = make_sat(monkeypatch)
+    sat = rec.s
+    monkeypatch.setattr(client.threading, "Thread", _MicThreadRefuses)
+
+    with pytest.raises(RuntimeError):
+        sat._start_voice_input(fatal=True)
+    assert sat._voice_input_started is False
+    assert sat._input_stream is None
+    assert rec.mic_stops == 1
+
+
+# ─── the first boot after the upgrade ────────────────────────────────────
+#
+# Kamron has three satellites in his house. Each one restarts into this code
+# with NO approval record, because only this code writes one. If "no record"
+# meant "not approved", all three would be deaf until their core answered —
+# and if the core is down at that moment (the power cut where the Pis boot
+# faster than the Beelink) deaf for the whole outage, with no wake word and
+# therefore no way even to play the canned "I can't reach the server" clip.
+# So an absent record means UNDECIDED, and the client looks for receipts the
+# OLD code left behind.
+
+
+def _receipt(path, body: str = "x\n") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+@pytest.mark.parametrize("sidecar", [
+    "SYNCED_SHA_SIDECAR",
+    "SYNCED_MANIFEST_SIDECAR",
+    "UPGRADE_PENDING_MARKER",
+    "WAKE_SIDECAR",
+    "WAKE_THRESHOLD_SIDECAR",
+    "VOICE_SIDECAR",
+])
+def test_an_already_paired_device_proves_itself_with_no_core_in_sight(
+    monkeypatch, sidecar,
+):
+    """Each of these files is a receipt: only code reacting to a frame the
+    core sends on an ACCEPTED session ever writes one. A parked device is
+    refused on its `hello`, before the socket carries anything it could act
+    on, so it can never have any of them."""
+    rec = make_sat(monkeypatch)
+    _receipt(getattr(client, sidecar))
+    assert not client.APPROVED_MARKER.exists(), "the upgrade's starting state"
+
+    run_sessions(rec, [unreachable(), unreachable(), unreachable()], monkeypatch)
+
+    assert rec.mic_opens == 1, "the wake word works through the whole outage"
+    assert rec.mic_thread_bodies == 1
+    assert ("no-server",) in rec.setup_status, "and it knows it is offline"
+    # Decided once and written down, so the next boot does not re-derive it.
+    assert client._read_approval_record() == client._APPROVAL_YES
+
+
+def test_nothing_a_parked_device_also_has_counts_as_a_receipt(monkeypatch):
+    """The bridge must not hand the microphone back to the device F-V013 is
+    about. A parked satellite gets a config.toml, a pairing token, an
+    approval code and a full sounds cache — `_sync_sounds` even runs before
+    `ready` is handled — so none of them is evidence."""
+    rec = make_sat(monkeypatch)
+    _receipt(client.CONFIG_PATH, "[satellite]\nroom_id = 'kitchen'\n")
+    _receipt(client.PAIRING_TOKEN_SIDECAR, "deadbeef\n")
+    _receipt(client.APPROVAL_CODE_SIDECAR, "428913\n")
+    _receipt(client.SOUNDS_CACHE_DIR / "greeting.mp3", "not really audio\n")
+
+    assert client._prior_acceptance_evidence() is None
+    assert client._was_ever_approved() is False
+
+    run_sessions(rec, [parked(), parked()], monkeypatch)
+    assert rec.mic_opens == 0
+
+
+def test_a_core_saying_no_outlives_the_receipts(monkeypatch):
+    """Why the negative verdict is WRITTEN rather than the file deleted. A
+    device the core has parked still carries the synced-sha sidecar from the
+    core that approved it months ago — if `awaiting_approval` merely deleted
+    the record, the bridge above would re-approve it on the very next boot
+    and an admin's "reset pairing" would never reach the microphone."""
+    rec = make_sat(monkeypatch)
+    _receipt(client.SYNCED_SHA_SIDECAR)
+    client._write_approval_record(client._APPROVAL_YES)
+
+    # This boot: approved from the record, mic opens, then the core parks it.
+    run_sessions(rec, [parked(), parked()], monkeypatch)
+    assert rec.mic_opens == 1, "it was approved when it booted"
+    assert client._read_approval_record() == client._APPROVAL_NO
+
+    # Next boot, same disk, same receipts.
+    again = make_sat(monkeypatch)
+    run_sessions(again, [parked()], monkeypatch)
+    assert again.mic_opens == 0, "the core's no is the last word"
+
+
+def test_the_first_build_of_this_gate_still_reads_as_approved(monkeypatch):
+    """995c3cf wrote a sentence rather than a verdict, and only ever wrote it
+    on an acceptance. A device carrying one is approved."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_text(
+        "the core accepted a session from this device; the microphone "
+        "may open at boot\n",
+        encoding="utf-8",
+    )
+    assert client._was_ever_approved() is True
+    run_sessions(rec, [unreachable()], monkeypatch)
+    assert rec.mic_opens == 1
+
+
+def test_an_unreadable_record_is_undecided_not_approved(monkeypatch):
+    """A truncated or non-UTF-8 file is not a yes. With no receipts either,
+    the device waits for its core — the safe direction."""
+    rec = make_sat(monkeypatch)
+    client.APPROVED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    client.APPROVED_MARKER.write_bytes(b"\xff\xfe\x00")
+    assert client._read_approval_record() is None
+    assert client._was_ever_approved() is False
+    run_sessions(rec, [parked()], monkeypatch)
+    assert rec.mic_opens == 0
+
+
+# ─── re-provisioning takes the verdict away ──────────────────────────────
+
+
+def test_re_provisioning_leaves_the_device_unapproved(monkeypatch):
+    """A fresh pairing token is a fresh identity: the previous core's verdict
+    must not travel with it. Without this, a device re-homed onto a different
+    core opens its microphone at boot while that core is parking it — F-V013
+    exactly, on the one path the gate did not cover."""
+    from satellite import provisioning_mode
+
+    # As it was before: approved by the old core, with a receipt to match.
+    client._write_approval_record(client._APPROVAL_YES)
+    _receipt(client.SYNCED_SHA_SIDECAR)
+    assert client._was_ever_approved() is True
+
+    assert provisioning_mode.APPROVED_MARKER_PATH == client.APPROVED_MARKER
+    provisioning_mode._write_not_approved()
+
+    assert client._read_approval_record() == client._APPROVAL_NO
+    assert client._was_ever_approved() is False, "the receipt must not revive it"
+
+    rec = make_sat(monkeypatch)
+    run_sessions(rec, [parked()], monkeypatch)
+    assert rec.mic_opens == 0
+
+
+def test_apply_provision_resets_the_approval_record():
+    """Pinned at the call site, not just on the helper: the reset has to
+    happen where the pairing token is rewritten, so every re-provision goes
+    through it."""
+    from satellite import provisioning_mode
+
+    body = inspect.getsource(provisioning_mode.apply_provision)
+    assert "_write_not_approved()" in body
+    assert body.index("PAIRING_TOKEN_PATH.write_text") < body.index(
+        "_write_not_approved()"
+    ), "beside the new token, just after it is written"
+
+
+# ─── the ring does not promise a wake word that is not armed yet ──────────
+
+
+def test_the_ring_waits_for_the_wake_word_on_the_first_approval(monkeypatch):
+    """The wake model is ~10-15 s of ONNX on a Pi Zero 2 W, and since this
+    feature it loads AFTER approval instead of at boot. Resyncing the ring on
+    the `ready` frame would take it off the awaiting-approval violet and tell
+    the person who just clicked Approve to try the wake word a quarter of a
+    minute early — the F-V013 false affordance, pointing the other way. The
+    mic thread owns that transition now."""
+    rec = make_sat(monkeypatch)
+
+    run_sessions(rec, [accepted()], monkeypatch)
+
+    assert rec.mic_opens == 1
+    assert rec.s._leds.resyncs == 0, (
+        "the ring stays where it was until the wake word is armed"
+    )
+
+
+def test_a_reconnect_still_resyncs_the_ring_immediately(monkeypatch):
+    """Which is what the resync was added for: a satellite that was parked,
+    then approved, then reconnects must not go on advertising that it is
+    waiting for approval."""
+    rec = make_sat(monkeypatch)
+    run_sessions(rec, [accepted(), accepted(), accepted()], monkeypatch)
+    assert rec.mic_opens == 1
+    assert rec.s._leds.resyncs == 2, "every ready but the one that opened it"
+
+
+def test_a_mic_less_build_resyncs_the_ring_exactly_as_before(monkeypatch):
+    """The video kiosk never opens a microphone, so nothing would ever
+    resync the ring for it later."""
+    rec = make_sat(monkeypatch, mic_enabled=False)
+    run_sessions(rec, [accepted(), accepted()], monkeypatch)
+    assert rec.s._leds.resyncs == 2
+
+
+def test_an_already_listening_device_resyncs_on_its_first_ready(monkeypatch):
+    """A device approved before this boot opens its mic in `run()`, so the
+    mic thread paints the ring; the first `ready` is then an ordinary one and
+    resyncs immediately, as it always did."""
+    rec = make_sat(monkeypatch)
+    client._write_approval_record(client._APPROVAL_YES)
+    run_sessions(rec, [accepted()], monkeypatch)
+    assert rec.mic_opens == 1
+    assert rec.s._leds.resyncs == 1
+
+
+def test_the_mic_thread_arms_the_wake_word_and_then_paints_the_ring():
+    """The real `_mic_thread_run`, which is where the transition now lives.
+    Only the audio stack and the calibrations are faked; `shutdown_event` is
+    pre-set so the wake loop exits at once."""
+    sat = object.__new__(client.Satellite)
+    sat.shutdown_event = threading.Event()
+    sat.shutdown_event.set()
+    sat._wake_armed = threading.Event()
+    sat._wake_word = "hey_domovoi"
+    sat._leds = Leds()
+    sat.wake_recording = threading.Event()
+    sat.dropin_active = threading.Event()
+    sat.chat_active = threading.Event()
+    order: list[str] = []
+
+    def load():
+        order.append("model")
+        return object()
+
+    sat._load_wake_model = load
+    sat._calibrate_mic_gain_initial = lambda: order.append("gain")
+    sat._calibrate_noise_gate_initial = lambda: order.append("gate")
+
+    client.Satellite._mic_thread_run(sat)
+
+    assert order == ["model", "gain", "gate"]
+    assert sat._wake_armed.is_set()
+    assert sat._leds.resyncs == 1, "painted only once it can actually answer"
+
+
+def test_a_wake_model_that_will_not_load_leaves_the_ring_alone(monkeypatch):
+    """It sets `fatal_error` and exits for systemd instead, and
+    `_setup_status("startup-failed")` writes the ring directly. Repainting
+    from the controller's cached state would paper over that."""
+    said: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        client, "_setup_status", lambda state, *a: said.append((state, *a)),
+    )
+    sat = object.__new__(client.Satellite)
+    sat.shutdown_event = threading.Event()
+    sat._wake_armed = threading.Event()
+    sat._wake_word = "hey_domovoi"
+    sat._leds = Leds()
+    sat.fatal_error = None
+
+    def boom():
+        raise RuntimeError("no such model")
+
+    sat._load_wake_model = boom
+    client.Satellite._mic_thread_run(sat)
+
+    assert sat.fatal_error is not None
+    assert sat.shutdown_event.is_set()
+    assert said == [("startup-failed",)]
+    assert sat._wake_armed.is_set() is False
+    assert sat._leds.resyncs == 0
+
+
+def test_a_re_parked_device_says_out_loud_that_it_is_still_listening(
+    monkeypatch, caplog,
+):
+    """The gate is a BOOT-time gate, and an admin who presses "Reset
+    pairing" on a live room gets a device that goes on answering its wake
+    word until it restarts. Nothing it hears can leave (the core closed the
+    socket) and tearing capture down under a running wake loop is a hazard
+    of its own — so the behaviour stands and the log says so, rather than
+    leaving whoever debugs it next to infer it from the source."""
+    rec = make_sat(monkeypatch)
+    sat = rec.s
+    client._write_approval_record(client._APPROVAL_YES)
+    assert sat._start_voice_input(fatal=False) is True
+
+    with caplog.at_level("WARNING", logger="satellite"):
+        sat._handle_text_frame({
+            "type": "error", "reason": "awaiting_approval", "code": "428913",
+        })
+
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "microphone is already open" in said
+    assert "deaf from the next restart" in said
+    assert rec.mic_stops == 0, "still not torn down mid-boot"
+
+
+def test_a_device_that_was_never_listening_says_nothing_of_the_kind(
+    monkeypatch, caplog,
+):
+    """The ordinary parked satellite — the F-V013 case — has no open mic to
+    warn about, and a warning there would be noise on every retry."""
+    rec = make_sat(monkeypatch)
+    with caplog.at_level("WARNING", logger="satellite"):
+        run_sessions(rec, [parked(), parked()], monkeypatch)
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "microphone is already open" not in said

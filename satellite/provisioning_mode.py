@@ -58,6 +58,12 @@ log = logging.getLogger("provisioning")
 CONFIG_DIR = Path("~/.domovoi").expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 PAIRING_TOKEN_PATH = CONFIG_DIR / "pairing_token"
+# The approval gate's record — `satellite.client.APPROVED_MARKER`, with the
+# same two words in its first line. Named here rather than imported because
+# this module is deliberately stdlib-only: it runs before the client's
+# dependencies (sounddevice, webrtcvad) are guaranteed to import at all.
+APPROVED_MARKER_PATH = CONFIG_DIR / "approved"
+APPROVAL_NOT_APPROVED = "not-approved"
 STATE_FILE = CONFIG_DIR / "provisioning_state.json"
 IMAGE_FILE = CONFIG_DIR / "setup_gadget.img"
 
@@ -901,6 +907,24 @@ def resolve_auto_url(configured: str) -> str | None:
     return url
 
 
+def _write_not_approved() -> None:
+    """Tell the client this device has not been approved by the core it is
+    now pointed at. Best-effort: a failure here costs the gate a boot, not
+    a provision, and the core still parks the device either way."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        APPROVED_MARKER_PATH.write_text(
+            f"{APPROVAL_NOT_APPROVED}\n"
+            "# Written by provisioning: a fresh pairing token is a fresh "
+            "identity, so this device must be approved again before its "
+            "microphone opens at boot.\n",
+            encoding="utf-8",
+        )
+        give_to_satellite_user(APPROVED_MARKER_PATH)
+    except OSError as e:
+        log.warning("could not reset the approval record: %s", e)
+
+
 def apply_provision(
     payload: dict[str, Any],
     *,
@@ -963,6 +987,22 @@ def apply_provision(
     # rather than "only root", which is nobody who needs it.
     give_to_satellite_user(PAIRING_TOKEN_PATH)
     PAIRING_TOKEN_PATH.chmod(0o600)
+
+    # 2b. A new pairing token is a new identity, so the previous core's
+    #     verdict does not travel with it. Approval gates the microphone
+    #     (satellite/client.py `_start_voice_input`), and a device re-homed
+    #     onto a different core — or re-provisioned onto the same one —
+    #     arrives with no pairing row: the core parks it and answers
+    #     `awaiting_approval`. Without this the old `approved` record would
+    #     still be on disk at the next boot, the mic would open before the
+    #     core got a word in, and the whole of F-V013 would be back on the
+    #     one path the gate does not otherwise cover.
+    #
+    #     Written as an explicit `not-approved` rather than deleted:
+    #     deleting it leaves the device UNDECIDED, and the client's upgrade
+    #     bridge would then re-approve it from the synced-sha sidecar its
+    #     old core left behind.
+    _write_not_approved()
 
     # 3. Timezone (best-effort).
     if payload.get("tz"):
