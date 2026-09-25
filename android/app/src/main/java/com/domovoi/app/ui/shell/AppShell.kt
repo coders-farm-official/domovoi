@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
@@ -51,6 +53,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
@@ -187,6 +190,62 @@ private fun ShellContent() {
 }
 
 // ---------------------------------------------------------------------------
+// The soft keyboard, and why the shells have to deal with it
+//
+// MainActivity calls enableEdgeToEdge(), so the window is NEVER resized for
+// the IME — android:windowSoftInputMode="adjustResize" is inert on targetSdk
+// 35 and doubly so under edge-to-edge. (Leave the manifest line alone anyway:
+// minSdk is 26, and on API 26-29 the legacy resize path is what makes the
+// inset observable at all.) Nothing in the app consumed WindowInsets.ime, so
+// the keyboard was simply painted over the bottom of every screen: the docked
+// player and the nav bar did not move, and a scroll container believed its
+// viewport was the full window, which is why the tail of a long document
+// could not be scrolled up past the keyboard either.
+//
+// The cure is to make the shells' BOTTOM CHROME exactly as tall as the
+// keyboard. Scaffold gives its body a bottom padding equal to the MEASURED
+// height of the bottomBar slot whenever that slot is non-empty — material3
+// 1.3.1 ScaffoldLayout computes
+//     if (bottomBarPlaceables.isEmpty() || bottomBarHeight == null)
+//         contentWindowInsets.calculateBottomPadding() else bottomBarHeight
+// — which is also why passing `contentWindowInsets = systemBars.union(ime)`
+// here would move exactly zero pixels: these shells always have a bottomBar,
+// so the inset's bottom component is discarded. Sizing the SLOT instead is
+// exact and needs no arithmetic in app code: the body ends where the keyboard
+// begins, every scroll container inside it learns its real height, and
+// Compose's existing caret bring-into-view starts doing real work.
+//
+// While the keyboard is up the docked player and the nav bar are dropped
+// rather than lifted above it. They are not visible in that state today
+// either (measured: the nav bar stays put and the IME covers it), nobody
+// switches tab mid-word, and a player plus a nav bar wedged between the caret
+// and the keyboard would eat ~130dp of the ~900px an editor has left. Both
+// come back the moment the keyboard closes.
+//
+// Not reachable from here, by construction: Dialog/AlertDialog are separate
+// windows that the platform still resizes for the IME (verified on the
+// emulator — they already work, and adding imePadding inside one would
+// double-count), and PairingScreen/StartupScreen render behind an early
+// return before any shell exists, so they carry their own imePadding().
+// ---------------------------------------------------------------------------
+
+/** True while the soft keyboard is on screen (or animating in). */
+@Composable
+private fun keyboardUp(): Boolean =
+    WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
+/**
+ * The compact shells' bottomBar slot: the chrome when there is no keyboard,
+ * and the keyboard's own height when there is.
+ */
+@Composable
+private fun BottomChrome(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.ime)) {
+        if (!keyboardUp()) Column { content() }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Offline/local mode: no domovoi configured. Music + Videos are the only
 // tabs, backed by on-device media (MediaStore); "connect" opens the
 // discovery/startup screen. Connecting flips prefs.serverUrl, which
@@ -257,7 +316,7 @@ private fun OfflineShell() {
             }
         },
         bottomBar = {
-            Column {
+            BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
                     listOf(Route.Music, Route.Videos).forEachIndexed { i, r ->
@@ -298,7 +357,7 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
         containerColor = Domovoi.colors.canvas,
         topBar = { Topbar(route, navigate) },
         bottomBar = {
-            Column {
+            BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
                     CompactRoutes.forEach { r ->
@@ -333,7 +392,9 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
 @Composable
 private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
-    Row(Modifier.fillMaxSize()) {
+    // No Scaffold here, so the shrink is on the root: imePadding() ends the
+    // whole shell — rail included — at the top of the keyboard.
+    Row(Modifier.fillMaxSize().imePadding()) {
         NavigationRail(containerColor = Domovoi.colors.card) {
             Box(Modifier.padding(vertical = 10.dp)) { DomovoiGlyph(24) }
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
@@ -350,8 +411,10 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
         Column(Modifier.weight(1f)) {
             Topbar(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            DockedPlayer()
-            Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            if (!keyboardUp()) {
+                DockedPlayer()
+                Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            }
         }
     }
 }
@@ -362,7 +425,8 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
 @Composable
 private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
-    Row(Modifier.fillMaxSize()) {
+    // As RailShell: no Scaffold, so the root carries the keyboard inset.
+    Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
             Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -391,8 +455,10 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
         Column(Modifier.weight(1f)) {
             Topbar(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
-            DockedPlayer()
-            Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            if (!keyboardUp()) {
+                DockedPlayer()
+                Box(Modifier.windowInsetsPadding(WindowInsets.navigationBars))
+            }
         }
     }
 }
