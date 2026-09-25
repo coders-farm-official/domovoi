@@ -493,12 +493,26 @@ EDITOR_SAVES = {
 }
 
 
+# The component's own body: from its declaration to the next top-level
+# one. This used to be `start + 4000`, which is not a property of the
+# code — DrawingOverlay grew an unsaved-work guard and pushed its own
+# catch 27 characters past the window, failing a test about something
+# else entirely. Nested declarations are indented, so a `const`/`function`
+# in column 0 is the next component every time.
+_NEXT_TOP_LEVEL = re.compile(r"\n(?:const|function|class|let|window)\s")
+
+
+def _component_body(src: str, decl: str) -> str:
+    start = src.index(decl)
+    nxt = _NEXT_TOP_LEVEL.search(src, start + 1)
+    return src[start:nxt.start() if nxt else len(src)]
+
+
 @pytest.mark.parametrize("name", sorted(EDITOR_SAVES))
 def test_every_editor_save_branches_on_the_auth_outcome(name: str):
     src = (STATIC / name).read_text(encoding="utf-8")
     # In the editor's OWN body, not merely somewhere in the file.
-    start = src.index(f"const {EDITOR_SAVES[name]} = ")
-    body = src[start:start + 4000]
+    body = _component_body(src, f"const {EDITOR_SAVES[name]} = ")
     assert "mutationErrorText" in body, f"{name}: save catch ignores the auth outcome"
     # The words are the helper's to choose now; a literal "Save failed"
     # here is a catch that decided before it looked.
