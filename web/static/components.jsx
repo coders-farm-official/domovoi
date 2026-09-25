@@ -925,8 +925,8 @@ const LoginModal = ({ onClose }) => {
           )}
           {err && <div className="err">{err}</div>}
           <div className="hint">
-            Admin actions (settings, plugins, satellite upgrades) need this;
-            everyday playback and browsing never do.
+            Admin actions (deleting files, settings, plugins, satellite
+            upgrades) need this; saving, playback and browsing never do.
           </div>
         </div>
         <div className="cal-modal-foot">
@@ -1040,10 +1040,41 @@ const AuthModalHost = () => {
   return null;
 };
 
+/* ---- "this device may not change files" -------------------------
+ * The refusal an admin's per-device block produces, rendered AT the
+ * button that was pressed rather than in a toast, and never as a
+ * prompt.
+ *
+ * It exists because the alternative is worse than useless: the server
+ * refuses a blocked device 403, the dashboard's generic auth retry read
+ * that as "sign in", and the person whose tablet an admin deliberately
+ * blocked was asked for the household's admin password — which implies
+ * typing it would help, and it does not (the block is on the device).
+ * data.js now marks that refusal `deviceBlocked`; this says what it is.
+ *
+ * `role="alert"` because it appears in answer to a press, and the
+ * person may not be looking at this corner of the screen. */
+const WriteBlockedNotice = ({ reason, children }) => {
+  if (!reason) return null;
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start',
+                  padding: '8px 14px', borderBottom: '1px solid var(--border)',
+                  background: 'var(--sunken)', color: 'var(--fg-muted)',
+                  fontSize: 12, lineHeight: 1.5 }}>
+      <Icon name="lock" size={13}/>
+      {/* The live region is the SENTENCE, not the strip: a screen
+          reader announcing a lock glyph helps nobody. */}
+      <span role="alert">
+        {reason}. An admin lifts the block in Settings → Devices.{children}
+      </span>
+    </div>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
-  DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt,
+  DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
 });

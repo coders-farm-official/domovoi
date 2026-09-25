@@ -46,6 +46,7 @@ const src = fs.readFileSync(process.argv[2], 'utf8');
 const run = async (scenario) => {
   const { method, sequence, signIn } = scenario;
   const calls = [];
+  let probeCalls = 0;
   let requestLoginCalls = 0;
   let ensureCalls = 0;
   const auth = {
@@ -60,6 +61,17 @@ const run = async (scenario) => {
     },
   };
   const fetch = async (url, opts) => {
+    // The device-block probe (a read-tier GET /api/files/browse that
+    // data.js makes on a refused MUTATION, to tell an admin's per-device
+    // block from a missing credential) is answered apart and does not
+    // consume a step of `sequence`: this module is about the request
+    // under test, and the probe is counted on its own as `probeCalls`.
+    if (String(url).indexOf('/api/files/browse') >= 0) {
+      probeCalls += 1;
+      const pb = '{"writable":true,"blocked_reason":null}';
+      return { ok: true, status: 200, statusText: 'OK',
+               text: async () => pb, json: async () => JSON.parse(pb) };
+    }
     const status = sequence[Math.min(calls.length, sequence.length - 1)];
     calls.push({ url, method: (opts && opts.method) || 'GET',
                  auth: (opts && opts.headers && opts.headers.Authorization) || null });
@@ -82,7 +94,7 @@ const run = async (scenario) => {
                 loginPrompted: !!e.loginPrompted, isAuthFailure: w.isAuthFailure(e),
                 message: e.message };
   }
-  return { ...outcome, fetchCalls: calls.length, requestLoginCalls, ensureCalls,
+  return { ...outcome, fetchCalls: calls.length, probeCalls, requestLoginCalls, ensureCalls,
            exported: typeof w.isAuthFailure === 'function' };
 };
 
@@ -141,6 +153,10 @@ def test_sign_in_replays_the_mutation_without_an_error(outcomes):
     o = outcomes["mutation_signed_in"]
     assert o["resolved"] is True
     assert o["fetchCalls"] == 2
+    # The cost of telling an admin's per-device file block from a
+    # missing credential, stated rather than hidden: one read-tier GET,
+    # on the refusal path of a mutation only, never more than one.
+    assert o["probeCalls"] == 1
 
 
 def test_a_401_that_survives_a_fresh_bearer_is_a_visible_error(outcomes):

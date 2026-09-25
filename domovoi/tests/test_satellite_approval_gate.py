@@ -171,7 +171,12 @@ async def test_a_wrong_code_is_refused_and_the_right_one_approves(
         right = await c.post(
             _approve_url(), json={"code": CODE}, headers=bearer(ADMIN_TOKEN)
         )
-    assert wrong.status_code == 403
+    # 422, not 403: the route is admin-gated, so 401/403 is how the
+    # dashboard's generic auth retry recognises "sign in again" and pops
+    # the admin-password modal. A mistyped digit must not look like that
+    # (F-050) — it is a wrong value in the body, so it answers 422.
+    assert wrong.status_code == 422
+    assert "does not match" in wrong.json()["detail"]
     assert right.status_code == 200 and right.json()["approved"] is True
     # The handler hands the code through untouched apart from trimming.
     assert fake_approvals.seen == [("kitchen", "000000"), ("kitchen", CODE)]
@@ -204,7 +209,7 @@ async def test_attempts_against_one_room_are_budgeted(
             r = await c.post(
                 _approve_url(), json={"code": "000000"}, headers=bearer(ADMIN_TOKEN)
             )
-            assert r.status_code == 403
+            assert r.status_code == 422
         blocked = await c.post(
             _approve_url(), json={"code": CODE}, headers=bearer(ADMIN_TOKEN)
         )

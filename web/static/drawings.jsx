@@ -79,9 +79,36 @@ const useExcalidraw = () => {
 };
 
 /* The canvas. `apiRef` receives the Excalidraw imperative API so the
- * page can pull scene data out at save time. */
-const DrawingCanvas = ({ lib, initialData, apiRef }) => {
+ * page can pull scene data out at save time; `onChange` is how the
+ * overlay above learns the scene moved (see its dirty guard).
+ *
+ * THE LOADING BRANCH WAITS FOR THE DATA, NOT ONLY FOR THE BUNDLE.
+ * Excalidraw reads `initialData` ONCE, at mount, and ignores every later
+ * change to the prop. `lib` belongs to the PAGE and survives the overlay
+ * being opened and closed, so from the second whiteboard of a session
+ * onwards it is already truthy on the overlay's first render — while the
+ * scene is still being read. Mounting there gives the operator a blank
+ * board for a file that is not empty, and the next Save writes that
+ * blank over their work. So: `initialData` is `undefined` while the read
+ * is in flight, and an object (or null, for a new whiteboard) once there
+ * is a real scene to mount with. `loadError` is the third case — the
+ * scene could not be read at all, so there is nothing honest to draw and
+ * nothing safe to save from it. */
+const DrawingCanvas = ({ lib, initialData, apiRef, onChange, loadError }) => {
   const Excalidraw = lib && lib.Excalidraw;
+  if (loadError) {
+    return (
+      <div style={{ padding: 24, maxWidth: 560, color: 'var(--fg-faint)', fontSize: 13 }}>
+        <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 6 }}>
+          This whiteboard couldn’t be opened.
+        </div>
+        <div>
+          {loadError} Nothing on disk has changed — close this and open it again.
+          An empty canvas here would save over the scene that is still there.
+        </div>
+      </div>
+    );
+  }
   if (!Excalidraw && _excalidrawError) {
     return (
       <div style={{ padding: 24, maxWidth: 560, color: 'var(--fg-faint)', fontSize: 13 }}>
@@ -97,26 +124,105 @@ const DrawingCanvas = ({ lib, initialData, apiRef }) => {
       </div>
     );
   }
-  if (!Excalidraw) {
-    return <div style={{ padding: 24, color: 'var(--fg-faint)' }}>Loading Excalidraw…</div>;
+  if (!Excalidraw || initialData === undefined) {
+    return (
+      <div style={{ padding: 24, color: 'var(--fg-faint)' }}>
+        {Excalidraw ? 'Loading the scene…' : 'Loading Excalidraw…'}
+      </div>
+    );
   }
   return (
     <div style={{ width: '100%', height: '100%' }}>
       {React.createElement(Excalidraw, {
         initialData: initialData || null,
         excalidrawAPI: (api) => { apiRef.current = api; },
+        onChange,
       })}
     </div>
   );
 };
 
 /* Full-screen drawing editor overlay. */
-const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
+const DrawingOverlay = ({ file, lib, onClose, onSaved, fire, blockedReason = null }) => {
   const apiRef = React.useRef(null);
+  // undefined = the saved scene is still being read; null = a new blank
+  // whiteboard; an object = the scene to mount Excalidraw with. The
+  // canvas mounts only for the last two — see DrawingCanvas.
   const [initialData, setInitialData] = React.useState(file.rel_path ? undefined : null);
+  const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+  const [dirty, setDirty] = React.useState(false);
+  /* An admin's per-device block. The Files page passes in what it
+   * already learned from browse; a block applied while the board is
+   * open arrives as a refused save and is kept here. Either way the
+   * answer is a sentence, never the admin-password prompt — no
+   * password lifts a block on the device. */
+  const [refused, setRefused] = React.useState(null);
+  const blocked = refused || blockedReason;
+  // A scene is on the canvas, so Save has something true to write. Until
+  // then Save and Export SVG would write an empty board over a file that
+  // is not empty, so they stay disabled.
+  const ready = initialData !== undefined && !loadError;
 
-  // Load an existing scene's JSON when editing a saved file.
+  /* Unsaved-work guard, same contract as doc_editor/sheet_editor/files:
+   * a `dirty` flag, an "unsaved — click Save" hint, and a Close that asks
+   * before throwing the scene away. Excalidraw keeps no dirty flag of its
+   * own, so it is derived from getSceneVersion() — the sum of the
+   * per-element version counters, which moves when elements are drawn,
+   * edited or deleted and stays put for pan, zoom and tool changes.
+   *
+   * THE BASELINE IS THE SCENE AS LOADED, established below the moment
+   * there is one — never "whatever onChange reports first". If the first
+   * onChange a bundle fires happens to be the operator's first stroke,
+   * adopting it as the baseline makes that stroke invisible: the header
+   * says nothing, and Close throws it away without asking, which is the
+   * exact loss this guard exists to prevent. The loaded elements go
+   * through restoreElements first because that is what Excalidraw itself
+   * does to initialData at mount, so both sides count the same numbers
+   * (a scene stored without per-element versions restores to 1 each on
+   * both sides).
+   *
+   * A successful .excalidraw save makes the scene as it was at that
+   * moment the new baseline. If the bundle ever ships without
+   * getSceneVersion the baseline stays null, the flag stays false and
+   * Close behaves as it did before — no false "discard?" on an untouched
+   * page. */
+  const sceneVersion = React.useRef(null);   // latest version seen
+  const savedVersion = React.useRef(null);   // version last written to disk
+  const baselined = React.useRef(false);
+  const versionOf = React.useCallback((elements) => {
+    const getVersion = lib && lib.getSceneVersion;
+    if (!getVersion) return null;
+    const els = elements || [];
+    try {
+      return getVersion(lib.restoreElements ? lib.restoreElements(els, null) : els);
+    } catch { return getVersion(els); }
+  }, [lib]);
+
+  React.useEffect(() => {
+    if (baselined.current || !lib || initialData === undefined) return;
+    const v = versionOf(initialData && initialData.elements);
+    if (v === null) return;                  // a bundle without getSceneVersion
+    sceneVersion.current = v;
+    savedVersion.current = v;
+    baselined.current = true;
+  }, [lib, initialData, versionOf]);
+
+  const onSceneChange = React.useCallback((elements) => {
+    const getVersion = lib && lib.getSceneVersion;
+    if (!getVersion) return;
+    const v = getVersion(elements);
+    sceneVersion.current = v;
+    // No baseline yet: the effect above owns it, and adopting this value
+    // instead is precisely the bug. Compare nothing rather than the
+    // wrong thing — the effect runs on the same commit as the mount.
+    if (savedVersion.current === null) return;
+    setDirty(v !== savedVersion.current);
+  }, [lib]);
+
+  // Load an existing scene's JSON when editing a saved file. The canvas
+  // stays unmounted until this resolves: Excalidraw takes its scene once,
+  // at mount, so a canvas mounted early is a blank one for good.
   React.useEffect(() => {
     if (!file.rel_path || !file.rel_path.endsWith('.excalidraw')) {
       setInitialData(null);
@@ -127,15 +233,27 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
         try {
           const scene = JSON.parse(res.content);
           setInitialData({ elements: scene.elements || [], appState: scene.appState || {}, files: scene.files || {} });
-        } catch { setInitialData(null); }
+        } catch {
+          // Falling back to a blank canvas here would offer to overwrite
+          // the file with nothing. Say what happened instead.
+          setLoadError('The saved file isn’t whiteboard JSON this editor can read.');
+        }
       })
-      .catch(() => setInitialData(null));
+      .catch(e => setLoadError(mutationErrorText(e, 'Open', { kept: false })
+                               || 'It couldn’t be read.'));
   }, [file.rel_path]);
 
   const doSave = async (asSvg) => {
     const api = apiRef.current;
-    if (!api || !lib) return;
+    // `ready` is belt and braces for the borrowed call sites (files.jsx,
+    // documents.jsx): the buttons are already disabled until the scene
+    // this overlay is editing is actually on the canvas.
+    if (!api || !lib || !ready) return;
     setSaving(true);
+    // Read the version BEFORE the await: the canvas stays live while the
+    // request is in flight, so anything drawn during it must survive as
+    // still-unsaved rather than be marked clean by the reply.
+    const versionAtSave = sceneVersion.current;
     try {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
@@ -155,15 +273,28 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
           rel = name.replace(/\.excalidraw$/i, '') + '.excalidraw';
         }
         await apiPost('/api/documents/drawings/write', { rel_path: rel, content, fmt: 'excalidraw' });
+        // Only the .excalidraw write clears the flag. An SVG export is a
+        // picture of the scene under a different name; the editable scene
+        // is still unsaved, and Close must still say so.
+        savedVersion.current = versionAtSave;
+        setDirty(sceneVersion.current !== versionAtSave);
       }
+      setRefused(null);
       fire('Saved');
       onSaved();
     } catch (e) {
+      const why = deviceBlockReason(e);
+      if (why) { setRefused(why); return; }
       // The scene is still on the canvas after a dismissed sign-in, so
       // say cancelled rather than reporting a failure.
       const msg = mutationErrorText(e);
       if (msg) fire(msg);
     } finally { setSaving(false); }
+  };
+
+  const requestClose = () => {
+    if (dirty && !window.confirm('You have unsaved changes. Discard them and close?')) return;
+    onClose();
   };
 
   return (
@@ -173,15 +304,22 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
                     borderBottom: '1px solid var(--border)', background: 'var(--card)' }}>
         <Icon name="pen-tool" size={16}/>
         <strong style={{ fontSize: 14 }}>{file.rel_path || 'new whiteboard'}</strong>
+        {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
-        <Button icon="image" disabled={saving} onClick={() => doSave(true)}>Export SVG</Button>
-        <Button variant="primary" icon="save" disabled={saving} onClick={() => doSave(false)}>
+        <Button icon="image" disabled={saving || !ready || !!blocked}
+                title={blocked || undefined} onClick={() => doSave(true)}>Export SVG</Button>
+        <Button variant="primary" icon="save" disabled={saving || !ready || !!blocked}
+                title={blocked || undefined} onClick={() => doSave(false)}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
-        <Button icon="x" onClick={onClose}>Close</Button>
+        <Button icon="x" onClick={requestClose}>Close</Button>
       </div>
+      <WriteBlockedNotice reason={blocked}>
+        {dirty ? ' The board is still on screen — export it before closing.' : ''}
+      </WriteBlockedNotice>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <DrawingCanvas lib={lib} initialData={initialData} apiRef={apiRef}/>
+        <DrawingCanvas lib={lib} initialData={initialData} apiRef={apiRef}
+                       onChange={onSceneChange} loadError={loadError}/>
       </div>
     </div>
   );

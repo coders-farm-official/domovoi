@@ -108,11 +108,19 @@ const downloadDocsZip = async (relPaths, onProgress) => {
 };
 
 /* ---- in-app text editor overlay --------------------------- */
-const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
+const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => {
   const [state, setState] = React.useState({ status: 'loading' });
   const [text, setText] = React.useState('');
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  /* Why this is BOTH a prop and a state. The Files page already knows
+   * the answer — /api/files/browse returns it for this device — so the
+   * Save button can be off before anybody presses it. But the block can
+   * also be applied while the editor is open, and this overlay is
+   * reachable from places that never browsed, so a refusal that arrives
+   * anyway has to land here too rather than as a password prompt. */
+  const [refused, setRefused] = React.useState(null);
+  const blocked = refused || blockedReason;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -140,12 +148,14 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
   }, [rel_path]);
 
   /* Through apiFetch, never a bare fetch. Saving is DEVICE tier, so this
-   * PUT carries the household token this browser stored — but a browser
-   * that has never been paired (or whose token was rotated) is refused
-   * 403, and the dashboard cookie alone is refused too. apiFetch answers
-   * a device-tier refusal with the PAIR prompt and an admin-tier one with
-   * the sign-in prompt, then replays the PUT once the missing credential
-   * exists, so the save the household asked for happens. A raw fetch
+   * PUT carries the household token this browser stored, and a refused
+   * write has to be able to ask for whatever it was refused for and then
+   * replay — the dashboard holds its bearer in memory only, so a page
+   * refresh leaves somebody who can still READ every file. apiFetch is
+   * the single place that decides WHICH refusal deserves which answer:
+   * the pairing prompt for a device-tier refusal, the sign-in prompt for
+   * an admin-tier one, and for the per-device block no prompt at all,
+   * because no credential the person can supply would help. A raw fetch
    * skipped all of it: one red PUT, no prompt, the typing lost. */
   const onSave = async () => {
     setSaving(true);
@@ -154,8 +164,13 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
         method: 'PUT', body: JSON.stringify({ text }),
       });
       setDirty(false);
+      setRefused(null);
       fire && fire('Saved');
     } catch (e) {
+      // The block is not a passing error and not a credential problem:
+      // it stays on screen beside Save until an admin lifts it.
+      const why = deviceBlockReason(e);
+      if (why) { setRefused(why); return; }
       const msg = mutationErrorText(e);
       if (msg && fire) fire(msg);
     } finally { setSaving(false); }
@@ -177,7 +192,8 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
       {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
       <span style={{ flex: 1 }}/>
       {state.status === 'ready' && (
-        <Button variant="primary" icon="save" disabled={saving || !dirty} onClick={onSave}>
+        <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
+                title={blocked || undefined} onClick={onSave}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
       )}
@@ -189,6 +205,9 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
     <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'var(--bg)',
                   display: 'flex', flexDirection: 'column' }}>
       {header}
+      <WriteBlockedNotice reason={blocked}>
+        {dirty ? ' Your changes are still here — copy them somewhere safe before closing.' : ''}
+      </WriteBlockedNotice>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {state.status === 'loading' && (
           <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Loading…</div>
@@ -1023,10 +1042,14 @@ const FilesPage = () => {
   // import need both; delete is admin-gated server-side and stays visible —
   // the login modal handles the 401.
   const blocked = view?.writable === false;
+  // The server's own sentence for this device, handed to the editors so
+  // they say the same thing this page does.
+  const blockedReason = blocked
+    ? (view.blocked_reason || 'this device is blocked from changing files') : null;
   const canWrite = !!view?.editable && !blocked;
   const canUpload = !!activeLib?.editable && !blocked;
-  const uploadTitle = blocked ? (view.blocked_reason || 'this device is blocked from changing files')
-    : canUpload ? 'upload into this folder' : 'this library is read-only';
+  const uploadTitle = blockedReason
+    || (canUpload ? 'upload into this folder' : 'this library is read-only');
 
   return (
     /* The desktop-file drop is handled ONCE, here on the page root: without
@@ -1061,9 +1084,14 @@ const FilesPage = () => {
                       border: '1px solid var(--border)', background: 'var(--sunken)',
                       fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
           <Icon name="lock" size={13}/>
+          {/* Naming the affordances one by one was already a list that
+              could go stale, and it did: saving a document is a write
+              too, and once the block reaches the editors this banner
+              understated it. Say what is and is not allowed instead. */}
           <span>
-            {view.blocked_reason}. You can browse and download, but not upload, move or
-            import from this device. An admin lifts the block in Settings → Devices.
+            {view.blocked_reason}. You can browse, open and download from this device,
+            but not change anything here — no saving a document, uploading, moving or
+            importing. An admin lifts the block in Settings → Devices.
           </span>
         </div>
       )}
@@ -1147,16 +1175,25 @@ const FilesPage = () => {
         )}
       </Card>
 
+      {/* The page already asked the server whether THIS device may write
+          (browse answers `writable` / `blocked_reason`), so an editor it
+          opens can grey Save out rather than letting the person type for
+          ten minutes and then be refused. The editors take the refusal
+          on its own too — the block can arrive while one is open. */}
       {docRel && window.DocEditor && (
-        <window.DocEditor rel_path={docRel} onClose={onCloseDoc} fire={fire}/>
+        <window.DocEditor rel_path={docRel} onClose={onCloseDoc} fire={fire}
+                          blockedReason={blockedReason}/>
       )}
       {sheetRel && window.SheetEditor && (
-        <window.SheetEditor rel_path={sheetRel} onClose={onCloseSheet} fire={fire}/>
+        <window.SheetEditor rel_path={sheetRel} onClose={onCloseSheet} fire={fire}
+                            blockedReason={blockedReason}/>
       )}
-      {textRel && <TextEditorOverlay rel_path={textRel} onClose={onCloseText} fire={fire}/>}
+      {textRel && <TextEditorOverlay rel_path={textRel} onClose={onCloseText} fire={fire}
+                                     blockedReason={blockedReason}/>}
       {drawing && DrawingOverlayCmp && (
         <DrawingOverlayCmp file={drawing} lib={lib}
                            onClose={() => setDrawing(null)}
+                           blockedReason={blockedReason}
                            onSaved={() => refresh()} fire={fire}/>
       )}
       <FilesDeleteConfirm state={confirmState} busy={busy === 'deleting'}

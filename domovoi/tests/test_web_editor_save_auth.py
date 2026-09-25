@@ -124,9 +124,20 @@ const run = async (scenario) => {
     },
     ensurePaired() { ensurePairedCalls += 1; return Promise.resolve(!!pair); },
   };
+  let probeCalls = 0;
   const fetch = async (url, opts) => {
     const o = opts || {};
     const headers = o.headers || {};
+    // data.js asks the server whether this device is blocked before it
+    // reads a refused mutation as "sign in" (an admin's per-device file
+    // block is a 403 no password lifts). That probe is a read-tier GET
+    // answered here on its own, so it neither consumes a step of
+    // `sequence` nor lands in `calls` — this module is about the write.
+    if (String(url).indexOf('/api/files/browse') >= 0) {
+      probeCalls += 1;
+      const pb = '{"writable":true,"blocked_reason":null}';
+      return resp(200, pb);
+    }
     const status = sequence[Math.min(calls.length, sequence.length - 1)];
     calls.push({
       url: String(url),
@@ -187,7 +198,7 @@ const run = async (scenario) => {
       message: e.message,
     };
   }
-  return { ...outcome, calls, requestLoginCalls, requestPairingCalls,
+  return { ...outcome, calls, probeCalls, requestLoginCalls, requestPairingCalls,
            ensureLoggedInCalls, ensurePairedCalls,
            exports: { apiFetchRaw: typeof w.apiFetchRaw,
                       mutationErrorText: typeof w.mutationErrorText } };
@@ -301,6 +312,14 @@ def test_a_cookie_only_403_on_a_delete_opens_the_login_and_replays(store):
     assert o["requestLoginCalls"] == 0          # ...and never re-opened
     assert len(o["calls"]) == 2                 # refused, then replayed
     first, second = o["calls"]
+    assert first["method"] == second["method"] == "POST"
+    # One read-tier probe on the refusal path: the price of not
+    # mistaking an admin's per-device block for a missing password.
+    assert o["probeCalls"] == 1
+
+
+def test_the_replay_carries_the_fresh_bearer_and_the_same_body(store):
+    first, second = store["delete_signed_in"]["calls"]
     assert first["method"] == second["method"] == "POST"
     assert first["auth"] is None                            # the refusal
     assert second["auth"] == "Bearer fresh-bearer"          # the replay
@@ -572,12 +591,26 @@ EDITOR_SAVES = {
 }
 
 
+# The component's own body: from its declaration to the next top-level
+# one. This used to be `start + 4000`, which is not a property of the
+# code — DrawingOverlay grew an unsaved-work guard and pushed its own
+# catch 27 characters past the window, failing a test about something
+# else entirely. Nested declarations are indented, so a `const`/`function`
+# in column 0 is the next component every time.
+_NEXT_TOP_LEVEL = re.compile(r"\n(?:const|function|class|let|window)\s")
+
+
+def _component_body(src: str, decl: str) -> str:
+    start = src.index(decl)
+    nxt = _NEXT_TOP_LEVEL.search(src, start + 1)
+    return src[start:nxt.start() if nxt else len(src)]
+
+
 @pytest.mark.parametrize("name", sorted(EDITOR_SAVES))
 def test_every_editor_save_branches_on_the_auth_outcome(name: str):
     src = (STATIC / name).read_text(encoding="utf-8")
     # In the editor's OWN body, not merely somewhere in the file.
-    start = src.index(f"const {EDITOR_SAVES[name]} = ")
-    body = src[start:start + 4000]
+    body = _component_body(src, f"const {EDITOR_SAVES[name]} = ")
     assert "mutationErrorText" in body, f"{name}: save catch ignores the auth outcome"
     # The words are the helper's to choose now; a literal "Save failed"
     # here is a catch that decided before it looked.

@@ -209,8 +209,14 @@ const makeApi = (table) => {
     calls.push({ method, path: p, body: clone(body) });
     const hit = lookup(method, p);
     if (hit && typeof hit === 'object' && hit.__error) {
-      const e = new Error(hit.__error.message || `${hit.__error.status} error`);
-      e.status = hit.__error.status; e.detail = hit.__error.detail;
+      // Every field of __error except `message` lands on the error, so a
+      // scenario can hand a component the flags data.js sets alongside
+      // the status — `authCancelled` (the operator dismissed the sign-in),
+      // `loginPrompted` (the modal is on screen and owns the story),
+      // `deviceTokenRequired` — and drive the branches that read them.
+      const { message, ...rest } = hit.__error;
+      const e = new Error(message || `${hit.__error.status} error`);
+      Object.assign(e, rest);
       return Promise.reject(e);
     }
     return Promise.resolve(clone(hit));

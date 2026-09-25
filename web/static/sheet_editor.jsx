@@ -53,10 +53,16 @@ const _xsToGrid = (data) => {
   return grid;
 };
 
-const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
+const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => {
   const [state, setState] = React.useState({ status: 'loading' });
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  /* The Files page already knows whether this device may write and
+   * passes it in, so Save can be off before anybody presses it; a block
+   * applied while the editor is open still arrives as a refusal, and
+   * that lands here rather than as a password prompt. */
+  const [refused, setRefused] = React.useState(null);
+  const blocked = refused || blockedReason;
   const holderRef = React.useRef(null);
   const sheetRef = React.useRef(null);
 
@@ -111,12 +117,16 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
         method: 'PUT', body: JSON.stringify({ rows: _xsToGrid(data) }),
       });
       setDirty(false);
+      setRefused(null);
       fire && fire('Saved');
       return true;
     } catch (e) {
-      // Same contract as the doc editor: a dismissed sign-in reads as
-      // cancelled (the grid is untouched), and the prompt speaks for
-      // itself while it is up.
+      // Same contract as the doc editor. A per-device block first: it
+      // is not a credential problem and no prompt can answer it.
+      const why = deviceBlockReason(e);
+      if (why) { setRefused(why); return false; }
+      // A dismissed sign-in reads as cancelled (the grid is untouched),
+      // and the prompt speaks for itself while it is up.
       const msg = mutationErrorText(e);
       if (msg && fire) fire(msg);
       return false;
@@ -152,12 +162,17 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire }) => {
         <Button icon="file-down" title="export as .csv" onClick={() => onExport('csv')}>csv</Button>
         <Button icon="file-down" title="export as .xlsx" onClick={() => onExport('xlsx')}>xlsx</Button>
         {state.status === 'ready' && (
-          <Button variant="primary" icon="save" disabled={saving || !dirty} onClick={onSave}>
+          <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
+                  title={blocked || undefined} onClick={onSave}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
         )}
         <Button icon="x" onClick={requestClose}>Close</Button>
       </div>
+
+      <WriteBlockedNotice reason={blocked}>
+        {dirty ? ' Your edits are still on screen — copy them out before closing.' : ''}
+      </WriteBlockedNotice>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {state.status === 'loading' && (
