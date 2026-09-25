@@ -118,7 +118,7 @@ async def test_the_browse_answer_and_the_write_refusal_are_one_sentence(
     await files_api._assert_can_write("browser-somebody-else")
 
 
-def test_the_block_message_names_the_device(monkeypatch) -> None:
+def test_the_block_message_names_the_device() -> None:
     """Not the wording, the CONTENT: the sentence has to say whose device
     it is, or an operator holding two tablets cannot act on it."""
     from web.backend.api import files as files_api
