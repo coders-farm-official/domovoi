@@ -26,9 +26,10 @@
 //              ServerStore / navigator than the defaults below.
 //   script   — a JS function body run with (h) — the helpers below —
 //              whose return value is the scenario's result (JSON).
-// Helpers on h: render(), tree(), find(sel), findAll(sel), text(),
-//   click(sel), type(sel, value), change(sel, value), submit(sel),
-//   key(sel, key), plain(el), calls, hookCalls, api, settle(),
+// Helpers on h: render(), rerender(), tree(), find(sel), findAll(sel),
+//   text(), click(sel), type(sel, value), change(sel, value),
+//   submit(sel), key(sel, key), plain(el), calls, fnCalls, hookCalls,
+//   api, settle(),
 //   global(name) (a sandbox global, e.g. what a `setup` stub recorded).
 //   sel is {type?, text?, title?, placeholder?, icon?, value?, name?, nth?}
 //   or a predicate (el) => boolean; `text` and `title` match substrings.
@@ -289,8 +290,17 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   const Component = sandbox.window.__component;
   if (typeof Component !== 'function') throw new Error(`${component} is not a component`);
 
+  // A function prop is a RECORDER, not a bare noop: a component that
+  // reports through a callback (an editor's `fire` toast, an overlay's
+  // onClose) is only testable if the scenario can read what it said.
+  // h.fnCalls is [{name, args}] in call order.
+  const fnCalls = [];
   const fullProps = { ...props };
-  for (const name of fnProps) fullProps[name] = noop;
+  for (const name of fnProps) {
+    fullProps[name] = (...args) => {
+      fnCalls.push({ name, args: args.map((a) => (a && typeof a === 'object' ? '[object]' : a)) });
+    };
+  }
 
   const settle = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
   const matches = (el, sel) => {
@@ -311,11 +321,15 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   };
   const h = {
     calls: api.calls,
+    fnCalls,
     hookCalls,
     api: table,
     settle,
     global(name) { return sandbox[name]; },
     render() { return rt.mount(React.createElement(Component, fullProps)); },
+    // Render again with no event: what a scenario needs after `await
+    // h.settle()` has let a mount-time fetch resolve.
+    rerender() { return rt.rerender(); },
     tree() { return rt.tree(); },
     findAll(sel) { return rt.tree().filter((el) => matches(el, sel)); },
     find(sel) {
