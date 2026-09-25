@@ -1688,9 +1688,12 @@ const FilesAccessCard = ({ fire, deviceList }) => {
     background: 'var(--card)', color: 'var(--fg)',
   };
 
+  // The subtitle is not a list of buttons. A list goes stale the moment
+  // the block reaches one more of them, and this one did: saving a
+  // document is refused too. It says what the block DOES.
   return (
     <Card title="Files access"
-          sub="Stop a device from uploading, moving or importing files. It can still browse and download; deleting always needs admin.">
+          sub="Stop a device from changing anything in the libraries — saving a document, uploading, moving, importing. It can still browse and download; deleting always needs admin.">
       <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'flex-start',
                     borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
         <Icon name="info" size={13}/>

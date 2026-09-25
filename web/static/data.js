@@ -230,7 +230,9 @@ const ServerStore = {
 // stored household device token ride along on every API call
 // (Auth.headers() carries both); a 401/403 from an admin-gated endpoint
 // pops the login modal so the user can authenticate, and one that names
-// the device token pops the pair modal instead.
+// the device token pops the pair modal instead. The one refusal that
+// pops NOTHING is an admin's per-device file block — no credential this
+// dashboard can collect lifts it, so asking for one only misleads.
 const _authHeaders = () => {
   try { return (typeof Auth !== 'undefined' && Auth.headers()) || {}; }
   catch { return {}; }
@@ -267,6 +269,11 @@ const _isDeviceTokenRefusal = (status, text) => (
  * device that also happens to be blocked: delete is admin-gated and
  * does not consult the block, so its refusal is a different sentence
  * and this comparison says no. */
+// Any library answers for all of them: a block is on the DEVICE, not on
+// a library (web/backend/api/files.py `_block_status` takes a device id
+// and nothing else), so one library's `writable` is the whole answer.
+// If this one is missing the probe simply fails and the old behaviour
+// stands, which is the safe direction.
 const BLOCK_PROBE_LIBRARY = 'core:documents';
 
 // Raw fetch on purpose: apiFetch would come back through the retry
@@ -590,7 +597,11 @@ const isAuthFailure = (e) => !!(e && e.loginPrompted);
 /* What an editor should say when a save (or any other mutation that holds
  * the operator's unsent work) was refused. Returns null for "say nothing".
  *
- * Three outcomes, and only the third is a failure:
+ * Four outcomes, and only the last is a failure:
+ *   * an admin blocked this DEVICE — `deviceBlocked`. Not a credential
+ *     problem and not transient: name the reason the server gave and
+ *     who can lift it, and never the word "sign in", which is what a
+ *     bare 403 used to turn into here.
  *   * the sign-in (or pairing) prompt was shown and DISMISSED —
  *     `authCancelled`. Nothing broke and nothing was lost: the request was
  *     never authorised, so say cancelled, and say the work is still here.
