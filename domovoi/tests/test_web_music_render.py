@@ -42,7 +42,7 @@ SEEDED_STATS = {"total_tracks": 11, "total_duration_sec": 81,
                 "enriched_count": 0}
 MIXED_STATS = {"total_tracks": 12, "total_duration_sec": 7200,
                "by_added_via": {"voice": 7, "manual": 2, "unknown": 3},
-               "by_source": {"library": 9, "ytdlp": 3}, "enriched_count": 12}
+               "by_source": {"library": 9, "provider": 3}, "enriched_count": 12}
 
 SCENARIOS = {
     "drawer_after_remove": {
@@ -117,7 +117,7 @@ def test_stats_have_a_by_source_tile(rendered):
 def test_stats_render_every_bucket_largest_first(rendered):
     tiles = _stats(rendered["stats_mixed"])
     assert tiles["added via voice"] == (7, "3 unknown · 2 manual")
-    assert tiles["by source library"] == (9, "3 ytdlp")
+    assert tiles["by source library"] == (9, "3 provider")
 
 
 def test_stats_pluralise_minutes(rendered):

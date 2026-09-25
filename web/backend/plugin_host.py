@@ -128,6 +128,10 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # Capabilities, Files and the satellite surfaces ask what kind of host
     # this is (WSL sees no removable drives).
     "domovoi.host_kind",
+    # The music room-cast path resolves MPD_HTTP_BASE=auto lazily
+    # (``from domovoi import lan_address`` inside the handler). It only
+    # worked because satellite_adoption happened to import it first.
+    "domovoi.lan_address",
 )
 
 

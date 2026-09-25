@@ -127,7 +127,16 @@ def test_every_lazy_core_import_in_the_web_backend_survives_the_guard():
                 continue
             for inner in ast.walk(node):
                 names: list[str] = []
-                if isinstance(inner, ast.ImportFrom) and inner.level == 0 and inner.module:
+                if (isinstance(inner, ast.ImportFrom) and inner.level == 0
+                        and inner.module == "domovoi"):
+                    # ``from domovoi import lan_address`` imports the
+                    # submodule domovoi.lan_address — same guard, same
+                    # need to be preloaded. Plain attributes are skipped.
+                    pkg = backend.parents[1] / "domovoi"
+                    names = [f"domovoi.{a.name}" for a in inner.names
+                             if (pkg / f"{a.name}.py").is_file()
+                             or (pkg / a.name / "__init__.py").is_file()]
+                elif isinstance(inner, ast.ImportFrom) and inner.level == 0 and inner.module:
                     names = [inner.module]
                 elif isinstance(inner, ast.Import):
                     names = [a.name for a in inner.names]

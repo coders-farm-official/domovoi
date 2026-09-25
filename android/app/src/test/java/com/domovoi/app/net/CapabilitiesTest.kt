@@ -16,7 +16,7 @@ class CapabilitiesTest {
           "server_version": "0.9.0",
           "plugins": [
             {"slug": "radio", "version": "1.2", "android_capabilities": ["stations"]},
-            {"slug": "ytdlp", "android_capabilities": []},
+            {"slug": "provider", "android_capabilities": []},
             {"slug": "future", "android_capabilities": ["holograms"], "extra_field": true}
           ],
           "handler_display": [

@@ -53,7 +53,7 @@ def _story(i: int, url: str | None) -> dict:
 def _now_playing(source_url: str | None) -> dict:
     return {"room_id": "kitchen", "state": "play", "elapsed_sec": 10,
             "song": {"title": "t", "artist": "a", "duration_sec": 100},
-            "source": "ytdlp", "source_url": source_url}
+            "source": "provider", "source_url": source_url}
 
 
 NEWS_ITEMS = [_story(1, WEB_LINK), _story(2, PLAIN_HTTP_LINK), _story(3, None)] + [
