@@ -480,7 +480,9 @@ instead of bouncing core and web, and each run does this:
    `domovoi-db` (a cheap no-op Flyway run), start core and web, and
    health-check them. The button stays fast.
 2. Refuse, touching nothing, if tracked files have uncommitted changes. A
-   rollback could not restore that tree. Untracked files are fine.
+   rollback could not restore that tree. Untracked files are fine. Stop,
+   touching nothing, if the dependencies changed but the service user
+   can't write the venv (step 5 would fail, and so would its rollback).
 3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
    `/var/lib/domovoi-update/backups/` (the newest 5 are kept). If the backup
    fails, the update stops there and nothing has been stopped.
@@ -549,6 +551,7 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_USER=domovoi
 # Default: the checkout the script lives in.
 # DOMOVOI_REPO_DIR=/opt/domovoi
+# Default: the venv domovoi-core.service's ExecStart runs from, else <checkout>/.venv.
 # DOMOVOI_VENV=/opt/domovoi/.venv
 # Extras for the venv re-sync. An NVIDIA host adds cuda: dev,real-clients,voice-profile,cuda
 # DOMOVOI_PIP_EXTRAS=dev,real-clients,voice-profile
@@ -635,14 +638,15 @@ first server. Run these over SSH, as your admin user, in this order.
    ExecStart=/bin/bash /opt/domovoi/scripts/linux/apply-update.sh
    TimeoutStartSec=30min
    EOF
-   echo 'domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service' | sudo tee /etc/sudoers.d/domovoi-update >/dev/null
-   sudo chmod 0440 /etc/sudoers.d/domovoi-update
+   echo 'domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service' >/tmp/domovoi-update.sudoers
+   sudo visudo -cf /tmp/domovoi-update.sudoers && sudo install -m 0440 -o root -g root /tmp/domovoi-update.sudoers /etc/sudoers.d/domovoi-update
    sudo visudo -c
    sudo systemctl daemon-reload
    ```
 
-   `visudo -c` must report every file `parsed OK`. A broken file under
-   `/etc/sudoers.d` can lock you out of `sudo`, so fix it before going on.
+   The rule is checked before it goes into place, because a broken file
+   under `/etc/sudoers.d` can lock you out of `sudo`. `visudo -c` must then
+   report every file `parsed OK`.
 
 4. Apply the pull with the new pipeline. Without `--no-block`,
    `systemctl start` waits until the run finishes:
@@ -654,7 +658,14 @@ first server. Run these over SSH, as your admin user, in this order.
 
    Expect `"status": "ok"` and `"mode": "update"`. If it says `rolled_back`,
    the box is back on the old SHA and the `error` field says why.
-   `journalctl -u domovoi-update -n 200` has the detail. This first run also
+   `journalctl -u domovoi-update -n 200` has the detail. That old SHA
+   predates the script, so its Restart button is still the plain bounce:
+   once the cause is fixed, pull again (step 2) and repeat this step by
+   hand. `refused` means tracked files in `/opt/domovoi` have local
+   changes; commit or stash them as `domovoi` and repeat this step.
+   `aborted` means nothing was changed: the backup failed, or the
+   dependencies changed and `domovoi` can't write the venv (`sudo chown -R
+   domovoi: /opt/domovoi/.venv` fixes that one). This first run also
    recreates the `domovoi-postgres` container once, to pick up its new
    `restart: unless-stopped` policy. The data volume is untouched.
 

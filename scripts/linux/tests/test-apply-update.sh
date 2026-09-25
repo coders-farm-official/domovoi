@@ -52,7 +52,10 @@ write_shims() {
   cat >"$bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$SHIM_STATE/calls.log"
-if [ "${1-}" = show ]; then exit 0; fi
+if [ "${1-}" = show ]; then
+  case "$*" in *ExecStart*) cat "$SHIM_STATE/show-execstart" 2>/dev/null ;; esac
+  exit 0
+fi
 if [ -f "$SHIM_STATE/fail-systemctl" ] && grep -qxF -- "$*" "$SHIM_STATE/fail-systemctl"; then
   echo "systemctl: forced failure for: $*" >&2; exit 1
 fi
@@ -200,6 +203,10 @@ if [ "${1-}" = -m ] && [ "${2-}" = pip ]; then
   shift 2
   echo "pip $*" >>"$SHIM_STATE/calls.log"
   if [ -f "$SHIM_STATE/fail-pip" ]; then echo "pip: resolution failed" >&2; exit 1; fi
+  if [[ " $* " == *" install "* ]] && [ -f "$SHIM_STATE/pip-fail-when-head" ] \
+      && [ "$("$SHIM_REAL_GIT" -C "$SHIM_REPO" rev-parse HEAD)" = "$(cat "$SHIM_STATE/pip-fail-when-head")" ]; then
+    cat "$SHIM_STATE/pip-fail-output" >&2; exit 1
+  fi
   for a in "$@"; do
     if [ "$a" = freeze ]; then
       printf 'requests==2.31.0\ntorch==2.14.0+cpu\nlocalthing @ file:///tmp/localthing.whl\n'
@@ -209,6 +216,9 @@ if [ "${1-}" = -m ] && [ "${2-}" = pip ]; then
   exit 0
 fi
 echo "python $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -c ]; then
+  d=$(cd "$(dirname "$0")/.." && pwd)/lib/site-packages; mkdir -p "$d"; printf '%s\n' "$d"
+fi
 SH
   chmod +x "$venv/bin/python"
 }
@@ -249,12 +259,13 @@ new_case() {
 # run_update [extra PATH dir]: run the script against the current case.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
+  if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
   RC=0
-  env PATH="$path" \
+  env -u DOMOVOI_VENV PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
-    DOMOVOI_VENV="$CASE/venv" \
+    ${venv_env[@]+"${venv_env[@]}"} \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
@@ -568,6 +579,106 @@ case_noop_health_failure_reports() {
   end_case
 }
 
+case_rollback_that_cannot_get_healthy() {
+  new_case rollback_that_cannot_get_healthy
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  : >"$STATE/curl-fail-always"          # neither B nor A comes back up
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rollback_failed" eq "$(field status)" '"rollback_failed"'
+  check "names the rollback step and its own error" \
+    eq "$(field error | grep -c 'the rollback then failed at rollback-health: rollback-health failed')" 1
+  check "checkout still went back to A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
+  check "applied_sha not moved" file_is "$UPD/applied_sha" "$SHA_A"
+  check "services started again anyway" again_after "reset --keep" "systemctl start domovoi-core.service"
+  end_case
+}
+
+case_sync_failure_output_stays_valid_utf8() {
+  new_case sync_failure_output_stays_valid_utf8
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["nope"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: unresolvable deps")
+  echo "$sha_b" >"$STATE/pip-fail-when-head"
+  # pip's own error art, long enough that a byte-counting cut(1) lands
+  # inside a three-byte character, plus a quote and a backslash for the
+  # JSON escaping. valid_json then reads the result as strict UTF-8.
+  { printf 'error: resolution-impossible "quoted" C:\\path\n'
+    printf 'x'; for _ in $(seq 150); do printf '\342\224\200'; done; printf '\n'
+    printf '\303\227 No matching distribution found for nope \342\225\260\342\224\200> see above\n'
+  } >"$STATE/pip-fail-output"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "failed at sync-deps" eq "$(field error | grep -c 'failed at sync-deps')" 1
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "rollback re-synced A's deps" again_after "reset --keep" "install -e"
+  end_case
+}
+
+case_venv_from_the_core_unit() {
+  new_case venv_from_the_core_unit
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_venv "$CASE/unit-venv"
+  : >"$CASE/unit-venv/pyvenv.cfg"
+  printf '{ path=%s/unit-venv/bin/python ; argv[]=%s/unit-venv/bin/python -m domovoi.main ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n' \
+    "$CASE" "$CASE" >"$STATE/show-execstart"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  NO_VENV_ENV=1 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asked the core unit" called "systemctl show -p ExecStart --value domovoi-core.service"
+  check "pip ran (from the unit's venv)" eq "$(grep -c '^pip .*install -e' "$STATE/calls.log")" 1
+  end_case
+}
+
+case_venv_ignores_a_non_venv_interpreter() {
+  new_case venv_ignores_a_non_venv_interpreter
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -m domovoi.main ; ignore_errors=no }\n' >"$STATE/show-execstart"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  NO_VENV_ENV=1 run_update
+  check "aborted before anything changed" eq "$(field status)" '"aborted"'
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "pip never ran" not_called "pip "
+  check "no bad_sha" eq "$(field bad_sha)" null
+  check "names the missing venv" eq "$(field error | grep -c "no venv interpreter at $REPO/.venv/bin/python")" 1
+  end_case
+}
+
+case_venv_not_writable_aborts() {
+  new_case venv_not_writable_aborts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps")
+  write_root_shims "$CASE/rootbin"
+  # The venv's site-packages belongs to someone else: `test -w` as the
+  # service user says no for it (and only it).
+  cat >"$CASE/rootbin/test" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -w ] && [ "${2-}" = "$(cat "$SHIM_STATE/not-writable")" ]; then exit 1; fi
+exec /usr/bin/test "$@"
+SH
+  chmod +x "$CASE/rootbin/test"
+  echo "$CASE/venv/lib/site-packages" >"$STATE/not-writable"
+  run_update "$CASE/rootbin"
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "error names the dir and the user" \
+    eq "$(field error | grep -c "$CASE/venv/lib/site-packages is not writable by tester")" 1
+  check "asked as the service user" called "runuser -u tester -- test -w $CASE/venv/lib/site-packages"
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "no bad_sha" eq "$(field bad_sha)" null
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
 case_noop_restart
 case_noop_without_any_history
 case_deps_changed_as_root
@@ -583,6 +694,11 @@ case_prev_from_orig_head
 case_garbage_prev_record_ignored
 case_backups_pruned
 case_noop_health_failure_reports
+case_rollback_that_cannot_get_healthy
+case_sync_failure_output_stays_valid_utf8
+case_venv_from_the_core_unit
+case_venv_ignores_a_non_venv_interpreter
+case_venv_not_writable_aborts
 
 echo "apply-update harness: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

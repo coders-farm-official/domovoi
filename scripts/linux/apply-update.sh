@@ -55,6 +55,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
+# Without DOMOVOI_VENV, resolve_venv may move this to the core unit's venv.
 VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
 # `-` rather than `:-`: an explicitly empty value is honoured (no extras; no
 # CPU-torch step).
@@ -149,6 +150,24 @@ json_bool() {
   if [ "$1" = 1 ]; then printf 'true'; else printf 'false'; fi
 }
 
+# The first $2 characters of $1. Characters, not bytes: cut(1) on
+# Debian/Ubuntu counts bytes and can split pip's "╰─>" mid-character, which
+# leaves invalid UTF-8 in the result JSON. Bash counts by the locale, so
+# set a UTF-8 one for just this expansion.
+trunc() (
+  LC_ALL=C.UTF-8
+  printf '%s' "${1:0:$2}"
+) 2>/dev/null
+
+# The last $2 lines of file $1, each cut to $3 characters.
+tail_lines() {
+  local line out=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    out+="$(trunc "$line" "$3")"$'\n'
+  done < <(tail -n "$2" "$1")
+  printf '%s' "${out%$'\n'}"
+}
+
 # Write "$2" to "$1" by rename, so a reader never sees half a file and a
 # symlink planted at the target is replaced rather than followed.
 write_atomic() {
@@ -222,8 +241,8 @@ run_step() {
   if [ "$rc" -eq 0 ]; then
     add_step "$name" ok "$t0" ""
   else
-    add_step "$name" failed "$t0" "$(tail -n 15 "$out" | cut -c1-300)"
-    LAST_ERROR="$name failed (exit $rc): $(tail -n 3 "$out" | tr '\n' ' ' | cut -c1-400 | sed 's/[[:space:]]*$//')"
+    add_step "$name" failed "$t0" "$(tail_lines "$out" 15 300)"
+    LAST_ERROR="$name failed (exit $rc): $(trunc "$(tail -n 3 "$out" | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
     log "step $name failed (exit $rc)"
   fi
   rm -f "$out"
@@ -283,6 +302,23 @@ resolve_core_state_dir() {
     if [ -z "$d" ]; then d=$home/.domovoi/update; else d=$home${d#\~}; fi
   fi
   CORE_STATE_DIR=$d
+}
+
+# Without DOMOVOI_VENV: the venv domovoi-core.service actually runs from
+# (its ExecStart interpreter), so a layout other than <repo>/.venv needs no
+# setting. Kept at <repo>/.venv when the unit can't say, or its interpreter
+# is not inside a venv.
+resolve_venv() {
+  local exe d
+  [ -z "${DOMOVOI_VENV:-}" ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  exe=$(systemctl show -p ExecStart --value "$CORE_UNIT" 2>/dev/null \
+        | sed -n 's/^{ path=\([^ ;]*\) ;.*/\1/p' | head -n 1) || return 0
+  case $exe in
+    */bin/python*) d=${exe%/bin/python*} ;;
+    *) return 0 ;;
+  esac
+  if [ -f "$d/pyvenv.cfg" ]; then VENV_DIR=$d; fi
 }
 
 resolve_mpd_names() {
@@ -379,7 +415,7 @@ backup_db() {
   if ! docker exec -i "$PG_CONTAINER" pg_restore --list <"$partial" >/dev/null; then
     echo "pg_restore cannot read the dump"; rm -f "$partial"; return 1
   fi
-  mv -f "$partial" "$f"
+  mv -f "$partial" "$f" || { rm -f "$partial"; return 1; }
   BACKUP_FILE=$f
   prune_backups
 }
@@ -430,6 +466,24 @@ restore_db() {
 
 pip_as() {
   as_user "$VENV_DIR/bin/python" -m pip --disable-pip-version-check --no-input "$@"
+}
+
+# Can the service user change the venv that sync_deps would change? Asked
+# before anything is touched: a venv that isn't there, or that another user
+# owns (one built by an admin before the checkout was handed to the service
+# user), aborts the update instead of failing half-way through and then
+# failing the rollback's re-sync the same way.
+venv_writable() {
+  local purelib d
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    echo "no venv interpreter at $VENV_DIR/bin/python (set DOMOVOI_VENV)"; return 1
+  fi
+  purelib=$(as_user "$VENV_DIR/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>/dev/null) || purelib=""
+  for d in "$VENV_DIR" "$VENV_DIR/bin" ${purelib:+"$purelib"}; do
+    if ! as_user test -w "$d"; then
+      echo "$d is not writable by ${SERVICE_USER:-the service user}"; return 1
+    fi
+  done
 }
 
 # The venv the way docs/LINUX_HOST.md builds it: CPU torch first when the
@@ -526,7 +580,7 @@ plain_restart() {
 }
 
 full_update() {
-  local dirty failed="" t0
+  local dirty failed="" t0 why
   MODE=update
   log "updating ${PREV_SHA:0:12} ($PREV_SOURCE) -> ${HEAD_SHA:0:12}"
 
@@ -543,6 +597,11 @@ full_update() {
   fi
   if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
+  if [ "$DEPS_CHANGED" = 1 ] && ! why=$(venv_writable); then
+    add_step preflight refused "$t0" "$why"
+    finish aborted "the dependencies changed but the venv can't be re-synced, so nothing was changed: $why"
+    return
+  fi
   add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
   write_result running
 
@@ -584,34 +643,41 @@ full_update() {
   rollback "$failed" "$LAST_ERROR"
 }
 
+# rb_failed STEP: remember the first rollback step that failed, and its
+# error, before a later step's error replaces LAST_ERROR. Sets rollback()'s
+# locals (bash scoping is dynamic).
+rb_failed() {
+  if [ -z "$rb" ]; then rb=$1; rb_err=$LAST_ERROR; fi
+}
+
 rollback() {
-  local failed_step=$1 cause=$2 rb=""
+  local failed_step=$1 cause=$2 rb="" rb_err=""
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
   if run_step rollback-checkout git_as reset --keep "$PREV_SHA"; then
     if [ "$DEPS_CHANGED" = 1 ]; then
-      run_step rollback-deps sync_deps || rb=${rb:-rollback-deps}
+      run_step rollback-deps sync_deps || rb_failed rollback-deps
       # Best effort: a pin that can't be restored leaves a newer but
       # compatible version, which is what sync_deps alone would give.
       run_step rollback-pins restore_pins || true
     fi
     if [ "$MPD_CHANGED" = 1 ]; then
-      run_step rollback-mpd rebuild_mpd || rb=${rb:-rollback-mpd}
+      run_step rollback-mpd rebuild_mpd || rb_failed rollback-mpd
     fi
     MIGRATIONS_AFTER=$(migration_count || true)
     if migrations_grew; then
-      run_step restore-db restore_db || rb=${rb:-restore-db}
+      run_step restore-db restore_db || rb_failed restore-db
     fi
   else
     # The tree could not go back, so neither may the database: old data
     # under new code is worse than new data under new code.
-    rb=rollback-checkout
+    rb_failed rollback-checkout
   fi
-  run_step rollback-migrate restart_db || rb=${rb:-rollback-migrate}
-  run_step rollback-start start_services || rb=${rb:-rollback-start}
+  run_step rollback-migrate restart_db || rb_failed rollback-migrate
+  run_step rollback-start start_services || rb_failed rollback-start
   SERVICES_STOPPED=0
-  run_step rollback-health wait_healthy || rb=${rb:-rollback-health}
+  run_step rollback-health wait_healthy || rb_failed rollback-health
 
   BAD_SHA=$HEAD_SHA
   write_atomic "$BAD_FILE" "$HEAD_SHA"$'\n'
@@ -620,7 +686,7 @@ rollback() {
     write_atomic "$APPLIED_FILE" "$PREV_SHA"$'\n'
     finish rolled_back "update to ${HEAD_SHA:0:12} failed at $failed_step and was rolled back to ${PREV_SHA:0:12}: $cause"
   else
-    finish rollback_failed "update to ${HEAD_SHA:0:12} failed at $failed_step ($cause); the rollback then failed at $rb: $LAST_ERROR"
+    finish rollback_failed "update to ${HEAD_SHA:0:12} failed at $failed_step ($cause); the rollback then failed at $rb: $rb_err"
   fi
 }
 
@@ -649,6 +715,7 @@ main() {
   # puts the cwd on sys.path) should run somewhere they can read.
   cd "$REPO_DIR"
   resolve_core_state_dir
+  resolve_venv
   resolve_mpd_names
 
   if ! HEAD_SHA=$(git_as rev-parse --verify HEAD) || ! is_sha "$HEAD_SHA"; then
