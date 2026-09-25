@@ -78,6 +78,18 @@ async def _schema_exists() -> bool:
     return row is not None
 
 
+async def _admin_rows() -> int:
+    async with engine.connect() as conn:
+        return (
+            await conn.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM admin_auth)"
+                    " + (SELECT count(*) FROM admin_sessions)"
+                )
+            )
+        ).scalar_one()
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _plugin_env(tmp_path: Path, monkeypatch):
     """Sandbox every install-pipeline path under tmp + full cleanup."""
@@ -97,6 +109,7 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(installer, "previous_root", lambda: previous)
     monkeypatch.setattr(loader_mod, "installed_root", lambda: installed)
     monkeypatch.setattr(loader_mod, "bundled_root", lambda: bundled)
+    admin_rows_before = await _admin_rows()
 
     yield
 
@@ -110,6 +123,13 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     await reg.delete_plugin(SLUG)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
+    # Regression guard, checked last so a trip never skips the cleanup
+    # above: an admin credential a test commits and leaves behind ends
+    # the pre-setup grace for every module that runs later (26
+    # test_files_api failures once, far from the test that caused them).
+    assert await _admin_rows() <= admin_rows_before, (
+        "test left admin_auth/admin_sessions rows behind; delete them in a finally"
+    )
 
 
 # ─── zip safety (§7.4) ──────────────────────────────────────────────────────
@@ -463,18 +483,26 @@ async def test_mutating_endpoints_are_structurally_gated(db_session) -> None:
             {"h": token_hash},
         )
         await db_session.commit()
+        try:
+            r = await client.post("/v1/plugins/install", json={})
+            assert r.status_code == 401
 
-        r = await client.post("/v1/plugins/install", json={})
-        assert r.status_code == 401
-
-        r = await client.post(
-            "/v1/plugins/install",
-            json={},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        # Past the gate; rejected for the empty body, not for auth.
-        assert r.status_code == 422
-        assert r.json()["detail"]["error"]["code"] == "bad_request"
+            r = await client.post(
+                "/v1/plugins/install",
+                json={},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            # Past the gate; rejected for the empty body, not for auth.
+            assert r.status_code == 422
+            assert r.json()["detail"]["error"]["code"] == "bad_request"
+        finally:
+            # Committed rows outlive the test (db_session truncates on
+            # setup only). A leaked admin credential ends the pre-setup
+            # grace for every module that runs after this one on the same
+            # test DB — test_files_api's gates all 401 without it.
+            await db_session.execute(text("DELETE FROM admin_sessions"))
+            await db_session.execute(text("DELETE FROM admin_auth"))
+            await db_session.commit()
 
 
 # ─── §7.4 poisoned-lockfile pre-confirm code execution (BLOCKER) ────────────
