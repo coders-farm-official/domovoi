@@ -102,6 +102,29 @@ def test_a_visible_network_gets_no_scan_ssid(no_nmcli):
     assert "scan_ssid" not in _block(no_nmcli)
 
 
+def test_the_fallback_replaces_its_own_block_instead_of_stacking(no_nmcli):
+    """Three submissions of the same form used to leave three blocks in a
+    root-owned config file that nothing ever prunes. wpa_supplicant takes
+    the first one it likes, so a stale block outranks the correction."""
+    for _ in range(3):
+        ok, err = pm.apply_wifi("HomeNet", PSK, None, False, 30.0, run=FakeWpa())
+        assert ok is True, err
+    text = no_nmcli.read_text(encoding="utf-8")
+    assert text.count("network={") == 1
+    assert text.startswith("ctrl_interface=")           # the rest is untouched
+    assert "update_config=1\n" in text
+
+
+def test_another_networks_block_is_left_alone(no_nmcli):
+    pm.apply_wifi("Neighbour", PSK, None, False, 30.0, run=FakeWpa())
+    pm.apply_wifi("HomeNet", PSK, None, False, 30.0, run=FakeWpa())
+    pm.apply_wifi("HomeNet", PSK, None, False, 30.0, run=FakeWpa())
+    text = no_nmcli.read_text(encoding="utf-8")
+    assert text.count("network={") == 2
+    assert "\tssid=" + "Neighbour".encode().hex() + "\n" in text
+    assert "\tssid=" + "HomeNet".encode().hex() + "\n" in text
+
+
 def test_the_block_is_exactly_four_or_five_lines():
     """Nothing but the network directive, the two values and the brace:
     no directive can ride in on a name or a passphrase."""
