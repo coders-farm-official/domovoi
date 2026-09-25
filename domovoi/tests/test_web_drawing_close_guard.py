@@ -14,7 +14,11 @@ is an implementation detail; what this module pins is the contract — the
 whiteboard uses the SAME guard and the SAME sentence as its three
 siblings, so there is only ever one of these to learn.
 
-Source assertions only: no DB, no node, never skips.
+Source assertions only: no DB, no node, never skips. Reading the source
+cannot tell whether the flag is armed at the right MOMENT — whether the
+first stroke counts, and whether the canvas even holds the scene it is
+about to overwrite. ``test_web_drawing_scene_load.py`` drives the real
+component for that.
 """
 
 from __future__ import annotations
