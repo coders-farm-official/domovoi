@@ -159,7 +159,10 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire }) => {
       fire('Saved');
       onSaved();
     } catch (e) {
-      fire(`Save failed: ${String(e.message || e).slice(0, 80)}`);
+      // The scene is still on the canvas after a dismissed sign-in, so
+      // say cancelled rather than reporting a failure.
+      const msg = mutationErrorText(e);
+      if (msg) fire(msg);
     } finally { setSaving(false); }
   };
 

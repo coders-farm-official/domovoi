@@ -85,13 +85,22 @@ const DocEditorOverlay = ({ rel_path, onClose, fire }) => {
       });
       setDirty(false);
       fire && fire('Saved');
+      return true;
     } catch (e) {
-      fire && fire(`Save failed: ${String(e.message || e).slice(0, 80)}`);
+      // A dismissed sign-in is not a broken endpoint: mutationErrorText
+      // says "cancelled" for that (the text is still in the buffer) and
+      // stays quiet while the prompt itself is on screen.
+      const msg = mutationErrorText(e);
+      if (msg && fire) fire(msg);
+      return false;
     } finally { setSaving(false); }
   };
 
   const onExport = async () => {
-    if (dirty) await onSave();
+    // Export what is on screen, not what is on disk: a refused or
+    // cancelled save must stop this, or the download hands back the old
+    // file and reads as if the edit had been saved.
+    if (dirty && !(await onSave())) return;
     const a = document.createElement('a');
     // A browser-driven download, so no header — the daily read tier takes
     // the household token in the query for exactly this shape of request.
