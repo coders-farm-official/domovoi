@@ -26,6 +26,18 @@ _CREATE_RE = re.compile(
 _CANCEL_RE = re.compile(r"^(?:cancel|stop) (?:the |)timer(?: (?:for|called|named) (.+))?$")
 _STATUS_RE = re.compile(r"^(?:how much time|how long) (?:left |)on (?:the |)timer$")
 
+# "timer for 10 minutes for the pasta" stores the label "the pasta". Every
+# line that puts its own word in front of the label ("the pasta timer",
+# "Your pasta timer is done") speaks it without the user's article, or it
+# comes out as "the the pasta timer".
+_LEADING_ARTICLE_RE = re.compile(r"^(?:the|my|a|an)\s+", re.IGNORECASE)
+
+
+def spoken_label(label: str) -> str:
+    """A timer label ready to follow "the" or "your": "the pasta" → "pasta".
+    Shared by these replies and the TimerWatcher's fired line."""
+    return _LEADING_ARTICLE_RE.sub("", label.strip())
+
 
 def _format_duration(seconds: int) -> str:
     if seconds < 60:
@@ -172,7 +184,7 @@ class TimerHandler(Handler):
                 matched_handler=self.name,
             )
         if label:
-            text = f"Cancelled the {label} timer."
+            text = f"Cancelled the {spoken_label(label)} timer."
         elif deleted == 1:
             text = "Cancelled the timer."
         else:
@@ -198,6 +210,8 @@ class TimerHandler(Handler):
             )
         spoken = _format_duration(remaining)
         text = (
-            f"{spoken} left on the {label} timer." if label else f"{spoken} left on the timer."
+            f"{spoken} left on the {spoken_label(label)} timer."
+            if label
+            else f"{spoken} left on the timer."
         )
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)

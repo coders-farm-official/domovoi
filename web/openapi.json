@@ -3249,7 +3249,7 @@
           "satellite-media"
         ],
         "summary": "Media Targets",
-        "description": "Removable drives that look like a flashed Pi boot partition.",
+        "description": "Removable drives that look like a flashed Pi boot partition. Always\nempty inside WSL, which sees no removable drives (``/status`` says\nso with ``drive_targets: false``).",
         "operationId": "media_targets_api_satellites_media_targets_get",
         "responses": {
           "200": {
@@ -3368,7 +3368,7 @@
           "satellite-media"
         ],
         "summary": "Media Job Credentials",
-        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. The\ncard always has them, so the message says where to look rather than\npretending they're gone for good.",
+        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again.",
         "operationId": "media_job_credentials_api_satellites_media_jobs__job_id__credentials_get",
         "parameters": [
           {
@@ -13391,7 +13391,7 @@
           "setup_transport": {
             "type": "string",
             "title": "Setup Transport",
-            "default": "usb"
+            "description": "usb | portal. Omitted: usb, or portal when the server runs inside WSL (no removable drives there)."
           },
           "wifi_country": {
             "type": "string",

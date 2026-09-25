@@ -6,8 +6,15 @@ from uuid import uuid4
 import pytest
 
 from domovoi.db.repositories import TimerRepository, utcnow
+from domovoi.handlers import timer as timer_mod
 from domovoi.handlers.shared.number_words import parse_duration_seconds
-from domovoi.handlers.timer import TimerHandler, _CANCEL_RE, _CREATE_RE, _STATUS_RE
+from domovoi.handlers.timer import (
+    TimerHandler,
+    _CANCEL_RE,
+    _CREATE_RE,
+    _STATUS_RE,
+    spoken_label,
+)
 from domovoi.models import Context, Intent
 from domovoi.tests.conftest import fast_path_winner, requires_db
 
@@ -157,6 +164,70 @@ def test_bare_set_a_timer_does_not_fast_path() -> None:
     assert fast_path_winner("set a timer for") is None
 
 
+@pytest.mark.parametrize(
+    ("label", "spoken"),
+    [
+        ("pasta", "pasta"),
+        ("the pasta", "pasta"),
+        ("The Pasta", "Pasta"),
+        ("my laundry", "laundry"),
+        ("an egg", "egg"),
+        ("  the pasta  ", "pasta"),
+        ("theory exam", "theory exam"),     # a word, not an article
+    ],
+)
+def test_spoken_label_drops_the_users_article(label: str, spoken: str) -> None:
+    assert spoken_label(label) == spoken
+
+
+class _OneTimerRepo:
+    """TimerRepository stand-in holding one labelled timer, so the reply
+    wording is checked without a database."""
+
+    label = "the pasta"
+
+    def __init__(self, session) -> None:
+        pass
+
+    async def cancel_by_label(self, label, room_id) -> int:
+        return 1
+
+    async def next_active(self, room_id):
+        return 1, utcnow() + timedelta(minutes=10, seconds=30), self.label
+
+
+@pytest.mark.asyncio
+async def test_labelled_cancel_and_status_read_the_label_once(monkeypatch) -> None:
+    """"cancel the timer for the pasta" stores/asks with the label "the
+    pasta"; the replies used to put their own "the" in front of it:
+    "Cancelled the the pasta timer." / "... left on the the pasta timer."."""
+    monkeypatch.setattr(timer_mod, "TimerRepository", _OneTimerRepo)
+    handler = TimerHandler()
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+
+    m = _CANCEL_RE.match("cancel the timer for the pasta")
+    assert m and m.group(1) == "the pasta"
+    response = await handler._cancel_from_match(m, ctx, None)  # type: ignore[arg-type]
+    assert response.text == "Cancelled the pasta timer."
+
+    m = _STATUS_RE.match("how much time left on the timer")
+    assert m
+    response = await handler._status_from_match(m, ctx, None)  # type: ignore[arg-type]
+    assert response.text == "10 minutes left on the pasta timer."
+
+
+@pytest.mark.asyncio
+async def test_unarticled_label_wording_is_unchanged(monkeypatch) -> None:
+    monkeypatch.setattr(_OneTimerRepo, "label", "pasta")
+    monkeypatch.setattr(timer_mod, "TimerRepository", _OneTimerRepo)
+    handler = TimerHandler()
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    response = await handler._cancel(label="pasta", ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == "Cancelled the pasta timer."
+    response = await handler._status(ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == "10 minutes left on the pasta timer."
+
+
 @pytest.mark.asyncio
 async def test_zero_duration_is_refused_before_touching_the_db() -> None:
     handler = TimerHandler()
@@ -241,6 +312,29 @@ async def test_cancel_removes_row(db_session) -> None:
 
     nxt = await TimerRepository(db_session).next_active(room_id="kitchen")
     assert nxt is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_articled_label_round_trip_reads_naturally(db_session) -> None:
+    handler = TimerHandler()
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    m = _CREATE_RE.match("timer for 10 minutes for the pasta")
+    assert m
+    await handler._create_from_match(m, ctx, db_session)
+    await db_session.commit()
+
+    m2 = _STATUS_RE.match("how much time left on the timer")
+    assert m2
+    response = await handler._status_from_match(m2, ctx, db_session)
+    assert response.text.endswith(" left on the pasta timer."), response.text
+
+    m3 = _CANCEL_RE.match("cancel the timer for the pasta")
+    assert m3
+    response = await handler._cancel_from_match(m3, ctx, db_session)
+    await db_session.commit()
+    assert response.text == "Cancelled the pasta timer."
+    assert await TimerRepository(db_session).next_active(room_id="kitchen") is None
 
 
 @requires_db

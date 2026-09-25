@@ -287,6 +287,12 @@ class Settings(BaseSettings):
     # GET /v1/admin/version serves it as `last_update`. A host without the
     # unit simply has no file, and the field is null.
     update_result_file: str = "/var/lib/domovoi-update/last-result.json"
+    # What kind of machine this is: auto | linux | wsl | windows | darwin.
+    # "auto" reads the kernel (domovoi/host_kind.py) and is right on every
+    # normal install. Inside WSL the dashboard explains that USB satellite
+    # adoption and writing a card aren't available, because WSL sees no
+    # removable drives. Set it only if detection gets your host wrong.
+    domovoi_host_kind: str = "auto"
     # How long a satellite gets to reconnect after an upgrade+self-restart
     # before its on-Pi watchdog rolls back to the pre-upgrade tarball. Bounds
     # the window an import-clean-but-behaviourally-broken upgrade can wedge a

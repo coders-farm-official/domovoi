@@ -29,11 +29,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.host_kind import host_kind
 from domovoi.satellite_media import builder, cache, fetchers, overlay
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
 from domovoi.satellite_payload import enabled_satellite_plugins, payload_files
 
-from web.backend.api.files_security import detect_removable, drive_token
+from web.backend.api.files_security import (
+    detect_removable,
+    drive_token,
+    removable_drives_visible,
+)
 from web.backend.domovoi_client import auth_forward_headers, post_admin
 from web.backend.db import session_scope
 from web.backend.satellite_adoption import _volume_label  # label pre-filter reuse
@@ -67,6 +72,21 @@ def _remember_credentials(job_id: int, creds: dict[str, Any]) -> None:
         _JOB_CREDENTIALS.pop(next(iter(_JOB_CREDENTIALS)))
 
 
+def default_setup_transport() -> str:
+    """What a prepare request that names no transport gets: USB adoption
+    where this server can see the device's drive, the Wi-Fi portal where
+    it can't (inside WSL, whose host keeps USB drives to itself)."""
+    return "usb" if removable_drives_visible() else "portal"
+
+
+# Why a drive target is refused inside WSL. Worded for the person reading
+# a 422, who is holding a card and needs the way forward.
+_NO_DRIVES_DETAIL = (
+    "this server runs inside WSL on Windows and can't see SD cards — "
+    "choose the zip download and unzip it onto the card instead"
+)
+
+
 class PrepareRequest(BaseModel):
     board: str = "pi02w"
     mic_profile: str = "respeaker_2mic_hat_v2"
@@ -77,7 +97,13 @@ class PrepareRequest(BaseModel):
     #            onboards it from a phone. Portal cards deliberately skip the
     #            dwc2 peripheral-mode overlay, which a USB mic array can't
     #            share a single-port Pi with.
-    setup_transport: str = "usb"
+    setup_transport: str = Field(
+        default_factory=default_setup_transport,
+        description=(
+            "usb | portal. Omitted: usb, or portal when the server runs "
+            "inside WSL (no removable drives there)."
+        ),
+    )
     # No safe default exists — legal channels and power limits are per
     # market, so this is a deliberate choice per batch, not a fallback.
     wifi_country: str = "US"
@@ -137,6 +163,11 @@ async def media_status() -> dict[str, Any]:
         })
     return {
         "docker_available": fetchers.docker_available(),
+        # Inside WSL there are no drive targets and USB adoption can't
+        # finish, so the card offers the zip and the Wi-Fi portal only.
+        "host_kind": host_kind(),
+        "drive_targets": removable_drives_visible(),
+        "default_setup_transport": default_setup_transport(),
         "cache": cache.status(PI02W.python_version, PI02W.os_release),
         "boards": [
             {
@@ -152,11 +183,15 @@ async def media_status() -> dict[str, Any]:
 
 @router.get("/targets")
 async def media_targets() -> list[dict[str, Any]]:
-    """Removable drives that look like a flashed Pi boot partition."""
+    """Removable drives that look like a flashed Pi boot partition. Always
+    empty inside WSL, which sees no removable drives (``/status`` says
+    so with ``drive_targets: false``)."""
     from domovoi.satellite_media.overlay import looks_like_pi_boot
     import shutil as _shutil
 
     out: list[dict[str, Any]] = []
+    if not removable_drives_visible():
+        return out
     for rm in detect_removable():
         mount = rm.get("mount")
         if not mount:
@@ -200,6 +235,8 @@ async def media_prepare(body: PrepareRequest, request: Request) -> dict[str, Any
     mount: Path | None = None
     target_ref = "zip"
     if kind == "drive":
+        if not removable_drives_visible():
+            raise HTTPException(status_code=422, detail=_NO_DRIVES_DETAIL)
         token = str(body.target.get("token") or "")
         match = next(
             (
@@ -353,17 +390,19 @@ async def media_jobs(limit: int = 10) -> list[dict[str, Any]]:
 async def media_job_credentials(job_id: int) -> dict[str, Any]:
     """The setup-AP and console credentials for a prepared card.
 
-    404 once the web process has restarted — they live in memory only. The
-    card always has them, so the message says where to look rather than
-    pretending they're gone for good."""
+    404 once the web process has restarted — they live in memory only. A
+    card written straight to a drive still has them, so the message says
+    where to look; a zip never carried them (WEB-1), so it says to build
+    it again."""
     creds = _JOB_CREDENTIALS.get(job_id)
     if creds is None:
         raise HTTPException(
             status_code=404,
             detail=(
                 "credentials aren't in memory any more (the dashboard was "
-                "restarted). Read domovoi/ap.json and domovoi/console.json "
-                "from the card."
+                "restarted). A card written from here has them in "
+                "domovoi/ap.json and domovoi/console.json; a zip never "
+                "did, so prepare it again."
             ),
         )
     return creds

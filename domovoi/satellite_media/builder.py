@@ -234,8 +234,22 @@ async def build(
             "2. Copy the domovoi/ folder to the card's boot partition, and",
             "   apply the config.txt/cmdline.txt additions from this zip's",
             "   copies (each addition is marked with a domovoi comment).",
-            "3. Boot the device, then plug it into the Domovoi server's USB",
-            "   port and adopt it from the dashboard's Satellites page.",
+        ]
+        if ap is not None:
+            # A portal card never goes near the server's USB port - and
+            # on a Windows (WSL) install, where the zip is the only way to
+            # build a card, it can't.
+            readme += [
+                "3. Create domovoi/ap.json (below), then boot the device. It",
+                "   raises its own Wi-Fi setup network: set it up from a phone,",
+                "   then approve it on the dashboard's Satellites page.",
+            ]
+        else:
+            readme += [
+                "3. Boot the device, then plug it into the Domovoi server's USB",
+                "   port and adopt it from the dashboard's Satellites page.",
+            ]
+        readme += [
             "",
             "This zip deliberately contains no passwords. The dashboard shows",
             f"the console login for {SAT_USER} once, when the build finishes —",

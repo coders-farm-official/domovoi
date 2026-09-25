@@ -1572,6 +1572,11 @@ const SatellitesPage = () => {
   const { items: pending } = useApiList('/api/satellites/pending', {
     eventTypes: ['satellites.pending.changed'],
   });
+  // Inside WSL (a Windows install) the server can't see USB drives, so
+  // nothing ever turns up under "plugged in"; the empty state points at
+  // the Wi-Fi setup route instead of the USB port.
+  const { data: caps } = useApiObject('/api/capabilities');
+  const onWsl = caps?.host_kind === 'wsl';
   const [adoptTarget, setAdoptTarget] = React.useState(null);   // {pending, force}
   const [adoptedIds, setAdoptedIds] = React.useState({});       // pending_id → room
 
@@ -1633,7 +1638,10 @@ const SatellitesPage = () => {
       {loading && sats.length === 0 ? (
         <Card><div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading satellites…</div></Card>
       ) : sats.length === 0 ? (
-        <Card><Empty glyph="sleeping" title="no satellites provisioned yet" sub="plug a satellite into this machine's USB port to adopt it — or provision one manually"/></Card>
+        <Card><Empty glyph="sleeping" title="no satellites provisioned yet"
+                     sub={onWsl
+                       ? "prepare a card below and set the satellite up from a phone — USB adoption isn't available while Domovoi runs inside WSL on Windows"
+                       : "plug a satellite into this machine's USB port to adopt it — or provision one manually"}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)
       ) : (

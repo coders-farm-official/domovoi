@@ -125,6 +125,9 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # boot error.
     "domovoi.server_identity",
     "domovoi._ed25519",
+    # Capabilities, Files and the satellite surfaces ask what kind of host
+    # this is (WSL sees no removable drives).
+    "domovoi.host_kind",
 )
 
 

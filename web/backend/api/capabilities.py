@@ -24,6 +24,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 
+from domovoi.host_kind import host_kind
+
 from web.backend.plugin_host import HOST
 
 log = logging.getLogger(__name__)
@@ -126,6 +128,10 @@ async def capabilities() -> dict[str, Any]:
         "handler_display": handler_display,
         "source_tones": CORE_SOURCE_TONES,
         "features": _features(),
+        # linux | wsl | windows | darwin (domovoi/host_kind.py). The
+        # Satellites page reads "wsl" to explain why USB adoption and
+        # writing a card aren't offered on a Windows install.
+        "host_kind": host_kind(),
     }
 
 

@@ -9,7 +9,12 @@
  * Legacy note: flash stock OS with any tool → insert the card into THIS machine
  * (or pick the zip download) → prepare → boot the device → plug it into
  * this machine's USB → adopt. Build progress rides the satellites.media
- * realtime channel (satellite_media_jobs, V004). */
+ * realtime channel (satellite_media_jobs, V004).
+ *
+ * Inside WSL (a Windows install) the server sees no removable drives, so
+ * /status answers drive_targets: false: the card drops the USB transport
+ * and the drive targets, stops polling for cards, and says why — the zip
+ * plus the Wi-Fi portal is the whole route there. */
 
 const smInput = {
   font: 'inherit', fontSize: 13, height: 32, padding: '0 8px',
@@ -139,7 +144,10 @@ const MediaJobRow = ({ j, onShowCredentials }) => {
           eject the card, then boot the device to finish setup
         </div>
       )}
-      {j.status === 'done' && j.target_kind === 'drive' && onShowCredentials && (
+      {/* Zip builds too: their passwords are in no file at all (WEB-1), so
+          this is the only place a portal card's setup key can be read —
+          and inside WSL the zip is the only way to build a card. */}
+      {j.status === 'done' && onShowCredentials && (
         <div style={{ marginTop: 6 }}>
           <Button variant="ghost" icon="key" onClick={() => onShowCredentials(j)}>
             show setup details
@@ -177,20 +185,33 @@ const PrepareMediaCard = ({ fire }) => {
       // A zip build's passwords exist nowhere else, so the modal says so.
       setCreds({ ...c, zip: job.target_kind === 'zip' });
     } catch (e) {
-      // 404 is the normal case after a dashboard restart, not a fault.
-      fire(e.status === 404
-        ? 'setup details are no longer in memory — read domovoi/ap.json from the card'
-        : `couldn't load setup details: ${e.message}`);
+      // 404 is the normal case after a dashboard restart, not a fault. A
+      // card written from here still carries the files; a zip never did.
+      fire(e.status !== 404
+        ? `couldn't load setup details: ${e.message}`
+        : job.target_kind === 'zip'
+          ? 'setup details are no longer in memory, and the zip never had them — prepare the zip again'
+          : 'setup details are no longer in memory — read domovoi/ap.json from the card');
     }
   };
+
+  // False only inside WSL, where no drive ever appears. Unknown (status
+  // still loading, or an older server) counts as visible, which is how
+  // the card has always behaved.
+  const drivesVisible = status?.drive_targets !== false;
 
   // Re-scan drives while the section is open (a just-inserted card should
   // appear without a manual refresh).
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || !drivesVisible) return;
     const t = setInterval(refreshTargets, 4000);
     return () => clearInterval(t);
-  }, [open, refreshTargets]);
+  }, [open, drivesVisible, refreshTargets]);
+
+  // Nothing but the portal can finish setup here; don't send a stale pick.
+  React.useEffect(() => {
+    if (!drivesVisible) { setTransport('portal'); setTarget('zip'); }
+  }, [drivesVisible]);
 
   const boards = status?.boards || [];
   const plugins = status?.plugins || [];
@@ -276,10 +297,12 @@ const PrepareMediaCard = ({ fire }) => {
                        catch (err) { /* private window — session only */ }
                      }}/>
             </label>
-            <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
-              <option value="portal">wi-fi setup portal</option>
-              <option value="usb">usb adoption (plug into this server)</option>
-            </select>
+            {drivesVisible && (
+              <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
+                <option value="portal">wi-fi setup portal</option>
+                <option value="usb">usb adoption (plug into this server)</option>
+              </select>
+            )}
             <select value={target} onChange={e => setTarget(e.target.value)} style={smInput}>
               <option value="zip">download overlay zip</option>
               {bootTargets.map(t => (
@@ -291,6 +314,23 @@ const PrepareMediaCard = ({ fire }) => {
             <Button variant="primary" icon="hammer" disabled={busy} onClick={prepare}>Prepare</Button>
             <Button icon="refresh-cw" disabled={busy} onClick={refreshCache}>Refresh caches</Button>
           </div>
+
+          {!drivesVisible && (
+            <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
+                          alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
+                          background: 'var(--sunken)' }}>
+              <Icon name="info" size={13}/>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                Domovoi is running inside WSL on Windows, which can't see USB
+                drives or SD cards, so USB adoption and writing straight to a
+                card aren't available here. Download the zip, unzip it onto the
+                card's boot partition, and add{' '}
+                <span className="mono">domovoi/ap.json</span> with the key from
+                "show setup details" (the zip's README has the line) — then set
+                the satellite up from a phone over its own Wi-Fi.
+              </span>
+            </div>
+          )}
 
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
                                          display: 'flex', gap: 12, flexWrap: 'wrap' }}>

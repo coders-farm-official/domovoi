@@ -7,14 +7,11 @@ from typing import Any
 
 from domovoi.db.repositories import TimerRepository
 from domovoi.db.session import session_scope
-from domovoi.handlers.timer import _format_duration
+from domovoi.handlers.timer import _format_duration, spoken_label
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
 
-# "timer for 10 minutes for the pasta" stores the label "the pasta"; the
-# fired line reads "Your pasta timer", not "Your the pasta timer".
-_LEADING_ARTICLE_RE = re.compile(r"^(?:the|my|a|an)\s+", re.IGNORECASE)
 # "10 minutes" → "10 minute": the duration is an adjective in the fired line.
 _PLURAL_UNIT_RE = re.compile(r"\b(second|minute|hour)s\b")
 
@@ -24,7 +21,8 @@ def _timer_done_text(label: str | None, duration_sec: int) -> str:
     gave one, else the duration in the same wording the "Timer set for ..."
     acknowledgement used, so two unlabelled timers can be told apart."""
     if label:
-        return f"Your {_LEADING_ARTICLE_RE.sub('', label.strip())} timer is done."
+        # "the pasta" → "Your pasta timer", not "Your the pasta timer".
+        return f"Your {spoken_label(label)} timer is done."
     if duration_sec > 0:
         spoken = _PLURAL_UNIT_RE.sub(r"\1", _format_duration(duration_sec))
         return f"Your {spoken} timer is done."

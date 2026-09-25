@@ -100,6 +100,11 @@ typo is visible before the setup network closes.
 Choose the route when you prepare the card: **Satellites → prepare satellite
 media → wi-fi setup portal** (the default) or **usb adoption**.
 
+On a Windows install, where Domovoi runs inside WSL, the portal and the zip
+download are the only choices. WSL can't see USB drives or SD cards, so USB
+adoption and writing straight to a card aren't offered there and the card
+says why. Unzip the overlay onto the card yourself (below).
+
 ## The golden path — prepare media from the dashboard
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
