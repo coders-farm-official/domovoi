@@ -70,16 +70,15 @@ const downloadDoc = (rel) => {
  * real progress (download-zip sets Content-Length). `onProgress` gets a
  * 0..1 fraction, or null when the length is unknown. */
 const downloadDocsZip = async (relPaths, onProgress) => {
-  const r = await fetch(`${API_BASE}/api/documents/download-zip`, {
+  // Bulk-archiving the operator's Documents folder is the admin tier, so
+  // this goes through apiFetchRaw: the same headers a plain apiFetch
+  // sends, the same sign-in prompt and replay on a 403, and the streamed
+  // Response handed back so the progress bar can still move.
+  const r = await apiFetchRaw('/api/documents/download-zip', {
     method: 'POST',
-    credentials: 'include',
-    // Bulk-archiving the operator's Documents folder is the admin tier, so
-    // this raw fetch (streamed for the progress bar) sends what apiFetch
-    // would: the bearer plus the preflight-forcing header.
-    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rel_paths: relPaths }),
   });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   const total = Number(r.headers.get('Content-Length')) || 0;
   const reader = r.body && r.body.getReader ? r.body.getReader() : null;
   let blob;
@@ -139,20 +138,23 @@ const TextEditorOverlay = ({ rel_path, onClose, fire }) => {
     return () => { cancelled = true; };
   }, [rel_path]);
 
+  /* Through apiFetch, never a bare fetch: writing a document is the ADMIN
+   * tier, the dashboard holds that bearer in memory only, and a page
+   * refresh therefore leaves an admin who can still READ every file.
+   * apiFetch answers that 403 with the sign-in prompt and replays the PUT
+   * once a bearer exists, so the save the operator asked for happens. A
+   * raw fetch skipped all of it: one red PUT, no prompt, the typing lost. */
   const onSave = async () => {
     setSaving(true);
     try {
-      const r = await fetch(`${API_BASE}${docTextUrl(rel_path)}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
-        body: JSON.stringify({ text }),
+      await apiFetch(docTextUrl(rel_path), {
+        method: 'PUT', body: JSON.stringify({ text }),
       });
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
       setDirty(false);
       fire && fire('Saved');
     } catch (e) {
-      fire && fire(`Save failed: ${String(e.message || e).slice(0, 80)}`);
+      const msg = mutationErrorText(e);
+      if (msg && fire) fire(msg);
     } finally { setSaving(false); }
   };
 
@@ -831,7 +833,8 @@ const FilesPage = () => {
       else if (row.category === 'drawing') setDrawing(row);
       else if (row.category === 'text') setTextRel(row.rel_path);
     } catch (e) {
-      fire(`Create failed: ${String(e.message || e).slice(0, 80)}`);
+      const msg = mutationErrorText(e, 'Create');
+      if (msg) fire(msg);
     }
   };
 
@@ -856,7 +859,8 @@ const FilesPage = () => {
       fire(parts.join(' · '));
       refresh();
     } catch (e) {
-      fire(`upload failed: ${String(e.message || e).slice(0, 80)}`);
+      const msg = mutationErrorText(e, 'upload');
+      if (msg) fire(msg);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -964,7 +968,8 @@ const FilesPage = () => {
       clearSelection();
       refresh();
     } catch (e) {
-      fire(`move failed: ${apiErrorText(e, 100)}`);
+      const msg = mutationErrorText(e, 'move');
+      if (msg) fire(msg);
     } finally { setBusy(null); }
   };
 
@@ -1003,7 +1008,8 @@ const FilesPage = () => {
       if (res.reindex_triggered) parts.push('reindexing');
       fire(parts.join(' · '));
     } catch (e) {
-      fire(`import failed: ${String(e.message || e).slice(0, 80)}`);
+      const msg = mutationErrorText(e, 'import');
+      if (msg) fire(msg);
     } finally { setBusy(null); }
   };
 
