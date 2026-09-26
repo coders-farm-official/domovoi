@@ -378,9 +378,11 @@ class PluginHost:
             register_web(ctx)
             assert self.app is not None
             from domovoi.webkit import (
+                WEBSOCKET_UNSUPPORTED,
                 tier_conflicts,
                 ungated_routes,
                 unlisted_tier_routes,
+                websocket_routes,
             )
 
             # A route that says both "any paired device" and "no credential"
@@ -391,6 +393,15 @@ class PluginHost:
                 raise RuntimeError(
                     "route(s) carry both @open_endpoint and @device_endpoint: "
                     + "; ".join(conflicts)
+                )
+            # A websocket route cannot take this gate: its dependency takes
+            # a Request, so the handshake would die with a TypeError at
+            # connect. Refused up front, with the reason, until the gate
+            # has a websocket form.
+            sockets = websocket_routes(ctx.routers)
+            if sockets:
+                raise RuntimeError(
+                    f"{WEBSOCKET_UNSUPPORTED}: " + "; ".join(sockets)
                 )
             # A route FastAPI would mount WITHOUT this gate (a plain
             # Starlette Route or Mount) would answer with no tier and no

@@ -71,6 +71,8 @@ __all__ = [
     "tier_conflicts",
     "iter_plugin_routes",
     "ungated_routes",
+    "websocket_routes",
+    "WEBSOCKET_UNSUPPORTED",
     "unlisted_tier_routes",
     "enforce_route_tier",
     "admin_required",
@@ -201,23 +203,56 @@ def iter_plugin_routes(routers: Iterable[Any]) -> Iterable[Any]:
 
 
 def ungated_routes(routers: Iterable[Any]) -> list[str]:
-    """Every route on ``routers`` that the per-slug gate would never run
-    for. The gate is a router-level dependency, and FastAPI applies those
-    to its own route classes only: a plain Starlette ``Route`` (from
-    ``router.add_route``), a ``WebSocketRoute``, a ``Mount`` or a ``Host``
-    is mounted with no dependency at all — no auth tier, and no 404 while
-    the plugin is disabled. Both processes refuse a plugin with any."""
-    from fastapi.routing import APIRoute, APIWebSocketRoute
+    """Every HTTP route on ``routers`` that the per-slug gate would never
+    run for. The gate is a router-level dependency, and FastAPI applies
+    those to its own route classes only: a plain Starlette ``Route`` (from
+    ``router.add_route``), a ``Mount`` or a ``Host`` is mounted with no
+    dependency at all — no auth tier, and no 404 while the plugin is
+    disabled. Both processes refuse a plugin with any. Websocket routes of
+    either kind are :func:`websocket_routes`' to report."""
+    from fastapi.routing import APIRoute
+    from starlette.routing import WebSocketRoute
 
     out: list[str] = []
     for route in iter_plugin_routes(routers):
-        if isinstance(route, (APIRoute, APIWebSocketRoute)):
+        if isinstance(route, (APIRoute, WebSocketRoute)):
             continue
         fn = getattr(route, "endpoint", None)
         label = _route_label(route, fn) if fn is not None else (
             f"{type(route).__name__} {getattr(route, 'path', '?')}"
         )
         out.append(f"{label} is a {type(route).__name__}")
+    return out
+
+
+# The one sentence both processes' load errors carry for a plugin
+# websocket route, so a plugin author can search for it.
+WEBSOCKET_UNSUPPORTED = "plugin websocket routes are not supported yet"
+
+
+def websocket_routes(routers: Iterable[Any]) -> list[str]:
+    """``"WEBSOCKET path (module.function)"`` for every websocket route on
+    ``routers`` — ``@router.websocket`` / ``add_api_websocket_route``
+    (FastAPI's ``APIWebSocketRoute``) or a plain Starlette
+    ``WebSocketRoute``. Both processes refuse a plugin with any
+    (:data:`WEBSOCKET_UNSUPPORTED`).
+
+    The per-slug gate is written for HTTP: its dependency takes a
+    ``Request``, so on a websocket FastAPI cannot call it and the
+    handshake died with a ``TypeError`` at connect time — closed, but for
+    no reason a plugin author could read — while a plain
+    ``WebSocketRoute`` skipped the gate altogether. Until the gate has a
+    websocket form (what tier a socket needs, and how a browser presents
+    it), the load fails up front and says so."""
+    from starlette.routing import WebSocketRoute
+
+    out: list[str] = []
+    for route in iter_plugin_routes(routers):
+        if not isinstance(route, WebSocketRoute):   # APIWebSocketRoute too
+            continue
+        fn = getattr(route, "endpoint", None)
+        where = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
+        out.append(f"WEBSOCKET {getattr(route, 'path', '?')} ({where})")
     return out
 
 

@@ -18,8 +18,10 @@ the dashboard's ``PluginHost`` — with the same synthetic plugin router.
 The load-time refusals are here too, each against the web mount AND the
 core loader (``PluginLoader.load_plugin`` → contract check 6): a marker
 the install preview's source walk cannot see (set by hand, applied by a
-call, one router down), and a route FastAPI would mount without the gate
-at all (a plain Starlette ``Route`` or ``Mount``).
+call, one router down), a route FastAPI would mount without the gate at
+all (a plain Starlette ``Route`` or ``Mount``), and a websocket route,
+which the HTTP-only gate cannot serve (plugin websockets are not
+supported yet).
 
 DB-free except the last test: the auth primitives are faked at the seam
 ``auth_testkit.install_fake_db`` patches, and no route body touches
@@ -741,6 +743,163 @@ async def test_the_core_refuses_a_route_the_gate_cannot_cover(
         plugin_http._plugin_enabled.pop(SLUG, None)
         plugin_http._mounted.pop(SLUG, None)
         _forget_core_plugin(root)
+
+
+# ─── plugin websocket routes: refused at load, with the reason ────────────
+#
+# The gate is HTTP-only — its dependency takes a Request — so FastAPI
+# could not call it for a websocket and the handshake died with a
+# TypeError at connect time: closed, but for no reason a plugin author
+# could read. Until the gate has a websocket form, both processes refuse
+# the plugin at load and name the route.
+
+WEBSOCKET_ROUTES = {
+    "websocket-decorator": '''
+        from fastapi import APIRouter, WebSocket
+
+        router = APIRouter()
+
+
+        @router.websocket("/ws")
+        async def live(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_json({"live": True})
+            await websocket.close()
+    ''',
+    "nested-websocket": '''
+        from fastapi import APIRouter, WebSocket
+
+        inner = APIRouter()
+
+
+        @inner.websocket("/ws")
+        async def live(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.close()
+
+
+        router = APIRouter()
+        router.include_router(inner, prefix="/in")
+    ''',
+    # Starlette's own class: the gate never ran for it at all. It used to
+    # be refused as "a route the gate cannot cover", whose advice (use the
+    # router's decorators) led straight to the TypeError above.
+    "starlette-websocket-route": '''
+        from fastapi import APIRouter
+
+        router = APIRouter()
+
+
+        async def live(websocket):
+            await websocket.accept()
+            await websocket.close()
+
+
+        router.add_websocket_route("/ws", live)
+    ''',
+}
+
+
+@pytest.mark.parametrize("shape", sorted(WEBSOCKET_ROUTES))
+async def test_the_web_mount_refuses_a_websocket_route(shape: str, tmp_path: Path) -> None:
+    _write_plugin(tmp_path, _plugin_source(WEBSOCKET_ROUTES[shape]))
+    try:
+        app = FastAPI()
+        host = PluginHost()
+        host.app = app
+        row = _row(tmp_path)
+        host.rows = {SLUG: row}
+        host._mount_one(row)
+        assert SLUG not in host.mounted
+        error = host.load_errors[SLUG]
+        assert "plugin websocket routes are not supported yet" in error, error
+        assert "WEBSOCKET /ws (" in error
+        assert "gate cannot cover" not in error   # named once, for the right reason
+        assert not any(
+            getattr(r, "path", "").startswith(f"/api/plugins/{SLUG}") for r in app.routes
+        )
+    finally:
+        _forget_plugin_modules(tmp_path)
+
+
+@pytest.mark.parametrize("shape", sorted(WEBSOCKET_ROUTES))
+async def test_the_core_refuses_a_websocket_route(shape: str, tmp_path: Path) -> None:
+    from domovoi.plugins_runtime.contracts import ContractError
+    from domovoi.plugins_runtime.loader import LOADER
+
+    root = _write_core_plugin(tmp_path, _plugin_source(WEBSOCKET_ROUTES[shape]))
+    try:
+        with pytest.raises(ContractError) as exc:
+            await _load_core(root)
+        assert len(exc.value.errors) == 1, exc.value.errors
+        error = exc.value.errors[0]
+        assert "WEBSOCKET /ws (" in error
+        assert "plugin websocket routes are not supported yet" in error, error
+        assert SLUG not in LOADER.loaded
+        # The mount is the last door, for any caller but the loader.
+        import importlib
+
+        module = importlib.import_module(f"domovoi_plugin_{SLUG}.core")
+        plugin_http._mounted.pop(SLUG, None)
+        with pytest.raises(TypeError, match="plugin websocket routes are not supported yet"):
+            plugin_http.mount_plugin_router(FastAPI(), SLUG, module.router)
+        assert SLUG not in plugin_http._mounted
+    finally:
+        plugin_http._plugin_enabled.pop(SLUG, None)
+        plugin_http._mounted.pop(SLUG, None)
+        _forget_core_plugin(root)
+
+
+async def test_a_websocket_route_used_to_fail_only_at_connect() -> None:
+    """Why the load refuses it: behind the gate, a plugin websocket could
+    not even be called — the gate's dependency wants a Request. Mounted
+    by hand (``include_router``, skipping the refusal), the handshake
+    fails with the TypeError the refusal now replaces."""
+    from fastapi import Depends, WebSocket
+    from fastapi.testclient import TestClient
+
+    router = APIRouter()
+
+    @router.websocket("/ws")
+    async def live(websocket: WebSocket):
+        await websocket.accept()
+        await websocket.close()
+
+    assert webkit.websocket_routes([router]) == [
+        f"WEBSOCKET /ws ({__name__}.test_a_websocket_route_used_to_fail_only_at_connect.<locals>.live)"
+    ]
+    app = FastAPI()
+    app.include_router(
+        router, prefix=f"/v1/plugins/{SLUG}",
+        dependencies=[Depends(plugin_http._make_gate(SLUG))],
+    )
+    plugin_http.set_plugin_enabled(SLUG, True)
+    try:
+        with pytest.raises(TypeError, match="request"):
+            with TestClient(app).websocket_connect(f"/v1/plugins/{SLUG}/ws"):
+                pass
+    finally:
+        plugin_http._plugin_enabled.pop(SLUG, None)
+
+
+async def test_an_http_route_is_never_named_a_websocket() -> None:
+    """The websocket check names websocket routes only: radio's real
+    routers, a plain HTTP router and an ungated Starlette route pass it."""
+    radio_dir = Path(__file__).resolve().parents[2] / "plugins" / "radio"
+    if str(radio_dir) not in sys.path:
+        sys.path.insert(0, str(radio_dir))
+    from domovoi_plugin_radio import core as radio_core
+    from domovoi_plugin_radio import web as radio_web
+
+    class _Ctx:
+        db_session_scope = None
+        core = None
+
+    plain = APIRouter()
+    plain.add_route("/plain", lambda request: None, methods=["POST"])
+    routers = [radio_web.build_router(_Ctx()), radio_core._build_core_router(None), plain]
+    assert webkit.websocket_routes(routers) == []
+    assert webkit.ungated_routes([plain]) != []
 
 
 async def test_a_nested_router_route_keeps_its_tier_and_its_listing(

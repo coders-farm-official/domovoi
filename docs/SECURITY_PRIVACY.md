@@ -721,9 +721,12 @@ What the install flow *does* do (verified in
   ship a mutation the household's devices — let alone the LAN — can call
   unnoticed. The gate is a router dependency, which FastAPI runs for its
   own route classes only, so a plugin router carrying a plain Starlette
-  `Route` (`router.add_route`), `Mount`, `Host` or `WebSocketRoute` — which
-  would answer with no tier at all, even while the plugin is disabled — is
-  refused at load in both processes, nested routers included. The bundled
+  `Route` (`router.add_route`), `Mount` or `Host` — which would answer
+  with no tier at all, even while the plugin is disabled — is refused at
+  load in both processes, nested routers included. So is any websocket
+  route: the gate is HTTP-only (a Starlette `WebSocketRoute` skips it, and
+  on `@router.websocket` it cannot even be called), so plugin websocket
+  routes are not supported yet. The bundled
   radio plugin opens nothing to the whole LAN: its
   everyday mutations (play, favorite, edit, forget, simulcast lookup) are
   `@device_endpoint` and its FCC bulk import keeps the admin default.

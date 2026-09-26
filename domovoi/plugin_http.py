@@ -23,7 +23,9 @@ dependencies:
   markers is refused (decorator, load-time contract check, and
   :func:`mount_plugin_routers` itself), and so is a route FastAPI would
   mount WITHOUT the gate dependency — a plain Starlette ``Route`` /
-  ``Mount`` / ``Host`` / ``WebSocketRoute`` (``webkit.ungated_routes``).
+  ``Mount`` / ``Host`` (``webkit.ungated_routes``) — and any websocket
+  route: the gate is HTTP-only, so plugin websocket routes are not
+  supported yet (``webkit.websocket_routes``).
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -46,6 +48,7 @@ from domovoi.db.session import session_scope
 from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
     _DEVICE_MARKER,
     _OPEN_MARKER,
+    WEBSOCKET_UNSUPPORTED,
     EndpointTierConflict,
     admin_required,
     device_endpoint,
@@ -56,6 +59,7 @@ from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
     open_endpoint,
     tier_conflicts,
     ungated_routes,
+    websocket_routes,
 )
 
 log = logging.getLogger(__name__)
@@ -145,6 +149,14 @@ def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
         raise EndpointTierConflict(
             f"plugin {slug!r}: route(s) carry both @open_endpoint and "
             f"@device_endpoint: {'; '.join(conflicts)}"
+        )
+    sockets = websocket_routes(routers)
+    if sockets:
+        # The gate's dependency takes a Request; on a websocket FastAPI
+        # cannot call it and the handshake dies with a TypeError. Say why
+        # at mount instead.
+        raise TypeError(
+            f"plugin {slug!r}: {WEBSOCKET_UNSUPPORTED}: {'; '.join(sockets)}"
         )
     ungated = ungated_routes(routers)
     if ungated:

@@ -1140,9 +1140,12 @@ for how to declare them.
   carrying both is refused at staging and at load, and so is a route whose
   marker the preview's source scan cannot see (one applied by a call or set
   by hand rather than stacked as a decorator). So is a route the gate cannot
-  cover: a plain Starlette `Route` (`router.add_route`), `Mount`, `Host` or
-  `WebSocketRoute` on a plugin router would mount without the gate
-  dependency, so it fails the load. GETs are open unless the
+  cover: a plain Starlette `Route` (`router.add_route`), `Mount` or `Host`
+  on a plugin router would mount without the gate dependency, so it fails
+  the load. Plugin websocket routes are not supported yet: the gate is
+  HTTP-only, so a `@router.websocket` route (or a Starlette
+  `WebSocketRoute`) fails the load in both processes with "plugin
+  websocket routes are not supported yet". GETs are open unless the
   plugin adds its own `Depends(admin_required)` or marks the GET
   `@device_endpoint`.
 * Pre-setup grace applies: until the admin credential exists, the gate

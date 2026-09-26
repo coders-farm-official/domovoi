@@ -1170,6 +1170,18 @@ with the router's own decorators or `add_api_route` (nested routers via
 `router.mount(...)` is mounted by FastAPI without the gate dependency —
 no tier, and no `404` while disabled — so it fails the load too.
 
+**Plugin websocket routes are not supported yet.** The gate that gives a
+route its tier and its disabled-`404` is written for HTTP requests; on a
+websocket FastAPI cannot call it, so a `@router.websocket(...)` route used
+to mount and then fail every handshake with a `TypeError`. Until the gate
+has a websocket form, a plugin router carrying any websocket route —
+`@router.websocket`, `add_api_websocket_route`, or a Starlette
+`add_websocket_route` — fails the load in both processes with "plugin
+websocket routes are not supported yet", naming the route. For live
+dashboard updates, declare `[[realtime]]` channels in the manifest
+([§4.12](#412-realtime--sdkrealtime)): they ride the dashboard's own
+`/ws/state` socket.
+
 ### 4.16 The web entry point — `register_web(ctx)`
 
 Runs in the separate dashboard process. Your `web.py` receives a
@@ -1179,7 +1191,9 @@ Runs in the separate dashboard process. Your `web.py` receives a
   **same gate as the core** (one body, `webkit.enforce_route_tier`): 404
   while disabled, and every non-GET route requires an admin session unless
   its function is decorated `@device_endpoint` or `@open_endpoint` — the
-  same tiers, chosen the same way, as [§4.15](#415-core-process-http-routers-device_endpoint-and-open_endpoint).
+  same tiers, chosen the same way, as [§4.15](#415-core-process-http-routers-device_endpoint-and-open_endpoint)
+  (which also covers the routes the load refuses, websocket routes
+  included).
   The decorators and the GET-gating dependency come from the one module a
   web entry may import:
 
