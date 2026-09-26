@@ -126,14 +126,21 @@ def _make_gate(slug: str, mount: list[Any] | None = None):
     of the mount that includes the route: once the slug is mounted again
     (a later enable, on this app or another) the route 404s like a
     disabled one, whatever the flag says."""
-    async def _gate(request: Request) -> None:
+    def _refuse_if_gone() -> None:
         if not _plugin_enabled.get(slug, False) or (
             mount is not None and _mounted.get(slug) is not mount
         ):
             raise HTTPException(status_code=404, detail=f"plugin {slug!r} disabled")
+
+    async def _gate(request: Request) -> None:
+        _refuse_if_gone()
         # Default-DENY for mutations: the admin tier unless the route
         # function carries a tier marker (shared body with the web gate).
         await enforce_route_tier(request)
+        # The tier check can await the DB. A disable (or disable and
+        # re-enable) that ran meanwhile tore this route's SDK down, so
+        # look again before the endpoint runs against it.
+        _refuse_if_gone()
     return _gate
 
 
@@ -209,11 +216,14 @@ def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
         table = app.router.routes
         # include_router appends, so everything past ``start`` is ours.
         start = len(table)
-        # It also folds each router's lifespan into the app's. Plugins
-        # mount from inside the app's lifespan (or later), where that can
-        # never run — and on every re-enable it would chain one more
-        # wrapper holding that load's routers, and their SDK, alive.
+        # It also folds each router's lifespan into the app's, and appends
+        # its startup / shutdown handlers to the app's. Plugins mount from
+        # inside the app's lifespan (or later), where none of that can
+        # run — and on every re-enable it would chain one more wrapper, and
+        # add one more handler, holding that load's routers and SDK alive.
         lifespan = app.router.lifespan_context
+        startup = list(app.router.on_startup)
+        shutdown = list(app.router.on_shutdown)
         try:
             for router in routers:
                 app.include_router(
@@ -228,6 +238,8 @@ def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
             raise
         finally:
             app.router.lifespan_context = lifespan
+            app.router.on_startup[:] = startup
+            app.router.on_shutdown[:] = shutdown
         added = table[start:]
         for entry in added:
             setattr(entry, _SLUG_ATTR, slug)

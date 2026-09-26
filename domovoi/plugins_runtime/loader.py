@@ -338,12 +338,14 @@ class PluginLoader:
         return lp
 
     async def unload_plugin(self, slug: str) -> None:
-        """Full §3.4 teardown: on_disable hooks → workers → handlers →
-        routers (404 gate) → SDK teardown (capabilities, subscriptions,
-        stamps, open-enum values, canned sounds, state) → config."""
+        """Full §3.4 teardown: routers (404 gate) → on_disable hooks →
+        workers → handlers → SDK teardown (capabilities, subscriptions,
+        stamps, open-enum values, canned sounds, state) → config. The gate
+        closes first: the hooks and the worker stop await, and a request
+        let through meanwhile would run against a load being torn down."""
+        set_plugin_enabled(slug, False)
         lp = self.loaded.pop(slug, None)
         if lp is None:
-            set_plugin_enabled(slug, False)
             return
         for cb in lp.context.disable_callbacks:
             try:
@@ -354,7 +356,6 @@ class PluginLoader:
         WORKERS.remove_owner(slug)
         for handler in lp.context.handlers:
             unregister_handler(handler)
-        set_plugin_enabled(slug, False)
         lp.sdk.teardown()
         PLUGIN_CONFIG.unregister(slug)
         for key in [k for k, (owner, _) in CONTEXT_PROVIDERS.items() if owner == slug]:

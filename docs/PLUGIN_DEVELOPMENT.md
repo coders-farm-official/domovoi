@@ -731,7 +731,7 @@ what makes disable/uninstall a clean teardown:
 | `ctx.add_capability(name, impl)` | Provide a capability under a plain name. |
 | `ctx.add_config(SettingsModel, fieldspecs)` | Register your settings; the validated live instance lands on `ctx.sdk.config`. |
 | `ctx.on_reapply(field_name, cb)` | Callback after a `tier="reapply"` config field is written. |
-| `ctx.on_disable(cb)` | Async teardown callback, first thing run on disable/uninstall. |
+| `ctx.on_disable(cb)` | Async teardown callback, the first plugin code run on disable/uninstall (by then the plugin's routes already answer 404). |
 | `ctx.add_canned_sounds(sounds)` | Shortcut for `sdk.assets.add_canned_sounds`. |
 | `ctx.add_context_provider(key, fn)` | Contribute a key to the per-turn Context extras (keys are exclusive across plugins). |
 

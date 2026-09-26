@@ -350,13 +350,23 @@ async def test_the_route_table_does_not_grow_across_enable_cycles() -> None:
     OpenAPI doc stay the size of one mount, each cycle's own routes are
     the ones answering, and the first mount's router is released — a
     torn-down load is not kept alive. ``include_router`` also folds each
-    router's lifespan into the app's; that is undone, or every cycle
-    would chain one more wrapper holding that load's routers."""
+    router's lifespan into the app's and appends its startup / shutdown
+    handlers to the app's; both are undone, or every cycle would chain
+    one more wrapper, and add one more handler, holding that load's
+    routers."""
     import gc
     import weakref
 
+    def _with_hooks(router: APIRouter) -> APIRouter:
+        async def hook() -> None:
+            router.routes  # a load's own handler closes over that load
+
+        router.on_startup.append(hook)
+        router.on_shutdown.append(hook)
+        return router
+
     app = FastAPI()
-    first = _tiered_router(0)
+    first = _with_hooks(_tiered_router(0))
     released = weakref.ref(first)
     plugin_http.mount_plugin_routers(app, "demo", [first])
     del first
@@ -367,7 +377,9 @@ async def test_the_route_table_does_not_grow_across_enable_cycles() -> None:
 
     for gen in range(1, 6):
         set_plugin_enabled("demo", False)
-        plugin_http.mount_plugin_routers(app, "demo", [_tiered_router(gen)])
+        plugin_http.mount_plugin_routers(
+            app, "demo", [_with_hooks(_tiered_router(gen))]
+        )
         assert len(app.router.routes) == entries
         assert len(list(iter_route_contexts(app.routes))) == effective
         assert len(app.openapi()["paths"]) == paths
@@ -375,8 +387,40 @@ async def test_the_route_table_does_not_grow_across_enable_cycles() -> None:
             r = await client.get("/v1/plugins/demo/things")
             assert r.json() == {"gen": gen}
     assert app.router.lifespan_context is lifespan
+    assert (app.router.on_startup, app.router.on_shutdown) == ([], [])
     gc.collect()
     assert released() is None
+
+
+async def test_a_disable_during_the_tier_check_404s_the_request(monkeypatch) -> None:
+    """The tier check can await the DB. A request that passed the enable
+    check and is still in its tier check when the plugin is disabled —
+    or disabled and re-enabled, which tore its route's SDK down — must
+    not go on to run the endpoint against that load."""
+    import asyncio
+
+    parked, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_tier_check(request) -> None:
+        parked.set()
+        await release.wait()
+
+    monkeypatch.setattr(plugin_http, "enforce_route_tier", slow_tier_check)
+
+    for re_enable in (False, True):
+        app = FastAPI()
+        plugin_http.mount_plugin_routers(app, "demo", [_tiered_router(1)])
+        parked.clear()
+        release.clear()
+        async with await _client(app) as client:
+            request = asyncio.create_task(client.get("/v1/plugins/demo/things"))
+            await asyncio.wait_for(parked.wait(), 5)
+            set_plugin_enabled("demo", False)
+            if re_enable:
+                plugin_http.mount_plugin_routers(app, "demo", [_tiered_router(2)])
+            release.set()
+            r = await asyncio.wait_for(request, 5)
+        assert r.status_code == 404, (re_enable, r.text)
 
 
 async def test_a_route_answers_only_for_the_mount_that_included_it() -> None:
@@ -505,6 +549,25 @@ async def test_the_loader_mounts_both_routers_and_re_enables_cleanly(demo_plugin
     await demo_plugin.load()
     assert await _statuses(app, "/first", "/second") == [200, 200]
     assert len(app.router.routes) == size
+
+
+async def test_disable_closes_the_gate_before_the_plugin_s_own_teardown(
+    demo_plugin,
+) -> None:
+    """Disable 404s the plugin's routes BEFORE its on_disable hooks and the
+    worker stop, both of which await: a request let through meanwhile
+    would run against a load half torn down."""
+    app = demo_plugin.app
+    demo_plugin.write(_TWO_ROUTER_PLUGIN)
+    lp = await demo_plugin.load()
+    seen: list[list[int]] = []
+
+    async def on_disable() -> None:
+        seen.append(await _statuses(app, "/first", "/second"))
+
+    lp.context.disable_callbacks.append(on_disable)
+    await demo_plugin.loader.unload_plugin("demo")
+    assert seen == [[404, 404]]
 
 
 # ─── Re-enable serves the CURRENT load ────────────────────────────────────
