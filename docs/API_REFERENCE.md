@@ -1203,8 +1203,8 @@ password — and the FCC import keeps the admin default; nothing is open):
 | `GET /api/plugins/radio/stations/{station_id}` | Open | — | One station. |
 | `GET /api/plugins/radio/recent` | Open | — | The ten most recently played stations. |
 | `POST /api/plugins/radio/play` | Device (`@device_endpoint`) | `{source, external_id?, station_id?, ...}` | Stamp a station as played (resolve-or-create, not a favorite) and return the row to stream. A new `stream_url` passes the outbound-URL check before it becomes a row. |
-| `POST /api/plugins/radio/stations` | Device (`@device_endpoint`) | station body | Save (favorite) a station. `201`. Idempotent on `external_id`. |
-| `PATCH /api/plugins/radio/stations/{station_id}` | Device (`@device_endpoint`) | `{name?, stream_url?, favorited?, sample_interval_sec?, tags?}` | Edit / favorite / unfavorite. A `stream_url` passes the outbound-URL check before it is stored. |
+| `POST /api/plugins/radio/stations` | Device (`@device_endpoint`) | station body | Save (favorite) a station. `201`. Idempotent on `external_id`. `422` for a null `name` / `source` / `tags` / `sample_interval_sec` or a `frequency_mhz` outside 0-9999.9 (the column is `NUMERIC(5,1)`). |
+| `PATCH /api/plugins/radio/stations/{station_id}` | Device (`@device_endpoint`) | `{name?, stream_url?, favorited?, sample_interval_sec?, tags?}` | Edit / favorite / unfavorite. A `stream_url` passes the outbound-URL check before it is stored. An explicit `null` clears `stream_url` or `tags`; for `name`, `favorited` or `sample_interval_sec` (NOT NULL columns) it is a `422` naming the field, and nothing is written. |
 | `DELETE /api/plugins/radio/stations/{station_id}` | Device (`@device_endpoint`) | — | Forget a station (cascades to its detections). `204`. |
 | `POST /api/plugins/radio/stations/{station_id}/resolve-simulcast` | Device (`@device_endpoint`) | — | Simulcast resolution from the dashboard; the caller's household token (or Bearer) is forwarded to the core's own device-tier gate. |
 | `POST /api/plugins/radio/fcc-import` | Admin (default mutation gate) | `?state=` | Start the FCC import (Bearer forwarded to the core). |

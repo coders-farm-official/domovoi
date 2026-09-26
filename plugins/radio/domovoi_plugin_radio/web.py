@@ -118,7 +118,9 @@ class RadioStationCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     source: str = "online"
     stream_url: str | None = None
-    frequency_mhz: float | None = None
+    # The column is NUMERIC(5,1): past 9999.9 the INSERT overflowed into a
+    # 500, so the bound is checked here and answers 422 instead.
+    frequency_mhz: float | None = Field(default=None, ge=0, le=9999.9)
     market_city: str | None = None
     market_state: str | None = None
     call_sign: str | None = None
@@ -150,6 +152,13 @@ class RadioStationPatch(BaseModel):
     favorited: bool | None = None
     sample_interval_sec: int | None = Field(default=None, ge=30, le=86400)
     tags: list[str] | None = None
+
+
+# The PATCH fields whose columns are NOT NULL. ``None`` in the model above
+# means "not sent"; an explicit JSON null for one of these is a bad
+# request, not a way to clear it — unchecked, it reached Postgres and came
+# back as a 500. ``stream_url`` and ``tags`` are nullable: null clears them.
+_PATCH_NOT_NULL = ("name", "favorited", "sample_interval_sec")
 
 
 class RadioDetection(BaseModel):
@@ -522,10 +531,20 @@ def build_router(ctx: Any) -> APIRouter:
         """Partial update — most commonly the favorited flag or the
         per-station sample interval. A new ``stream_url`` is the one field
         that points the server somewhere, and it goes through the same
-        outbound-URL check as ``POST /stations`` before it is stored."""
+        outbound-URL check as ``POST /stations`` before it is stored. A
+        null for a NOT NULL column is a 422 (``_PATCH_NOT_NULL``)."""
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             raise HTTPException(status_code=400, detail="no fields provided")
+        nulled = [k for k in _PATCH_NOT_NULL if k in updates and updates[k] is None]
+        if nulled:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{', '.join(nulled)} can't be null — send a value, or "
+                    "leave the field out to keep the current one"
+                ),
+            )
         if "stream_url" in updates:
             await _check_stream_url(updates["stream_url"])
         set_fragments = [f"{k} = :{k}" for k in updates]

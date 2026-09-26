@@ -86,6 +86,79 @@ def test_patch_404_and_empty_body(web_client) -> None:
     ).status_code == 400
 
 
+@pytest.mark.parametrize("field", ["name", "favorited", "sample_interval_sec"])
+def test_patch_refuses_null_for_a_not_null_column(web_client, field: str) -> None:
+    """``{"name": null}`` used to reach Postgres as ``SET name = NULL`` and
+    come back a 500. It is a bad request: 422, a detail that names the
+    field, and the row untouched."""
+    st = _seed_station(web_client)
+    resp = web_client.patch(
+        f"/api/plugins/radio/stations/{st['id']}", json={field: None}
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, str) and detail.startswith(f"{field} can't be null"), detail
+    after = web_client.get(f"/api/plugins/radio/stations/{st['id']}").json()
+    assert after[field] == st[field]
+
+
+def test_patch_names_every_nulled_field_and_writes_none_of_the_batch(web_client) -> None:
+    st = _seed_station(web_client)
+    resp = web_client.patch(
+        f"/api/plugins/radio/stations/{st['id']}",
+        json={"name": None, "favorited": None, "sample_interval_sec": 600},
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"].startswith("name, favorited can't be null")
+    after = web_client.get(f"/api/plugins/radio/stations/{st['id']}").json()
+    assert after["sample_interval_sec"] == st["sample_interval_sec"]
+
+
+def test_patch_null_still_clears_the_nullable_columns(web_client) -> None:
+    """An FM station has no stream URL and a station may have no tags —
+    null clears those two, as before."""
+    st = _seed_station(web_client)
+    patched = web_client.patch(
+        f"/api/plugins/radio/stations/{st['id']}",
+        json={"stream_url": None, "tags": None},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["stream_url"] is None
+    assert patched.json()["tags"] == []
+
+
+@pytest.mark.parametrize("field", ["name", "source", "sample_interval_sec", "tags"])
+def test_create_refuses_null_for_a_not_null_column(web_client, field: str) -> None:
+    """``POST /stations`` never let a null through — the create model's
+    types refuse it — so this pins the 422 rather than fixing it."""
+    body = {"name": "KEXP", "source": "online",
+            "stream_url": "http://kexp.example/stream.mp3", "external_id": "uuid-null"}
+    body[field] = None
+    resp = web_client.post("/api/plugins/radio/stations", json=body)
+    assert resp.status_code == 422, resp.text
+    assert web_client.get("/api/plugins/radio/stations").json() == []
+
+
+@pytest.mark.parametrize("freq", [123456.7, 10000.0, -1.0])
+def test_create_refuses_a_frequency_the_column_cannot_hold(web_client, freq: float) -> None:
+    """``frequency_mhz`` is NUMERIC(5,1): 123456.7 overflowed the INSERT
+    into a 500. Out of range is a 422 now, and nothing is written."""
+    resp = web_client.post("/api/plugins/radio/stations", json={
+        "name": "WXYZ", "source": "fm", "frequency_mhz": freq, "external_id": "fcc-big",
+    })
+    assert resp.status_code == 422, resp.text
+    assert web_client.get("/api/plugins/radio/stations").json() == []
+
+
+@pytest.mark.parametrize("field", ["source", "tags"])
+def test_play_refuses_null_for_a_not_null_column(web_client, field: str) -> None:
+    body = {"name": "KEXP", "stream_url": "http://kexp.example/stream.mp3",
+            "external_id": "uuid-null", field: None}
+    resp = web_client.post("/api/plugins/radio/play", json=body)
+    assert resp.status_code == 422, resp.text
+    assert web_client.get("/api/plugins/radio/stations").json() == []
+
+
 def test_delete_station(web_client) -> None:
     st = _seed_station(web_client)
     assert web_client.delete(
