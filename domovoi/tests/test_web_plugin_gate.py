@@ -243,6 +243,62 @@ async def test_disabled_plugin_is_404_for_every_method(
             assert r.status_code == 404, (method, path)
 
 
+async def test_re_enable_serves_the_one_live_registration(tmp_path: Path) -> None:
+    """The web process tears nothing down on disable — the gate is the
+    whole unmount — and an enable finds the slug mounted and re-runs
+    nothing. So the routes answering after a re-enable are the ones
+    ``register_web`` built, holding the context it was handed, which is
+    still the live one. (The core DOES tear its SDK down on disable, so
+    it replaces the slug's routes on every enable instead:
+    ``test_plugin_http.py``.)"""
+    slug = "webcycle"
+    pkg = tmp_path / f"domovoi_plugin_{slug}"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "web.py").write_text(textwrap.dedent(
+        """
+        from fastapi import APIRouter
+
+        CONTEXTS = []
+
+        def register_web(ctx):
+            CONTEXTS.append(ctx)
+            router = APIRouter()
+
+            @router.get("/ctx")
+            async def which():
+                return {"ctx": id(ctx), "registrations": len(CONTEXTS)}
+
+            ctx.add_router(router)
+        """
+    ), encoding="utf-8")
+    app, host, row = FastAPI(), PluginHost(), _row(slug, tmp_path)
+    try:
+        _mount(host, app, row)
+        contexts = sys.modules[f"domovoi_plugin_{slug}.web"].CONTEXTS
+        live = {"ctx": id(contexts[0]), "registrations": 1}
+        size = len(app.router.routes)
+        async with _client(app) as c:
+            assert (await c.get(f"/api/plugins/{slug}/ctx")).json() == live
+
+        host.rows = {slug: {**row, "enabled": False}}
+        async with _client(app) as c:
+            assert (await c.get(f"/api/plugins/{slug}/ctx")).status_code == 404
+
+        # What resync does for an enabled row.
+        host.rows = {slug: row}
+        host._mount_one(row)
+        async with _client(app) as c:
+            assert (await c.get(f"/api/plugins/{slug}/ctx")).json() == live
+        assert len(contexts) == 1
+        assert len(app.router.routes) == size
+    finally:
+        sys.modules.pop(f"domovoi_plugin_{slug}.web", None)
+        sys.modules.pop(f"domovoi_plugin_{slug}", None)
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 
 
 # ─── the bundled radio plugin under the gate ──────────────────────────────

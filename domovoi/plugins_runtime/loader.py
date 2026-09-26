@@ -7,10 +7,11 @@ fails loudly at boot, not silently at the first Whisper call.
 
 Hot enable/disable never unloads modules (Python can't, and we don't
 pretend to): the imported module stays cached; enable re-runs
-``register()`` against a fresh :class:`PluginContext`, and disable is a
-context teardown. **Code changes therefore need a core restart** —
-stated plainly per design §3.4; the dev loop is ``domovoi plugin dev``
-(§3.8).
+``register()`` against a fresh :class:`PluginContext` (whose routers
+replace the torn-down context's on the app — ``domovoi.plugin_http``),
+and disable is a context teardown. **Code changes therefore need a core
+restart** — stated plainly per design §3.4; the dev loop is
+``domovoi plugin dev`` (§3.8).
 """
 
 from __future__ import annotations
@@ -301,9 +302,9 @@ class PluginLoader:
         degraded = _probe_system_tools(manifest)
 
         # Mount routers / start workers now that the contract holds.
-        # Every router at once: mounting is per slug (a second call for
-        # a mounted slug only re-enables it), so a router-at-a-time loop
-        # mounted the first and silently dropped the rest.
+        # Every router at once: mounting is per slug (each call replaces
+        # the slug's previous mount — on a re-enable, the torn-down load's
+        # routes), so a router-at-a-time loop would leave only the last.
         if self._app is not None:
             mount_plugin_routers(self._app, slug, ctx.routers)
         set_plugin_enabled(slug, True)

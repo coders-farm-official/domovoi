@@ -1121,9 +1121,11 @@ for how to declare them.
 
 **Core process — `/v1/plugins/<slug>/...`** (`domovoi/plugin_http.py`):
 
-* **Enable gate**: a disabled plugin's routes return `404` (FastAPI can't
-  remove routes, so a per-slug flag guards them; the router is reused on
-  re-enable).
+* **Enable gate**: a disabled plugin's routes return `404` (a per-slug flag
+  guards them). Each enable mounts the routers that load registered in
+  place of the previous load's, so a re-enabled plugin answers from its
+  live state and a plugin re-enabled with a different route set serves
+  exactly that set; the route table does not grow.
 * **Auth gate, default-deny for mutations**: every non-GET route requires an
   admin session unless the plugin author put it on another tier with a
   decorator on the route function:

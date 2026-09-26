@@ -15,8 +15,11 @@ live here:
   runtime invariant rather than a lint suggestion.
 * **Router + static hosting** — plugin routers mount at
   ``/api/plugins/<slug>`` behind a per-slug gate dependency that 404s
-  while the slug is disabled (FastAPI can't remove routes; the gate is
-  the unmount) and that applies the same default-deny auth rule as the
+  while the slug is disabled (the gate is the unmount: this process
+  tears nothing down on disable and never re-runs ``register_web``, so
+  the routes mounted once keep a live context — the core, whose disable
+  DOES tear its SDK down, replaces a slug's routes on every enable
+  instead) and that applies the same default-deny auth rule as the
   core's ``domovoi.plugin_http`` (``webkit.enforce_route_tier``): every
   non-GET route requires an admin session unless its function is
   decorated ``@domovoi.webkit.device_endpoint`` (household token or admin

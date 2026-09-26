@@ -175,3 +175,58 @@ async def test_unload_is_clean(db_session) -> None:
     await LOADER.unload_plugin("radio")
     assert "radio" not in HANDLER_BY_NAME
     assert "radio" not in NOW_PLAYING.sources()
+
+
+@requires_db
+async def test_state_route_reads_the_live_sdk_after_re_enable(db_session) -> None:
+    """Disable then enable runs ``register()`` again against a fresh SDK,
+    and the core ``/state`` route must read THAT load's ``sdk.state``. The
+    first enable's route used to keep answering, from the torn-down SDK's
+    orphaned state: a tuner the disable had stopped, an FCC job nothing
+    updates any more."""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from domovoi.plugins_runtime.loader import PluginLoader
+
+    class _Tuner:
+        def __init__(self, mhz: float) -> None:
+            self.current_frequency_mhz = mhz
+
+        async def stop(self) -> None:
+            pass
+
+    manifest = parse_manifest_dir(PLUGIN_DIR)
+    loader = PluginLoader()
+    app = FastAPI()
+    loader.bind_app(app)
+
+    async def _load():
+        return await loader.load_plugin(
+            slug="radio", install_dir=PLUGIN_DIR, manifest=manifest,
+            foreign_corpus=[], foreign_web_routes=[],
+            update_registry_status=False,
+        )
+
+    async def _state() -> dict:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.get("/v1/plugins/radio/state")
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    try:
+        first = await _load()
+        first.sdk.state["sdr_tuner"] = _Tuner(88.1)
+        assert (await _state())["sdr_frequency_mhz"] == 88.1
+
+        await loader.unload_plugin("radio")
+        second = await _load()
+        second.sdk.state["sdr_tuner"] = _Tuner(97.5)
+        body = await _state()
+        assert body["sdr_available"] is True
+        assert body["sdr_frequency_mhz"] == 97.5
+    finally:
+        if "radio" in loader.loaded:
+            await loader.unload_plugin("radio")
