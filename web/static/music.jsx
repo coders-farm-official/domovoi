@@ -523,7 +523,7 @@ const AddMusicBar = ({ rooms, canFulfillQuery, fire, onQueued }) => {
       setText('');
       onQueued && onQueued();
     } catch (e) {
-      fire(`add failed: ${e.message}`);
+      reportMutationFailure(fire, 'add', e);
     } finally {
       setBusy(false);
     }
@@ -676,7 +676,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire }) => {
       refresh();
     } catch (e) {
       setOrder(null);                     // revert to the server's truth
-      fire(`move failed: ${apiErrorText(e)}`);
+      reportMutationFailure(fire, 'move', e);
     }
   };
 
@@ -689,7 +689,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire }) => {
       fire(`removed "${item.title || 'track'}"`);
       refresh();
     } catch (e) {
-      fire(`remove failed: ${apiErrorText(e)}`);
+      reportMutationFailure(fire, 'remove', e);
     } finally { setBusy(false); }
   };
 
@@ -702,7 +702,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire }) => {
       fire(`cleared ${room}'s queue`);
       refresh();
     } catch (e) {
-      fire(`clear failed: ${apiErrorText(e)}`);
+      reportMutationFailure(fire, 'clear', e);
     } finally { setBusy(false); }
   };
 
@@ -1004,7 +1004,9 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
     });
     setEditing(true);
   };
-  const saveEdit = async () => { await onEdit(playlist, playlistFields(form)); setEditing(false); };
+  // The form closes only once the save landed: a refused or failed save
+  // leaves the operator's typing where it was (the track drawer's rule).
+  const saveEdit = async () => { if (await onEdit(playlist, playlistFields(form))) setEditing(false); };
 
   // HTML5 drag-to-reorder. Works on a local copy; commits the new order on drop.
   const onDrop = (toIdx) => {
@@ -1155,7 +1157,8 @@ const LibraryAddDrawer = ({ track, onClose, fire, onMutated }) => {
       }
       closeAndPing();
     } catch (e) {
-      fire(`failed: ${e.message}`);
+      const verb = p.is_virtual ? (inIt ? 'unfavorite' : 'favorite') : (inIt ? 'remove' : 'add');
+      reportMutationFailure(fire, verb, e);
       refreshMembers(); refreshAll();
     }
   };
@@ -1169,7 +1172,7 @@ const LibraryAddDrawer = ({ track, onClose, fire, onMutated }) => {
       fire(`created ${name} · added "${track.title || 'track'}"`);
       closeAndPing();
     } catch (e) {
-      fire(`create failed: ${e.message}`);
+      reportMutationFailure(fire, 'create', e);
     }
   };
 
@@ -1349,13 +1352,31 @@ const MusicPage = () => {
   React.useEffect(() => { setTick(0); }, [JSON.stringify(nowPlaying)]);
 
   // ── Action handlers — all hit the real backend. ──────────────
-  const onPlayRandom = async (room_id) => {
-    fire(`shuffle requested in ${room_id}…`);
-    try { await apiPost('/api/music/play', { room_id, query: 'something random' }); refreshNP(); }
-    catch (e) { fire(`play failed: ${e.message}`); }
+  // Every mutation's catch reports through reportMutationFailure (data.js):
+  // a refusal the pair / sign-in prompt owns stays quiet, a dismissed
+  // prompt reads "play cancelled — this browser is not paired.", and a
+  // real failure names the server's reason — never `${e.message}`, which
+  // put `play failed: 401 Unauthorized: {"detail":…}` in the toast.
+  //
+  // One play request per room in flight at a time (the radio Stations
+  // page's rule). A tap that shows nothing for a round trip gets tapped
+  // again, and every copy refused for want of a credential waits on the
+  // SAME prompt: dismissing it toasted the refusal once per tap, and
+  // pairing replayed every copy — two random tracks, or one playlist
+  // started twice. Later taps for that room are dropped until the first
+  // settles; another room's play still goes straight through.
+  const playsInFlight = React.useRef(new Set());
+  const playInRoom = async (room_id, verb, startedMsg, send) => {
+    if (playsInFlight.current.has(room_id)) return;
+    playsInFlight.current.add(room_id);
+    fire(startedMsg);
+    try { await send(); refreshNP(); }
+    catch (e) { reportMutationFailure(fire, verb, e); }
+    finally { playsInFlight.current.delete(room_id); }
   };
-  const onPlayInRoom = async (track, room_id) => {
-    fire(`playing "${track.title || 'track'}" in ${room_id}…`);
+  const onPlayRandom = (room_id) => playInRoom(room_id, 'play', `shuffle requested in ${room_id}…`,
+    () => apiPost('/api/music/play', { room_id, query: 'something random' }));
+  const onPlayInRoom = (track, room_id) => {
     // Close the drawer immediately rather than after the API resolves
     // so the click feels responsive even when MPD takes a beat.
     // Failure surfaces as a toast either way.
@@ -1363,13 +1384,17 @@ const MusicPage = () => {
     // Direct-play by id: skips the router entirely, so no
     // conversation_log entry, and no fuzzy-match streaming-provider
     // fallthrough when ID3 tags don't line up with what MPD indexed.
-    try { await apiPost('/api/music/play-track', { room_id, track_id: track.id }); refreshNP(); }
-    catch (e) { fire(`play failed: ${e.message}`); }
+    return playInRoom(room_id, 'play', `playing "${track.title || 'track'}" in ${room_id}…`,
+      () => apiPost('/api/music/play-track', { room_id, track_id: track.id }));
   };
-  const onPause = async (room_id) => { try { await apiPost(`/api/music/pause/${room_id}`); refreshNP(); } catch (e) { fire(`pause failed: ${e.message}`); } };
-  const onResume = async (room_id) => { try { await apiPost(`/api/music/resume/${room_id}`); refreshNP(); } catch (e) { fire(`resume failed: ${e.message}`); } };
-  const onSkip = async (room_id) => { try { await apiPost(`/api/music/skip/${room_id}`); refreshNP(); } catch (e) { fire(`skip failed: ${e.message}`); } };
-  const onStop = async (room_id) => { try { await apiPost(`/api/music/stop/${room_id}`); refreshNP(); } catch (e) { fire(`stop failed: ${e.message}`); } };
+  const transport = (verb) => async (room_id) => {
+    try { await apiPost(`/api/music/${verb}/${room_id}`); refreshNP(); }
+    catch (e) { reportMutationFailure(fire, verb, e); }
+  };
+  const onPause = transport('pause');
+  const onResume = transport('resume');
+  const onSkip = transport('skip');
+  const onStop = transport('stop');
 
   // Favorite whatever's currently playing in `room_id`. The backend
   // picks the right path (library row flip · generic acquisition
@@ -1390,7 +1415,7 @@ const MusicPage = () => {
       lib.refresh();
       refreshNP();
     } catch (e) {
-      fire(`favorite failed: ${e.message}`);
+      reportMutationFailure(fire, next ? 'favorite' : 'unfavorite', e);
     }
   };
 
@@ -1416,7 +1441,7 @@ const MusicPage = () => {
       // immediate feedback.
       refreshNP();
     } catch (e) {
-      fire(`favorite failed: ${e.message}`);
+      reportMutationFailure(fire, 'favorite', e);
     }
   };
 
@@ -1445,7 +1470,7 @@ const MusicPage = () => {
       refreshStats();
     } catch (e) {
       // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
-      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+      reportMutationFailure(fire, 'delete', e);
     }
   };
   // Tag edits from the drawer: PATCH only what changed, keep the open
@@ -1461,44 +1486,37 @@ const MusicPage = () => {
       refreshNP();
       return true;
     } catch (e) {
-      if (!isAuthFailure(e)) fire(`update failed: ${apiErrorText(e)}`);
+      // The drawer keeps the edit open on false, so the typing is kept.
+      reportMutationFailure(fire, 'update', e, { kept: true });
       return false;
     }
   };
   const onCancelAcquisition = async (a) => {
     try { await apiDelete(`/api/music/acquisitions/${a.id}`); fire(`cancel sent for #${a.id}`); refreshAcquisitions(); }
-    catch (e) { fire(`cancel failed: ${e.message}`); }
+    catch (e) { reportMutationFailure(fire, `cancel #${a.id}`, e); }
   };
   // ── Playlist action handlers ─────────────────────────────────
-  const onPlayPlaylist = async (playlist, room_id) => {
-    fire(`playing ${playlist.name} in ${room_id}…`);
-    try {
-      await apiPost('/api/music/play-playlist',
-        { room_id, playlist_id: playlist.id, shuffle: false });
-      refreshNP();
-    } catch (e) { fire(`play failed: ${e.message}`); }
-  };
+  const onPlayPlaylist = (playlist, room_id) => playInRoom(
+    room_id, 'play', `playing ${playlist.name} in ${room_id}…`,
+    () => apiPost('/api/music/play-playlist',
+      { room_id, playlist_id: playlist.id, shuffle: false }));
   // The Playlists tab's row play button targets the first room; with none
   // provisioned it says so rather than posting to a room that isn't there.
   const onPlayPlaylistInFirstRoom = (playlist) => {
     if (rooms.length === 0) { fire('no rooms provisioned yet — connect a satellite to play on a speaker'); return; }
     return onPlayPlaylist(playlist, rooms[0]);
   };
-  const onShufflePlaylist = async (playlist, room_id) => {
-    fire(`shuffling ${playlist.name} in ${room_id}…`);
-    try {
-      await apiPost('/api/music/play-playlist',
-        { room_id, playlist_id: playlist.id, shuffle: true });
-      refreshNP();
-    } catch (e) { fire(`shuffle failed: ${e.message}`); }
-  };
+  const onShufflePlaylist = (playlist, room_id) => playInRoom(
+    room_id, 'shuffle', `shuffling ${playlist.name} in ${room_id}…`,
+    () => apiPost('/api/music/play-playlist',
+      { room_id, playlist_id: playlist.id, shuffle: true }));
   const onRemoveFromPlaylist = async (playlist, track) => {
     try {
       await apiDelete(`/api/playlists/${playlist.id}/tracks/${track.id}`);
       fire(`removed "${track.title || 'track'}" from ${playlist.name}`);
       refreshPlaylists();
     } catch (e) {
-      fire(`remove failed: ${e.message}`);
+      reportMutationFailure(fire, 'remove', e);
     }
   };
   const onDeletePlaylist = async (playlist) => {
@@ -1509,7 +1527,7 @@ const MusicPage = () => {
       setOpenPlaylist(null);
       refreshPlaylists();
     } catch (e) {
-      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+      reportMutationFailure(fire, 'delete', e);
     }
   };
   const onCreatePlaylist = async (form) => {
@@ -1521,7 +1539,8 @@ const MusicPage = () => {
       refreshPlaylists();
       return true;
     } catch (e) {
-      if (!isAuthFailure(e)) fire(`create failed: ${apiErrorText(e)}`);
+      // The create form stays open on false, with the typing in it.
+      reportMutationFailure(fire, 'create', e, { kept: true });
       return false;
     }
   };
@@ -1531,8 +1550,10 @@ const MusicPage = () => {
       fire('playlist updated');
       refreshPlaylists();
       setOpenPlaylist({ ...playlist, ...fields });   // keep the drawer current
+      return true;
     } catch (e) {
-      fire(`update failed: ${e.message}`);
+      reportMutationFailure(fire, 'update', e, { kept: true });
+      return false;
     }
   };
   const onReorderPlaylist = async (playlist, track_ids) => {
@@ -1540,28 +1561,33 @@ const MusicPage = () => {
       await apiPatch(`/api/playlists/${playlist.id}/order`, { track_ids });
       refreshPlaylists();
     } catch (e) {
-      fire(`reorder failed: ${e.message}`);
+      reportMutationFailure(fire, 'reorder', e);
       throw e;   // let the drawer revert its optimistic order
     }
   };
   const onBulkAddToPlaylist = async (playlistId, trackIds) => {
-    let added = 0, dupes = 0;
+    let added = 0, dupes = 0, stopped = false;
     for (const tid of trackIds) {
       try {
         await apiPost(`/api/playlists/${playlistId}/tracks`, { track_id: tid });
         added++;
       } catch (e) {
-        if (/already|409/.test(e.message)) dupes++;
-        else fire(`add failed: ${e.message}`);
+        if (/already|409/.test(e.message)) { dupes++; continue; }
+        reportMutationFailure(fire, 'add', e);
+        // A refusal the prompt was shown for would be asked again for
+        // every remaining track — one prompt per track. Stop at the first.
+        if (e.authCancelled || isAuthFailure(e)) { stopped = true; break; }
       }
     }
-    fire(`added ${added} track${added === 1 ? '' : 's'}${dupes ? `, ${dupes} already in` : ''}`);
+    if (!stopped || added || dupes) {
+      fire(`added ${added} track${added === 1 ? '' : 's'}${dupes ? `, ${dupes} already in` : ''}`);
+    }
     refreshPlaylists();
   };
 
   const onRescan = async () => {
     try { await apiPost('/api/music/library/reindex'); fire('rescan started'); }
-    catch (e) { fire(`rescan failed: ${e.message}`); }
+    catch (e) { reportMutationFailure(fire, 'rescan', e); }
   };
 
   // ── Upload audio into the library ───────────────────────────
@@ -1588,7 +1614,7 @@ const MusicPage = () => {
       parts.push(res.reindex_triggered ? 'indexing…' : 'domovoi offline — will index on next boot');
       fire(parts.join(' · '));
     } catch (e) {
-      fire(`upload failed: ${e.message}`);
+      reportMutationFailure(fire, 'upload', e);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1596,7 +1622,7 @@ const MusicPage = () => {
   };
   const onEnrich = async () => {
     try { await apiPost('/api/music/library/enrich'); fire('enrich started'); }
-    catch (e) { fire(`enrich failed: ${e.message}`); }
+    catch (e) { reportMutationFailure(fire, 'enrich', e); }
   };
 
   const playingCount = nowPlaying.filter(n => n.state === 'play').length;

@@ -20,6 +20,8 @@
 // resolve to null); every mutation is appended to `calls`.
 //
 // Usage: node jsx_interact_harness.js <repo-root> '<scenarios json>'
+//        node jsx_interact_harness.js <repo-root> @<file holding that json>
+//   (the file form for scenario sets past Windows' ~32 KB command line)
 //   scenario: { files, component, props?, fnProps?, api?, setup?, script }
 //   setup    — JS source evaluated INSIDE the sandbox before the files
 //              load, for a scenario that needs a different Auth /
@@ -39,7 +41,9 @@ const path = require('path');
 const vm = require('vm');
 
 const root = process.argv[2];
-const scenarios = JSON.parse(process.argv[3]);
+const scenarioArg = process.argv[3];
+const scenarios = JSON.parse(scenarioArg.startsWith('@')
+  ? fs.readFileSync(scenarioArg.slice(1), 'utf8') : scenarioArg);
 
 const babelMod = require(path.join(root, 'web/static/vendor/babel/babel.min.js'));
 const Babel = babelMod.transform ? babelMod : (global.Babel || babelMod.default || babelMod);

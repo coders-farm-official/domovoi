@@ -632,6 +632,22 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
   return `${verb} failed: ${apiErrorText(e, 120)}`;
 };
 
+/* Toast a refused page action — or say nothing. mutationErrorText's rule
+ * for the many catch blocks that only ever had a toast to give: a refusal
+ * the pair / sign-in prompt owns stays quiet, a dismissed prompt reads
+ * "play cancelled — this browser is not paired.", and a real failure
+ * names the server's own reason instead of `play failed: 401
+ * Unauthorized: {"detail":…}`, which is what `${e.message}` put in front
+ * of the operator. `kept` defaults to false — pass { kept: true } where a
+ * form the operator typed into stays open after the failure. Returns the
+ * text it fired (or null). The radio Stations page's reportFailure is the
+ * same rule for a plugin page that may meet an older dashboard. */
+const reportMutationFailure = (fire, verb, e, { kept = false } = {}) => {
+  const msg = mutationErrorText(e, verb, { kept });
+  if (msg) fire(msg);
+  return msg;
+};
+
 const apiGet = (path) => apiFetch(path);
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
@@ -1114,7 +1130,7 @@ Object.assign(window, {
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
   stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
-  mutationErrorText, deviceBlockReason, clipSentence,
+  mutationErrorText, reportMutationFailure, deviceBlockReason, clipSentence,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

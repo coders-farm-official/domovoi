@@ -188,11 +188,13 @@ def test_server_error_is_not_an_auth_failure(outcomes):
 
 
 # The delete handlers SH-03 audited (finding F-006 "Where"): each toast must
-# sit behind the guard. Counting occurrences, not just presence, so a new
-# unguarded `delete failed:` in these files is caught too.
+# sit behind the guard — `if (!isAuthFailure(e))`, or data.js's
+# reportMutationFailure, whose mutationErrorText stays quiet on the same
+# condition. Counting occurrences, not just presence, so a new unguarded
+# `delete failed:` in these files is caught too.
 GUARDED_DELETE_TOASTS = {
     "files.jsx": 1,      # performDelete
-    "music.jsx": 2,      # onDeleteTrack, onDeletePlaylist
+    "music.jsx": 2,      # onDeleteTrack, onDeletePlaylist (reportMutationFailure)
     "people.jsx": 2,     # deleteMemory, deleteFavorite
     "calendar.jsx": 1,   # del
 }
@@ -202,6 +204,7 @@ GUARDED_DELETE_TOASTS = {
 def test_delete_toasts_are_guarded_by_is_auth_failure(name: str, expected: int):
     src = (STATIC / name).read_text(encoding="utf-8")
     guarded = re.findall(r"if \(!isAuthFailure\(\w+\)\) fire\(`delete failed:", src)
+    guarded += re.findall(r"reportMutationFailure\(fire, 'delete', \w+", src)
     unguarded = re.findall(r"^\s*fire\(`delete failed:", src, re.MULTILINE)
     assert len(guarded) == expected, f"{name}: {len(guarded)} guarded delete toasts"
     assert unguarded == [], f"{name}: unguarded delete toast(s): {unguarded}"
