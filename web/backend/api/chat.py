@@ -401,7 +401,10 @@ async def get_upload(token: str):
         ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
     }.get(p.suffix.lower(), "application/octet-stream")
-    return FileResponse(p, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    # ``private``: this answer depends on the caller's credential, so only
+    # the browser that was allowed to read it may keep a copy — never a
+    # shared cache between the box and the next device to ask.
+    return FileResponse(p, media_type=media, headers={"Cache-Control": "private, max-age=86400"})
 
 
 # ─── Models for the picker ──────────────────────────────────────────────────

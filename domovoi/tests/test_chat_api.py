@@ -134,6 +134,9 @@ def test_upload_and_vision_model_switch(uploads_dir, stub_stream):
         served = c.get(f"/api/chat/uploads/{token}")
         assert served.status_code == 200
         assert served.headers["content-type"] == "image/png"
+        # Read on the device tier, so no shared cache may keep a copy
+        # for the next device that asks.
+        assert served.headers["cache-control"].startswith("private")
         assert c.get("/api/chat/uploads/deadbeef").status_code == 404
 
         bad = c.post("/api/chat/uploads",

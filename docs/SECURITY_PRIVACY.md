@@ -253,9 +253,12 @@ token, or an admin session — and by nothing else on the network:
 
 They take the READ half of the device tier, `require_device_read`, the same
 gate as the Documents, Files, Images and Videos reads: the household token
-(header) or an admin Bearer, the dashboard's session cookie, or
-`?device_token=` for the two that a browser fetches by URL (a chat image,
-a clip's `<audio>`). No credential, a stale token or a wrong query token is
+(header) or an admin Bearer, the dashboard's session cookie, or the
+household token as `?device_token=`. The gate takes the query on every one
+of these reads, as it does on every read of that tier, but the dashboard
+only puts it in the two a browser fetches by URL (a chat image, a clip's
+`<audio>`); its JSON reads send the header, so the token does not land in
+a URL for them. No credential, a stale token or a wrong query token is
 `401`, and the pre-setup grace still applies. They are device tier rather
 than admin because the people reading them are the household — somebody
 checking what they asked the kitchen this morning from their own phone —
