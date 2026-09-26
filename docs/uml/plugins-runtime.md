@@ -221,7 +221,8 @@ Loader guarantees worth naming:
   unless the author put it on the household device tier with
   `@device_endpoint` or opened it with `@open_endpoint` (both are listed on
   the install preview, each under its own heading; a route may carry only
-  one — the contract check refuses both).
+  one — the contract check refuses both — and a route off the admin tier
+  that the preview's source scan does not list fails the same check).
 * **Teardown** (`unload_plugin` → `PluginSDK.teardown()` + owner-keyed
   deregistration): handlers out of the registry, workers stopped in reverse
   order, event subscriptions dropped, capabilities and now-playing sources

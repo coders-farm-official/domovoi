@@ -38,12 +38,13 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
 import httpx
 from fastapi import HTTPException, Request
 
-from domovoi import net_safety
+from domovoi import net_safety, route_markers
 from domovoi.admin_auth import (
     DEVICE_TOKEN_HEADER,
     check_admin_request,
@@ -68,6 +69,7 @@ __all__ = [
     "EndpointTierConflict",
     "endpoint_tier",
     "tier_conflicts",
+    "unlisted_tier_routes",
     "enforce_route_tier",
     "admin_required",
 ]
@@ -184,10 +186,63 @@ def tier_conflicts(routers: Iterable[Any]) -> list[str]:
             fn = getattr(route, "endpoint", None)
             if fn is None or not (is_open_endpoint(fn) and is_device_endpoint(fn)):
                 continue
-            methods = ",".join(sorted(getattr(route, "methods", None) or [])) or "?"
-            where = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
-            out.append(f"{methods} {getattr(route, 'path', '?')} ({where})")
+            out.append(_route_label(route, fn))
     return out
+
+
+def _route_label(route: Any, fn: Any) -> str:
+    methods = ",".join(sorted(getattr(route, "methods", None) or [])) or "?"
+    where = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
+    return f"{methods} {getattr(route, 'path', '?')} ({where})"
+
+
+def unlisted_tier_routes(routers: Iterable[Any], package_dir: Path | str) -> list[str]:
+    """Every route on ``routers`` that is off the admin tier at RUNTIME but
+    that the install preview's source walk (:mod:`domovoi.route_markers`)
+    of ``package_dir`` — the plugin's ``domovoi_plugin_<slug>`` package —
+    does not list on that tier. The core's contract check and the web
+    mount refuse to serve a plugin with any.
+
+    The trust screen can only show what the walk reads off the source: a
+    marker decorator on a ``def`` in the package. A marker put on any
+    other way — ``setattr`` of the marker attribute, ``device_endpoint(fn)``
+    called rather than stacked, a route function from outside the package
+    — moves a route off the admin tier without the admin ever seeing it.
+    Holding the runtime tiers to the walk closes that for both markers
+    alike; a route the walk lists that is admin at runtime is harmless
+    (the screen overstated it) and is not reported. Matching is by
+    ``(module, function name, tier)``. This keeps an honest mistake — or a
+    lazy evasion — from shipping an unlisted route; it is not a sandbox:
+    plugin code is unsandboxed (docs/SECURITY_PRIVACY.md)."""
+    off_admin: list[tuple[Any, Any, str]] = []
+    for router in routers:
+        for route in getattr(router, "routes", None) or []:
+            fn = getattr(route, "endpoint", None)
+            if fn is None:
+                continue
+            tier = endpoint_tier(fn)
+            if tier != "admin":
+                off_admin.append((route, fn, tier))
+    if not off_admin:
+        return []
+    try:
+        scanned = route_markers.scan_marked_endpoints(Path(package_dir))
+    except (OSError, SyntaxError, RecursionError, ValueError) as e:
+        # The package was readable enough to import; if its source cannot
+        # be walked now, nothing off the admin tier can be vouched for.
+        log.warning("route-marker walk of %s failed: %s", package_dir, e)
+        scanned = {}
+    listed = {
+        (rec.get("module"), rec.get("function"), tier)
+        for tier in ("open", "device")
+        for rec in scanned.get(tier) or []
+    }
+    return [
+        f"{_route_label(route, fn)} is {tier} tier"
+        for route, fn, tier in off_admin
+        if (getattr(fn, "__module__", None), getattr(fn, "__name__", None), tier)
+        not in listed
+    ]
 
 
 async def enforce_route_tier(request: Request) -> None:

@@ -1158,7 +1158,13 @@ preview finds every marked route by scanning the staged package's source
 (`device_endpoints` and `open_endpoints` in the preview; the trust screen
 lists them under separate headings — "any paired household device" and
 "anyone on your network"), so a route off the admin tier is always visible
-to the admin before the plugin lands.
+to the admin before the plugin lands. The scan follows a local alias
+(`from domovoi.sdk import device_endpoint as household`), but only the
+decorator form: a marker applied any other way — `device_endpoint(fn)`
+passed to `add_api_route`, the marker attribute set by hand — is invisible
+to it, and because both processes hold every route's runtime tier to that
+same scan when they load the plugin, such a route fails the load ("the
+install preview does not list it") instead of serving.
 
 ### 4.16 The web entry point — `register_web(ctx)`
 

@@ -9,36 +9,41 @@ household device — the household token or an admin Bearer) or, rarely,
 each tier under its own heading, so the admin sees who can call the
 plugin BEFORE confirming. That list has to come from the staged source
 without importing it — importing runs plugin code, and nothing runs
-pre-confirm — so this module walks the package's Python files with
-:mod:`ast` and reports every function that carries a marker together
-with the router decorator on the same ``def``. A function carrying BOTH
+pre-confirm — so the package's Python files are walked with :mod:`ast`
+(:mod:`domovoi.route_markers`, the one walk the load-time check uses
+too) and every function that carries a marker is reported together with
+the router decorator on the same ``def``. A function carrying BOTH
 markers is reported as a conflict, which the installer refuses (the
 runtime refuses to load it too).
 
-The walk runs in a **throwaway subprocess** (``python -I open_endpoints.py
-<package dir>`` — this file imports only the stdlib): ``ast.parse`` never
+The walk runs in a **throwaway subprocess** (``python -I route_markers.py
+<package dir>`` — that file imports only the stdlib): ``ast.parse`` never
 executes code, but a crafted source can still exhaust the parser
 (recursion depth, memory), and that must not take the core down. The
 subprocess is time-boxed; a failure refuses the install (fail closed —
 a package the parser cannot read is one the trust screen cannot
 describe).
 
-Static best effort, by construction: a router decorator whose path is
-not a string literal reports ``path: None``; a decorator spelled through
-an alias other than ``open_endpoint`` / ``device_endpoint`` is not
-recognised. A plugin author follows the documented shape
-(``@router.post("/x")`` over the marker over the ``def``) and gets an
-accurate list.
+The walk is static: it knows the documented shape (``@router.post("/x")``
+over the marker over the ``def``, the marker imported under its own name
+or a local alias). A marker applied any other way — ``setattr`` of the
+marker attribute, a call instead of a decorator — is invisible HERE, and
+that is why the load holds every route that is off the admin tier at
+runtime against this same walk and refuses the ones it does not list
+(``domovoi.webkit.unlisted_tier_routes``): what the trust screen did not
+show never serves.
 """
 
 from __future__ import annotations
 
-import ast
 import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from domovoi import route_markers
+from domovoi.route_markers import MARKERS, scan_marked_endpoints  # noqa: F401
 
 __all__ = [
     "scan_marked_endpoints",
@@ -49,115 +54,11 @@ __all__ = [
     "OpenEndpointScanError",
 ]
 
-# Decorator name → the tier it puts a route on.
-MARKERS = {"open_endpoint": "open", "device_endpoint": "device"}
-
-_ROUTE_METHODS = {
-    "get": "GET", "post": "POST", "put": "PUT", "patch": "PATCH",
-    "delete": "DELETE", "head": "HEAD", "options": "OPTIONS",
-    "api_route": None, "route": None, "websocket": "WS",
-}
 SCAN_TIMEOUT_SEC = 60
 
 
 class OpenEndpointScanError(RuntimeError):
     """The subprocess scan failed or timed out."""
-
-
-def _decorator_name(node: ast.expr) -> str | None:
-    """``open_endpoint`` / ``sdk.open_endpoint`` / ``open_endpoint()`` →
-    ``"open_endpoint"``; anything else → its trailing attribute name."""
-    if isinstance(node, ast.Call):
-        node = node.func
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
-def _route_decorator(node: ast.expr) -> tuple[str | None, str | None] | None:
-    """(method, path) for ``@<something>.post("/x", ...)``-shaped
-    decorators; None when the decorator is not a router method."""
-    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-        return None
-    attr = node.func.attr
-    if attr not in _ROUTE_METHODS:
-        return None
-    method = _ROUTE_METHODS[attr]
-    path: str | None = None
-    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(
-        node.args[0].value, str
-    ):
-        path = node.args[0].value
-    else:
-        for kw in node.keywords:
-            if kw.arg == "path" and isinstance(kw.value, ast.Constant) and isinstance(
-                kw.value.value, str
-            ):
-                path = kw.value.value
-    if method is None:  # api_route(..., methods=[...])
-        for kw in node.keywords:
-            if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                names = [
-                    e.value.upper() for e in kw.value.elts
-                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
-                ]
-                method = ",".join(names) or None
-    return method, path
-
-
-def _module_name(package_dir: Path, file: Path) -> str:
-    rel = file.relative_to(package_dir.parent).with_suffix("")
-    parts = list(rel.parts)
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    return ".".join(parts)
-
-
-def scan_marked_endpoints(package_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    """Walk every ``.py`` under ``package_dir`` (the plugin's
-    ``domovoi_plugin_<slug>`` package) and return
-    ``{"open": [...], "device": [...], "conflicts": [...]}`` — one record
-    per route of every function decorated ``@open_endpoint``,
-    ``@device_endpoint``, or (a conflict) both:
-    ``{method, path, module, function, process, line}``. ``process`` is
-    ``"web"`` for the package's ``web`` module (and modules under a
-    ``web`` subpackage), else ``"core"`` — the two mount prefixes the
-    trust screen renders. Raises ``SyntaxError`` (propagated) for a file
-    the parser cannot read."""
-    package_dir = Path(package_dir)
-    found: dict[str, list[dict[str, Any]]] = {"open": [], "device": [], "conflicts": []}
-    for file in sorted(package_dir.rglob("*.py")):
-        if "__pycache__" in file.parts:
-            continue
-        tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"), str(file))
-        module = _module_name(package_dir, file)
-        tail = module.split(".", 1)[1] if "." in module else ""
-        process = "web" if tail == "web" or tail.startswith("web.") else "core"
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            names = {_decorator_name(d) for d in node.decorator_list}
-            tiers = {MARKERS[n] for n in names if n in MARKERS}
-            if not tiers:
-                continue
-            bucket = "conflicts" if len(tiers) > 1 else tiers.pop()
-            routes = [r for r in (_route_decorator(d) for d in node.decorator_list) if r]
-            if not routes:
-                routes = [(None, None)]
-            for method, path in routes:
-                found[bucket].append(
-                    {
-                        "method": method,
-                        "path": path,
-                        "module": module,
-                        "function": node.name,
-                        "process": process,
-                        "line": node.lineno,
-                    }
-                )
-    return found
 
 
 def scan_open_endpoints(package_dir: Path) -> list[dict[str, Any]]:
@@ -184,12 +85,13 @@ def collect_marked_endpoints(
     return its ``{"open", "device", "conflicts"}`` records. Raises
     :class:`OpenEndpointScanError` when the scan fails, times out, or
     reports a file it could not parse."""
-    # Run THIS file as a plain script: it imports only the stdlib, so the
-    # child needs no domovoi on its path, and -I (isolated: no env vars,
-    # no site customisation, no cwd on sys.path) keeps the walk inert.
+    # Run the walk's own file as a plain script: it imports only the
+    # stdlib, so the child needs no domovoi on its path, and -I (isolated:
+    # no env vars, no site customisation, no script dir or cwd on
+    # sys.path) keeps the walk inert.
     proc_args = [
-        sys.executable, "-I", "-X", "utf8", str(Path(__file__).resolve()),
-        str(package_dir),
+        sys.executable, "-I", "-X", "utf8",
+        str(Path(route_markers.__file__).resolve()), str(package_dir),
     ]
     try:
         proc = subprocess.run(
@@ -218,34 +120,3 @@ def collect_marked_endpoints(
         "device": list(payload.get("device_endpoints") or []),
         "conflicts": list(payload.get("conflicts") or []),
     }
-
-
-def _main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(json.dumps({"error": "usage: open_endpoints <package dir>"}))
-        return 2
-    package_dir = Path(argv[1])
-    if not package_dir.is_dir():
-        print(json.dumps({"error": f"{package_dir} is not a directory"}))
-        return 1
-    try:
-        marked = scan_marked_endpoints(package_dir)
-    except SyntaxError as e:
-        print(json.dumps({"error": f"cannot parse {e.filename} line {e.lineno}: {e.msg}"}))
-        return 1
-    except RecursionError:
-        print(json.dumps({"error": "source too deeply nested to parse"}))
-        return 1
-    # ``endpoints`` keeps its name (the open list); the device tier and
-    # any conflicts ride beside it.
-    print(json.dumps({
-        "endpoints": marked["open"],
-        "device_endpoints": marked["device"],
-        "conflicts": marked["conflicts"],
-    }))
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover — the subprocess entry
-    sys.setrecursionlimit(3000)
-    raise SystemExit(_main(sys.argv))

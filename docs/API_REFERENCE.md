@@ -1137,7 +1137,9 @@ for how to declare them.
 
   Every route on either tier is listed on the install preview's trust screen
   (`device_endpoints` and `open_endpoints`, under separate headings); a route
-  carrying both is refused at staging and at load. GETs are open unless the
+  carrying both is refused at staging and at load, and so is a route whose
+  marker the preview's source scan cannot see (one applied by a call or set
+  by hand rather than stacked as a decorator). GETs are open unless the
   plugin adds its own `Depends(admin_required)` or marks the GET
   `@device_endpoint`.
 * Pre-setup grace applies: until the admin credential exists, the gate

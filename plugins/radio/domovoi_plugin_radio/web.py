@@ -567,9 +567,9 @@ def build_router(ctx: Any) -> APIRouter:
 
         Device tier, like the favorite it undoes — the core's podcast
         unsubscribe (which drops the show's episode rows) sits on the same
-        tier. Nothing here is unrecoverable the way a deleted person or
-        audio file is: the station is one search away and its detections
-        are observations the sampler makes again."""
+        tier. The station's detection log goes with it, but nothing here
+        costs the household what a deleted person or audio file does: the
+        station is one search away."""
         async with session_scope() as s:
             result = await s.execute(
                 text("DELETE FROM radio_stations WHERE id = :id"),

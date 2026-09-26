@@ -312,6 +312,48 @@ def test_scan_reports_both_markers_as_a_conflict(tmp_path: Path) -> None:
     assert marked["open"] == [] and marked["device"] == []
 
 
+def test_scan_follows_a_local_alias_of_either_marker(tmp_path: Path) -> None:
+    """Renaming the import (or binding the marker to another name) must
+    not take a route off the trust screen — for either tier."""
+    pkg = _write_package(tmp_path, "scandemo", '''
+        from domovoi import webkit
+        from domovoi.sdk import open_endpoint as anyone
+        from domovoi.webkit import device_endpoint as household
+
+        pal = household
+        also_open: object = webkit.open_endpoint
+
+        @router.post("/a")
+        @household
+        async def a():
+            return {}
+
+        @router.post("/b")
+        @pal
+        async def b():
+            return {}
+
+        @router.post("/c")
+        @anyone
+        async def c():
+            return {}
+
+        @router.post("/d")
+        @also_open
+        async def d():
+            return {}
+
+        @router.post("/admin")
+        async def admin_default():
+            return {}
+    ''')
+    marked = scan_marked_endpoints(pkg)
+    assert {e["function"] for e in marked["device"]} == {"a", "b"}
+    assert {e["function"] for e in marked["open"]} == {"c", "d"}
+    assert marked["conflicts"] == []
+    assert collect_marked_endpoints(pkg) == marked
+
+
 def test_bundled_radio_opts_nothing_out() -> None:
     assert scan_open_endpoints(REPO_ROOT / "plugins" / "radio" / "domovoi_plugin_radio") == []
 

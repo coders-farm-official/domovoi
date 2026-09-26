@@ -22,7 +22,9 @@ Checks:
    by construction (§4.11); anything mounted around it is warn-flagged.
    A route function may carry at most one tier marker: one wearing both
    ``@open_endpoint`` and ``@device_endpoint`` is a load failure, not a
-   precedence puzzle (:func:`check_route_tiers`).
+   precedence puzzle; and every route that is off the admin tier at
+   runtime must be one the install preview's source walk lists on that
+   tier, or the load fails (:func:`check_route_tiers`).
 7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
    and collides with neither a core dashboard route nor another enabled
    plugin's page (F-026 — the shell resolves core-first, so a colliding
@@ -34,6 +36,7 @@ from __future__ import annotations
 import inspect
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from domovoi.handlers.base import Handler, as_fast_path, registry_sort_key
@@ -441,19 +444,37 @@ def check_web_routes(
                 )
 
 
-def check_route_tiers(routers: list[Any], report: ContractReport) -> None:
+def check_route_tiers(
+    routers: list[Any], report: ContractReport, package_dir: Path | None = None
+) -> None:
     """Check 6 — every core route the plugin registered names at most one
     tier. ``@open_endpoint`` (no credential) and ``@device_endpoint`` (any
     paired device) on the same function contradict each other; the
     decorators already refuse to stack, so this catches markers copied
-    across by a wrapper or set by hand. The web process refuses the same
-    routes when it mounts them."""
-    from domovoi.webkit import tier_conflicts
+    across by a wrapper or set by hand.
+
+    With ``package_dir`` (the loader always passes the plugin's package),
+    every route that is off the admin tier at runtime must also be one
+    the install preview's source walk lists on that tier
+    (:func:`domovoi.webkit.unlisted_tier_routes`): a marker the trust
+    screen could not see — set with ``setattr``, applied by a call instead
+    of a decorator — fails the load instead of serving a route the admin
+    was never shown. The web process refuses the same routes when it
+    mounts them."""
+    from domovoi.webkit import tier_conflicts, unlisted_tier_routes
 
     for conflict in tier_conflicts(routers):
         report.errors.append(
             f"route {conflict} carries both @open_endpoint and "
             f"@device_endpoint — pick one tier"
+        )
+    if package_dir is None:
+        return
+    for unlisted in unlisted_tier_routes(routers, package_dir):
+        report.errors.append(
+            f"route {unlisted}, but the install preview does not list it — "
+            "put @device_endpoint / @open_endpoint directly on the route "
+            "function (under the router decorator) so the trust screen shows it"
         )
 
 
@@ -471,12 +492,13 @@ def run_contract_checks(
     import_seconds: float = 0.0,
     cuda_initialized: bool = False,
     routers: list[Any] | None = None,
+    package_dir: Path | None = None,
 ) -> ContractReport:
     """Run every §13.2 check; returns a report (caller raises
     :class:`ContractError` / sets ``load_error`` on ``errors``)."""
     report = ContractReport()
     check_handlers(slug, handlers, report)
-    check_route_tiers(list(routers or []), report)
+    check_route_tiers(list(routers or []), report, package_dir)
     check_consumes(manifest, report)
     check_manifest_drift(
         slug, manifest, handlers, worker_names, hook_names,

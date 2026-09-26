@@ -64,8 +64,8 @@ globalThis.usePlayback = () => ({
   playItems: (items) => { globalThis.__played.push(items.map((i) => i.src)); },
 });
 globalThis.Auth = {
-  token: null,
-  paired: false,
+  token: globalThis.__ADMIN ? 'admin-bearer' : null,
+  paired: !!globalThis.__PAIRED,
   credentialVersion: 0,
   status: { setup_complete: true, authenticated: false },
   headers() {
@@ -144,9 +144,12 @@ SCRIPT = r"""
 
 
 def _scenario(*, taps: int, pair: bool, refusal: str = DEVICE_401,
-              server_error: bool = False) -> dict:
+              server_error: bool = False, paired: bool = False,
+              admin: bool = False) -> dict:
     setup = (f"globalThis.__TAPS = {taps};\n"
              f"globalThis.__PAIR = {json.dumps(pair)};\n"
+             f"globalThis.__PAIRED = {json.dumps(paired)};\n"
+             f"globalThis.__ADMIN = {json.dumps(admin)};\n"
              f"globalThis.__REFUSAL = {json.dumps(refusal)};\n"
              f"globalThis.__SERVER_ERROR = {json.dumps(server_error)};\n" + SETUP)
     return {
@@ -164,6 +167,10 @@ SCENARIOS = {
     "double_tap_paired": _scenario(taps=2, pair=True),
     # A single tap against a server that is simply broken.
     "server_error": _scenario(taps=1, pair=False, server_error=True),
+    # A browser that already holds the household token, and one signed in
+    # as an admin (no token): each plays on the first tap, no prompt.
+    "already_paired": _scenario(taps=1, pair=False, paired=True),
+    "admin_signed_in": _scenario(taps=1, pair=False, admin=True),
 }
 
 
@@ -212,6 +219,21 @@ def test_pairing_at_the_prompt_replays_the_play_and_the_station_streams(outcomes
     assert [c["deviceToken"] for c in plays] == [None, "household-token"], plays
     assert o["played"] == [["/api/plugins/radio/stations/1/stream"]]
     assert o["toastTexts"] == ["playing Lofi 24/7"], o
+
+
+@pytest.mark.parametrize("name,field,value", [
+    ("already_paired", "deviceToken", "household-token"),
+    ("admin_signed_in", "auth", "Bearer admin-bearer"),
+])
+def test_a_paired_or_signed_in_browser_plays_on_the_first_tap(
+    outcomes, name: str, field: str, value: str
+) -> None:
+    o = outcomes[name]
+    plays = [c for c in o["net"] if c["path"].endswith("/radio/play")]
+    assert [c[field] for c in plays] == [value], plays
+    assert o["played"] == [["/api/plugins/radio/stations/1/stream"]]
+    assert o["toastTexts"] == ["playing Lofi 24/7"], o
+    assert o["prompts"] == {"pair": 0, "login": 0, "ensurePair": 0, "ensureLogin": 0}
 
 
 def test_a_real_failure_still_says_so_with_the_servers_reason(outcomes) -> None:

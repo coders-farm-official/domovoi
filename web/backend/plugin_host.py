@@ -377,7 +377,7 @@ class PluginHost:
             ctx = WebPluginContext(slug)
             register_web(ctx)
             assert self.app is not None
-            from domovoi.webkit import tier_conflicts
+            from domovoi.webkit import tier_conflicts, unlisted_tier_routes
 
             # A route that says both "any paired device" and "no credential"
             # is refused whole rather than resolved by a precedence rule —
@@ -387,6 +387,17 @@ class PluginHost:
                 raise RuntimeError(
                     "route(s) carry both @open_endpoint and @device_endpoint: "
                     + "; ".join(conflicts)
+                )
+            # And a route off the admin tier that the install preview's
+            # source walk does not list (a marker set by hand, or applied
+            # by a call) never serves: the trust screen never showed it.
+            package_dir = Path(install_dir) / entry_web.split(".", 1)[0]
+            unlisted = unlisted_tier_routes(ctx.routers, package_dir)
+            if unlisted:
+                raise RuntimeError(
+                    "route(s) off the admin tier that the install preview "
+                    "does not list — put @device_endpoint / @open_endpoint "
+                    "directly on the route function: " + "; ".join(unlisted)
                 )
             from fastapi import Depends
 

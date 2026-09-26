@@ -190,12 +190,14 @@ the admin default. The bundled radio plugin uses it for its everyday
 mutations: play, favorite, the interval / stream-URL edit and unfavorite,
 forget, and the simulcast lookup (web and core hop alike — the web hop
 forwards the caller's household token). Its FCC bulk import stays admin.
-Forget sits here because the core's nearest precedent does: unsubscribing
-from a podcast, which drops that show's episode rows, is device tier; a
-station is one search away and its detections are observations the sampler
-makes again, not the kind of row whose loss is permanent (a person, an
-audio file). A stream URL a device sets goes through the outbound-URL
-check on the way in and again at fetch time.
+Forget sits here because the core's nearest precedents do: unsubscribing
+from a podcast drops that show's episode rows and deleting a news topic
+drops its feed attachments, both device tier. Forget likewise drops the
+station's song-detection log with it, but a station is one search away and
+the log is a record of what played, not the kind of row whose loss costs
+the household something it owns (a person, an audio file). A stream URL a
+device sets goes through the outbound-URL check on the way in and again at
+fetch time.
 
 A client that presents nothing gets `401`; the dashboard cookie alone gets
 `403`, because rendering a page is not the same as acting in a room. The web dashboard forwards whatever
@@ -681,12 +683,17 @@ What the install flow *does* do (verified in
   the admin gate**, in two separately headed lists — the routes anyone on
   the network can call (`@open_endpoint`) and the routes any paired
   household device can call (`@device_endpoint`) — found by scanning the
-  staged source for both decorators, so neither list depends on the
-  publisher's goodwill (a route carrying both is refused at staging),
-  direct **and transitive** Python dependencies with the origin
-  each resolves from, the handlers it registers, how many database
-  migrations it ships, and the trust statement above. A package the
-  scanner cannot parse is refused rather than previewed incompletely.
+  staged source for both decorators (under their own names or a local
+  alias), so neither list depends on the publisher's goodwill (a route
+  carrying both is refused at staging), direct **and transitive** Python
+  dependencies with the origin each resolves from, the handlers it
+  registers, how many database migrations it ships, and the trust
+  statement above. A package the scanner cannot parse is refused rather
+  than previewed incompletely. At load, both processes hold every route
+  that is actually off the admin tier to that same scan and refuse the
+  plugin if one is missing from it: a marker set by hand, or applied by a
+  call rather than a decorator, is a load error, never a route the screen
+  did not show.
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.

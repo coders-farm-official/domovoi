@@ -300,6 +300,20 @@ async def test_a_disabled_plugin_is_404_whatever_the_credential(mount, claimed) 
             assert r.status_code == 404, (method, path)
 
 
+async def test_a_mutation_never_takes_the_token_from_the_query_string(mount, claimed) -> None:
+    """``?device_token=`` is a READ credential only (bytes the browser
+    fetches by URL). On a device-tier mutation it authorizes nothing — a
+    query string lands in logs and Referer headers — so the refusal is
+    the plain no-credential 401."""
+    async with mount.client() as c:
+        for method, path in DEVICE_MUTATIONS:
+            r = await c.request(
+                method, f"{mount.prefix}{path}", params={"device_token": TOKEN}
+            )
+            assert r.status_code == 401, (method, path, r.text)
+            assert r.json()["detail"] == DEVICE_401
+
+
 async def test_a_device_get_is_a_device_read(mount, claimed) -> None:
     """On a GET the marker gates the read the way the core's media reads
     are gated: the header, the cookie and ``?device_token=`` all render;
@@ -413,6 +427,253 @@ async def test_the_web_mount_refuses_both_markers(tmp_path: Path) -> None:
         )
     finally:
         _forget_plugin_modules(tmp_path)
+
+
+# ─── a marker the trust screen cannot see never serves ────────────────────
+#
+# The install preview lists what an AST walk of the source finds: a marker
+# DECORATOR on a ``def`` in the package. A marker put on any other way
+# moves a route off the admin tier without the admin ever being shown it,
+# so both processes hold every runtime tier to that same walk at load and
+# refuse the plugin when a route is missing from it — for both markers.
+
+_HIDDEN_TAIL = '''
+
+def register(ctx):
+    ctx.add_router(router)
+
+
+def register_web(ctx):
+    ctx.add_router(router)
+'''
+
+HIDDEN_MARKERS = {
+    # The marker attribute set by hand (spelled so no literal names it).
+    "setattr-device": '''
+        from fastapi import APIRouter
+
+        router = APIRouter()
+
+
+        async def sneaky():
+            return {"sneaky": True}
+
+
+        setattr(sneaky, "_domovoi_" + "device_endpoint", True)
+        router.add_api_route("/sneaky", sneaky, methods=["POST"])
+    ''',
+    "setattr-open": '''
+        from fastapi import APIRouter
+
+        router = APIRouter()
+
+
+        async def sneaky():
+            return {"sneaky": True}
+
+
+        setattr(sneaky, "_domovoi_" + "open_endpoint", True)
+        router.add_api_route("/sneaky", sneaky, methods=["POST"])
+    ''',
+    # The real decorator, called rather than stacked on the def.
+    "call-device": '''
+        from fastapi import APIRouter
+        from domovoi.webkit import device_endpoint
+
+        router = APIRouter()
+
+
+        async def sneaky():
+            return {"sneaky": True}
+
+
+        router.add_api_route("/sneaky", device_endpoint(sneaky), methods=["POST"])
+    ''',
+    "call-open": '''
+        from fastapi import APIRouter
+        from domovoi.webkit import open_endpoint
+
+        router = APIRouter()
+
+
+        async def sneaky():
+            return {"sneaky": True}
+
+
+        router.add_api_route("/sneaky", open_endpoint(sneaky), methods=["POST"])
+    ''',
+}
+
+ALIASED_MARKER = '''
+    from fastapi import APIRouter
+    from domovoi.webkit import device_endpoint as household
+
+    router = APIRouter()
+    pal = household
+
+
+    @router.post("/aliased")
+    @household
+    async def aliased():
+        return {"aliased": True}
+
+
+    @router.post("/chained")
+    @pal
+    async def chained():
+        return {"chained": True}
+'''
+
+
+def _plugin_source(body: str) -> str:
+    return textwrap.dedent(body) + _HIDDEN_TAIL
+
+
+@pytest.mark.parametrize("shape", sorted(HIDDEN_MARKERS))
+async def test_the_web_mount_refuses_a_marker_the_preview_cannot_see(
+    shape: str, tmp_path: Path, claimed
+) -> None:
+    _write_plugin(tmp_path, _plugin_source(HIDDEN_MARKERS[shape]))
+    try:
+        app = FastAPI()
+        host = PluginHost()
+        host.app = app
+        row = _row(tmp_path)
+        host.rows = {SLUG: row}
+        host._mount_one(row)
+        assert SLUG not in host.mounted
+        assert "does not list" in host.load_errors[SLUG], host.load_errors
+        assert "POST /sneaky" in host.load_errors[SLUG]
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            assert (await c.post(f"/api/plugins/{SLUG}/sneaky")).status_code == 404
+    finally:
+        _forget_plugin_modules(tmp_path)
+
+
+def _write_core_plugin(root: Path, source: str) -> Path:
+    """A loadable core plugin (manifest + package) whose ``core`` module
+    is ``source``."""
+    _write_plugin(root, source)
+    pkg = root / f"domovoi_plugin_{SLUG}"
+    (pkg / "core.py").write_text((pkg / "web.py").read_text(encoding="utf-8"), encoding="utf-8")
+    (root / "domovoi-plugin.toml").write_text(textwrap.dedent(f'''
+        [plugin]
+        slug = "{SLUG}"
+        name = "{SLUG}"
+        version = "1.0.0"
+        publisher = "tests"
+        license = "MIT"
+        description = "generated test plugin"
+        domovoi_api = ">=1.3,<2.0"
+
+        [entry_points]
+        core = "domovoi_plugin_{SLUG}.core"
+    '''), encoding="utf-8")
+    return root
+
+
+async def _load_core(root: Path):
+    from domovoi import bootstrap
+    from domovoi.plugins_runtime.loader import LOADER
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    bootstrap.register_nvidia_dlls()
+    manifest = parse_manifest((root / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    return await LOADER.load_plugin(
+        slug=SLUG, install_dir=root, manifest=manifest,
+        foreign_corpus=[], foreign_web_routes=[], update_registry_status=False,
+    )
+
+
+def _forget_core_plugin(root: Path) -> None:
+    sys.modules.pop(f"domovoi_plugin_{SLUG}.core", None)
+    _forget_plugin_modules(root)
+    resolved = str(root.resolve())
+    if resolved in sys.path:
+        sys.path.remove(resolved)
+
+
+@pytest.mark.parametrize("shape", sorted(HIDDEN_MARKERS))
+async def test_the_core_load_refuses_a_marker_the_preview_cannot_see(
+    shape: str, tmp_path: Path
+) -> None:
+    from domovoi.plugins_runtime.contracts import ContractError
+    from domovoi.plugins_runtime.loader import LOADER
+
+    root = _write_core_plugin(tmp_path, _plugin_source(HIDDEN_MARKERS[shape]))
+    try:
+        with pytest.raises(ContractError) as exc:
+            await _load_core(root)
+        joined = " ".join(exc.value.errors)
+        assert "POST /sneaky" in joined and "does not list" in joined, joined
+        assert SLUG not in LOADER.loaded
+    finally:
+        _forget_core_plugin(root)
+
+
+async def test_an_aliased_marker_is_listed_and_serves_on_its_tier(
+    tmp_path: Path, claimed
+) -> None:
+    """The walk follows a local alias (``import … as``, ``pal = household``),
+    so an honest author who renames the import is listed, not refused."""
+    from domovoi.route_markers import scan_marked_endpoints
+
+    _write_plugin(tmp_path, _plugin_source(ALIASED_MARKER))
+    try:
+        listed = scan_marked_endpoints(tmp_path / f"domovoi_plugin_{SLUG}")
+        assert {e["function"] for e in listed["device"]} == {"aliased", "chained"}
+        app = FastAPI()
+        host = PluginHost()
+        host.app = app
+        row = _row(tmp_path)
+        host.rows = {SLUG: row}
+        host._mount_one(row)
+        assert SLUG in host.mounted, host.load_errors
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            for path in ("/aliased", "/chained"):
+                url = f"/api/plugins/{SLUG}{path}"
+                assert (await c.post(url)).status_code == 401
+                assert (await c.post(url, headers={HEADER: TOKEN})).status_code == 200
+    finally:
+        _forget_plugin_modules(tmp_path)
+
+
+async def test_the_core_load_accepts_an_aliased_marker(tmp_path: Path) -> None:
+    from domovoi.plugins_runtime.loader import LOADER
+
+    root = _write_core_plugin(tmp_path, _plugin_source(ALIASED_MARKER))
+    try:
+        await _load_core(root)
+        assert SLUG in LOADER.loaded
+    finally:
+        if SLUG in LOADER.loaded:
+            await LOADER.unload_plugin(SLUG)
+        _forget_core_plugin(root)
+
+
+async def test_the_bundled_radio_routers_match_their_source_walk() -> None:
+    """Radio's real routers, held to the walk of its real package — what
+    both processes check when they load it: nothing off the admin tier is
+    missing from the trust screen."""
+    radio_dir = Path(__file__).resolve().parents[2] / "plugins" / "radio"
+    if str(radio_dir) not in sys.path:
+        sys.path.insert(0, str(radio_dir))
+    from domovoi_plugin_radio import core as radio_core
+    from domovoi_plugin_radio import web as radio_web
+
+    class _Ctx:
+        db_session_scope = None
+        core = None
+
+    routers = [radio_web.build_router(_Ctx()), radio_core._build_core_router(None)]
+    package = radio_dir / "domovoi_plugin_radio"
+    assert webkit.unlisted_tier_routes(routers, package) == []
+    report = ContractReport()
+    check_route_tiers(routers, report, package)
+    assert report.errors == []
+    # The same routers against a walk that lists nothing: every device
+    # route is reported, so the empty answer above is not vacuous.
+    assert len(webkit.unlisted_tier_routes(routers, radio_dir / "missing")) == 6
 
 
 # ─── the web→core hop carries the household token ─────────────────────────

@@ -285,6 +285,7 @@ class PluginLoader:
             import_seconds=import_seconds,
             cuda_initialized=cuda_initialized,
             routers=ctx.routers,
+            package_dir=install_dir / manifest.package_name,
         )
         for warning in report.warnings:
             log.warning("plugin %s: %s", slug, warning)
