@@ -1358,23 +1358,27 @@ const MusicPage = () => {
   // real failure names the server's reason — never `${e.message}`, which
   // put `play failed: 401 Unauthorized: {"detail":…}` in the toast.
   //
-  // One play request per room in flight at a time (the radio Stations
-  // page's rule). A tap that shows nothing for a round trip gets tapped
-  // again, and every copy refused for want of a credential waits on the
-  // SAME prompt: dismissing it toasted the refusal once per tap, and
-  // pairing replayed every copy — two random tracks, or one playlist
-  // started twice. Later taps for that room are dropped until the first
-  // settles; another room's play still goes straight through.
+  // One request per play in flight at a time (the radio Stations page's
+  // rule). A tap that shows nothing for a round trip gets tapped again,
+  // and every copy refused for want of a credential waits on the SAME
+  // prompt: dismissing it toasted the refusal once per tap, and pairing
+  // replayed every copy — two random tracks, or one playlist started
+  // twice. A repeat of the same play (same room, same `what`) is dropped
+  // until the first settles; a different choice for that room — another
+  // track while MPD is still starting the first — goes through, rather
+  // than vanishing behind a drawer that already closed, and so does
+  // another room's play.
   const playsInFlight = React.useRef(new Set());
-  const playInRoom = async (room_id, verb, startedMsg, send) => {
-    if (playsInFlight.current.has(room_id)) return;
-    playsInFlight.current.add(room_id);
+  const playInRoom = async (room_id, what, verb, startedMsg, send) => {
+    const key = `${room_id}|${what}`;
+    if (playsInFlight.current.has(key)) return;
+    playsInFlight.current.add(key);
     fire(startedMsg);
     try { await send(); refreshNP(); }
     catch (e) { reportMutationFailure(fire, verb, e); }
-    finally { playsInFlight.current.delete(room_id); }
+    finally { playsInFlight.current.delete(key); }
   };
-  const onPlayRandom = (room_id) => playInRoom(room_id, 'play', `shuffle requested in ${room_id}…`,
+  const onPlayRandom = (room_id) => playInRoom(room_id, 'random', 'play', `shuffle requested in ${room_id}…`,
     () => apiPost('/api/music/play', { room_id, query: 'something random' }));
   const onPlayInRoom = (track, room_id) => {
     // Close the drawer immediately rather than after the API resolves
@@ -1384,7 +1388,7 @@ const MusicPage = () => {
     // Direct-play by id: skips the router entirely, so no
     // conversation_log entry, and no fuzzy-match streaming-provider
     // fallthrough when ID3 tags don't line up with what MPD indexed.
-    return playInRoom(room_id, 'play', `playing "${track.title || 'track'}" in ${room_id}…`,
+    return playInRoom(room_id, `track ${track.id}`, 'play', `playing "${track.title || 'track'}" in ${room_id}…`,
       () => apiPost('/api/music/play-track', { room_id, track_id: track.id }));
   };
   const transport = (verb) => async (room_id) => {
@@ -1497,7 +1501,7 @@ const MusicPage = () => {
   };
   // ── Playlist action handlers ─────────────────────────────────
   const onPlayPlaylist = (playlist, room_id) => playInRoom(
-    room_id, 'play', `playing ${playlist.name} in ${room_id}…`,
+    room_id, `playlist ${playlist.id}`, 'play', `playing ${playlist.name} in ${room_id}…`,
     () => apiPost('/api/music/play-playlist',
       { room_id, playlist_id: playlist.id, shuffle: false }));
   // The Playlists tab's row play button targets the first room; with none
@@ -1507,7 +1511,7 @@ const MusicPage = () => {
     return onPlayPlaylist(playlist, rooms[0]);
   };
   const onShufflePlaylist = (playlist, room_id) => playInRoom(
-    room_id, 'shuffle', `shuffling ${playlist.name} in ${room_id}…`,
+    room_id, `playlist ${playlist.id} shuffled`, 'shuffle', `shuffling ${playlist.name} in ${room_id}…`,
     () => apiPost('/api/music/play-playlist',
       { room_id, playlist_id: playlist.id, shuffle: true }));
   const onRemoveFromPlaylist = async (playlist, track) => {
@@ -1575,8 +1579,10 @@ const MusicPage = () => {
         if (/already|409/.test(e.message)) { dupes++; continue; }
         reportMutationFailure(fire, 'add', e);
         // A refusal the prompt was shown for would be asked again for
-        // every remaining track — one prompt per track. Stop at the first.
-        if (e.authCancelled || isAuthFailure(e)) { stopped = true; break; }
+        // every remaining track — one prompt per track — and an admin's
+        // block on this device refuses every one of them the same way,
+        // one identical toast per track. Stop at the first.
+        if (e.authCancelled || isAuthFailure(e) || deviceBlockReason(e)) { stopped = true; break; }
       }
     }
     if (!stopped || added || dupes) {

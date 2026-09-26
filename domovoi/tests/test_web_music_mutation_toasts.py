@@ -15,8 +15,11 @@ broken endpoint. Two things, both pinned here:
 * **The double tap.** The room plays ("play something", play in room,
   play / shuffle a playlist) had no in-flight guard. Two taps sent two
   POSTs; refused, both waited on the same prompt, so dismissing it toasted
-  twice — and pairing replayed both, starting two random tracks. One play
-  per room is in flight at a time now; another room's play still goes.
+  twice — and pairing replayed both, starting two random tracks. A repeat
+  of a play still in flight is dropped now; a different play for that
+  room, or any play for another room, still goes.
+* **Bulk add stops at a refusal** that would repeat for every track: a
+  dismissed prompt (asked once, not once per track) or a device block.
 
 Driven for real: ``web/static/data.js`` (apiFetch, the refusal routing and
 replay, ``mutationErrorText``), ``components.jsx`` and ``music.jsx`` load
@@ -59,6 +62,7 @@ const NOW_PLAYING = [
 ];
 const PLAYLIST = { id: 2, name: 'W1b Mix', track_count: 1, is_virtual: false,
                    description: '', cover_color: '', cover_emoji: '', created_at: null };
+const BLOCK_REASON = 'the den tablet is blocked from changing things here';
 const __resp = (status, body) => ({
   ok: status >= 200 && status < 300, status,
   statusText: status === 200 ? 'OK' : status === 401 ? 'Unauthorized' : 'Error',
@@ -105,13 +109,24 @@ globalThis.fetch = async (url, opts) => {
   const path = String(url).split('?')[0];
   if (method === 'GET') {
     if (path.endsWith('/api/music/now-playing')) return __resp(200, JSON.stringify(NOW_PLAYING));
-    if (path.endsWith('/api/music/library')) return __resp(200, '{"total":0,"items":[]}');
+    if (path.endsWith('/api/music/library')) {
+      return __resp(200, globalThis.__LIBRARY
+        ? JSON.stringify({ total: 3, items: [1, 2, 3].map((id) => ({
+            id, title: `Track ${id}`, artist: 'Hearth Ensemble', album: null, added_at: null,
+            added_via: 'upload', source: null, duration_sec: 180, favorited: false })) })
+        : '{"total":0,"items":[]}');
+    }
     if (path.endsWith('/api/music/library/stats')) {
       return __resp(200, '{"total_tracks":0,"total_duration_sec":0,"by_added_via":{},"by_source":{},"enriched_count":0}');
     }
     if (path.endsWith('/api/acquisitions')) return __resp(200, '{"acquisitions":[]}');
     if (path.endsWith('/api/playlists')) return __resp(200, JSON.stringify([PLAYLIST]));
-    if (path.includes('/api/files/browse')) return __resp(200, '{"writable":true}');
+    // data.js's device-block probe: a blocked device reads its own reason.
+    if (path.includes('/api/files/browse')) {
+      return __resp(200, globalThis.__BLOCKED
+        ? JSON.stringify({ writable: false, blocked_reason: BLOCK_REASON })
+        : '{"writable":true}');
+    }
     return __resp(200, '[]');
   }
   let body = null;
@@ -120,6 +135,9 @@ globalThis.fetch = async (url, opts) => {
                           deviceToken: headers['X-Device-Token'] || null,
                           auth: headers.Authorization || null });
   if (globalThis.__SERVER_ERROR) return __resp(500, '{"detail":"mpd is on fire"}');
+  // An admin blocked this device: every write is refused with the block's
+  // own sentence, whatever credential it carries.
+  if (globalThis.__BLOCKED) return __resp(403, JSON.stringify({ detail: BLOCK_REASON }));
   if (ADMIN_PATHS.includes(path)) {
     if (!headers.Authorization) return __resp(401, JSON.stringify({ detail: 'admin session required' }));
   } else if (!headers['X-Device-Token'] && !headers.Authorization) {
@@ -169,13 +187,30 @@ PLAYLIST_ROW_PLAY = (
     "await h.click({ type: 'button', text: 'Playlists' });"
     " return tap(h.find({ type: 'button', title: 'play' }), 2);"
 )
+# Two DIFFERENT plays for the kitchen in the same instant: "play something"
+# on its card, and the Playlists tab's row play (which targets the first
+# room, the kitchen).
+SAME_ROOM_TWO_PLAYS = (
+    "await h.click({ type: 'button', text: 'Playlists' });"
+    " return [...tap(h.find({ type: 'button', text: 'play something' })),"
+    " ...tap(h.find({ type: 'button', title: 'play' }))];"
+)
+# Select the three library tracks and add them to the playlist in one go.
+BULK_ADD = (
+    "await h.change({ type: 'input', title: 'select all on this page' }, true);"
+    " await h.change({ type: 'select', value: '' }, '2');"
+    " return tap(h.find({ type: 'button', text: 'add 3' }));"
+)
 
 
 def _scenario(act: str, *, taps: int = 1, answer: bool = False, paired: bool = False,
-              server_error: bool = False) -> dict:
+              server_error: bool = False, library: bool = False,
+              blocked: bool = False) -> dict:
     setup = (f"globalThis.__ANSWER = {json.dumps(answer)};\n"
              f"globalThis.__PAIRED = {json.dumps(paired)};\n"
-             f"globalThis.__SERVER_ERROR = {json.dumps(server_error)};\n" + SETUP)
+             f"globalThis.__SERVER_ERROR = {json.dumps(server_error)};\n"
+             f"globalThis.__LIBRARY = {json.dumps(library)};\n"
+             f"globalThis.__BLOCKED = {json.dumps(blocked)};\n" + SETUP)
     return {
         "files": ["web/static/data.js", "web/static/components.jsx", MUSIC],
         "component": "MusicPage",
@@ -199,6 +234,12 @@ SCENARIOS = {
     "rescan_dismissed": _scenario(RESCAN),
     # The Playlists tab's row play, double-tapped on a paired browser.
     "playlist_double_tap": _scenario(PLAYLIST_ROW_PLAY, paired=True),
+    # A different choice for a room whose first play has not settled.
+    "same_room_two_plays": _scenario(SAME_ROOM_TWO_PLAYS, paired=True),
+    # Bulk add on an unpaired browser; the pair prompt is dismissed.
+    "bulk_add_dismissed": _scenario(BULK_ADD, library=True),
+    # Bulk add from a device an admin has blocked.
+    "bulk_add_blocked": _scenario(BULK_ADD, library=True, paired=True, blocked=True),
 }
 
 
@@ -254,6 +295,42 @@ def test_pairing_at_the_prompt_replays_one_play(outcomes) -> None:
 def test_the_guard_is_per_room(outcomes) -> None:
     o = outcomes["two_rooms"]
     assert [c["room"] for c in _posts(o, "/api/music/play")] == ["kitchen", "den"], o["net"]
+
+
+def test_a_different_play_for_the_same_room_is_not_swallowed(outcomes) -> None:
+    """The guard drops a REPEAT of a play, not the room's next choice: a
+    track picked while MPD is still starting the last one must not vanish
+    behind a drawer that already closed, with no toast to say so."""
+    o = outcomes["same_room_two_plays"]
+    sent = [(c["path"], c["room"]) for c in o["net"]]
+    assert sent == [("/api/music/play", "kitchen"),
+                    ("/api/music/play-playlist", "kitchen")], o["net"]
+    assert o["toastTexts"] == [
+        "shuffle requested in kitchen…",
+        "playing W1b Mix in kitchen…",
+    ], o["toastTexts"]
+
+
+def test_a_dismissed_bulk_add_asks_once_and_stops(outcomes) -> None:
+    """Three tracks, one refusal: the pair prompt is asked for once, the
+    remaining tracks are not sent to ask it again, and no "added 0 tracks"
+    follows the cancellation."""
+    o = outcomes["bulk_add_dismissed"]
+    assert len(_posts(o, "/api/playlists/2/tracks")) == 1, o["net"]
+    assert o["prompts"]["ensurePair"] == 1, o["prompts"]
+    assert o["toastTexts"] == ["add cancelled — this browser is not paired."], o["toastTexts"]
+
+
+def test_a_blocked_device_bulk_add_says_so_once(outcomes) -> None:
+    """A device block refuses every track the same way: one toast naming
+    the block, not one per track."""
+    o = outcomes["bulk_add_blocked"]
+    assert len(_posts(o, "/api/playlists/2/tracks")) == 1, o["net"]
+    assert o["prompts"]["ensurePair"] == 0 and o["prompts"]["ensureLogin"] == 0, o["prompts"]
+    assert o["toastTexts"] == [
+        "add refused — the den tablet is blocked from changing things here. "
+        "An admin lifts the block in Settings → Devices."
+    ], o["toastTexts"]
 
 
 def test_a_real_failure_names_the_servers_reason(outcomes) -> None:
