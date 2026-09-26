@@ -502,7 +502,83 @@ HIDDEN_MARKERS = {
 
         router.add_api_route("/sneaky", open_endpoint(sneaky), methods=["POST"])
     ''',
+    # The hand-set marker one router down: FastAPI >= 0.139 keeps an
+    # included router nested, so a walk of router.routes alone missed it
+    # while the gate (which reads the matched endpoint) honoured it.
+    "nested-setattr-device": '''
+        from fastapi import APIRouter
+
+        inner = APIRouter()
+
+
+        async def sneaky():
+            return {"sneaky": True}
+
+
+        setattr(sneaky, "_domovoi_" + "device_endpoint", True)
+        inner.add_api_route("/sneaky", sneaky, methods=["POST"])
+        router = APIRouter()
+        router.include_router(inner, prefix="/in")
+    ''',
 }
+
+# Routes FastAPI mounts with NO router-level dependency — so without a
+# refusal they answer with no tier at all, and even while the plugin is
+# disabled.
+UNGATED_ROUTES = {
+    "starlette-route": '''
+        from fastapi import APIRouter
+        from starlette.responses import JSONResponse
+
+        router = APIRouter()
+
+
+        async def plain(request):
+            return JSONResponse({"plain": True})
+
+
+        router.add_route("/plain", plain, methods=["POST"])
+    ''',
+    "mount": '''
+        from fastapi import APIRouter
+        from starlette.responses import JSONResponse
+
+        router = APIRouter()
+        router.mount("/plain", JSONResponse({"mounted": True}))
+    ''',
+    "nested-starlette-route": '''
+        from fastapi import APIRouter
+        from starlette.responses import JSONResponse
+
+        inner = APIRouter()
+
+
+        async def plain(request):
+            return JSONResponse({"plain": True})
+
+
+        inner.add_route("/plain", plain, methods=["POST"])
+        router = APIRouter()
+        router.include_router(inner, prefix="/in")
+    ''',
+}
+
+NESTED_DEVICE_ROUTE = '''
+    from fastapi import APIRouter
+    from domovoi.webkit import device_endpoint
+
+    inner = APIRouter()
+
+
+    @inner.post("/deep")
+    @device_endpoint
+    async def deep():
+        return {"deep": True}
+
+
+    router = APIRouter()
+    router.include_router(inner, prefix="/in")
+'''
 
 ALIASED_MARKER = '''
     from fastapi import APIRouter
@@ -609,6 +685,91 @@ async def test_the_core_load_refuses_a_marker_the_preview_cannot_see(
         assert SLUG not in LOADER.loaded
     finally:
         _forget_core_plugin(root)
+
+
+@pytest.mark.parametrize("shape", sorted(UNGATED_ROUTES))
+async def test_the_web_mount_refuses_a_route_the_gate_cannot_cover(
+    shape: str, tmp_path: Path, claimed
+) -> None:
+    _write_plugin(tmp_path, _plugin_source(UNGATED_ROUTES[shape]))
+    try:
+        app = FastAPI()
+        host = PluginHost()
+        host.app = app
+        row = _row(tmp_path)
+        host.rows = {SLUG: row}
+        host._mount_one(row)
+        assert SLUG not in host.mounted
+        assert "gate cannot cover" in host.load_errors[SLUG], host.load_errors
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            for path in ("/plain", "/in/plain"):
+                r = await c.post(f"/api/plugins/{SLUG}{path}")
+                assert r.status_code == 404, (path, r.status_code, r.text)
+    finally:
+        _forget_plugin_modules(tmp_path)
+
+
+@pytest.mark.parametrize("shape", sorted(UNGATED_ROUTES))
+async def test_the_core_refuses_a_route_the_gate_cannot_cover(
+    shape: str, tmp_path: Path
+) -> None:
+    from domovoi.plugins_runtime.contracts import ContractError
+    from domovoi.plugins_runtime.loader import LOADER
+
+    root = _write_core_plugin(tmp_path, _plugin_source(UNGATED_ROUTES[shape]))
+    try:
+        with pytest.raises(ContractError) as exc:
+            await _load_core(root)
+        joined = " ".join(exc.value.errors)
+        assert "without the plugin gate" in joined, joined
+        assert SLUG not in LOADER.loaded
+        # The mount itself is the last door, for any caller but the loader.
+        import importlib
+
+        module = importlib.import_module(f"domovoi_plugin_{SLUG}.core")
+        plugin_http._mounted.pop(SLUG, None)
+        with pytest.raises(TypeError, match="gate cannot cover"):
+            plugin_http.mount_plugin_router(FastAPI(), SLUG, module.router)
+        assert SLUG not in plugin_http._mounted
+    finally:
+        plugin_http._plugin_enabled.pop(SLUG, None)
+        plugin_http._mounted.pop(SLUG, None)
+        _forget_core_plugin(root)
+
+
+async def test_a_nested_router_route_keeps_its_tier_and_its_listing(
+    tmp_path: Path, claimed
+) -> None:
+    """A device route one router down is listed, passes the load checks
+    and is gated on the device tier."""
+    from domovoi.route_markers import scan_marked_endpoints
+
+    _write_plugin(tmp_path, _plugin_source(NESTED_DEVICE_ROUTE))
+    try:
+        listed = scan_marked_endpoints(tmp_path / f"domovoi_plugin_{SLUG}")
+        assert [e["function"] for e in listed["device"]] == ["deep"]
+        app = FastAPI()
+        host = PluginHost()
+        host.app = app
+        row = _row(tmp_path)
+        host.rows = {SLUG: row}
+        host._mount_one(row)
+        assert SLUG in host.mounted, host.load_errors
+        url = f"/api/plugins/{SLUG}/in/deep"
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            assert (await c.post(url)).status_code == 401
+            assert (await c.post(url, headers={HEADER: TOKEN})).status_code == 200
+    finally:
+        _forget_plugin_modules(tmp_path)
+
+
+async def test_both_markers_one_router_down_are_still_a_conflict() -> None:
+    outer = APIRouter()
+    outer.include_router(_smuggled_router(), prefix="/in")
+    assert webkit.tier_conflicts([outer]) != []
+    report = ContractReport()
+    check_route_tiers([outer], report)
+    assert any("POST /both" in e for e in report.errors), report.errors
 
 
 async def test_an_aliased_marker_is_listed_and_serves_on_its_tier(

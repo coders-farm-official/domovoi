@@ -1164,7 +1164,11 @@ decorator form: a marker applied any other way — `device_endpoint(fn)`
 passed to `add_api_route`, the marker attribute set by hand — is invisible
 to it, and because both processes hold every route's runtime tier to that
 same scan when they load the plugin, such a route fails the load ("the
-install preview does not list it") instead of serving.
+install preview does not list it") instead of serving. Register routes
+with the router's own decorators or `add_api_route` (nested routers via
+`include_router` are fine): a plain Starlette `router.add_route(...)` or
+`router.mount(...)` is mounted by FastAPI without the gate dependency —
+no tier, and no `404` while disabled — so it fails the load too.
 
 ### 4.16 The web entry point — `register_web(ctx)`
 

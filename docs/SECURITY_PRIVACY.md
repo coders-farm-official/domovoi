@@ -719,7 +719,12 @@ What the install flow *does* do (verified in
   opens it to anyone, with no credential at all. Every route on either is
   listed on the trust screen under its own heading, so a plugin cannot
   ship a mutation the household's devices — let alone the LAN — can call
-  unnoticed. The bundled radio plugin opens nothing to the whole LAN: its
+  unnoticed. The gate is a router dependency, which FastAPI runs for its
+  own route classes only, so a plugin router carrying a plain Starlette
+  `Route` (`router.add_route`), `Mount`, `Host` or `WebSocketRoute` — which
+  would answer with no tier at all, even while the plugin is disabled — is
+  refused at load in both processes, nested routers included. The bundled
+  radio plugin opens nothing to the whole LAN: its
   everyday mutations (play, favorite, edit, forget, simulcast lookup) are
   `@device_endpoint` and its FCC bulk import keeps the admin default.
 

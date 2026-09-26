@@ -22,9 +22,11 @@ Checks:
    by construction (§4.11); anything mounted around it is warn-flagged.
    A route function may carry at most one tier marker: one wearing both
    ``@open_endpoint`` and ``@device_endpoint`` is a load failure, not a
-   precedence puzzle; and every route that is off the admin tier at
-   runtime must be one the install preview's source walk lists on that
-   tier, or the load fails (:func:`check_route_tiers`).
+   precedence puzzle; every route that is off the admin tier at runtime
+   must be one the install preview's source walk lists on that tier; and
+   every route must be one FastAPI runs the plugin gate for — a plain
+   Starlette ``Route`` / ``Mount`` would mount with no gate at all.
+   Each is a load failure (:func:`check_route_tiers`).
 7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
    and collides with neither a core dashboard route nor another enabled
    plugin's page (F-026 — the shell resolves core-first, so a colliding
@@ -459,14 +461,23 @@ def check_route_tiers(
     (:func:`domovoi.webkit.unlisted_tier_routes`): a marker the trust
     screen could not see — set with ``setattr``, applied by a call instead
     of a decorator — fails the load instead of serving a route the admin
-    was never shown. The web process refuses the same routes when it
-    mounts them."""
-    from domovoi.webkit import tier_conflicts, unlisted_tier_routes
+    was never shown. And a route FastAPI would mount without the gate
+    dependency (a plain Starlette ``Route``, ``Mount``, ``Host`` or
+    ``WebSocketRoute``) fails it too. Nested routers are walked
+    (:func:`domovoi.webkit.iter_plugin_routes`). The web process refuses
+    the same routes when it mounts them."""
+    from domovoi.webkit import tier_conflicts, ungated_routes, unlisted_tier_routes
 
     for conflict in tier_conflicts(routers):
         report.errors.append(
             f"route {conflict} carries both @open_endpoint and "
             f"@device_endpoint — pick one tier"
+        )
+    for ungated in ungated_routes(routers):
+        report.errors.append(
+            f"route {ungated}, which FastAPI mounts without the plugin gate "
+            "(no auth tier, no 404 while disabled) — register it with the "
+            "router's own decorators or add_api_route"
         )
     if package_dir is None:
         return

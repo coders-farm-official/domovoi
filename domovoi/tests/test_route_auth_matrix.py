@@ -271,9 +271,9 @@ RADIO_ROUTE_TIERS: dict[tuple[str, str, str], str] = {
 
 def _radio_mutations() -> dict[tuple[str, str, str], Any]:
     """``(process, METHOD, path) -> endpoint`` for every mutating route on
-    the radio plugin's web and core routers. A plugin router's own
-    ``routes`` list is flat (nothing is included INTO it), so no
-    version-dependent walk is needed here."""
+    the radio plugin's web and core routers, walked the way the load-time
+    checks walk them (``webkit.iter_plugin_routes`` — a router included
+    INTO a plugin router stays nested on FastAPI >= 0.139)."""
     import sys
     from pathlib import Path
 
@@ -291,9 +291,11 @@ def _radio_mutations() -> dict[tuple[str, str, str], Any]:
         "web": radio_web.build_router(_Ctx()),
         "core": radio_core._build_core_router(None),
     }
+    from domovoi.webkit import iter_plugin_routes
+
     out: dict[tuple[str, str, str], Any] = {}
     for process, router in routers.items():
-        for route in router.routes:
+        for route in iter_plugin_routes([router]):
             for method in MUTATING_METHODS:
                 if method in (getattr(route, "methods", None) or set()):
                     out[(process, method, route.path)] = route.endpoint

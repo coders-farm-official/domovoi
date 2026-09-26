@@ -20,7 +20,9 @@ APIRouter at ``/v1/plugins/<slug>/...`` behind two gate dependencies:
   behind the very same rule (``web.backend.plugin_host``), so one
   decorator means one thing in both processes. A route carrying both
   markers is refused (decorator, load-time contract check, and
-  :func:`mount_plugin_router` itself).
+  :func:`mount_plugin_router` itself), and so is a route FastAPI would
+  mount WITHOUT the gate dependency — a plain Starlette ``Route`` /
+  ``Mount`` / ``Host`` / ``WebSocketRoute`` (``webkit.ungated_routes``).
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -52,6 +54,7 @@ from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
     is_open_endpoint,
     open_endpoint,
     tier_conflicts,
+    ungated_routes,
 )
 
 log = logging.getLogger(__name__)
@@ -123,6 +126,14 @@ def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
         raise EndpointTierConflict(
             f"plugin {slug!r}: route(s) carry both @open_endpoint and "
             f"@device_endpoint: {'; '.join(conflicts)}"
+        )
+    ungated = ungated_routes([router])
+    if ungated:
+        # Same last door: a route FastAPI mounts without the gate
+        # dependency would answer with no tier and no disabled-404.
+        raise TypeError(
+            f"plugin {slug!r}: route(s) the plugin gate cannot cover — use "
+            f"the router's own decorators / add_api_route: {'; '.join(ungated)}"
         )
     app.include_router(
         router,

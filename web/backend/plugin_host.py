@@ -377,7 +377,11 @@ class PluginHost:
             ctx = WebPluginContext(slug)
             register_web(ctx)
             assert self.app is not None
-            from domovoi.webkit import tier_conflicts, unlisted_tier_routes
+            from domovoi.webkit import (
+                tier_conflicts,
+                ungated_routes,
+                unlisted_tier_routes,
+            )
 
             # A route that says both "any paired device" and "no credential"
             # is refused whole rather than resolved by a precedence rule —
@@ -387,6 +391,16 @@ class PluginHost:
                 raise RuntimeError(
                     "route(s) carry both @open_endpoint and @device_endpoint: "
                     + "; ".join(conflicts)
+                )
+            # A route FastAPI would mount WITHOUT this gate (a plain
+            # Starlette Route or Mount) would answer with no tier and no
+            # disabled-404 at all.
+            ungated = ungated_routes(ctx.routers)
+            if ungated:
+                raise RuntimeError(
+                    "route(s) the plugin gate cannot cover — register them "
+                    "with the router's own decorators or add_api_route: "
+                    + "; ".join(ungated)
                 )
             # And a route off the admin tier that the install preview's
             # source walk does not list (a marker set by hand, or applied

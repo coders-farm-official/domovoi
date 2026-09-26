@@ -69,6 +69,8 @@ __all__ = [
     "EndpointTierConflict",
     "endpoint_tier",
     "tier_conflicts",
+    "iter_plugin_routes",
+    "ungated_routes",
     "unlisted_tier_routes",
     "enforce_route_tier",
     "admin_required",
@@ -176,17 +178,59 @@ def endpoint_tier(fn: Callable[..., Any] | None) -> EndpointTier:
     return "admin"
 
 
+def iter_plugin_routes(routers: Iterable[Any]) -> Iterable[Any]:
+    """Every route on ``routers``, with routers a plugin included INTO its
+    own flattened. FastAPI >= 0.139 keeps an included router nested as one
+    ``_IncludedRouter`` entry (its routes live on ``.original_router``)
+    where older releases copied them in, so a walk of ``router.routes``
+    alone would never see a nested route's markers — while the gate, which
+    reads the matched route's endpoint, would still honour them."""
+    seen: set[int] = set()
+
+    def _walk(routes: Iterable[Any]) -> Iterable[Any]:
+        for route in routes:
+            inner = getattr(route, "original_router", None)
+            if inner is None:
+                yield route
+            elif id(inner) not in seen:
+                seen.add(id(inner))
+                yield from _walk(getattr(inner, "routes", None) or [])
+
+    for router in routers:
+        yield from _walk(getattr(router, "routes", None) or [])
+
+
+def ungated_routes(routers: Iterable[Any]) -> list[str]:
+    """Every route on ``routers`` that the per-slug gate would never run
+    for. The gate is a router-level dependency, and FastAPI applies those
+    to its own route classes only: a plain Starlette ``Route`` (from
+    ``router.add_route``), a ``WebSocketRoute``, a ``Mount`` or a ``Host``
+    is mounted with no dependency at all — no auth tier, and no 404 while
+    the plugin is disabled. Both processes refuse a plugin with any."""
+    from fastapi.routing import APIRoute, APIWebSocketRoute
+
+    out: list[str] = []
+    for route in iter_plugin_routes(routers):
+        if isinstance(route, (APIRoute, APIWebSocketRoute)):
+            continue
+        fn = getattr(route, "endpoint", None)
+        label = _route_label(route, fn) if fn is not None else (
+            f"{type(route).__name__} {getattr(route, 'path', '?')}"
+        )
+        out.append(f"{label} is a {type(route).__name__}")
+    return out
+
+
 def tier_conflicts(routers: Iterable[Any]) -> list[str]:
     """``"METHOD path (module.function)"`` for every route on ``routers``
     whose function carries both markers — what the core's contract check
     and the web mount refuse to load."""
     out: list[str] = []
-    for router in routers:
-        for route in getattr(router, "routes", None) or []:
-            fn = getattr(route, "endpoint", None)
-            if fn is None or not (is_open_endpoint(fn) and is_device_endpoint(fn)):
-                continue
-            out.append(_route_label(route, fn))
+    for route in iter_plugin_routes(routers):
+        fn = getattr(route, "endpoint", None)
+        if fn is None or not (is_open_endpoint(fn) and is_device_endpoint(fn)):
+            continue
+        out.append(_route_label(route, fn))
     return out
 
 
@@ -215,14 +259,13 @@ def unlisted_tier_routes(routers: Iterable[Any], package_dir: Path | str) -> lis
     lazy evasion — from shipping an unlisted route; it is not a sandbox:
     plugin code is unsandboxed (docs/SECURITY_PRIVACY.md)."""
     off_admin: list[tuple[Any, Any, str]] = []
-    for router in routers:
-        for route in getattr(router, "routes", None) or []:
-            fn = getattr(route, "endpoint", None)
-            if fn is None:
-                continue
-            tier = endpoint_tier(fn)
-            if tier != "admin":
-                off_admin.append((route, fn, tier))
+    for route in iter_plugin_routes(routers):
+        fn = getattr(route, "endpoint", None)
+        if fn is None:
+            continue
+        tier = endpoint_tier(fn)
+        if tier != "admin":
+            off_admin.append((route, fn, tier))
     if not off_admin:
         return []
     try:

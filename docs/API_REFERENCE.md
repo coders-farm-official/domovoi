@@ -1139,7 +1139,10 @@ for how to declare them.
   (`device_endpoints` and `open_endpoints`, under separate headings); a route
   carrying both is refused at staging and at load, and so is a route whose
   marker the preview's source scan cannot see (one applied by a call or set
-  by hand rather than stacked as a decorator). GETs are open unless the
+  by hand rather than stacked as a decorator). So is a route the gate cannot
+  cover: a plain Starlette `Route` (`router.add_route`), `Mount`, `Host` or
+  `WebSocketRoute` on a plugin router would mount without the gate
+  dependency, so it fails the load. GETs are open unless the
   plugin adds its own `Depends(admin_required)` or marks the GET
   `@device_endpoint`.
 * Pre-setup grace applies: until the admin credential exists, the gate
