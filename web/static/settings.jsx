@@ -949,7 +949,7 @@ const ConfigPanel = () => {
  *   POST   /api/wake-words/{id}/record/stop · stop streaming {room_id}
  *   POST   /api/wake-words/{id}/train       · mark for training (needs enough clips)
  *   GET    /api/wake-words/{id}/clips              · per-clip quality/trim/selection (WakeClipList)
- *   GET    /api/wake-words/{id}/clips/{name}/audio · stream a clip WAV (variant=raw|trimmed) for playback
+ *   GET    /api/wake-words/{id}/clips/{name}/audio · stream a clip WAV (variant=raw|trimmed) for playback (device read tier)
  *   PATCH  /api/wake-words/{id}/clips/{name}       · include/exclude one clip from training {selected}
  *   POST   /api/wake-words/{id}/clips/selection    · bulk select {selected, names?, only_verdict?}
  *   POST   /api/wake-words/{id}/clips/reanalyze    · force-recompute quality + trim
@@ -1062,7 +1062,12 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
   const play = (name, variant) => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if (playing && playing.name === name && playing.variant === variant) { setPlaying(null); return; }
-    const url = `/api/wake-words/${wid}/clips/${encodeURIComponent(name)}/audio?variant=${variant}`;
+    // A clip is a recording of somebody's voice, served on the device READ
+    // tier; an <audio> element can't set a header, so the household token
+    // rides in the query (the dashboard cookie also passes). API_BASE keeps
+    // the token on the server it belongs to when another one is selected.
+    const url = withDeviceToken(
+      `${API_BASE}/api/wake-words/${wid}/clips/${encodeURIComponent(name)}/audio?variant=${variant}`);
     const audio = new Audio(url);
     audioRef.current = audio;
     setPlaying({ name, variant });

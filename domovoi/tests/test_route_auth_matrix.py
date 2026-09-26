@@ -35,11 +35,18 @@ Plugin routes are not in either static table — they mount at runtime
 behind ``webkit.enforce_route_tier`` — so the last section walks the
 bundled radio plugin's real routers and holds each mutation to its tier
 (``@device_endpoint`` / ``@open_endpoint`` / the admin default).
+
+One class of READ is walked too: household speech and personal content
+(conversation turns, voice notes, memories, favorites, preferences, chat,
+wake-word recordings) is for paired devices only (owner decision
+2026-09-26), so every such GET must wear ``require_device_read`` — and the
+reads beside them that were deliberately left open are pinned open, so
+moving one is a decision rather than a drive-by.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, Iterator, get_args
 
 import pytest
 from fastapi import FastAPI
@@ -49,6 +56,7 @@ from domovoi.auth import require_admin
 from domovoi.main import app as core_app
 from domovoi.tests.route_walk import iter_route_contexts
 from web.backend.main import app as web_app
+from web.backend.schemas import ConversationTurn, Favorite, Memory, VoiceNote
 
 MUTATING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
@@ -239,6 +247,162 @@ def test_device_token_reads_are_admin_reads_that_fail_closed() -> None:
     assert set(found) == {("core", "/v1/admin/device-token"), ("web", "/api/auth/device-token")}
     for key, calls in found.items():
         assert admin_auth.require_admin_security_read in calls, key
+
+
+# ─── Household speech and personal content: paired devices only ──────────
+#
+# Owner decision 2026-09-26: what the household SAID, and what the house
+# keeps about a PERSON, is read by a paired device — the household token or
+# an admin session — and by nothing else on the LAN. Each GET below wears
+# the READ half of the device tier, ``require_device_read``: the gate every
+# other device-tier read takes (Documents, Files, Images, Videos), so the
+# dashboard cookie and ``?device_token=`` pass exactly as they do there and
+# a bare request is 401. None of them proxies a core read — each is the web
+# process's own query (or a file under the config dir) — so there is no
+# second hop to gate. The behaviour is driven end to end in
+# test_web_speech_reads.py; this is the route-table half.
+
+SPEECH_READS: list[tuple[str, str]] = [
+    # conversation_log rows: user_text / assistant_text
+    ("web", "/api/satellites/{room_id}/conversations"),
+    ("web", "/api/people/{person_id}/conversations"),
+    # voice notes: dictated speech
+    ("web", "/api/satellites/{room_id}/notes"),
+    ("web", "/api/people/{person_id}/notes"),
+    # what the house keeps about a person (pending memories included)
+    ("web", "/api/people/{person_id}/memories"),
+    ("web", "/api/people/{person_id}/favorites"),
+    ("web", "/api/people/{person_id}/preferences"),
+    # the dashboard's text chat — titles and snippets are message text too
+    ("web", "/api/chat/threads"),
+    ("web", "/api/chat/threads/{thread_id}/messages"),
+    ("web", "/api/chat/uploads/{token}"),
+    # a recording of somebody in the house saying the wake phrase
+    ("web", "/api/wake-words/{wake_word_id}/clips/{name}/audio"),
+]
+
+# Speech that was already gated one tier HIGHER before the decision: the
+# satellite keeps a ``heard: <transcript>`` line for every utterance in the
+# log ring these pull. They stay admin reads, at both hops.
+SPEECH_READS_ADMIN: list[tuple[str, str]] = [
+    ("core", "/v1/admin/satellite/{room_id}/logs"),
+    ("web", "/api/satellites/{room_id}/logs"),
+]
+
+# Reads beside the list above that were deliberately LEFT OPEN — household
+# state, or metadata without a word anybody said — pending an owner
+# decision. Pinned open so that gating one is a recorded decision (here,
+# in docs/SECURITY_PRIVACY.md and docs/API_REFERENCE.md), not a drive-by.
+SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
+    ("web", "/api/people"): "the roster: names, last seen, the people.notes column",
+    ("web", "/api/people/{person_id}"): "one roster row",
+    ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke — no words",
+    ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions — times and counts, no words",
+    ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
+    ("web", "/api/satellites/{room_id}/timers"): "household state; a reminder's message is text somebody set",
+    ("web", "/api/calendar/events"): "household state; titles and descriptions",
+    ("web", "/api/calendar/events/{event_id}"): "household state",
+    ("web", "/api/news/people/{person_id}/topics"): "a person's followed topics — the nearest cousin of favorites",
+    ("web", "/api/news/people/{person_id}/items"): "public stories fetched for a person's topics",
+    ("web", "/api/news/people/{person_id}/briefing"): "a summary of those stories",
+    ("web", "/api/wake-words/{wake_word_id}/clips"): "clip names, quality metrics, an amplitude envelope — no audio",
+    ("web", "/api/denylist"): "opt-out rows: a date and an admin's note, never the embedding",
+    ("web", "/api/acquisitions"): "the media request queue — search text or a URL",
+}
+
+# The response models that ARE household speech or personal content. Any
+# GET on either app answering with one of them must be on SPEECH_READS (or
+# SPEECH_READS_ADMIN): a new route serving ConversationTurn rows from
+# somewhere else fails here instead of quietly reopening the history.
+SPEECH_MODELS = (ConversationTurn, VoiceNote, Memory, Favorite)
+
+
+def _get_records(app: FastAPI, label: str) -> dict[tuple[str, str], Any]:
+    """``(app, path) -> route context`` for every GET route, walked the same
+    way as the mutations above."""
+    out: dict[tuple[str, str], Any] = {}
+    for rc in iter_route_contexts(app.routes):
+        path = getattr(rc, "path", None)
+        if path and "GET" in (getattr(rc, "methods", None) or set()):
+            out[(label, path)] = rc
+    return out
+
+
+GET_ROUTES = {**_get_records(core_app, "core"), **_get_records(web_app, "web")}
+
+
+def _get_gates(key: tuple[str, str]) -> list[Any]:
+    assert key in GET_ROUTES, f"GET {key[1]} is missing from the {key[0]} app"
+    return list(_dependency_calls(getattr(GET_ROUTES[key], "dependant", None)))
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), SPEECH_READS, ids=[f"{a} GET {p}" for a, p in SPEECH_READS]
+)
+def test_speech_read_needs_a_paired_device(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_device_read in calls, (
+        f"{label} GET {path} returns household speech or personal content — it "
+        f"must depend on require_device_read (paired devices only)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), SPEECH_READS_ADMIN,
+    ids=[f"{a} GET {p}" for a, p in SPEECH_READS_ADMIN],
+)
+def test_the_log_pull_stays_an_admin_read(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_admin_read in calls
+    assert admin_auth.require_device_read not in calls, (
+        f"{label} GET {path} must not drop to the household tier"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), sorted(SPEECH_ADJACENT_LEFT_OPEN),
+    ids=[f"{a} GET {p}" for a, p in sorted(SPEECH_ADJACENT_LEFT_OPEN)],
+)
+def test_the_reads_left_open_are_still_open(label, path) -> None:
+    """Left open on purpose, pending an owner decision. If one of these
+    grows a gate, move it to SPEECH_READS and say so in the docs."""
+    assert SPEECH_ADJACENT_LEFT_OPEN[(label, path)].strip()
+    calls = _get_gates((label, path))
+    gates = {
+        admin_auth.require_device_read, admin_auth.require_device,
+        admin_auth.require_admin_read, admin_auth.require_admin_mutation,
+    }
+    assert not gates.intersection(calls), f"{label} GET {path} is gated now"
+
+
+def _answers_with(rc: Any, models: tuple[type, ...]) -> bool:
+    """True when the route's response model is, or contains (``list[...]``,
+    ``Optional[...]``), one of ``models``."""
+    stack = [getattr(rc, "response_model", None)]
+    while stack:
+        t = stack.pop()
+        if t is None:
+            continue
+        if isinstance(t, type) and issubclass(t, models):
+            return True
+        stack.extend(get_args(t))
+    return False
+
+
+def test_every_route_serving_speech_models_is_on_the_list() -> None:
+    serving = {
+        key for key, rc in GET_ROUTES.items() if _answers_with(rc, SPEECH_MODELS)
+    }
+    # Guard against the walk going blind (the parametrized tests above would
+    # still pass on an empty table): the known routes must be found.
+    assert ("web", "/api/people/{person_id}/conversations") in serving
+    assert ("web", "/api/satellites/{room_id}/notes") in serving
+    listed = set(SPEECH_READS) | set(SPEECH_READS_ADMIN)
+    missing = sorted(serving - listed)
+    assert not missing, (
+        f"these GETs answer with household speech / personal-content models but "
+        f"are not on SPEECH_READS — gate them with require_device_read: {missing}"
+    )
 
 
 # ─── Plugin routes: which tier each bundled-radio mutation answers to ─────

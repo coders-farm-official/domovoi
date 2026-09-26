@@ -808,6 +808,38 @@ const stateBus = new StateBus();
 // sidesteps that without forcing components.jsx (which is the
 // canonical first-declared place for these names) to change.
 
+// The post-login / post-pairing retry useApiList and useApiObject carry
+// (below), for a page that fetches by hand instead — a person's tabs on
+// the People page, a chat thread's messages. Both read the household's
+// speech, which answers to a paired device, so on a browser that is not
+// paired yet the first fetch is refused and the pair modal opens.
+// Pass the error that refused the fetch (null once one succeeds) and the
+// function that repeats it: `retry` runs when a CREDENTIAL arrives after
+// the refusal (a login, or the household token through the pair modal) —
+// once per credential. Never on a notify that changed none (the modal
+// opening or closing): the retried read that is refused again re-opens
+// the modal, and retrying on THAT notify is the modal loop. A second
+// token typed into the modal after a mistyped one is a new credential,
+// so it gets its own retry.
+const useRetryAfterCredential = (refusal, retry) => {
+  // The credentialVersion the last retry ran on.
+  const retriedAtRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!refusal || (refusal.status !== 401 && refusal.status !== 403)) return;
+    if (typeof Auth === 'undefined') return;
+    try {
+      const seen = Auth.credentialVersion;
+      return Auth.subscribe(() => {
+        const version = Auth.credentialVersion;
+        if (version === seen || version === retriedAtRef.current) return;
+        if (!Auth.isLoggedIn() && !(Auth.isPaired && Auth.isPaired())) return;
+        retriedAtRef.current = version;
+        retry();
+      });
+    } catch { /* auth.js absent — nothing to recover from */ }
+  }, [refusal, retry]);
+};
+
 // One-shot list fetch with refresh. `eventTypes` is a list of WS
 // event types that should trigger a refetch (server doesn't always
 // embed the full new payload, so a refetch is the safest move).

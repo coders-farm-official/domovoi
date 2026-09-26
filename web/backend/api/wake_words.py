@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_device_read
 from domovoi import wake_clip_quality as wq
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
@@ -372,7 +372,16 @@ async def list_clips(wake_word_id: int) -> WakeClipList:
     )
 
 
-@router.get("/{wake_word_id}/clips/{name}/audio")
+@router.get(
+    "/{wake_word_id}/clips/{name}/audio",
+    # Device READ tier (owner decision 2026-09-26): a clip is a recording
+    # of somebody in the house saying the wake phrase — household speech,
+    # for paired devices only. The <audio> element that plays it cannot set
+    # a header, so the dashboard cookie and ?device_token= pass as they do
+    # on every media read. The clip LIST beside it (names, quality metrics,
+    # an amplitude envelope) carries no audio and stays open.
+    dependencies=[Depends(require_device_read)],
+)
 async def clip_audio(
     wake_word_id: int,
     name: str,

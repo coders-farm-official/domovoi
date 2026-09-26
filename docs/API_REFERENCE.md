@@ -96,6 +96,7 @@ Every endpoint below is labeled with one of these tiers:
 |---|---|
 | **Open** | No auth. Daily-use surface, LAN trust. |
 | **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. This is the tier for ordinary household actions on BOTH hops: a turn, an announcement, playback and the room queue, and on the dashboard also the calendar, playlists, chat, news, podcasts, audiobooks, a person's memories and favorites, device registration, and the satellite verbs the core puts on the same tier (label, timers, announce, volume). |
+| **Device read** | `require_device_read`, the READ half of the device tier: everything **Device** accepts, plus the dashboard's session cookie and the household token as a `?device_token=` query (for what a browser fetches by URL — an `<img>`, a `<video>`, an `<audio>`, `window.open`). `401` with none of them, with a stale token or a wrong query token; nothing that writes reads the query. Same pre-setup grace. The tier for the Documents / Files / Images / Videos reads and — because household speech and personal content are for paired devices only (2026-09-26) — for reading back conversations, voice notes, chat, wake-word recordings and a person's memories, favorites and preferences. |
 | **Chat callback** | `require_chat_callback`: the per-boot secret the chat agent's generated proxy tools carry in `X-Chat-Callback`. One endpoint (`POST /v1/admin/chat-tool`) wears it, because Letta's sandbox holds no admin session. A core restart mints a new secret, so the tools must be regenerated (`POST /v1/admin/chat/resync`). |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
@@ -135,7 +136,9 @@ gate, the web endpoint forwards `Authorization`, `X-Device-Token` and the real
 client address (`X-Forwarded-For`) and returns the core's status + JSON
 verbatim. `domovoi/tests/test_route_auth_matrix.py` walks every mutating
 route of both apps and fails when one lacks a gate and is not allowlisted
-with a reason.
+with a reason; it also holds every GET that answers with household speech or
+personal content to **Device read**, and pins the reads beside them that
+were deliberately left **Open**.
 
 ### 1.2 `X-Requested-With` on every write
 
@@ -384,7 +387,12 @@ ranges, and `*.local` origins only.
 header **or** an admin Bearer, `401` with neither, `403` with only the
 dashboard cookie, and the pre-setup grace kept so a fresh install works. The
 dashboard's ordinary mutations are on it — the reads beside them are not, and
-stay Open unless the row says otherwise.
+stay Open unless the row says otherwise. The exception is anything that reads
+back what the household SAID or what the house keeps about a person — a room's
+or a person's conversations and voice notes, a person's memories, favorites
+and preferences, the chat threads, messages and images, a wake-word clip's
+audio — which is **Device read** (§1.1): paired devices only. Each of those is
+the web process's own read, not a proxy, so there is no core hop behind it.
 
 An **Open** label here describes this hop only. Every web route that forwards
 to the core passes the caller's `Authorization`, `Cookie`, `X-Device-Token`
@@ -513,7 +521,12 @@ it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
 
 ### 3.6 People
 
-Reads are **Open**. The memory / favorite / preference edits are **Device**
+What a person said and what the house keeps about them — their conversation
+turns, the notes that name them, their memories, favorites and preferences —
+is read on the **Device read** tier (§1.1): a paired device only, `401` for
+anything else on the LAN. The roster, the session list and the voice-profile
+rows stay **Open** (no words anybody said; left open pending an owner
+decision). The memory / favorite / preference edits are **Device**
 tier — a person's own content, written by whichever household client they are
 using. The two deletes that lose identification data — forgetting a person and
 dropping a voice profile — are **Admin (Bearer)**: `401` without an admin
@@ -527,18 +540,18 @@ Person-centric views over the voice-profile / memory tables.
 | `GET /api/people/{person_id}` | — | One person. |
 | `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
 | `GET /api/people/{person_id}/sessions` | `?limit=20` | Recent conversation sessions. |
-| `GET /api/people/{person_id}/conversations` | `?limit=50` | Recent conversation turns. |
-| `GET /api/people/{person_id}/notes` | — | Notes mentioning them. |
+| `GET /api/people/{person_id}/conversations` | **Device read** · `?limit=50` | Recent conversation turns. |
+| `GET /api/people/{person_id}/notes` | **Device read** | Notes mentioning them. |
 | `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
 | `DELETE /api/people/{person_id}/profiles/{profile_id}` | **Admin** | Drop one voice profile. |
-| `GET /api/people/{person_id}/memories` | `?status=` | Extracted memories. |
+| `GET /api/people/{person_id}/memories` | **Device read** · `?status=` | Extracted memories (pending ones included). |
 | `POST /api/people/{person_id}/memories` | `MemoryCreate` | Add a memory manually. |
 | `PATCH /api/people/{person_id}/memories/{memory_id}` | `MemoryPatch` | Edit/confirm/reject a memory. |
 | `DELETE /api/people/{person_id}/memories/{memory_id}` | — | Delete a memory. |
-| `GET /api/people/{person_id}/favorites` | `?kind=` | Favorites (songs, stations, …). |
+| `GET /api/people/{person_id}/favorites` | **Device read** · `?kind=` | Favorites (songs, stations, …). |
 | `POST /api/people/{person_id}/favorites` | `FavoriteCreate` | Add a favorite. |
 | `DELETE /api/people/{person_id}/favorites/{favorite_id}` | — | Remove a favorite. |
-| `GET /api/people/{person_id}/preferences` | — | Per-person preferences. |
+| `GET /api/people/{person_id}/preferences` | **Device read** | Per-person preferences. |
 | `PATCH /api/people/{person_id}/preferences` | `PreferencesPatch` | Update preferences. |
 
 Related: the voice-identification denylist — `GET /api/denylist` (Open) and
@@ -547,7 +560,10 @@ puts someone back in front of the matcher, so it answers to the operator).
 
 ### 3.7 Satellites
 
-Reads are **Open**. The action endpoints carry the tier the core route behind
+Reads are **Open**, except a room's conversations and voice notes — what was
+said there — which are **Device read** (paired devices only), and the log pull,
+which carries the same speech raw and is an **Admin read** at both hops. The
+action endpoints carry the tier the core route behind
 each one carries, so the two hops agree: room label, timer cancel, announce,
 announce-all and volume are **Device**; restart, display and the config push
 are **Admin (Bearer)**; code push, pairing reset, adopt and delete are the
@@ -559,9 +575,9 @@ proxy to the core admin endpoints with the caller's credentials forwarded.
 | `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability. |
 | `GET /api/satellites/{room_id}` | Open | — | One room. |
 | `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
-| `GET /api/satellites/{room_id}/conversations` | Open | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
+| `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
 | `GET /api/satellites/{room_id}/logs` | **Admin (read)** | `?max_bytes=` (1 KB–10 MB, default 1 MB) | Satellite's recent log output, live over its WS. Gated: the satellite logs every transcript, so this returns room conversation content. `404` when the room isn't connected — the buffer lives in the Pi's process. |
-| `GET /api/satellites/{room_id}/notes` | Open | — | Notes taken in this room. |
+| `GET /api/satellites/{room_id}/notes` | **Device read** | — | Notes taken in this room. |
 | `GET /api/satellites/{room_id}/recently-played` | Open | `?limit=100` | Play history for the room. |
 | `GET /api/satellites/{room_id}/timers` | Open | — | Active timers/reminders. |
 | `DELETE /api/satellites/{room_id}/timers/{timer_id}` | **Device** | — | Cancel a timer. |
@@ -659,7 +675,10 @@ file on the server. Mutations trigger the core's background clip re-render
 
 ### 3.12 Wake words
 
-Reads are **Open**; every mutation (`POST` / `PATCH` / `DELETE`, including
+Reads are **Open**, except a clip's audio — a recording of somebody in the
+house saying the phrase — which is **Device read** (paired devices only; the
+dashboard's `<audio>` carries the token as `?device_token=`). Every mutation
+(`POST` / `PATCH` / `DELETE`, including
 clip selection and deletion and the record / score / push proxies) is
 **Admin (Bearer)** via `require_admin_mutation` — this surface decides what
 the house listens for. Recording, scoring, and pushing proxy to the core (which owns
@@ -675,7 +694,7 @@ picked up by the core's background trainer. The default wake word is
 | `POST /api/wake-words/{id}/record/stop` | `{room_id}` | Proxy → core: stop capturing. |
 | `POST /api/wake-words/{id}/train` | — | Queue training (the background trainer picks it up). |
 | `GET /api/wake-words/{id}/clips` | — | Recorded clips with quality analysis + selection state. |
-| `GET /api/wake-words/{id}/clips/{name}/audio` | `?variant=raw\|trimmed` | Listen to one clip. |
+| `GET /api/wake-words/{id}/clips/{name}/audio` | **Device read** · `?variant=raw\|trimmed` | Listen to one clip. |
 | `PATCH /api/wake-words/{id}/clips/{name}` | `{selected}` | Include/exclude one clip from training. |
 | `POST /api/wake-words/{id}/clips/selection` | `ClipSelectionBody` | Bulk select/deselect. |
 | `POST /api/wake-words/{id}/clips/reanalyze` | — | Re-run clip quality analysis. |
@@ -929,8 +948,12 @@ carrying image uploads is answered by `ollama_vision_model` (the Vision
 role slot on the Models page) instead of the Q&A model. Mutations fire the
 `chat.changed` WS event.
 
-Reads are **Open**; every write — creating, renaming or deleting a thread,
-sending a message, staging an upload — is **Device** tier.
+Reads are **Device read** — the thread list (titles and snippets are message
+text), a thread's transcript and the images sent into it are the household's
+conversation, for paired devices only; an image's `<img src>` carries the
+token as `?device_token=`. The model picker (`/models`) stays **Open**. Every
+write — creating, renaming or deleting a thread, sending a message, staging an
+upload — is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
@@ -942,7 +965,7 @@ sending a message, staging an upload — is **Device** tier.
 | `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
-| `GET /api/chat/models` | — | Installed Ollama models + configured default/vision models for the composer. |
+| `GET /api/chat/models` | Open | Installed Ollama models + configured default/vision models for the composer. |
 
 ### 3.19 Models (LLM management)
 

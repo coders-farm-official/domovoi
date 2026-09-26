@@ -74,6 +74,10 @@ def test_every_mutation_route_carries_the_admin_gate(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(ROUTERS))
 def test_read_routes_stay_open(name: str) -> None:
+    """No read here needs the ADMIN gate. (A wake-word clip's audio is a
+    recording of somebody's voice and needs a paired device —
+    ``require_device_read``, pinned in test_route_auth_matrix — which is
+    not the admin tier and not what this asserts.)"""
     router = ROUTERS[name]
     reads = [r for r in _routes(router) if r.methods <= _READ_METHODS]
     assert reads, f"{name}: expected at least one GET"

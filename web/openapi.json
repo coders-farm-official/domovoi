@@ -9341,7 +9341,7 @@
           "chat"
         ],
         "summary": "Get Upload",
-        "description": "Serve a staged/persisted chat image inline (for rendering in the\ntranscript). Token-addressed \u2014 the client never names paths.",
+        "description": "Serve a staged/persisted chat image inline (for rendering in the\ntranscript). Token-addressed \u2014 the client never names paths. The token\nis unguessable, but the image is household content like the thread it\nwas sent in, so it answers to the same paired-device read; an\n``<img src>`` carries the household token as ``?device_token=``.",
         "operationId": "get_upload_api_chat_uploads__token__get",
         "parameters": [
           {

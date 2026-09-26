@@ -40,7 +40,7 @@ tier is what keeps it from going further.
 flowchart TB
     subgraph daily["Daily tier — any LAN host, no auth"]
         d1["Reads: health, time, handlers,<br/>capabilities, the file-sync channels"]
-        d2["Dashboard read-only pages"]
+        d2["Dashboard reads of household STATE:<br/>rooms, now-playing, library, calendar,<br/>timers — never what anybody said"]
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
@@ -55,6 +55,7 @@ flowchart TB
         v6["On the dashboard: the calendar, playlists,<br/>chat, news, podcasts and audiobooks,<br/>a person's memories and favorites"]
         v7["Satellite room label, timer cancel,<br/>announce and volume"]
         v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
+        v9["READING what the household said:<br/>conversations, voice notes, chat,<br/>wake-word recordings — and a person's<br/>memories, favorites, preferences"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -230,6 +231,56 @@ same token as a `?device_token=` query parameter. Nothing that writes looks
 at the query — a token in a URL lands in history and logs, which is a
 reasonable price for rendering a thumbnail and not for changing a file.
 
+**Reading what the household said is for paired devices only.** Every turn
+anybody speaks to Domovoi is written down (`conversation_log`), and so is
+what the house keeps about a person. Reading any of it back used to need
+nothing but the LAN — while the two other places that carry the same
+speech, the `/ws/state` push and the satellite log pull, were already
+gated. The rule now (2026-09-26) is that household speech and personal
+content are read by a **paired device** — one presenting the household
+token, or an admin session — and by nothing else on the network:
+
+* a room's conversations and voice notes (`GET /api/satellites/{room}/conversations`, `/notes`);
+* a person's conversations, the voice notes that name them, their
+  memories (the pending ones Domovoi extracted too), favorites and
+  preferences (`GET /api/people/{id}/conversations`, `/notes`,
+  `/memories`, `/favorites`, `/preferences`);
+* the dashboard's text chat — the thread list (a title and the last-message
+  snippet are message text), a thread's messages, and the images sent into
+  it (`GET /api/chat/threads`, `/threads/{id}/messages`, `/uploads/{token}`);
+* a recorded wake-word clip — somebody's voice saying the phrase
+  (`GET /api/wake-words/{id}/clips/{name}/audio`).
+
+They take the READ half of the device tier, `require_device_read`, the same
+gate as the Documents, Files, Images and Videos reads: the household token
+(header) or an admin Bearer, the dashboard's session cookie, or
+`?device_token=` for the two that a browser fetches by URL (a chat image,
+a clip's `<audio>`). No credential, a stale token or a wrong query token is
+`401`, and the pre-setup grace still applies. They are device tier rather
+than admin because the people reading them are the household — somebody
+checking what they asked the kitchen this morning from their own phone —
+and the household token is what every paired phone and browser already
+holds; the satellite log pull stays an admin read, because it is a whole
+room's raw log ring, not a history view. All of these are the web
+process's own database reads, so there is no second hop to gate; the
+core's own speech-carrying surfaces (a turn, the satellite stream, the
+drop-in socket, the log pull) were gated already. The dashboard asks an
+unpaired browser to pair when one of these is refused and shows the
+history once it has; the Android app sends the token on every request
+anyway.
+
+**Left open, on purpose, pending a decision.** Next to that list sit reads
+that carry no words anybody said, or that are household state, and they
+still answer the LAN: the people roster (names, when each was last heard,
+the free-text note on the row), a person's or a room's session list (times,
+rooms and turn counts), voice-profile enrolment metadata (never an
+embedding), timers and reminders (a reminder's message is text somebody
+set), the calendar, a person's followed news topics and the stories
+fetched for them, the wake-word clip list (names and quality numbers, no
+audio), the voice denylist and the media request queue. Each is pinned in
+`domovoi/tests/test_route_auth_matrix.py`, so moving one is a recorded
+decision rather than a side effect.
+
 **What a device id means now.** Files writes still name a `device_id`, and
 the admin block list (`files_device_blocks`) still matches on it or on the
 device's registered name — but only requests that already carry the
@@ -367,8 +418,10 @@ completes: the pre-setup grace is what lets you set the thing up.
 Acting in a room is one step up, on the device tier above, and so is every
 ordinary mutation the dashboard makes: your household shouldn't log in to
 ask for a song or add a calendar entry, but the ask should come from a
-device the household enrolled. What is left on this tier is reads, the
-pre-setup grace and the kiosk below. The accepted risk is now narrower and
+device the household enrolled. So is reading back anything the household
+SAID — conversations, notes, chat, wake-word recordings — or what the house
+keeps about a person (above). What is left on this tier is reads of
+household state, the pre-setup grace and the kiosk below. The accepted risk is now narrower and
 still real — one shared household secret, no per-device identity, and
 anything holding it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
@@ -774,8 +827,8 @@ All of it on hardware you own. Locations, verified against the code:
 
 | Where | What |
 |---|---|
-| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
-| **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models). |
+| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
+| **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
 | **`~/.domovoi/` on each Pi** | `config.toml`, synced sound clips, synced wake models, small state sidecars (`voice`, `wake`, last-synced version, and the `pairing_token` WS-auth secret — mode 0600), and a tarball backup of the previous satellite code kept for upgrade rollback. |

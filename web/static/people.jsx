@@ -4,11 +4,17 @@
  *   * GET /api/people                          — roster.
  *   * GET /api/people/{id}/sessions            — sessions for the selected person.
  *   * GET /api/people/{id}/conversations       — conversation_log rows for them.
+ *   * GET /api/people/{id}/memories|favorites|preferences — the Memory tab.
  *   * GET /api/denylist                        — opted-out voice count.
  *   * /ws/state · `people.last_seen.changed`   — push refresh of the roster.
  *
  * Sessions and conversations are fetched per-person on selection; we
  * don't preload them all because conversation_log can be large.
+ *
+ * Conversations, memories, favorites and preferences are household speech
+ * and personal content: the server reads them on the DEVICE tier, so an
+ * unpaired browser is asked to pair (apiGet opens the prompt) and the
+ * per-person fetch re-runs once it has (useRetryAfterCredential).
  */
 
 const isLive = (iso) => {
@@ -186,7 +192,7 @@ const MemoryRow = ({ m, dimmed, onApprove, onReject, onDelete }) => (
   </div>
 );
 
-const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefresh, fire }) => {
+const MemoryTab = ({ person, memories, favorites, preferences, loading, refused, onRefresh, fire }) => {
   const [newMemBody, setNewMemBody] = React.useState('');
   const [newFavKind, setNewFavKind] = React.useState('');
   const [newFavValue, setNewFavValue] = React.useState('');
@@ -250,6 +256,8 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
 
   if (loading && memories.length === 0 && favorites.length === 0 && Object.keys(preferences || {}).length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading memory…</div>;
+  if (refused && memories.length === 0 && favorites.length === 0)
+    return <PairedOnlyEmpty what={`what the house keeps about ${person.name}`}/>;
 
   return (
     <div>
@@ -486,7 +494,7 @@ const ConversationTurn = ({ c }) => {
   );
 };
 
-const ConversationsTab = ({ person, conversations, loading }) => {
+const ConversationsTab = ({ person, conversations, loading, refused }) => {
   const [q, setQ] = React.useState('');
   const filtered = conversations.filter(c => {
     if (!q) return true;
@@ -495,6 +503,8 @@ const ConversationsTab = ({ person, conversations, loading }) => {
   });
   if (loading && conversations.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading conversations…</div>;
+  if (refused && conversations.length === 0)
+    return <PairedOnlyEmpty what={`what ${person.name} said`}/>;
   return (
     <>
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
@@ -574,22 +584,36 @@ const PeoplePage = () => {
   const [perPersonLoading, setPerPersonLoading] = React.useState(false);
   const [refreshTick, setRefreshTick] = React.useState(0);
   const refreshProfile = React.useCallback(() => setRefreshTick(t => t + 1), []);
+  // What a person said and what the house keeps about them (conversations,
+  // memories, favorites, preferences) is read on the device tier, so an
+  // unpaired browser's first fetch is refused: apiGet opens the pair modal,
+  // the tab renders empty, and this refusal re-runs the fetch once the
+  // browser is paired (or an admin signs in).
+  const [personRefusal, setPersonRefusal] = React.useState(null);
+  useRetryAfterCredential(personRefusal, refreshProfile);
+  const personPairRefused = !!(personRefusal && personRefusal.deviceTokenRequired);
 
   React.useEffect(() => {
     if (selectedId == null) {
       setSessions([]); setConversations([]);
       setMemories([]); setFavorites([]); setPreferences({});
+      setPersonRefusal(null);
       return;
     }
     let cancelled = false;
+    let refusal = null;
+    const read = (path, empty) => apiGet(path).catch((e) => {
+      if (e && (e.status === 401 || e.status === 403) && !refusal) refusal = e;
+      return empty;
+    });
     setPerPersonLoading(true);
     (async () => {
       const [ss, cc, mm, ff, pp] = await Promise.all([
-        apiGet(`/api/people/${selectedId}/sessions?limit=50`).catch(() => []),
-        apiGet(`/api/people/${selectedId}/conversations?limit=200`).catch(() => []),
-        apiGet(`/api/people/${selectedId}/memories`).catch(() => []),
-        apiGet(`/api/people/${selectedId}/favorites`).catch(() => []),
-        apiGet(`/api/people/${selectedId}/preferences`).catch(() => ({})),
+        read(`/api/people/${selectedId}/sessions?limit=50`, []),
+        read(`/api/people/${selectedId}/conversations?limit=200`, []),
+        read(`/api/people/${selectedId}/memories`, []),
+        read(`/api/people/${selectedId}/favorites`, []),
+        read(`/api/people/${selectedId}/preferences`, {}),
       ]);
       if (cancelled) return;
       setSessions(ss || []);
@@ -597,6 +621,7 @@ const PeoplePage = () => {
       setMemories(mm || []);
       setFavorites(ff || []);
       setPreferences(pp || {});
+      setPersonRefusal(refusal);
       setPerPersonLoading(false);
     })();
     return () => { cancelled = true; };
@@ -735,6 +760,7 @@ const PeoplePage = () => {
                          favorites={favorites}
                          preferences={preferences}
                          loading={perPersonLoading}
+                         refused={personPairRefused}
                          onRefresh={refreshProfile}
                          fire={fire}/>
             )}
@@ -744,7 +770,7 @@ const PeoplePage = () => {
             )}
             {tab === 'conversations' && (
               <ConversationsTab person={selected} conversations={conversations}
-                                loading={perPersonLoading}/>
+                                loading={perPersonLoading} refused={personPairRefused}/>
             )}
           </Card>
         )}

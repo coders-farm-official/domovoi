@@ -13,7 +13,11 @@
  * the no-build bundle).
  */
 
-const chatUploadUrl = (token) => `${API_BASE}/api/chat/uploads/${token}`;
+/* An <img src> (and the new tab its link opens) cannot set a header, and a
+ * chat image is read on the device tier like the thread it was sent in, so
+ * the URL carries the household token as ?device_token= (withDeviceToken,
+ * data.js) — the query the server accepts on reads and nowhere else. */
+const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
 
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
@@ -138,7 +142,7 @@ const ChatMessage = ({ m }) => {
 
 const ChatPage = () => {
   const [fire, toastNode] = useToast();
-  const { items: threads, refresh: refreshThreads } =
+  const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
   const { data: modelsInfo } = useApiObject('/api/chat/models');
 
@@ -151,12 +155,25 @@ const ChatPage = () => {
   const scrollRef = React.useRef(null);
   const fileRef = React.useRef(null);
 
+  // A thread's messages are read on the device tier: on a browser that is
+  // not paired yet the read is refused, apiGet opens the pair modal, and
+  // the refusal re-runs the read once a credential arrives. The thread
+  // list is a useApiList and recovers on its own.
+  const [messagesRefusal, setMessagesRefusal] = React.useState(null);
   const loadMessages = async (id) => {
     try {
       const r = await apiGet(`/api/chat/threads/${id}/messages`);
       setMessages(r.messages || []);
-    } catch { setMessages([]); }
+      setMessagesRefusal(null);
+    } catch (e) {
+      setMessages([]);
+      setMessagesRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+    }
   };
+  const reloadMessages = React.useCallback(() => {
+    if (threadId != null) loadMessages(threadId);
+  }, [threadId]);
+  useRetryAfterCredential(messagesRefusal, reloadMessages);
 
   const selectThread = (t) => {
     setThreadId(t.id);
@@ -255,7 +272,11 @@ const ChatPage = () => {
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex',
                         flexDirection: 'column', gap: 2 }}>
             {threads.length === 0
-              ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>no chats yet</div>
+              ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>
+                  {threadsError && threadsError.deviceTokenRequired
+                    ? 'paired devices only — pair this browser, or sign in, to read the chats'
+                    : 'no chats yet'}
+                </div>
               : threads.map((t) => (
                   <ChatThreadRow key={t.id} t={t} active={t.id === threadId}
                                  onSelect={selectThread} onDelete={deleteThread}/>

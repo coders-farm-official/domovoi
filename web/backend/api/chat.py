@@ -22,7 +22,14 @@ Thread/message writes are DEVICE tier (REV-1): a valid ``X-Device-Token``
 or an admin Bearer, with the pre-setup LAN grace kept. Thread history
 contains only what the user typed here, but it is the household's
 conversation all the same, and the send verb spends the box's model time.
-Mutations fire
+READING it is device tier too (owner decision 2026-09-26: household
+speech and personal content are for paired devices only): the thread list
+(titles and the last-message snippet are message text), a thread's
+messages and the images staged into them take the read half of the gate,
+``require_device_read`` — the household token or an admin Bearer, the
+dashboard cookie, or ``?device_token=`` for the ``<img src>`` an upload is
+rendered through. The model picker stays open; it lists models, not
+anything anybody said. Mutations fire
 ``chat_changed`` NOTIFY → the ``chat.changed`` WS event so a second open
 dashboard's thread list stays fresh.
 """
@@ -42,7 +49,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_device
+from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
@@ -52,6 +59,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 DEVICE = [Depends(require_device)]
+READ = [Depends(require_device_read)]
 
 UPLOADS_DIR = Path.home() / ".domovoi" / "chat_uploads"
 _UPLOAD_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
@@ -78,7 +86,7 @@ class ThreadPatch(BaseModel):
     archived: Optional[bool] = None
 
 
-@router.get("/threads")
+@router.get("/threads", dependencies=READ)
 async def list_threads(archived: bool = False) -> dict[str, Any]:
     async with session_scope() as s:
         rows = (
@@ -196,7 +204,7 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     return d
 
 
-@router.get("/threads/{thread_id}/messages")
+@router.get("/threads/{thread_id}/messages", dependencies=READ)
 async def list_messages(thread_id: int) -> dict[str, Any]:
     async with session_scope() as s:
         exists = (
@@ -379,10 +387,13 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     return {"token": token, "name": file.filename or f"image{ext}"}
 
 
-@router.get("/uploads/{token}")
+@router.get("/uploads/{token}", dependencies=READ)
 async def get_upload(token: str):
     """Serve a staged/persisted chat image inline (for rendering in the
-    transcript). Token-addressed — the client never names paths."""
+    transcript). Token-addressed — the client never names paths. The token
+    is unguessable, but the image is household content like the thread it
+    was sent in, so it answers to the same paired-device read; an
+    ``<img src>`` carries the household token as ``?device_token=``."""
     p = _upload_path(token)
     if p is None:
         raise HTTPException(status_code=404, detail="upload not found")

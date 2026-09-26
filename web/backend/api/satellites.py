@@ -15,6 +15,12 @@ Source-of-truth pieces:
 Sessions / conversations / notes / timers are pure DB reads scoped by
 ``room_id``. The announce endpoints stub out at 501 since they need
 the Domovoi server's ``app.state.active_sessions`` to do TTS fanout.
+
+A room's conversations and voice notes are what the household SAID, so
+reading them takes a paired device (``require_device_read``, owner
+decision 2026-09-26) — like the log pull, which carries the same speech
+and sits one tier higher. The other per-room reads are household state
+and stay open.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from domovoi.admin_auth import (
     require_admin_read,
     require_admin_security,
     require_device,
+    require_device_read,
 )
 
 from satellite import provisioning_protocol as proto
@@ -382,7 +389,14 @@ async def list_sessions(
         ]
 
 
-@router.get("/{room_id}/conversations", response_model=list[ConversationTurn])
+@router.get(
+    "/{room_id}/conversations", response_model=list[ConversationTurn],
+    # Device READ tier: every turn's user_text / assistant_text is what
+    # somebody said in this room. A paired device (the household token or
+    # an admin Bearer, the dashboard cookie, ?device_token=) reads it;
+    # anything else on the LAN gets 401. Pre-setup grace kept.
+    dependencies=[Depends(require_device_read)],
+)
 async def list_conversations(
     room_id: str, limit: int = Query(default=50, ge=1, le=500)
 ) -> list[ConversationTurn]:
@@ -417,7 +431,12 @@ async def list_conversations(
         ]
 
 
-@router.get("/{room_id}/notes", response_model=list[VoiceNote])
+@router.get(
+    "/{room_id}/notes", response_model=list[VoiceNote],
+    # Device READ tier, like the conversations above: a voice note is
+    # dictated speech.
+    dependencies=[Depends(require_device_read)],
+)
 async def list_notes(room_id: str) -> list[VoiceNote]:
     async with session_scope() as s:
         rows = await s.execute(

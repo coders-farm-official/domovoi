@@ -212,6 +212,17 @@ const Empty = ({ title, sub, glyph = 'sleeping', action }) => {
   );
 };
 
+/* What a panel shows when its read was refused for want of the household
+ * token — a room's conversations, a person's memories: household speech
+ * and personal content, which the server reads to paired devices only.
+ * data.js has already opened the "pair this browser" prompt (and the page
+ * re-reads once a credential arrives); this keeps the panel from saying
+ * "nothing here" while that prompt is up, or after it was dismissed. */
+const PairedOnlyEmpty = ({ what }) => (
+  <Empty glyph="sleeping" title="paired devices only"
+         sub={`pair this browser, or sign in, to read ${what}`}/>
+);
+
 /* ---- Buttons ------------------------------------------------ */
 const Button = ({ variant = 'secondary', icon, children, ...rest }) => (
   <button className={`btn btn-${variant}`} {...rest}>

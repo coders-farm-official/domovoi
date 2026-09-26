@@ -3,8 +3,8 @@
  * Data sources:
  *   * GET /api/satellites                                     — grid roster
  *   * GET /api/satellites/{room}/sessions                     — drawer · sessions tab
- *   * GET /api/satellites/{room}/conversations                — drawer · conversations tab
- *   * GET /api/satellites/{room}/notes                        — drawer · notes tab
+ *   * GET /api/satellites/{room}/conversations                — drawer · conversations tab (paired devices only)
+ *   * GET /api/satellites/{room}/notes                        — drawer · notes tab (paired devices only)
  *   * GET /api/satellites/{room}/timers                       — drawer · timers tab
  *   * GET /api/satellites/{room}/recently-played              — drawer · recently-played tab
  *   * POST /api/music/add-by-url|query                        — drawer · recently-played "+ add" (generic acquisition)
@@ -728,10 +728,12 @@ const RoomSessionsBody = ({ room }) => {
 
 const RoomConversationsBody = ({ room }) => {
   const [q, setQ] = React.useState('');
-  const { items: all, loading } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: all, loading, error } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
   if (loading && all.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading conversations…</div>;
+  if (error && error.deviceTokenRequired && all.length === 0)
+    return <PairedOnlyEmpty what="what was said in this room"/>;
   return (
     <>
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -756,9 +758,11 @@ const RoomConversationsBody = ({ room }) => {
 };
 
 const RoomNotesBody = ({ room }) => {
-  const { items: notes, loading } = useApiList(`/api/satellites/${room}/notes`);
+  const { items: notes, loading, error } = useApiList(`/api/satellites/${room}/notes`);
   if (loading && notes.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading notes…</div>;
+  if (error && error.deviceTokenRequired && notes.length === 0)
+    return <PairedOnlyEmpty what="the notes taken in this room"/>;
   if (notes.length === 0)
     return <Empty glyph="sleeping" title="no notes from this room" sub="say: domovoi, jot this down — …"/>;
   return (

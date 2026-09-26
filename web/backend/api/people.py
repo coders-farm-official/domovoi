@@ -19,7 +19,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_device
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_device,
+    require_device_read,
+)
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.schemas import (
@@ -47,6 +51,21 @@ router = APIRouter(prefix="/api/people", tags=["people"])
 # Deleting a PERSON or a voice PROFILE stays admin tier: those cascade
 # across the history and cannot be undone from the same screen.
 DEVICE = [Depends(require_device)]
+
+# READING what a person said, and what the house keeps about them, needs a
+# paired device too (owner decision 2026-09-26: household speech and
+# personal content are for paired devices only): their conversation
+# turns, the voice notes that name them, their memories (pending ones
+# included), favorites and preferences. The READ half of the device tier,
+# exactly as the Documents and Files reads take it — the household token
+# or an admin Bearer, the dashboard cookie, or ``?device_token=`` — with
+# the same pre-setup grace. Nothing, or a stale token, is 401.
+#
+# Left open on purpose, pending an owner decision: the roster itself
+# (names, last seen, the ``notes`` column), a person's session list (when
+# and in which room, no words) and their voice-profile rows (enrolment
+# metadata, never an embedding or a recording).
+READ = [Depends(require_device_read)]
 
 
 # ─── List + detail ─────────────────────────────────────────────────────────
@@ -153,7 +172,10 @@ async def list_sessions(
         ]
 
 
-@router.get("/{person_id}/conversations", response_model=list[ConversationTurn])
+@router.get(
+    "/{person_id}/conversations", response_model=list[ConversationTurn],
+    dependencies=READ,
+)
 async def list_conversations(
     person_id: int, limit: int = Query(default=50, ge=1, le=500)
 ) -> list[ConversationTurn]:
@@ -175,7 +197,9 @@ async def list_conversations(
         return [_row_to_turn(r) for r in rows.all()]
 
 
-@router.get("/{person_id}/notes", response_model=list[VoiceNote])
+@router.get(
+    "/{person_id}/notes", response_model=list[VoiceNote], dependencies=READ
+)
 async def list_notes_mentioning(person_id: int) -> list[VoiceNote]:
     """Voice notes that mention this person by name (heuristic ILIKE).
 
@@ -287,7 +311,9 @@ async def delete_profile(person_id: int, profile_id: int) -> None:
 # ─── Memories / favorites / preferences ────────────────────────────
 
 
-@router.get("/{person_id}/memories", response_model=list[Memory])
+@router.get(
+    "/{person_id}/memories", response_model=list[Memory], dependencies=READ
+)
 async def list_memories(
     person_id: int,
     status: str | None = Query(default=None),
@@ -449,7 +475,9 @@ async def delete_memory(person_id: int, memory_id: int) -> None:
         )
 
 
-@router.get("/{person_id}/favorites", response_model=list[Favorite])
+@router.get(
+    "/{person_id}/favorites", response_model=list[Favorite], dependencies=READ
+)
 async def list_favorites(
     person_id: int, kind: str | None = Query(default=None)
 ) -> list[Favorite]:
@@ -553,7 +581,7 @@ async def delete_favorite(person_id: int, favorite_id: int) -> None:
         )
 
 
-@router.get("/{person_id}/preferences")
+@router.get("/{person_id}/preferences", dependencies=READ)
 async def get_preferences(person_id: int) -> dict:
     async with session_scope() as s:
         await _ensure_person_exists(s, person_id)
