@@ -7,7 +7,7 @@ exception — ``delete failed: 401 Unauthorized: {"detail":"admin session
 required"}`` — behind the password prompt, which reads as a crash rather
 than "please sign in" (finding F-006, card SH-03).
 
-Two invariants:
+Three invariants:
 
 * ``isAuthFailure(e)`` (data.js) is true exactly when the login modal was
   shown for that refusal — a dismissed sign-in, or a plain 401/403 GET —
@@ -16,6 +16,9 @@ Two invariants:
   operator will see. Exercised for real: data.js is loaded into a Node
   ``vm`` sandbox with a scripted ``fetch`` and ``Auth``.
 * every delete handler SH-03 audited guards its toast with it.
+* the pages that report mutation failures through ``reportMutationFailure``
+  (data.js — ``mutationErrorText``'s rule) toast no raw ``${e.message}``
+  anywhere else either, beyond a listed few that say why they stay.
 
 No DB, no ``requires_db`` — this must never skip. The behavioural half
 needs ``node`` (the same runtime the JSX compile check uses); it fails,
@@ -208,3 +211,30 @@ def test_delete_toasts_are_guarded_by_is_auth_failure(name: str, expected: int):
     unguarded = re.findall(r"^\s*fire\(`delete failed:", src, re.MULTILINE)
     assert len(guarded) == expected, f"{name}: {len(guarded)} guarded delete toasts"
     assert unguarded == [], f"{name}: unguarded delete toast(s): {unguarded}"
+
+
+# Pages whose mutation catches report through data.js's reportMutationFailure
+# (the mutationErrorText rule) instead of toasting the raw exception: a
+# `${e.message}` toast is the status line plus the JSON body, and behind a
+# pair / sign-in prompt it reads as a crash. What is still raw on each page
+# is listed with the reason it stays; a new one fails here.
+RAW_TOASTS_LEFT = {
+    "calendar.jsx": [],
+    "music.jsx": [],
+    "people.jsx": [],
+    "satellites.jsx": ["adopt failed"],                    # inline form error with its own 409/410 wording
+    "satellite_media.jsx": ["couldn't load setup details"],  # a read, not a mutation
+    "plugins.jsx": ["validation failed"] * 2,              # structured staging error: needs its own reader
+    # Verb-less guard() / act() wrappers (each call site needs a verb), and
+    # a sample fetch whose error is a bare status line, not a JSON body.
+    "settings.jsx": ["failed", "sample failed", "failed", "failed", "failed"],
+    "models.jsx": ["failed"],
+}
+
+
+@pytest.mark.parametrize("name,expected", sorted(RAW_TOASTS_LEFT.items()))
+def test_mutation_toasts_do_not_print_the_raw_exception(name: str, expected: list[str]):
+    src = (STATIC / name).read_text(encoding="utf-8")
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", src, flags=re.S)
+    raw = [p.rstrip(": ") for p in re.findall(r"`([^`]*?)\$\{(?:e|err)\.message", code)]
+    assert raw == expected, f"{name}: raw exception text in {raw}"

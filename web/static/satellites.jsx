@@ -243,7 +243,7 @@ const VolumeControl = ({ s, fire }) => {
       await apiPost(`/api/satellites/${s.room_id}/volume`, { level });
       fire(`${s.room_id} volume set to ${level}%`);
     } catch (e) {
-      fire(`volume failed: ${e.message}`);
+      reportMutationFailure(fire, 'volume', e);
     } finally {
       dirtyRef.current = false;
     }
@@ -304,7 +304,7 @@ const VideoControls = ({ s, fire }) => {
         ? `restarting kiosk on ${s.room_id}…`
         : `screen ${action} sent to ${s.room_id}`);
     } catch (e) {
-      fire(`display action failed: ${e.message}`);
+      reportMutationFailure(fire, 'display action', e);
     }
   };
   const restartKiosk = () => {
@@ -388,7 +388,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       }
       setMsg('');
     } catch (e) {
-      fire(`announce failed: ${e.message}`);
+      reportMutationFailure(fire, 'announce', e);
     }
   };
 
@@ -399,7 +399,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       await apiPost(`/api/satellites/${s.room_id}/restart`, {});
       fire(`restarting ${s.room_id}…`);
     } catch (e) {
-      fire(`restart failed: ${e.message}`);
+      reportMutationFailure(fire, 'restart', e);
     }
   };
 
@@ -415,7 +415,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
       fire(`upgrading ${s.room_id}…`);
     } catch (e) {
-      fire(`upgrade failed: ${e.message}`);
+      reportMutationFailure(fire, 'upgrade', e);
     }
   };
 
@@ -435,7 +435,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       const r = await apiPost(`/api/satellites/${s.room_id}/pairing/reset`, {});
       fire(r && r.reset ? `pairing reset for ${s.room_id}` : `${s.room_id} had no pairing to reset`);
     } catch (e) {
-      fire(`reset pairing failed: ${e.message}`);
+      reportMutationFailure(fire, 'reset pairing', e);
     }
   };
 
@@ -454,7 +454,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       fire(`dropping in: ${s.room_id} → ${peer}`);
       setPeer('');
     } catch (e) {
-      fire(`drop-in failed: ${e.message}`);
+      reportMutationFailure(fire, 'drop-in', e);
     }
   };
   const hangUp = async () => {
@@ -462,7 +462,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       await apiPost(`/api/satellites/${s.room_id}/dropin/end`, {});
       fire(`hung up ${s.room_id}`);
     } catch (e) {
-      fire(`hang up failed: ${e.message}`);
+      reportMutationFailure(fire, 'hang up', e);
     }
   };
 
@@ -511,17 +511,17 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                             title={np.state === 'play' ? 'pause' : 'resume'}
                             onClick={async () => {
                               try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
-                              catch (e) { fire(`transport failed: ${e.message}`); }
+                              catch (e) { reportMutationFailure(fire, np.state === 'play' ? 'pause' : 'resume', e); }
                             }}/>
                 <IconButton name="skip-forward" title="skip"
                             onClick={async () => {
                               try { await apiPost(`/api/music/skip/${s.room_id}`); }
-                              catch (e) { fire(`skip failed: ${e.message}`); }
+                              catch (e) { reportMutationFailure(fire, 'skip', e); }
                             }}/>
                 <IconButton name="square" title="stop"
                             onClick={async () => {
                               try { await apiPost(`/api/music/stop/${s.room_id}`); }
-                              catch (e) { fire(`stop failed: ${e.message}`); }
+                              catch (e) { reportMutationFailure(fire, 'stop', e); }
                             }}/>
               </div>
             )}
@@ -582,7 +582,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               fire(v.trim() ? `labeled ${s.room_id} as "${v.trim()}"` : `cleared ${s.room_id}'s room label`);
               refresh && refresh();
             } catch (e) {
-              fire(`label update failed: ${e.message}`);
+              reportMutationFailure(fire, 'label update', e);
             }
           }}/>
         </div>
@@ -675,7 +675,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                 onClose && onClose();
                 refresh && refresh();
               } catch (e) {
-                fire(`remove failed: ${e.message}`);
+                reportMutationFailure(fire, 'remove', e);
               }
             }}>
               Remove
@@ -700,7 +700,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                 onClose && onClose();
                 refresh && refresh();
               } catch (e) {
-                fire(`retire failed: ${e.message}`);
+                reportMutationFailure(fire, 'retire', e);
               }
             }}>
               Retire room
@@ -790,7 +790,7 @@ const RoomTimersBody = ({ room, fire }) => {
       fire(`cancelled ${t.is_reminder ? 'reminder' : 'timer'} #${t.id}`);
       refresh();
     } catch (e) {
-      fire(`cancel failed: ${e.message}`);
+      reportMutationFailure(fire, `cancel #${t.id}`, e);
     }
   };
 
@@ -880,7 +880,7 @@ const RoomRecentlyPlayedBody = ({ room, fire }) => {
       setQueued(prev => new Set(prev).add(r.id));
       refresh();
     } catch (e) {
-      fire(`add failed: ${e.message}`);
+      reportMutationFailure(fire, 'add', e);
     }
   };
 
@@ -1165,7 +1165,7 @@ const Broadcast = ({ onlineCount, fire }) => {
       }
       setMsg('');
     } catch (e) {
-      fire(`broadcast failed: ${e.message}`);
+      reportMutationFailure(fire, 'broadcast', e);
     }
   };
   return (

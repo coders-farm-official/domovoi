@@ -513,7 +513,7 @@ const VersionSection = () => {
         fire('up to date');
       }
     } catch (e) {
-      fire(`update check failed: ${e.message || e}`);
+      reportMutationFailure(fire, 'update check', e);
     } finally {
       setChecking(false);
     }
@@ -537,7 +537,7 @@ const VersionSection = () => {
         fire(`pull failed: ${(res && res.error) || 'unknown'}`);
       }
     } catch (e) {
-      fire(`pull failed: ${e.message || e}`);
+      reportMutationFailure(fire, 'pull', e);
     } finally {
       setPulling(false);
     }
@@ -619,7 +619,7 @@ const VersionSection = () => {
       if (e && e.authCancelled) {
         fire('restart cancelled — not signed in');
       } else if (e && e.status) {
-        fire(`restart failed: ${e.message}`);
+        reportMutationFailure(fire, 'restart', e);
       } else {
         fire(kind === 'update' ? 'updating…' : 'restarting…');
         await waitForServer(kind, previousRun);

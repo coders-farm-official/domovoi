@@ -235,7 +235,7 @@ const PrepareMediaCard = ({ fire }) => {
       const r = await apiPost('/api/satellites/media/prepare', body);
       fire(r.attached ? 'attached to the running build' : 'build started');
     } catch (e) {
-      fire(`prepare failed: ${e.message}`);
+      reportMutationFailure(fire, 'prepare', e);
     } finally {
       setBusy(false);
     }
@@ -250,7 +250,7 @@ const PrepareMediaCard = ({ fire }) => {
       fire(bad.length ? `cache refresh: ${bad.map(([k, v]) => `${k}: ${v.message}`).join(' · ')}` : 'caches refreshed');
       refreshStatus();
     } catch (e) {
-      fire(`cache refresh failed: ${e.message}`);
+      reportMutationFailure(fire, 'cache refresh', e);
     } finally {
       setBusy(false);
     }

@@ -517,7 +517,7 @@ const CalendarPage = () => {
       setModalOp(false);
       refreshEvents();
     } catch (err) {
-      fire(`save failed: ${err.message}`);
+      reportMutationFailure(fire, 'save', err, { kept: true });
     }
   };
 
@@ -529,7 +529,7 @@ const CalendarPage = () => {
       refreshEvents();
     } catch (err) {
       // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
-      if (!isAuthFailure(err)) fire(`delete failed: ${err.message}`);
+      reportMutationFailure(fire, 'delete', err);
     }
   };
 

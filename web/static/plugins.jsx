@@ -555,11 +555,11 @@ const PluginsPage = () => {
       else fire(`enabled ${p.name}`);
       refresh();
     }
-    catch (e) { fire(`enable failed: ${e.message}`); }
+    catch (e) { reportMutationFailure(fire, 'enable', e); }
   };
   const onDisable = async (p) => {
     try { await apiPost(`/api/plugins/${p.slug}/disable`); fire(`disabled ${p.name}`); refresh(); }
-    catch (e) { fire(`disable failed: ${e.message}`); }
+    catch (e) { reportMutationFailure(fire, 'disable', e); }
   };
 
   return (

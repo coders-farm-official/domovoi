@@ -199,14 +199,14 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       setNewMemBody('');
       fire('saved memory');
       onRefresh();
-    } catch (e) { fire(`save failed: ${e.message}`); }
+    } catch (e) { reportMutationFailure(fire, 'save', e); }
   };
   const setMemoryStatus = async (mem, status) => {
     try {
       await apiPatch(`/api/people/${person.id}/memories/${mem.id}`, { status });
       fire(status === 'active' ? 'approved' : 'rejected');
       onRefresh();
-    } catch (e) { fire(`patch failed: ${e.message}`); }
+    } catch (e) { reportMutationFailure(fire, status === 'active' ? 'approve' : 'reject', e); }
   };
   const deleteMemory = async (mem) => {
     if (!window.confirm(`Forget "${mem.body}"?`)) return;
@@ -216,7 +216,7 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       onRefresh();
     } catch (e) {
       // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
-      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+      reportMutationFailure(fire, 'delete', e);
     }
   };
   const submitFavorite = async () => {
@@ -228,7 +228,7 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       setNewFavKind(''); setNewFavValue('');
       fire('saved favorite');
       onRefresh();
-    } catch (e) { fire(`save failed: ${e.message}`); }
+    } catch (e) { reportMutationFailure(fire, 'save', e); }
   };
   const deleteFavorite = async (fav) => {
     if (!window.confirm(`Forget favorite ${fav.kind} = ${fav.value}?`)) return;
@@ -237,7 +237,7 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, onRefres
       fire('deleted');
       onRefresh();
     } catch (e) {
-      if (!isAuthFailure(e)) fire(`delete failed: ${e.message}`);
+      reportMutationFailure(fire, 'delete', e);
     }
   };
 
@@ -614,7 +614,7 @@ const PeoplePage = () => {
       setSelectedId(null);
       refreshPeople();
     } catch (e) {
-      fire(`forget failed: ${e.message}`);
+      reportMutationFailure(fire, 'forget', e);
     }
   };
 
