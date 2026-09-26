@@ -15,6 +15,12 @@ Both processes mount plugin routers behind one gate body
 against BOTH mounts — the core's ``plugin_http.mount_plugin_router`` and
 the dashboard's ``PluginHost`` — with the same synthetic plugin router.
 
+The load-time refusals are here too, each against the web mount AND the
+core loader (``PluginLoader.load_plugin`` → contract check 6): a marker
+the install preview's source walk cannot see (set by hand, applied by a
+call, one router down), and a route FastAPI would mount without the gate
+at all (a plain Starlette ``Route`` or ``Mount``).
+
 DB-free except the last test: the auth primitives are faked at the seam
 ``auth_testkit.install_fake_db`` patches, and no route body touches
 Postgres. The ``requires_db`` test walks the same ground once with real
