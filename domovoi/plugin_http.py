@@ -1,7 +1,8 @@
 """Plugin HTTP mounting on the core app (design §4.11).
 
-``mount_plugin_router(app, slug, router)`` includes a plugin's
-APIRouter at ``/v1/plugins/<slug>/...`` behind two gate dependencies:
+``mount_plugin_routers(app, slug, routers)`` includes every APIRouter a
+plugin registered at ``/v1/plugins/<slug>/...`` behind two gate
+dependencies:
 
 * **Enable gate** — FastAPI can't remove routes cleanly, so a disabled
   plugin's routes 404 via a per-slug flag (``set_plugin_enabled``) and
@@ -20,7 +21,7 @@ APIRouter at ``/v1/plugins/<slug>/...`` behind two gate dependencies:
   behind the very same rule (``web.backend.plugin_host``), so one
   decorator means one thing in both processes. A route carrying both
   markers is refused (decorator, load-time contract check, and
-  :func:`mount_plugin_router` itself), and so is a route FastAPI would
+  :func:`mount_plugin_routers` itself), and so is a route FastAPI would
   mount WITHOUT the gate dependency — a plain Starlette ``Route`` /
   ``Mount`` / ``Host`` / ``WebSocketRoute`` (``webkit.ungated_routes``).
 
@@ -59,10 +60,11 @@ from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
 
 log = logging.getLogger(__name__)
 
-# slug → enabled? Populated by mount_plugin_router / the plugin runtime.
+# slug → enabled? Populated by mount_plugin_routers / the plugin runtime.
 _plugin_enabled: dict[str, bool] = {}
-# slug → mounted router (reused across disable/enable).
-_mounted: dict[str, Any] = {}
+# slug → every router mounted for it, in registration order (reused
+# across disable/enable).
+_mounted: dict[str, list[Any]] = {}
 
 
 def set_plugin_enabled(slug: str, enabled: bool) -> None:
@@ -109,17 +111,34 @@ def _make_gate(slug: str):
     return _gate
 
 
-def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
-    """Include ``router`` at ``/v1/plugins/<slug>`` behind the enable +
-    auth gates, and mark the slug enabled. Re-mounting an
-    already-mounted slug just re-enables it (route addition at runtime
-    is supported; removal is the 404 gate's job)."""
+def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
+    """Include every router in ``routers`` — all a plugin registered, in
+    order — at ``/v1/plugins/<slug>`` behind the enable + auth gates, and
+    mark the slug enabled.
+
+    Mounting is per slug, not per router: a slug already mounted is just
+    re-enabled, and nothing is included twice. Enable re-runs the
+    plugin's ``register()``, which builds fresh router objects, but code
+    changes need a core restart (``plugins_runtime.loader``) and FastAPI
+    can't remove routes cleanly — so the routers mounted at the first
+    enable keep serving, and disable is the 404 gate's job. Every router
+    is checked before any is included, so a refused plugin mounts
+    nothing."""
     from fastapi import Depends
 
+    routers = list(routers)
     if slug in _mounted:
+        if len(routers) != len(_mounted[slug]):
+            log.warning(
+                "plugin %s re-enabled with %d router(s) where %d are mounted "
+                "— the mounted set keeps serving until the core restarts",
+                slug, len(routers), len(_mounted[slug]),
+            )
         set_plugin_enabled(slug, True)
         return
-    conflicts = tier_conflicts([router])
+    if not routers:
+        return
+    conflicts = tier_conflicts(routers)
     if conflicts:
         # The loader's contract check refuses these first (load_error);
         # this is the last door, for any other caller.
@@ -127,7 +146,7 @@ def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
             f"plugin {slug!r}: route(s) carry both @open_endpoint and "
             f"@device_endpoint: {'; '.join(conflicts)}"
         )
-    ungated = ungated_routes([router])
+    ungated = ungated_routes(routers)
     if ungated:
         # Same last door: a route FastAPI mounts without the gate
         # dependency would answer with no tier and no disabled-404.
@@ -135,13 +154,22 @@ def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
             f"plugin {slug!r}: route(s) the plugin gate cannot cover — use "
             f"the router's own decorators / add_api_route: {'; '.join(ungated)}"
         )
-    app.include_router(
-        router,
-        prefix=f"/v1/plugins/{slug}",
-        dependencies=[Depends(_make_gate(slug))],
-        tags=[f"plugin:{slug}"],
-    )
-    _mounted[slug] = router
+    for router in routers:
+        app.include_router(
+            router,
+            prefix=f"/v1/plugins/{slug}",
+            dependencies=[Depends(_make_gate(slug))],
+            tags=[f"plugin:{slug}"],
+        )
+    _mounted[slug] = routers
     set_plugin_enabled(slug, True)
     # A router added post-startup must invalidate the cached OpenAPI doc.
     app.openapi_schema = None
+
+
+def mount_plugin_router(app: FastAPI, slug: str, router: Any) -> None:
+    """:func:`mount_plugin_routers` for a plugin with ONE router. The
+    per-slug rule applies: a second call for the same slug re-enables it
+    and mounts nothing, so a plugin with several routers hands them over
+    together (the loader passes ``ctx.routers`` whole)."""
+    mount_plugin_routers(app, slug, [router])

@@ -28,7 +28,7 @@ from domovoi import bootstrap
 from domovoi.config import settings
 from domovoi.handlers import register_handler, unregister_handler, HANDLERS
 from domovoi.handlers.base import Handler
-from domovoi.plugin_http import mount_plugin_router, set_plugin_enabled
+from domovoi.plugin_http import mount_plugin_routers, set_plugin_enabled
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.config_bridge import PLUGIN_CONFIG, FieldSpec
 from domovoi.plugins_runtime.contracts import ContractError, run_contract_checks
@@ -195,8 +195,7 @@ class PluginLoader:
         self._app = app
         # Mount routers of anything loaded before the app existed.
         for lp in self.loaded.values():
-            for router in lp.context.routers:
-                mount_plugin_router(app, lp.slug, router)
+            mount_plugin_routers(app, lp.slug, lp.context.routers)
 
     # ── load / unload ────────────────────────────────────────────────────────
 
@@ -302,9 +301,11 @@ class PluginLoader:
         degraded = _probe_system_tools(manifest)
 
         # Mount routers / start workers now that the contract holds.
+        # Every router at once: mounting is per slug (a second call for
+        # a mounted slug only re-enables it), so a router-at-a-time loop
+        # mounted the first and silently dropped the rest.
         if self._app is not None:
-            for router in ctx.routers:
-                mount_plugin_router(self._app, slug, router)
+            mount_plugin_routers(self._app, slug, ctx.routers)
         set_plugin_enabled(slug, True)
         try:
             await WORKERS.start_owner(slug)

@@ -160,6 +160,164 @@ async def test_mutations_denied_after_admin_setup(db_session) -> None:
         await db_session.commit()
 
 
+# ─── Every router a plugin registers, mounted once ────────────────────────
+#
+# Mounting is per slug: a mounted slug is only re-enabled. The loader used
+# to mount a plugin's routers one call at a time, so the second call found
+# the slug mounted and a plugin with two core routers served only the
+# first. These need no DB — GETs pass the gate without a credential lookup.
+
+
+def _two_routers() -> tuple[APIRouter, APIRouter]:
+    first, second = APIRouter(), APIRouter()
+
+    @first.get("/first")
+    async def from_first():
+        return {"router": 1}
+
+    @second.get("/second")
+    async def from_second():
+        return {"router": 2}
+
+    return first, second
+
+
+async def _statuses(app: FastAPI, *paths: str) -> list[int]:
+    async with await _client(app) as client:
+        return [(await client.get(f"/v1/plugins/demo{p}")).status_code for p in paths]
+
+
+async def test_every_router_a_plugin_registers_is_mounted() -> None:
+    app = FastAPI()
+    first, second = _two_routers()
+    plugin_http.mount_plugin_routers(app, "demo", [first, second])
+    assert await _statuses(app, "/first", "/second") == [200, 200]
+    assert plugin_http._mounted["demo"] == [first, second]
+
+
+async def test_re_enabling_a_mounted_slug_includes_nothing_twice() -> None:
+    """Enable re-runs ``register()``, which builds FRESH router objects:
+    the slug is re-enabled, the first mount keeps serving, and the route
+    table does not grow."""
+    app = FastAPI()
+    first, second = _two_routers()
+    plugin_http.mount_plugin_routers(app, "demo", [first, second])
+    size = len(app.router.routes)
+
+    set_plugin_enabled("demo", False)
+    assert await _statuses(app, "/first", "/second") == [404, 404]
+
+    plugin_http.mount_plugin_routers(app, "demo", list(_two_routers()))
+    assert len(app.router.routes) == size
+    assert await _statuses(app, "/first", "/second") == [200, 200]
+    assert plugin_http._mounted["demo"] == [first, second]
+    # The one-router form follows the same per-slug rule.
+    mount_plugin_router(app, "demo", APIRouter())
+    assert len(app.router.routes) == size
+
+
+async def test_one_refused_router_mounts_none_of_them() -> None:
+    """Every router is checked before any is included: a conflict on the
+    second must not leave the first serving."""
+    app = FastAPI()
+    first, _ = _two_routers()
+    bad = APIRouter()
+
+    async def both():
+        return {}
+
+    setattr(both, plugin_http._OPEN_MARKER, True)
+    setattr(both, plugin_http._DEVICE_MARKER, True)
+    bad.add_api_route("/both", both, methods=["POST"])
+    with pytest.raises(plugin_http.EndpointTierConflict, match="POST /both"):
+        plugin_http.mount_plugin_routers(app, "demo", [first, bad])
+    assert "demo" not in plugin_http._mounted
+    assert await _statuses(app, "/first") == [404]
+
+
+_TWO_ROUTER_PLUGIN = '''
+from fastapi import APIRouter
+
+first = APIRouter()
+second = APIRouter()
+
+
+@first.get("/first")
+async def from_first():
+    return {"router": 1}
+
+
+@second.get("/second")
+async def from_second():
+    return {"router": 2}
+
+
+def register(ctx):
+    ctx.add_router(first)
+    ctx.add_router(second)
+'''
+
+
+async def test_the_loader_mounts_both_routers_and_re_enables_cleanly(tmp_path) -> None:
+    """The path the bug lived on: ``PluginLoader`` → the core app. Both
+    routers serve, disable 404s both, and enable brings both back
+    without growing the route table."""
+    import sys
+    import textwrap
+
+    from domovoi import bootstrap
+    from domovoi.plugins_runtime.loader import PluginLoader
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    pkg = tmp_path / "domovoi_plugin_demo"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "core.py").write_text(_TWO_ROUTER_PLUGIN, encoding="utf-8")
+    manifest = parse_manifest(textwrap.dedent('''
+        [plugin]
+        slug = "demo"
+        name = "demo"
+        version = "1.0.0"
+        publisher = "tests"
+        license = "MIT"
+        description = "two core routers"
+        domovoi_api = ">=1.3,<2.0"
+
+        [entry_points]
+        core = "domovoi_plugin_demo.core"
+    '''))
+    bootstrap.register_nvidia_dlls()
+    loader = PluginLoader()
+    app = FastAPI()
+    loader.bind_app(app)
+
+    async def _load() -> None:
+        await loader.load_plugin(
+            slug="demo", install_dir=tmp_path, manifest=manifest,
+            foreign_corpus=[], foreign_web_routes=[], update_registry_status=False,
+        )
+
+    try:
+        await _load()
+        assert await _statuses(app, "/first", "/second") == [200, 200]
+        size = len(app.router.routes)
+
+        await loader.unload_plugin("demo")
+        assert await _statuses(app, "/first", "/second") == [404, 404]
+
+        await _load()
+        assert await _statuses(app, "/first", "/second") == [200, 200]
+        assert len(app.router.routes) == size
+    finally:
+        if "demo" in loader.loaded:
+            await loader.unload_plugin("demo")
+        sys.modules.pop("domovoi_plugin_demo.core", None)
+        sys.modules.pop("domovoi_plugin_demo", None)
+        for entry in (str(tmp_path), str(tmp_path.resolve())):
+            if entry in sys.path:
+                sys.path.remove(entry)
+
+
 # ─── Core introspection endpoints (main app) ──────────────────────────────
 
 
