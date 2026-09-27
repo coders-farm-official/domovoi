@@ -613,6 +613,11 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     db_reachable: bool
     domovoi_reachable: bool
+    # The core's speech-recognition state from its /v1/health: "ok",
+    # "fallback" (the cpu fallback model loaded instead of the configured
+    # one), "unavailable" (nothing loaded), "stub" (tests) or "not_loaded".
+    # None when the core did not answer. Never makes `status` degraded.
+    stt: str | None = None
 
 
 class ConfigResponse(BaseModel):

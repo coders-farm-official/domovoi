@@ -400,7 +400,9 @@ async def health() -> HealthResponse:
     """Cheap readiness probe — DB ping + domovoi ping. Returns
     'degraded' (HTTP 200, not 503) when the Domovoi server is down so
     the UI can show a partial-degradation banner instead of refusing
-    to render."""
+    to render. ``stt`` passes the core's speech-recognition state through
+    from the same ping, so a page can say "the kitchen can't hear you"
+    without the costly hardware probe."""
     from sqlalchemy import text
 
     db_ok = True
@@ -415,19 +417,29 @@ async def health() -> HealthResponse:
     # Domovoi ping: best-effort against /v1/health on the
     # configured domovoi URL. Doesn't fail the response.
     core_ok = False
+    stt: str | None = None
     try:
         import httpx
         domovoi_url = os.environ.get("DOMOVOI_URL", "http://localhost:6370")
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.get(f"{domovoi_url}/v1/health")
             core_ok = r.status_code == 200
+            if core_ok:
+                # The core's speech-recognition state, passed through as-is
+                # (ok / fallback / unavailable / stub / not_loaded — see
+                # clients.whisper.stt_status). It is a signal, never a cause
+                # for "degraded": the core boots without STT on purpose.
+                doc = r.json()
+                if isinstance(doc, dict) and isinstance(doc.get("stt"), str):
+                    stt = doc["stt"]
     except Exception:
-        core_ok = False
+        pass
 
     return HealthResponse(
         status="ok" if db_ok and core_ok else "degraded",
         db_reachable=db_ok,
         domovoi_reachable=core_ok,
+        stt=stt,
     )
 
 
