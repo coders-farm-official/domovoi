@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -45,6 +46,20 @@ QA_THINK_CHOICES = ("default", "false", "true")
 
 # The values of `home_problems_visibility`, first = default. See the field.
 HOME_PROBLEMS_VISIBILITY_CHOICES = ("everyone", "summary", "admins")
+# What an admin plausibly MEANT by a value that isn't one of those — read
+# as the choice it names, never as the most open one.
+HOME_PROBLEMS_VISIBILITY_ALIASES = {
+    "admin": "admins", "admin-only": "admins", "admin_only": "admins", "admin only": "admins",
+    "admins-only": "admins", "admins_only": "admins", "admins only": "admins",
+    "none": "admins", "nobody": "admins", "nothing": "admins", "off": "admins",
+    "summary-only": "summary", "summary_only": "summary", "summary only": "summary",
+    "all": "everyone", "everybody": "everyone",
+}
+# Anything else falls back HERE, not to the default: an admin who wrote
+# something in .env meant to change it, and the likely change is quieter.
+HOME_PROBLEMS_VISIBILITY_UNKNOWN = "summary"
+
+_log = logging.getLogger(__name__)
 
 
 def normalize_think_setting(value: object) -> str:
@@ -211,18 +226,34 @@ class Settings(BaseSettings):
     # attention"). "admins": only a signed-in admin sees any. An admin
     # always sees them all, and a device marked a shared screen shows the
     # summary line at most, whatever this says. Read by the dashboard only;
-    # changes apply live (the web reads it through the core's snapshot).
+    # changes apply live (the web reads it through the core's snapshot). A
+    # value that is none of the three reads as "summary" (see the validator).
     home_problems_visibility: str = HOME_PROBLEMS_VISIBILITY_CHOICES[0]
 
     @field_validator("home_problems_visibility", mode="before")
     @classmethod
     def _home_problems_visibility_known(cls, value: object) -> str:
-        """Case and whitespace forgiven. An unknown value falls back to the
-        default instead of stopping the server from booting: this only
-        decides what a web page shows, and a typo in .env must not take
-        the voice service down with it."""
+        """Case and whitespace forgiven, and never fatal: this only decides
+        what a web page shows, and a typo in .env must not take the voice
+        service down with it. Empty is the default. A near miss ("admin",
+        "admin-only", "none", "summary only", "all") reads as the choice
+        it names. Anything else falls back to "summary" — NOT the default,
+        which is the most open choice: someone who set it meant to change
+        it — and the log says which value was refused."""
         text = str(value or "").strip().lower()
-        return text if text in HOME_PROBLEMS_VISIBILITY_CHOICES else HOME_PROBLEMS_VISIBILITY_CHOICES[0]
+        if not text:
+            return HOME_PROBLEMS_VISIBILITY_CHOICES[0]
+        if text in HOME_PROBLEMS_VISIBILITY_CHOICES:
+            return text
+        meant = HOME_PROBLEMS_VISIBILITY_ALIASES.get(" ".join(text.split()))
+        if meant:
+            _log.warning("HOME_PROBLEMS_VISIBILITY=%r read as %r (the choices: %s)",
+                         value, meant, ", ".join(HOME_PROBLEMS_VISIBILITY_CHOICES))
+            return meant
+        _log.warning("HOME_PROBLEMS_VISIBILITY=%r is not one of %s; using %r",
+                     value, ", ".join(HOME_PROBLEMS_VISIBILITY_CHOICES),
+                     HOME_PROBLEMS_VISIBILITY_UNKNOWN)
+        return HOME_PROBLEMS_VISIBILITY_UNKNOWN
 
     # ─── WebSocket keep-alives ─────────────────────────────────────────
     # Without periodic pings, a Pi's WS can go silently dead under flaky

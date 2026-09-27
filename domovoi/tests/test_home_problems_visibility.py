@@ -47,14 +47,26 @@ def test_the_default_is_option_a() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw", "read"),
-    [("summary", "summary"), ("  Admins ", "admins"), ("EVERYONE", "everyone"),
-     # A typo must not stop the voice server booting over a web-page detail.
-     ("nobody", "everyone"), ("", "everyone")],
+    ("raw", "read", "warned"),
+    [("summary", "summary", False), ("  Admins ", "admins", False), ("EVERYONE", "everyone", False),
+     ("", "everyone", False),
+     # A near miss reads as the choice it names — never as the most open one.
+     ("admin", "admins", True), ("Admin-Only", "admins", True), ("admins_only", "admins", True),
+     ("none", "admins", True), ("nobody", "admins", True), ("summary  only", "summary", True),
+     ("all", "everyone", True),
+     # Anything else: the quieter "summary", said in the log, and a typo
+     # still never stops the voice server booting over a web-page detail.
+     ("sometimes", "summary", True), ("everyone!", "summary", True)],
 )
-def test_env_values_are_forgiven_and_never_fatal(monkeypatch, raw, read) -> None:
+def test_env_values_are_forgiven_and_never_fatal(monkeypatch, caplog, raw, read, warned) -> None:
     monkeypatch.setenv("HOME_PROBLEMS_VISIBILITY", raw)
-    assert Settings(_env_file=None).home_problems_visibility == read
+    with caplog.at_level("WARNING", logger="domovoi.config"):
+        assert Settings(_env_file=None).home_problems_visibility == read
+    said = [r.getMessage() for r in caplog.records if r.name == "domovoi.config"]
+    if warned:
+        assert said and "HOME_PROBLEMS_VISIBILITY" in said[0] and repr(raw) in said[0], said
+    else:
+        assert not said, said
 
 
 def test_env_example_carries_it_commented_at_its_default() -> None:
