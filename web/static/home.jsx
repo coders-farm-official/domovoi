@@ -53,10 +53,10 @@ const HOME_STOP_ALL_ARM_MS = 4000;
 const HOME_DISK_WARN = 90;
 const HOME_DISK_ERR = 95;
 const HOME_PHONE_ROWS = 3;                 // attention rows and today rows a phone shows
-const HOME_PHONE_TIMERS = 2;               // ...and timers, so the rooms start above the fold
+const HOME_TODAY_ROWS = 6;                 // ...and a desktop
+const HOME_PHONE_TIMERS = 2;               // timers a phone shows, so the rooms start above the fold
 const HOME_FRESH_MS = 5 * 1000;            // a read this young needs no re-read on (re)connect
 const HOME_MANUAL_MS = 30 * 60 * 1000;     // the manual's example phrases hardly change
-const HOME_TODAY_ROWS = 6;                 // ...and a desktop
 const HOME_SOON_SEC = 600;                 // countdowns turn warn under 10 min
 const HOME_ROOM_EVENTS = [
   'satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed',
@@ -68,9 +68,6 @@ const HOME_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'se
 const HOME_HINT_HANDLERS = ['timer', 'reminder', 'clock', 'music'];
 const HOME_HINT_FALLBACK = 'set a timer for 10 minutes';
 
-/* Pages the "everything" grid lists besides the nav items: Settings has
- * no nav row (the topbar gear opens it) and the manual is reached from
- * Settings → About, so a phone would otherwise have no way to either. */
 /* Answers that outlive one mount of the page, for the reads whose cost is
  * the point (useCachedObject below). On a phone Home is also the "more"
  * menu, so it mounts every time someone passes through it on the way to
@@ -78,6 +75,9 @@ const HOME_HINT_FALLBACK = 'set a timer for 10 minutes';
  * sample on the core. path → { at, data }. */
 const HOME_CACHE = new Map();
 
+/* Pages the "everything" grid lists besides the nav items: Settings has
+ * no nav row (the topbar gear opens it) and the manual is reached from
+ * Settings → About, so a phone would otherwise have no way to either. */
 const HOME_EXTRA_TILES = [
   { route: 'settings', icon: 'settings', label: 'Settings', core: true },
   { route: 'manual', icon: 'book', label: 'User Manual', core: true },
@@ -1232,6 +1232,10 @@ const HomePage = ({ counts, badges }) => {
   const [sheetRoom, setSheetRoom] = React.useState(null);
   const [stoppingAll, setStoppingAll] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(() => new Set());
+  // The guards read refs, not render state: two taps inside one batch of
+  // events would both see the state from before either of them.
+  const stoppingRef = React.useRef(false);
+  const cancellingRef = React.useRef(new Set());
   const setRoomBusy = (room, on) => setBusy((b) => ({ ...b, [room]: on }));
   const setRoomsBusy = (list, on) => setBusy((b) => {
     const next = { ...b };
@@ -1268,7 +1272,8 @@ const HomePage = ({ counts, badges }) => {
   // Every room in the batch is busy until the whole batch settles, so no
   // pause or stop can land in the middle of it and "stop all" can't fire twice.
   const onStopAll = async (list) => {
-    if (stoppingAll) return;
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     setStoppingAll(true);
     setRoomsBusy(list, true);
     try {
@@ -1283,6 +1288,7 @@ const HomePage = ({ counts, badges }) => {
       }
     } finally {
       setRoomsBusy(list, false);
+      stoppingRef.current = false;
       setStoppingAll(false);
       refetchRooms();
     }
@@ -1291,7 +1297,8 @@ const HomePage = ({ counts, badges }) => {
   // One DELETE per timer at a time: a double tap must not send a second
   // one and toast "that one already finished" over "cancelled".
   const onCancel = async (t) => {
-    if (cancelling.has(t.id)) return;
+    if (cancellingRef.current.has(t.id)) return;
+    cancellingRef.current.add(t.id);
     setCancelling((c) => new Set(c).add(t.id));
     cancelled.current.add(t.id);
     try {
@@ -1302,6 +1309,7 @@ const HomePage = ({ counts, badges }) => {
       if (e && e.status === 404) fire('that one already finished');
       else reportMutationFailure(fire, 'cancel', e);
     } finally {
+      cancellingRef.current.delete(t.id);
       setCancelling((c) => { const next = new Set(c); next.delete(t.id); return next; });
       timers.refresh();
     }
