@@ -519,8 +519,16 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
 const apiFetch = (path, opts = {}) => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
   // `quiet` and `noPrompt` are this layer's, not fetch's (see
-  // _sendWithAuthRetry).
-  const { quiet, noPrompt, ...init } = opts;
+  // _sendWithAuthRetry). Copied out by hand, NOT with `{ quiet, ...init }`:
+  // the in-browser Babel compiles object rest to a top-level
+  // `const _excluded`, every script shares one global scope, and
+  // components.jsx already declares its own — a second one is a
+  // SyntaxError that takes components.jsx (and the whole app) down.
+  const init = Object.assign({}, opts);
+  const quiet = init.quiet;
+  const noPrompt = init.noPrompt;
+  delete init.quiet;
+  delete init.noPrompt;
   const send = () => fetch(url, {
     credentials: 'include',
     ...init,
