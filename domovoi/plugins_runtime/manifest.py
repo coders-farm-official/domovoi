@@ -70,8 +70,9 @@ RESERVED_SLUGS = frozenset(
 # test_plugin_web_routes.py pins this set to index.html and plugin_host.
 CORE_WEB_ROUTES = frozenset(
     {
-        "chat", "music", "podcasts", "audiobooks", "videos", "news", "people",
-        "satellites", "calendar", "files", "plugins", "settings", "manual",
+        "home", "chat", "music", "podcasts", "audiobooks", "videos", "news",
+        "people", "satellites", "calendar", "files", "plugins", "settings",
+        "manual",
     }
 )
 # A page route becomes the URL hash (#<route>): lowercase slug charset only.

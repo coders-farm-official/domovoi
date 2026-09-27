@@ -64,6 +64,9 @@ log = logging.getLogger(__name__)
 # ─── Published core nav orders (§5.2 — versioned API surface) ─────────────
 # Plugins slot anywhere; equal values sort core-first then slug.
 CORE_NAV: dict[str, int] = {
+    # Home, the default page. First in order; on a desktop its row is the
+    # sidebar's brand row, on a phone the first of the five strip tabs.
+    "home": 1,
     "chat": 8,
     "music": 10,
     "podcasts": 12,

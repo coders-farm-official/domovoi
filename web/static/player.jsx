@@ -1035,8 +1035,11 @@ const MiniPlayer = () => {
     <>
       {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}/>}
       {showCast && <CastMenu p={p} onClose={() => setShowCast(false)}/>}
-      <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 45,
+      {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
+          760px and below (styles.css), so on a phone the player docks ON
+          TOP of the five tabs instead of covering them. */}
+      <div className="mini-player" style={{
+        position: 'fixed', left: 0, right: 0, bottom: 'var(--dock-bottom, 0px)', zIndex: 45,
         background: 'var(--card)', borderTop: '1px solid var(--border)',
         boxShadow: '0 -4px 16px oklch(0 0 0 / 0.10)',
         display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center',
@@ -1143,7 +1146,7 @@ const QueuePanel = ({ p, onClose }) => {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
-      <div style={{ position: 'fixed', right: 14, bottom: 76, width: 380, maxHeight: '60vh', zIndex: 47,
+      <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 380, maxHeight: '60vh', zIndex: 47,
                     background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                     boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1214,7 +1217,7 @@ const CastMenu = ({ p, onClose }) => {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
-      <div style={{ position: 'fixed', right: 14, bottom: 76, width: 260, zIndex: 47,
+      <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 260, zIndex: 47,
                     background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                     boxShadow: 'var(--shadow-md)', overflow: 'hidden' }}>
         <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 600 }}>play on</div>

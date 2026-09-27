@@ -43,7 +43,7 @@ internal data class SettingsPerson(
 // ---------------------------------------------------------------------------
 
 /** The dashboard route the web app reads from `location.hash` for its
- *  Settings page (web/static/index.html: `#<route>`, default `#music`). */
+ *  Settings page (web/static/index.html: `#<route>`, default `#home`). */
 internal const val DASHBOARD_SETTINGS_HASH = "#settings"
 
 /**

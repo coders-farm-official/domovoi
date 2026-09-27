@@ -22,9 +22,10 @@ import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 
 /**
- * Route table — mirrors the web hash router (#music default). The web
- * sidebar order is preserved; Settings comes from the topbar gear and
- * Manual from Settings > About.
+ * Route table — mirrors the web hash router's routes. The web sidebar
+ * order is preserved; Settings comes from the topbar gear and Manual from
+ * Settings > About. (The web now opens on #home; this app still starts on
+ * Music until its own Home screen lands.)
  *
  * The table stays a compiled-in enum, but *visibility* is data-driven
  * (design §8): routes backed by a plugin declare a required capability

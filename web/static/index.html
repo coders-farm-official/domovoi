@@ -57,6 +57,10 @@
   <script type="text/babel" data-presets="react" src="models.jsx"></script>
   <script type="text/babel" data-presets="react" src="news.jsx"></script>
   <script type="text/babel" data-presets="react" src="manual.jsx"></script>
+  <!-- Home is the default page. Loaded LAST of the core pages so every
+       helper another page puts on window (satellites.jsx, calendar.jsx,
+       manual.jsx) already exists when it evaluates. -->
+  <script type="text/babel" data-presets="react" src="home.jsx"></script>
 
   <script type="text/babel" data-presets="react">
     /* ── Plugin bootstrap + app shell (design §5.2) ─────────────────────
@@ -72,6 +76,7 @@
      */
     window.DomovoiCore = window.DomovoiCore || {};
     window.DomovoiCore.pages = {
+      home: () => window.HomePage,
       chat: () => window.ChatPage,
       music: () => window.MusicPage,
       podcasts: () => window.PodcastsPage,
@@ -235,7 +240,9 @@
     const App = () => {
       const initialTheme = document.documentElement.getAttribute('data-theme')
         || localStorage.getItem('domovoi-theme') || 'light';
-      const initialRoute = (window.location.hash || '#music').slice(1);
+      // Home is where a bare URL, the installed app (manifest start_url)
+      // and an unknown route all land. Deep links (#music, …) still work.
+      const initialRoute = (window.location.hash || '#home').slice(1);
       const [theme, setThemeState] = React.useState(initialTheme);
       const [route, setRouteState] = React.useState(initialRoute);
 
@@ -251,7 +258,7 @@
 
       React.useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
-        const handler = () => setRouteState((window.location.hash || '#music').slice(1));
+        const handler = () => setRouteState((window.location.hash || '#home').slice(1));
         window.addEventListener('hashchange', handler);
         return () => window.removeEventListener('hashchange', handler);
       }, []);
@@ -290,7 +297,9 @@
           }
         }
       }
-      if (!Page) Page = window.DomovoiCore.pages.music();
+      // Unknown route → Home. Music only if Home itself failed to register
+      // (a script error in home.jsx must not leave the shell with no page).
+      if (!Page) Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();
 
       return (
         <PlaybackProvider>
@@ -298,7 +307,10 @@
             <Sidebar route={route} setRoute={setRoute} counts={counts} manifest={manifest}/>
             <Topbar route={route} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
             <main className="main">
-              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page/></PluginErrorBoundary>
+              {/* `counts` is the ONE useSidebarCounts result, handed down so
+                  Home's "everything" grid can badge its tiles without
+                  repeating the sidebar's fetches. Other pages ignore it. */}
+              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts}/></PluginErrorBoundary>
             </main>
             <AuthModalHost/>
             {pluginsStale && (

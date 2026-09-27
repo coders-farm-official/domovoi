@@ -434,10 +434,17 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
 
 /* Core nav items. `order` values are the published core_nav numbers
  * (design §5.2, echoed in /api/plugins/manifest) so plugin authors can
- * slot pages deliberately. `countKey` reads useSidebarCounts. */
+ * slot pages deliberately. `countKey` reads useSidebarCounts.
+ *
+ * `primary` marks the five tabs the phone strip keeps (760px and below):
+ * home, music, satellites, calendar, chat — the Android app's compact
+ * routes, with home in its "more" slot. Everything else is one tap away
+ * on Home's "everything" grid. The desktop sidebar shows every item
+ * EXCEPT home: there the brand row is the link to it (`brandLink`). */
 const CORE_NAV_ITEMS = [
-  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
-  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music' },
+  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, primary: true, brandLink: true },
+  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8, primary: true },
+  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music', primary: true },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
@@ -445,11 +452,34 @@ const CORE_NAV_ITEMS = [
   // page slots there (nav_order 16 in its manifest) when installed.
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
-  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites' },
-  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
+  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites', primary: true },
+  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar', primary: true },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
+
+/* Every nav destination, core and plugin, in sidebar order. Core items
+ * carry `core: true` and their CORE_NAV_ITEMS fields; plugin pages carry
+ * `core: false`, their `slug`, `iconSrc` (the manifest's nav_icon) and
+ * never `primary`. Interleaved by nav order; equal values sort core-first,
+ * then plugin slug (design §5.2). The Sidebar draws it, and Home's
+ * "everything" grid draws the non-primary part of the same list, so the
+ * two can't disagree about what exists. */
+const buildNavItems = (manifest) => {
+  const items = CORE_NAV_ITEMS.map((it) => ({ ...it, core: true, slug: '' }));
+  (manifest?.plugins || []).forEach((p) => (p.pages || []).forEach((pg) => {
+    items.push({
+      route: pg.route, label: pg.nav_label || pg.route,
+      iconSrc: pg.nav_icon, order: pg.nav_order ?? 50,
+      core: false, slug: p.slug,
+    });
+  }));
+  items.sort((a, b) => (a.order - b.order)
+    || (a.core === b.core ? 0 : (a.core ? -1 : 1))
+    || String(a.slug).localeCompare(String(b.slug))
+    || String(a.route).localeCompare(String(b.route)));
+  return items;
+};
 
 /* Poll each plugin page's declared badge endpoint on a shared, jittered
  * 30 s cadence (design §5.3 badge contract): open GET returning JSON;
@@ -491,36 +521,42 @@ const PluginNavIcon = ({ src }) => src
          style={{ width: 16, height: 16, flexShrink: 0 }}/>
   : <Icon name="puzzle" className="ico" size={16}/>;
 
+/* One nav row's classes. `primary` keeps the row in the phone strip;
+ * `brand-link` hides it in the desktop sidebar, where the brand row is
+ * that link; `more-active` lights the home tab on a phone while a page
+ * that lives on Home's "everything" grid is open, the way the app's
+ * More tab does (styles.css only honours it at 760px and below). */
+const navItemClass = (it, route, primaryRoutes) => [
+  'nav-item',
+  route === it.route ? 'active' : '',
+  it.primary ? 'primary' : '',
+  it.brandLink ? 'brand-link' : '',
+  it.brandLink && route !== it.route && !primaryRoutes.has(route) ? 'more-active' : '',
+].filter(Boolean).join(' ');
+
 const Sidebar = ({ route, setRoute, counts, manifest }) => {
   const badges = usePluginBadges(manifest);
-  // Interleave core + plugin items by nav order; equal values sort
-  // core-first, then plugin slug (design §5.2).
-  const items = CORE_NAV_ITEMS.map((it) => ({ ...it, core: true, slug: '' }));
-  (manifest?.plugins || []).forEach((p) => (p.pages || []).forEach((pg) => {
-    items.push({
-      route: pg.route, label: pg.nav_label || pg.route,
-      iconSrc: pg.nav_icon, order: pg.nav_order ?? 50,
-      core: false, slug: p.slug,
-    });
-  }));
-  items.sort((a, b) => (a.order - b.order)
-    || (a.core === b.core ? 0 : (a.core ? -1 : 1))
-    || String(a.slug).localeCompare(String(b.slug))
-    || String(a.route).localeCompare(String(b.route)));
+  const items = buildNavItems(manifest);
+  const primaryRoutes = new Set(items.filter((it) => it.primary).map((it) => it.route));
   return (
     <aside className="sidebar">
-      <div className="brand-row">
+      {/* The way home on a desktop. An anchor, not an onClick div, so it
+          takes keyboard focus, Enter, and a middle-click into a new tab;
+          the hash router follows the hashchange. (No version here: the
+          "/ 1.0" this row used to carry was never the running version —
+          the Version section of Settings → Configuration reads the real
+          one.) */}
+      <a href="#home" className="brand-row" title="home" aria-label="domovoi home">
         <DomovoiGlyph size={22} className="glyph"/>
         <div className="word">domovoi</div>
-        <div className="ver">/ 1.0</div>
-      </div>
+      </a>
 
       <div>
         <div className="nav-section">workspace</div>
         <nav className="nav">
           {items.map((it) => (
             <div key={it.route}
-                 className={`nav-item ${route === it.route ? 'active' : ''}`}
+                 className={navItemClass(it, route, primaryRoutes)}
                  onClick={() => setRoute(it.route)}>
               {it.core
                 ? <Icon name={it.icon} className="ico" size={16}/>
@@ -634,7 +670,7 @@ const _groupBy = (list) => {
 
 /* ---- Topbar ------------------------------------------------- */
 const Topbar = ({ route, setRoute, theme, setTheme }) => {
-  const labels = { music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
+  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
   // Plugin routes take their crumb label from the manifest.
   if (!labels[route]) {
     const manifest = window.DomovoiPluginManifest || { plugins: [] };
@@ -648,7 +684,9 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
   return (
     <header className="topbar">
       <div className="crumbs">
-        <span>domovoi</span>
+        {/* The way home on a phone, where the sidebar's brand row is
+            hidden (styles.css, 760px and below). Same anchor on desktop. */}
+        <a href="#home" className="crumb-home" title="home">domovoi</a>
         <span className="sep">/</span>
         <strong>{labels[route]}</strong>
       </div>
@@ -1086,6 +1124,7 @@ const WriteBlockedNotice = ({ reason, children }) => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
+  CORE_NAV_ITEMS, buildNavItems, PluginNavIcon, usePluginBadges,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
 });

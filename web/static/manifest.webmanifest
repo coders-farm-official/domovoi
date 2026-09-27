@@ -1,8 +1,8 @@
 {
-  "name": "Domovoi Music",
+  "name": "Domovoi",
   "short_name": "Domovoi",
-  "description": "Local-first browser music player for the Domovoi voice assistant.",
-  "start_url": "/#music",
+  "description": "Local-first home dashboard for the Domovoi voice assistant: rooms, music, timers and more.",
+  "start_url": "/#home",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

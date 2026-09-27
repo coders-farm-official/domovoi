@@ -28,6 +28,8 @@
   gap: 16px;
   min-width: 0;
 }
+/* The brand row is an <a href="#home">: the desktop way to Home. The
+   focus ring is the global one (colors_and_type.css). */
 .brand-row {
   display: flex;
   align-items: center;
@@ -35,10 +37,14 @@
   padding: 6px 10px;
   height: 40px;
   color: var(--fg);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
 }
+.brand-row:hover { background: var(--brand-soft); }
 .brand-row .glyph { width: 22px; height: 22px; color: var(--brand); }
 .brand-row .word { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
-.brand-row .ver  { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-faint); margin-left: auto; }
 
 .nav { display: flex; flex-direction: column; gap: 1px; }
 .nav-item {
@@ -57,6 +63,9 @@
 .nav-item.active .ico { color: var(--brand); }
 .nav-item .ico { width: 16px; height: 16px; flex: none; color: var(--fg-subtle); }
 .nav-item .badge { margin-left: auto; font-family: var(--ff-mono); font-size: 10px; color: var(--fg-faint); }
+/* Home's own row: on a desktop the brand row above is that link, so the
+   row only exists in the phone strip (see the 760px block). */
+.sidebar .nav-item.brand-link { display: none; }
 
 .nav-section {
   font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em;
@@ -96,6 +105,10 @@
 }
 .crumbs { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-muted); }
 .crumbs strong { color: var(--fg); font-weight: 500; }
+/* "domovoi" in the crumb is the link to Home — the only one on a phone,
+   where the brand row is hidden. Reads as the crumb it always was. */
+.crumbs .crumb-home { color: inherit; text-decoration: none; cursor: pointer; }
+.crumbs .crumb-home:hover { color: var(--fg); }
 .crumbs .sep { color: var(--fg-faint); }
 .topbar .spacer { flex: 1; }
 
@@ -116,8 +129,9 @@
   overflow: auto;
   padding: 24px;
   /* Room for the global docked mini-player (64px tall, fixed to the
-     viewport bottom). Harmless when the player is idle — it just reserves
-     a strip of empty space below the last row. */
+     viewport bottom — or to the top of the phone strip, see the 760px
+     block). Harmless when the player is idle — it just reserves a strip
+     of empty space below the last row. */
   padding-bottom: 88px;
 }
 
@@ -267,10 +281,23 @@ table.tbl .actions { text-align: right; }
 .empty .s { font-size: 11px; color: var(--fg-faint); font-family: var(--ff-mono); }
 
 /* Mobile -------------------------------------------------------- */
+/* The sidebar becomes a bottom strip of the five PRIMARY tabs — home,
+   music, satellites, calendar, chat (CORE_NAV_ITEMS `primary`, the
+   Android app's compact routes). Every other page, plugin pages
+   included, is on Home's "everything" grid; the strip used to squeeze
+   all of them into one 10px row with no overflow handling.
+
+   The docked mini-player (player.jsx, position:fixed) sits ON TOP of the
+   strip rather than over it: `--dock-bottom` lifts it by the strip's
+   height, and .main keeps the same 88px of bottom padding as on a
+   desktop so the last row of a page scrolls clear of the player (.main
+   ends where the strip begins — it is the grid row above it). */
+:root { --phone-nav-h: 56px; }
 @media (max-width: 760px) {
+  :root { --dock-bottom: var(--phone-nav-h); }
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: var(--topbar-h) 1fr 56px;
+    grid-template-rows: var(--topbar-h) 1fr var(--phone-nav-h);
     grid-template-areas:
       "top"
       "main"
@@ -279,9 +306,13 @@ table.tbl .actions { text-align: right; }
   .sidebar { flex-direction: row; padding: 6px; gap: 0; border-right: none; border-top: 1px solid var(--border); }
   .sidebar .brand-row, .sidebar .nav-section, .sidebar .footer { display: none; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
-  .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; }
+  .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
+  .sidebar .nav-item:not(.primary) { display: none; }
+  .sidebar .nav-item.brand-link { display: flex; }
+  .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }
+  .sidebar .nav-item.more-active .ico { color: var(--brand); }
   .sidebar .nav-item .badge { display: none; }
-  .main { padding: 16px; }
+  .main { padding: 16px; padding-bottom: 88px; }
   .topbar { padding: 0 14px; gap: 8px; }
 }
 
