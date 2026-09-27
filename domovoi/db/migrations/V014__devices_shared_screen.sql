@@ -1,0 +1,30 @@
+-- V014 — A device an admin has marked as a shared screen.
+--
+-- The dashboard's Home page is what a browser lands on, and one of the
+-- places it lands is a tablet everybody in the house uses — the kitchen
+-- screen. On a device marked shared, Home keeps everything a kitchen
+-- tablet is FOR (rooms, now playing, timers, announce, stop) and leaves
+-- out what is one person's: calendar titles and locations become "busy",
+-- a reminder shows its room instead of its text, problem rows shrink to
+-- one neutral line, and personal pages drop off the launcher.
+--
+-- ── Why a column, set by an admin ──────────────────────────────────────
+--
+-- Owner decision 2026-09-26 (HOME-PLAN.md, "way 2"): the flag lives on
+-- the device's own row, so it survives the browser's storage being
+-- cleared, and only an admin can change it — the dashboard's rename is
+-- device tier, but this is not, so a device cannot un-share itself.
+--
+-- ── What this is NOT ───────────────────────────────────────────────────
+--
+-- PRESENTATIONAL, not a security boundary. A shared tablet is paired: it
+-- holds the household token, so anyone at it with a bit of know-how can
+-- read whatever a paired phone can. Real enforcement would be a restricted
+-- "display" pairing of its own (way 3), which this is not.
+--
+-- NOT NULL DEFAULT FALSE: every existing row, and every device that
+-- registers from now on, is an ordinary personal device until an admin
+-- says otherwise. IF NOT EXISTS so a database patched by hand ahead of
+-- Flyway (a test lane) still takes this migration cleanly.
+ALTER TABLE devices
+    ADD COLUMN IF NOT EXISTS shared_screen BOOLEAN NOT NULL DEFAULT FALSE;

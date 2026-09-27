@@ -1564,6 +1564,25 @@ const QueueAccessCard = ({ fire, deviceList }) => {
   const [room, setRoom] = React.useState('');     // '' = every room
   const [note, setNote] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [sharing, setSharing] = React.useState(null);   // device_id mid-toggle
+
+  /* Shared screen (V014): Home shows a device marked here without anyone's
+   * personal content — calendar titles become "busy", reminders show their
+   * room, problems shrink to one line. Admin-only on the server, so the
+   * tablet itself can't switch it off. When the row is THIS browser, it
+   * re-reads its own record so its Home follows at once. */
+  const setShared = async (d, on) => {
+    setSharing(d.device_id);
+    try {
+      await apiPatch(`/api/devices/${encodeURIComponent(d.device_id)}/shared-screen`,
+                     { shared_screen: on });
+      fire(on ? `${d.name} is now a shared screen` : `${d.name} is a personal device again`);
+      refreshDevices();
+      if (d.device_id === DeviceIdentity.id() && DeviceIdentity.refresh) DeviceIdentity.refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'shared screen', e);
+    } finally { setSharing(null); }
+  };
 
   const addBlock = async () => {
     const device = devices.find((d) => d.device_id === pick);
@@ -1692,7 +1711,7 @@ const QueueAccessCard = ({ fire, deviceList }) => {
       </Card>
 
       <Card title={`Known devices (${devices.length})`}
-            sub="Browsers and phones that have introduced themselves, most recent first.">
+            sub="Browsers and phones that have introduced themselves, most recent first. Mark a tablet the whole house uses as a shared screen and Home leaves personal content off it.">
         {devicesLoading && devices.length === 0 ? (
           <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
         ) : devices.length === 0 ? (
@@ -1703,7 +1722,7 @@ const QueueAccessCard = ({ fire, deviceList }) => {
         ) : (
           <table className="tbl">
             <thead><tr>
-              <th>name</th><th>id</th><th>platform</th><th>last seen</th>
+              <th>name</th><th>id</th><th>platform</th><th>last seen</th><th>shared screen</th>
             </tr></thead>
             <tbody>
               {devices.map((d) => (
@@ -1717,6 +1736,16 @@ const QueueAccessCard = ({ fire, deviceList }) => {
                   <td className="mono" style={{ fontSize: 11 }}>{d.device_id}</td>
                   <td className="mono" style={{ fontSize: 11 }}>{d.platform || '—'}</td>
                   <td className="mono">{d.last_seen_at ? relTime(d.last_seen_at) : '—'}</td>
+                  <td>
+                    <input type="checkbox" name="shared-screen"
+                           checked={!!d.shared_screen} disabled={sharing === d.device_id}
+                           onChange={(e) => setShared(d, e.target.checked)}
+                           title={d.shared_screen
+                             ? 'shared screen — Home shows no personal content here'
+                             : 'mark as a shared screen'}
+                           aria-label={`${d.name}: shared screen`}
+                           style={{ width: 16, height: 16, cursor: 'pointer' }}/>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2147,7 +2176,7 @@ const SETTINGS_SUB = {
   greetings: 'Lines a satellite plays the instant the wake word fires.',
   voices: 'The TTS voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
-  devices: 'Name this device, the household token, and who may edit a room’s play queue.',
+  devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
   models: "What's active in each role, install more, and the host hardware readout.",
   config: 'Editable domovoi configuration.',
 };

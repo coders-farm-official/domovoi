@@ -1110,6 +1110,37 @@ const DeviceIdentity = (() => {
     } catch {}
   };
 
+  /* Shared screen (V014). An admin marks a device — the kitchen tablet —
+   * as a shared screen in Settings → Devices, and every device row the
+   * server returns carries `shared_screen`, this device's own registration
+   * included. The last answer is echoed to localStorage so a reload paints
+   * the shared view at once instead of flashing personal content while
+   * register() is in flight. Presentational, not a boundary (V014). */
+  const SHARED_KEY = 'domovoi-shared-screen';
+  let lastShared = null;            // this session's answer, once there is one
+  const sharedListeners = new Set();
+  const cachedShared = () => {
+    try {
+      const v = localStorage.getItem(SHARED_KEY);
+      return v === '1' ? true : v === '0' ? false : null;
+    } catch { return null; }
+  };
+  const remember = (row) => {
+    if (!row || typeof row.shared_screen !== 'boolean') return row;
+    const changed = row.shared_screen !== sharedScreen();
+    lastShared = row.shared_screen;
+    try { localStorage.setItem(SHARED_KEY, lastShared ? '1' : '0'); } catch {}
+    if (changed) sharedListeners.forEach((fn) => { try { fn(lastShared); } catch {} });
+    return row;
+  };
+  // true / false, or null while nothing is known yet (no answer this
+  // session and none remembered) — a page that must not show personal
+  // content on a shared screen treats null as "not yet".
+  const sharedScreen = () => (lastShared != null ? lastShared : cachedShared());
+  // fn(shared) whenever the answer changes (a refresh() after an admin
+  // flipped it). Returns the unsubscribe.
+  const subscribeShared = (fn) => { sharedListeners.add(fn); return () => sharedListeners.delete(fn); };
+
   let registered = null;   // in-flight / resolved registration promise
 
   const register = () => {
@@ -1121,7 +1152,7 @@ const DeviceIdentity = (() => {
       user_agent: (navigator.userAgent || '').slice(0, 400),
     }).then((row) => {
       if (row && row.name) cacheName(row.name);
-      return row;
+      return remember(row);
     }).catch((e) => {
       // Never fatal: the dashboard works unnamed, queue entries just show
       // no "added by" tag. Retry on the next load.
@@ -1132,13 +1163,32 @@ const DeviceIdentity = (() => {
     return registered;
   };
 
+  // Ask the server again, past the once-per-load memo: how a page picks up
+  // an admin's shared-screen change without a reload (on focus, say). Only
+  // for a browser that can register — paired, signed in, or a box not yet
+  // claimed. An unpaired browser's register is refused, and a refused
+  // write opens the pair prompt, which a focus handler must never do.
+  const canRegister = () => {
+    try {
+      if (typeof Auth === 'undefined') return true;
+      return !!((Auth.isPaired && Auth.isPaired()) || (Auth.isLoggedIn && Auth.isLoggedIn())
+        || (Auth.status && Auth.status.setup_complete === false));
+    } catch { return false; }
+  };
+  const refresh = () => {
+    if (!canRegister()) return Promise.resolve(null);
+    registered = null;
+    return register();
+  };
+
   const rename = async (name) => {
     const row = await apiPatch(`/api/devices/${encodeURIComponent(id())}`, { name });
     if (row && row.name) cacheName(row.name);
-    return row;
+    return remember(row);
   };
 
-  return { id, name: cachedName, suggestedName, register, rename };
+  return { id, name: cachedName, suggestedName, register, refresh, rename,
+           sharedScreen, subscribeShared };
 })();
 
 // ─── Time helpers (page-local NOW vs reference NOW) ─────────────────

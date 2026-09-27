@@ -22,6 +22,14 @@ and why renaming can't be used to escape a block (blocks match the id as well
 as the name). What the credential changed is who gets as far as asserting an
 id at all. Listing the roster is admin-gated, because it's an inventory of
 who's on the network.
+
+**Shared screens.** An admin can mark a device as a shared screen (the
+kitchen tablet): ``PATCH /{device_id}/shared-screen`` at ADMIN tier, NOT the
+device tier the rename takes, so a device cannot un-share itself. Every
+device answer carries ``shared_screen``, the device's own registration
+included, which is how the dashboard's Home page knows to leave personal
+content off. Presentational, not a boundary: the tablet still holds the
+household token (V014 says the same).
 """
 
 from __future__ import annotations
@@ -34,7 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_read, require_device
+from domovoi.admin_auth import require_admin_mutation, require_admin_read, require_device
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -68,6 +76,10 @@ class DeviceRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=_MAX_NAME)
 
 
+class DeviceSharedScreen(BaseModel):
+    shared_screen: bool
+
+
 class Device(BaseModel):
     device_id: str
     name: str
@@ -75,6 +87,10 @@ class Device(BaseModel):
     user_agent: str | None = None
     first_seen_at: Any = None
     last_seen_at: Any = None
+    # An admin marked this device a shared screen (V014): the dashboard's
+    # Home page shows a shared-screen view on it. False on a database that
+    # has not had V014 yet.
+    shared_screen: bool = False
 
 
 def _clean_name(raw: str | None) -> str | None:
@@ -158,11 +174,45 @@ def _validate_id(device_id: str) -> str:
 def _row_to_device(r: Any) -> Device:
     return Device(
         device_id=r[0], name=r[1], platform=r[2], user_agent=r[3],
-        first_seen_at=r[4], last_seen_at=r[5],
+        first_seen_at=r[4], last_seen_at=r[5], shared_screen=bool(r[6]),
     )
 
 
-_COLUMNS = "device_id, name, platform, user_agent, first_seen_at, last_seen_at"
+_BASE_COLUMNS = "device_id, name, platform, user_agent, first_seen_at, last_seen_at"
+
+# Whether `devices` has V014's `shared_screen` column. Registration is on the
+# path EVERY dashboard load takes, so a web process started against a
+# database Flyway has not caught up with must keep registering devices, not
+# 500 — the same tolerance repositories.py extends to V011. Only a positive
+# answer is cached: once the migration lands, the next request sees the
+# column without a restart.
+_HAS_SHARED_SCREEN = False
+
+
+async def _has_shared_screen(s: Any) -> bool:
+    global _HAS_SHARED_SCREEN
+    if not _HAS_SHARED_SCREEN:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'devices'
+                      AND column_name = 'shared_screen'
+                    """
+                )
+            )
+        ).first()
+        _HAS_SHARED_SCREEN = row is not None
+    return _HAS_SHARED_SCREEN
+
+
+async def _columns(s: Any) -> str:
+    """The select / RETURNING list for a :class:`Device`, ``shared_screen``
+    last — read as FALSE until V014 is applied."""
+    flag = "shared_screen" if await _has_shared_screen(s) else "FALSE AS shared_screen"
+    return f"{_BASE_COLUMNS}, {flag}"
 
 
 @router.post("/register", response_model=Device, dependencies=DEVICE)
@@ -177,6 +227,7 @@ async def register_device(payload: DeviceRegistration, response: Response) -> De
     ident = _validate_id(payload.device_id)
     name = _clean_name(payload.name)
     async with session_scope() as s:
+        columns = await _columns(s)
         row = await s.execute(
             text(
                 f"""
@@ -186,7 +237,7 @@ async def register_device(payload: DeviceRegistration, response: Response) -> De
                 SET last_seen_at = now(),
                     platform   = COALESCE(EXCLUDED.platform, devices.platform),
                     user_agent = COALESCE(EXCLUDED.user_agent, devices.user_agent)
-                RETURNING {_COLUMNS}
+                RETURNING {columns}
                 """
             ),
             {
@@ -216,16 +267,60 @@ async def rename_device(device_id: str, payload: DeviceRename) -> Device:
     if not name:
         raise HTTPException(status_code=400, detail="name can't be blank")
     async with session_scope() as s:
+        columns = await _columns(s)
         row = await s.execute(
             text(
                 f"""
                 UPDATE devices
                 SET name = :name, last_seen_at = now()
                 WHERE device_id = :id
-                RETURNING {_COLUMNS}
+                RETURNING {columns}
                 """
             ),
             {"id": ident, "name": name},
+        )
+        result = row.first()
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"device {ident!r} hasn't registered yet",
+        )
+    return _row_to_device(result)
+
+
+@router.patch(
+    "/{device_id}/shared-screen",
+    response_model=Device,
+    # ADMIN tier, not the device tier the rename above takes: the tablet
+    # holds the household token, and a flag it could clear itself would
+    # hide nothing from anybody standing at it.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def set_shared_screen(device_id: str, payload: DeviceSharedScreen) -> Device:
+    """Mark a device as a shared screen, or back to a personal one. Leaves
+    ``last_seen_at`` alone: this is an admin's action, not the device being
+    seen."""
+    ident = _validate_id(device_id)
+    async with session_scope() as s:
+        if not await _has_shared_screen(s):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "this database has no devices.shared_screen column yet — "
+                    "run the migrations (V014) to mark shared screens"
+                ),
+            )
+        columns = await _columns(s)
+        row = await s.execute(
+            text(
+                f"""
+                UPDATE devices
+                SET shared_screen = :shared
+                WHERE device_id = :id
+                RETURNING {columns}
+                """
+            ),
+            {"id": ident, "shared": payload.shared_screen},
         )
         result = row.first()
     if result is None:
@@ -242,10 +337,11 @@ async def list_devices(limit: int = 200) -> list[Device]:
     inventory of what's on the network. Feeds the blocklist editor, so an
     admin picks a device from a list instead of typing an id."""
     async with session_scope() as s:
+        columns = await _columns(s)
         rows = await s.execute(
             text(
                 f"""
-                SELECT {_COLUMNS} FROM devices
+                SELECT {columns} FROM devices
                 ORDER BY last_seen_at DESC
                 LIMIT :limit
                 """
