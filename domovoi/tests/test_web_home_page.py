@@ -83,8 +83,21 @@ localStorage = {
   removeItem: (k) => { __store.delete(k); },
 };
 document.hidden = false;
-document.addEventListener = () => {};
-document.removeEventListener = () => {};
+// Listeners are recorded, so a scenario can fire `focus`; intervals are
+// recorded and never run on their own, so a scenario ticks them by period.
+window.__listeners = [];
+window.addEventListener = (t, fn) => { window.__listeners.push({ t, fn }); };
+window.removeEventListener = (t, fn) => {
+  window.__listeners = window.__listeners.filter((l) => !(l.t === t && l.fn === fn));
+};
+document.addEventListener = window.addEventListener;
+document.removeEventListener = window.removeEventListener;
+window.__fire = (t) => window.__listeners.filter((l) => l.t === t).forEach((l) => l.fn({ type: t }));
+window.__intervals = new Map();
+let __iid = 0;
+setInterval = (fn, ms) => { __iid += 1; window.__intervals.set(__iid, { fn, ms }); return __iid; };
+clearInterval = (id) => { window.__intervals.delete(id); };
+window.__every = (ms) => [...window.__intervals.values()].filter((x) => x.ms === ms).forEach((x) => x.fn());
 window.__sockets = [];
 WebSocket = function (url, protocols) { this.l = {}; window.__sockets.push(this); };
 WebSocket.prototype.addEventListener = function (t, fn) { (this.l[t] = this.l[t] || []).push(fn); };
@@ -554,6 +567,62 @@ SCENARIOS["quiet_option"] = scenario(
     component="(window.__Auth = Auth, () => null)",
 )
 
+# The shell's boot register (index.html → DeviceIdentity.boot) ---------------
+# Home is where every browser lands, so the shell's own device registration
+# must not open the pair prompt on a guest's phone either.
+_REG_ROW = {"device_id": "browser-x", "name": "Chrome on Linux", "shared_screen": False}
+_REFUSED = {"__status": 401, "__body": {"detail": "X-Device-Token or admin session required"}}
+_BOOT_SNAP = ("({ posts: w.__fetches.filter((f) => f.method === 'POST' && f.path === '/api/devices/register')"
+              ".map((f) => f.device), pair: w.__Auth.pairModalOpen, modal: w.__Auth.modalOpen })")
+
+
+def boot(table: dict, script: str, *, ls: dict | None = None) -> dict:
+    # boot() twice: the shell calls it once, and a second call is a no-op.
+    return scenario(table, "await w.__DI.boot(); await w.__DI.boot(); await w.__flush(h);" + script,
+                    ls=ls, component="(window.__Auth = Auth, window.__DI = DeviceIdentity, () => null)")
+
+
+SCENARIOS["boot_unpaired"] = boot(
+    {"GET /api/auth/status": STATUS_CLAIMED, "POST /api/devices/register": _REFUSED},
+    f"const before = {_BOOT_SNAP};"
+    f"w.__table['POST /api/devices/register'] = {json.dumps(_REG_ROW)};"
+    "w.__Auth.pair('house-token'); await w.__flush(h);"
+    f"return {{ before, paired: {_BOOT_SNAP} }};",
+)
+SCENARIOS["boot_paired"] = boot(
+    {"GET /api/auth/status": STATUS_CLAIMED, "POST /api/devices/register": _REG_ROW},
+    f"return {_BOOT_SNAP};", ls=PAIRED_LS,
+)
+SCENARIOS["boot_unclaimed"] = boot(
+    {"GET /api/auth/status": STATUS_UNCLAIMED, "POST /api/devices/register": _REG_ROW},
+    f"return {_BOOT_SNAP};",
+)
+SCENARIOS["boot_admin_signs_in"] = boot(
+    {"GET /api/auth/status": STATUS_CLAIMED, "POST /api/devices/register": _REG_ROW,
+     "POST /api/auth/login": {"token": "admin-bearer"},
+     "GET /api/auth/device-token": {"token": "house-token"}},
+    f"const before = {_BOOT_SNAP};"
+    "await w.__Auth.login('pw'); await w.__flush(h);"
+    f"return {{ before, after: {_BOOT_SNAP} }};",
+)
+# The household token was rotated since this browser stored it: the boot
+# register and a later refresh (Home's focus handler) are both refused,
+# and neither opens the pair prompt.
+SCENARIOS["boot_stale_token"] = boot(
+    {"GET /api/auth/status": STATUS_CLAIMED, "POST /api/devices/register": _REFUSED},
+    f"const booted = {_BOOT_SNAP};"
+    "await w.__DI.refresh(); await w.__flush(h);"
+    f"return {{ booted, refreshed: {_BOOT_SNAP} }};",
+    ls=PAIRED_LS,
+)
+# The same stale token, on Home, when the tab gets focus back.
+SCENARIOS["focus_stale_token"] = scenario(
+    house(**{"POST /api/devices/register": _REFUSED}),
+    "w.__fire('focus'); await w.__flush(h);"
+    f"return {_BOOT_SNAP};",
+    ls=PAIRED_LS,
+)
+
 
 # ─── run ─────────────────────────────────────────────────────────────────
 
@@ -1000,6 +1069,44 @@ def test_a_loud_read_and_any_mutation_still_prompt(driven) -> None:
     assert out["loud"]["loginPrompted"] is True and out["q3"]["modal"] is True
     assert out["q4"] == {"pair": True}
     assert out["mutation"]["authCancelled"] is True
+
+
+# ─── the shell's boot register ───────────────────────────────────────────
+
+
+def test_an_unpaired_browser_on_a_claimed_box_boots_with_no_register_and_no_prompt(driven) -> None:
+    out = driven["boot_unpaired"]
+    assert out["before"] == {"posts": [], "pair": False, "modal": False}
+    # Pairing later (from any page) registers once, carrying the new token.
+    assert out["paired"] == {"posts": ["house-token"], "pair": False, "modal": False}
+
+
+@pytest.mark.parametrize(("case", "device"), [("boot_paired", "house-token"), ("boot_unclaimed", None)])
+def test_a_browser_that_can_register_does_so_exactly_once(driven, case, device) -> None:
+    assert driven[case] == {"posts": [device], "pair": False, "modal": False}
+
+
+def test_signing_in_after_boot_registers_once(driven) -> None:
+    out = driven["boot_admin_signs_in"]
+    assert out["before"]["posts"] == []
+    assert out["after"] == {"posts": ["house-token"], "pair": False, "modal": False}
+
+
+def test_a_refused_background_register_never_prompts(driven) -> None:
+    out = driven["boot_stale_token"]
+    assert out["booted"] == {"posts": ["house-token"], "pair": False, "modal": False}
+    assert out["refreshed"] == {"posts": ["house-token", "house-token"], "pair": False, "modal": False}
+    focus = driven["focus_stale_token"]
+    assert focus["posts"] == ["house-token"] and focus["pair"] is False and focus["modal"] is False
+
+
+def test_the_shell_boots_the_device_identity_instead_of_registering_blind() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "DeviceIdentity.boot();" in html
+    assert "DeviceIdentity.register()" not in html
+    data = (STATIC / "data.js").read_text(encoding="utf-8")
+    register = data[data.index("const register = () => {"):data.index("const refresh = () => {")]
+    assert "noPrompt: true" in register
 
 
 # ─── source pins ─────────────────────────────────────────────────────────

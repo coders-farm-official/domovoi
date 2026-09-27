@@ -1047,18 +1047,11 @@ const HomePage = ({ counts }) => {
       versionAt.current = Date.now();
       version.refresh();
     }
-    // An admin may have marked (or unmarked) this device meanwhile.
+    // An admin may have marked (or unmarked) this device meanwhile. A
+    // background write: refused, it fails silently (data.js noPrompt).
+    // Pairing itself re-registers from the shell (DeviceIdentity.boot).
     try { if (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.refresh) DeviceIdentity.refresh(); } catch {}
   });
-  // Just paired (the link below, or an action's pair prompt): register,
-  // which is also how the page learns whether this is a shared screen.
-  const wasPaired = React.useRef(viewer.paired);
-  React.useEffect(() => {
-    if (viewer.paired && !wasPaired.current) {
-      try { if (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.refresh) DeviceIdentity.refresh(); } catch {}
-    }
-    wasPaired.current = viewer.paired;
-  }, [viewer.paired]);
 
   // Browser-side plugin errors (index.html's pipeline): re-render on news.
   const [, bumpPluginErrors] = React.useReducer((n) => n + 1, 0);

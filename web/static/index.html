@@ -162,9 +162,13 @@
 
     const bootstrap = async () => {
       // Introduce this browser to the server (id + a seeded name) so room
-      // queues can say "added by <device>". Not awaited and never fatal —
-      // the dashboard renders unnamed, queue entries just carry no tag.
-      DeviceIdentity.register();
+      // queues can say "added by <device>" and a shared screen learns it
+      // is one. Only a browser that CAN register does (paired, signed in,
+      // or an unclaimed box), and again once a credential arrives: an
+      // unpaired guest phone landing on Home sends nothing and sees no
+      // prompt. Not awaited and never fatal — the dashboard renders
+      // unnamed, queue entries just carry no tag.
+      DeviceIdentity.boot();
 
       let manifest = { plugins: [], core_nav: {} };
       try {

@@ -448,8 +448,14 @@ const _maybeRequestPairing = () => {
 // empty state) and `loginPrompted` stays false, because nothing was
 // shown. A mutation ignores it: an action someone pressed still gets its
 // prompt and its replay.
-const _sendWithAuthRetry = async (send, { method, body, raw, quiet } = {}) => {
-  const quietRead = !!quiet && !_isMutation(method);
+//
+// `noPrompt` is the same promise for a WRITE nobody pressed: the device
+// registration the dashboard sends at boot, on focus and every few
+// minutes (DeviceIdentity). A refused one opens nothing and replays
+// nothing — it just fails, and the next attempt tries again. Every other
+// mutation leaves it unset.
+const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } = {}) => {
+  const quietRead = (!!quiet && !_isMutation(method)) || !!noPrompt;
   const refusedToken = _authToken();
   const refusedDeviceToken = _deviceToken();
   let r = await send();
@@ -464,10 +470,11 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet } = {}) => {
     deviceRefusal = _isDeviceTokenRefusal(r.status, text);
     // Only a mutation can be the block — reads are never blocked — and
     // probing on every refused GET would cost a request per empty panel.
-    if (!deviceRefusal && _isMutation(method)) deviceBlock = await _deviceBlockRefusal(text);
+    if (!deviceRefusal && _isMutation(method) && !noPrompt) deviceBlock = await _deviceBlockRefusal(text);
   }
 
-  if (_isAuthStatus(r.status) && !deviceBlock && _isMutation(method) && _replayableBody(body)) {
+  if (_isAuthStatus(r.status) && !deviceBlock && _isMutation(method) && _replayableBody(body)
+      && !noPrompt) {
     promptedHere = true;
     const again = deviceRefusal ? _pairAgain(refusedDeviceToken) : _signInAgain(refusedToken);
     if (await again) { r = await send(); text = null; }
@@ -511,8 +518,9 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet } = {}) => {
 
 const apiFetch = (path, opts = {}) => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  // `quiet` is this layer's, not fetch's (see _sendWithAuthRetry).
-  const { quiet, ...init } = opts;
+  // `quiet` and `noPrompt` are this layer's, not fetch's (see
+  // _sendWithAuthRetry).
+  const { quiet, noPrompt, ...init } = opts;
   const send = () => fetch(url, {
     credentials: 'include',
     ...init,
@@ -522,7 +530,7 @@ const apiFetch = (path, opts = {}) => {
       ...(init.headers || {}),
     },
   });
-  return _sendWithAuthRetry(send, { method: init.method, body: init.body, quiet });
+  return _sendWithAuthRetry(send, { method: init.method, body: init.body, quiet, noPrompt });
 };
 
 /* apiFetch's raw-Response twin, for the calls that read the body
@@ -1075,9 +1083,12 @@ const useSidebarCounts = () => {
 // device is one device everywhere — renaming it in Settings relabels its
 // room-queue entries, and an admin block on it covers both features.
 //
-// register() is fire-and-forget on boot: it upserts the row, refreshes
-// last_seen_at, and seeds the name ONLY if the row is new (the server
-// COALESCEs), so this can run on every load without stomping a rename.
+// register() upserts the row, refreshes last_seen_at, and seeds the name
+// ONLY if the row is new (the server COALESCEs), so this can run on every
+// load without stomping a rename. It is a device-tier write nobody
+// pressed, so it never prompts (`noPrompt`): a refused one just fails.
+// boot() is how the shell calls it — only for a browser that can
+// register, and again whenever a credential arrives.
 
 const DeviceIdentity = (() => {
   const ID_KEY = 'domovoi-client-id';
@@ -1159,11 +1170,18 @@ const DeviceIdentity = (() => {
 
   const register = () => {
     if (registered) return registered;
-    registered = apiPost('/api/devices/register', {
-      device_id: id(),
-      name: suggestedName(),
-      platform: 'browser',
-      user_agent: (navigator.userAgent || '').slice(0, 400),
+    registered = apiFetch('/api/devices/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        device_id: id(),
+        name: suggestedName(),
+        platform: 'browser',
+        user_agent: (navigator.userAgent || '').slice(0, 400),
+      }),
+      // Nobody pressed anything: a refusal (an unpaired browser, a
+      // household token rotated since this one was stored) must not open
+      // the pair prompt on whatever page is showing.
+      noPrompt: true,
     }).then((row) => {
       if (row && row.name) cacheName(row.name);
       return remember(row);
@@ -1180,8 +1198,8 @@ const DeviceIdentity = (() => {
   // Ask the server again, past the once-per-load memo: how a page picks up
   // an admin's shared-screen change without a reload (on focus, say). Only
   // for a browser that can register — paired, signed in, or a box not yet
-  // claimed. An unpaired browser's register is refused, and a refused
-  // write opens the pair prompt, which a focus handler must never do.
+  // claimed. An unpaired browser's register would only be refused, so it
+  // is not even sent.
   const canRegister = () => {
     try {
       if (typeof Auth === 'undefined') return true;
@@ -1195,14 +1213,43 @@ const DeviceIdentity = (() => {
     return register();
   };
 
+  /* The shell's boot (index.html). Register once the server has said who
+   * this browser is (Auth.status: is the box claimed yet?), and only when
+   * it can: an unpaired, signed-out browser on a claimed box — a guest's
+   * phone landing on Home — sends nothing at all. Then register again
+   * whenever a credential appears or changes (the pair prompt, a sign-in,
+   * the household token arriving through one), from whatever page the
+   * browser is on: that is also how a freshly paired tablet learns it is
+   * a shared screen. Once per page load. */
+  let booted = null;
+  const boot = () => {
+    if (booted) return booted;
+    try {
+      if (typeof Auth !== 'undefined' && Auth.subscribe) {
+        let seen = Auth.credentialVersion;
+        Auth.subscribe(() => {
+          if (Auth.credentialVersion === seen) return;
+          seen = Auth.credentialVersion;
+          refresh();
+        });
+      }
+    } catch { /* auth.js absent */ }
+    let asked = Promise.resolve(null);
+    try {
+      if (typeof Auth !== 'undefined' && Auth.refreshStatus) asked = Promise.resolve(Auth.refreshStatus());
+    } catch { /* auth.js absent */ }
+    booted = asked.catch(() => null).then(() => refresh());
+    return booted;
+  };
+
   const rename = async (name) => {
     const row = await apiPatch(`/api/devices/${encodeURIComponent(id())}`, { name });
     if (row && row.name) cacheName(row.name);
     return remember(row);
   };
 
-  return { id, name: cachedName, suggestedName, register, refresh, rename,
-           sharedScreen, subscribeShared };
+  return { id, name: cachedName, suggestedName, register, refresh, rename, boot,
+           canRegister, sharedScreen, subscribeShared };
 })();
 
 // ─── Time helpers (page-local NOW vs reference NOW) ─────────────────
