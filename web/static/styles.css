@@ -295,8 +295,12 @@ table.tbl .actions { text-align: right; }
 :root { --phone-nav-h: 56px; }
 @media (max-width: 760px) {
   :root { --dock-bottom: var(--phone-nav-h); }
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track never shrinks below its
+     items' min-content, so one unwrappable line (a long server label, a
+     nowrap problem row) widened the whole grid past a 375px screen and
+     .app's overflow:hidden clipped every page's right edge. */
   .app {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--topbar-h) 1fr var(--phone-nav-h);
     grid-template-areas:
       "top"
@@ -320,8 +324,15 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }
   .sidebar .nav-item.more-active .ico { color: var(--brand); }
   .sidebar .nav-item .badge { display: none; }
-  .main { padding: 16px; padding-bottom: 88px; }
-  .topbar { padding: 0 14px; gap: 8px; }
+  .main { padding: 16px; padding-bottom: 88px; min-width: 0; }
+  .topbar { padding: 0 14px; gap: 8px; min-width: 0; }
+  /* The topbar's server label gives way first (it ellipsizes), and the
+     theme toggle drops its word and keeps its icon. */
+  .topbar .crumbs { flex: none; }
+  .topbar .theme-toggle { flex: none; }
+  .topbar .theme-toggle:has(.mono) { flex: 0 1 auto; min-width: 0; }
+  .topbar .theme-toggle .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .theme-toggle > span:not(.mono) { display: none; }
 }
 
 /* ================================================================
