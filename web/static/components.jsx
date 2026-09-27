@@ -377,9 +377,10 @@ const useToast = () => {
    * editor looked like it had done nothing at all. A toast reports what
    * just happened to the surface the operator is looking at, so it has to
    * clear whatever that surface is — the same argument that raised
-   * .cal-modal-bg from 30 to 100. */
+   * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
+   * phone's tab strip (it is 0 on a desktop). */
   const node = items.length > 0 && (
-    <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
                   gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (

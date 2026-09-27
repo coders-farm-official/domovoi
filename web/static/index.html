@@ -306,13 +306,19 @@
       }
       // Unknown route → Home. Music only if Home itself failed to register
       // (a script error in home.jsx must not leave the shell with no page).
-      if (!Page) Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();
+      // The crumb and the nav then name the page that is showing, not the
+      // unknown route ("domovoi / " with nothing after it).
+      let shownRoute = route;
+      if (!Page) {
+        Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();
+        shownRoute = window.DomovoiCore.pages.home() ? 'home' : 'music';
+      }
 
       return (
         <PlaybackProvider>
-          <div className="app" data-screen-label={`Domovoi · ${route}`}>
-            <Sidebar route={route} setRoute={setRoute} counts={counts} manifest={manifest} badges={badges}/>
-            <Topbar route={route} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
+          <div className="app" data-screen-label={`Domovoi · ${shownRoute}`}>
+            <Sidebar route={shownRoute} setRoute={setRoute} counts={counts} manifest={manifest} badges={badges}/>
+            <Topbar route={shownRoute} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
             <main className="main">
               {/* `counts` and `badges` are the ONE useSidebarCounts and
                   usePluginBadges results, handed down so Home's
@@ -322,7 +328,7 @@
             </main>
             <AuthModalHost/>
             {pluginsStale && (
-              <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 80,
+              <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + 24px)', right: 24, zIndex: 80,
                             background: 'var(--overlay)', border: '1px solid var(--border)',
                             borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md)',
                             padding: '10px 14px', fontSize: 13, display: 'flex',
@@ -382,7 +388,8 @@
       var bar = document.createElement('div');
       bar.id = 'bundle-stale';
       bar.setAttribute('role', 'status');
-      bar.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:120;' +
+      // --dock-bottom: above the phone's tab strip (0 on a desktop).
+      bar.style.cssText = 'position:fixed;left:24px;bottom:calc(var(--dock-bottom, 0px) + 24px);z-index:120;' +
         'max-width:min(420px,calc(100vw - 48px));background:var(--overlay,#222);' +
         'color:var(--fg,#eee);border:1px solid var(--border,#444);' +
         'border-radius:var(--r-md,10px);box-shadow:var(--shadow-md,0 6px 24px rgba(0,0,0,.35));' +

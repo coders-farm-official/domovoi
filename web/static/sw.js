@@ -1,4 +1,4 @@
-/* Domovoi Music — service worker.
+/* Domovoi — the dashboard's service worker.
  *
  * Two jobs:
  *   1. App-shell offline: cache the static bundle (index.html, css, jsx, the

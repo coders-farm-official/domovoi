@@ -238,7 +238,11 @@ def test_the_default_and_fallback_routes_are_home() -> None:
     html = _src("index.html")
     assert "'#music'" not in html, "a #music default literal survived"
     assert html.count("(window.location.hash || '#home').slice(1)") == 2
-    assert "if (!Page) Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();" in html
+    assert "Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();" in html
+    # ...and the crumb and the nav name the page that is showing, not the
+    # unknown route (which left "domovoi / " with an empty label).
+    assert "shownRoute = window.DomovoiCore.pages.home() ? 'home' : 'music';" in html
+    assert "<Topbar route={shownRoute}" in html and "<Sidebar route={shownRoute}" in html
     # Deep links still resolve core-first: the route map is consulted
     # before any fallback, so #music opens Music.
     assert "const coreGetter = window.DomovoiCore.pages[route];" in html
@@ -441,3 +445,19 @@ def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
     given = driven["sidebar_given_badges"]
     assert given["gets"] == []
     assert "4" in given["text"]
+
+
+def test_toasts_clear_the_phone_strip() -> None:
+    """Fixed at bottom: 24px they covered the tab strip for up to 12 s."""
+    lifted = "bottom: 'calc(var(--dock-bottom, 0px) + 24px)'"
+    comps = _src("components.jsx")
+    toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
+    assert lifted in toast and "bottom: 24," not in toast
+    html = _src("index.html")
+    assert lifted in html                                            # "plugins changed"
+    assert "bottom:calc(var(--dock-bottom, 0px) + 24px)" in html     # "Domovoi has been updated"
+
+
+def test_the_service_worker_is_the_dashboards_not_the_music_players() -> None:
+    assert _src("sw.js").startswith("/* Domovoi — the dashboard's service worker.")
+    assert "Domovoi Music" not in _src("sw.js")
