@@ -16,9 +16,13 @@ The shell half of the Home page (design-notes HOME-PLAN.md, approved
   "domovoi" crumb is the same link — the only one on a phone, where the
   brand row is hidden.
 * the phone strip (760px and below) keeps only the five ``primary`` tabs —
-  home, music, satellites, calendar, chat — and every other page sits on
-  Home's "everything" grid. The desktop sidebar keeps every item except a
-  separate home row.
+  home · music · satellites · calendar · chat, in that order — and every
+  other page sits on Home's "everything" grid. The desktop sidebar keeps
+  every item except a separate home row.
+* a shared screen (an admin marks the device) drops the personal pages
+  (People, Chat, Files, News) from every launcher — the sidebar, the strip
+  and the grid — through one filter, ``navItemsFor``.
+* plugin nav badges are polled once, by App, for the sidebar and the grid.
 * the docked mini-player lifts above the strip on a phone instead of
   covering it, and ``.main`` keeps room for it.
 
@@ -54,26 +58,46 @@ HOME = "web/static/home.jsx"
 
 PRIMARY = {"home", "music", "satellites", "calendar", "chat"}
 
-_SETUP = "ServerStore = { current: () => null, currentLabel: () => 'box:6369' };"
+_SETUP = (
+    "ServerStore = { current: () => null, currentLabel: () => 'box:6369' };"
+    # A plugin badge re-polls every 30 s; that timer must not hold node open.
+    " const __st = setTimeout;"
+    " setTimeout = (fn, ms, ...a) => { const t = __st(fn, ms, ...a); if (t && t.unref) t.unref(); return t; };"
+)
 _RADIO = {"plugins": [{"slug": "radio", "pages": [
     {"route": "radio", "page": "RadioPage", "nav_label": "Radio", "nav_order": 11}]}]}
 
 _NAV_ROWS = (
     "return h.tree().filter((e) => String(e.props.className || '').split(' ').includes('nav-item'))"
-    ".map((e) => ({ route: e.props.key, cls: String(e.props.className).split(' ').sort() }));"
+    ".map((e) => ({ route: e.props.key, cls: String(e.props.className).split(' ').sort(),"
+    " strip: (e.props.style || {})['--strip-order'] ?? null }));"
 )
+_BADGED = {"plugins": [{"slug": "radio", "pages": [
+    {"route": "radio", "page": "RadioPage", "nav_label": "Radio", "nav_order": 11,
+     "badge": {"endpoint": "/api/plugins/radio/badge", "key": "live"}}]}]}
 
 
-def _sidebar(route: str) -> dict:
+def _device(shared) -> str:
+    """data.js's DeviceIdentity as the Sidebar sees it: the server's answer
+    (true / false, or null for "not known yet") and whether this browser
+    can register at all ("unpaired": it can't, and never learns)."""
+    answer = {True: "true", False: "false", None: "null", "unpaired": "null"}[shared]
+    can = "false" if shared == "unpaired" else "true"
+    return (f" DeviceIdentity = {{ id: () => 'dev-1', sharedScreen: () => {answer},"
+            f" canRegister: () => {can}, subscribeShared: () => () => {{}} }};")
+
+
+def _sidebar(route: str, *, shared=False, props: dict | None = None) -> dict:
     return {
         "files": [COMPONENTS], "component": "Sidebar",
-        "props": {"route": route, "counts": {"music": 3}, "manifest": _RADIO},
-        "fnProps": ["setRoute"], "setup": _SETUP,
+        "props": {"route": route, "counts": {"music": 3}, "manifest": _RADIO, **(props or {})},
+        "fnProps": ["setRoute"], "setup": _SETUP + _device(shared),
         "script": (
-            "h.render();"
+            "h.render(); await h.settle(); h.rerender();"
             "const brand = h.find((e) => String(e.props.className || '') === 'brand-row');"
             "const rows = (() => {" + _NAV_ROWS + "})();"
-            "return { brand: h.plain(brand), rows, text: h.text() };"
+            "return { brand: h.plain(brand), rows, text: h.text(),"
+            " gets: h.calls.filter((c) => c.method === 'GET').map((c) => c.path) };"
         ),
     }
 
@@ -82,6 +106,15 @@ SCENARIOS = {
     "sidebar_on_podcasts": _sidebar("podcasts"),
     "sidebar_on_music": _sidebar("music"),
     "sidebar_on_home": _sidebar("home"),
+    # A shared screen, and one whose answer hasn't come yet (a paired
+    # browser: masked until the server says) - and an unpaired browser,
+    # which never learns and so is never masked.
+    "sidebar_shared": _sidebar("music", shared=True),
+    "sidebar_shared_not_known_yet": _sidebar("music", shared=None),
+    "sidebar_unpaired_not_known": _sidebar("music", shared="unpaired"),
+    # The badge poll: a Sidebar handed App's badges polls nothing itself.
+    "sidebar_polls_alone": _sidebar("music", props={"manifest": _BADGED}),
+    "sidebar_given_badges": _sidebar("music", props={"manifest": _BADGED, "badges": {"radio": 4}}),
     "topbar_chat": {
         "files": [COMPONENTS], "component": "Topbar",
         "props": {"route": "chat", "theme": "light"}, "fnProps": ["setRoute", "setTheme"],
@@ -97,6 +130,13 @@ SCENARIOS = {
         "setup": _SETUP + " window.DomovoiPluginManifest = " + json.dumps(_RADIO) + ";",
         "script": ("h.render(); return { tiles: h.findAll((e) => e.props.className === 'home-tile')"
                    ".map((e) => e.props.href), text: h.text() };"),
+    },
+    "home_everything_shared": {
+        "files": [COMPONENTS, HOME], "component": "HomeEverything",
+        "props": {"counts": {}, "shared": True, "badges": {}},
+        "setup": _SETUP + " window.DomovoiPluginManifest = " + json.dumps(_RADIO) + ";",
+        "script": ("h.render(); return { tiles: h.findAll((e) => e.props.className === 'home-tile')"
+                   ".map((e) => e.props.href) };"),
     },
 }
 # The crumb label for every route the task added to the map, one Topbar each.
@@ -217,7 +257,9 @@ def test_home_script_loads_after_the_pages_it_borrows_from() -> None:
 def test_the_page_gets_the_one_sidebar_counts_result() -> None:
     html = _src("index.html")
     assert html.count("useSidebarCounts()") == 1
-    assert "<Page counts={counts}/>" in html
+    assert html.count("usePluginBadges(") == 1
+    assert "<Page counts={counts} badges={badges}/>" in html
+    assert "manifest={manifest} badges={badges}/>" in html
 
 
 def test_the_installed_app_opens_on_home_and_is_called_domovoi() -> None:
@@ -352,3 +394,50 @@ def test_home_top_level_names_are_prefixed() -> None:
     """Every page script shares one Babel scope (the duplicate-global trap)."""
     names = re.findall(r"^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)", _src("home.jsx"), re.M)
     assert names and all(n.startswith(("Home", "HOME_")) for n in names), names
+
+
+# ─── shared screens and the launchers ────────────────────────────────────
+
+PERSONAL = {"people", "chat", "files", "news"}
+
+
+def test_a_shared_screen_drops_personal_pages_from_the_sidebar_and_the_strip(driven) -> None:
+    """The sidebar and the phone strip are one element, so one render covers
+    both widths: no personal row exists for either to show."""
+    rows = _classes(driven, "sidebar_shared")
+    assert not set(rows) & PERSONAL, set(rows) & PERSONAL
+    assert {r for r, cls in rows.items() if "primary" in cls} == PRIMARY - {"chat"}
+    assert {"podcasts", "videos", "plugins", "radio"} <= set(rows)
+    assert not set(_classes(driven, "sidebar_shared_not_known_yet")) & PERSONAL
+    assert PERSONAL <= set(_classes(driven, "sidebar_unpaired_not_known"))
+    assert PERSONAL <= set(_classes(driven, "sidebar_on_music"))
+
+
+def test_a_shared_screen_drops_the_same_pages_from_the_everything_grid(driven) -> None:
+    tiles = set(driven["home_everything_shared"]["tiles"])
+    assert not {f"#{r}" for r in PERSONAL} & tiles
+    assert {"#podcasts", "#radio", "#settings", "#manual"} <= tiles
+
+
+def test_one_list_decides_what_a_shared_screen_hides() -> None:
+    comps = _src("components.jsx")
+    assert "const SHARED_SCREEN_HIDDEN = new Set(['people', 'chat', 'files', 'news']);" in comps
+    assert "const items = navItemsFor(manifest, { shared });" in comps
+    home = _src("home.jsx")
+    assert "navItemsFor(manifest, { shared })" in home
+    assert "HOME_SHARED_HIDDEN" not in home and "'documents'" not in home
+
+
+def test_the_strip_reads_home_music_satellites_calendar_chat(driven) -> None:
+    strip = {r["route"]: r["strip"] for r in driven["sidebar_on_music"]["rows"] if r["strip"] is not None}
+    assert sorted(strip, key=strip.get) == ["home", "music", "satellites", "calendar", "chat"]
+    assert ".sidebar .nav-item.primary { order: var(--strip-order, 9); }" in _phone_block(_src("styles.css"))
+    readme = (REPO_ROOT / ".claude" / "skills" / "domovoi-design" / "README.md").read_text(encoding="utf-8")
+    assert "(home · music · satellites · calendar · chat)" in readme
+
+
+def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
+    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge"]
+    given = driven["sidebar_given_badges"]
+    assert given["gets"] == []
+    assert "4" in given["text"]

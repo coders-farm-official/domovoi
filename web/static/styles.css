@@ -311,6 +311,10 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
   .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
+  /* The strip reads home · music · satellites · calendar · chat, whatever
+     the sidebar's published nav order (components.jsx sets --strip-order
+     on the five primary items). */
+  .sidebar .nav-item.primary { order: var(--strip-order, 9); }
   .sidebar .nav-item:not(.primary) { display: none; }
   .sidebar .nav-item.brand-link { display: flex; }
   .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }

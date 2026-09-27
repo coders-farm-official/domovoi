@@ -246,11 +246,14 @@ def house(**over) -> dict:
 
 def scenario(table: dict, script: str, *, ls: dict | None = None, phone: bool | None = None,
              counts: dict | None = None, manifest: dict | None = None,
-             component: str = COMPONENT) -> dict:
+             badges: dict | None = None, component: str = COMPONENT) -> dict:
     head = (f"const __NOW0 = {NOW}; const __TABLE = {json.dumps(table)};"
             f" const __LS = {json.dumps(ls or {})}; const __PHONE = {json.dumps(phone)};"
             f" const __MANIFEST = {json.dumps(manifest)};\n")
-    return {"files": FILES, "component": component, "props": {"counts": counts or {}},
+    props = {"counts": counts or {}}
+    if badges is not None:
+        props["badges"] = badges
+    return {"files": FILES, "component": component, "props": props,
             "setup": head + PRELUDE,
             "script": "const w = h.global('window'); h.render(); await w.__flush(h);\n" + script}
 
@@ -492,6 +495,12 @@ SCENARIOS["phone_launcher"] = scenario(
     house(**{"GET /api/plugins/radio/badge": {"live": 3}}),
     "await w.__flush(h); return w.__snap(h);",
     ls=PAIRED_LS, phone=True, counts={"people": 4, "music": 9}, manifest=_RADIO,
+)
+# App's one badge poll, handed down: the grid shows it and polls nothing.
+SCENARIOS["phone_launcher_given_badges"] = scenario(
+    house(**{"GET /api/plugins/radio/badge": {"live": 3}}),
+    "await w.__flush(h); return w.__snap(h);",
+    ls=PAIRED_LS, phone=True, manifest=_RADIO, badges={"radio": 7},
 )
 SCENARIOS["desktop_no_launcher"] = scenario(
     house(**{"GET /api/plugins/radio/badge": {"live": 3}}),
@@ -987,6 +996,12 @@ def test_the_phone_launcher_lists_every_page_off_the_strip_with_badges(driven) -
         assert f"#{r}" not in tiles, r
     assert tiles["#radio"] == "Radio3"               # the plugin's own badge
     assert tiles["#people"] == "People4"             # App's counts, handed down
+
+
+def test_the_grid_uses_the_shells_badges_and_polls_none_itself(driven) -> None:
+    snap = driven["phone_launcher_given_badges"]
+    assert {t["href"]: t["text"] for t in snap["tiles"]}["#radio"] == "Radio7"
+    assert "/api/plugins/radio/badge" not in _fetched(snap)
 
 
 def test_the_desktop_mounts_no_launcher_and_polls_no_badge(driven) -> None:

@@ -437,14 +437,15 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  * slot pages deliberately. `countKey` reads useSidebarCounts.
  *
  * `primary` marks the five tabs the phone strip keeps (760px and below):
- * home, music, satellites, calendar, chat — the Android app's compact
- * routes, with home in its "more" slot. Everything else is one tap away
- * on Home's "everything" grid. The desktop sidebar shows every item
- * EXCEPT home: there the brand row is the link to it (`brandLink`). */
+ * home · music · satellites · calendar · chat, left to right (`strip`,
+ * the strip's own order — the sidebar keeps the published one). Everything
+ * else is one tap away on Home's "everything" grid. The desktop sidebar
+ * shows every item EXCEPT home: there the brand row is the link to it
+ * (`brandLink`). */
 const CORE_NAV_ITEMS = [
-  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, primary: true, brandLink: true },
-  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8, primary: true },
-  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music', primary: true },
+  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, primary: true, strip: 1, brandLink: true },
+  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8, primary: true, strip: 5 },
+  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music', primary: true, strip: 2 },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
@@ -452,11 +453,54 @@ const CORE_NAV_ITEMS = [
   // page slots there (nav_order 16 in its manifest) when installed.
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
-  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites', primary: true },
-  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar', primary: true },
+  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites', primary: true, strip: 3 },
+  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar', primary: true, strip: 4 },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
+
+/* Pages a shared screen (an admin marks the device in Settings → Devices;
+ * the kitchen tablet) leaves off EVERY launcher — the sidebar, the phone
+ * strip and Home's "everything" grid, through navItemsFor below, so the
+ * three can't drift apart. One person's things: the household's names and
+ * notes (People), every chat thread (Chat), the files and documents
+ * (Files, which is where Documents lives), and each person's followed
+ * topics (News). Presentational, like the rest of the shared view: the
+ * pages still open by URL, and the tablet still holds the household
+ * token. */
+const SHARED_SCREEN_HIDDEN = new Set(['people', 'chat', 'files', 'news']);
+
+/* Is this device a shared screen? DeviceIdentity (data.js) remembers the
+ * server's last answer, so a reload paints the right mode first. No answer
+ * yet (null) on a browser that CAN register — it may well be the kitchen
+ * tablet — counts as shared until the server says otherwise; a browser
+ * that can't register (unpaired, claimed box) never learns, so it is
+ * never treated as one. Re-renders when the answer or the credentials
+ * change. */
+const useSharedScreen = () => {
+  const read = () => {
+    try {
+      if (typeof DeviceIdentity === 'undefined' || !DeviceIdentity.sharedScreen) return false;
+      const v = DeviceIdentity.sharedScreen();
+      if (v != null) return v === true;
+      return !!(DeviceIdentity.canRegister && DeviceIdentity.canRegister());
+    } catch { return false; }
+  };
+  const [shared, setShared] = React.useState(read);
+  React.useEffect(() => {
+    const sync = () => setShared(read());
+    const offs = [];
+    try {
+      if (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.subscribeShared) {
+        offs.push(DeviceIdentity.subscribeShared(sync));
+      }
+    } catch { /* data.js absent */ }
+    try { if (typeof Auth !== 'undefined' && Auth.subscribe) offs.push(Auth.subscribe(sync)); } catch { /* auth.js absent */ }
+    sync();   // an answer that landed between render and subscribe
+    return () => offs.forEach((off) => { try { off(); } catch {} });
+  }, []);
+  return shared;
+};
 
 /* Every nav destination, core and plugin, in sidebar order. Core items
  * carry `core: true` and their CORE_NAV_ITEMS fields; plugin pages carry
@@ -481,10 +525,18 @@ const buildNavItems = (manifest) => {
   return items;
 };
 
+// buildNavItems as a launcher shows it: on a shared screen, without the
+// SHARED_SCREEN_HIDDEN pages.
+const navItemsFor = (manifest, { shared = false } = {}) =>
+  buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route)));
+
 /* Poll each plugin page's declared badge endpoint on a shared, jittered
  * 30 s cadence (design §5.3 badge contract): open GET returning JSON;
  * render body[key] when it's a positive int; non-200 / non-JSON /
- * missing key / 0 ⇒ no badge, never an error surface. */
+ * missing key / 0 ⇒ no badge, never an error surface. The shell (App)
+ * runs it ONCE and hands the result to the Sidebar and to the page;
+ * pass `null` for no polling at all. Quiet reads (a mis-tiered badge
+ * endpoint must not prompt a guest), and none while the tab is hidden. */
 const usePluginBadges = (manifest) => {
   const [badges, setBadges] = React.useState({});   // route → int
   React.useEffect(() => {
@@ -496,16 +548,19 @@ const usePluginBadges = (manifest) => {
     let cancelled = false;
     let timer = null;
     const poll = async () => {
-      const next = {};
-      await Promise.all(pages.map(async (pg) => {
-        try {
-          const body = await apiGet(pg.badge.endpoint);
-          const v = body && body[pg.badge.key];
-          if (typeof v === 'number' && v > 0) next[pg.route] = v;
-        } catch { /* no badge — by contract */ }
-      }));
-      if (cancelled) return;
-      setBadges(next);
+      const hidden = typeof document !== 'undefined' && !!document.hidden;
+      if (!hidden) {
+        const next = {};
+        await Promise.all(pages.map(async (pg) => {
+          try {
+            const body = await apiGet(pg.badge.endpoint, { quiet: true });
+            const v = body && body[pg.badge.key];
+            if (typeof v === 'number' && v > 0) next[pg.route] = v;
+          } catch { /* no badge — by contract */ }
+        }));
+        if (cancelled) return;
+        setBadges(next);
+      }
       timer = setTimeout(poll, 30000 + Math.random() * 3000);
     };
     poll();
@@ -534,9 +589,14 @@ const navItemClass = (it, route, primaryRoutes) => [
   it.brandLink && route !== it.route && !primaryRoutes.has(route) ? 'more-active' : '',
 ].filter(Boolean).join(' ');
 
-const Sidebar = ({ route, setRoute, counts, manifest }) => {
-  const badges = usePluginBadges(manifest);
-  const items = buildNavItems(manifest);
+/* `badges` is App's one usePluginBadges result; a Sidebar rendered without
+ * it polls for itself. On a shared screen the personal pages drop off the
+ * sidebar and the strip alike (navItemsFor), and the strip keeps four tabs. */
+const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
+  const own = usePluginBadges(given ? null : manifest);
+  const badges = given || own;
+  const shared = useSharedScreen();
+  const items = navItemsFor(manifest, { shared });
   const primaryRoutes = new Set(items.filter((it) => it.primary).map((it) => it.route));
   return (
     <aside className="sidebar">
@@ -557,6 +617,9 @@ const Sidebar = ({ route, setRoute, counts, manifest }) => {
           {items.map((it) => (
             <div key={it.route}
                  className={navItemClass(it, route, primaryRoutes)}
+                 // The phone strip's left-to-right order (styles.css reads
+                 // it only at 760px and below).
+                 style={it.strip ? { '--strip-order': it.strip } : undefined}
                  onClick={() => setRoute(it.route)}>
               {it.core
                 ? <Icon name={it.icon} className="ico" size={16}/>
@@ -1124,7 +1187,8 @@ const WriteBlockedNotice = ({ reason, children }) => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  CORE_NAV_ITEMS, buildNavItems, PluginNavIcon, usePluginBadges,
+  CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
+  SHARED_SCREEN_HIDDEN, useSharedScreen,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
 });

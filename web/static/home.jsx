@@ -25,10 +25,12 @@
  *
  * Never on Home: transcripts, voice notes, memories, people's names, chat
  * titles, Wi-Fi names. A shared screen (an admin marks the device in
- * Settings → Devices) also hides calendar titles, reminder text, the
- * problem rows (one neutral line at most) and the personal pages on the
- * everything grid. That is presentational, not a boundary: the tablet
- * still holds the household token.
+ * Settings → Devices) also hides calendar titles, reminder text and the
+ * problem rows (one neutral line at most), and the personal pages drop off
+ * every launcher (components.jsx SHARED_SCREEN_HIDDEN). That is
+ * presentational, not a boundary: everything it hides is an open read, a
+ * browser that can't register (a private window on the tablet itself) is
+ * never masked, and the tablet still holds the household token.
  *
  * Every top-level name starts with Home or HOME_: all the dashboard's
  * scripts share one Babel scope, and a second `const Foo` anywhere is a
@@ -57,8 +59,6 @@ const HOME_ROOM_EVENTS = [
   'satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed',
   'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed',
 ];
-// Personal pages a shared screen leaves off the everything grid.
-const HOME_SHARED_HIDDEN = new Set(['people', 'chat', 'documents', 'files']);
 const HOME_WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const HOME_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 // The first-run hint prefers these handlers' example phrases, in order.
@@ -133,9 +133,7 @@ const HomeSongTitle = (song) => (song && (song.title || (song.file || '').split(
 const HomeHooks = (() => {
   /* Who is looking. `isAdmin` also covers a cookie session that survived a
    * reload (status.authenticated — isLoggedIn() alone misses it) and the
-   * pre-setup grace, where every read, the admin ones included, is open.
-   * `canRegister` mirrors DeviceIdentity's rule: only such a browser ever
-   * learns whether it is a shared screen. */
+   * pre-setup grace, where every read, the admin ones included, is open. */
   const whoIsLooking = () => {
     let st = null; let loggedIn = false; let paired = false;
     try {
@@ -151,7 +149,6 @@ const HomeHooks = (() => {
       unclaimed,
       paired,
       isAdmin: loggedIn || !!(st && st.authenticated) || unclaimed,
-      canRegister: paired || loggedIn || unclaimed,
     };
   };
 
@@ -177,28 +174,6 @@ const HomeHooks = (() => {
     });
     useStateEvents(['_status'], (ev) => setLive(!!ev.connected));
     return live;
-  };
-
-  /* Is this device a shared screen? DeviceIdentity remembers the server's
-   * last answer, so a reload paints the right mode first. No answer yet
-   * (null) on a browser that CAN register — it may well be the kitchen
-   * tablet — shows the shared view until the server says otherwise; a
-   * browser that can't register (unpaired, claimed box) is never marked. */
-  const useShared = (canRegister) => {
-    const read = () => {
-      try {
-        return (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.sharedScreen)
-          ? DeviceIdentity.sharedScreen() : false;
-      } catch { return false; }
-    };
-    const [shared, setShared] = React.useState(read);
-    React.useEffect(() => {
-      if (typeof DeviceIdentity === 'undefined' || !DeviceIdentity.subscribeShared) return undefined;
-      const off = DeviceIdentity.subscribeShared((v) => setShared(v));
-      setShared(read());      // an answer that landed between render and subscribe
-      return off;
-    }, []);
-    return shared === true || (shared == null && canRegister);
   };
 
   // Every poll here skips while the tab is hidden.
@@ -317,7 +292,7 @@ const HomeHooks = (() => {
     return { active, done: doneList, now };
   };
 
-  return { useViewer, useLive, useShared, useInterval, useOnFocus, useDebounced, useTick, useIsPhone, useTimers };
+  return { useViewer, useLive, useInterval, useOnFocus, useDebounced, useTick, useIsPhone, useTimers };
 })();
 
 /* ---- needs attention: the rules ----------------------------------- */
@@ -958,17 +933,20 @@ const HomeFirstRun = ({ manual }) => (
 
 /* Every page that is not one of the phone strip's five tabs — plugin
  * pages included, with their badges — plus Settings and the manual. The
- * phone's "more" menu. `counts` is App's one useSidebarCounts result,
- * handed down rather than fetched again. On a desktop the sidebar
- * already lists everything and this is not mounted. */
-const HomeEverything = ({ counts, shared }) => {
+ * phone's "more" menu. `counts` and `badges` are App's one
+ * useSidebarCounts and usePluginBadges results, handed down rather than
+ * fetched again (a grid rendered without `badges` polls for itself). A
+ * shared screen leaves the same pages off as the sidebar and the strip
+ * (navItemsFor). On a desktop the sidebar already lists everything and
+ * this is not mounted. */
+const HomeEverything = ({ counts, badges: given, shared }) => {
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
-  const badges = usePluginBadges(manifest);
+  const own = usePluginBadges(given ? null : manifest);
+  const badges = given || own;
   const c = counts || {};
-  const tiles = buildNavItems(manifest)
+  const tiles = navItemsFor(manifest, { shared })
     .filter((it) => !it.primary)
-    .concat(HOME_EXTRA_TILES)
-    .filter((it) => !(shared && HOME_SHARED_HIDDEN.has(it.route)));
+    .concat(HOME_EXTRA_TILES);
   return (
     <div className="home-sec home-sec-everything">
       <Card title="everything">
@@ -991,11 +969,11 @@ const HomeEverything = ({ counts, shared }) => {
 
 /* ---- the page ------------------------------------------------------- */
 
-const HomePage = ({ counts }) => {
+const HomePage = ({ counts, badges }) => {
   const [fire, toastNode] = useToast();
   const viewer = HomeHooks.useViewer();
   const live = HomeHooks.useLive();
-  const shared = HomeHooks.useShared(viewer.canRegister);
+  const shared = useSharedScreen();
   const isPhone = HomeHooks.useIsPhone();
   const admin = viewer.isAdmin;
 
@@ -1215,7 +1193,7 @@ const HomePage = ({ counts }) => {
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>
             </div>
           )}
-          {isPhone !== false && <HomeEverything counts={counts} shared={shared}/>}
+          {isPhone !== false && <HomeEverything counts={counts} badges={badges} shared={shared}/>}
         </div>
       </div>
       {sheetRoom && <HomePlaySheet room={sheetRoom} onClose={() => setSheetRoom(null)} onFavorites={onFavorites}/>}

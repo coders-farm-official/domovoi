@@ -285,6 +285,9 @@
 
       const counts = useSidebarCounts();
       const manifest = window.DomovoiPluginManifest || { plugins: [] };
+      // Plugin nav badges, polled ONCE for the sidebar (the phone strip is
+      // the same element) and Home's "everything" grid alike.
+      const badges = usePluginBadges(manifest);
 
       // Route map: core routes + manifest-declared plugin pages.
       let Page = null;
@@ -308,13 +311,14 @@
       return (
         <PlaybackProvider>
           <div className="app" data-screen-label={`Domovoi · ${route}`}>
-            <Sidebar route={route} setRoute={setRoute} counts={counts} manifest={manifest}/>
+            <Sidebar route={route} setRoute={setRoute} counts={counts} manifest={manifest} badges={badges}/>
             <Topbar route={route} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
             <main className="main">
-              {/* `counts` is the ONE useSidebarCounts result, handed down so
-                  Home's "everything" grid can badge its tiles without
-                  repeating the sidebar's fetches. Other pages ignore it. */}
-              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts}/></PluginErrorBoundary>
+              {/* `counts` and `badges` are the ONE useSidebarCounts and
+                  usePluginBadges results, handed down so Home's
+                  "everything" grid can badge its tiles without repeating
+                  the sidebar's fetches. Other pages ignore them. */}
+              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
             </main>
             <AuthModalHost/>
             {pluginsStale && (
