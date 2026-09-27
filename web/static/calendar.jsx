@@ -582,3 +582,6 @@ const CalendarPage = () => {
 };
 
 window.CalendarPage = CalendarPage;
+// Home's "today" card formats times the way this page does (see the
+// shared-scope note in satellites.jsx for why it borrows, not copies).
+Object.assign(window, { fmtClock, fmtDayLabel });

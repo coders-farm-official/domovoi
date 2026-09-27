@@ -1138,7 +1138,9 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
 };
 
 /* ---- Broadcast composer ----------------------------------- */
-const Broadcast = ({ onlineCount, fire }) => {
+/* `compact` is Home's one-line "say something in every room": the same
+ * send, the same partial-delivery toast, in a row that fits a phone. */
+const Broadcast = ({ onlineCount, fire, compact = false }) => {
   const [msg, setMsg] = React.useState('');
   const send = async () => {
     // Explicit feedback on the no-op branches. The button is also
@@ -1172,6 +1174,28 @@ const Broadcast = ({ onlineCount, fire }) => {
       reportMutationFailure(fire, 'broadcast', e);
     }
   };
+  if (compact) {
+    const none = onlineCount === 0;
+    return (
+      <Card title="announce"
+            action={<Pill tone={none ? 'idle' : 'live'} live={!none}>{none ? 'no rooms online' : `${onlineCount} online`}</Pill>}>
+        <div style={{ display: 'flex', gap: 8, padding: '6px 16px 10px' }}>
+          <input value={msg} onChange={e => setMsg(e.target.value)}
+                 onKeyDown={e => { if (e.key === 'Enter') send(); }}
+                 aria-label="announcement"
+                 placeholder="say something in every room" disabled={none}
+                 style={{ flex: 1, minWidth: 0, font: 'inherit', fontSize: 13, height: 38, padding: '0 12px',
+                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                          background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
+          <Button variant="primary" icon="megaphone" title="announce in every room"
+                  style={{ height: 38 }}
+                  disabled={!msg.trim() || none} onClick={() => { send(); }}>
+            send
+          </Button>
+        </div>
+      </Card>
+    );
+  }
   return (
     <Card>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)',
@@ -1686,3 +1710,8 @@ const SatellitesPage = () => {
 };
 
 window.SatellitesPage = SatellitesPage;
+// Home (home.jsx) shows the same rooms, timers and broadcast. It reads
+// these from window instead of declaring its own: every page script
+// shares one Babel scope, and a second top-level `const wifiTone` would
+// be a SyntaxError that kills whichever file loads later.
+Object.assign(window, { wifiTone, fmtRemaining, remainingFromExpiresAt, Broadcast });
