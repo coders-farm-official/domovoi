@@ -43,6 +43,9 @@ _DUAL_STACK_LOOPBACK_NAMES = frozenset({
 # (the model's own default applies); "false" / "true" send it.
 QA_THINK_CHOICES = ("default", "false", "true")
 
+# The values of `home_problems_visibility`, first = default. See the field.
+HOME_PROBLEMS_VISIBILITY_CHOICES = ("everyone", "summary", "admins")
+
 
 def normalize_think_setting(value: object) -> str:
     """One of :data:`QA_THINK_CHOICES` for a raw setting value: a bool, the
@@ -198,6 +201,28 @@ class Settings(BaseSettings):
 
     bot_name: str = "Domovoi"
     log_level: str = "INFO"
+
+    # Who sees the "needs attention" rows on the dashboard's Home page (a
+    # household setting, admin-set). "everyone": a household member sees
+    # the problems that explain what they notice — a room offline, speech
+    # recognition off, a plugin that failed — each pointing at the page or
+    # the admin that can fix it, and an admin sees every row. "summary":
+    # household members see one neutral line ("something needs the admin's
+    # attention"). "admins": only a signed-in admin sees any. An admin
+    # always sees them all, and a device marked a shared screen shows the
+    # summary line at most, whatever this says. Read by the dashboard only;
+    # changes apply live (the web reads it through the core's snapshot).
+    home_problems_visibility: str = HOME_PROBLEMS_VISIBILITY_CHOICES[0]
+
+    @field_validator("home_problems_visibility", mode="before")
+    @classmethod
+    def _home_problems_visibility_known(cls, value: object) -> str:
+        """Case and whitespace forgiven. An unknown value falls back to the
+        default instead of stopping the server from booting: this only
+        decides what a web page shows, and a typo in .env must not take
+        the voice service down with it."""
+        text = str(value or "").strip().lower()
+        return text if text in HOME_PROBLEMS_VISIBILITY_CHOICES else HOME_PROBLEMS_VISIBILITY_CHOICES[0]
 
     # ─── WebSocket keep-alives ─────────────────────────────────────────
     # Without periodic pings, a Pi's WS can go silently dead under flaky

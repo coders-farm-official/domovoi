@@ -50,7 +50,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from domovoi.config import QA_THINK_CHOICES
+from domovoi.config import HOME_PROBLEMS_VISIBILITY_CHOICES, QA_THINK_CHOICES
 
 Tier = Literal["hot", "reapply", "restart"]
 Section = Literal["common", "advanced"]
@@ -146,6 +146,22 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "frame/turn); INFO is the normal level; WARNING/ERROR quiet it down.",
         "choice", tier="reapply",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    ),
+
+    # ─── Dashboard ─────────────────────────────────────────────────────
+    # Read by the web page only. 'hot' holds for the web process too: it
+    # reads the live value from the core's /v1/admin/snapshot (polled every
+    # 1.5 s), not from its own settings copy, which a save leaves stale.
+    FieldSpec(
+        "home_problems_visibility", "Problems on Home", "Dashboard",
+        "Who sees the 'needs attention' rows on the dashboard's Home page. "
+        "everyone: household members see the problems that explain what they "
+        "notice (a room offline, speech recognition off, a plugin that failed) "
+        "and you see all of them. summary: household members see one neutral "
+        "line saying something needs the admin. admins: only a signed-in admin "
+        "sees any. A shared screen never shows more than the summary line. "
+        "Applies immediately.",
+        "choice", tier="hot", choices=list(HOME_PROBLEMS_VISIBILITY_CHOICES),
     ),
 
     # ─── Models (LLM role slots) ───────────────────────────────────────

@@ -20,12 +20,14 @@ from domovoi.admin_auth import (
     require_admin_security,
     require_device,
 )
+from domovoi.config import HOME_PROBLEMS_VISIBILITY_CHOICES
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
     get_admin,
+    get_cached_snapshot,
     post_admin,
 )
 from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
@@ -33,6 +35,21 @@ from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
 router = APIRouter(prefix="/api", tags=["config"])
 
 WEB_VERSION = "0.1.0-dev"
+
+
+def home_problems_visibility() -> str:
+    """The live HOME_PROBLEMS_VISIBILITY.
+
+    The setting is edited through the core (Settings → Configuration, tier
+    ``hot``), which mutates the CORE process's settings; this process's copy
+    is whatever ``.env`` said when it booted. So the value comes from the
+    core's admin snapshot the poll loop refreshes every 1.5 s, and falls back
+    to this process's own copy only while the core has not answered (down,
+    or a core from before the field)."""
+    live = (get_cached_snapshot() or {}).get("home_problems_visibility")
+    if live in HOME_PROBLEMS_VISIBILITY_CHOICES:
+        return live
+    return core_settings.home_problems_visibility
 
 
 @router.get("/config", response_model=ConfigResponse)
@@ -64,6 +81,10 @@ async def get_config() -> ConfigResponse:
         rooms=rooms,
         web_version=WEB_VERSION,
         wake_word_min_clips=core_settings.wake_word_min_clips,
+        # Open on purpose, like the rest of this response: the Home page
+        # every browser lands on decides from it what to show. The one
+        # household setting exposed here; nothing else from the config is.
+        home_problems_visibility=home_problems_visibility(),
     )
 
 

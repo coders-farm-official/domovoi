@@ -629,6 +629,11 @@ class ConfigResponse(BaseModel):
     # Wake Words tab reads this to gate/label "N / min clips" off the real
     # server config instead of a hardcoded guess.
     wake_word_min_clips: int
+    # Who sees Home's "needs attention" rows: "everyone" (household members
+    # see the rows that explain what they notice, an admin sees all),
+    # "summary" (household members see one neutral line) or "admins"
+    # (only an admin sees any). HOME_PROBLEMS_VISIBILITY, admin-set.
+    home_problems_visibility: Literal["everyone", "summary", "admins"] = "everyone"
 
 
 class ConfigUpdateRequest(BaseModel):

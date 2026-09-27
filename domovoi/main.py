@@ -1081,6 +1081,12 @@ async def admin_snapshot() -> dict[str, Any]:
         # Cached: the dashboard polls this endpoint every 1.5 s and the
         # tree only moves on a pull, which drops the cache.
         "domovoi_version": await git_version.cached_current_sha(),
+        # The LIVE value of the one household setting the dashboard's Home
+        # page reads (who sees its problem rows). A config save mutates this
+        # process's settings only; the web process reads the value here, on
+        # its 1.5 s poll, so the change reaches every open page without a
+        # restart. Carries nothing else from the config.
+        "home_problems_visibility": settings.home_problems_visibility,
     }
 
 
