@@ -300,6 +300,7 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
     ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions — times and counts, no words",
     ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
     ("web", "/api/satellites/{room_id}/timers"): "household state; a reminder's message is text somebody set",
+    ("web", "/api/timers"): "the same rows for every room at once — Home's countdowns (owner decision 2026-09-26)",
     ("web", "/api/calendar/events"): "household state; titles and descriptions",
     ("web", "/api/calendar/events/{event_id}"): "household state",
     ("web", "/api/news/people/{person_id}/topics"): "a person's followed topics — the nearest cousin of favorites",

@@ -401,10 +401,25 @@ class VoiceNote(BaseModel):
 class Timer(BaseModel):
     id: int
     expires_at: datetime
+    # When it was set: with expires_at, the full length of the timer, so a
+    # page can draw how much of it has run. Every row has one (the column
+    # is NOT NULL); optional here only for the shape's sake.
+    created_at: datetime | None = None
     label: str | None = None
     message: str | None = None  # non-null = reminder
-    room_id: str | None = None
+    room_id: str | None = None  # null = set somewhere with no room
     is_reminder: bool = False
+
+
+class TimerList(BaseModel):
+    """Every timer and reminder in the house, soonest first.
+
+    ``server_now`` is the database clock at the moment of the read — the
+    clock that decides when a timer fires — so a page counts down against
+    the server rather than a phone whose clock is minutes off."""
+
+    server_now: datetime
+    timers: list[Timer]
 
 
 # ─── Calendar ─────────────────────────────────────────────────────────────

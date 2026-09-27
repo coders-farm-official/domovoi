@@ -39,6 +39,7 @@ from domovoi.admin_auth import (
     require_device,
     require_device_read,
 )
+from domovoi.db.repositories import notify_timers_changed
 
 from satellite import provisioning_protocol as proto
 
@@ -70,6 +71,7 @@ from web.backend.schemas import (
     SatellitePairing,
     Session,
     Timer,
+    TimerList,
     VoiceNote,
     VolumeRequest,
     WifiStatus,
@@ -78,6 +80,11 @@ from web.backend.schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/satellites", tags=["satellites"])
+
+# Every timer in the house, whatever room it was set in — including the
+# ones set with no room at all, which no per-room route can name. Beside
+# the per-room routes below so both share one row shape (_timer_from_row).
+timers_router = APIRouter(prefix="/api/timers", tags=["timers"])
 
 
 # ─── List + detail ─────────────────────────────────────────────────────────
@@ -515,6 +522,21 @@ async def list_recently_played(
         return out
 
 
+_TIMER_COLUMNS = "id, expires_at, label, message, room_id, created_at"
+
+
+def _timer_from_row(r: Any) -> Timer:
+    return Timer(
+        id=int(r[0]),
+        expires_at=r[1],
+        label=r[2],
+        message=r[3],
+        room_id=r[4],
+        created_at=r[5],
+        is_reminder=r[3] is not None,
+    )
+
+
 @router.get("/{room_id}/timers", response_model=list[Timer])
 async def list_timers(room_id: str) -> list[Timer]:
     """Active timers and reminders for this room.
@@ -527,8 +549,8 @@ async def list_timers(room_id: str) -> list[Timer]:
     async with session_scope() as s:
         rows = await s.execute(
             text(
-                """
-                SELECT id, expires_at, label, message, room_id
+                f"""
+                SELECT {_TIMER_COLUMNS}
                 FROM timers
                 WHERE room_id = :room_id
                 ORDER BY expires_at ASC
@@ -536,17 +558,7 @@ async def list_timers(room_id: str) -> list[Timer]:
             ),
             {"room_id": room_id},
         )
-        return [
-            Timer(
-                id=int(r[0]),
-                expires_at=r[1],
-                label=r[2],
-                message=r[3],
-                room_id=r[4],
-                is_reminder=r[3] is not None,
-            )
-            for r in rows.all()
-        ]
+        return [_timer_from_row(r) for r in rows.all()]
 
 
 @router.delete(
@@ -566,11 +578,56 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
             ),
             {"id": timer_id, "room_id": room_id},
         )
+        if result.rowcount:
+            await notify_timers_changed(s, "cancelled")
     if (result.rowcount or 0) == 0:
         raise HTTPException(
             status_code=404,
             detail=f"timer {timer_id} not found in room {room_id!r}",
         )
+
+
+@timers_router.get("", response_model=TimerList)
+async def list_all_timers() -> TimerList:
+    """Every running timer and reminder in the house, soonest first —
+    rows with no room included — plus the database clock.
+
+    Open, like the per-room read above: household state. The dashboard's
+    Home page counts these down, so the answer carries ``server_now`` (the
+    clock ``pop_expired`` fires against) and each row its ``created_at``.
+    Changes push on the ``timers`` realtime channel."""
+    async with session_scope() as s:
+        server_now = (await s.execute(text("SELECT now()"))).scalar_one()
+        rows = await s.execute(
+            text(
+                f"""
+                SELECT {_TIMER_COLUMNS}
+                FROM timers
+                ORDER BY expires_at ASC, id ASC
+                """
+            )
+        )
+        return TimerList(
+            server_now=server_now, timers=[_timer_from_row(r) for r in rows.all()]
+        )
+
+
+@timers_router.delete(
+    "/{timer_id}", status_code=204,
+    # Device tier, like the per-room cancel: stopping a timer somebody in
+    # the house set is an ordinary daily action. This is also the only way
+    # to cancel one set with no room, which the per-room path can't name.
+    dependencies=[Depends(require_device)],
+)
+async def cancel_any_timer(timer_id: int) -> None:
+    async with session_scope() as s:
+        result = await s.execute(
+            text("DELETE FROM timers WHERE id = :id"), {"id": timer_id}
+        )
+        if result.rowcount:
+            await notify_timers_changed(s, "cancelled")
+    if (result.rowcount or 0) == 0:
+        raise HTTPException(status_code=404, detail=f"timer {timer_id} not found")
 
 
 # ─── Action endpoints (proxied to domovoi admin) ──────────────────────

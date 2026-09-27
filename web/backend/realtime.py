@@ -31,6 +31,9 @@ Channels emitted (core; enabled plugins add their own via manifest
   wake_words mutation (web CRUD, a recorded clip landing via the
   Domovoi server's streaming path, a trainer status flip) so the Wake
   Words tab's clip-count / status pills refresh sub-second
+* ``timers`` — every running timer and reminder in the house (the rows
+  ``GET /api/timers`` lists, without its ``server_now``); fires when one
+  is set, cancelled (by voice or from any dashboard) or goes off
 
 Snapshot diffs are coarse: we emit the full new value rather than a
 field-level patch. The frontend rerenders on receipt; payloads are
@@ -148,6 +151,12 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # subscribes via the resulting `news.changed` event and refetches the
     # selected person's topics / feeds / saved items / briefing.
     "news_changed": "news",
+    # Timers and reminders. The core fires `timers_changed` when one is set
+    # (TimerRepository.create), cancelled by voice (the timer and reminder
+    # handlers) or goes off (pop_expired, only when a row fired); the web
+    # fires it from both cancel routes. Home's timers section rides the
+    # resulting `timers.changed` event.
+    "timers_changed": "timers",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -773,6 +782,36 @@ async def _snapshot_now_playing() -> dict[str, dict[str, Any]]:
     return out
 
 
+async def _snapshot_timers() -> list[dict[str, Any]]:
+    """Every timer and reminder, soonest first — the rows of
+    ``GET /api/timers`` (web/backend/api/satellites.py). Its
+    ``server_now`` is deliberately NOT here: a value that moves every tick
+    would make this channel "change" on every poll. A page that needs the
+    server clock takes it from the GET."""
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(
+                """
+                SELECT id, expires_at, label, message, room_id, created_at
+                FROM timers
+                ORDER BY expires_at ASC, id ASC
+                """
+            )
+        )
+        return [
+            {
+                "id": int(r[0]),
+                "expires_at": _isoformat(r[1]),
+                "created_at": _isoformat(r[5]),
+                "label": r[2],
+                "message": r[3],
+                "room_id": r[4],
+                "is_reminder": r[3] is not None,
+            }
+            for r in rows.all()
+        ]
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -792,6 +831,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     "chat":              _snapshot_chat,
     "model_jobs":        _snapshot_model_jobs,
     "news":              _snapshot_news,
+    "timers":            _snapshot_timers,
     # USB satellite adoption: pending gadget volumes on the server's USB
     # ports (web/backend/satellite_adoption.py — TTL-cached scan, [] when
     # the feature is off). Plug/unplug/status flips push

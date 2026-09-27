@@ -46,6 +46,29 @@ async def _has_utterance_trigger(s: AsyncSession) -> bool:
     return _HAS_UTTERANCE_TRIGGER
 
 
+# NOTIFY channel for any change to the `timers` table. The web process
+# LISTENs on it and pushes the `timers` realtime channel (web/backend/
+# realtime.py), so the dashboard's Home page sees a voice-set timer, a
+# cancel from any client, and a timer firing within a moment instead of on
+# a poll. Commit-coupled like `acquisitions_changed` (domovoi/acquisitions
+# .py): it runs on the caller's open session, and Postgres delivers a
+# NOTIFY only on COMMIT, so a rolled-back write never announces anything.
+TIMERS_CHANGED_CHANNEL = "timers_changed"
+
+
+async def notify_timers_changed(session: AsyncSession, reason: str) -> None:
+    """Queue a ``timers_changed`` NOTIFY on ``session``'s transaction.
+
+    ``reason`` is informational (``created`` / ``cancelled`` / ``fired``);
+    the listener refetches the whole list whatever it says. Every site that
+    writes the ``timers`` table calls this — :class:`TimerRepository`, the
+    reminder handler's own cancels, and the dashboard's cancel routes."""
+    await session.execute(
+        text("SELECT pg_notify(:channel, :reason)"),
+        {"channel": TIMERS_CHANGED_CHANNEL, "reason": reason},
+    )
+
+
 class TimerRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -80,7 +103,9 @@ class TimerRepository:
                 "created_at": created_at,
             },
         )
-        return int(row.scalar_one())
+        timer_id = int(row.scalar_one())
+        await notify_timers_changed(self.s, "created")
+        return timer_id
 
     async def cancel_by_label(self, label: str | None, room_id: str | None) -> int:
         if label is None:
@@ -93,7 +118,10 @@ class TimerRepository:
                 text("DELETE FROM timers WHERE label = :label"),
                 {"label": label},
             )
-        return result.rowcount or 0
+        deleted = result.rowcount or 0
+        if deleted:
+            await notify_timers_changed(self.s, "cancelled")
+        return deleted
 
     async def next_active(self, room_id: str | None) -> tuple[int, datetime, str | None] | None:
         row = await self.s.execute(
@@ -119,6 +147,9 @@ class TimerRepository:
         """Atomically select + delete all expired timers.
 
         Returns (id, label, message, room_id, created_at, expires_at).
+
+        NOTIFYs ``timers_changed`` only when something fired: the watcher
+        calls this every tick, and an empty sweep changed nothing.
         """
         result = await self.s.execute(
             text(
@@ -129,7 +160,10 @@ class TimerRepository:
                 """
             )
         )
-        return [(int(r[0]), r[1], r[2], r[3], r[4], r[5]) for r in result.all()]
+        rows = [(int(r[0]), r[1], r[2], r[3], r[4], r[5]) for r in result.all()]
+        if rows:
+            await notify_timers_changed(self.s, "fired")
+        return rows
 
 
 class IntentLogRepository:

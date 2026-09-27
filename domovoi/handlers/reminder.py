@@ -28,7 +28,7 @@ from datetime import timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.db.repositories import TimerRepository, utcnow
+from domovoi.db.repositories import TimerRepository, notify_timers_changed, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
 from domovoi.handlers.timer import _format_duration
@@ -279,6 +279,10 @@ class ReminderHandler(Handler):
                 {"room_id": ctx.room_id},
             )
         deleted = result.rowcount or 0
+        if deleted:
+            # Same transaction as the DELETE, so the dashboard hears about
+            # it on commit and never about a rolled-back cancel.
+            await notify_timers_changed(session, "cancelled")
         if deleted == 0:
             return Response(
                 text="I couldn't find a matching reminder.",

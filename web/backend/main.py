@@ -353,6 +353,7 @@ app.include_router(denylist_api.router)
 # never be captured by the satellites router's /{room_id} parameters.
 app.include_router(satellite_media_api.router)
 app.include_router(satellites_api.router)
+app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)
 app.include_router(config_api.router)
 app.include_router(playlists_api.router)
