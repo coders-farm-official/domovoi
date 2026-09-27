@@ -89,12 +89,14 @@ SCENARIOS = {
         "script": ("h.render(); return { links: h.findAll({ type: 'a' }).map(h.plain),"
                    " crumb: h.findAll({ type: 'strong' }).map((e) => e.text) };"),
     },
-    "home_placeholder": {
-        "files": [COMPONENTS, HOME], "component": "HomePage",
+    # Home's "everything" grid, the phone's way to every page off the strip
+    # (the whole page is driven by test_web_home_page.py).
+    "home_everything": {
+        "files": [COMPONENTS, HOME], "component": "HomeEverything",
         "props": {"counts": {"people": 2, "music": 7}},
         "setup": _SETUP + " window.DomovoiPluginManifest = " + json.dumps(_RADIO) + ";",
-        "script": ("h.render(); return { tiles: h.findAll({ type: 'a' }).map((e) => e.props.href),"
-                   " text: h.text() };"),
+        "script": ("h.render(); return { tiles: h.findAll((e) => e.props.className === 'home-tile')"
+                   ".map((e) => e.props.href), text: h.text() };"),
     },
 }
 # The crumb label for every route the task added to the map, one Topbar each.
@@ -334,11 +336,11 @@ def test_main_keeps_room_for_the_player_on_a_phone() -> None:
     assert main.index("padding: 16px") < main.index("padding-bottom: 88px")
 
 
-# ─── the placeholder page ────────────────────────────────────────────────
+# ─── the everything grid ─────────────────────────────────────────────────
 
 
-def test_the_placeholder_lists_every_page_off_the_strip(driven) -> None:
-    tiles = driven["home_placeholder"]["tiles"]
+def test_the_everything_grid_lists_every_page_off_the_strip(driven) -> None:
+    tiles = driven["home_everything"]["tiles"]
     assert "#radio" in tiles and "#settings" in tiles and "#manual" in tiles
     for r in ("podcasts", "audiobooks", "videos", "news", "people", "files", "plugins"):
         assert f"#{r}" in tiles
