@@ -1142,9 +1142,62 @@ def test_the_desktop_mounts_no_launcher_and_polls_no_badge(driven) -> None:
     home_css = css[css.index("Home page (home.jsx)"):]
     assert ".home-sec-everything { display: none; }" in home_css.split("@media")[0]
     phone = home_css[home_css.index("@media (max-width: 760px)"):]
-    assert ".home-sec-everything { order: 6; display: block; }" in phone
+    assert ".home-sec-everything { display: block; }" in phone
     assert ".home-phone-extra, .home-desktop-only { display: none; }" in phone
     assert "height: 44px; min-width: 44px" in phone
+
+
+def _media(css: str, query: str) -> str:
+    start = css.index(f"@media {query} {{")
+    depth = 0
+    for i in range(start, len(css)):
+        if css[i] == "{":
+            depth += 1
+        elif css[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return css[start:i + 1]
+    raise AssertionError(query)
+
+
+def test_the_layout_holds_at_tablet_widths() -> None:
+    """761-1279px used to overflow: room tiles ran under the right rail and
+    the timers card crushed its countdown into Today's. The harness has no
+    layout engine, so the rules are pinned here; the geometry was measured
+    in headless Chrome at 375, 768, 800, 834, 1024, 1180 and 1280px (no
+    overlap, no horizontal scroll, every phone control 44px)."""
+    css = (STATIC / "styles.css").read_text(encoding="utf-8")
+    home = css[css.index("Home page (home.jsx)"):]
+    assert "grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr))" in home
+    assert ".home .room-chip { white-space: nowrap; }" in home
+    one_col = _media(home, "(max-width: 1099px)")
+    assert ".home-col, .home-pair { display: contents; }" in one_col
+    # The plan's order, the phone's: each section has its place.
+    order = ["attention", "timers", "rooms", "announce", "today", "everything"]
+    for i, sec in enumerate(order, 1):
+        assert f".home-sec-{sec} {{ order: {i}; }}" in one_col, sec
+    stacked = _media(home, "(min-width: 1100px) and (max-width: 1279px)")
+    assert ".home-pair { flex-direction: column; align-items: stretch; }" in stacked
+
+
+def test_every_one_tap_control_is_44px_on_a_phone() -> None:
+    css = (STATIC / "styles.css").read_text(encoding="utf-8")
+    phone = _media(css[css.index("Home page (home.jsx)"):], "(max-width: 760px)")
+    for sel in (".home-room-actions .btn", ".home-timer .btn", ".home-sec-head .btn",
+                ".home-sheet-head .btn", ".home-sec-announce .btn"):
+        assert sel in phone, sel
+    assert ".home-sec-announce input { height: 44px; }" in phone
+    assert ".home-link { min-height: 44px;" in phone
+    # The header's desktop pill must lose to the phone rule, and the
+    # attention rows stay one line each.
+    assert ".home-header .actions.home-desktop-only { display: none; }" in phone
+    assert ".home-att-row .txt { white-space: nowrap;" in phone
+    # Inline heights would outrank all of that: the compact announce row
+    # takes its heights from styles.css.
+    sats = (STATIC / "satellites.jsx").read_text(encoding="utf-8")
+    start = sats.index('className="broadcast-compact"')
+    compact = sats[start:sats.index("</Card>", start)]
+    assert "height: 38" not in compact and "broadcast-send-label" in compact
 
 
 # ─── fewer fan-outs ──────────────────────────────────────────────────────

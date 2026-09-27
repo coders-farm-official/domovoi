@@ -612,9 +612,14 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
   }
 
   const extra = rows.length - HOME_PHONE_ROWS;
+  // "+N more" rides the card header, not a footer row of its own: on a
+  // phone every row above the rooms is a row the rooms start below.
+  const more = extra > 0 && !expanded && (
+    <button type="button" className="home-link home-phone-only" onClick={() => setExpanded(true)}>+{extra} more</button>
+  );
   return (
     <div className="home-sec home-sec-attention">
-      <Card title="needs attention">
+      <Card title="needs attention" action={more}>
         {rows.map((r, i) => {
           const cls = `home-att-row${i >= HOME_PHONE_ROWS && !expanded ? ' home-phone-extra' : ''}`;
           const body = (
@@ -637,11 +642,6 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
           }
           return <a key={r.key} className={cls} data-key={r.key} href={r.href}>{body}</a>;
         })}
-        {extra > 0 && !expanded && (
-          <div className="home-att-foot home-phone-only">
-            <button type="button" className="home-link" onClick={() => setExpanded(true)}>+{extra} more</button>
-          </div>
-        )}
         {checking && <div className="home-att-quiet">checking…</div>}
         {/* A problem row must not hide that a check behind it failed: a
             disk filling up says nothing while the hardware read is down. */}
@@ -679,19 +679,17 @@ const HomeTimers = ({ active, done, now, shared, onlineRooms, cancelling, onCanc
   const [expanded, setExpanded] = React.useState(false);
   if (!active.length && !done.length) return null;
   const extra = active.length - HOME_PHONE_TIMERS;
+  const more = extra > 0 && !expanded && (
+    <button type="button" className="home-link home-phone-only" onClick={() => setExpanded(true)}>+{extra} more</button>
+  );
   return (
     <div className="home-sec home-sec-timers">
-      <Card title="timers">
+      <Card title="timers" action={more}>
         {active.map((t, i) => (
           <HomeTimerRow key={t.id} t={t} now={now} shared={shared}
                         roomOnline={onlineRooms.has(t.room_id)} busy={cancelling.has(t.id)}
                         extra={i >= HOME_PHONE_TIMERS && !expanded} onCancel={onCancel}/>
         ))}
-        {extra > 0 && !expanded && (
-          <div className="home-att-foot home-phone-only">
-            <button type="button" className="home-link" onClick={() => setExpanded(true)}>+{extra} more</button>
-          </div>
-        )}
         {done.map((d) => (
           <div key={`done-${d.id}`} className="home-timer-done" data-done={d.id}>
             <StatusDot tone="ok"/>

@@ -780,11 +780,15 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 
 /* ================================================================
    Home page (home.jsx)
-   Desktop: two columns — rooms, then timers beside today, on the
-   left; needs attention and announce on the right. Phone: one column
-   in the plan's order (attention, timers, rooms, announce, today,
-   everything). The column wrappers dissolve on a phone
-   (display: contents) so `order` can interleave sections from both.
+   Wide (1280px and up): two columns — rooms, then timers beside today,
+   on the left; needs attention and announce on the right. 1100-1279px:
+   the same two columns, with timers and today stacked (side by side
+   they crush the countdown). Up to 1099px — a phone, and the kitchen
+   tablet in portrait or landscape — one column in the plan's order
+   (attention, timers, rooms, announce, today; everything on a phone).
+   The column wrappers dissolve there (display: contents) so `order` can
+   interleave sections from both. Measured in headless Chrome at 375,
+   768, 800, 834, 1024, 1180 and 1280px.
    ================================================================ */
 .home-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
 .home-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
@@ -865,8 +869,9 @@ a.home-att-row:hover { background: var(--brand-soft); }
 }
 .home-timer-done:first-child { border-top: none; }
 
-/* rooms: tiles on a desktop, rows on a phone */
-.home-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+/* rooms: tiles on a desktop, rows on a phone. min(): a column narrower
+   than one tile gets one full-width tile instead of an overflowing one. */
+.home-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
 .home-room {
   display: flex; align-items: center; gap: 8px;
   min-width: 0; min-height: 72px; padding: 12px 12px 12px 0;
@@ -895,6 +900,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
   font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums;
 }
 .home-room-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+
+/* A chip is one line, always ("no room" used to break in two). */
+.home .room-chip { white-space: nowrap; }
+
+/* announce (satellites.jsx Broadcast, compact) */
+.broadcast-compact input, .broadcast-compact .btn { height: 38px; }
 
 /* today */
 .home-today-day + .home-today-day { margin-top: 8px; }
@@ -941,16 +952,32 @@ a.home-att-row:hover { background: var(--brand-soft); }
 @media (min-width: 761px) {
   .home-phone-only { display: none; }
 }
-@media (max-width: 760px) {
-  .home-cols { display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
+@media (min-width: 1100px) and (max-width: 1279px) {
+  .home-pair { flex-direction: column; align-items: stretch; }
+  .home-pair > .home-sec { flex: none; width: 100%; }
+}
+@media (max-width: 1099px) {
+  .home-cols { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
   .home-col, .home-pair { display: contents; }
   .home-sec-attention { order: 1; }
   .home-sec-timers { order: 2; }
   .home-sec-rooms { order: 3; }
   .home-sec-announce { order: 4; }
   .home-sec-today { order: 5; }
-  .home-sec-everything { order: 6; display: block; }
+  .home-sec-everything { order: 6; }
+}
+@media (max-width: 760px) {
+  .home-cols { gap: 16px; }
+  .home-sec-everything { display: block; }
   .home-phone-extra, .home-desktop-only { display: none; }
+  /* ...including the header's live pill, whose `.page-header .actions`
+     display would otherwise outrank the rule above. */
+  .home-header .actions.home-desktop-only { display: none; }
+  /* One line per problem, so three of them and the timers still leave
+     the rooms above the fold at 375x812; the claim row keeps its wrap. */
+  .home-att-row { min-height: 44px; }
+  .home-att-row .txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-att-claim .txt { white-space: normal; }
   /* Rooms become full-width rows in one card: a half-width tile can't
      hold a title and two 44px buttons at 375px. */
   .home-rooms {
@@ -960,7 +987,14 @@ a.home-att-row:hover { background: var(--brand-soft); }
   }
   .home-room { border: none; border-radius: 0; box-shadow: none; border-top: 1px solid var(--border-soft); }
   .home-room:first-child { border-top: none; }
-  .home-room-actions .btn, .home-timer .btn { height: 44px; min-width: 44px; justify-content: center; }
+  /* Every one-tap control is a 44px target on a phone. */
+  .home-room-actions .btn, .home-timer .btn, .home-sec-head .btn, .home-sheet-head .btn,
+  .home-sec-announce .btn { height: 44px; min-width: 44px; justify-content: center; }
+  .home-sec-announce input { height: 44px; }
+  .home-sec-announce .broadcast-send-label { display: none; }   /* the megaphone says it */
+  .home-link { min-height: 44px; display: inline-flex; align-items: center; }
+  /* ...without making a card header any taller ("+2 more", "calendar"). */
+  .home .card-head .home-link { margin-block: -12px; }
   .home-sheet-bg { align-items: flex-end; }
   .home-sheet { border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 }

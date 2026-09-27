@@ -1179,18 +1179,21 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
     return (
       <Card title="announce"
             action={<Pill tone={none ? 'idle' : 'live'} live={!none}>{none ? 'no rooms online' : `${onlineCount} online`}</Pill>}>
-        <div style={{ display: 'flex', gap: 8, padding: '6px 16px 10px' }}>
+        {/* Heights live in styles.css (.broadcast-compact), not inline,
+            so Home's phone block can make both 44px touch targets; on a
+            phone the label hides and the megaphone button is the send. */}
+        <div className="broadcast-compact" style={{ display: 'flex', gap: 8, padding: '6px 16px 10px' }}>
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') send(); }}
                  aria-label="announcement"
                  placeholder="say something in every room" disabled={none}
-                 style={{ flex: 1, minWidth: 0, font: 'inherit', fontSize: 13, height: 38, padding: '0 12px',
+                 style={{ flex: 1, minWidth: 0, font: 'inherit', fontSize: 13, padding: '0 12px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
           <Button variant="primary" icon="megaphone" title="announce in every room"
-                  style={{ height: 38 }}
+                  aria-label="announce in every room"
                   disabled={!msg.trim() || none} onClick={() => { send(); }}>
-            send
+            <span className="broadcast-send-label">send</span>
           </Button>
         </div>
       </Card>
