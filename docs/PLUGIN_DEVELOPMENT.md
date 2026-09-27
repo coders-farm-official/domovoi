@@ -545,7 +545,11 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   script. Your scripts run in the dashboard's origin and inherit its
   credentials — including the household device token — so call the shell's
   `apiGet` / `apiPost` from `data.js` rather than a bare `fetch` and the
-  `X-Device-Token` header rides along for free.
+  `X-Device-Token` header rides along for free. A read your page makes on
+  its own, unasked, can pass `{ quiet: true }` (`apiGet(path, { quiet:
+  true })`, or the same option to `useApiObject` / `useApiList`): refused,
+  it just fails instead of opening the sign-in or pair prompt. The Home
+  page reads that way. Writes ignore it — a press still prompts.
 * `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
   `nav_order` slots among core pages (core publishes its own orders; default
   50); `badge` polls an endpoint and renders `payload[key]` as a count.

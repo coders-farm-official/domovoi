@@ -440,7 +440,16 @@ const _maybeRequestPairing = () => {
 // progress bar, an SSE reply that fills in live). They used to call
 // fetch() directly and got none of this: no prompt, no replay, and a
 // thrown "403 Forbidden" with the reason discarded.
-const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
+//
+// `quiet` is for READS a page makes on its own, unasked — the Home page
+// every browser lands on. A refused quiet GET opens NO prompt: nobody
+// pressed anything, so a sign-in or pair modal would be the page
+// ambushing a guest's phone. The read just fails (the panel renders its
+// empty state) and `loginPrompted` stays false, because nothing was
+// shown. A mutation ignores it: an action someone pressed still gets its
+// prompt and its replay.
+const _sendWithAuthRetry = async (send, { method, body, raw, quiet } = {}) => {
+  const quietRead = !!quiet && !_isMutation(method);
   const refusedToken = _authToken();
   const refusedDeviceToken = _deviceToken();
   let r = await send();
@@ -470,7 +479,7 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
     // Never re-open a modal we have just come back from — that is the
     // loop. And never open one at all for a device block: no credential
     // this dashboard can collect will lift it.
-    if (!promptedHere && !deviceBlock) {
+    if (!promptedHere && !deviceBlock && !quietRead) {
       if (_isDeviceTokenRefusal(r.status, text)) _maybeRequestPairing();
       else _maybeRequestLogin(r.status);
     }
@@ -490,7 +499,7 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
     // re-opened for it, so the caller's error toast is the only thing
     // the operator will see.
     err.loginPrompted = signInDismissed
-      || (!promptedHere && !deviceBlock && _isAuthStatus(r.status));
+      || (!promptedHere && !deviceBlock && !quietRead && _isAuthStatus(r.status));
     err.deviceTokenRequired = _isDeviceTokenRefusal(r.status, text);
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
@@ -502,16 +511,18 @@ const _sendWithAuthRetry = async (send, { method, body, raw } = {}) => {
 
 const apiFetch = (path, opts = {}) => {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+  // `quiet` is this layer's, not fetch's (see _sendWithAuthRetry).
+  const { quiet, ...init } = opts;
   const send = () => fetch(url, {
     credentials: 'include',
-    ...opts,
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       ...apiHeaders(),
-      ...(opts.headers || {}),
+      ...(init.headers || {}),
     },
   });
-  return _sendWithAuthRetry(send, { method: opts.method, body: opts.body });
+  return _sendWithAuthRetry(send, { method: init.method, body: init.body, quiet });
 };
 
 /* apiFetch's raw-Response twin, for the calls that read the body
@@ -648,7 +659,8 @@ const reportMutationFailure = (fire, verb, e, { kept = false } = {}) => {
   return msg;
 };
 
-const apiGet = (path) => apiFetch(path);
+// apiGet(path, { quiet: true }) — a read that never opens a prompt.
+const apiGet = (path, opts) => apiFetch(path, opts && opts.quiet ? { quiet: true } : {});
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
 const apiDelete = (path, body) => apiFetch(path, {
@@ -843,7 +855,8 @@ const useRetryAfterCredential = (refusal, retry) => {
 // One-shot list fetch with refresh. `eventTypes` is a list of WS
 // event types that should trigger a refetch (server doesn't always
 // embed the full new payload, so a refetch is the safest move).
-const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
+// `quiet: true` makes a refused read open no prompt (see apiGet).
+const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false } = {}) => {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
@@ -852,7 +865,7 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
 
   const refresh = React.useCallback(async () => {
     try {
-      const data = await apiGet(path);
+      const data = await apiGet(path, { quiet });
       setItems(pickItems(data) || []);
       setError(null);
       retriedRef.current = false;
@@ -862,7 +875,7 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [path, quiet]);
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
@@ -906,7 +919,8 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x } = {}) => {
 
 // One-shot single-resource fetch (e.g. /api/config). Same shape as
 // useApiList minus the array-ness — `data` instead of `items`.
-const useApiObject = (path, { eventTypes = [] } = {}) => {
+// `quiet: true` makes a refused read open no prompt (see apiGet).
+const useApiObject = (path, { eventTypes = [], quiet = false } = {}) => {
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
@@ -924,7 +938,7 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
       return;
     }
     try {
-      setData(await apiGet(path));
+      setData(await apiGet(path, { quiet }));
       setError(null);
       retriedRef.current = false;
     } catch (e) {
@@ -933,7 +947,7 @@ const useApiObject = (path, { eventTypes = [] } = {}) => {
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [path, quiet]);
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
