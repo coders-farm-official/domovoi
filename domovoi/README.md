@@ -957,6 +957,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |
 | `BOT_NAME` | `Domovoi` | Bot identity (used in responses) |
 | `LOG_LEVEL` | `INFO` | Standard library logging level |
+| `HOME_PROBLEMS_VISIBILITY` | `everyone` | Who sees the dashboard Home page's "needs attention" rows: `everyone` (household members see the ones that explain what they notice, an admin sees all), `summary` (one neutral line) or `admins` (only an admin). Editable live in Settings |
 | `CHAT_MODE_ENABLED` | `false` | Master gate for conversational chat mode. Off → `LettaStubClient`, Letta never contacted |
 | `CHAT_SILENCE_TIMEOUT_SEC` | `30.0` | Auto-exit an open-mic conversation after this much silence |
 | `LETTA_BASE_URL` | `http://localhost:6283` | Self-hosted Letta server (the `letta` compose service) |

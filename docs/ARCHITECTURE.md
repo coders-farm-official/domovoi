@@ -363,8 +363,9 @@ never produces a phantom event.
 
 Core channels map NOTIFY → realtime like `acquisitions_changed →
 acquisitions`, `playlists_changed → playlists`, `library_changed →
-library.indexer`, `wake_words_changed → wake_words`, `plugins_changed` (the
-plugin registry), and more. Enabled plugins add their own pairs via manifest
+library.indexer`, `wake_words_changed → wake_words`, `timers_changed →
+timers` (a timer set, cancelled or fired), `plugins_changed` (the plugin
+registry), and more. Enabled plugins add their own pairs via manifest
 `[[realtime]]` entries — the web process wires them from the manifest JSONB in
 the `plugins` table and **never imports plugin code**.
 

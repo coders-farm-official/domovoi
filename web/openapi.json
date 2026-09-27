@@ -2284,6 +2284,59 @@
         }
       }
     },
+    "/api/devices/{device_id}/shared-screen": {
+      "patch": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Set Shared Screen",
+        "description": "Mark a device as a shared screen, or back to a personal one. Leaves\n``last_seen_at`` alone: this is an admin's action, not the device being\nseen.",
+        "operationId": "set_shared_screen_api_devices__device_id__shared_screen_patch",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceSharedScreen"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices": {
       "get": {
         "tags": [
@@ -4765,6 +4818,63 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/timers": {
+      "get": {
+        "tags": [
+          "timers"
+        ],
+        "summary": "List All Timers",
+        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock ``pop_expired`` fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel.",
+        "operationId": "list_all_timers_api_timers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimerList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/timers/{timer_id}": {
+      "delete": {
+        "tags": [
+          "timers"
+        ],
+        "summary": "Cancel Any Timer",
+        "operationId": "cancel_any_timer_api_timers__timer_id__delete",
+        "parameters": [
+          {
+            "name": "timer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Timer Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -10261,7 +10371,7 @@
     "/api/health": {
       "get": {
         "summary": "Health",
-        "description": "Cheap readiness probe \u2014 DB ping + domovoi ping. Returns\n'degraded' (HTTP 200, not 503) when the Domovoi server is down so\nthe UI can show a partial-degradation banner instead of refusing\nto render.",
+        "description": "Cheap readiness probe \u2014 DB ping + domovoi ping. Returns\n'degraded' (HTTP 200, not 503) when the Domovoi server is down so\nthe UI can show a partial-degradation banner instead of refusing\nto render. ``stt`` passes the core's speech-recognition state through\nfrom the same ping, so a page can say \"the kitchen can't hear you\"\nwithout the costly hardware probe.",
         "operationId": "health_api_health_get",
         "responses": {
           "200": {
@@ -11096,6 +11206,16 @@
           "wake_word_min_clips": {
             "type": "integer",
             "title": "Wake Word Min Clips"
+          },
+          "home_problems_visibility": {
+            "type": "string",
+            "enum": [
+              "everyone",
+              "summary",
+              "admins"
+            ],
+            "title": "Home Problems Visibility",
+            "default": "everyone"
           }
         },
         "type": "object",
@@ -11377,6 +11497,11 @@
           },
           "last_seen_at": {
             "title": "Last Seen At"
+          },
+          "shared_screen": {
+            "type": "boolean",
+            "title": "Shared Screen",
+            "default": false
           }
         },
         "type": "object",
@@ -11451,6 +11576,19 @@
           "name"
         ],
         "title": "DeviceRename"
+      },
+      "DeviceSharedScreen": {
+        "properties": {
+          "shared_screen": {
+            "type": "boolean",
+            "title": "Shared Screen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shared_screen"
+        ],
+        "title": "DeviceSharedScreen"
       },
       "DeviceTokenRequest": {
         "properties": {
@@ -11973,6 +12111,17 @@
           "domovoi_reachable": {
             "type": "boolean",
             "title": "Domovoi Reachable"
+          },
+          "stt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stt"
           }
         },
         "type": "object",
@@ -14520,6 +14669,18 @@
             "format": "date-time",
             "title": "Expires At"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
           "label": {
             "anyOf": [
               {
@@ -14565,6 +14726,29 @@
           "expires_at"
         ],
         "title": "Timer"
+      },
+      "TimerList": {
+        "properties": {
+          "server_now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Now"
+          },
+          "timers": {
+            "items": {
+              "$ref": "#/components/schemas/Timer"
+            },
+            "type": "array",
+            "title": "Timers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_now",
+          "timers"
+        ],
+        "title": "TimerList",
+        "description": "Every timer and reminder in the house, soonest first.\n\n``server_now`` is the database clock at the moment of the read \u2014 the\nclock that decides when a timer fires \u2014 so a page counts down against\nthe server rather than a phone whose clock is minutes off."
       },
       "Track": {
         "properties": {
