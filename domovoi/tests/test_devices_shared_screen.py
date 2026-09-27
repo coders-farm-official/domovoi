@@ -68,6 +68,28 @@ def test_v014_adds_the_column_off_by_default() -> None:
     ), sql
 
 
+def test_the_docs_say_how_thin_the_mask_is() -> None:
+    """The flag is presentational, and the docs must not oversell it: what
+    Home hides is an open read, an unpaired browser (a private window on the
+    tablet) is never masked, and the flag belongs to a self-asserted id the
+    browser keeps in its own storage — clearing that un-marks the tablet."""
+    (v14,) = MIGRATIONS.glob("V014__*.sql")
+    v14_text = " ".join(v14.read_text(encoding="utf-8").split())
+    assert "survives the browser's storage being cleared" not in v14_text
+    assert "SELF-ASSERTED" in v14_text and "private window" in v14_text
+    security = (REPO_ROOT / "docs" / "SECURITY_PRIVACY.md").read_text(encoding="utf-8")
+    row = next(line for line in security.splitlines() if line.startswith("| **Shared screens**"))
+    for phrase in ("open read", "private window on the tablet itself", "self-asserted device id",
+                   "Clearing the tablet's site data"):
+        assert phrase in row, phrase
+    assert "renders several of them to an unpaired browser" in security
+    api = (REPO_ROOT / "docs" / "API_REFERENCE.md").read_text(encoding="utf-8")
+    patch = next(line for line in api.splitlines() if line.startswith("| `PATCH /api/devices/{device_id}/shared-screen`"))
+    assert "readable with no credential at all" in patch and "self-asserted device id" in patch
+    module = " ".join((devices_api.__doc__ or "").split())
+    assert "NO credential" in module and "SELF-ASSERTED" in module
+
+
 def _gates(method: str, path: str) -> set:
     for rc in iter_route_contexts(web_app.routes):
         if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or ()):

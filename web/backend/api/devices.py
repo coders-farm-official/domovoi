@@ -25,11 +25,23 @@ who's on the network.
 
 **Shared screens.** An admin can mark a device as a shared screen (the
 kitchen tablet): ``PATCH /{device_id}/shared-screen`` at ADMIN tier, NOT the
-device tier the rename takes, so a device cannot un-share itself. Every
-device answer carries ``shared_screen``, the device's own registration
-included, which is how the dashboard's Home page knows to leave personal
-content off. Presentational, not a boundary: the tablet still holds the
-household token (V014 says the same).
+device tier the rename takes, so a device cannot un-share itself through
+this route. Every device answer carries ``shared_screen``, the device's own
+registration included, which is how the dashboard knows to leave personal
+content off Home and off its launchers. Presentational, and thin:
+
+* what Home hides on a shared screen (calendar titles and locations, a
+  reminder's text, problem rows) is readable with NO credential at all,
+  and Home never masks a browser that can't register, a private window on
+  the tablet itself included;
+* the flag hangs off the SELF-ASSERTED device id above, kept in the
+  browser's own storage: clearing it, or registering under a fresh id,
+  gives an unmarked device — ``register`` upserts any valid id and never
+  touches the flag;
+* the tablet holds the household token, so it can read any device-tier
+  page too.
+
+Enforcement would take a restricted display pairing of its own (V014).
 """
 
 from __future__ import annotations

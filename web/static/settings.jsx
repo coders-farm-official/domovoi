@@ -1711,7 +1711,7 @@ const QueueAccessCard = ({ fire, deviceList }) => {
       </Card>
 
       <Card title={`Known devices (${devices.length})`}
-            sub="Browsers and phones that have introduced themselves, most recent first. Mark a tablet the whole house uses as a shared screen and Home leaves personal content off it.">
+            sub="Browsers and phones that have introduced themselves, most recent first. Mark a tablet the whole house uses as a shared screen and Home and the page list leave personal content off it: a courtesy for the kitchen, not a lock (the same things are readable without a credential).">
         {devicesLoading && devices.length === 0 ? (
           <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
         ) : devices.length === 0 ? (

@@ -11,16 +11,22 @@
 -- ── Why a column, set by an admin ──────────────────────────────────────
 --
 -- Owner decision 2026-09-26 (HOME-PLAN.md, "way 2"): the flag lives on
--- the device's own row, so it survives the browser's storage being
--- cleared, and only an admin can change it — the dashboard's rename is
--- device tier, but this is not, so a device cannot un-share itself.
+-- the device's row, server-side, and only an admin can change it — the
+-- dashboard's rename is device tier, but this is not, so a device cannot
+-- un-share itself through that route. The row is keyed by the client's
+-- SELF-ASSERTED id, which a browser keeps in its own storage: clear that
+-- storage, or register under a fresh id, and it is a new, unmarked device
+-- until an admin marks it again.
 --
 -- ── What this is NOT ───────────────────────────────────────────────────
 --
--- PRESENTATIONAL, not a security boundary. A shared tablet is paired: it
--- holds the household token, so anyone at it with a bit of know-how can
--- read whatever a paired phone can. Real enforcement would be a restricted
--- "display" pairing of its own (way 3), which this is not.
+-- PRESENTATIONAL, not a security boundary, and a thin one. What Home
+-- hides on a shared screen (calendar titles and locations, a reminder's
+-- text, problem rows) is readable with no credential at all, and an
+-- unpaired browser — a private window on the tablet itself — is never
+-- masked. A shared tablet is also paired: it holds the household token,
+-- so it can read whatever a paired phone can. Real enforcement would be
+-- a restricted "display" pairing of its own (way 3), which this is not.
 --
 -- NOT NULL DEFAULT FALSE: every existing row, and every device that
 -- registers from now on, is an ordinary personal device until an admin
