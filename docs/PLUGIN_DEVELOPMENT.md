@@ -549,7 +549,10 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   its own, unasked, can pass `{ quiet: true }` (`apiGet(path, { quiet:
   true })`, or the same option to `useApiObject` / `useApiList`): refused,
   it just fails instead of opening the sign-in or pair prompt. The Home
-  page reads that way. Writes ignore it — a press still prompts.
+  page reads that way. Writes ignore it — a press still prompts. A write
+  nobody pressed (a background sync of your own) can pass `noPrompt: true`
+  to `apiFetch` for the same promise; the dashboard's own device
+  registration is sent that way.
 * `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
   `nav_order` slots among core pages (core publishes its own orders; default
   50); `badge` polls an endpoint and renders `payload[key]` as a count.
