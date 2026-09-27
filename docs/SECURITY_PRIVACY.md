@@ -279,7 +279,9 @@ the free-text note on the row), a person's or a room's session list (times,
 rooms and turn counts), voice-profile enrolment metadata (never an
 embedding), timers and reminders (a reminder's message is text somebody
 set — per room, and for the whole house at once in `GET /api/timers`, the
-list the dashboard's Home page counts down; cancelling one is device tier),
+list the dashboard's Home page counts down, which leaves out the words of a
+reminder set with no room unless the caller holds a household credential;
+cancelling one is device tier),
 the calendar, a person's followed news topics and the stories
 fetched for them, the wake-word clip list (names and quality numbers, no
 audio), the voice denylist and the media request queue. Each is pinned in

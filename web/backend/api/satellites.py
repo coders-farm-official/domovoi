@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from domovoi.admin_auth import (
+    check_device_request,
     require_admin_mutation,
     require_admin_read,
     require_admin_security,
@@ -587,15 +588,32 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
         )
 
 
+# What a caller must pass (check_device_request) to read the TEXT of a
+# reminder set with no room: the household token, an admin Bearer or
+# cookie session, or the pre-setup grace — what the timers push itself
+# goes to.
+_READS_ROOMLESS_REMINDER_TEXT = ("ok", "admin", "pre-setup", "cookie-only")
+
+
 @timers_router.get("", response_model=TimerList)
-async def list_all_timers() -> TimerList:
+async def list_all_timers(request: Request) -> TimerList:
     """Every running timer and reminder in the house, soonest first —
     rows with no room included — plus the database clock.
 
     Open, like the per-room read above: household state. The dashboard's
     Home page counts these down, so the answer carries ``server_now`` (the
     clock ``pop_expired`` fires against) and each row its ``created_at``.
-    Changes push on the ``timers`` realtime channel."""
+    Changes push on the ``timers`` realtime channel.
+
+    One thing is held back from a caller with no household credential: the
+    words of a reminder set with NO room. Those come from a device-tier
+    voice turn with no room (the app, the dashboard's chat), and no open
+    route listed them before this one; the per-room read has always
+    answered a room's reminders to the LAN, so those stay as they were.
+    Such a row still counts down, ``is_reminder`` true, with ``message``
+    and ``label`` null (a reminder's label is its message). The caller is
+    classified only when such a row exists, so the read charges no token
+    backoff the rest of the time."""
     async with session_scope() as s:
         server_now = (await s.execute(text("SELECT now()"))).scalar_one()
         rows = await s.execute(
@@ -607,9 +625,15 @@ async def list_all_timers() -> TimerList:
                 """
             )
         )
-        return TimerList(
-            server_now=server_now, timers=[_timer_from_row(r) for r in rows.all()]
-        )
+        timers = [_timer_from_row(r) for r in rows.all()]
+    if any(t.room_id is None and t.is_reminder for t in timers):
+        if await check_device_request(request) not in _READS_ROOMLESS_REMINDER_TEXT:
+            timers = [
+                t.model_copy(update={"message": None, "label": None})
+                if t.room_id is None and t.is_reminder else t
+                for t in timers
+            ]
+    return TimerList(server_now=server_now, timers=timers)
 
 
 @timers_router.delete(

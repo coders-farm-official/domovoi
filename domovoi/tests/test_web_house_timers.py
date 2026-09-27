@@ -8,7 +8,9 @@ section 3):
   each with ``created_at``, plus ``server_now``: the database clock that
   decides when a timer fires, so a phone with a skewed clock still counts
   down right. OPEN, like ``GET /api/satellites/{room}/timers``: household
-  state.
+  state. Except the words of a reminder set with NO room, which no open
+  route listed before: without a household credential that row reads
+  ``is_reminder`` true with ``message`` and ``label`` null.
 * ``DELETE /api/timers/{id}`` — cancel any timer, room or no room. Device
   tier, like the per-room cancel.
 * a ``timers_changed`` NOTIFY, commit-coupled (it rides the writer's own
@@ -188,8 +190,11 @@ async def test_the_house_list_is_every_timer_soonest_first(_db, db_session) -> N
     body = r.json()
     assert [t["id"] for t in body["timers"]] == [ids["mum"], ids["pasta"], ids["office"]]
     mum, pasta, office = body["timers"]
-    # The room-less reminder no per-room route can list.
-    assert mum["room_id"] is None and mum["is_reminder"] is True and mum["message"] == "call mum"
+    # The room-less reminder no per-room route can list: it counts down for
+    # anyone, but its words (the label is the message too) need the
+    # household token.
+    assert mum["room_id"] is None and mum["is_reminder"] is True
+    assert mum["message"] is None and mum["label"] is None
     assert pasta["room_id"] == "kitchen" and pasta["label"] == "pasta" and not pasta["is_reminder"]
     assert office["label"] is None and office["room_id"] == "office"
     # created_at + expires_at give the full length: the pasta timer is 15 min.
@@ -199,6 +204,47 @@ async def test_the_house_list_is_every_timer_soonest_first(_db, db_session) -> N
     assert all(t["created_at"] for t in body["timers"])
     server_now = datetime.fromisoformat(body["server_now"].replace("Z", "+00:00"))
     assert abs(server_now - datetime.now(timezone.utc)) < timedelta(seconds=30)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_roomless_reminders_words_need_a_household_credential(_db, db_session) -> None:
+    async with web_client() as c:
+        await claim_admin(c)
+    token = await db_device_token()
+    ids = await _seed()
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        ids["bins"] = await TimerRepository(s).create(
+            expires_at=utcnow() + timedelta(minutes=30), label="bins out",
+            message="bins out", room_id="kitchen",
+        )
+
+    def by_id(body: dict) -> dict[int, dict]:
+        return {t["id"]: t for t in body["timers"]}
+
+    async with web_client() as anon:
+        seen = by_id((await anon.get("/api/timers")).json())
+        stale = by_id((await anon.get("/api/timers", headers={HEADER: "not-the-token"})).json())
+    async with _paired(token) as paired:
+        told = by_id((await paired.get("/api/timers")).json())
+    assert seen[ids["mum"]]["message"] is None and seen[ids["mum"]]["label"] is None
+    assert stale[ids["mum"]]["message"] is None
+    assert told[ids["mum"]]["message"] == "call mum" and told[ids["mum"]]["label"] == "call mum"
+    # A room's reminder reads as it always has on the per-room route.
+    assert seen[ids["bins"]]["message"] == "bins out"
+    assert seen[ids["pasta"]]["label"] == "pasta"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_fresh_install_reads_every_reminder(_db, db_session) -> None:
+    """Pre-setup LAN grace: nobody holds a credential yet."""
+    ids = await _seed()
+    async with web_client() as c:
+        rows = {t["id"]: t for t in (await c.get("/api/timers")).json()["timers"]}
+    assert rows[ids["mum"]]["message"] == "call mum"
 
 
 @requires_db

@@ -4838,7 +4838,7 @@
           "timers"
         ],
         "summary": "List All Timers",
-        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock ``pop_expired`` fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel.",
+        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock ``pop_expired`` fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel.\n\nOne thing is held back from a caller with no household credential: the\nwords of a reminder set with NO room. Those come from a device-tier\nvoice turn with no room (the app, the dashboard's chat), and no open\nroute listed them before this one; the per-room read has always\nanswered a room's reminders to the LAN, so those stay as they were.\nSuch a row still counts down, ``is_reminder`` true, with ``message``\nand ``label`` null (a reminder's label is its message). The caller is\nclassified only when such a row exists, so the read charges no token\nbackoff the rest of the time.",
         "operationId": "list_all_timers_api_timers_get",
         "responses": {
           "200": {
