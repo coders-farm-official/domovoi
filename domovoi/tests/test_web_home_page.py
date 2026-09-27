@@ -103,6 +103,7 @@ WebSocket = function (url, protocols) { this.l = {}; window.__sockets.push(this)
 WebSocket.prototype.addEventListener = function (t, fn) { (this.l[t] = this.l[t] || []).push(fn); };
 WebSocket.prototype.send = function () {};
 window.__wsOpen = () => window.__sockets.forEach((s) => (s.l.open || []).forEach((f) => f()));
+window.__wsClose = () => window.__sockets.forEach((s) => (s.l.close || []).forEach((f) => f()));
 window.__wsEmit = (msg) => window.__sockets.forEach(
   (s) => (s.l.message || []).forEach((f) => f({ data: JSON.stringify(msg) })));
 window.__fetches = [];
@@ -159,7 +160,9 @@ window.__snap = (h) => {
       title: e.props.title || null, text: w.__deepText(e), disabled: !!e.props.disabled })),
     tiles: byCls('home-tile').map((e) => ({ href: e.props.href, text: w.__deepText(e) })),
     links: h.findAll({ type: 'a' }).map((e) => e.props.href),
-    timers: byCls('home-timer').map((e) => ({ id: e.props['data-timer'], text: w.__deepText(e) })),
+    timers: byCls('home-timer').map((e) => ({ id: e.props['data-timer'], text: w.__deepText(e),
+      extra: w.__cls(e).includes('home-phone-extra') })),
+    line: byCls('home-status-line').map((e) => w.__deepText(e)).join(''),
     soon: byCls('soon').map((e) => w.__deepText(e)),
     bars: byCls('home-bar').map((e) => {
       const inner = [].concat(e.props.children || [])[0];
@@ -505,6 +508,109 @@ SCENARIOS["phone_launcher_given_badges"] = scenario(
 SCENARIOS["desktop_no_launcher"] = scenario(
     house(**{"GET /api/plugins/radio/badge": {"live": 3}}),
     SNAP, ls=PAIRED_LS, phone=False, manifest=_RADIO,
+)
+
+# Fewer fan-outs ---------------------------------------------------------------
+_N = "const n = (p) => w.__fetches.filter((f) => f.path.split('?')[0] === p).length;"
+_COUNTS = "({ sats: n('/api/satellites'), timers: n('/api/timers') })"
+# The socket's first open lands a moment after the mount reads: no second
+# /api/satellites (an MPD connection per room). A real gap does re-read.
+SCENARIOS["first_connect"] = scenario(
+    house(),
+    _N + f"const before = {_COUNTS};"
+    f"w.__wsOpen(); await w.__flush(h); const first = {_COUNTS};"
+    f"w.__wsClose(); await w.__flush(h); w.__setNow({NOW + 60_000}); w.__wsOpen(); await w.__flush(h);"
+    f"return {{ before, first, back: {_COUNTS} }};",
+    ls=PAIRED_LS,
+)
+# A push while the tab is hidden re-reads nothing until the tab is back;
+# a Wi-Fi report is merged in and never re-read.
+SCENARIOS["hidden_push"] = scenario(
+    house(**{"GET /api/satellites": [room("kitchen", state="play"), room("den")]}),
+    _N + "w.__wsOpen(); await w.__flush(h); const start = n('/api/satellites');"
+    "const doc = h.global('document'); doc.hidden = true;"
+    "w.__wsEmit({ type: 'satellites.presence.changed', data: [] });"
+    "await new Promise((r) => setTimeout(r, 450)); await w.__flush(h);"
+    "const whileHidden = n('/api/satellites') - start;"
+    f"doc.hidden = false; w.__setNow({NOW + 20_000}); w.__fire('focus');"
+    "await new Promise((r) => setTimeout(r, 450)); await w.__flush(h);"
+    "const onReturn = n('/api/satellites') - start;"
+    "w.__wsEmit({ type: 'satellites.wifi.changed', data: { den: { rx_mbits: 2.5, tx_mbits: 1.0,"
+    " ssid: 'SECRETNET' } } });"
+    "await new Promise((r) => setTimeout(r, 450)); await w.__flush(h);"
+    "return { whileHidden, onReturn, afterWifi: n('/api/satellites') - start, snap: w.__snap(h) };",
+    ls=PAIRED_LS,
+)
+# The admin probes survive Home re-mounting (a phone passes through it on
+# the way to every other page); the cheap reads are simply made again.
+_REMOUNT = ("(window.__Auth = Auth, (() => { const W = () => {"
+            " const [on, set] = React.useState(true); window.__toggle = () => set((x) => !x);"
+            " return on ? React.createElement(HomePage, { counts: {} }) : null; }; return W; })())")
+SCENARIOS["remount"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN}),
+    _N + "w.__toggle(); await w.__flush(h); w.__toggle(); await w.__flush(h);"
+    "return { hardware: n('/api/models/hardware'), version: n('/api/config/version'),"
+    " approvals: n('/api/satellites/approvals'), health: n('/api/health'), snap: w.__snap(h) };",
+    ls=PAIRED_LS, component=_REMOUNT,
+)
+SCENARIOS["remount_after_ttl"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN}),
+    _N + f"w.__toggle(); await w.__flush(h); w.__setNow({NOW + 6 * 60_000}); w.__toggle(); await w.__flush(h);"
+    "return { hardware: n('/api/models/hardware'), version: n('/api/config/version') };",
+    ls=PAIRED_LS, component=_REMOUNT,
+)
+
+# Honest when things are down ----------------------------------------------------
+SCENARIOS["core_down_frozen"] = scenario(
+    house(**{"GET /api/health": {"status": "degraded", "db_reachable": True,
+                                 "domovoi_reachable": False, "stt": None}}),
+    f"const t0 = w.__snap(h); w.__setNow({NOW + 60_000}); h.rerender();"
+    "return { t0, t60: w.__snap(h) };",
+    ls=PAIRED_LS,
+)
+SCENARIOS["sats_fail"] = scenario(
+    house(**{"GET /api/satellites": {"__status": 500, "__body": {"detail": "boom"}}}),
+    SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["db_down_rooms"] = scenario(
+    house(**{"GET /api/health": {"status": "degraded", "db_reachable": False,
+                                 "domovoi_reachable": True, "stt": "ok"},
+             "GET /api/satellites": {"__status": 503, "__body": {"detail": "db"}}}),
+    SNAP, ls=PAIRED_LS,
+)
+# An admin with a problem row AND a check that failed: both are said.
+SCENARIOS["admin_rows_and_failed"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN,
+             "GET /api/models/hardware": {"__status": 502, "__body": {"detail": "core down"}}}),
+    SNAP, ls=PAIRED_LS,
+)
+# The admin's in-memory sign-in is stale: the quiet admin reads 401.
+SCENARIOS["admin_refused"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN,
+             "GET /api/models/hardware": {"__status": 401, "__body": {"detail": "admin session required"}},
+             "GET /api/config/version": {"__status": 401, "__body": {"detail": "admin session required"}}}),
+    "const before = w.__snap(h);"
+    "await h.click({ type: 'button', text: 'sign in again' });"
+    "return { before, modal: w.__Auth.modalOpen };",
+    ls=PAIRED_LS,
+)
+
+# One press, one request ----------------------------------------------------------
+SCENARIOS["cancel_double_tap"] = scenario(
+    house(**{"DELETE /api/timers/5": {"__hang": True}}),
+    "await h.click({ type: 'button', title: 'cancel pasta timer' });"
+    "await h.click({ type: 'button', title: 'cancel pasta timer' });"
+    "return { deletes: w.__fetches.filter((f) => f.method === 'DELETE').length, snap: w.__snap(h) };",
+    ls=PAIRED_LS,
+)
+SCENARIOS["stop_all_busy"] = scenario(
+    house(**{"GET /api/satellites": [room("kitchen", state="play"), room("office", state="play")],
+             "POST /api/music/stop/kitchen": {"__hang": True},
+             "POST /api/music/stop/office": {"__hang": True}}),
+    "await h.click({ type: 'button', text: 'stop all' });"
+    "await h.click({ type: 'button', text: 'stop 2 rooms?' }); await w.__flush(h);"
+    "return w.__snap(h);",
+    ls=PAIRED_LS,
 )
 
 # The attention rules on their own ---------------------------------------------
@@ -1041,6 +1147,88 @@ def test_the_desktop_mounts_no_launcher_and_polls_no_badge(driven) -> None:
     assert "height: 44px; min-width: 44px" in phone
 
 
+# ─── fewer fan-outs ──────────────────────────────────────────────────────
+
+
+def test_the_first_socket_open_rereads_nothing_but_a_real_reconnect_does(driven) -> None:
+    out = driven["first_connect"]
+    assert out["before"] == {"sats": 1, "timers": 1}
+    assert out["first"] == {"sats": 1, "timers": 1}
+    assert out["back"] == {"sats": 2, "timers": 2}
+
+
+def test_a_hidden_tab_defers_room_rereads_and_wifi_is_merged(driven) -> None:
+    out = driven["hidden_push"]
+    assert out["whileHidden"] == 0
+    assert out["onReturn"] == 1                      # once, when the tab is back
+    assert out["afterWifi"] == 1                     # a Wi-Fi report re-reads nothing
+    den = _room(out["snap"], "den")
+    assert "weak wi-fi" in den["text"]
+    assert "SECRETNET" not in out["snap"]["blob"]
+
+
+def test_the_costly_admin_reads_survive_a_remount(driven) -> None:
+    out = driven["remount"]
+    assert out["hardware"] == 1 and out["version"] == 1 and out["approvals"] == 1
+    assert out["health"] == 2                        # the cheap reads are simply made again
+    assert "home disk" not in out["snap"]["blob"]    # 40%: and the cached answer is used
+    later = driven["remount_after_ttl"]
+    assert later["hardware"] == 2                    # past its 5-minute poll: asked again
+    assert later["version"] == 1                     # the 10-minute one is still fresh
+
+
+# ─── honest when things are down ─────────────────────────────────────────
+
+
+def test_a_down_core_says_the_counts_are_last_known_and_freezes_progress(driven) -> None:
+    out = driven["core_down_frozen"]
+    line = out["t0"]["line"]
+    assert "last known" in line and line.index("last known") < line.index("1 online")
+    assert "playing" not in line and "1 timer" in line
+    assert "0:30 / 3:58" in _room(out["t0"], "kitchen")["text"]
+    assert "0:30 / 3:58" in _room(out["t60"], "kitchen")["text"]     # not extrapolated
+    assert "the Domovoi server isn't answering" in out["t0"]["blob"]
+
+
+def test_timer_counts_survive_a_failed_rooms_read(driven) -> None:
+    snap = driven["sats_fail"]
+    assert "1 timer" in snap["line"]
+    assert "couldn't load rooms" in snap["quiet"]
+    assert "rooms unavailable · the database isn't answering" in driven["db_down_rooms"]["quiet"]
+
+
+def test_an_admin_sees_a_failed_check_beside_the_problem_rows(driven) -> None:
+    snap = driven["admin_rows_and_failed"]
+    assert [r["key"] for r in snap["attention"]] == ["offline"]
+    assert "couldn't check disk" in snap["quiet"]
+    out = driven["admin_refused"]
+    assert "couldn't check updates, disk · sign in again" in out["before"]["quiet"]
+    assert out["modal"] is True
+
+
+# ─── one press, one request ──────────────────────────────────────────────
+
+
+def test_a_double_tapped_cancel_sends_one_delete(driven) -> None:
+    out = driven["cancel_double_tap"]
+    assert out["deletes"] == 1
+    (btn,) = [b for b in out["snap"]["buttons"] if b["title"] == "cancel pasta timer"]
+    assert btn == {"title": "cancel pasta timer", "text": "cancelling…", "disabled": True}
+
+
+def test_stop_all_holds_every_room_until_the_batch_settles(driven) -> None:
+    buttons = {b["title"] or b["text"]: b for b in driven["stop_all_busy"]["buttons"]}
+    assert buttons["stopping…"]["disabled"] is True
+    for t in ("pause kitchen", "stop kitchen", "pause office", "stop office"):
+        assert buttons[t]["disabled"] is True, t
+
+
+def test_a_phone_shows_two_timers_and_a_way_to_the_rest(driven) -> None:
+    t0 = driven["timer_countdown"]["t0"]
+    assert [t["extra"] for t in t0["timers"]] == [False, False, True]
+    assert any(b["text"] == "+1 more" for b in t0["buttons"])
+
+
 # ─── the attention rules ─────────────────────────────────────────────────
 
 
@@ -1181,6 +1369,9 @@ def test_home_borrows_helpers_through_window_not_copies() -> None:
 def test_every_home_read_is_quiet() -> None:
     home = (STATIC / "home.jsx").read_text(encoding="utf-8")
     calls = re.findall(r"useApiObject\(([^;]*?)\);", home, re.S)
-    assert len(calls) >= 12
+    cached = re.findall(r"useCachedObject\(([^;]*?)\);", home, re.S)
+    assert len(calls) + len(cached) >= 12 and len(cached) == 4
     for call in calls:
         assert "HOME_QUIET" in call or "quiet: true" in call, call
+    # The cached reads go through one apiGet, quiet too; nothing else fetches.
+    assert re.findall(r"\bapiGet\(([^)]*)\)", home) == ["path, HOME_QUIET"]

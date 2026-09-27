@@ -811,6 +811,13 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
   box-shadow: var(--inner-highlight); cursor: pointer;
 }
 .home-live:hover { color: var(--fg); }
+/* The phone's live dot, at the right end of the count line: a 44px target
+   that doesn't make the line any taller. */
+.home-live-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; margin: -12px -12px -12px auto; padding: 0;
+  border: none; background: none; cursor: pointer;
+}
 .home-link {
   font: inherit; font-size: 12px; padding: 0; border: none; background: none;
   color: var(--brand-press); text-decoration: none; cursor: pointer; text-align: left;

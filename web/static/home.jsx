@@ -53,6 +53,9 @@ const HOME_STOP_ALL_ARM_MS = 4000;
 const HOME_DISK_WARN = 90;
 const HOME_DISK_ERR = 95;
 const HOME_PHONE_ROWS = 3;                 // attention rows and today rows a phone shows
+const HOME_PHONE_TIMERS = 2;               // ...and timers, so the rooms start above the fold
+const HOME_FRESH_MS = 5 * 1000;            // a read this young needs no re-read on (re)connect
+const HOME_MANUAL_MS = 30 * 60 * 1000;     // the manual's example phrases hardly change
 const HOME_TODAY_ROWS = 6;                 // ...and a desktop
 const HOME_SOON_SEC = 600;                 // countdowns turn warn under 10 min
 const HOME_ROOM_EVENTS = [
@@ -68,6 +71,13 @@ const HOME_HINT_FALLBACK = 'set a timer for 10 minutes';
 /* Pages the "everything" grid lists besides the nav items: Settings has
  * no nav row (the topbar gear opens it) and the manual is reached from
  * Settings → About, so a phone would otherwise have no way to either. */
+/* Answers that outlive one mount of the page, for the reads whose cost is
+ * the point (useCachedObject below). On a phone Home is also the "more"
+ * menu, so it mounts every time someone passes through it on the way to
+ * Podcasts or Settings; the hardware probe alone runs nvidia-smi and a CPU
+ * sample on the core. path → { at, data }. */
+const HOME_CACHE = new Map();
+
 const HOME_EXTRA_TILES = [
   { route: 'settings', icon: 'settings', label: 'Settings', core: true },
   { route: 'manual', icon: 'book', label: 'User Manual', core: true },
@@ -230,6 +240,41 @@ const HomeHooks = (() => {
     useInterval(() => setN((n) => n + 1), 1000, active);
   };
 
+  /* useApiObject's shape ({data, error, loading, refresh}) for a read an
+   * answer younger than `ttl` can stand in for: reused from HOME_CACHE on
+   * mount instead of asked for again. refresh() always asks. Quiet, like
+   * every read on this page. */
+  const useCachedObject = (path, ttl) => {
+    const fresh = () => {
+      const hit = path ? HOME_CACHE.get(path) : null;
+      return hit && Date.now() - hit.at < ttl ? hit : null;
+    };
+    const [state, setState] = React.useState(() => {
+      const hit = fresh();
+      return hit ? { data: hit.data, error: null, loading: false }
+        : { data: null, error: null, loading: !!path };
+    });
+    const alive = React.useRef(true);
+    React.useEffect(() => () => { alive.current = false; }, []);
+    const load = React.useCallback(async () => {
+      if (!path) { setState({ data: null, error: null, loading: false }); return; }
+      try {
+        const data = await apiGet(path, HOME_QUIET);
+        HOME_CACHE.set(path, { at: Date.now(), data });
+        if (alive.current) setState({ data, error: null, loading: false });
+      } catch (error) {
+        // Like useApiObject: a failed re-read keeps what was last known.
+        if (alive.current) setState((st) => ({ data: st.data, error, loading: false }));
+      }
+    }, [path]);
+    React.useEffect(() => {
+      const hit = fresh();
+      if (hit) setState({ data: hit.data, error: null, loading: false });
+      else load();
+    }, [load]);
+    return { ...state, refresh: load };
+  };
+
   // true on a phone, false on a desktop, null when the browser can't say
   // (the CSS then decides alone).
   const useIsPhone = () => {
@@ -292,7 +337,8 @@ const HomeHooks = (() => {
     return { active, done: doneList, now };
   };
 
-  return { useViewer, useLive, useInterval, useOnFocus, useDebounced, useTick, useIsPhone, useTimers };
+  return { useViewer, useLive, useInterval, useOnFocus, useDebounced, useTick, useIsPhone, useTimers,
+           useCachedObject, tabHidden };
 })();
 
 /* ---- needs attention: the rules ----------------------------------- */
@@ -321,7 +367,7 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   }
   if (coreDown) {
     add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites',
-          text: "the domovoi server isn't answering · rooms show the last known state" });
+          text: "the Domovoi server isn't answering · rooms show the last known state" });
   }
 
   if (!dbDown && !coreDown) {
@@ -480,6 +526,13 @@ const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
                 <React.Fragment key={i}><span className="sep">·</span><span>{part}</span></React.Fragment>
               ))
             : <span className="home-skel" aria-hidden="true"/>}
+          {/* On a phone the live dot ends the count line (the plan's place
+              for it) instead of taking a row of its own above the fold. */}
+          <button type="button" className="home-live-dot home-phone-only" title={why}
+                  aria-label={live ? 'live' : 'not live'} aria-expanded={explain}
+                  onClick={() => setExplain((x) => !x)}>
+            <StatusDot tone={live ? 'brand' : 'idle'} live={live}/>
+          </button>
         </div>
         {unpaired && (
           <button type="button" className="home-link" onClick={() => { onPair(); }}>
@@ -488,7 +541,7 @@ const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
         )}
         {explain && <div className="home-explain">{why}</div>}
       </div>
-      <div className="actions">
+      <div className="actions home-desktop-only">
         <button type="button" className="home-live" title={why} aria-expanded={explain}
                 onClick={() => setExplain((x) => !x)}>
           <StatusDot tone={live ? 'brand' : 'idle'} live={live}/>
@@ -501,8 +554,16 @@ const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
 
 /* ---- needs attention ----------------------------------------------- */
 
-const HomeAttention = ({ view, viewer, shared, checking, failed, checkedAt, onClaim, onSignIn }) => {
+const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checkedAt, onClaim, onSignIn }) => {
   const [expanded, setExpanded] = React.useState(false);
+  // An admin read refused (401/403): the in-memory sign-in is gone or
+  // stale, and every admin check behind it is failing quietly.
+  const signInAgain = refused && (
+    <> · <button type="button" className="home-link" onClick={() => { onSignIn(); }}>sign in again</button></>
+  );
+  const couldnt = failed.length > 0 && (
+    <div className="home-att-quiet">couldn't check {failed.join(', ')}{signInAgain}</div>
+  );
   const signInHint = !viewer.isAdmin && !shared && viewer.known && (
     <div className="home-att-foot home-desktop-only">
       <button type="button" className="home-link" onClick={() => { onSignIn(); }}>
@@ -533,13 +594,19 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, checkedAt, onCl
     // it. Only an admin gets the explicit all-clear — and never a false
     // one: "checking…" until every source has answered once.
     if (!viewer.isAdmin || shared) return null;
-    let quiet;
-    if (checking) quiet = 'checking…';
-    else if (failed.length) quiet = `couldn't check ${failed.join(', ')}`;
-    else quiet = `nothing needs you · checked ${relTime(new Date(checkedAt || Date.now()).toISOString())}`;
+    let quiet = null;
+    if (checking) quiet = <div className="home-att-quiet">checking…</div>;
+    else if (failed.length) quiet = couldnt;
+    else {
+      quiet = (
+        <div className="home-att-quiet">
+          nothing needs you · checked {relTime(new Date(checkedAt || Date.now()).toISOString())}
+        </div>
+      );
+    }
     return (
       <div className="home-sec home-sec-attention">
-        <Card title="needs attention"><div className="home-att-quiet">{quiet}</div></Card>
+        <Card title="needs attention">{quiet}</Card>
       </div>
     );
   }
@@ -576,6 +643,9 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, checkedAt, onCl
           </div>
         )}
         {checking && <div className="home-att-quiet">checking…</div>}
+        {/* A problem row must not hide that a check behind it failed: a
+            disk filling up says nothing while the hardware read is down. */}
+        {!checking && viewer.isAdmin && !shared && couldnt}
         {signInHint}
       </Card>
     </div>
@@ -584,7 +654,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, checkedAt, onCl
 
 /* ---- timers -------------------------------------------------------- */
 
-const HomeTimerRow = ({ t, now, shared, roomOnline, onCancel }) => {
+const HomeTimerRow = ({ t, now, shared, roomOnline, busy, extra, onCancel }) => {
   const at = Date.parse(t.expires_at);
   const created = Date.parse(t.created_at);
   const left = Math.max(0, Math.round((at - now) / 1000));
@@ -592,27 +662,36 @@ const HomeTimerRow = ({ t, now, shared, roomOnline, onCancel }) => {
   const pct = span > 0 ? Math.min(100, Math.max(0, ((now - created) / span) * 100)) : 0;
   const title = HomeTimerTitle(t, shared);
   return (
-    <div className="home-timer" data-timer={t.id}>
+    <div className={`home-timer${extra ? ' home-phone-extra' : ''}`} data-timer={t.id}>
       <div className="home-timer-main">
         {t.room_id ? <RoomChip name={t.room_id} online={roomOnline}/> : <span className="room-chip">no room</span>}
         <span className="home-timer-title">{title}</span>
       </div>
       <span className={`home-timer-left${left < HOME_SOON_SEC ? ' soon' : ''}`}>{HomeFmtLeft(left)}</span>
-      <Button icon="x" title={`cancel ${HomeTimerNoun(t, shared)}`} onClick={() => { onCancel(t); }}>cancel</Button>
+      <Button icon="x" title={`cancel ${HomeTimerNoun(t, shared)}`} disabled={busy}
+              onClick={() => { onCancel(t); }}>{busy ? 'cancelling…' : 'cancel'}</Button>
       <div className="home-bar" aria-hidden="true"><span style={{ width: `${pct}%` }}/></div>
     </div>
   );
 };
 
-const HomeTimers = ({ active, done, now, shared, onlineRooms, onCancel }) => {
+const HomeTimers = ({ active, done, now, shared, onlineRooms, cancelling, onCancel }) => {
+  const [expanded, setExpanded] = React.useState(false);
   if (!active.length && !done.length) return null;
+  const extra = active.length - HOME_PHONE_TIMERS;
   return (
     <div className="home-sec home-sec-timers">
       <Card title="timers">
-        {active.map((t) => (
+        {active.map((t, i) => (
           <HomeTimerRow key={t.id} t={t} now={now} shared={shared}
-                        roomOnline={onlineRooms.has(t.room_id)} onCancel={onCancel}/>
+                        roomOnline={onlineRooms.has(t.room_id)} busy={cancelling.has(t.id)}
+                        extra={i >= HOME_PHONE_TIMERS && !expanded} onCancel={onCancel}/>
         ))}
+        {extra > 0 && !expanded && (
+          <div className="home-att-foot home-phone-only">
+            <button type="button" className="home-link" onClick={() => setExpanded(true)}>+{extra} more</button>
+          </div>
+        )}
         {done.map((d) => (
           <div key={`done-${d.id}`} className="home-timer-done" data-done={d.id}>
             <StatusDot tone="ok"/>
@@ -647,7 +726,8 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPl
   const playing = !!song && np.state === 'play';
   const paused = !!song && np.state === 'pause';
   const dur = song && song.duration_sec ? song.duration_sec : 0;
-  const elapsed = song ? (np.elapsed_sec || 0) + (playing ? sinceFetchSec : 0) : 0;
+  // A stale read (the core is down) is where it was, not where it would be.
+  const elapsed = song ? (np.elapsed_sec || 0) + (playing && !stale ? sinceFetchSec : 0) : 0;
   const progress = dur ? Math.min(100, (elapsed / dur) * 100) : 0;
   const rx = s.wifi && s.wifi.rx_mbits;
   const weakWifi = online && rx != null && window.wifiTone && window.wifiTone(rx) === 'err';
@@ -735,13 +815,14 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPl
 };
 
 // "stop all" touches other people's rooms, so it always takes a second tap.
-const HomeStopAll = ({ count, onConfirm }) => {
+const HomeStopAll = ({ count, busy, onConfirm }) => {
   const [armed, setArmed] = React.useState(false);
   React.useEffect(() => {
     if (!armed) return undefined;
     const t = setTimeout(() => setArmed(false), HOME_STOP_ALL_ARM_MS);
     return () => clearTimeout(t);
   }, [armed]);
+  if (busy) return <Button variant="secondary" icon="square" disabled>stopping…</Button>;
   return (
     <Button variant={armed ? 'primary' : 'secondary'} icon="square"
             onClick={() => {
@@ -754,13 +835,15 @@ const HomeStopAll = ({ count, onConfirm }) => {
   );
 };
 
-const HomeRooms = ({ rooms, answered, failed, stale, fetchedAt, timerLeftByRoom, busy, onAct, onPlay, onStopAll }) => {
+const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLeftByRoom, busy, stoppingAll,
+                     onAct, onPlay, onStopAll }) => {
   const playing = stale ? [] : rooms.filter((s) => HomeRoomRank(s) === 0);
   const head = (
     <div className="home-sec-head">
       <span className="label">rooms</span>
-      {playing.length >= 2 && (
-        <HomeStopAll count={playing.length} onConfirm={() => onStopAll(playing.map((s) => s.room_id))}/>
+      {(playing.length >= 2 || stoppingAll) && (
+        <HomeStopAll count={playing.length} busy={stoppingAll}
+                     onConfirm={() => onStopAll(playing.map((s) => s.room_id))}/>
       )}
     </div>
   );
@@ -768,7 +851,14 @@ const HomeRooms = ({ rooms, answered, failed, stale, fetchedAt, timerLeftByRoom,
   if (!answered) {
     content = <div className="home-rooms"><div className="home-room home-room-skel" aria-hidden="true"/></div>;
   } else if (failed) {
-    content = <Card><div className="home-att-quiet">rooms unavailable · the dashboard can't reach the server</div></Card>;
+    // Say the cause when health knows it; otherwise just that it failed.
+    content = (
+      <Card>
+        <div className="home-att-quiet">
+          {dbDown ? "rooms unavailable · the database isn't answering" : "couldn't load rooms"}
+        </div>
+      </Card>
+    );
   } else if (!rooms.length) {
     content = (
       <Card>
@@ -997,19 +1087,43 @@ const HomePage = ({ counts, badges }) => {
 
   // Admin-only reads: never issued for anyone else (a refused GET used to
   // pop the login modal on landing; quiet is the second belt).
-  const approvals = useApiObject(admin ? '/api/satellites/approvals' : null, HOME_QUIET);
+  // The costly ones (and the manual, below) survive a re-mount for as
+  // long as their own poll would have waited (HOME_CACHE).
+  const approvals = HomeHooks.useCachedObject(admin ? '/api/satellites/approvals' : null, HOME_APPROVALS_MS);
   const pending = useApiObject(admin ? '/api/satellites/pending' : null,
                                { eventTypes: ['satellites.pending.changed'], quiet: true });
-  const version = useApiObject(admin ? '/api/config/version' : null, HOME_QUIET);
-  const hardware = useApiObject(admin ? '/api/models/hardware' : null, HOME_QUIET);
+  const version = HomeHooks.useCachedObject(admin ? '/api/config/version' : null, HOME_VERSION_GAP_MS);
+  const hardware = HomeHooks.useCachedObject(admin ? '/api/models/hardware' : null, HOME_HARDWARE_MS);
 
-  // Rooms: a push re-reads, debounced; a dead socket polls instead.
+  // When the rooms and the timers were last read (each read is a new object).
+  const satsAt = React.useMemo(() => Date.now(), [sats.data]);
+  const timersAt = React.useMemo(() => Date.now(), [timers.data]);
+
+  // Rooms: a push re-reads, debounced; a dead socket polls instead. A
+  // push while the tab is hidden only marks them stale — the focus handler
+  // re-reads once — because every /api/satellites read opens an MPD
+  // connection per room. A Wi-Fi report carries the whole new state, and
+  // every room sends one a minute, so it is merged in, never re-read.
   const refetchRooms = HomeHooks.useDebounced(() => sats.refresh(), HOME_ROOM_DEBOUNCE_MS);
-  useStateEvents(HOME_ROOM_EVENTS, () => refetchRooms());
+  const roomsDirty = React.useRef(false);
+  const [wifiPush, setWifiPush] = React.useState(null);   // { at, map: {room: wifi} }
+  useStateEvents(HOME_ROOM_EVENTS, (ev) => {
+    if (ev.type === 'satellites.wifi.changed') {
+      if (ev.data && typeof ev.data === 'object') setWifiPush({ at: Date.now(), map: ev.data });
+      return;
+    }
+    if (HomeHooks.tabHidden()) { roomsDirty.current = true; return; }
+    refetchRooms();
+  });
+  // Back from a real gap, re-read what the pushes would have said. Not on
+  // the socket's FIRST open, a moment after the mount's own reads: what
+  // was read under HOME_FRESH_MS ago needs no second fan-out.
   const wasLive = React.useRef(live);
   React.useEffect(() => {
-    // Back from a gap: whatever was pushed meanwhile was missed.
-    if (live && !wasLive.current) { sats.refresh(); timers.refresh(); }
+    if (live && !wasLive.current) {
+      if (Date.now() - satsAt >= HOME_FRESH_MS) sats.refresh();
+      if (Date.now() - timersAt >= HOME_FRESH_MS) timers.refresh();
+    }
     wasLive.current = live;
   }, [live]);
   HomeHooks.useInterval(() => { sats.refresh(); timers.refresh(); }, HOME_LIVE_POLL_MS, !live);
@@ -1023,7 +1137,8 @@ const HomePage = ({ counts, badges }) => {
   React.useEffect(() => { if (admin) versionAt.current = Date.now(); }, [admin]);
   HomeHooks.useOnFocus(() => {
     cfg.refresh(); health.refresh(); cal.refresh();
-    if (!live) { sats.refresh(); timers.refresh(); }
+    if (!live) { roomsDirty.current = false; sats.refresh(); timers.refresh(); }
+    else if (roomsDirty.current) { roomsDirty.current = false; refetchRooms(); }
     if (admin && Date.now() - versionAt.current > HOME_VERSION_GAP_MS) {
       versionAt.current = Date.now();
       version.refresh();
@@ -1040,8 +1155,14 @@ const HomePage = ({ counts, badges }) => {
 
   // ── derived ──
   const coreDown = !!(health.data && health.data.domovoi_reachable === false);
-  const rooms = Array.isArray(sats.data) ? sats.data : [];
-  const satsAt = React.useMemo(() => Date.now(), [sats.data]);
+  const dbDown = !!(health.data && health.data.db_reachable === false);
+  // A Wi-Fi push newer than the last read wins for rx/tx; nothing else.
+  const wifiNow = wifiPush && wifiPush.at >= satsAt ? wifiPush.map : null;
+  const rooms = (Array.isArray(sats.data) ? sats.data : []).map((s) => {
+    const w = wifiNow && wifiNow[s.room_id];
+    if (!w || typeof w !== 'object') return s;
+    return { ...s, wifi: { ...(s.wifi || {}), rx_mbits: w.rx_mbits, tx_mbits: w.tx_mbits } };
+  });
   const cancelled = React.useRef(new Set());
   const { active, done, now } = HomeHooks.useTimers(timers.data, cancelled);
   const online = rooms.filter((s) => s.status === 'online');
@@ -1060,6 +1181,8 @@ const HomePage = ({ counts, badges }) => {
   if (HomeOk(sats)) {
     if (!rooms.length) line.push('no rooms yet');
     else {
+      // With the core down these are what it said last, not what is true.
+      if (coreDown) line.push('last known');
       line.push(`${online.length} online`);
       const off = rooms.filter((s) => s.status === 'offline').length;
       const wait = rooms.filter((s) => s.status === 'waiting').length;
@@ -1067,11 +1190,12 @@ const HomePage = ({ counts, badges }) => {
       if (wait) line.push(`${wait} waiting`);
       if (playingCount) line.push(`${playingCount} playing`);
     }
-    const nTimers = active.filter((t) => !t.is_reminder).length;
-    const nReminders = active.length - nTimers;
-    if (nTimers) line.push(HomePlural(nTimers, 'timer'));
-    if (nReminders) line.push(HomePlural(nReminders, 'reminder'));
   }
+  // The database answers these, not the rooms read: they count on their own.
+  const nTimers = active.filter((t) => !t.is_reminder).length;
+  const nReminders = active.length - nTimers;
+  if (nTimers) line.push(HomePlural(nTimers, 'timer'));
+  if (nReminders) line.push(HomePlural(nReminders, 'reminder'));
 
   // Needs attention.
   const sources = [
@@ -1081,6 +1205,8 @@ const HomePage = ({ counts, badges }) => {
   ];
   const checking = sources.some(([, r]) => !HomeAnswered(r));
   const failed = sources.filter(([, r]) => HomeAnswered(r) && !HomeOk(r)).map(([n]) => n);
+  const refused = admin && sources.some(([, r]) => !HomeOk(r) && r.error
+    && (r.error.status === 401 || r.error.status === 403));
   const rows = HomeAttentionRows({
     viewer, health: health.data, rooms, plugins: plugins.data,
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
@@ -1101,12 +1227,19 @@ const HomePage = ({ counts, badges }) => {
   // the manual. Only then is the manual asked for.
   const firstRun = HomeOk(sats) && !rooms.length && HomeOk(timers) && !active.length
     && HomeOk(cal) && !(cal.data || []).length;
-  const manual = useApiObject(firstRun ? '/api/capabilities/manual' : null, HOME_QUIET);
+  const manual = HomeHooks.useCachedObject(firstRun ? '/api/capabilities/manual' : null, HOME_MANUAL_MS);
 
   // ── actions (device tier; data.js prompts and replays when unpaired) ──
   const [busy, setBusy] = React.useState({});
   const [sheetRoom, setSheetRoom] = React.useState(null);
+  const [stoppingAll, setStoppingAll] = React.useState(false);
+  const [cancelling, setCancelling] = React.useState(() => new Set());
   const setRoomBusy = (room, on) => setBusy((b) => ({ ...b, [room]: on }));
+  const setRoomsBusy = (list, on) => setBusy((b) => {
+    const next = { ...b };
+    list.forEach((room) => { next[room] = on; });
+    return next;
+  });
 
   const onAct = async (room, verb) => {
     setRoomBusy(room, true);
@@ -1134,20 +1267,34 @@ const HomePage = ({ counts, badges }) => {
     }
   };
 
+  // Every room in the batch is busy until the whole batch settles, so no
+  // pause or stop can land in the middle of it and "stop all" can't fire twice.
   const onStopAll = async (list) => {
-    const results = await Promise.allSettled(
-      list.map((room) => apiPost(`/api/music/stop/${encodeURIComponent(room)}`)));
-    const bad = results.filter((r) => r.status === 'rejected');
-    if (!bad.length) fire(`stopped ${HomePlural(list.length, 'room')}`);
-    else {
-      const said = mutationErrorText(bad[0].reason, 'stop', { kept: false });
-      if (bad.length < list.length) fire(`stopped ${list.length - bad.length} of ${list.length} rooms${said ? ` · ${said}` : ''}`);
-      else if (said) fire(said);
+    if (stoppingAll) return;
+    setStoppingAll(true);
+    setRoomsBusy(list, true);
+    try {
+      const results = await Promise.allSettled(
+        list.map((room) => apiPost(`/api/music/stop/${encodeURIComponent(room)}`)));
+      const bad = results.filter((r) => r.status === 'rejected');
+      if (!bad.length) fire(`stopped ${HomePlural(list.length, 'room')}`);
+      else {
+        const said = mutationErrorText(bad[0].reason, 'stop', { kept: false });
+        if (bad.length < list.length) fire(`stopped ${list.length - bad.length} of ${list.length} rooms${said ? ` · ${said}` : ''}`);
+        else if (said) fire(said);
+      }
+    } finally {
+      setRoomsBusy(list, false);
+      setStoppingAll(false);
+      refetchRooms();
     }
-    refetchRooms();
   };
 
+  // One DELETE per timer at a time: a double tap must not send a second
+  // one and toast "that one already finished" over "cancelled".
   const onCancel = async (t) => {
+    if (cancelling.has(t.id)) return;
+    setCancelling((c) => new Set(c).add(t.id));
     cancelled.current.add(t.id);
     try {
       await apiDelete(`/api/timers/${t.id}`);
@@ -1157,6 +1304,7 @@ const HomePage = ({ counts, badges }) => {
       if (e && e.status === 404) fire('that one already finished');
       else reportMutationFailure(fire, 'cancel', e);
     } finally {
+      setCancelling((c) => { const next = new Set(c); next.delete(t.id); return next; });
       timers.refresh();
     }
   };
@@ -1175,18 +1323,20 @@ const HomePage = ({ counts, badges }) => {
       <div className="home-cols">
         <div className="home-col">
           <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
-                     stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
-                     busy={busy} onAct={onAct} onPlay={setSheetRoom} onStopAll={onStopAll}/>
+                     dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
+                     busy={busy} stoppingAll={stoppingAll}
+                     onAct={onAct} onPlay={setSheetRoom} onStopAll={onStopAll}/>
           <div className="home-pair">
             <HomeTimers active={active} done={done} now={now} shared={shared}
-                        onlineRooms={onlineRooms} onCancel={onCancel}/>
+                        onlineRooms={onlineRooms} cancelling={cancelling} onCancel={onCancel}/>
             <HomeToday events={cal.data} answered={HomeAnswered(cal)}
                        failed={HomeAnswered(cal) && !HomeOk(cal)} now={now} shared={shared}/>
           </div>
         </div>
         <div className="home-col">
           <HomeAttention view={view} viewer={viewer} shared={shared} checking={checking}
-                         failed={failed} checkedAt={checkedAt} onClaim={onSignIn} onSignIn={onSignIn}/>
+                         failed={failed} refused={refused} checkedAt={checkedAt}
+                         onClaim={onSignIn} onSignIn={onSignIn}/>
           {Broadcast && (
             <div className="home-sec home-sec-announce">
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>
