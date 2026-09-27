@@ -293,6 +293,11 @@ def test_the_desktop_sidebar_keeps_every_page_but_hides_the_home_row(driven) -> 
 def test_the_phone_strip_shows_only_primary_tabs() -> None:
     phone = _phone_block(_src("styles.css"))
     assert ".sidebar .nav-item:not(.primary) { display: none; }" in phone
+    # The tabs share the strip's full width: without the wrapper stretching,
+    # each tab sized to its content (33px in headless Chrome at 375px) and
+    # "Satellites" spilled into its neighbours.
+    assert ".sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }" in phone
+    assert 'className="nav-wrap"' in _src("components.jsx")
     # The home row the desktop hides comes back in the strip, AFTER the
     # desktop rule so it wins at equal specificity.
     assert ".sidebar .nav-item.brand-link { display: flex; }" in phone

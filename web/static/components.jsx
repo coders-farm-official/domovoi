@@ -551,7 +551,7 @@ const Sidebar = ({ route, setRoute, counts, manifest }) => {
         <div className="word">domovoi</div>
       </a>
 
-      <div>
+      <div className="nav-wrap">
         <div className="nav-section">workspace</div>
         <nav className="nav">
           {items.map((it) => (

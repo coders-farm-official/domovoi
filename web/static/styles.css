@@ -305,6 +305,10 @@ table.tbl .actions { text-align: right; }
   }
   .sidebar { flex-direction: row; padding: 6px; gap: 0; border-right: none; border-top: 1px solid var(--border); }
   .sidebar .brand-row, .sidebar .nav-section, .sidebar .footer { display: none; }
+  /* The nav's wrapper must take the strip's whole width, or the tabs size
+     to their content and a label like "Satellites" spills into its
+     neighbours (measured in headless Chrome: 33px tabs without this). */
+  .sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
   .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
   .sidebar .nav-item:not(.primary) { display: none; }
