@@ -1013,7 +1013,10 @@ const HomePage = ({ counts, badges }) => {
     wasLive.current = live;
   }, [live]);
   HomeHooks.useInterval(() => { sats.refresh(); timers.refresh(); }, HOME_LIVE_POLL_MS, !live);
-  HomeHooks.useInterval(() => health.refresh(), HOME_HEALTH_MS);
+  // The problem-rows setting rides the health tick: a wall tablet that
+  // never loses focus still picks up an admin's change within a minute.
+  // (Whether this device is a shared screen, DeviceIdentity.boot re-asks.)
+  HomeHooks.useInterval(() => { health.refresh(); cfg.refresh(); }, HOME_HEALTH_MS);
   HomeHooks.useInterval(() => approvals.refresh(), HOME_APPROVALS_MS, admin);
   HomeHooks.useInterval(() => hardware.refresh(), HOME_HARDWARE_MS, admin);
   const versionAt = React.useRef(0);
@@ -1025,10 +1028,6 @@ const HomePage = ({ counts, badges }) => {
       versionAt.current = Date.now();
       version.refresh();
     }
-    // An admin may have marked (or unmarked) this device meanwhile. A
-    // background write: refused, it fails silently (data.js noPrompt).
-    // Pairing itself re-registers from the shell (DeviceIdentity.boot).
-    try { if (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.refresh) DeviceIdentity.refresh(); } catch {}
   });
 
   // Browser-side plugin errors (index.html's pipeline): re-render on news.

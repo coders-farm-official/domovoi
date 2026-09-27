@@ -1216,11 +1216,24 @@ const DeviceIdentity = (() => {
   /* The shell's boot (index.html). Register once the server has said who
    * this browser is (Auth.status: is the box claimed yet?), and only when
    * it can: an unpaired, signed-out browser on a claimed box — a guest's
-   * phone landing on Home — sends nothing at all. Then register again
-   * whenever a credential appears or changes (the pair prompt, a sign-in,
-   * the household token arriving through one), from whatever page the
-   * browser is on: that is also how a freshly paired tablet learns it is
-   * a shared screen. Once per page load. */
+   * phone landing on Home — sends nothing at all. Then register again,
+   * from whatever page the browser is on:
+   *   * whenever a credential appears or changes (the pair prompt, a
+   *     sign-in, the household token arriving through one) — how a freshly
+   *     paired tablet learns it is a shared screen;
+   *   * when the tab comes back (focus, or shown again), at most every 15 s;
+   *   * every 2 minutes while the tab is visible — how a kitchen tablet
+   *     that sits on one page and never loses focus learns an admin marked
+   *     (or unmarked) it. Nothing pushes that change; the register is an
+   *     upsert, so asking is cheap.
+   * Once per page load. */
+  const REFRESH_MS = 2 * 60 * 1000;
+  const FOCUS_GAP_MS = 15 * 1000;
+  let lastAsked = 0;
+  const ask = () => { lastAsked = Date.now(); return refresh(); };
+  const tabHidden = () => {
+    try { return typeof document !== 'undefined' && !!document.hidden; } catch { return false; }
+  };
   let booted = null;
   const boot = () => {
     if (booted) return booted;
@@ -1230,15 +1243,23 @@ const DeviceIdentity = (() => {
         Auth.subscribe(() => {
           if (Auth.credentialVersion === seen) return;
           seen = Auth.credentialVersion;
-          refresh();
+          ask();
         });
       }
     } catch { /* auth.js absent */ }
-    let asked = Promise.resolve(null);
     try {
-      if (typeof Auth !== 'undefined' && Auth.refreshStatus) asked = Promise.resolve(Auth.refreshStatus());
+      setInterval(() => { if (!tabHidden()) ask(); }, REFRESH_MS);
+      const back = () => { if (!tabHidden() && Date.now() - lastAsked >= FOCUS_GAP_MS) ask(); };
+      window.addEventListener('focus', back);
+      if (typeof document !== 'undefined' && document.addEventListener) {
+        document.addEventListener('visibilitychange', back);
+      }
+    } catch { /* no timers or events here (a test harness) */ }
+    let statusKnown = Promise.resolve(null);
+    try {
+      if (typeof Auth !== 'undefined' && Auth.refreshStatus) statusKnown = Promise.resolve(Auth.refreshStatus());
     } catch { /* auth.js absent */ }
-    booted = asked.catch(() => null).then(() => refresh());
+    booted = statusKnown.catch(() => null).then(() => ask());
     return booted;
   };
 

@@ -624,11 +624,35 @@ SCENARIOS["boot_stale_token"] = boot(
     f"return {{ booted, refreshed: {_BOOT_SNAP} }};",
     ls=PAIRED_LS,
 )
-# The same stale token, on Home, when the tab gets focus back.
+# The same stale token, on Home, when the tab gets focus back (the shell's
+# boot owns that re-register, at most every 15 s).
 SCENARIOS["focus_stale_token"] = scenario(
     house(**{"POST /api/devices/register": _REFUSED}),
-    "w.__fire('focus'); await w.__flush(h);"
-    f"return {_BOOT_SNAP};",
+    "await w.__DI.boot(); await w.__flush(h);"
+    "w.__fire('focus'); await w.__flush(h); const tooSoon = " + _BOOT_SNAP + ".posts.length;"
+    f"w.__setNow({NOW + 20_000}); w.__fire('focus'); await w.__flush(h);"
+    f"return {{ tooSoon, ...{_BOOT_SNAP} }};",
+    ls=PAIRED_LS,
+)
+# A kitchen tablet sits on Home and never loses focus. An admin marks it a
+# shared screen, and sets the problem rows to admins only, from their phone:
+# no focus event, no reload — the page still catches up on its own timers.
+SCENARIOS["tick_marks_the_tablet"] = scenario(
+    house(**{"GET /api/calendar/events": EVENTS,
+             "GET /api/satellites": [room("kitchen"), room("office", "offline")],
+             "POST /api/devices/register": _REG_ROW}),
+    "await w.__DI.boot(); await w.__flush(h); const before = w.__snap(h);"
+    "w.__table['POST /api/devices/register'] = { ...w.__table['POST /api/devices/register'], shared_screen: true };"
+    "w.__every(120000); await w.__flush(h);"
+    "return { before, after: w.__snap(h) };",
+    ls=PAIRED_LS,
+)
+SCENARIOS["tick_rereads_the_setting"] = scenario(
+    house(**{"GET /api/satellites": [room("kitchen"), room("office", "offline")]}),
+    "const before = w.__snap(h);"
+    f"w.__table['GET /api/config'] = {json.dumps(cfg('admins'))};"
+    "w.__every(60000); await w.__flush(h);"
+    "return { before, after: w.__snap(h) };",
     ls=PAIRED_LS,
 )
 
@@ -1112,7 +1136,23 @@ def test_a_refused_background_register_never_prompts(driven) -> None:
     assert out["booted"] == {"posts": ["house-token"], "pair": False, "modal": False}
     assert out["refreshed"] == {"posts": ["house-token", "house-token"], "pair": False, "modal": False}
     focus = driven["focus_stale_token"]
-    assert focus["posts"] == ["house-token"] and focus["pair"] is False and focus["modal"] is False
+    assert focus["tooSoon"] == 1                 # boot's own, then a focus inside 15 s: nothing
+    assert focus["posts"] == ["house-token", "house-token"]
+    assert focus["pair"] is False and focus["modal"] is False
+
+
+def test_a_tablet_that_never_loses_focus_is_masked_on_the_next_tick(driven) -> None:
+    out = driven["tick_marks_the_tablet"]
+    assert "Dentist" in out["before"]["blob"]
+    assert "Dentist" not in out["after"]["blob"] and "busy" in out["after"]["blob"]
+    (row,) = out["after"]["attention"]
+    assert row["text"].startswith("something needs the admin's attention")
+
+
+def test_the_problem_rows_setting_is_reread_on_the_health_tick(driven) -> None:
+    out = driven["tick_rereads_the_setting"]
+    assert [r["key"] for r in out["before"]["attention"]] == ["offline"]
+    assert out["after"]["attention"] == []
 
 
 def test_the_shell_boots_the_device_identity_instead_of_registering_blind() -> None:
