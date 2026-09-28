@@ -271,7 +271,7 @@ upgrade are two-phase: stage → preview → confirm.
 | `POST /v1/plugins/{slug}/enable` | Admin, fail-closed | — | Enable and hot-load a disabled plugin. Runs the migration catch-up first; a refusal or failure there is a `422` with the same `migration_*` codes as confirm, and the plugin stays disabled. While an upgrade of the plugin waits for its restart, enable marks it enabled without loading and answers `{enabled: true, slug, restart_required: true}`. |
 | `POST /v1/plugins/{slug}/disable` | Admin, fail-closed | — | Disable: unload handlers/workers; the plugin's HTTP routes start returning `404`. |
 | `POST /v1/plugins/{slug}/uninstall` | Admin, fail-closed | `{"data": "keep" \| "purge"}` (default `keep`) | Remove the plugin; `purge` also drops its Postgres schema. |
-| `POST /v1/plugins/{slug}/upgrade` | Admin, fail-closed | zip or `{"github_url", "force"?}` | Stage an upgrade (returns `{staged_id, preview}`; confirm via the shared confirm endpoint). Dev-mode installs refuse upgrade. |
+| `POST /v1/plugins/{slug}/upgrade` | Admin, fail-closed | zip or `{"github_url", "force"?}` | Stage an upgrade (returns `{staged_id, preview}`; confirm via the shared confirm endpoint). Dev-mode installs refuse upgrade. A bundled plugin refuses with `422` `bundled_plugin` ("bundled plugins update with the core"): it lives in the Domovoi checkout and updates with a pull and restart, and an upgrade would move its folder out of the checkout. Install refuses a zip whose slug is a bundled plugin the same way. |
 
 ### 2.4 Acquisitions (generic media queue)
 

@@ -703,3 +703,104 @@ async def test_zip_over_bundled_tombstone_becomes_non_bundled() -> None:
     row = await reg.get_plugin(SLUG)
     assert row is not None and row.bundled is False
     assert Path(row.install_dir) == installed_dir
+
+
+# ─── bundled plugins update with the core, never from a zip ────────────────
+
+def _into_checkout() -> Path:
+    """A copy of the fixture where a bundled plugin lives: the checkout's
+    plugins/<slug> (bundled_root is a tmp dir in these tests)."""
+    from domovoi.plugins_runtime import loader as loader_mod
+
+    copy = loader_mod.bundled_root() / SLUG
+    shutil.copytree(FIXTURE, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    return copy
+
+
+def _tree(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+
+
+async def test_a_bundled_plugin_refuses_a_zip_or_github_upgrade() -> None:
+    """Upgrading a bundled plugin moved <repo>/plugins/<slug> to .previous
+    and deleted it on success, then turned the row into a zip install: the
+    checkout lost tracked files, later pulls stopped reaching the plugin,
+    and the update unit refused every update over the dirty tree."""
+    from fastapi import HTTPException
+
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    copy = _into_checkout()
+    before = _tree(copy)
+    manifest = parse_manifest((copy / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    await reg.insert_plugin(
+        slug=SLUG, name="Compliments", version="1.0.0", publisher="Coders Farm",
+        license="MIT", domovoi_api=">=1.0,<2.0", enabled=True, bundled=True,
+        install_source="bundled", source_ref=None, install_dir=str(copy),
+        manifest=manifest.raw,
+    )
+
+    class _Unread:
+        """The refusal comes before the request body is read."""
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_upgrade(_Unread(), SLUG)
+    assert http.value.status_code == 422
+    error = http.value.detail["error"]
+    assert error["code"] == "bundled_plugin"
+    assert "bundled plugins update with the core" in error["message"]
+
+    # Staging refuses it too: as an upgrade, and as a fresh install of the
+    # slug (which the dashboard would otherwise re-stage as an upgrade).
+    for upgrade_of in (SLUG, None):
+        with pytest.raises(InstallError) as exc:
+            await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=upgrade_of)
+        assert exc.value.code == "bundled_plugin"
+    assert list(installer.staging_root().iterdir()) == []
+
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.bundled and row.install_source == "bundled"
+    assert row.version == "1.0.0" and row.install_dir == str(copy)
+    assert _tree(copy) == before
+
+
+async def test_confirm_never_moves_a_plugin_out_of_the_checkout() -> None:
+    """Defence in depth at confirm, where the move happens: a row whose
+    files sit in the checkout is refused before anything is torn down."""
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    copy = _into_checkout()
+    await reg.update_plugin(SLUG, install_dir=str(copy))     # still bundled=False
+    staged2 = await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=SLUG)
+
+    with pytest.raises(InstallError) as exc:
+        await confirm_upgrade(staged2.staged_id)
+
+    assert exc.value.code == "bundled_plugin"
+    assert (copy / "domovoi-plugin.toml").is_file()
+    assert list(installer.previous_root().iterdir()) == []
+    assert not staged2.root.exists()
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.version == "1.0.0" and row.install_dir == str(copy)
+    assert SLUG in LOADER.loaded                               # nothing torn down
+
+
+async def test_uninstall_never_deletes_files_in_the_checkout() -> None:
+    """A non-bundled row can still point into plugins/ — a dev registration
+    of a checkout dir. Uninstall drops the row and leaves git's files."""
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    copy = _into_checkout()
+    manifest = parse_manifest((copy / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    await reg.insert_plugin(
+        slug=SLUG, name="Compliments", version="1.0.0", publisher="Coders Farm",
+        license="MIT", domovoi_api=">=1.0,<2.0", enabled=False, bundled=False,
+        install_source="dev", source_ref=None, install_dir=str(copy),
+        manifest=manifest.raw,
+    )
+
+    out = await uninstall_plugin(SLUG, data="keep")
+
+    assert out["uninstalled"] and out["bundled"] is False
+    assert await reg.get_plugin(SLUG) is None
+    assert (copy / "domovoi-plugin.toml").is_file()

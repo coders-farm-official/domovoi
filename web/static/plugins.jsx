@@ -463,10 +463,41 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
   );
 };
 
+/* ---- Upgrade from a zip or GitHub ------------------------------ */
+/* For plugins installed that way. A bundled plugin lives in the Domovoi
+ * checkout and updates with it — the core refuses a zip or GitHub upgrade
+ * of one, which would move its folder out of the checkout — and a
+ * dev-mode plugin just restarts. */
+const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
+  const [ghUrl, setGhUrl] = React.useState('');
+  if (p.status === 'uninstalled' || p.install_source === 'dev') return null;
+  if (p.bundled) {
+    return (
+      <div className="meta">
+        bundled with Domovoi — it updates with the Domovoi server (Settings → Version),
+        not from a zip or GitHub
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Button icon="arrow-up-circle" onClick={() => onUpgradeZip(p.slug)}>upgrade from zip</Button>
+      <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
+             onChange={(e) => setGhUrl(e.target.value)}
+             style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 10px', width: 280,
+                      borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                      background: 'var(--card)', color: 'var(--fg)' }}/>
+      <Button icon="github" disabled={!ghUrl.trim()}
+              onClick={() => { onUpgradeUrl(p.slug, ghUrl.trim()); setGhUrl(''); }}>
+        upgrade from GitHub
+      </Button>
+    </div>
+  );
+};
+
 /* ---- One installed-plugin row --------------------------------- */
 const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
   const [open, setOpen] = React.useState(false);
-  const [ghUrl, setGhUrl] = React.useState('');
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
   const activePerms = Object.keys(PERMISSION_LABELS).filter((k) => perms[k]);
@@ -563,20 +594,7 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               ))}
             </div>
           )}
-          {p.status !== 'uninstalled' && p.install_source !== 'dev' && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Button icon="arrow-up-circle" onClick={() => onUpgradeZip(p.slug)}>upgrade from zip</Button>
-              <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
-                     onChange={(e) => setGhUrl(e.target.value)}
-                     style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 10px', width: 280,
-                              borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                              background: 'var(--card)', color: 'var(--fg)' }}/>
-              <Button icon="github" disabled={!ghUrl.trim()}
-                      onClick={() => { onUpgradeUrl(p.slug, ghUrl.trim()); setGhUrl(''); }}>
-                upgrade from GitHub
-              </Button>
-            </div>
-          )}
+          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}/>
         </div>
       )}
     </div>

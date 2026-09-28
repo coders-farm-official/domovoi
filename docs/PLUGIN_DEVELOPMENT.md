@@ -1646,7 +1646,9 @@ The runtime forces most of this, but know the shapes:
   Domovoi checkout. Every core boot refreshes its registry row — name,
   version, `domovoi_api`, publisher, license and the stored manifest the
   dashboard and the other plugins' checks read — from the manifest on disk,
-  so a pull plus a restart is the whole upgrade.
+  so a pull plus a restart is the whole upgrade. The zip/GitHub upgrade
+  endpoint refuses a bundled plugin (`422 bundled_plugin`), and no install,
+  upgrade or uninstall moves or deletes files under `plugins/`.
 
 ### 6.8 Trust and permissions honesty
 

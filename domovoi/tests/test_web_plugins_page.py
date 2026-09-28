@@ -4,7 +4,9 @@ Babel, a plain-object React), so the assertions run without Postgres or a
 server.
 
 Covers: an upgrade staged for restart — the "restart to finish the
-upgrade" card (wired to the dashboard's one restart) and the row pill.
+upgrade" card (wired to the dashboard's one restart) and the row pill; the
+upgrade controls, which a bundled plugin doesn't get (it updates with the
+core).
 """
 
 from __future__ import annotations
@@ -46,6 +48,11 @@ def _row(restart_pending: bool, **over) -> dict:
             "fnProps": ROW_FNS}
 
 
+def _controls(**over) -> dict:
+    return {"file": PLUGINS, "component": "PluginUpgradeControls", "preload": [COMPONENTS],
+            "props": {"p": {**ROW, **over}}, "fnProps": ["onUpgradeZip", "onUpgradeUrl"]}
+
+
 SCENARIOS = {
     "card": _card({"restart_capable": True, "restart_mode": "restart"}, RADIO_WAITING),
     "card_update_unit": _card({"restart_capable": True, "restart_mode": "update"}, RADIO_WAITING),
@@ -54,6 +61,12 @@ SCENARIOS = {
     "card_nothing_waiting": _card({"restart_capable": True}, []),
     "row_waiting": _row(True),
     "row_not_waiting": _row(False),
+    "controls_zip": _controls(),
+    "controls_github": _controls(install_source="github"),
+    "controls_bundled": _controls(slug="radio", bundled=True, install_source="bundled"),
+    "controls_bundled_tombstone": _controls(bundled=True, install_source="bundled",
+                                            status="uninstalled", enabled=False),
+    "controls_dev": _controls(install_source="dev"),
 }
 
 
@@ -104,3 +117,26 @@ def test_nothing_waiting_renders_no_card(rendered) -> None:
 def test_the_row_of_a_staged_upgrade_says_so(rendered) -> None:
     assert "restart to finish the upgrade" in _texts(rendered["row_waiting"])
     assert "restart to finish the upgrade" not in _texts(rendered["row_not_waiting"])
+
+
+# ─── bundled plugins update with the core ─────────────────────────────────
+
+
+def test_a_zip_or_github_plugin_offers_both_upgrades(rendered) -> None:
+    for case in ("controls_zip", "controls_github"):
+        texts = _texts(rendered[case])
+        assert "upgrade from zip" in texts, (case, texts)
+        assert "upgrade from GitHub" in texts, (case, texts)
+
+
+def test_a_bundled_plugin_offers_no_upgrade_and_says_why(rendered) -> None:
+    texts = _texts(rendered["controls_bundled"])
+    assert not any("upgrade from" in t for t in texts), texts
+    assert any("bundled with Domovoi" in t and "updates with the Domovoi server" in t
+               for t in texts), texts
+    assert not any(e["type"] == "input" for e in rendered["controls_bundled"])
+
+
+def test_tombstones_and_dev_plugins_show_no_upgrade_controls(rendered) -> None:
+    assert rendered["controls_bundled_tombstone"] == []
+    assert rendered["controls_dev"] == []

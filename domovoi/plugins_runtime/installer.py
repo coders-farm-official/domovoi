@@ -38,6 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
+from domovoi.plugins_runtime import loader as _loader
 from domovoi.plugins_runtime.loader import LOADER, code_imported, installed_root
 from domovoi.plugins_runtime.lockfile import (
     LockfileError,
@@ -108,6 +109,28 @@ def previous_root() -> Path:
 
 def data_root() -> Path:
     return Path.home() / ".domovoi" / "plugins" / "data"
+
+
+def _in_checkout(path: Path) -> bool:
+    """Whether ``path`` lies in the repo's ``plugins/`` dir: git's files,
+    which no install, upgrade or uninstall may move or delete (a missing
+    tracked file leaves the checkout dirty, and the dashboard's pull and
+    the update unit both refuse a dirty tree)."""
+    try:
+        return Path(path).resolve().is_relative_to(_loader.bundled_root().resolve())
+    except OSError:  # pragma: no cover — unresolvable path
+        return False
+
+
+def _bundled_refusal(slug: str) -> InstallError:
+    return InstallError(
+        "bundled_plugin",
+        f"bundled plugins update with the core — {slug!r} ships inside the "
+        f"Domovoi checkout; pull the new Domovoi version and restart (the "
+        f"Version panel in Settings) instead of installing it from a zip or "
+        f"GitHub",
+        details={"slug": slug},
+    )
 
 
 # ─── zip safety (§7.4 / §3.2 step 2) ────────────────────────────────────────
@@ -534,6 +557,11 @@ async def stage_zip(
         # Step 6 — slug collision / orphan schema.
         existing = await reg.get_plugin(manifest.slug)
         if upgrade_of is None:
+            if (existing is not None and existing.status != "uninstalled"
+                    and existing.bundled):
+                # Not slug_exists: the dashboard re-stages that as an
+                # upgrade, which a bundled plugin refuses anyway.
+                raise _bundled_refusal(manifest.slug)
             if existing is not None and existing.status != "uninstalled":
                 raise InstallError(
                     "slug_exists",
@@ -569,6 +597,8 @@ async def stage_zip(
                 raise InstallError(
                     "upgrade_missing", f"plugin {upgrade_of!r} is not installed"
                 )
+            if existing.bundled:
+                raise _bundled_refusal(upgrade_of)
             cmp = _semver_cmp(manifest.version, existing.version)
             if cmp == 0:
                 raise InstallError(
@@ -1093,11 +1123,19 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
                 others.add(req.split("==")[0].split("[")[0].lower())
         pip_uninstall(sorted(newly - others))
 
-    # 4/5. Bundled → tombstone (never delete dir or row); else remove both.
+    # 4/5. Bundled → tombstone (never delete dir or row); else remove both
+    #      — but never files in the checkout (a dev registration of a dir
+    #      under plugins/, say): those belong to git.
     if row.bundled:
         await reg.tombstone_plugin(slug)
     else:
-        shutil.rmtree(Path(row.install_dir), ignore_errors=True)
+        if _in_checkout(Path(row.install_dir)):
+            log.warning(
+                "uninstall %s: %s is in the Domovoi checkout — row removed, "
+                "files left for git", slug, row.install_dir,
+            )
+        else:
+            shutil.rmtree(Path(row.install_dir), ignore_errors=True)
         await reg.delete_plugin(slug)
 
     await _best_effort_resync()
@@ -1130,6 +1168,12 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         raise InstallError("upgrade_missing", f"plugin {slug!r} is not installed")
 
     old_dir = Path(row.install_dir)
+    if row.bundled or _in_checkout(old_dir):
+        # Checked again here, before anything is torn down: the upgrade
+        # below MOVES the old dir and deletes it on success, and for a
+        # bundled plugin that dir is <repo>/plugins/<slug>.
+        _drop_staged(staged)
+        raise _bundled_refusal(slug)
     prev_dir = previous_root() / f"{slug}-{row.version}"
     prev_dir.parent.mkdir(parents=True, exist_ok=True)
     manifest = staged.manifest
@@ -1311,7 +1355,8 @@ async def api_uninstall(slug: str, body: dict | None = None) -> dict:
 )
 async def api_upgrade(request: Request, slug: str) -> dict:
     """Stage an upgrade (same two-phase flow: returns staged_id + preview;
-    confirm via the shared confirm endpoint)."""
+    confirm via the shared confirm endpoint). A dev-mode plugin refuses
+    (just restart), and so does a bundled one: it updates with the core."""
     try:
         row = await reg.get_plugin(slug)
         if row is None:
@@ -1320,6 +1365,8 @@ async def api_upgrade(request: Request, slug: str) -> dict:
             raise InstallError(
                 "dev_mode", "dev-mode plugins refuse upgrade — just restart"
             )
+        if row.bundled:
+            raise _bundled_refusal(slug)
         data, source_ref, github_url, force = await _read_install_body(request)
         install_source = "zip"
         if data is None:
