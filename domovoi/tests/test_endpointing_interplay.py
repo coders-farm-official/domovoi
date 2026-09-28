@@ -696,6 +696,44 @@ def test_the_real_loop_pauses_after_the_greeting_not_on_it(pipeline, monkeypatch
     assert said == "Pause the music." and doc["stt_reused"] is True
 
 
+# The `ready` of a core from before early endpointing — 8cb568d, the one the
+# household runs today — word for word: no `features`.
+_OLDER_READY = {
+    "type": "ready", "protocol_version": "0.1", "room_id": "kitchen",
+    "bot_name": "Domovoi", "audio_sample_rate_in": 16000,
+}
+
+
+@pytest.mark.parametrize(
+    "feed,greeting_frames",
+    [
+        ([SAT_LOUD] * 30 + [SAT_QUIET] * 60, None),
+        ([SAT_LOUD] * 33 + [SAT_QUIET] * 20 + [SAT_LOUD] * 20 + [SAT_QUIET] * 60, 40),
+        ([SAT_LOUD] * 33 + [SAT_QUIET] * 200, 40),
+        ([SAT_LOUD] * 38 + [SAT_QUIET] * 200, 40),
+    ],
+    ids=["no-greeting", "bleed-then-command", "bleed-only", "command-under-greeting"],
+)
+def test_the_merged_loop_sends_an_older_core_nothing_new(monkeypatch, feed, greeting_frames) -> None:
+    """Satellite code is served from the core's checkout, so a satellite
+    upgraded after a pull but before the core restarts runs this loop
+    against the older core, which answers any message type it doesn't know
+    with `error` — the end of the turn on a Pi. Whatever the greeting did,
+    the capture sends that core only utterance_start, its audio and
+    utterance_end (whose new fields an older core ignores)."""
+    if greeting_frames is None:
+        sat = _satellite(monkeypatch, _OLDER_READY, early_commit=True)
+    else:
+        sat = _greeting_satellite(
+            monkeypatch, _OLDER_READY, frames=greeting_frames, early_commit=True,
+        )
+    assert sat._core_features == frozenset()
+    emitted = sat_capture(sat, feed)
+    texts = [d for k, d in emitted if k == "text"]
+    assert [d["type"] for d in texts] == ["utterance_start", "utterance_end"]
+    assert sum(1 for k, _ in emitted if k == "bytes") == texts[-1]["frames"]
+
+
 def test_the_real_loop_sends_a_bleed_alone_and_the_core_drops_it(pipeline, monkeypatch) -> None:
     kept = _kept(monkeypatch)
     whisper = pipeline["whisper"] = _WatchedWhisper("Back so soon.")
