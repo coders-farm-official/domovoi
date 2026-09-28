@@ -194,6 +194,25 @@ async def test_a_loaded_model_with_the_wrong_context_is_cold(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_window_ollama_keeps_reporting_is_its_clamp_not_a_reload(monkeypatch) -> None:
+    """num_ctx above a model's trained length: Ollama clamps it, doesn't
+    reload, and /api/ps reports the clamped window from then on. That is a
+    cold start once at most — never "waking up" before every answer."""
+    c = _client(_Chat(), url="http://ollama.test:11434", tool_num_ctx=65536)
+    _ps(monkeypatch, [("qwen3:8b", 40960), ("llama3.2:3b", 4096)])
+    assert await c.cold_models("tool") == ["qwen3:8b"]
+    assert await c.cold_models("tool") == []
+    assert await c.cold_models("tool") == []
+    # A different window is news again (someone else reloaded it).
+    _ps(monkeypatch, [("qwen3:8b", 8192)])
+    assert await c.cold_models("tool") == ["qwen3:8b"]
+    # Not loaded at all is always cold.
+    _ps(monkeypatch, [])
+    assert await c.cold_models("tool") == ["qwen3:8b"]
+    assert await c.cold_models("tool") == ["qwen3:8b"]
+
+
+@pytest.mark.asyncio
 async def test_untagged_names_match_latest(monkeypatch) -> None:
     c = _client(_Chat(), url="http://ollama.test:11434", qa_model="llama3.2")
     _ps(monkeypatch, [("llama3.2:latest", 4096)])

@@ -756,6 +756,8 @@ class RealOllamaClient:
             ),
         )
         self._url = url
+        # See `cold_models`; shared with the cold-start twin (a shallow copy).
+        self._ctx_mismatches: dict[str, set[int]] = {}
         self._qa_model = qa_model
         self._tool_model = tool_model
         # Bound at construction like the model names (reset_ollama_client is
@@ -1163,6 +1165,10 @@ class RealOllamaClient:
             "tool": (self._tool_model, self._tool_num_ctx),
             "qa": (self._qa_model, self._num_ctx),
         }
+        # Context windows /api/ps has already reported for a model that
+        # differ from the one asked for (see below). Per client, so a
+        # settings change (a new client) starts afresh.
+        mismatches: dict[str, set[int]] = self.__dict__.setdefault("_ctx_mismatches", {})
         cold: list[str] = []
         for role in roles:
             model, num_ctx = wanted[role]
@@ -1170,7 +1176,17 @@ class RealOllamaClient:
             if key not in contexts:
                 cold.append(model)
             elif num_ctx and contexts[key] and int(contexts[key]) != num_ctx:
-                cold.append(model)
+                # Ollama reloads a model asked for with a different window —
+                # but it also clamps a num_ctx above the model's trained
+                # length and then reports the clamped window for good: a
+                # mismatch that never reloads and never goes away. Counting
+                # it every time would say "waking up" before every answer,
+                # so a given reported window is a cold start only the first
+                # time it is seen.
+                seen = mismatches.setdefault(key, set())
+                if int(contexts[key]) not in seen:
+                    seen.add(int(contexts[key]))
+                    cold.append(model)
         return list(dict.fromkeys(cold))
 
     def for_cold_start(self) -> "RealOllamaClient":

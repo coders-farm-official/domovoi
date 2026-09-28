@@ -687,6 +687,9 @@ own answer is stale. Two signals drive the offer (either one fires):
    small model closes that string early (a joke without its punchline,
    "I don" for "I don't…"), and the self-reported doubt flag that came
    with it fired on background speech rather than on stale facts.
+   An answer that ends by offering to look it up itself ("…can I
+   look that up for you?") counts too (`answer_offers_lookup`): its
+   offer is parked as-is, so a yes is kept and nothing is asked twice.
 
 When either signal fires, the bot speaks its answer and tacks on
 "Want me to check that online?" as a sentence of its own. A yes routes via the existing

@@ -203,6 +203,16 @@ def test_greeting_only_transcripts_are_recognised(transcript):
         "Play some jazz.",
         "Make it quiet, please.",                   # look-alike of "Make it quick."
         "I'm already home.",
+        # A greeting's frame with other words in it: close in characters
+        # (0.75-0.87), but the differing words are swapped, not misheard.
+        "What can you do for me?",                  # "What can I do for you?"
+        "How can you help?",                        # "How can I help?"
+        "What do you mean?",                        # "What do you need?"
+        "What do you know?",
+        "What would you do?",                       # "What would you like?"
+        "What can I do?",                           # "What can I get you?"
+        "What can I ask you?",
+        "What's on my mind?",                       # "What's on your mind?"
         "",
         "...",
     ],
@@ -233,3 +243,29 @@ def test_only_the_played_greeting_counts_when_it_is_known():
 def test_the_strip_still_preserves_a_greeting_only_turn():
     # Unchanged contract: the strip leaves it, the new check drops it.
     assert strip_leading_greeting("Back so soon.", _V001) == "Back so soon."
+
+
+@pytest.mark.parametrize(
+    "transcript,played",
+    [
+        ("What can you do for me?", "What can I do for you?"),
+        ("How can you help?", "How can I help?"),
+        ("What do you mean?", "What do you need?"),
+        ("What can I do?", "What can I get you?"),
+    ],
+)
+def test_a_question_built_on_the_played_greeting_is_not_it(transcript, played):
+    assert not is_greeting_only(transcript, [played], played=True)
+
+
+@pytest.mark.parametrize(
+    "transcript,played",
+    [
+        ("Back to soon.", "Back so soon?"),
+        ("Beck so soon.", "Back so soon?"),
+        ("Whenever your ready.", "Whenever you're ready."),
+        ("What can I get ya?", "What can I get you?"),
+    ],
+)
+def test_a_misheard_played_greeting_of_any_length_is_recognised(transcript, played):
+    assert is_greeting_only(transcript, [played], played=True)

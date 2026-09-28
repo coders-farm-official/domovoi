@@ -27,6 +27,7 @@ from domovoi.turn_timings import timings_for_row
 from domovoi.uncertainty import (
     VOLATILE_CATEGORIES,
     answer_admits_staleness,
+    answer_offers_lookup,
     categorize_question,
     looks_like_question,
 )
@@ -725,13 +726,18 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             latency_ms=_elapsed_ms(),
         )
         return response
+    # The model may already close with an offer of its own ("…can I look
+    # that up for you?"): that counts as its doubt, and it is the offer —
+    # parked below so a "yes" is kept, not asked a second time.
+    offers_itself = answer_offers_lookup(answer)
     self_doubt = looks_like_question(intent.transcript) and (
-        qa.needs_verification or answer_admits_staleness(answer)
+        qa.needs_verification or answer_admits_staleness(answer) or offers_itself
     )
     should_offer = ctx.online and (category is not None or self_doubt)
     expect_followup = False
     if should_offer:
-        answer = _end_sentence(answer) + " " + _ONLINE_CHECK_OFFER
+        if not offers_itself:
+            answer = _end_sentence(answer) + " " + _ONLINE_CHECK_OFFER
         try:
             await request_confirmation(
                 session,

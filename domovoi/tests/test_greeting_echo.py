@@ -25,6 +25,7 @@ import pytest
 from domovoi import streaming
 from domovoi.canned_sounds import _greeting_entries
 from domovoi.streaming import StreamSession
+from domovoi.tests.conftest import requires_db
 
 # A slice of the shipped V001 bank, as app.state holds it after boot.
 _ROWS = [
@@ -33,6 +34,11 @@ _ROWS = [
     ("Hello!", "generic"),
     ("Yes?", "generic"),
     ("Beep boop. How can I help?", "funny"),
+    # Lines a person's own question can be built on (see
+    # test_a_question_shaped_like_a_greeting_is_the_user).
+    ("What can I do for you?", "generic"),
+    ("How can I help?", "generic"),
+    ("What do you need?", "generic"),
 ]
 _PHRASES = [text for text, _ in _ROWS]
 _CLIPS = {mp3: text for mp3, _sidecar, text in _greeting_entries(_ROWS)}
@@ -207,3 +213,66 @@ async def test_utterance_end_hands_the_clip_to_the_turn(monkeypatch) -> None:
         await sess._response_task
     assert [c["greeting_clip"] for c in calls] == [_BACK_SO_SOON, None, None]
     assert all(c["greeting_played"] is True for c in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "heard,reaches",
+    [
+        ("Back so soon, set a timer for five minutes.", "set a timer for five minutes."),
+        ("Back so soon? Set a timer for five minutes.", "Set a timer for five minutes."),
+        # No break after the greeting's words: not stripped, and not only a
+        # greeting either — it routes exactly as heard.
+        ("Back so soon set a timer for five minutes", "Back so soon set a timer for five minutes"),
+    ],
+)
+@pytest.mark.parametrize("clip", [_BACK_SO_SOON, None], ids=["clip-named", "old-satellite"])
+async def test_a_command_that_starts_like_the_greeting_is_never_swallowed(
+    monkeypatch, routed, heard, reaches, clip,
+) -> None:
+    await _turn(
+        monkeypatch, heard, greeting_played=True, trigger="wake_word", greeting_clip=clip,
+    )
+    assert routed == [reaches]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "heard,clip_text",
+    [
+        ("What can you do for me?", "What can I do for you?"),
+        ("How can you help?", "How can I help?"),
+        ("What do you mean?", "What do you need?"),
+        ("What do you know?", "What do you need?"),
+    ],
+)
+@pytest.mark.parametrize("named", [True, False], ids=["clip-named", "old-satellite"])
+async def test_a_question_shaped_like_a_greeting_is_the_user(
+    monkeypatch, routed, heard, clip_text, named,
+) -> None:
+    """Close to a greeting in characters, but a different sentence: the
+    words that differ are other words, not misheard ones. Dropping it would
+    leave the person's question unanswered, in silence."""
+    clip = next(mp3 for mp3, text in _CLIPS.items() if text == clip_text) if named else None
+    await _turn(
+        monkeypatch, heard, greeting_played=True, trigger="wake_word", greeting_clip=clip,
+    )
+    assert routed == [heard]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_stripped_timer_command_routes_to_the_timer(db_session) -> None:
+    """What reaches the router after "Back so soon, …" is stripped is an
+    ordinary timer command, and the timer takes it."""
+    from domovoi.models import Context, Intent
+    from domovoi.router import route
+
+    response = await route(
+        Intent(transcript="set a timer for five minutes.", room_id="office"),
+        Context(room_id="office", online=True),
+        db_session,
+    )
+    await db_session.commit()
+    assert response.matched_handler == "timer"
+    assert response.matched_path == "fast"

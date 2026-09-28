@@ -215,6 +215,34 @@ def _unpadded(words: list[str]) -> list[str]:
     return words[start:end]
 
 
+# How close each word Whisper got wrong must stay to the greeting's word it
+# replaced (character similarity of the two spans) for a whole transcript
+# to still count as that greeting. A bled-in greeting comes back misspelt —
+# "big boob" for "beep boop" (0.59), "to" for "so", "ya" for "you" (0.4) —
+# while a person's question that merely shares a greeting's frame swaps in
+# a different word: "What can YOU do for ME?" against "What can I do for
+# you?", "How can YOU help?", "What do you MEAN?" against "What do you
+# need?" (0.25 and under). The overall ratio can't tell those apart; the
+# swapped words can. Dropping a real question in silence costs far more
+# than answering a stray echo, so the bar leans toward the question.
+_MISHEARD_WORD_MIN_RATIO = 0.4
+
+
+def _only_misheard(t_words: list[str], p_words: list[str]) -> bool:
+    """Whether ``t_words`` differ from the greeting's ``p_words`` only the
+    way a mistranscription does: greeting words dropped, or replaced by
+    near-spellings — never a word added, and never a different word."""
+    sm = difflib.SequenceMatcher(None, t_words, p_words, autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "delete":
+            return False          # a word the greeting doesn't have
+        if op == "replace" and _similarity(
+            " ".join(t_words[i1:i2]), " ".join(p_words[j1:j2])
+        ) < _MISHEARD_WORD_MIN_RATIO:
+            return False
+    return True
+
+
 def is_greeting_only(transcript: str, greeting_phrases, *, played: bool = False) -> bool:
     """Whether ``transcript`` is nothing but one of ``greeting_phrases`` —
     the satellite hearing its own wake greeting, not a command.
@@ -232,10 +260,13 @@ def is_greeting_only(transcript: str, greeting_phrases, *, played: bool = False)
     "Heythere"), hesitation noises around it ("Uh, back so soon?").
     Greetings of ``FUZZY_MIN_MATCHED_WORDS`` or more words also match
     fuzzily under the same rule as the leading strip, with a word fewer
-    allowed but never one more. ``played=True`` says ``greeting_phrases``
-    is the single greeting known to have played this turn, which allows a
-    close match for a short greeting as well
-    (``KNOWN_GREETING_MIN_RATIO``); against the whole bank a short
+    allowed but never one more — and every word that differs must be a
+    near-spelling of the greeting's (``_only_misheard``), so a question
+    built on a greeting's frame ("What can you do for me?", "How can you
+    help?") is never taken for the greeting and dropped. ``played=True``
+    says ``greeting_phrases`` is the single greeting known to have played
+    this turn, which allows a close match at any length, a short greeting
+    included (``KNOWN_GREETING_MIN_RATIO``); against the whole bank a short
     greeting must match exactly, because "Hello." and "Yes?" are also
     things a person says.
     """
@@ -258,6 +289,8 @@ def is_greeting_only(transcript: str, greeting_phrases, *, played: bool = False)
                 return True
             if not len(p_words) - 1 <= len(t_words) <= len(p_words):
                 continue
+            if not _only_misheard(t_words, p_words):
+                continue
             if len(p_words) >= FUZZY_MIN_MATCHED_WORDS:
                 shared = _matched_words(t, p)
                 if (
@@ -266,6 +299,8 @@ def is_greeting_only(transcript: str, greeting_phrases, *, played: bool = False)
                     and shared * 2 >= len(p_words)
                 ):
                     return True
-            elif played and _similarity(t.replace(" ", ""), p_compact) >= KNOWN_GREETING_MIN_RATIO:
+            # The one line known to have played may be misheard more
+            # loosely, at any length ("Back to soon." for "Back so soon?").
+            if played and _similarity(t.replace(" ", ""), p_compact) >= KNOWN_GREETING_MIN_RATIO:
                 return True
     return False

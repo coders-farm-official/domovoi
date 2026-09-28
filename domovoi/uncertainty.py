@@ -126,7 +126,11 @@ _SUBJECTIVE_RE = re.compile(
 # An answer in which the model says, in its own words, that what it knows
 # may be stale — the one self-doubt signal worth an online check. Narrow on
 # purpose: "I'm not sure who Chevy is" is not a stale fact, and an offer
-# glued onto chit-chat is noise.
+# glued onto chit-chat is noise. The later alternatives are llama3.2:3b's
+# own hedges on time-sensitive questions the categorizer lets through
+# (probe, 2026-09-28: "I'm a bit out of date, to be honest", "I might not
+# have the very latest information", "I'm not up to date on all the
+# latest sports news", "I was last updated in December 2023").
 _STALE_ANSWER_RE = re.compile(
     r"\b("
     r"real[- ]time (?:info\w*|data|access|updates?|news)|"
@@ -135,7 +139,13 @@ _STALE_ANSWER_RE = re.compile(
     r"(?:may|might|could) (?:be|have) (?:out of date|outdated|changed since)|"
     r"(?:don't|do not|doesn't|does not) have (?:access to )?"
     r"(?:current|up-to-date|up to date|live|the latest|recent) "
-    r"(?:info\w*|data|news|details|figures)"
+    r"(?:info\w*|data|news|details|figures)|"
+    r"(?:i'm|i am) (?:a (?:bit|little) |slightly |probably )?"
+    r"(?:out of date|outdated|not (?:fully |always )?(?:up[- ]to[- ]date|current))|"
+    r"(?:may|might|could) not (?:have|know|be) (?:the )?(?:very |most )?"
+    r"(?:latest|newest|most recent|up[- ]to[- ]date|current)|"
+    r"(?:i was|i've been|my (?:knowledge|information|info|data) was) last updated|"
+    r"my (?:knowledge|information|info|data) (?:stopped|stops|ends|only goes|goes up to)"
     r")\b"
 )
 
@@ -151,6 +161,23 @@ def answer_admits_staleness(answer: str) -> bool:
     """True when the spoken answer says the model's knowledge may be out of
     date ("I don't have real-time info, but the latest I know of is…")."""
     return bool(answer) and bool(_STALE_ANSWER_RE.search(answer.lower().replace("’", "'")))
+
+
+# The model closing its answer by offering, itself, to look it up ("…I'm not
+# up to date on all the latest sports news, can I look that up for you?").
+# Only the confirmation flow can keep that promise — without it a "yes"
+# goes to the model, which can't search — so the router treats it as the
+# online-check offer and parks it, without appending a second one.
+_OFFERS_LOOKUP_RE = re.compile(
+    r"\b(?:look (?:that|this|it) up|check (?:that |this |it )?online|"
+    r"search (?:for (?:that|this|it)|online|the web))\b[^.!?]*\?[\"')”’]*$"
+)
+
+
+def answer_offers_lookup(answer: str) -> bool:
+    """True when the answer ends by offering to look it up online."""
+    text = (answer or "").strip().lower().replace("’", "'")
+    return bool(text) and bool(_OFFERS_LOOKUP_RE.search(text))
 
 
 def looks_like_question(transcript: str) -> bool:

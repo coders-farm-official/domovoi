@@ -49,7 +49,11 @@ from domovoi.router import (
 from domovoi.speech_sanitize import sanitize_for_speech
 from domovoi.streaming import _split_sentences
 from domovoi.tests.conftest import requires_db
-from domovoi.uncertainty import answer_admits_staleness, looks_like_question
+from domovoi.uncertainty import (
+    answer_admits_staleness,
+    answer_offers_lookup,
+    looks_like_question,
+)
 
 JOKE = "What do you call a fake noodle? An impasta!"
 OFFER = "Want me to check that online?"
@@ -239,6 +243,13 @@ async def test_the_real_client_never_self_flags() -> None:
         "That may be out of date by now.",
         "I don’t have current information on that.",
         "My knowledge cutoff is 2023, so I can't say.",
+        # llama3.2:3b's own hedges on questions the categorizer lets through
+        # (local probe, 2026-09-28).
+        "I'm a bit out of date, to be honest. My knowledge stopped in 2023.",
+        "I think it's 2023. I was last updated in December 2023, so I might "
+        "not have the very latest information.",
+        "That would be Mike McCarthy, but I'm not up to date on all the latest sports news.",
+        "My information might not be current, but it was Parag Agrawal.",
     ],
 )
 def test_an_answer_that_admits_it_may_be_stale(answer: str) -> None:
@@ -252,11 +263,32 @@ def test_an_answer_that_admits_it_may_be_stale(answer: str) -> None:
         "I'm not sure who Chevy is.",
         "What do you call a fake noodle? An impasta!",
         "I can't provide information on the melting point of cocaine.",
+        "Elon Musk is the CEO of Twitter.",
+        "I might not have heard you right.",
+        "I'm up to date on my chores, thanks.",
+        "The page was last updated in 2020.",
         "",
     ],
 )
 def test_ordinary_answers_do_not_admit_staleness(answer: str) -> None:
     assert not answer_admits_staleness(answer)
+
+
+@pytest.mark.parametrize(
+    "answer,expected",
+    [
+        ("Mike McCarthy. I'm not up to date on sports, can I look that up for you?", True),
+        ("I'm not sure. Want me to check that online?", True),
+        ("I'm not sure. Should I search the web for it?", True),
+        ('Should I look it up?"', True),
+        ("I looked it up once. It's Canberra.", False),
+        ("Can I look that up for you? It's probably Canberra.", False),
+        ("Canberra.", False),
+        ("", False),
+    ],
+)
+def test_answer_offers_lookup(answer: str, expected: bool) -> None:
+    assert answer_offers_lookup(answer) is expected
 
 
 @pytest.mark.parametrize(
@@ -465,3 +497,28 @@ async def test_a_flag_on_a_question_offers_as_its_own_sentence(db_session) -> No
         db_session, "what does that mean?", "I don't have enough context to answer that"
     )
     assert resp.text == "I don't have enough context to answer that. " + OFFER
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_models_own_lookup_offer_is_parked_not_asked_twice(db_session) -> None:
+    """The model sometimes ends by offering to look it up itself. A "yes"
+    to that must reach the web search (so the offer is parked), and the
+    room must not hear the question twice."""
+    from domovoi.db.repositories import SessionRepository
+
+    answer = (
+        "That would be Mike McCarthy, but I'm not up to date on all the latest "
+        "sports news, can I look that up for you?"
+    )
+    resp, row = await _route_real(
+        db_session, "Who is the head coach of the Cowboys?", _Chat(answer)
+    )
+    assert resp.text == answer
+    assert OFFER not in resp.text
+    assert resp.expect_followup is True
+    pending = (await SessionRepository(db_session).get_context(resp.session_id))[
+        "pending_confirmation"
+    ]
+    assert pending["kind"] == "core.self_doubt_offer"
+    assert pending["question"] == "Who is the head coach of the Cowboys?"
