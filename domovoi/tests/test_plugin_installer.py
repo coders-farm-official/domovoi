@@ -120,6 +120,7 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     # default, locked 14). Leaving it registered would leak its handler
     # into the registry-shape tests that run later.
     await LOADER.shutdown()
+    LOADER.pending_restart.clear()    # an upgrade test's staged restart
     await reg.delete_plugin(SLUG)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
@@ -339,6 +340,37 @@ async def test_disable_enable_roundtrip() -> None:
     assert row is not None and row.enabled
 
 
+async def test_enable_refuses_checksum_drift_with_a_422() -> None:
+    """An applied migration edited on disk while the plugin was disabled:
+    enable refuses with ``migration_drift`` — a 422 from the admin API —
+    and the plugin stays disabled. The runner's MigrationChecksumError
+    used to escape api_enable (which only catches InstallError) as a 500."""
+    from fastapi import HTTPException
+
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    await disable_plugin(SLUG)
+    v1 = installer.installed_root() / SLUG / "migrations" / "V001__compliments_schema.sql"
+    v1.write_text(
+        v1.read_text(encoding="utf-8") + "\n-- edited after it was applied\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallError) as exc:
+        await enable_plugin(SLUG)
+    assert exc.value.code == "migration_drift"
+    assert "V001__compliments_schema.sql" in str(exc.value)
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_enable(SLUG)
+    assert http.value.status_code == 422
+    assert http.value.detail["error"]["code"] == "migration_drift"
+
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and not row.enabled
+    assert "compliments" not in HANDLER_BY_NAME
+
+
 # ─── uninstall keep / purge (§3.5) ──────────────────────────────────────────
 
 async def test_uninstall_keep_preserves_schema() -> None:
@@ -439,10 +471,16 @@ async def test_upgrade_happy_path() -> None:
 
     staged2 = await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=SLUG)
     result = await confirm_upgrade(staged2.staged_id)
-    assert result["loaded"] and result["upgraded_from"] == "1.0.0"
+    # The running 1.0.0 module stays cached in this process, so the new
+    # version is staged for the next restart rather than hot-loaded
+    # (test_plugin_upgrade_restart.py covers the restart itself).
+    assert result["upgraded_from"] == "1.0.0"
+    assert result["restart_required"] is True and result["loaded"] is False
     row = await reg.get_plugin(SLUG)
     assert row is not None and row.version == "1.1.0" and row.enabled
-    assert "compliments" in HANDLER_BY_NAME
+    assert row.status == "ok"
+    assert "compliments" not in HANDLER_BY_NAME
+    assert LOADER.pending_restart[SLUG]["to_version"] == "1.1.0"
     # The .previous copy is cleaned up on success.
     assert list(installer.previous_root().iterdir()) == []
 
@@ -665,3 +703,161 @@ async def test_zip_over_bundled_tombstone_becomes_non_bundled() -> None:
     row = await reg.get_plugin(SLUG)
     assert row is not None and row.bundled is False
     assert Path(row.install_dir) == installed_dir
+
+
+# ─── bundled plugins update with the core, never from a zip ────────────────
+
+def _into_checkout() -> Path:
+    """A copy of the fixture where a bundled plugin lives: the checkout's
+    plugins/<slug> (bundled_root is a tmp dir in these tests)."""
+    from domovoi.plugins_runtime import loader as loader_mod
+
+    copy = loader_mod.bundled_root() / SLUG
+    shutil.copytree(FIXTURE, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    return copy
+
+
+def _tree(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+
+
+async def test_a_bundled_plugin_refuses_a_zip_or_github_upgrade() -> None:
+    """Upgrading a bundled plugin moved <repo>/plugins/<slug> to .previous
+    and deleted it on success, then turned the row into a zip install: the
+    checkout lost tracked files, later pulls stopped reaching the plugin,
+    and the update unit refused every update over the dirty tree."""
+    from fastapi import HTTPException
+
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    copy = _into_checkout()
+    before = _tree(copy)
+    manifest = parse_manifest((copy / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    await reg.insert_plugin(
+        slug=SLUG, name="Compliments", version="1.0.0", publisher="Coders Farm",
+        license="MIT", domovoi_api=">=1.0,<2.0", enabled=True, bundled=True,
+        install_source="bundled", source_ref=None, install_dir=str(copy),
+        manifest=manifest.raw,
+    )
+
+    class _Unread:
+        """The refusal comes before the request body is read."""
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_upgrade(_Unread(), SLUG)
+    assert http.value.status_code == 422
+    error = http.value.detail["error"]
+    assert error["code"] == "bundled_plugin"
+    assert "bundled plugins update with the core" in error["message"]
+
+    # Staging refuses it too: as an upgrade, and as a fresh install of the
+    # slug (which the dashboard would otherwise re-stage as an upgrade).
+    for upgrade_of in (SLUG, None):
+        with pytest.raises(InstallError) as exc:
+            await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=upgrade_of)
+        assert exc.value.code == "bundled_plugin"
+    assert list(installer.staging_root().iterdir()) == []
+
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.bundled and row.install_source == "bundled"
+    assert row.version == "1.0.0" and row.install_dir == str(copy)
+    assert _tree(copy) == before
+
+
+async def test_confirm_never_moves_a_plugin_out_of_the_checkout() -> None:
+    """Defence in depth at confirm, where the move happens: a row whose
+    files sit in the checkout is refused before anything is torn down."""
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    copy = _into_checkout()
+    await reg.update_plugin(SLUG, install_dir=str(copy))     # still bundled=False
+    staged2 = await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=SLUG)
+
+    with pytest.raises(InstallError) as exc:
+        await confirm_upgrade(staged2.staged_id)
+
+    assert exc.value.code == "bundled_plugin"
+    assert (copy / "domovoi-plugin.toml").is_file()
+    assert list(installer.previous_root().iterdir()) == []
+    assert not staged2.root.exists()
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.version == "1.0.0" and row.install_dir == str(copy)
+    assert SLUG in LOADER.loaded                               # nothing torn down
+
+
+async def test_uninstall_never_deletes_files_in_the_checkout() -> None:
+    """A non-bundled row can still point into plugins/ — a dev registration
+    of a checkout dir. Uninstall drops the row and leaves git's files."""
+    from domovoi.plugins_runtime.manifest import parse_manifest
+
+    copy = _into_checkout()
+    manifest = parse_manifest((copy / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    await reg.insert_plugin(
+        slug=SLUG, name="Compliments", version="1.0.0", publisher="Coders Farm",
+        license="MIT", domovoi_api=">=1.0,<2.0", enabled=False, bundled=False,
+        install_source="dev", source_ref=None, install_dir=str(copy),
+        manifest=manifest.raw,
+    )
+
+    out = await uninstall_plugin(SLUG, data="keep")
+
+    assert out["uninstalled"] and out["bundled"] is False
+    assert await reg.get_plugin(SLUG) is None
+    assert (copy / "domovoi-plugin.toml").is_file()
+
+
+# ─── a failed upgrade names the migrations it left applied (§3.6) ──────────
+
+def _with_files(zip_bytes: bytes, extra: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as src, \
+            zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info))
+        for name, content in extra.items():
+            dst.writestr(name, content)
+    return buf.getvalue()
+
+
+async def test_a_failed_upgrade_names_the_migrations_it_kept() -> None:
+    """Migrations never roll back: when V003 of an upgrade fails, V002 stays
+    applied and the previous version comes back to run against it. That
+    used to reach only the server log; the admin who pressed confirm now
+    gets it in the error, per database."""
+    from fastapi import HTTPException
+
+    from domovoi.plugins_runtime.migrations import default_database_urls
+
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    upgrade = _with_files(build_fixture_zip(version="1.1.0"), {
+        "migrations/V002__add_mood.sql": "ALTER TABLE compliments_log ADD COLUMN mood TEXT;\n",
+        "migrations/V003__broken.sql": "ALTER TABLE no_such_table ADD COLUMN x INT;\n",
+    })
+    staged2 = await stage_zip(upgrade, upgrade_of=SLUG)
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_confirm(staged2.staged_id)
+
+    assert http.value.status_code == 422
+    error = http.value.detail["error"]
+    assert error["code"] == "migration_failed"
+    assert "V003__broken.sql" in error["message"]
+    [url] = default_database_urls()                 # the pinned _test DB
+    db = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    assert error["details"]["migrations_kept"] == {db: ["V002__add_mood.sql"]}
+    # The previous version is back — against the newer schema.
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.version == "1.0.0" and row.enabled
+    async with engine.connect() as conn:
+        versions = (
+            await conn.execute(text(f'SELECT version FROM "{SCHEMA}".schema_history ORDER BY 1'))
+        ).scalars().all()
+    assert versions == [1, 2]
+
+    # Trying again applies nothing new before failing, so nothing is named.
+    staged3 = await stage_zip(upgrade, upgrade_of=SLUG)
+    with pytest.raises(InstallError) as exc:
+        await confirm_upgrade(staged3.staged_id)
+    assert exc.value.code == "migration_failed"
+    assert "migrations_kept" not in exc.value.details

@@ -484,8 +484,10 @@ instead of bouncing core and web, and each run does this:
    touching nothing, if the dependencies changed but the service user
    can't write the venv (step 5 would fail, and so would its rollback).
 3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
-   `/var/lib/domovoi-update/backups/` (the newest 5 are kept). If the backup
-   fails, the update stops there and nothing has been stopped.
+   `/var/lib/domovoi-update/backups/`, and `domovoi_test` next to it
+   (`pre-<sha>-<time>.test.dump`) when that database exists: plugin
+   migrations are applied to both. The newest 5 of each are kept. If either
+   backup fails, the update stops there and nothing has been stopped.
 4. Stop `domovoi-web` and `domovoi-core`.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv the way [Install](#install) builds it (CPU
@@ -497,15 +499,40 @@ instead of bouncing core and web, and each run does this:
 7. `systemctl restart domovoi-db`: compose up plus Flyway.
 8. Start core and web. Both must answer `/v1/health` (core, :6370) and
    `/api/health` (web, :6369) within 120 s.
+9. Every plugin that loaded before the update must still load: none that
+   was enabled and not at `load_error` may be at `load_error` now. The core
+   never lets a failing plugin take it down, so its health check stays
+   green through one, and without this step a plugin the new code breaks
+   would drop out of the house under an `ok` update. The script reads each
+   plugin's status from the `plugins` table through the `domovoi-postgres`
+   container, as it does the migration counts; the core has recorded every
+   plugin's load before it first answers `/v1/health`. A plugin that was
+   already failing, or that you switched off, doesn't count, and neither
+   does one that is new in the update.
 
-If any of 4-8 fails, it rolls back: `git reset --keep` to the previous SHA
+If any of 4-9 fails, it rolls back: `git reset --keep` to the previous SHA
 (never `--hard`), the venv re-synced and every package put back at its
 exact pre-update version, the old MPD image rebuilt, and, if
-`flyway_schema_history` grew, the pre-update dump restored. The restore goes
-into a fresh database that is then renamed to `domovoi`; the replaced one
-is kept as `domovoi_failed_<timestamp>` for inspection, and you drop it by
-hand when you're done with it. Then it restarts and health-checks again, and
-records the commit it rolled back as `bad_sha`. The panel stops offering a
+`flyway_schema_history` or any plugin's migration ledger
+(`plugin_<slug>.schema_history`) grew, the pre-update dump restored.
+Plugin migrations count because Flyway never sees them: the core applies a
+plugin's pending migrations when it starts, so a pull that adds one to a
+bundled plugin changes the database in step 8, not step 7. Rolling the code
+back without them would leave that plugin's schema ahead of its code, and a
+corrected release of the same migration would then be refused as an edited
+file. `domovoi_test` gets the same treatment on its own evidence: its dump
+is restored if a plugin ledger in it grew. The restore goes into a fresh
+database that is then renamed to `domovoi` (or `domovoi_test`); the
+replaced one is kept as `domovoi_failed_<timestamp>` (or
+`domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
+when you're done with it. The loader switches off a plugin whose import,
+`register()` or contract check fails, and a boot skips switched-off
+plugins, so every plugin that loaded before the update and that the new
+code's load errors switched off is switched back on before the previous SHA
+starts (a plugin you switched off yourself stays off). Then it restarts,
+health-checks and checks the plugins again, and records the commit it
+rolled back as `bad_sha`. If a plugin still won't load on the previous SHA,
+the result is `rollback_failed` and names it. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
@@ -566,6 +593,7 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 # DOMOVOI_PG_CONTAINER=domovoi-postgres
 # DOMOVOI_PG_USER=domovoi
+# Its <db>_test twin is backed up and restored with it whenever that exists.
 # DOMOVOI_PG_DB=domovoi
 # Where the core records the pre-pull SHA (its UPDATE_STATE_DIR). Default: ~<service user>/.domovoi/update
 # DOMOVOI_CORE_STATE_DIR=/home/domovoi/.domovoi/update

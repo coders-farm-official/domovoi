@@ -642,6 +642,16 @@ _RULE_CASES = {
         {"id": 2, "kind": "url", "status": "pending", "text": "x"}]}},
     "update_rolled_back": {"version": {"restart_required": False, "bad_sha": "a" * 40,
                                        "last_update": {"status": "rolled_back"}}},
+    # A plugin upgrade staged for restart, with and without pulled code.
+    "restart_plugin_only": {"version": {"restart_required": True, "code_restart_required": False,
+                                         "plugins_pending_restart": [
+                                             {"slug": "radio", "from_version": "1.1.0",
+                                              "to_version": "1.2.0", "where": ["core"]}]}},
+    "restart_plugins_and_code": {"version": {"restart_required": True, "code_restart_required": True,
+                                              "plugins_pending_restart": [
+                                                  {"slug": "radio"}, {"slug": "sleep"}]}},
+    "restart_two_plugins": {"version": {"restart_required": True, "code_restart_required": False,
+                                         "plugins_pending_restart": [{"slug": "radio"}, {"slug": "sleep"}]}},
     "disk_full": {"hardware": {"disk": {"percent": 96.2}}},
     "disk_ok": {"hardware": {"disk": {"percent": 89.9}}},
     "db_down": {"health": {"status": "degraded", "db_reachable": False, "domovoi_reachable": True},
@@ -1332,6 +1342,17 @@ def test_update_and_disk_rows_are_admin_scoped(driven) -> None:
     assert [(r["key"], r["scope"]) for r in driven["rules"]["update_rolled_back"]] == [("update", "admin")]
     assert _rules(driven, "disk_full") == [("disk", "err")]
     assert _rules(driven, "disk_ok") == []
+
+
+def test_a_staged_plugin_upgrade_asks_for_the_restart_by_name(driven) -> None:
+    (row,) = driven["rules"]["restart_plugin_only"]
+    assert (row["key"], row["tone"], row["scope"]) == ("restart", "warn", "admin")
+    assert row["text"] == "a restart is pending · the radio upgrade isn't running yet"
+    (row,) = driven["rules"]["restart_two_plugins"]
+    assert row["text"] == "a restart is pending · 2 plugin upgrades aren't running yet"
+    # Pulled code is the bigger news; one row, not two.
+    (row,) = driven["rules"]["restart_plugins_and_code"]
+    assert row["text"] == "a restart is pending · the pulled code isn't running yet"
 
 
 def test_a_down_core_or_database_suppresses_what_depends_on_it(driven) -> None:

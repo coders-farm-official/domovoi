@@ -38,7 +38,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
-from domovoi.plugins_runtime.loader import LOADER, installed_root
+from domovoi.plugins_runtime import loader as _loader
+from domovoi.plugins_runtime.loader import LOADER, code_imported, installed_root
 from domovoi.plugins_runtime.lockfile import (
     LockfileError,
     LockRequirement,
@@ -52,6 +53,8 @@ from domovoi.plugins_runtime.manifest import (
     validate_plugin_dir,
 )
 from domovoi.plugins_runtime.migrations import (
+    MigrationChecksumError,
+    MigrationError,
     PluginMigrationRunner,
     SqlLintError,
     discover_migrations,
@@ -106,6 +109,28 @@ def previous_root() -> Path:
 
 def data_root() -> Path:
     return Path.home() / ".domovoi" / "plugins" / "data"
+
+
+def _in_checkout(path: Path) -> bool:
+    """Whether ``path`` lies in the repo's ``plugins/`` dir: git's files,
+    which no install, upgrade or uninstall may move or delete (a missing
+    tracked file leaves the checkout dirty, and the dashboard's pull and
+    the update unit both refuse a dirty tree)."""
+    try:
+        return Path(path).resolve().is_relative_to(_loader.bundled_root().resolve())
+    except OSError:  # pragma: no cover — unresolvable path
+        return False
+
+
+def _bundled_refusal(slug: str) -> InstallError:
+    return InstallError(
+        "bundled_plugin",
+        f"bundled plugins update with the core — {slug!r} ships inside the "
+        f"Domovoi checkout; pull the new Domovoi version and restart (the "
+        f"Version panel in Settings) instead of installing it from a zip or "
+        f"GitHub",
+        details={"slug": slug},
+    )
 
 
 # ─── zip safety (§7.4 / §3.2 step 2) ────────────────────────────────────────
@@ -532,6 +557,11 @@ async def stage_zip(
         # Step 6 — slug collision / orphan schema.
         existing = await reg.get_plugin(manifest.slug)
         if upgrade_of is None:
+            if (existing is not None and existing.status != "uninstalled"
+                    and existing.bundled):
+                # Not slug_exists: the dashboard re-stages that as an
+                # upgrade, which a bundled plugin refuses anyway.
+                raise _bundled_refusal(manifest.slug)
             if existing is not None and existing.status != "uninstalled":
                 raise InstallError(
                     "slug_exists",
@@ -567,6 +597,8 @@ async def stage_zip(
                 raise InstallError(
                     "upgrade_missing", f"plugin {upgrade_of!r} is not installed"
                 )
+            if existing.bundled:
+                raise _bundled_refusal(upgrade_of)
             cmp = _semver_cmp(manifest.version, existing.version)
             if cmp == 0:
                 raise InstallError(
@@ -793,7 +825,14 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
 
 # ─── Phase B — confirm (§3.2 steps 9–15 + rollback matrix) ─────────────────
 
-async def confirm_install(staged_id: str) -> dict[str, Any]:
+async def confirm_install(
+    staged_id: str, *, load: bool = True, enabled: bool = True
+) -> dict[str, Any]:
+    """Phase B. ``load=False`` (an upgrade staged for restart, see
+    :func:`confirm_upgrade`) runs every step but the hot load (13): the
+    new version is installed and registered, and loads at the next
+    restart. ``enabled=False`` (an upgrade of a disabled plugin) writes the
+    row disabled and loads nothing."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -816,10 +855,13 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
     runner = PluginMigrationRunner(slug, staged.root / manifest.migrations_dir)
     # A schema that pre-exists (reinstall-after-keep, §3.5) carries user
     # data — rollback must NEVER drop it; only a brand-new schema is
-    # dropped on failure (§3.2 matrix row 10).
-    schema_was_fresh = not await runner.schema_exists()
+    # dropped on failure (§3.2 matrix row 10). Decided per database: a
+    # _test schema an earlier install left behind is not brand new.
+    fresh_urls: list[str] = []
 
     try:
+        fresh_urls = await runner.missing_schema_urls()
+
         # Step 9b — real pip install.
         if manifest.python_requirements:
             lock = staged.root / (manifest.lockfile or "requirements.lock")
@@ -827,7 +869,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
 
         # Step 10 — migrations, both DBs (the runner owns fresh-install
         # both-or-neither internally).
-        await runner.apply_all()
+        await _apply_migrations(runner)
 
         # Step 11 — move staging → installed/<slug>/.
         meta_file.unlink(missing_ok=True)
@@ -853,7 +895,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
             # zip/github install always becomes a normal non-bundled row.
             await reg.update_plugin(
                 slug,
-                status="ok", enabled=True, version=manifest.version,
+                status="ok", enabled=enabled, version=manifest.version,
                 install_dir=str(dest), manifest=manifest.raw,
                 pip_report=pip_report, install_source=staged.install_source,
                 source_ref=staged.source_ref, bundled=False, last_error=None,
@@ -862,12 +904,26 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
             await reg.insert_plugin(
                 slug=slug, name=manifest.name, version=manifest.version,
                 publisher=manifest.publisher, license=manifest.license,
-                domovoi_api=manifest.domovoi_api, enabled=True, bundled=False,
+                domovoi_api=manifest.domovoi_api, enabled=enabled, bundled=False,
                 install_source=staged.install_source,
                 source_ref=staged.source_ref, install_dir=str(dest),
                 manifest=manifest.raw, pip_report=pip_report,
             )
         registry_inserted = True
+
+        if not (load and enabled):
+            # Staged for restart: this process already imported the plugin,
+            # so loading now would register the cached OLD module against
+            # this manifest. Or disabled, which loads nothing either way.
+            # Chat drops the unloaded plugin's tools until a load brings
+            # the new ones.
+            _STAGED.pop(staged_id, None)
+            await _best_effort_resync()
+            return {
+                "installed": True, "loaded": False, "slug": slug,
+                "version": manifest.version, "status": "ok",
+                "enabled": enabled, "restart_required": not load,
+            }
 
         # Step 13 — hot load + contract checks. Failure here is NOT rolled
         # back like earlier steps: status='load_error', enabled=false, files
@@ -884,6 +940,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
                 "slug": slug,
                 "status": "load_error",
                 "error": str(e),
+                "restart_required": False,
             }
 
         # Step 14 — Letta/chat resync (non-fatal).
@@ -901,6 +958,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
         result: dict[str, Any] = {
             "installed": True, "loaded": True, "slug": slug,
             "version": manifest.version, "status": "ok",
+            "restart_required": False,
         }
         if resync_warning:
             result["warning"] = resync_warning
@@ -908,16 +966,30 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
 
     except InstallError:
         await _rollback(
-            staged, pip_report, schema_was_fresh, moved_to,
+            staged, pip_report, fresh_urls, moved_to,
             registry_inserted, runner,
         )
         raise
     except Exception as e:
         await _rollback(
-            staged, pip_report, schema_was_fresh, moved_to,
+            staged, pip_report, fresh_urls, moved_to,
             registry_inserted, runner,
         )
         raise InstallError("install_failed", f"install failed: {e}") from e
+
+
+async def _apply_migrations(runner: PluginMigrationRunner) -> None:
+    """``runner.apply_all()`` with the runner's refusals and failures
+    raised as InstallError, so every admin endpoint answers a 422 naming
+    the file and the reason instead of an unhandled 500."""
+    try:
+        await runner.apply_all()
+    except MigrationChecksumError as e:
+        raise InstallError("migration_drift", str(e)) from e
+    except SqlLintError as e:
+        raise InstallError("migration_lint", str(e)) from e
+    except MigrationError as e:
+        raise InstallError("migration_failed", str(e)) from e
 
 
 def hash_tree_excluding(root: Path, exclude_names: set[str]) -> str:
@@ -937,15 +1009,15 @@ def hash_tree_excluding(root: Path, exclude_names: set[str]) -> str:
 async def _rollback(
     staged: StagedInstall,
     pip_report: dict[str, Any] | None,
-    schema_was_fresh: bool,
+    fresh_urls: list[str],
     moved_to: Path | None,
     registry_inserted: bool,
     runner: PluginMigrationRunner,
 ) -> None:
     """§3.2 failure matrix, rows 9–12 (later rows don't roll back). The
-    schema is dropped only when it was BRAND NEW this install — a kept
-    schema from an earlier uninstall (§3.5 reinstall-after-keep) carries
-    user data and survives."""
+    schema is dropped only on the databases where it was BRAND NEW this
+    install (``fresh_urls``) — a kept schema from an earlier uninstall
+    (§3.5 reinstall-after-keep) carries user data and survives."""
     slug = staged.manifest.slug
     if registry_inserted:
         try:
@@ -954,9 +1026,9 @@ async def _rollback(
             log.exception("rollback: registry delete failed")
     if moved_to is not None:
         shutil.rmtree(moved_to, ignore_errors=True)
-    if schema_was_fresh:
+    if fresh_urls:
         try:
-            await runner.drop_schema()
+            await runner.drop_schema(only=fresh_urls)
         except Exception:  # pragma: no cover
             log.exception("rollback: schema drop failed")
     if pip_report:
@@ -984,8 +1056,12 @@ async def enable_plugin(slug: str) -> dict[str, Any]:
     # Migration catch-up on BOTH DBs (a newer version may have been copied
     # in while disabled), then load + contract checks + resync.
     runner = PluginMigrationRunner(slug, install_dir / manifest.migrations_dir)
-    await runner.apply_all()
+    await _apply_migrations(runner)
     await reg.set_enabled(slug, True)
+    if slug in LOADER.pending_restart:
+        # Upgraded after this process imported the old code: the new
+        # version loads at the restart the upgrade is waiting for.
+        return {"enabled": True, "slug": slug, "restart_required": True}
     try:
         await LOADER.load_plugin(slug=slug, install_dir=install_dir, manifest=manifest)
     except Exception as e:
@@ -1022,8 +1098,9 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
     if row is None:
         raise InstallError("not_installed", f"plugin {slug!r} is not installed")
 
-    # 1. Full disable teardown.
+    # 1. Full disable teardown. A staged upgrade has nothing left to finish.
     await LOADER.unload_plugin(slug)
+    LOADER.pending_restart.pop(slug, None)
 
     manifest = row.manifest or {}
     migrations_dir = (manifest.get("assets") or {}).get("migrations_dir", "migrations")
@@ -1050,11 +1127,19 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
                 others.add(req.split("==")[0].split("[")[0].lower())
         pip_uninstall(sorted(newly - others))
 
-    # 4/5. Bundled → tombstone (never delete dir or row); else remove both.
+    # 4/5. Bundled → tombstone (never delete dir or row); else remove both
+    #      — but never files in the checkout (a dev registration of a dir
+    #      under plugins/, say): those belong to git.
     if row.bundled:
         await reg.tombstone_plugin(slug)
     else:
-        shutil.rmtree(Path(row.install_dir), ignore_errors=True)
+        if _in_checkout(Path(row.install_dir)):
+            log.warning(
+                "uninstall %s: %s is in the Domovoi checkout — row removed, "
+                "files left for git", slug, row.install_dir,
+            )
+        else:
+            shutil.rmtree(Path(row.install_dir), ignore_errors=True)
         await reg.delete_plugin(slug)
 
     await _best_effort_resync()
@@ -1065,7 +1150,17 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
 
 async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     """Confirm a staged UPGRADE: teardown old → move old dir to .previous →
-    run the normal confirm pipeline → best-effort restore on failure."""
+    run the normal confirm pipeline → best-effort restore on failure.
+
+    When this process has already imported the plugin (the usual case: it
+    was running), the new code is NOT hot-loaded — ``import_module`` would
+    return the cached old module, so ``register()`` would run the old code
+    against the new manifest, and a new worker or handler would then fail
+    the contract check and leave the plugin disabled. The upgrade is staged
+    for restart instead: migrations applied, files swapped, row written,
+    ``restart_required: true`` in the answer and a
+    ``LOADER.pending_restart`` marker that ``/v1/admin/version`` and
+    ``/v1/plugins`` report until the Domovoi services restart."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -1077,13 +1172,25 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         raise InstallError("upgrade_missing", f"plugin {slug!r} is not installed")
 
     old_dir = Path(row.install_dir)
+    if row.bundled or _in_checkout(old_dir):
+        # Checked again here, before anything is torn down: the upgrade
+        # below MOVES the old dir and deletes it on success, and for a
+        # bundled plugin that dir is <repo>/plugins/<slug>.
+        _drop_staged(staged)
+        raise _bundled_refusal(slug)
     prev_dir = previous_root() / f"{slug}-{row.version}"
     prev_dir.parent.mkdir(parents=True, exist_ok=True)
     manifest = staged.manifest
     mig_runner = PluginMigrationRunner(
         slug, staged.root / manifest.migrations_dir
     )
-    pre_upgrade_ledger = await mig_runner.ledger_max_version()
+    ledger_before = await _ledger_versions(mig_runner)
+    # Read now: a failed confirm deletes the staged tree.
+    staged_files = {
+        mf.version: mf.filename
+        for mf in discover_migrations(staged.root / manifest.migrations_dir)
+    }
+    stage_for_restart = code_imported(slug) or slug in LOADER.pending_restart
 
     await LOADER.unload_plugin(slug)
     old_row = row
@@ -1096,21 +1203,32 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     await reg.delete_plugin(slug)
 
     try:
-        result = await confirm_install(staged_id)
+        # A disabled plugin stays disabled: the upgrade swaps its files and
+        # schema, it doesn't switch it on.
+        result = await confirm_install(
+            staged_id, load=not stage_for_restart, enabled=old_row.enabled
+        )
         shutil.rmtree(prev_dir, ignore_errors=True)
+        if stage_for_restart:
+            LOADER.stage_restart(
+                slug, from_version=old_row.version, to_version=manifest.version
+            )
         result["upgraded_from"] = old_row.version
         return result
     except BaseException as e:
         # Roll back: previous dir returns, old row returns, old version
-        # re-enables. Migrations that already applied STAY applied — warn
-        # loudly naming them (§3.6, DB rule 5).
-        new_ledger = await mig_runner.ledger_max_version()
-        if new_ledger > pre_upgrade_ledger:
+        # re-enables. Migrations that already applied STAY applied — say
+        # which, per database, in the log and in the error the dashboard
+        # shows (§3.6, DB rule 5).
+        kept = _kept_migrations(
+            ledger_before, await _ledger_versions(mig_runner), staged_files
+        )
+        for db, files in kept.items():
             log.error(
-                "upgrade of %s failed AFTER migrations V%03d..V%03d applied — "
-                "they stay applied; the previous version must be "
-                "one-version backward compatible (design §6.2 rule 5)",
-                slug, pre_upgrade_ledger + 1, new_ledger,
+                "upgrade of %s failed AFTER %s applied on %s — they stay "
+                "applied; the previous version must be one-version backward "
+                "compatible (design §6.2 rule 5)",
+                slug, ", ".join(files), db,
             )
         if prev_dir.is_dir() and not old_dir.exists():
             old_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1124,7 +1242,9 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
                 source_ref=old_row.source_ref, install_dir=old_row.install_dir,
                 manifest=old_row.manifest, pip_report=old_row.pip_report,
             )
-            if old_row.enabled:
+            # Not while an earlier upgrade waits for its restart: the cached
+            # module is older still than the version just put back.
+            if old_row.enabled and slug not in LOADER.pending_restart:
                 old_manifest = parse_manifest(
                     (old_dir / "domovoi-plugin.toml").read_text(encoding="utf-8")
                 )
@@ -1134,8 +1254,43 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         except Exception:  # pragma: no cover — double fault
             log.exception("upgrade rollback of %s failed", slug)
         if isinstance(e, InstallError):
+            if kept:
+                e.details["migrations_kept"] = kept
             raise
-        raise InstallError("upgrade_failed", f"upgrade failed: {e}") from e
+        raise InstallError(
+            "upgrade_failed", f"upgrade failed: {e}",
+            {"migrations_kept": kept} if kept else None,
+        ) from e
+
+
+async def _ledger_versions(runner: PluginMigrationRunner) -> dict[str, int]:
+    """Highest applied migration per target database, for naming what a
+    failed upgrade left applied. A database that can't be read is left out:
+    the upgrade itself reports it (an unreachable ``_test`` twin fails the
+    confirm with a 422 and a clean rollback, not here with a 500)."""
+    out: dict[str, int] = {}
+    for url in runner.database_urls:
+        try:
+            out[url] = await runner.ledger_max_version(url)
+        except Exception as e:  # noqa: BLE001 — best effort, for the report
+            log.warning("could not read %s's migration ledger: %s", runner.slug, e)
+    return out
+
+
+def _kept_migrations(
+    before: dict[str, int], after: dict[str, int], files: dict[int, str]
+) -> dict[str, list[str]]:
+    """``{database name: [migration file, ...]}`` for what a failed upgrade
+    applied and left applied — its migrations never roll back, and the
+    previous version comes back to run against them."""
+    kept: dict[str, list[str]] = {}
+    for url, now in after.items():
+        was = before.get(url)
+        if was is None or now <= was:
+            continue
+        db = url.rsplit("/", 1)[-1].split("?", 1)[0]
+        kept[db] = [files.get(v, f"V{v:03d}") for v in range(was + 1, now + 1)]
+    return kept
 
 
 # ─── the admin HTTP surface (§3.2/§7.3 gated list) ──────────────────────────
@@ -1251,7 +1406,8 @@ async def api_uninstall(slug: str, body: dict | None = None) -> dict:
 )
 async def api_upgrade(request: Request, slug: str) -> dict:
     """Stage an upgrade (same two-phase flow: returns staged_id + preview;
-    confirm via the shared confirm endpoint)."""
+    confirm via the shared confirm endpoint). A dev-mode plugin refuses
+    (just restart), and so does a bundled one: it updates with the core."""
     try:
         row = await reg.get_plugin(slug)
         if row is None:
@@ -1260,6 +1416,8 @@ async def api_upgrade(request: Request, slug: str) -> dict:
             raise InstallError(
                 "dev_mode", "dev-mode plugins refuse upgrade — just restart"
             )
+        if row.bundled:
+            raise _bundled_refusal(slug)
         data, source_ref, github_url, force = await _read_install_body(request)
         install_source = "zip"
         if data is None:

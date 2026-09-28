@@ -1538,12 +1538,36 @@ rejects:
 * cross-schema `REFERENCES` — use soft refs + events + a sweep instead;
 * anything that would step outside the migration's role or path:
   `SET`/`RESET ROLE`, `SET SESSION AUTHORIZATION`, `RESET ALL`,
-  `SET search_path` / `set_config(...)`, `DO` blocks, `COPY`,
-  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`.
+  `SET`/`RESET search_path` / `set_config(...)`, `DO` blocks, `COPY`,
+  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`, and
+  `SET standard_conforming_strings` / `client_encoding` / `NAMES` (they
+  change how the server reads the SQL after them);
+* transaction control — `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`,
+  `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION`. The
+  runner already wraps each file in its own transaction; a `COMMIT` would
+  end it, and the rest of the file would run as the application user in
+  `public`. Don't wrap a file in `BEGIN; … COMMIT;`. A PL/pgSQL
+  `BEGIN … END` inside a dollar-quoted function body is fine, and so is
+  `CASE … END` anywhere. Write function bodies dollar-quoted
+  (`AS $$ … $$`): a SQL-standard `BEGIN ATOMIC … END` body isn't quoted,
+  so its closing `END` reads as transaction control and the file is
+  refused.
+
+The lint reads the file the way Postgres does — comments, `'…'` and
+`E'…'` literals, quoted identifiers and dollar quotes (any tag) — so
+nothing it takes for a string or a comment runs as code; the runner pins
+`standard_conforming_strings = on` for each file to keep that true.
 
 `INSERT`/`UPDATE`/`DELETE` on your own tables (seed rows, backfills) are
 fine. The lint is a tripwire in front of the role — the role is what
-Postgres enforces. The application's database user must be a superuser
+Postgres enforces. As a backstop, before recording a file as applied the
+runner checks it finished in the runner's transaction, as the plugin
+role, on the pinned path; a file that didn't is rolled back as far as it
+still can be and is not recorded. Role, lint and check keep an honest
+migration inside its schema; they are not a wall against a hostile one
+(the connection's own user can always switch back to itself, from a
+PL/pgSQL `EXECUTE` no lint can read) — a plugin is trusted code, see
+§6.8. The application's database user must be a superuser
 or hold `CREATEROLE` (the docker-compose and harness users are the
 bootstrap superuser; a hardened deployment grants `CREATEROLE`), or the
 first plugin install fails with a message saying so. Objects an earlier
@@ -1554,7 +1578,9 @@ Uninstall-with-purge drops the role along with the schema. Migrations are
 checksummed into `plugin_<slug>.schema_history`, and an already-applied file
 that changed on disk refuses to load. No down-migrations, ever. Each apply
 targets both the prod DB and its `_test` sibling; on a fresh install a
-failure anywhere drops the brand-new schema everywhere (both-or-neither).
+failure anywhere drops the brand-new schema everywhere (both-or-neither)
+— on each database where that install created it, never a schema that
+was already there.
 
 ### 6.4 The offline contract, and the bus is not durable
 
@@ -1617,9 +1643,30 @@ The runtime forces most of this, but know the shapes:
   backwards).
 * Upgrades tear down the old version, move it aside, and run the normal
   install pipeline; on failure the old version is restored — but migrations
-  the new version already applied **stay applied**, so each released version
-  should be one-version backward compatible with its own schema.
+  the new version already applied **stay applied** (the confirm error names
+  them per database, and the dashboard shows the list), so each released
+  version should be one-version backward compatible with its own schema.
+* An upgrade of a plugin the server has already loaded is **staged for
+  restart**: Python keeps the module it imported, so re-running `register()`
+  would run the old code against your new manifest. The new version's
+  migrations run, its files replace the old ones and its registry row is
+  written, but it loads at the next restart of the Domovoi services. Confirm
+  answers `restart_required: true`; `GET /v1/admin/version` and
+  `GET /v1/plugins` list the upgrade as pending, and the dashboard's Plugins
+  page and Settings → Version offer the restart (the same one that loads
+  pulled code — it bounces core and web). Until then the plugin is not
+  loaded in the core. A plugin whose code the server never imported (its
+  import failed at boot, say) is hot-loaded as before.
+* A disabled plugin stays disabled through an upgrade: its files, schema and
+  row move to the new version, and nothing loads until someone enables it.
 * Dev-mode plugins refuse the upgrade endpoint — just restart.
+* A bundled plugin (shipped in the repo's `plugins/`) updates with the
+  Domovoi checkout. Every core boot refreshes its registry row — name,
+  version, `domovoi_api`, publisher, license and the stored manifest the
+  dashboard and the other plugins' checks read — from the manifest on disk,
+  so a pull plus a restart is the whole upgrade. The zip/GitHub upgrade
+  endpoint refuses a bundled plugin (`422 bundled_plugin`), and no install,
+  upgrade or uninstall moves or deletes files under `plugins/`.
 
 ### 6.8 Trust and permissions honesty
 
@@ -1647,10 +1694,13 @@ history) is why the default is keep.
 
 ### 6.10 Assorted sharp edges
 
-* **Code changes need a core restart.** Enable/disable re-runs `register()`
-  against the cached module; it never re-imports. Same for upgraded web
-  modules in the dashboard process — it shows a "restart the web process"
-  toast.
+* **Code changes need a restart.** Enable/disable re-runs `register()`
+  against the cached module; it never re-imports. Same for web modules in
+  the dashboard process: it remembers the version it imported, and when the
+  registry moves past it (an upgrade, a `domovoi plugin dev` re-register)
+  `GET /api/config/version` lists the plugin in `plugins_pending_restart` and
+  the dashboard offers the restart of the Domovoi services (core and web
+  together) that loads it.
 * **Import budget**: > 10 s to import your core entry module, or initializing
   CUDA during import, fails the load. Lazy-load heavy libraries.
 * **Windows is a first-class host.** No emoji/arrows in console output

@@ -30,6 +30,7 @@ from web.backend.domovoi_client import (
     get_cached_snapshot,
     post_admin,
 )
+from web.backend.plugin_host import HOST
 from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["config"])
@@ -143,10 +144,39 @@ async def get_version(request: Request):
     most needs to get right. On a Linux host with the update unit it also
     carries ``restart_mode``, ``last_update`` (that unit's last run) and
     ``bad_sha`` (a commit it rolled back). Read-only proxy to the Domovoi
-    server, which owns the git working tree; the web process can't see it."""
-    return bridge_response(
-        *await get_admin("/v1/admin/version", headers=auth_forward_headers(request))
+    server, which owns the git working tree; the web process can't see it.
+
+    ``plugins_pending_restart`` is the one addition this process makes: the
+    core lists its upgrades staged for restart, and this process adds every
+    plugin whose web module it imported at an older version than the
+    registry now holds (``where`` names which process runs the old code).
+    Either one makes ``restart_required`` true."""
+    status, payload = await get_admin(
+        "/v1/admin/version", headers=auth_forward_headers(request)
     )
+    if status == 200 and isinstance(payload, dict):
+        payload = merge_web_pending_restarts(payload, HOST.stale_mounts())
+    return bridge_response(status, payload)
+
+
+def merge_web_pending_restarts(
+    version: dict, web_stale: list[dict]
+) -> dict:
+    """Fold this process's stale plugin mounts into the core's version
+    answer. A slug both processes hold old code for is one entry."""
+    pending = [dict(p) for p in (version.get("plugins_pending_restart") or [])]
+    by_slug = {p.get("slug"): p for p in pending}
+    for entry in web_stale:
+        existing = by_slug.get(entry["slug"])
+        if existing is None:
+            pending.append(dict(entry))
+            by_slug[entry["slug"]] = pending[-1]
+        elif "web" not in (existing.get("where") or []):
+            existing["where"] = [*(existing.get("where") or []), "web"]
+    merged = {**version, "plugins_pending_restart": pending}
+    if pending:
+        merged["restart_required"] = True
+    return merged
 
 
 @router.get("/config/server-identity")

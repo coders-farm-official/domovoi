@@ -27,6 +27,39 @@ const STATUS_PILL = {
   uninstalled: { tone: 'idle', label: 'uninstalled' },
 };
 
+/* A refused confirm as the modal shows it: the core's own message (not
+ * "422 Unprocessable Entity: {…}") and, for a failed upgrade, the
+ * migrations that ran before the failure. Those never roll back — the
+ * previous version comes back and runs against the newer schema — so the
+ * admin is told which, per database: [[database, [file, …]], …]. */
+const confirmErrorView = (e) => {
+  const body = ((e && e.detail) || {}).detail;
+  const err = (body && body.error) || {};
+  const kept = (err.details && err.details.migrations_kept) || {};
+  return {
+    // A plain {detail: "…"} (the web process's own 502/503, a 403) is a
+    // sentence too; only a request that got no answer at all falls back
+    // to the bare error.
+    message: err.message || (typeof body === 'string' && body) || String((e && e.message) || e),
+    kept: Object.entries(kept).filter(([, files]) => Array.isArray(files) && files.length > 0),
+  };
+};
+
+const ConfirmError = ({ err }) => (
+  <div className="err">
+    {err.message}
+    {err.kept.length > 0 && (
+      <div style={{ marginTop: 6 }}>
+        These migrations ran before the failure and stay applied — the previous
+        version is back and runs against the newer schema:
+        {err.kept.map(([db, files]) => (
+          <div key={db} className="mono">{files.join(', ')} · {db}</div>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
 /* ---- The §7.5 trust/confirm modal ---------------------------- */
 /* Rendered after Phase A returns a preview; the ONLY affordance that
  * reaches Phase B. Shows the standing trust statement, permission
@@ -62,14 +95,21 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
       const res = await apiPost(`/api/plugins/install/${stagedId}/confirm`);
       // Installed but refused at load (contract check) is a 200 with
       // loaded:false — say so, with the reason, instead of "complete".
-      if (res && res.loaded === false) {
+      // An upgrade of a plugin the server already runs is staged for the
+      // restart instead (restart_required): installed, not loaded yet. An
+      // upgrade of a disabled plugin leaves it disabled.
+      if (res && res.enabled === false) {
+        fire(`${verb} of ${p.name} ${p.version || ''} is installed — it stays disabled`);
+      } else if (res && res.restart_required) {
+        fire(`${verb} of ${p.name} ${p.version || ''} is installed — restart to finish it`);
+      } else if (res && res.loaded === false) {
         fire(`${verb} of ${p.name} ${p.version || ''} did not load: ${res.error || res.status || 'load error'}`);
       } else {
         fire(`${verb} complete: ${p.name} ${p.version || ''}`);
       }
       onDone(res);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr(confirmErrorView(e));
     } finally {
       setBusy(false);
     }
@@ -250,7 +290,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
               version, and migrations never run backwards.
             </div>
           )}
-          {err && <div className="err">{err}</div>}
+          {err && <ConfirmError err={err}/>}
         </div>
         <div className="cal-modal-foot">
           <Button onClick={onCancel} disabled={busy}>cancel</Button>
@@ -356,7 +396,9 @@ const useInstallFlow = (fire, refresh) => {
         fire(`${existingSlug} is already installed — staging as an upgrade`);
         return stageZip(file, existingSlug);
       }
-      fire(`validation failed: ${e.message}`);
+      // The core's own sentence ("install failed: bundled plugins update
+      // with the core — …"), not "422 Unprocessable Entity: {…}".
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
     }
   };
 
@@ -371,7 +413,7 @@ const useInstallFlow = (fire, refresh) => {
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
-      fire(`validation failed: ${e.message}`);
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
     }
   };
 
@@ -416,10 +458,84 @@ const useBrowserPluginErrors = (slug) => {
 
 const PHASE_LABEL = { load: 'failed to load in your browser', render: 'crashed while rendering' };
 
-/* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
-  const [open, setOpen] = React.useState(false);
+/* ---- Upgrades waiting for a restart --------------------------- */
+/* A running plugin can't be swapped in place — the server keeps the
+ * module it imported — so its upgrade is staged: installed, migrated and
+ * registered, loaded at the next restart. GET /api/config/version lists
+ * what is waiting (the core's staged upgrades, plus any plugin the web
+ * process still runs an older copy of); the button is the same restart
+ * as Settings → Version. */
+const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
+  const [restarting, setRestarting] = React.useState(false);
+  if (!pending.length) return null;
+  const capable = !!(version && version.restart_capable);
+  const updateUnit = !!(version && version.restart_mode === 'update');
+  const restart = () => restartDomovoiServer({
+    core: version, fire,
+    question: 'Restart the Domovoi services to finish the plugin upgrade?',
+    onStart: () => setRestarting(true),
+    onSettled,
+  }).finally(() => setRestarting(false));
+  return (
+    <Card title="restart to finish the upgrade"
+          sub="installed and migrated — the new version loads when the Domovoi services restart">
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="mono" style={{ fontSize: 12 }}>{pending.map(pluginUpgradeLabel).join(' · ')}</div>
+        {capable ? (
+          <div>
+            <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
+              {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to finish the upgrade'}
+            </Button>
+          </div>
+        ) : (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            {(version && version.restart_hint) || 'This host can’t restart itself.'} Run by hand:
+            <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
+              {updateUnit ? 'sudo systemctl start domovoi-update.service'
+                          : 'sudo systemctl restart domovoi-core domovoi-web'}
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
+
+/* ---- Upgrade from a zip or GitHub ------------------------------ */
+/* For plugins installed that way. A bundled plugin lives in the Domovoi
+ * checkout and updates with it — the core refuses a zip or GitHub upgrade
+ * of one, which would move its folder out of the checkout — and a
+ * dev-mode plugin just restarts. */
+const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
   const [ghUrl, setGhUrl] = React.useState('');
+  if (p.status === 'uninstalled' || p.install_source === 'dev') return null;
+  if (p.bundled) {
+    return (
+      <div className="meta">
+        bundled with Domovoi — it updates with the Domovoi server (Settings → Version),
+        not from a zip or GitHub
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Button icon="arrow-up-circle" onClick={() => onUpgradeZip(p.slug)}>upgrade from zip</Button>
+      <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
+             onChange={(e) => setGhUrl(e.target.value)}
+             style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 10px', width: 280,
+                      borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                      background: 'var(--card)', color: 'var(--fg)' }}/>
+      <Button icon="github" disabled={!ghUrl.trim()}
+              onClick={() => { onUpgradeUrl(p.slug, ghUrl.trim()); setGhUrl(''); }}>
+        upgrade from GitHub
+      </Button>
+    </div>
+  );
+};
+
+/* ---- One installed-plugin row --------------------------------- */
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
+  const [open, setOpen] = React.useState(false);
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
   const activePerms = Object.keys(PERMISSION_LABELS).filter((k) => perms[k]);
@@ -437,6 +553,7 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
             {p.install_source === 'dev' && <Pill tone="warn">DEV</Pill>}
             <Pill tone={pill.tone}>{pill.label}</Pill>
             {!p.enabled && p.status !== 'uninstalled' && <Pill tone="idle">disabled</Pill>}
+            {restartPending && <Pill tone="warn">restart to finish the upgrade</Pill>}
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {p.publisher || 'unknown publisher'} · {p.license || 'no license'}
@@ -515,20 +632,7 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
               ))}
             </div>
           )}
-          {p.status !== 'uninstalled' && p.install_source !== 'dev' && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Button icon="arrow-up-circle" onClick={() => onUpgradeZip(p.slug)}>upgrade from zip</Button>
-              <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
-                     onChange={(e) => setGhUrl(e.target.value)}
-                     style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 10px', width: 280,
-                              borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                              background: 'var(--card)', color: 'var(--fg)' }}/>
-              <Button icon="github" disabled={!ghUrl.trim()}
-                      onClick={() => { onUpgradeUrl(p.slug, ghUrl.trim()); setGhUrl(''); }}>
-                upgrade from GitHub
-              </Button>
-            </div>
-          )}
+          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}/>
         </div>
       )}
     </div>
@@ -538,8 +642,16 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
 /* ---- The page -------------------------------------------------- */
 const PluginsPage = () => {
   const [fire, toastNode] = useToast();
-  const { data, refresh } = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'] });
+  const { data, refresh: refreshList } = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'] });
   const plugins = (data && data.plugins) || [];
+  // Upgrades staged for the next restart (open read, same as Settings →
+  // Version): the core marks one when it confirms it, so re-read on every
+  // plugins change and after each action here.
+  const { data: version, refresh: refreshVersion } = useApiObject(
+    '/api/config/version', { eventTypes: ['plugins.changed'], quiet: true });
+  const waiting = pendingRestart(version).plugins;
+  const waitingSlugs = new Set(waiting.map((w) => w.slug));
+  const refresh = () => { refreshList(); refreshVersion(); };
   const flow = useInstallFlow(fire, refresh);
   const [ghUrl, setGhUrl] = React.useState('');
   const [uninstalling, setUninstalling] = React.useState(null);
@@ -552,6 +664,7 @@ const PluginsPage = () => {
     try {
       const res = await apiPost(`/api/plugins/${p.slug}/enable`);
       if (res && res.enabled === false) fire(`enable failed: ${res.error || res.status || 'plugin did not load'}`);
+      else if (res && res.restart_required) fire(`enabled ${p.name} — restart to finish its upgrade`);
       else fire(`enabled ${p.name}`);
       refresh();
     }
@@ -577,6 +690,8 @@ const PluginsPage = () => {
         }
       />
 
+      <PluginRestartCard version={version} pending={waiting} fire={fire} onSettled={refresh}/>
+
       <Card title="install from GitHub"
             sub="public repos only — the repo (or release tag) must contain a domovoi-plugin.toml at its root">
         <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -601,7 +716,7 @@ const PluginsPage = () => {
         ) : (
           <div>
             {plugins.map((p) => (
-              <PluginRow key={p.slug} p={p}
+              <PluginRow key={p.slug} p={p} restartPending={waitingSlugs.has(p.slug)}
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
@@ -614,8 +729,9 @@ const PluginsPage = () => {
       <div className="meta" style={{ maxWidth: 680 }}>
         Plugins are ordinary Python running inside your Domovoi server — there is no
         sandbox. The admin password gates who can install; the trust screen tells you
-        what you're agreeing to. Code changes to an already-loaded plugin need a core
-        restart to take effect.
+        what you're agreeing to. A running plugin's code can't be swapped in place, so
+        its upgrade finishes when the Domovoi services restart — this page offers the
+        restart when one is waiting.
       </div>
 
       {flow.modal}

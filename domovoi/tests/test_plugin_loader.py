@@ -3,6 +3,7 @@ manifest/code drift, DLL-bootstrap assertion, deterministic load order."""
 
 from __future__ import annotations
 
+import re
 import textwrap
 from pathlib import Path
 
@@ -311,6 +312,122 @@ async def test_discovery_heals_stale_bundled_install_dir(
     finally:
         await LOADER.shutdown()
         await reg.delete_plugin(slug)
+
+
+def _bump_checkout(root: Path, **changes: str) -> None:
+    """Edit a generated plugin's ``[plugin]`` table the way a pull would
+    (the first ``key = "..."`` line — [plugin] comes first)."""
+    toml = root / "domovoi-plugin.toml"
+    text = toml.read_text(encoding="utf-8")
+    for key, value in changes.items():
+        text, n = re.subn(rf'(?m)^{key} = ".*"$', f'{key} = "{value}"', text, count=1)
+        assert n == 1, key
+    toml.write_text(text, encoding="utf-8")
+
+
+@requires_db
+async def test_discovery_refreshes_a_bundled_row_from_the_checkout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A bundled row is written once, at first registration; a pull that
+    moves the checkout on must reach it. The Plugins page, capabilities,
+    the web shell's pages/nav/scripts/realtime and other plugins' contract
+    checks all read the row, not the files."""
+    from domovoi.plugins_runtime import loader as loader_mod
+
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    monkeypatch.setattr(loader_mod, "installed_root", lambda: installed)
+    monkeypatch.setattr(loader_mod, "bundled_root", lambda: bundled)
+
+    slug = "bumpme"
+    root = make_plugin(bundled, slug, corpus=("bumpme ping",))
+    first = parse_manifest((root / "domovoi-plugin.toml").read_text(encoding="utf-8"))
+    try:
+        await reg.insert_plugin(
+            slug=slug, name=slug, version="1.0.0", publisher="tests",
+            license="MIT", domovoi_api=">=1.0,<2.0", enabled=True,
+            bundled=True, install_source="bundled", source_ref=None,
+            install_dir=str(root.resolve()), manifest=first.raw,
+        )
+        _bump_checkout(
+            root, version="1.2.0", name="Bump Me", publisher="Coders Farm",
+            license="Apache-2.0", domovoi_api=">=1.1,<2.0",
+        )
+
+        await LOADER.discover_and_load_all()
+
+        row = await reg.get_plugin(slug)
+        assert row is not None
+        assert (row.name, row.version, row.publisher, row.license, row.domovoi_api) == (
+            "Bump Me", "1.2.0", "Coders Farm", "Apache-2.0", ">=1.1,<2.0",
+        )
+        assert row.manifest["plugin"]["version"] == "1.2.0"
+        assert row.manifest["handlers"][0]["corpus"] == ["bumpme ping"]
+        assert LOADER.loaded[slug].manifest.version == "1.2.0"
+        assert row.status == "ok"
+
+        # Nothing changed on the next boot: the row stays untouched (the
+        # IS DISTINCT FROM guard), so no plugins_changed NOTIFY either.
+        await LOADER.shutdown()
+        await LOADER.discover_and_load_all()
+        again = await reg.get_plugin(slug)
+        assert again is not None and again.updated_at == row.updated_at
+    finally:
+        await LOADER.shutdown()
+        await reg.delete_plugin(slug)
+
+
+@requires_db
+async def test_disabled_and_tombstoned_bundled_rows_on_refresh(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A disabled bundled row follows the checkout too (and its install dir
+    heals, so enabling it later finds its files) without being loaded; a
+    tombstone is left exactly as it is (§3.5)."""
+    from domovoi.plugins_runtime import loader as loader_mod
+
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    monkeypatch.setattr(loader_mod, "installed_root", lambda: installed)
+    monkeypatch.setattr(loader_mod, "bundled_root", lambda: bundled)
+
+    off, gone = "offbump", "gonebump"
+    stale = tmp_path / "old-checkout" / "plugins"
+    try:
+        for slug in (off, gone):
+            root = make_plugin(bundled, slug)
+            manifest = parse_manifest(
+                (root / "domovoi-plugin.toml").read_text(encoding="utf-8")
+            )
+            await reg.insert_plugin(
+                slug=slug, name=slug, version="1.0.0", publisher="tests",
+                license="MIT", domovoi_api=">=1.0,<2.0", enabled=False,
+                bundled=True, install_source="bundled", source_ref=None,
+                install_dir=str(stale / slug), manifest=manifest.raw,
+            )
+            _bump_checkout(root, version="1.2.0")
+        await reg.tombstone_plugin(gone)
+
+        await LOADER.discover_and_load_all()
+
+        row = await reg.get_plugin(off)
+        assert row is not None and not row.enabled
+        assert row.version == "1.2.0" and row.manifest["plugin"]["version"] == "1.2.0"
+        assert row.install_dir == str((bundled / off).resolve())
+        assert off not in LOADER.loaded
+
+        tomb = await reg.get_plugin(gone)
+        assert tomb is not None and tomb.status == "uninstalled"
+        assert tomb.version == "1.0.0" and tomb.install_dir == str(stale / gone)
+    finally:
+        await LOADER.shutdown()
+        for slug in (off, gone):
+            await reg.delete_plugin(slug)
 
 
 @requires_db

@@ -5,9 +5,10 @@ Two tiers:
 
 * DB-free — the extended SQL lint, and the exact statement sequence the
   runner issues per file (recorded from a fake asyncpg connection):
-  ``SET LOCAL search_path = "plugin_<slug>"`` with NO ``public``, then
-  ``SET LOCAL ROLE plugin_<slug>``, the file, ``RESET ROLE``, the ledger
-  row. These never hide behind ``requires_db``.
+  ``SET LOCAL search_path = "plugin_<slug>"`` with NO ``public``,
+  ``standard_conforming_strings`` pinned on, then ``SET LOCAL ROLE
+  plugin_<slug>``, the file, ``RESET ROLE``, the ledger row. These never
+  hide behind ``requires_db``.
 * DB-backed — an unqualified statement naming a core table fails and the
   core rows are untouched; explicit ``public.`` DML and ``COPY … TO
   PROGRAM`` are refused by Postgres even when the lint is bypassed; the
@@ -26,7 +27,10 @@ from sqlalchemy import text
 
 from domovoi.db.session import engine
 from domovoi.plugins_runtime.migrations import (
+    _SANDBOX_SQL,
+    MigrationError,
     MigrationFile,
+    MigrationSandboxError,
     PluginMigrationRunner,
     SqlLintError,
     sql_lint,
@@ -101,6 +105,128 @@ def test_sql_lint_allows_own_schema_work(sql: str) -> None:
     assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The escape: everything after the COMMIT runs as the app user.
+        "CREATE TABLE t (id INT);\nCOMMIT;\nCREATE TABLE escape_probe (id INT);",
+        "commit;",
+        "END;",
+        "ROLLBACK;",
+        "abort;",
+        "BEGIN;\nCREATE TABLE t (id INT);\nCOMMIT;",     # a well-meant wrapper
+        "START TRANSACTION;",
+        "SAVEPOINT a;",
+        "RELEASE SAVEPOINT a;",
+        "release a;",
+        "PREPARE TRANSACTION 'x';",
+        "COMMIT PREPARED 'x';",
+        "COMMIT AND CHAIN;",
+        "/* the end */ COMMIT;",
+        "-- done\nCOMMIT;",
+        # A '--' or an E'\'' inside a literal can't hide what follows it.
+        "INSERT INTO t VALUES ('--'); COMMIT; CREATE TABLE p (id INT);",
+        "INSERT INTO t VALUES (E'it\\'s'); COMMIT;",
+        # After a function body, it is top level again.
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END $$;\nCOMMIT;",
+    ],
+)
+def test_sql_lint_rejects_transaction_control(sql: str) -> None:
+    violations = sql_lint(sql, SLUG)
+    assert any("transaction control" in v for v in violations), (sql, violations)
+
+
+def test_sql_lint_rejects_reset_search_path() -> None:
+    assert any("search_path" in v for v in sql_lint("RESET search_path;", SLUG))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # PL/pgSQL BEGIN … END, END IF and nested blocks are block syntax
+        # inside a dollar-quoted body, not transaction control.
+        "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$\n"
+        "BEGIN\n"
+        "  IF NEW.x IS NULL THEN\n    NEW.x := 0;\n  END IF;\n"
+        "  BEGIN\n    NEW.y := 1 / NEW.x;\n"
+        "  EXCEPTION WHEN division_by_zero THEN\n    NEW.y := NULL;\n  END;\n"
+        "  RETURN NEW;\n"
+        "END;\n$$;",
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $fn$ BEGIN RETURN 1; END $fn$;",
+        # Names and prose that merely contain the words.
+        "CREATE TABLE t (begin_at TIMESTAMPTZ, end_at TIMESTAMPTZ, commit_sha TEXT, "
+        "release_date DATE, savepoint_n INT);",
+        "UPDATE t SET end_at = now() WHERE commit_sha IS NULL;",
+        "COMMENT ON TABLE t IS 'COMMIT; ROLLBACK';",
+        "-- COMMIT when done\nCREATE TABLE t (id INT);",
+        "/* outer /* nested; COMMIT; */ still a comment; END; */ CREATE TABLE t (id INT);",
+        "CREATE TABLE t (note TEXT DEFAULT '--'); CREATE INDEX t_note ON t (note);",
+        "INSERT INTO t (note) VALUES (E'it\\'s'), ('; end');",
+        'CREATE TABLE "end" (id INT); CREATE TABLE "x;commit" (id INT);',
+    ],
+)
+def test_sql_lint_allows_block_syntax_and_lookalikes(sql: str) -> None:
+    assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
+
+
+# The lint must read a file token by token the way the server does. The
+# quoting cases are valid SQL whose statements the server RUNS, but that a
+# scanner reading quotes and dollar quotes differently takes for the
+# inside of a string. The $$'$$, $é$ and €$$ ones and the settings got
+# through the lint before; the first ran on real Postgres with no trace
+# in the runner's check (the role is back before the file ends).
+@pytest.mark.parametrize(
+    "sql,fragment",
+    [
+        # A lone quote inside a dollar-quoted string is just a character
+        # to the server; a scanner that looks for quotes inside the body
+        # opens a literal there and swallows the statements after it.
+        ("SELECT $$'$$;\nSET ROLE domovoi;\nCREATE TABLE public.escape_probe (id INT);\n"
+         f"SET ROLE {ROLE};\nSELECT $$'$$;", "SET/RESET ROLE"),
+        ("SELECT $$'$$;\nSET LOCAL search_path = public;\nSELECT $$'$$;", "search_path"),
+        ("SELECT $x$'$x$;\nDELETE FROM public.people;\nSELECT $x$'$x$;", "DML against the public"),
+        # A tag may be any non-ASCII character: $é$ is a dollar quote.
+        ("SELECT $é$'$é$;\nCOMMIT;\nCREATE TABLE escape_probe (id INT);\n"
+         "SELECT $é$'$é$;", "transaction control"),
+        # An identifier may end in $$ (and start with any non-ASCII
+        # character): that is no dollar quote.
+        ("SELECT 1 AS €$$;\nCOMMIT;\nSELECT 1 AS €$$;", "transaction control"),
+        ("SELECT 1 AS a$$;\nCOMMIT;\nSELECT 1 AS a$$;", "transaction control"),
+        # Settings that change how the server reads what follows.
+        ("SET standard_conforming_strings = off;", "standard_conforming_strings"),
+        ("set session standard_conforming_strings to off;", "standard_conforming_strings"),
+        ("SET client_encoding = 'SJIS';", "client_encoding"),
+        ("SET NAMES 'BIG5';", "NAMES"),
+        # A SQL-standard function body isn't quoted: its END reads as
+        # transaction control (documented: write bodies dollar-quoted).
+        ("CREATE FUNCTION one() RETURNS INT LANGUAGE sql\nBEGIN ATOMIC\n  SELECT 1;\nEND;",
+         "transaction control"),
+    ],
+)
+def test_sql_lint_reads_quotes_the_way_the_server_does(sql: str, fragment: str) -> None:
+    violations = sql_lint(sql, SLUG)
+    assert any(fragment.lower() in v.lower() for v in violations), (sql, violations)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Any tag, any body: still block syntax, still one string.
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $é$\n"
+        "BEGIN\n  RETURN CASE WHEN 1 = 1 THEN 1 ELSE 0 END;\nEND\n$é$;",
+        # A quote, a '--' and a ';' inside a body are the body's business.
+        "CREATE FUNCTION g() RETURNS TEXT LANGUAGE plpgsql AS $$\n"
+        "BEGIN\n  RAISE NOTICE 'it''s -- fine; really';\n  RETURN E'a\\'b';\nEND;\n$$;",
+        "CREATE FUNCTION h(x INT) RETURNS INT LANGUAGE sql AS $body$ SELECT $1 + 1 $body$;",
+        # Identifiers with '$' in them, and CASE … END at a line start.
+        "CREATE TABLE a$b (c$1 INT, été INT);",
+        "UPDATE a$b SET c$1 =\n  CASE WHEN c$1 > 0 THEN 1\n  ELSE 0\nEND;",
+    ],
+)
+def test_sql_lint_still_allows_what_the_server_reads_as_one_string(sql: str) -> None:
+    assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
+
+
 # ─── the statement sequence (DB-free, fake connection) ────────────────────
 
 
@@ -143,7 +269,14 @@ class FakeDriver:
             return {"?column?": 1} if self.role_exists else None
         if "current_user AS who" in sql:
             return {"who": "domovoi", "super": self.superuser, "member": self.member}
+        if sql == _SANDBOX_SQL:
+            return self.sandbox()
         return None
+
+    def sandbox(self) -> dict[str, Any]:
+        """Where the runner finds itself around a file: well-behaved files
+        leave the transaction, role and path exactly as they were."""
+        return {"xact": "742", "who": ROLE, "path": SCHEMA}
 
 
 def _file(version: int, sql: str) -> MigrationFile:
@@ -160,18 +293,30 @@ def _runner() -> PluginMigrationRunner:
     return PluginMigrationRunner(SLUG, Path("unused"), database_urls=["postgresql://x/y_test"])
 
 
+def _file_begin(calls: list[str], sql: str) -> int:
+    """Index of the BEGIN that opens ``sql``'s own transaction (the adopt
+    step runs its own transaction first)."""
+    at = calls.index(sql)
+    return max(i for i, c in enumerate(calls[:at]) if c == "BEGIN")
+
+
 @pytest.mark.asyncio
 async def test_each_file_runs_after_set_local_role_with_the_schema_only_path() -> None:
     drv = FakeDriver()
     sql = "CREATE TABLE things (id INT);"
     applied = await _runner()._apply_files(drv, [_file(1, sql)])
     assert applied == ["V001__t.sql"]
-    i = drv.calls.index("BEGIN")
-    assert drv.calls[i:i + 7] == [
+    i = _file_begin(drv.calls, sql)
+    assert drv.calls[i:i + 10] == [
         "BEGIN",
         f'SET LOCAL search_path = "{SCHEMA}"',      # the plugin schema ONLY
+        # Literals read the way the lint read them, whatever the server's
+        # own default.
+        "SET LOCAL standard_conforming_strings = on",
         f'SET LOCAL ROLE "{ROLE}"',
+        _SANDBOX_SQL,                               # where the file starts…
         sql,
+        _SANDBOX_SQL,                               # …and where it finished
         "RESET ROLE",
         f'INSERT INTO "{SCHEMA}".schema_history (version, filename, checksum) '
         "VALUES ($1, $2, $3)",
@@ -212,19 +357,46 @@ async def test_a_non_superuser_application_user_is_made_a_member() -> None:
 
 @pytest.mark.asyncio
 async def test_objects_left_by_an_earlier_runner_are_re_owned_before_catchup() -> None:
+    v2 = "ALTER TABLE things ADD COLUMN x INT;"
     drv = FakeDriver(
         ledger={1: ("V001__t.sql", _file(1, "CREATE TABLE things (id INT);").checksum)},
-        foreign_relations=[("things", "r"), ("things_id_seq", "S"), ("v", "v")],
+        # A free-standing sequence: column-owned ones never reach this list
+        # (the catalogue query leaves them out — see the pg_depend check
+        # below, and test_plugin_migrations_adopt.py on real Postgres).
+        foreign_relations=[("things", "r"), ("ticket_seq", "S"), ("v", "v")],
     )
-    await _runner()._apply_files(
-        drv, [_file(1, "CREATE TABLE things (id INT);"), _file(2, "ALTER TABLE things ADD COLUMN x INT;")]
-    )
-    assert f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"' in drv.calls
-    assert f'ALTER SEQUENCE "{SCHEMA}"."things_id_seq" OWNER TO "{ROLE}"' in drv.calls
+    await _runner()._apply_files(drv, [_file(1, "CREATE TABLE things (id INT);"), _file(2, v2)])
+    table = f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"'
+    assert table in drv.calls
+    assert f'ALTER SEQUENCE "{SCHEMA}"."ticket_seq" OWNER TO "{ROLE}"' in drv.calls
     assert f'ALTER VIEW "{SCHEMA}"."v" OWNER TO "{ROLE}"' in drv.calls
-    assert drv.calls.index(f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"') < drv.calls.index("BEGIN")
-    # Only V002 ran.
-    assert drv.calls.count("BEGIN") == 1
+    (query,) = [c for c in drv.calls if "FROM pg_class" in c]
+    assert "pg_depend" in query and "refobjsubid > 0" in query and "('a', 'i')" in query
+    # The re-owning is its own transaction, committed before V002's opens.
+    t = drv.calls.index(table)
+    adopt_begin = max(i for i, c in enumerate(drv.calls[:t]) if c == "BEGIN")
+    adopt_commit = drv.calls.index("COMMIT", t)
+    assert query in drv.calls[adopt_begin:t]
+    assert adopt_commit < _file_begin(drv.calls, v2)
+    # Only V002 ran (one BEGIN for the adopt step, one for the file).
+    assert drv.calls.count("BEGIN") == 2
+    assert v2 in drv.calls and "CREATE TABLE things (id INT);" not in drv.calls
+
+
+@pytest.mark.asyncio
+async def test_a_failed_re_own_rolls_the_whole_adopt_step_back() -> None:
+    class FailSecond(FakeDriver):
+        async def execute(self, sql: str, *args: Any) -> None:
+            await super().execute(sql, *args)
+            if sql.startswith('ALTER VIEW'):
+                raise RuntimeError("cannot re-own")
+
+    drv = FailSecond(foreign_relations=[("things", "r"), ("v", "v")])
+    with pytest.raises(MigrationError, match=f"could not prepare role {ROLE}.*cannot re-own"):
+        await _runner()._apply_files(drv, [_file(1, "SELECT 1;")])
+    assert drv.calls[-1] == "ROLLBACK"
+    assert "COMMIT" not in drv.calls
+    assert "SELECT 1;" not in drv.calls          # no file ran
 
 
 @pytest.mark.asyncio
@@ -244,10 +416,47 @@ async def test_a_failing_file_rolls_back_and_the_role_is_reset_by_the_transactio
                 raise RuntimeError("relation does not exist")
 
     drv = Boom()
-    with pytest.raises(RuntimeError):
-        await _runner()._apply_files(drv, [_file(1, "DELETE FROM admin_sessions;")])
+    sql = "DELETE FROM admin_sessions;"
+    with pytest.raises(MigrationError) as exc:
+        await _runner()._apply_files(drv, [_file(1, sql)], label="y_test")
     assert drv.calls[-1] == "ROLLBACK"
-    assert "COMMIT" not in drv.calls
+    assert "COMMIT" not in drv.calls[_file_begin(drv.calls, sql):]
+    # One error family for callers: the file, the database and the
+    # driver's message, with the driver's exception as the cause.
+    assert str(exc.value) == f"{SLUG}: V001__t.sql failed on y_test: relation does not exist"
+    assert isinstance(exc.value.__cause__, RuntimeError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "after,fragment",
+    [
+        # A COMMIT in the file: new transaction, app user, default path.
+        ({"xact": "743", "who": "domovoi", "path": '"$user", public'},
+         "ended the runner's transaction"),
+        ({"xact": "742", "who": "domovoi", "path": SCHEMA}, "finished as domovoi"),
+        ({"xact": "742", "who": ROLE, "path": '"$user", public'}, "search_path"),
+    ],
+)
+async def test_a_file_that_leaves_the_sandbox_is_rolled_back_and_not_recorded(
+    after: dict[str, Any], fragment: str
+) -> None:
+    class Escaping(FakeDriver):
+        reads = 0
+
+        def sandbox(self) -> dict[str, Any]:
+            self.reads += 1
+            return super().sandbox() if self.reads == 1 else after
+
+    drv = Escaping()
+    sql = "CREATE TABLE things (id INT);"
+    with pytest.raises(MigrationSandboxError, match=fragment) as exc:
+        await _runner()._apply_files(drv, [_file(1, sql)], label="y_test")
+    assert "V001__t.sql" in str(exc.value) and "y_test" in str(exc.value)
+    tail = drv.calls[_file_begin(drv.calls, sql):]
+    assert tail[-1] == "ROLLBACK"
+    assert not any("schema_history (version" in c for c in tail)     # no ledger row
+    assert "COMMIT" not in tail and "RESET ROLE" not in tail
 
 
 # ─── against Postgres ─────────────────────────────────────────────────────

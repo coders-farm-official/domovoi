@@ -399,6 +399,128 @@ const useToast = () => {
   return [fire, node];
 };
 
+/* ---- The dashboard's one restart ------------------------------ */
+
+// The update unit's last result (last_update.status) → pill.
+const UPDATE_RESULT_PILL = {
+  ok:              { tone: 'ok',   label: 'applied' },
+  running:         { tone: 'live', label: 'in progress' },
+  rolled_back:     { tone: 'warn', label: 'rolled back' },
+  rollback_failed: { tone: 'err',  label: 'rollback failed' },
+  failed:          { tone: 'err',  label: 'failed' },
+  aborted:         { tone: 'warn', label: 'not applied' },
+  refused:         { tone: 'warn', label: 'not applied' },
+};
+
+/* What a GET /api/config/version answer says is waiting for a restart.
+ * restart_required covers both halves; code_restart_required is the
+ * pulled-code half alone (a core from before plugin staging has no such
+ * field, and then restart_required meant exactly that). */
+const pendingRestart = (v) => {
+  const plugins = (v && Array.isArray(v.plugins_pending_restart)) ? v.plugins_pending_restart : [];
+  const code = !!(v && (v.code_restart_required !== undefined ? v.code_restart_required : v.restart_required));
+  return { any: !!(v && v.restart_required), code, plugins };
+};
+// "radio 1.1.0 → 1.2.0"
+const pluginUpgradeLabel = (p) => `${p.slug} ${p.from_version} → ${p.to_version}`;
+
+/* Bounce domovoi-core + domovoi-web — or, with domovoi-update.service
+ * installed, start it — and wait until the server is back with nothing
+ * left to restart. Settings → Version ("Restart to apply changes") and the
+ * Plugins page ("restart to finish the upgrade") both press this one, so
+ * the two can't drift into different restarts.
+ *
+ *   core      the last GET /api/config/version answer (restart_mode,
+ *             last_update)
+ *   question  the confirm's first line; the default is the pulled-code one
+ *   onStart   the operator said yes and the restart is being asked for
+ *   onSettled the wait is over, whichever way — re-read what you show
+ *
+ * Resolves true once the server reports restart_required cleared. */
+const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, onSettled = () => {} }) => {
+  const updating = !!(core && core.restart_mode === 'update');
+  if (!window.confirm(updating
+    ? `${question || 'Apply the pulled code?'}\n\n` +
+      'This backs up the database, updates dependencies and migrations if ' +
+      'they changed, and restarts domovoi-core and domovoi-web. If they ' +
+      'don’t come back healthy it rolls everything back. Voice is ' +
+      'unavailable meanwhile, usually for under a minute, longer when ' +
+      'dependencies change.'
+    : `${question || 'Restart the Domovoi services to load the pulled code?'}\n\n` +
+      'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
+      'a few seconds and connected satellites reconnect on their own.'
+  )) return false;
+  const kind = updating ? 'update' : 'restart';
+  const previousRun = core && core.last_update ? core.last_update.started_at : null;
+
+  // After the bounce the server is briefly gone; a failed poll is the
+  // expected middle of a successful restart, not an error to report.
+  //
+  // With the update unit the wait is longer (a backup, maybe a dependency
+  // sync, a migration and a health check), and it ends early when the unit
+  // records a result for THIS run: a refused or rolled-back update never
+  // clears restart_required the way a successful one does, or it clears it
+  // by going BACK, which must not read as "restarted onto the new code".
+  const waitForServer = async (mode) => {
+    const deadline = Date.now() + (mode === 'update' ? 15 * 60000 : 90000);
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const v = await apiGet('/api/config/version');
+        const run = v && v.last_update;
+        const newRun = run && run.started_at !== previousRun && run.status !== 'running';
+        if (mode === 'update' && newRun && run.status !== 'ok') {
+          onSettled();
+          // The script's error already says what happened ("update to … failed
+          // at health and was rolled back to …").
+          fire(run.error || `update ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
+          return false;
+        }
+        if (v && !v.restart_required && (mode !== 'update' || newRun)) {
+          onSettled();
+          fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
+          return true;
+        }
+      } catch (e) { /* still down — keep waiting */ }
+    }
+    fire(mode === 'update'
+      ? 'the update is taking longer than expected — check journalctl -u domovoi-update'
+      : 'restart is taking longer than expected — check the service by hand');
+    onSettled();
+    return false;
+  };
+
+  onStart();
+  try {
+    const res = await apiPost('/api/config/version/restart', {});
+    if (res && res.ok) {
+      fire(kind === 'update' ? 'updating…' : 'restarting…');
+      return await waitForServer(res.mode || kind);
+    }
+    fire(`restart failed: ${(res && res.error) || 'unknown'}`);
+    return false;
+  } catch (e) {
+    // A status means the SERVER answered — most often 403, because
+    // mutations are Bearer-only and the dashboard cookie alone doesn't
+    // authorize them. Treating that as "probably restarting" leaves the
+    // button spinning for 90s over a request that never left the house.
+    // Only a connection-level failure (no status) can mean the bounce cut
+    // us off mid-request, and that is the case worth polling through.
+    //
+    // data.js signs in and re-sends the restart on its own, so a 401/403
+    // still arriving here is a dismissed prompt, not a lost action.
+    if (e && e.authCancelled) {
+      fire('restart cancelled — not signed in');
+    } else if (e && e.status) {
+      reportMutationFailure(fire, 'restart', e);
+    } else {
+      fire(kind === 'update' ? 'updating…' : 'restarting…');
+      return await waitForServer(kind);
+    }
+    return false;
+  }
+};
+
 /* ---- Tabs (page-level helper) ------------------------------ */
 const Tabs = ({ tabs, value, onChange, padX = 0 }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border)',

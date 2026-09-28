@@ -1392,8 +1392,20 @@ async def admin_version() -> dict[str, Any]:
     After a pull without a restart the two differ and ``restart_required``
     is true — the panel must not claim a pulled fix is live when the old
     modules are still serving requests.
+
+    A plugin upgrade staged for restart (``installer.confirm_upgrade``)
+    makes ``restart_required`` true as well, and is listed in
+    ``plugins_pending_restart``; ``code_restart_required`` keeps the
+    pulled-code half on its own so the panel can say which it is.
     """
-    return await git_version.version_state()
+    from domovoi.plugins_runtime.loader import LOADER
+
+    state = await git_version.version_state()
+    pending = LOADER.pending_restarts()
+    state["code_restart_required"] = state["restart_required"]
+    state["plugins_pending_restart"] = pending
+    state["restart_required"] = state["restart_required"] or bool(pending)
+    return state
 
 
 @app.post(
@@ -3377,7 +3389,11 @@ async def capabilities() -> dict[str, Any]:
 
 @app.get("/v1/plugins")
 async def list_plugins() -> dict[str, Any]:
-    """Plugin registry rows (open read; design §12)."""
+    """Plugin registry rows (open read; design §12). ``pending_restart`` is
+    ``{slug, from_version, to_version, since, where}`` for an upgrade whose
+    new code loads at the next restart, else null."""
+    from domovoi.plugins_runtime.loader import LOADER
+
     async with session_scope() as s:
         rows = (
             await s.execute(
@@ -3400,6 +3416,7 @@ async def list_plugins() -> dict[str, Any]:
                 "status": r.status, "last_error": r.last_error,
                 "installed_at": r.installed_at.isoformat() if r.installed_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                "pending_restart": LOADER.pending_restart.get(r.slug),
             }
             for r in rows
         ]
@@ -3434,6 +3451,7 @@ async def plugin_status(slug: str) -> dict[str, Any]:
         for h in HANDLERS
         if h.plugin_slug == slug
     ]
+    from domovoi.plugins_runtime.loader import LOADER
     from domovoi.plugins_runtime.workers import WORKERS
 
     live = WORKERS.status(slug)
@@ -3444,6 +3462,9 @@ async def plugin_status(slug: str) -> dict[str, Any]:
         "enabled": bool(row.enabled),
         "status": row.status,
         "last_error": row.last_error,
+        # An upgrade staged for restart: the row is the new version, the
+        # handlers and workers below are empty until the restart loads it.
+        "pending_restart": LOADER.pending_restart.get(row.slug),
         "handlers": plugin_handlers,
         # Live per-worker / per-startup-hook state from the declarative
         # worker registry (design §4.14 — stable API keys).
