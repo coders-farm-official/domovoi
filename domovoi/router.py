@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
+from dataclasses import dataclass
+from typing import Any, Iterable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +22,7 @@ from domovoi.db.repositories import (
     WebSearchPrefsRepository,
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
-from domovoi.handlers.base import Handler, as_fast_path
+from domovoi.handlers.base import FastPath, Handler, as_fast_path
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.turn_timings import timings_for_row
@@ -95,6 +97,113 @@ def _parse_yes_no(transcript: str) -> bool | None:
     if _NO_RE.match(transcript):
         return False
     return None
+
+
+# ─── The fast tiers, as pure functions ─────────────────────────────────────
+# route() below is built on these, and so is plan_route(), which says what
+# route() would do with a transcript without doing any of it — the
+# satellite early-commit check (domovoi/early_commit.py) asks it while the
+# person may still be talking. One implementation, so the two can't drift.
+
+
+def normalize_transcript(raw: str) -> str:
+    """Whisper transcribes with terminal punctuation ("Play X by Y." or
+    "Add it to my library.") that fast-path regexes rarely tolerate. Strip
+    trailing punctuation alongside the lowercase/strip pass so handlers
+    don't each have to defend against it."""
+    return raw.lower().strip().rstrip(".,!?")
+
+
+def strip_leading_filler(transcript: str) -> str:
+    """Drop leading politeness ("please", "can you", "yeah,") so the
+    anchored fast-path regexes still match (see _LEADING_FILLER_RE)."""
+    return _LEADING_FILLER_RE.sub("", transcript)
+
+
+def first_fast_path(
+    transcript: str, handlers: Iterable[Handler] | None = None
+) -> tuple[Handler, FastPath, re.Match[str]] | None:
+    """The first fast path, in band order, that matches ``transcript``
+    (normalized and filler-stripped), with its match — or None."""
+    for handler in HANDLERS if handlers is None else handlers:
+        for entry in handler.fast_paths:
+            fp = as_fast_path(entry)
+            m = fp.pattern.match(transcript)
+            if m:
+                return handler, fp, m
+    return None
+
+
+def dispatchable_confirmation(
+    pending: Any, *, warn: bool = False
+) -> tuple[Handler, str] | None:
+    """The handler and (namespaced) kind a parked ``pending_confirmation``
+    payload resumes, or None when it resumes nothing."""
+    if not isinstance(pending, dict):
+        return None
+    handler = HANDLER_BY_NAME.get(pending.get("handler", ""))
+    if handler is None:
+        return None
+    kind = str(pending.get("kind", ""))
+    if (
+        kind not in handler.confirmation_kinds
+        and CORE_KIND_PREFIX + kind in handler.confirmation_kinds
+    ):
+        # A payload parked before the namespacing cutover (live
+        # sessions survive deploys) — normalize instead of wedging.
+        kind = CORE_KIND_PREFIX + kind
+    if kind in handler.confirmation_kinds:
+        return handler, kind
+    if warn:
+        # Undispatchable payload (undeclared kind) — the mediated
+        # pending API makes this unreachable for well-behaved
+        # parkers; log loudly and fall through to normal routing
+        # (the payload stays put).
+        log.warning(
+            "pending_confirmation kind %r is not declared by "
+            "handler %r (confirmation_kinds=%r) — ignoring",
+            kind, handler.name, handler.confirmation_kinds,
+        )
+    return None
+
+
+@dataclass(frozen=True)
+class RoutePlan:
+    """What route() would do with a transcript on its fast tiers: resume a
+    parked confirmation (``path="confirmation"``) or dispatch a fast path
+    (``path="fast"``). ``transcript`` is the text the decision was made on."""
+
+    path: str
+    handler: Handler
+    transcript: str
+    fast_path: FastPath | None = None
+    match: re.Match[str] | None = None
+    kind: str | None = None
+
+
+def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
+    """route()'s decision for ``raw_transcript`` on its fast tiers, worked
+    out without dispatching anything: no handler runs, nothing is read or
+    written. ``pending`` is the session's parked ``pending_confirmation``
+    payload (the caller reads it; None when there is none), so a yes/no
+    answer plans as the confirmation route() would resume. None means the
+    turn would go on to the language model. The offline gate is not
+    applied: it changes what the matched path does, not which path it is.
+    """
+    transcript = normalize_transcript(raw_transcript)
+    if pending is not None and _parse_yes_no(transcript) is not None:
+        target = dispatchable_confirmation(pending)
+        if target is not None:
+            return RoutePlan(
+                path="confirmation", handler=target[0], transcript=transcript,
+                kind=target[1],
+            )
+    transcript = strip_leading_filler(transcript)
+    hit = first_fast_path(transcript)
+    if hit is None:
+        return None
+    handler, fp, m = hit
+    return RoutePlan(path="fast", handler=handler, transcript=transcript, fast_path=fp, match=m)
 
 
 async def _persist_turn(
@@ -248,11 +357,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # turn that ENTERS chat mode ("let's have a chat") IS a normal command turn
     # and routes through ChatModeHandler's fast path below as usual.
     #
-    # Whisper transcribes with terminal punctuation ("Play X by Y." or "Add
-    # it to my library.") that fast-path regexes rarely tolerate. Strip
-    # trailing punctuation alongside the lowercase/strip pass so handlers
-    # don't each have to defend against it.
-    transcript = intent.transcript.lower().strip().rstrip(".,!?")
+    # Lowercase, strip, and drop Whisper's terminal punctuation (see
+    # normalize_transcript). plan_route() makes the same decisions as the
+    # code below without dispatching; keep the two on the same helpers.
+    transcript = normalize_transcript(intent.transcript)
     # latency_ms clock: route() alone. Speech-to-text has already happened
     # and text-to-speech hasn't — a voice turn's other stages are in
     # intents_log.timings (domovoi/turn_timings.py).
@@ -280,63 +388,44 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     if affirmative is not None:
         ctx_data = await session_repo.get_context(session_id) or {}
         pending = ctx_data.get("pending_confirmation")
-        if isinstance(pending, dict):
-            handler = HANDLER_BY_NAME.get(pending.get("handler", ""))
-            kind = str(pending.get("kind", ""))
-            if (
-                handler is not None
-                and kind not in handler.confirmation_kinds
-                and CORE_KIND_PREFIX + kind in handler.confirmation_kinds
-            ):
-                # A payload parked before the namespacing cutover (live
-                # sessions survive deploys) — normalize instead of wedging.
-                kind = CORE_KIND_PREFIX + kind
-            if handler is not None and kind in handler.confirmation_kinds:
-                response = await handler.handle_confirmation(
-                    kind,
-                    pending,
-                    affirmative,
-                    ctx,
-                    session,
+        target = dispatchable_confirmation(pending, warn=True)
+        if target is not None:
+            handler, kind = target
+            response = await handler.handle_confirmation(
+                kind,
+                pending,
+                affirmative,
+                ctx,
+                session,
+            )
+            # One-shot: clear the pending payload after we route
+            # to it whether the answer was yes or no, so a stray
+            # "yes" next turn doesn't re-enroll the same person.
+            # EXCEPT when the handler chained a new pending (e.g.
+            # DoubleCheckHandler appending the prefs_offer meta-
+            # question to a self_doubt_offer yes) — in that case
+            # leave the fresh one alone.
+            ctx_after = await session_repo.get_context(session_id) or {}
+            pending_after = ctx_after.get("pending_confirmation")
+            if pending_after == pending:
+                await session_repo.set_context_key(
+                    session_id, "pending_confirmation", None
                 )
-                # One-shot: clear the pending payload after we route
-                # to it whether the answer was yes or no, so a stray
-                # "yes" next turn doesn't re-enroll the same person.
-                # EXCEPT when the handler chained a new pending (e.g.
-                # DoubleCheckHandler appending the prefs_offer meta-
-                # question to a self_doubt_offer yes) — in that case
-                # leave the fresh one alone.
-                ctx_after = await session_repo.get_context(session_id) or {}
-                pending_after = ctx_after.get("pending_confirmation")
-                if pending_after == pending:
-                    await session_repo.set_context_key(
-                        session_id, "pending_confirmation", None
-                    )
-                response.matched_handler = response.matched_handler or handler.name
-                response.matched_path = "confirmation"
-                response.session_id = session_id
-                response.online = ctx.online
-                await _persist_turn(
-                    session=session,
-                    session_id=session_id,
-                    intent=intent,
-                    ctx=ctx,
-                    response=response,
-                    matched_handler=handler.name,
-                    matched_path="confirmation",
-                    latency_ms=_elapsed_ms(),
-                )
-                return response
-            if handler is not None:
-                # Undispatchable payload (undeclared kind) — the mediated
-                # pending API makes this unreachable for well-behaved
-                # parkers; log loudly and fall through to normal routing
-                # (the payload stays put).
-                log.warning(
-                    "pending_confirmation kind %r is not declared by "
-                    "handler %r (confirmation_kinds=%r) — ignoring",
-                    kind, handler.name, handler.confirmation_kinds,
-                )
+            response.matched_handler = response.matched_handler or handler.name
+            response.matched_path = "confirmation"
+            response.session_id = session_id
+            response.online = ctx.online
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=handler.name,
+                matched_path="confirmation",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
 
     # Strip leading polite/filler prefixes ("please", "can you", "yeah,"
     # etc.) so anchored fast-path regexes still match conversational
@@ -347,7 +436,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = _LEADING_FILLER_RE.sub("", transcript)
+    transcript = strip_leading_filler(transcript)
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #
@@ -357,43 +446,20 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # only an `offline_ok=False` path auto-falls-back (unset defaults to
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
-    for handler in HANDLERS:
-        for entry in handler.fast_paths:
-            fp = as_fast_path(entry)
-            m = fp.pattern.match(transcript)
-            if not m:
-                continue
-            offline_blocked = not ctx.online and (
-                handler.requires_network == "yes"
-                or (
-                    handler.requires_network == "degraded"
-                    and fp.offline_ok is False
-                )
+    hit = first_fast_path(transcript)
+    if hit is not None:
+        handler, fp, m = hit
+        offline_blocked = not ctx.online and (
+            handler.requires_network == "yes"
+            or (
+                handler.requires_network == "degraded"
+                and fp.offline_ok is False
             )
-            if offline_blocked:
-                response = await handler.fallback_offline(intent, ctx, session)
-                response.matched_handler = handler.name
-                response.matched_path = "fast_offline"
-                response.session_id = session_id
-                response.online = ctx.online
-                await _persist_turn(
-                    session=session,
-                    session_id=session_id,
-                    intent=intent,
-                    ctx=ctx,
-                    response=response,
-                    matched_handler=handler.name,
-                    matched_path="fast_offline",
-                    latency_ms=_elapsed_ms(),
-                )
-                return response
-
-            try:
-                response = await fp.method(handler, m, ctx, session)
-            except MPDNotProvisioned:
-                response = _no_speakers_yet(session_id, ctx)
+        )
+        if offline_blocked:
+            response = await handler.fallback_offline(intent, ctx, session)
             response.matched_handler = handler.name
-            response.matched_path = "fast"
+            response.matched_path = "fast_offline"
             response.session_id = session_id
             response.online = ctx.online
             await _persist_turn(
@@ -403,10 +469,30 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 ctx=ctx,
                 response=response,
                 matched_handler=handler.name,
-                matched_path="fast",
+                matched_path="fast_offline",
                 latency_ms=_elapsed_ms(),
             )
             return response
+
+        try:
+            response = await fp.method(handler, m, ctx, session)
+        except MPDNotProvisioned:
+            response = _no_speakers_yet(session_id, ctx)
+        response.matched_handler = handler.name
+        response.matched_path = "fast"
+        response.session_id = session_id
+        response.online = ctx.online
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=handler.name,
+            matched_path="fast",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
 
     # 2. LLM tool-call fallback (the stub client returns None).
     tool_schemas = offered_tool_schemas(transcript)

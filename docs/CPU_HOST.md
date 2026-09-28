@@ -265,22 +265,77 @@ with no transcript in it:
 ```bash
 journalctl -u domovoi-core | grep 'turn timings'
 # turn timings room=kitchen trigger=wake_word path=fast capture_audio_ms=2130
-#   stt_ms=640 identify_ms=41 route_ms=22 tts_first_ms=95 total_ms=830
+#   endpoint_silence_ms=1200 stt_ms=640 stt_wait_ms=0 identify_ms=41 route_ms=22
+#   tts_first_ms=95 total_ms=190 speech_to_reply_ms=1390 stt=reused/1spec
 #   whisper=small.en/cpu/int8/8t
 ```
 
 | Stage | What it measures |
 |---|---|
 | `capture_audio_ms` | how much audio the satellite sent (the length of the capture) |
-| `stt_ms` | the Whisper call — the number this page is mostly about |
-| `identify_ms` | voice identification (which household member spoke) |
+| `endpoint_silence_ms` | the silence the satellite waited out after your last word before it stopped listening — `listen.silence_timeout`, give or take a frame |
+| `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
+| `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
+| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran alongside that decode, so this is only the lookup |
 | `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
+| `speech_to_reply_ms` | your last word to the first reply audio: `endpoint_silence_ms + total_ms`. The number you feel. |
 
 `total_ms` starts when the satellite decides you have stopped talking,
-which is `listen.silence_timeout` (1.2 s by default) after your last word;
-that wait happens on the satellite and is not in any of these numbers.
+which is `listen.silence_timeout` (1.2 s by default) after your last word.
+`endpoint_silence_ms` is that wait, when the core can know it: satellites
+from this release report their last voiced frame, and for an older one it
+is worked out from the timeout it reported on connect; otherwise the two
+stages that need it are missing from the line.
+
+**Speculative transcription** (`speculative_stt_enabled`, on by default)
+is why `stt_wait_ms` is usually far below `stt_ms`. The satellite streams
+its audio as you speak, so at the first quarter-second pause the core
+starts Whisper on what it has, while the satellite is still counting its
+silence; at the end it uses that transcript only when nothing was said
+after it (it counts frames — it never guesses). `stt=reused/1spec` on the
+log line means it was used; `stt=full/…` means speech came after the copy
+and the whole capture was transcribed after all. On this hardware that
+takes the Whisper time out of every turn's wait up to the silence timeout:
+with a 0.6-1.0 s decode and the 1.2 s default, the transcript is usually
+ready when the satellite stops listening. Each pause somebody talks past
+costs one extra decode of CPU (at most three per utterance); the summary's
+`speculative` block counts how often the early transcript was used.
+
+**Early commit** (`early_commit_enabled`, on by default; satellites from
+this release only) goes one step further for simple commands: when the
+early transcript is a whole closed command, the core stops the satellite
+listening without waiting out its silence timeout and answers. The core
+logs each one:
+
+```bash
+journalctl -u domovoi-core | grep 'early commit'
+# early commit room=kitchen trigger=wake_word tier=A hold_ms=350 silence_ms=840 frames=71
+```
+
+`silence_ms` is how long after your last word it stopped listening, which
+becomes the turn's `endpoint_silence_ms`; the turn's log line carries
+`early_commit=A/350ms`. Tier A (closed phrases like "pause the music",
+"volume up", "what's playing") needs 350 ms of silence, tier B (a timer or
+reminder with a duration, "volume 40", the clock, one-word commands) 650
+ms (`early_commit_hold_a_ms`, `early_commit_hold_b_ms`). On a CPU-only
+server the decode itself usually takes longer than either hold, so in
+practice the capture ends when the transcript is ready: about
+`240 ms + stt_ms` after your last word instead of `silence_timeout +
+stt_ms` before this release. For "set a timer for ten minutes" on an
+8-core server with small.en that is roughly 0.8-1.2 s to the end of
+listening plus 0.2-0.4 s to the first reply audio (`speech_to_reply_ms`);
+getting under a second needs a faster decode (base.en, a GPU, or a
+dedicated fast recognizer for simple commands).
+
+Whatever is said after the hold is lost ("set a timer for ten minutes …
+for the pasta" gets no label). When the satellite heard speech after the
+core stopped listening, the core logs `early commit … cut in on speech`
+and records `post_commit_voiced_ms` on the turn; the summary's
+`early_commit` block counts them (`cut_in`). If a room sees those, turn
+the room's **Stop listening early on a whole command** off (satellite
+Listening settings), or `early_commit_tier_b` off for the whole house.
 
 The same stages are stored on each turn's `intents_log` row
 (`timings`, a JSON column; migration V015), and the dashboard's **Models**
@@ -295,6 +350,10 @@ curl -s "http://localhost:6370/v1/stats/latency?since=2026-09-28T18:00:00Z&room=
 Pass `since` as the time of your last restart when you are comparing
 Whisper settings, so the numbers are all from the settings now running
 (`whisper_seen` in the answer lists the settings the window covers).
+`speculative` in the answer is `{turns, reused, decodes}`: turns that had
+an early transcript, how many used it, and how many speculative decodes
+were started; `early_commit` is `{turns, A, B, cut_in}` for the captures
+the core ended early.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops
@@ -309,6 +368,95 @@ docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, 
 Compare the two paths and you can see exactly what the LLM costs on your
 hardware — which is the number that should drive your model choices, not
 the table above.
+
+### The streaming fast lane
+
+Every command still waits for the satellite's `listen.silence_timeout`
+(1.2 s) and then for one Whisper decode, however simple it was. The fast
+lane is a second, much smaller recognizer that follows each capture while
+you are still talking (sherpa-onnx running a streaming NeMo FastConformer,
+`domovoi/fast_lane.py`). When what it has heard so far is a complete
+simple command, such as "pause the music", "volume up" or "set a timer
+for ten minutes", and the room has then been quiet for a moment, it knows
+the command well before the satellite stops listening.
+
+For now it only runs in **shadow mode**: it writes down what it would
+have done and whether Whisper agreed, and every reply is exactly what it
+would have been without it. Those records decide whether it may ever act.
+
+Turn it on:
+
+```bash
+pip install -e ".[fastlane]"              # sherpa-onnx; not part of any other extra
+python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
+```
+
+then `FASTLANE_MODE=shadow` in `domovoi/.env` and a restart, or
+Settings → Speech-to-text → *Fast lane* → **shadow**, which applies at
+once. The model downloads on first enable into
+`~/.domovoi/models/fastlane/` from the sherpa-onnx project's GitHub
+releases, checked against a pinned SHA-256 (and its files again on every
+load). It is NVIDIA NeMo's
+`stt_en_fastconformer_hybrid_large_streaming_80ms` (CC-BY-4.0) in
+sherpa-onnx's int8 export. Without the extra, shadow mode logs once that
+the lane is unavailable and nothing else changes.
+
+What it commits on, and after how much quiet:
+
+| Hold | Commands |
+|---|---|
+| 350 ms | Closed phrases: pause / resume / stop the music, next / previous song, volume up / down, what's playing, how long is left on the timer, hang up, next / previous chapter, the wifi, server and voice questions, play / shuffle my favorites |
+| 650 ms | A number, a duration or a label: set a timer, cancel or stop the timer ("... for the pasta"), set the volume to N, skip N seconds, a calculation; the clock ("what time is it" can become "... in Tokyo"); phrases that can start a question ("what was that ... song", "what are my reminders ... for tomorrow", "how many albums ... does Adele have", "what's this book ... about"); a bare word ("stop", "pause", "next") and "go back", which often start a longer command |
+| never | Open slots (`play ...`, `remember ...`, `announce ...`), a reminder's message, plugin commands, anything for the language model |
+
+What you see: one line per turn it would have acted on,
+
+```bash
+journalctl -u domovoi-core | grep fastlane
+# fastlane would commit music._pause_from_match at +391ms (806 ms before
+#   utterance_end, hold 350 ms) in room=kitchen; lane heard 'pause the
+#   music'; whisper later said 'Pause the music.'; agree=True
+```
+
+plus a "fastlane missed ..." line when Whisper heard a command the lane
+could have taken but didn't (or "fastlane had not decided ..." when the
+core's own early commit stopped listening first: `fastlane_preempted`, not
+a miss). The turn's `intents_log.timings` carries
+`fastlane_seen`, `fastlane_ms` (your last voiced frame to the lane's
+decision), `fastlane_lead_ms` (how long before the satellite's
+`utterance_end` it came), `fastlane_agree`, `fastlane_after_ms` (speech
+that came after the decision: a real commit would have cut you off),
+`fastlane_cpu_ms`, and the lane's own text and path. The latency summary
+counts them without the text:
+
+```bash
+curl -s http://localhost:6370/v1/stats/latency | python3 -m json.tool   # the "fastlane" block
+docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, transcript, timings->>'fastlane_text' AS lane FROM intents_log WHERE timings->>'fastlane_agree' = 'false' ORDER BY at DESC LIMIT 20;"
+```
+
+**Measured, on the dev box** (i9-14900KF, 333 Piper-TTS command clips in
+nine voices shaped like a satellite capture; not yet on the Beelink, and
+TTS voices are not a household):
+
+| | |
+|---|---|
+| Last word to the lane's decision, 350 ms hold | p50 0.39 s, p95 0.63 s (real-time, one room); 0.41 / 0.67 s with three rooms talking at once |
+| Last word to the lane's decision, 650 ms hold | p50 0.66 s, p95 0.69 s |
+| CPU, one worker thread | real-time factor 0.16 (0.13 with 2 threads): about a sixth of one core per room while someone talks, nothing when nobody does; ~0.4 s of CPU per command |
+| The rest of the core | sherpa-onnx lets go of Python's lock while it decodes, so the core's event loop keeps running: its longest gap stayed under 1.5 ms with the lane following one or three rooms, apart from a single 10-34 ms gap per run. The lane also stops decoding a room at its `utterance_end`, the moment Whisper starts on that room's audio |
+| Memory | +200 MB for the model, +7 MB per room talking; loads in about 1 s |
+| Commits right | 181 of 182 on the single commands (the one miss: "what's *by* plus three") |
+| Commands caught | 181 of 252 single commands (72%; the 252 include 9 reminders it never takes). The rest were misheard and would simply have waited for Whisper. For scale: Whisper tiny got 211 of the 252 right, large-v3 77 of 84 on three of the voices |
+| Mid-command pauses | "set a timer for ten minutes ... for the pasta" with a 700 ms pause committed early in 7 of 9 clips, which is what a 650 ms hold does; "stop ... the timer", "next ... chapter" and "what time is it ... in Tokyo" waited correctly |
+
+So if it were allowed to act, a command it catches would start answering
+about 0.6-0.8 s after the last word on the 350 ms hold and 0.9-1.1 s on
+the 650 ms one (its decision plus roughly 0.25-0.45 s for voice
+identification, routing, the first sentence of speech and the satellite
+starting to play), against 1.2 s plus a Whisper decode plus the same
+0.25-0.45 s today.
+The lane uses one worker thread for every room; `fastlane_cpu_threads`
+(default 1) is what it may use.
 
 ---
 

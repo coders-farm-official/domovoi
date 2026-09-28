@@ -303,6 +303,61 @@ class Settings(BaseSettings):
     # a person waited for every transcript. A number pins it (and, being
     # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
     whisper_cpu_threads: int = 0
+    # Speculative transcription (early endpointing, part A): start Whisper
+    # at the first ~240 ms pause in a satellite's capture instead of after
+    # its whole silence timeout, and use that transcript when no speech
+    # came after it — decided by frame accounting, never by a guess, so a
+    # turn hears exactly what it would have without it. Costs one extra
+    # decode for each pause somebody talks past. Off = transcribe only
+    # after utterance_end, as before. See domovoi/streaming.py.
+    speculative_stt_enabled: bool = True
+    # Early commit (early endpointing, part B): when the transcript taken
+    # at a pause is a whole closed command (a fast path that opted in,
+    # FastPath.early_commit), the core ends the satellite's capture itself
+    # after a short hold instead of its whole silence timeout. Only
+    # satellites that declare capture_control are ever ended early, so a
+    # core update alone changes nothing until they upgrade. Whatever is
+    # said after the hold is lost; see domovoi/early_commit.py. Works on
+    # the speculative transcript, so it needs speculative_stt_enabled too.
+    early_commit_enabled: bool = True
+    # Tier B — phrases a pause can split (a timer or reminder duration,
+    # "volume 40", the clock, every one-word command) — on the longer hold.
+    # On because the owner chose it for the first release (2026-09-28);
+    # false keeps early commit to the closed tier-A phrases.
+    early_commit_tier_b: bool = True
+    # The holds: the satellite's own detector must have heard this long of
+    # silence since the last word. On a CPU-only server the decode itself
+    # usually takes longer, so the effective hold is the decode time.
+    early_commit_hold_a_ms: int = 350
+    early_commit_hold_b_ms: int = 650
+
+    # ─── Streaming fast lane (domovoi/fast_lane.py) ─────────────────────
+    # A small streaming recognizer that reads a capture's frames while the
+    # person is still talking and notices a complete closed command
+    # ("pause the music") well before the satellite's silence timeout.
+    # off (the default): nothing loads. shadow: it runs next to Whisper and
+    # only LOGS what it would have done, plus whether Whisper agreed (the
+    # fastlane_* keys on intents_log.timings); routing is untouched. Needs
+    # the `fastlane` extra; the model downloads on first enable into
+    # ~/.domovoi/models/fastlane/. Applies without a restart.
+    fastlane_mode: str = "off"
+    # Which pinned model (fast_lane.MODELS). Takes effect after a restart.
+    fastlane_model: str = "nemo-fastconformer-en-80ms-int8"
+    # CPU threads for the fast lane's ONE worker thread, shared by every
+    # room. Takes effect after a restart.
+    fastlane_cpu_threads: int = 1
+
+    @field_validator("fastlane_mode", mode="before")
+    @classmethod
+    def _fastlane_mode_known(cls, value: object) -> str:
+        """Never fatal, and never on by accident: case and whitespace are
+        forgiven, blank is off, and anything that isn't a mode reads as off
+        (the log says which value was refused)."""
+        text = str(value or "").strip().lower()
+        if text in ("", "off", "shadow"):
+            return text or "off"
+        _log.warning("FASTLANE_MODE=%r is not off or shadow; the fast lane stays off", value)
+        return "off"
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on
@@ -451,6 +506,25 @@ class Settings(BaseSettings):
     # a queued row is marked failed with a runbook pointer. See
     # scripts/wake_word/README.md for the operator-supplied command.
     wake_word_train_command: str = ""
+
+    # ─── Command recordings for tuning (opt-in per room) ───────────────
+    # Nothing is recorded unless an admin turns it on for a room (V016's
+    # command_capture_rooms; the Satellites drawer). Then each wake-word or
+    # follow-up command from that room is kept as a 16 kHz WAV plus a JSON
+    # sidecar under <command_captures_dir>/<room>/, to evaluate end-of-turn
+    # detection against real speech (design notes 2026-09-28). Server-private
+    # like wake_clips_dir: no web file route serves it, and the core refuses
+    # to write into a directory the dashboard or a satellite can fetch from.
+    command_captures_dir: str = str(Path.home() / ".domovoi" / "captures")
+    # How long a recording is kept. The owner's 14 days is also the ceiling:
+    # a longer value is clamped to it, a shorter one is honoured.
+    command_capture_retention_days: int = 14
+    # Disk cap for every room's recordings together, in MB; the oldest go
+    # first once it is exceeded. One command is about 32 KB per second.
+    command_capture_max_mb: int = 500
+    # How often the core's pruner deletes expired recordings, enforces the
+    # cap and removes anything left for a room that is no longer opted in.
+    command_capture_pruner_interval_sec: float = 3600.0
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

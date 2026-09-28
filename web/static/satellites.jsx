@@ -109,6 +109,9 @@ const SatCard = ({ s, onOpen, tick }) => {
         ) : (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>no music</div>
         )}
+        {s.capture_commands && (
+          <div style={{ marginTop: 8 }}><CaptureChip/></div>
+        )}
       </div>
 
       <div style={{ borderTop: '1px solid var(--border-soft)', padding: '10px 16px',
@@ -337,6 +340,102 @@ const VideoControls = ({ s, fire }) => {
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
         idle screen: {d.idle_mode || 'clock'} — change it (and the power mechanism) in the Settings tab
+      </div>
+    </div>
+  );
+};
+
+/* ---- Command recordings for tuning (opt-in per room) -------
+ * Off for every room until an admin turns it on here. While on, each
+ * wake-word or follow-up command said to this satellite is kept on the
+ * Domovoi server (audio + transcript) for tuning when Domovoi stops
+ * listening; Settings → Recordings plays and labels them. Turning it off
+ * deletes what was kept, so both directions confirm first. The server's
+ * security tier decides every call; the admin check here only picks
+ * which controls to show. */
+const SatCaptureControl = ({ s, fire, refresh }) => {
+  const admin = useAdminSignedIn();
+  const [busy, setBusy] = React.useState(false);
+  const path = admin ? `/api/captures?room_id=${encodeURIComponent(s.room_id)}` : null;
+  const { data, refresh: refreshKept } = useApiObject(path, { quiet: true });
+  // What the last toggle here set, shown until the roster (a slower read:
+  // it asks every room's player) catches up — so the block never says
+  // "on" right after it was turned off.
+  const [justSet, setJustSet] = React.useState(null);
+  React.useEffect(() => { setJustSet(null); }, [s.room_id, s.capture_commands]);
+  const on = justSet !== null ? justSet : !!s.capture_commands;
+  const room = data && (data.rooms || []).find((r) => r.room_id === s.room_id);
+  const kept = room ? room.count : 0;
+  const days = (data && data.retention_days) || 14;
+  const plural = (n) => `${n} recording${n === 1 ? '' : 's'}`;
+
+  const turnOn = async () => {
+    if (!window.confirm(
+      `Record commands in ${s.room_id}?\n\n` +
+      `Each command said to this satellite (after the wake word, or answering a ` +
+      `follow-up question) is kept on the Domovoi server for ${days} days, the audio ` +
+      `and what it heard, so admins can tune when Domovoi stops listening. ` +
+      `Wake-word training, drop-in calls and chat are never kept.\n\n` +
+      `Let the people who use this room know.`
+    )) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/api/captures/rooms/${encodeURIComponent(s.room_id)}`, { method: 'PUT' });
+      setJustSet(true);
+      fire(`recording commands in ${s.room_id}`);
+      refresh && refresh();
+      refreshKept();
+    } catch (e) {
+      reportMutationFailure(fire, 'turn on recording', e);
+    } finally { setBusy(false); }
+  };
+
+  const turnOff = async () => {
+    if (!window.confirm(
+      `Stop recording in ${s.room_id}?\n\n` +
+      (kept ? `The ${plural(kept)} kept so far will be deleted now. This can't be undone.`
+            : 'Nothing kept here yet, so nothing to delete.')
+    )) return;
+    setBusy(true);
+    try {
+      const r = await apiDelete(`/api/captures/rooms/${encodeURIComponent(s.room_id)}`);
+      const gone = (r && r.deleted) || 0;
+      setJustSet(false);
+      fire(`stopped recording in ${s.room_id}${gone ? ` · ${plural(gone)} deleted` : ''}`);
+      refresh && refresh();
+      refreshKept();
+    } catch (e) {
+      reportMutationFailure(fire, 'stop recording', e);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+        command recordings
+        {on && <CaptureChip/>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 180px', fontSize: 12, color: on ? 'var(--fg)' : 'var(--fg-muted)' }}>
+          {on
+            ? <>on since <span className="mono">{s.capture_since ? relTime(s.capture_since) : 'just now'}</span>
+                {admin && room && (
+                  <span style={{ color: 'var(--fg-muted)' }}>
+                    {' · '}{kept ? `${plural(kept)} · ${fmtBytes(room.bytes)}` : 'nothing kept yet'}
+                  </span>
+                )}</>
+            : 'off · nothing said here is kept'}
+        </div>
+        {admin && (on ? (
+          <Button icon="mic-off" disabled={busy} onClick={turnOff}>Stop and delete</Button>
+        ) : (
+          <Button icon="mic" disabled={busy} onClick={turnOn}>Record commands</Button>
+        ))}
+      </div>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+        {admin
+          ? `for tuning when domovoi stops listening · kept ${days} days · review in settings → recordings`
+          : 'admins turn this on or off · sign in to change it'}
       </div>
     </div>
   );
@@ -646,6 +745,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           live two-way audio — say "hang up" or use the button to end
         </div>
       </div>
+
+      <SatCaptureControl s={s} fire={fire} refresh={refresh}/>
 
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -2084,6 +2084,198 @@ const DevicesPanel = () => {
 };
 
 /* ============================================================ */
+/* Recordings — opt-in command recordings, reviewed by an admin */
+/* ============================================================ */
+/* Rooms an admin opted in (Satellites drawer → command recordings) keep
+ * each wake-word or follow-up command, audio plus transcript, for tuning
+ * when Domovoi stops listening. Here an admin plays them back, says
+ * whether the capture ended at the right moment, and deletes them. Every
+ * call is the server's security tier (admin only, 501 before setup). */
+
+const CAPTURE_LABEL_ORDER = ['cut_off', 'fine', 'waited_too_long'];
+
+const CaptureRow = ({ c, labels, playing, busy, onPlay, onLabel, onDelete }) => {
+  const t = c.timings || {};
+  const secs = c.duration_ms != null ? `${(c.duration_ms / 1000).toFixed(1)} s` : '—';
+  return (
+    <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)',
+                  display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+      <IconButton name={playing ? 'square' : 'play'} title={playing ? 'stop' : 'play'}
+                  onClick={() => onPlay(c)}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      fontSize: 11, color: 'var(--fg-muted)' }}>
+          <span className="room-chip">{c.room_id}</span>
+          <span title={c.captured_at}>{relTime(c.captured_at)}</span>
+          <span className="mono">
+            {(c.trigger || '').replace(/_/g, ' ')} · {secs} · {c.end_reason ? c.end_reason.replace(/_/g, ' ') : 'end not reported'}
+          </span>
+          {t.total_ms != null && <span className="mono">· reply after {t.total_ms} ms</span>}
+        </div>
+        <div style={{ fontSize: 13, marginTop: 6, overflowWrap: 'anywhere' }}>{c.transcript}</div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>
+          {c.matched_handler || '—'}{c.matched_path ? ` · ${c.matched_path}` : ''}{c.interrupted ? ' · interrupted' : ''}
+        </div>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
+          {CAPTURE_LABEL_ORDER.map((k) => (
+            <Button key={k} variant={c.label === k ? 'primary' : 'ghost'} disabled={busy}
+                    onClick={() => onLabel(c, c.label === k ? null : k)}>
+              {labels[k] || k}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <IconButton name="trash-2" title="delete recording" onClick={() => onDelete(c)}/>
+    </div>
+  );
+};
+
+const CapturesPanel = () => {
+  const [fire, toastNode] = useToast();
+  const admin = useAdminSignedIn();
+  const { data, loading, error, refresh } = useApiObject(admin ? '/api/captures' : null);
+  const [room, setRoom] = React.useState('');
+  const [only, setOnly] = React.useState('all');   // all | unlabelled | a label key
+  const [playing, setPlaying] = React.useState(null);
+  const [busy, setBusy] = React.useState('');
+  const audioRef = React.useRef(null);
+
+  const stopAudio = () => {
+    const cur = audioRef.current;
+    audioRef.current = null;
+    if (cur) { cur.audio.pause(); URL.revokeObjectURL(cur.url); }
+  };
+  React.useEffect(() => stopAudio, []);
+
+  // Fetched with the admin's credentials and played from memory: an <audio
+  // src> can't carry a Bearer, and a recording must never ride a URL token.
+  const play = async (c) => {
+    stopAudio();
+    if (playing === c.id) { setPlaying(null); return; }
+    setPlaying(c.id);
+    try {
+      const r = await apiFetchRaw(
+        `/api/captures/clips/${encodeURIComponent(c.room_id)}/${encodeURIComponent(c.id)}/audio`);
+      const url = URL.createObjectURL(await r.blob());
+      const audio = new Audio(url);
+      audioRef.current = { audio, url };
+      const done = () => {
+        if (audioRef.current && audioRef.current.audio === audio) stopAudio();
+        setPlaying((p) => (p === c.id ? null : p));
+      };
+      audio.onended = done;
+      await audio.play();
+    } catch (e) {
+      if (!isAuthFailure(e)) fire('playback failed');
+      stopAudio();
+      setPlaying(null);
+    }
+  };
+
+  const setLabel = async (c, label) => {
+    setBusy(c.id);
+    try {
+      await apiPatch(`/api/captures/clips/${encodeURIComponent(c.room_id)}/${encodeURIComponent(c.id)}`, { label });
+      await refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'label', e);
+    } finally { setBusy(''); }
+  };
+
+  const delConfirm = useDeleteConfirm(async (c) => {
+    if (playing === c.id) { stopAudio(); setPlaying(null); }
+    try {
+      await apiDelete(`/api/captures/clips/${encodeURIComponent(c.room_id)}/${encodeURIComponent(c.id)}`);
+      fire('recording deleted');
+      await refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'delete', e);
+    }
+  });
+
+  const note = (text) => (
+    <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>{text}</div>
+  );
+  const sub = 'What opted-in rooms said to Domovoi, kept to tune when it stops listening. '
+    + 'Turn a room on or off in its Satellites drawer.';
+
+  if (!admin) {
+    return <Card title="Command recordings" sub={sub}>{note('Admins only. Sign in to review recordings.')}</Card>;
+  }
+  if (error) {
+    return (
+      <Card title="Command recordings" sub={sub}>
+        {note(error.status === 501
+          ? 'Available once first-run admin setup is complete.'
+          : `couldn't load recordings: ${apiErrorText(error)}`)}
+      </Card>
+    );
+  }
+  if (loading || !data) return <Card title="Command recordings" sub={sub}>{note('loading…')}</Card>;
+
+  const labels = data.labels || {};
+  const rooms = data.rooms || [];
+  const all = data.captures || [];
+  const shown = all.filter((c) => (!room || c.room_id === room)
+    && (only === 'all' || (only === 'unlabelled' ? !c.label : c.label === only)));
+  const count = `${data.count} recording${data.count === 1 ? '' : 's'}`;
+
+  return (
+    <>
+      <Card title="Command recordings" sub={sub}
+            action={<IconButton name="refresh-cw" title="refresh" onClick={() => refresh()}/>}>
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {count} · {fmtBytes(data.bytes)} of {fmtBytes(data.cap_bytes)} · each kept {data.retention_days} days, oldest go first at the cap
+          </div>
+          {data.problem && (
+            <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+              not recording anywhere: {data.problem}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {rooms.length === 0 && <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>no room is recording</span>}
+            {rooms.map((r) => (
+              <span key={r.room_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <span className="room-chip">{r.room_id}</span>
+                {r.enabled ? <CaptureChip short/> : <span style={{ color: 'var(--fg-faint)' }}>off</span>}
+                <span className="mono" style={{ color: 'var(--fg-muted)' }}>{r.count}</span>
+              </span>
+            ))}
+          </div>
+          {all.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <select value={room} onChange={(e) => setRoom(e.target.value)} style={_wakeFieldStyle}>
+                <option value="">every room</option>
+                {rooms.map((r) => <option key={r.room_id} value={r.room_id}>{r.room_id}</option>)}
+              </select>
+              <select value={only} onChange={(e) => setOnly(e.target.value)} style={_wakeFieldStyle}>
+                <option value="all">every label</option>
+                <option value="unlabelled">not labelled yet</option>
+                {CAPTURE_LABEL_ORDER.map((k) => <option key={k} value={k}>{labels[k] || k}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+        {shown.length === 0 ? (
+          <Empty title={all.length ? 'nothing matches' : 'nothing recorded yet'}
+                 sub={all.length ? undefined : 'turn recording on for a room in its satellites drawer'}/>
+        ) : shown.map((c) => (
+          <CaptureRow key={c.id} c={c} labels={labels} playing={playing === c.id}
+                      busy={busy === c.id} onPlay={play} onLabel={setLabel}
+                      onDelete={(x) => delConfirm.request(x, {
+                        title: 'Delete this recording?',
+                        body: <div>The audio and its transcript are removed from the server now.</div>,
+                      })}/>
+        ))}
+      </Card>
+      {delConfirm.node}
+      {toastNode}
+    </>
+  );
+};
+
+/* ============================================================ */
 /* Settings shell                                               */
 /* ============================================================ */
 
@@ -2092,6 +2284,7 @@ const SETTINGS_TABS = [
   { id: 'greetings', label: 'Greetings' },
   { id: 'voices', label: 'Voices' },
   { id: 'wakewords', label: 'Wake Words' },
+  { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'config', label: 'Configuration' },   // last tab, by request
@@ -2102,6 +2295,7 @@ const SETTINGS_SUB = {
   greetings: 'Lines a satellite plays the instant the wake word fires.',
   voices: 'The TTS voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
+  recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
   models: "What's active in each role, install more, and the host hardware readout.",
   config: 'Editable domovoi configuration.',
@@ -2118,6 +2312,7 @@ const SettingsPage = () => {
       {tab === 'greetings' && <GreetingsPanel/>}
       {tab === 'voices' && <VoicesPanel/>}
       {tab === 'wakewords' && <WakeWordsPanel/>}
+      {tab === 'recordings' && <CapturesPanel/>}
       {tab === 'devices' && <DevicesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'config' && <ConfigPanel/>}

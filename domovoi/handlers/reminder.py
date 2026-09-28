@@ -103,8 +103,8 @@ class ReminderHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_CREATE_RE, ReminderHandler._create_from_match),
-            FastPath(_LIST_RE, ReminderHandler._list_from_match),
+            FastPath(_CREATE_RE, ReminderHandler._create_from_match, early_commit="B"),
+            FastPath(_LIST_RE, ReminderHandler._list_from_match, early_commit="A"),
             FastPath(_CANCEL_RE, ReminderHandler._cancel_from_match),
         ]
 

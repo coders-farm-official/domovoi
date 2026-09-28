@@ -212,6 +212,15 @@ def _isolate_update_state(tmp_path, monkeypatch):
     monkeypatch.setattr(self_restart, "_UNIT_DIRS", (str(tmp_path / "no-systemd-units"),))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_command_captures(tmp_path, monkeypatch):
+    """Opt-in command recordings (domovoi/command_captures.py) land under a
+    tmp dir for EVERY test: a test that routes a voice turn in a room some
+    other test opted in must never write household-speech-shaped files
+    into the developer's real ~/.domovoi/captures."""
+    monkeypatch.setattr(settings, "command_captures_dir", str(tmp_path / "command-captures"))
+
+
 @pytest_asyncio.fixture
 async def db_session():
     """Fresh session per test, with all tables truncated first."""

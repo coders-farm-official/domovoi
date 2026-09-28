@@ -68,6 +68,13 @@ FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)  # 480
 FRAME_BYTES = FRAME_SAMPLES * 2  # int16 = 2 bytes/sample
 
+# Silent frames after speech at which a capture tells the core it has
+# paused (`speech_pause`, 240 ms), so the core can start transcribing while
+# this side keeps counting toward `listen.silence_timeout`. Sent only to a
+# core whose `ready` lists the feature — an older core answers an unknown
+# message with `error`, which ends the turn here.
+SPEECH_PAUSE_FRAMES = 8
+
 # Log format, shared by the stderr handler (journald picks that up) and by
 # the in-memory ring the dashboard reads, so a line looks identical whether
 # you read it over SSH or in the browser.
@@ -418,6 +425,10 @@ class Config:
     wifi_cooldown_sec: float
     wifi_degraded_after_disconnect_sec: float
     log_level: str
+    # [listen] early_commit: let the core end a capture early when what it
+    # has heard so far is a whole command (declared as `capture_control` in
+    # the hello). Defaulted so a Config built without it keeps working.
+    early_commit: bool = True
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -606,6 +617,11 @@ class Config:
                 wifi.get("degraded_after_disconnect_sec", 30.0)
             ),
             log_level=str(logc.get("level", "INFO")).upper(),
+            # The core may stop this satellite listening as soon as it has
+            # heard a whole command ("pause the music"), instead of waiting
+            # out silence_timeout. Whatever is said after that is lost —
+            # turn off in a room where people pause mid-command.
+            early_commit=bool(listen.get("early_commit", True)),
         )
 
 
@@ -960,6 +976,12 @@ class Satellite:
         # past the AEC out of the transcript. Set when a greeting plays,
         # reset when reported (and at the start of each wake decision).
         self._greeting_played_this_turn = False
+
+        # The core's early commit: set by an `end_capture` for the capture
+        # in progress, checked by `_stream_capture` before every frame, and
+        # cleared when each capture starts. See `_capture_utt`.
+        self._end_capture = threading.Event()
+        self._capture_lock = threading.Lock()
 
         # State-indicator LEDs. Backend depends on the device profile:
         # APA102 over SPI on the ReSpeaker HAT, or the WS2812 ring driven
@@ -1348,6 +1370,16 @@ class Satellite:
             return False
         loop.call_soon_threadsafe(q.put_nowait, ("text", json.dumps(payload)))
         return True
+
+    def _begin_utterance(self, trigger: str) -> bool:
+        """Open a capture on the core: `utterance_start` with this
+        connection's next capture number (`utt`), which the capture's
+        hints and its `utterance_end` repeat. An older core reads only the
+        trigger."""
+        self._utt_seq += 1
+        return self._emit_text(
+            {"type": "utterance_start", "trigger": trigger, "utt": self._utt_seq}
+        )
 
     def _emit_audio(self, frame: bytes) -> bool:
         loop, q = self.loop, self.send_q
@@ -2299,6 +2331,7 @@ class Satellite:
             "listen.silence_timeout": c.silence_timeout,
             "listen.max_record_seconds": c.max_record_seconds,
             "listen.followup_pre_speech_timeout": c.followup_pre_speech_timeout,
+            "listen.early_commit": c.early_commit,
             "greeting.enabled": c.greeting_enabled,
             "greeting.funny_chance": c.greeting_funny_chance,
             "sounds.sync_enabled": c.sounds_sync_enabled,
@@ -3224,7 +3257,30 @@ class Satellite:
         cleanly — the server responds with a stock apology TTS
         and the satellite re-derives its noise gate against the new
         ambient on the way back to wake-word listen.
+
+        The core can also end the capture (early commit): an
+        `end_capture` naming this capture sets `_end_capture`, checked
+        before every frame, and the capture ends there — exit reason
+        `server_endpoint`, no noisy-capture check (the core is already
+        answering; an apology would cancel that answer), and an
+        `utterance_end` all the same, which the core reads only to log
+        whether speech came after it stopped listening.
         """
+        with self._capture_lock:
+            self._capture_utt = self._utt_seq
+            self._end_capture.clear()
+        try:
+            return self._capture(prefix_frames, pre_speech_timeout_sec)
+        finally:
+            with self._capture_lock:
+                self._capture_utt = None
+
+    def _capture(
+        self,
+        prefix_frames: list[bytes],
+        pre_speech_timeout_sec: float | None,
+    ) -> bool:
+        """The capture loop itself; see `_stream_capture`."""
         self._leds.set_state("listening")
         vad = webrtcvad.Vad(self.cfg.vad_aggressiveness)
         speaking = bool(prefix_frames)
@@ -3251,6 +3307,17 @@ class Satellite:
         gate_pass_count = 0
         voiced_count = 0
 
+        # For the core (see SPEECH_PAUSE_FRAMES): this capture's number, the
+        # last frame the detector called speech (a barge-in prefix counts as
+        # speech, as `speaking` above already assumes), and whether the
+        # current silence run has been reported. Hints go only to a core
+        # that listed them in `ready` — checked at each hint, not once per
+        # capture: a session that drops mid-capture may come back to an
+        # older core, which answers an unknown type with `error`.
+        utt = self._utt_seq
+        last_voiced = len(prefix_frames) - 1
+        pause_reported = False
+
         for f in prefix_frames:
             self._emit_audio(f)
             sent += 1
@@ -3261,25 +3328,53 @@ class Satellite:
         # going false (max_frames or shutdown_event without speech).
         exit_reason = "max_record_seconds"
         while sent < max_frames and not self.shutdown_event.is_set():
+            if self._end_capture.is_set():
+                # The core has heard a whole command and is answering it.
+                exit_reason = "server_endpoint"
+                break
             try:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
                 continue
-            self._emit_audio(frame)
-            sent += 1
             d = _frame_dbfs(frame)
             capture_dbfs.append(d)
             loud = d >= self.cfg.noise_gate_dbfs
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
+            if is_speech and pause_reported:
+                # BEFORE this frame's audio: the core counts every frame
+                # that reaches it while a reported pause stands as silence
+                # toward its early-commit hold, so the one that ends the
+                # pause must not get there first. `frame` is what the core
+                # holds when this arrives, as in `speech_pause`.
+                pause_reported = False
+                if "speech_pause" in self._core_features:
+                    self._emit_text({"type": "speech_resume", "utt": utt, "frame": sent})
+            self._emit_audio(frame)
+            sent += 1
             if is_speech:
                 speaking = True
                 silent_frames = 0
                 pre_speech_silent = 0
                 voiced_count += 1
+                last_voiced = sent - 1
             elif speaking:
                 silent_frames += 1
+                if (
+                    silent_frames == SPEECH_PAUSE_FRAMES
+                    and "speech_pause" in self._core_features
+                ):
+                    # Once per silence run: `frame` is what the core has
+                    # buffered when this arrives (one ordered queue).
+                    pause_reported = True
+                    self._emit_text({
+                        "type": "speech_pause",
+                        "utt": utt,
+                        "frame": sent,
+                        "last_voiced_frame": last_voiced,
+                        "greeting_played": self._greeting_played_this_turn,
+                    })
                 if silent_frames >= silence_limit:
                     exit_reason = "vad_silence_after_speech"
                     break
@@ -3335,7 +3430,8 @@ class Satellite:
         # rare in practice, exactly the case the user-facing apology
         # is meant for.
         if (
-            self.cfg.noise_gate_auto_calibrate
+            exit_reason != "server_endpoint"
+            and self.cfg.noise_gate_auto_calibrate
             and len(capture_dbfs) >= 30  # ~1 s, otherwise too small a sample
         ):
             finite = [d for d in capture_dbfs if d != float("-inf")]
@@ -3361,6 +3457,21 @@ class Satellite:
         delivered = self._emit_text({
             "type": "utterance_end",
             "greeting_played": self._greeting_played_this_turn,
+            # Exact frame accounting for the core: with these it knows
+            # whether a transcript it started at a pause covers every
+            # voiced frame. The same numbers (why the capture ended, and
+            # its voiced / trailing-silent / silence-limit frame counts)
+            # go into an opted-in room's command recording (end-of-turn
+            # tuning). An older core reads greeting_played alone. New
+            # FIELDS on an existing frame are safe both ways — unlike a new
+            # frame type, which an old core answers with `error`.
+            "utt": utt,
+            "frames": sent,
+            "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
+            "exit_reason": exit_reason,
+            "voiced_frames": voiced_count,
+            "trailing_silent_frames": silent_frames,
+            "silence_limit_frames": silence_limit,
         })
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False
@@ -3426,7 +3537,7 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
-                    self._emit_text({"type": "utterance_start", "trigger": "barge_in"})
+                    self._begin_utterance("barge_in")
                     self._barge_prefix = list(recent)
                     return "barge"
             else:
@@ -3483,7 +3594,7 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
-                    self._emit_text({"type": "utterance_start", "trigger": "barge_in"})
+                    self._begin_utterance("barge_in")
                     self._barge_prefix = []
                     return "barge"
 
@@ -3674,7 +3785,7 @@ class Satellite:
                 # Open mic, no wake gate — the whole point of chat mode. LED
                 # back to blue so each new turn reads as "your turn".
                 self._leds.set_state("listening")
-                self._emit_text({"type": "utterance_start", "trigger": "chat"})
+                self._begin_utterance("chat")
 
                 if not self._stream_capture(prefix, pre_speech_timeout_sec=pre_speech_timeout):
                     if self.shutdown_event.is_set():
@@ -3784,7 +3895,7 @@ class Satellite:
                     continue
                 wake_detected.clear()
                 log.info("wake word during drop-in — capturing command (e.g. 'hang up')")
-                self._emit_text({"type": "utterance_start", "trigger": "wake_word"})
+                self._begin_utterance("wake_word")
                 self.response_done.clear()
                 self.stop_playback.clear()
                 self.expect_followup.clear()
@@ -3939,7 +4050,7 @@ class Satellite:
                 # Stream the clip: start marker (trigger flags it as a training
                 # clip server-side), the PCM frames, then the end marker. The
                 # server writes a WAV per clip; we never wait on a response.
-                self._emit_text({"type": "utterance_start", "trigger": "wake_clip"})
+                self._begin_utterance("wake_clip")
                 for frame in buf:
                     self._emit_audio(frame)
                 self._emit_text({"type": "utterance_end", "greeting_played": False})
@@ -4118,7 +4229,7 @@ class Satellite:
                 continue
             if not woke:
                 return
-            self._emit_text({"type": "utterance_start", "trigger": "wake_word"})
+            self._begin_utterance("wake_word")
             prefix: list[bytes] = []
             # Set when this iteration is following up on the bot's own
             # question (e.g., "did I get that right?"). Caps the
@@ -4157,9 +4268,7 @@ class Satellite:
                             self.cfg.followup_pre_speech_timeout,
                         )
                         self.expect_followup.clear()
-                        self._emit_text(
-                            {"type": "utterance_start", "trigger": "followup"}
-                        )
+                        self._begin_utterance("followup")
                         prefix = []
                         pre_speech_timeout = self.cfg.followup_pre_speech_timeout
                         continue
@@ -4269,6 +4378,20 @@ class Satellite:
     _TIME_SYNC_MIN_INTERVAL_SEC = 6 * 3600
     _time_synced_at: float | None = None
 
+    # What the connected core understands beyond protocol 0.1, from its
+    # `ready` frame; empty between sessions and for a core that lists
+    # nothing. A new message type goes out only when it is in here.
+    _core_features: frozenset[str] = frozenset()
+    # This connection's capture counter: each utterance_start carries the
+    # next number (`utt`), and so does everything about that capture.
+    _utt_seq: int = 0
+    # The capture `_stream_capture` is running, by number, while it runs
+    # (None between captures). An `end_capture` for any other number is
+    # stale — the capture it meant already ended on its own — and must not
+    # end this one. Read by the receiver, written by the mic thread, both
+    # under `_capture_lock`.
+    _capture_utt: int | None = None
+
     def _sync_time_with_server(self) -> None:
         """Ask the root helper to copy the server's clock and time zone.
 
@@ -4292,9 +4415,10 @@ class Satellite:
         t = payload.get("type")
         if t == "ready":
             log.info(
-                "server ready: protocol=%s bot=%s",
+                "server ready: protocol=%s bot=%s features=%s",
                 payload.get("protocol_version"),
                 payload.get("bot_name"),
+                payload.get("features"),
             )
             # Everything this frame does for the housekeeping sits inside a
             # try/finally whose `finally` opens the microphone. Order is
@@ -4310,6 +4434,16 @@ class Satellite:
             # frame is the core accepting the session; opening the
             # microphone is the one thing it may not skip.
             try:
+                # What this core understands beyond protocol 0.1. Absent on
+                # an older core, and then nothing new is ever sent to it:
+                # it answers an unknown message with `error`, which ends
+                # the turn here.
+                features = payload.get("features")
+                self._core_features = (
+                    frozenset(f for f in features if isinstance(f, str))
+                    if isinstance(features, list)
+                    else frozenset()
+                )
                 # A `ready` frame means the (possibly just-upgraded) code
                 # connected and handshook cleanly — confirm the upgrade so
                 # the rollback watchdog stands down, and clear the pending
@@ -4703,6 +4837,18 @@ class Satellite:
                 asyncio.create_task(self._send_logs(rid, want))
             else:
                 log.warning("get_logs: no request_id in payload; ignoring")
+        elif t == "end_capture":
+            # The core has heard a whole command and is answering: stop
+            # the capture it names — but only that one. A late end_capture
+            # (the capture already ended on its own silence and the next,
+            # a follow-up, has started) names an older number and is
+            # dropped.
+            utt = payload.get("utt")
+            with self._capture_lock:
+                if utt is not None and utt == self._capture_utt:
+                    self._end_capture.set()
+                    return
+            log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)
         elif t == "pong":
             pass
         else:
@@ -4767,6 +4913,18 @@ class Satellite:
                     # mic-less builds) — the server refuses wake-recording /
                     # drop-in / chat for mic-disabled rooms.
                     "mic_enabled": self.cfg.mic_enabled,
+                    # This client reports its own pauses (`speech_pause` /
+                    # `speech_resume`) and each capture's last voiced frame
+                    # whenever the core's `ready` lists the feature, so the
+                    # core can transcribe at the first pause and know
+                    # exactly whether that transcript covers everything
+                    # said. An older core ignores the field.
+                    "speech_pause": True,
+                    # This client stops a capture on `end_capture` — the
+                    # core's early commit. Only a client that says so is
+                    # ever ended early; [listen] early_commit=false opts
+                    # this room out.
+                    "capture_control": self.cfg.early_commit,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if
@@ -4908,6 +5066,9 @@ class Satellite:
         # runs is dropped rather than queued. Idempotent: on a failed
         # reconnect this runs with the queue already gone.
         self.send_q = None
+        # The next core may be an older one; it says what it understands
+        # in its own `ready`.
+        self._core_features = frozenset()
         self.response_done.set()
         self.playback_active.clear()
         self.stop_playback.set()

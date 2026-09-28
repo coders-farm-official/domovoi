@@ -21,7 +21,7 @@
 #        --constraint /tmp/tested.txt --output-file requirements.lock pyproject.toml
 #
 # Not locked here, on purpose: the hardware-dependent extras (`real-clients`,
-# `cuda`, `voice-profile`, `fingerprint`, `shazam`, `chat`). Their wheels
+# `cuda`, `voice-profile`, `fingerprint`, `shazam`, `chat`, `fastlane`). Their wheels
 # differ per platform and GPU, so pinning them from one machine would break
 # installs on the next; install them with pip's own resolver as documented
 # in the README and docs/CPU_HOST.md.

@@ -116,7 +116,7 @@ class DismissHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_DISMISS_RE, DismissHandler._from_match),
+            FastPath(_DISMISS_RE, DismissHandler._from_match, early_commit="B"),
         ]
 
     async def execute(

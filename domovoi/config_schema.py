@@ -532,6 +532,81 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", section="advanced", tier="restart", min=0, max=256,
     ),
     FieldSpec(
+        "speculative_stt_enabled", "Start transcribing at the first pause",
+        "Speech-to-text",
+        "On by default: while a satellite is still waiting out its "
+        "end-of-speech silence, Whisper starts on what it has at the first "
+        "short pause, and that transcript is used when nothing was said "
+        "after it — so the silence and the transcription overlap instead "
+        "of adding up. Each pause somebody talks past costs one extra "
+        "transcription of CPU. Off transcribes only after the satellite "
+        "stops listening.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "early_commit_enabled", "Stop listening early on a whole command",
+        "Speech-to-text",
+        "When the transcript taken at a pause is a whole closed command "
+        "(\"pause the music\", \"what's playing\"), stop listening after a "
+        "short hold instead of the satellite's full end-of-speech silence, "
+        "and answer. Anything said after the hold is lost. Only satellites "
+        "running this release's code are ended early; each can opt out in "
+        "its own Listening settings. Needs \"Start transcribing at the "
+        "first pause\" on.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "early_commit_tier_b", "Stop early on timers, numbers and the clock too",
+        "Speech-to-text",
+        "Also stop early on phrases a pause can split, with the longer hold: "
+        "a timer or reminder duration (\"… for the pasta\" after the hold is "
+        "lost), \"volume 40\", clock questions (\"what time is it … in "
+        "Tokyo\"), and every one-word command (\"stop\" is also the start of "
+        "\"stop the timer\"). Off keeps early stops to the closed phrases.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "early_commit_hold_a_ms", "Early-stop hold (closed phrases)",
+        "Speech-to-text",
+        "How much silence after the last word before a closed phrase "
+        "(\"pause the music\") ends the capture. Longer is safer and slower.",
+        "int", section="advanced", tier="hot", min=200, max=2000, unit="ms",
+    ),
+    FieldSpec(
+        "early_commit_hold_b_ms", "Early-stop hold (timers, numbers, clock)",
+        "Speech-to-text",
+        "How much silence after the last word before a phrase a pause can "
+        "split (\"set a timer for ten minutes\") ends the capture. Keep it "
+        "above the closed-phrase hold.",
+        "int", section="advanced", tier="hot", min=200, max=3000, unit="ms",
+    ),
+    FieldSpec(
+        "fastlane_mode", "Fast lane", "Speech-to-text",
+        "A small streaming recognizer that follows each command while it is "
+        "being spoken and notices a finished simple one (pause, volume up, a "
+        "timer) before the satellite stops listening. 'shadow' only LOGS what "
+        "it would have done and whether Whisper agreed (GET /v1/stats/latency "
+        "counts them); every reply is exactly what it would have been. 'off' "
+        "(the default) loads nothing. Needs the fastlane extra; the model "
+        "(a 103 MB download) arrives on first enable. Applies immediately.",
+        "choice", section="advanced", tier="reapply", choices=["off", "shadow"],
+    ),
+    FieldSpec(
+        "fastlane_model", "Fast lane model", "Speech-to-text",
+        "Which pinned streaming model the fast lane runs; each one is "
+        "downloaded from a fixed address and checked against a fixed "
+        "SHA-256. Takes effect after a restart.",
+        "choice", section="advanced", tier="restart",
+        choices=["nemo-fastconformer-en-80ms-int8"],
+    ),
+    FieldSpec(
+        "fastlane_cpu_threads", "Fast lane CPU threads", "Speech-to-text",
+        "CPU threads for the fast lane's single worker, shared by every room. "
+        "1 keeps up with several rooms talking at once on a modern CPU. "
+        "Takes effect after a restart.",
+        "int", section="advanced", tier="restart", min=1, max=16,
+    ),
+    FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
         "How often the Domovoi server pings each satellite's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "

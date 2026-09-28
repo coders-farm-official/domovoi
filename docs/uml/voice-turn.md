@@ -26,17 +26,29 @@ sequenceDiagram
     participant TTS as TTS chain<br/>edge → piper → system
 
     Note over Pi: wake word detected<br/>(openWakeWord, on-Pi)
-    Pi->>WS: utterance_start {trigger:"wake_word"}
+    Pi->>WS: utterance_start {trigger:"wake_word", utt}
     Pi->>WS: binary PCM (16 kHz mono int16, streamed)
-    Pi->>WS: utterance_end {greeting_played}
+    Note over WS: first ~240 ms pause after speech<br/>(speech_pause, or judged from the frames)
+    WS->>STT: transcribe(copy so far) — speculative
+    WS->>VID: embed(copy so far) — alongside, no side effects
+    Pi->>WS: binary PCM (the rest of the silence timeout)
+    STT-->>WS: transcript (held)
+    Pi->>WS: utterance_end {greeting_played, frames,<br/>last_voiced_frame}
     Note over WS: receive loop spawns a response task<br/>and keeps draining the socket<br/>(so a barge_in still lands)
 
-    WS->>STT: transcribe(pcm)
-    STT-->>WS: transcript
+    opt satellite declared capture_control, transcript is a<br/>whole closed command, silent for the tier's hold
+        WS-->>Pi: end_capture {utt} — early commit, before utterance_end
+    end
+    alt last voiced frame inside the copy
+        Note over WS: use the held transcript and embedding
+    else speech came after the copy (or no copy)
+        WS->>STT: transcribe(pcm) — after any decode in flight
+        STT-->>WS: transcript
+    end
     Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC
     WS-->>Pi: transcript {text}
 
-    WS->>VID: identify(pcm)
+    WS->>VID: identify(pcm) — match only, when the held copy's embedding is used
     VID-->>WS: person_id, presence_tier, embedding (best-effort)
 
     Note over WS: chat-mode check: if the session is in<br/>conversational mode, bypass the router<br/>entirely (Letta turn) — not shown here

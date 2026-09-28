@@ -75,9 +75,12 @@ class TimerHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_CREATE_RE, TimerHandler._create_from_match),
-            FastPath(_CANCEL_RE, TimerHandler._cancel_from_match),
-            FastPath(_STATUS_RE, TimerHandler._status_from_match),
+            # early_commit "B" (FastPath): a duration can go on ("10 minutes
+            # … and 30 seconds") and a label can follow either ("… for the
+            # pasta"); status is closed ("A").
+            FastPath(_CREATE_RE, TimerHandler._create_from_match, early_commit="B"),
+            FastPath(_CANCEL_RE, TimerHandler._cancel_from_match, early_commit="B"),
+            FastPath(_STATUS_RE, TimerHandler._status_from_match, early_commit="A"),
         ]
 
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:

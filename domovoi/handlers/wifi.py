@@ -119,7 +119,7 @@ class WifiHandler(Handler):
     def __init__(self) -> None:
         self.fast_paths = [
             FastPath(_ACTION_RE, WifiHandler._reassociate_from_match),
-            FastPath(_DIAGNOSTIC_RE, WifiHandler._status_from_match),
+            FastPath(_DIAGNOSTIC_RE, WifiHandler._status_from_match, early_commit="A"),
         ]
 
     async def execute(

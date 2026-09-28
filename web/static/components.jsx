@@ -163,6 +163,40 @@ const RoomChip = ({ name, online }) => (
   </span>
 );
 
+/* ---- "recording commands for tuning" ------------------------ */
+/* A room an admin opted in to keeping its command recordings (V016). The
+ * chip goes wherever that room is shown — its satellite card and drawer,
+ * Home's room row — so nobody in the house has to go looking to learn
+ * that a room records. A neutral chip, not a status pill: it is a
+ * standing setting, not a fault, and it doesn't pulse, because nothing
+ * is happening until somebody speaks. `short` for tight rows. */
+const CaptureChip = ({ short = false }) => (
+  <span className="capture-chip"
+        title="recording commands for tuning: each command said here is kept for a while, then deleted; only admins can listen">
+    <Icon name="mic" size={12}/>{short ? 'recording' : 'recording commands for tuning'}
+  </span>
+);
+
+/* Is an admin signed in on this browser — a Bearer in memory, or a cookie
+ * session the server vouched for? Re-renders on login and logout. The
+ * security-tier surfaces (command recordings) show their controls off it;
+ * the server makes the actual decision on every request. */
+const useAdminSignedIn = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined') return undefined;
+    try {
+      const off = Auth.subscribe(force);
+      if (!Auth.status && Auth.refreshStatus) Auth.refreshStatus();
+      return off;
+    } catch { return undefined; }
+  }, []);
+  try {
+    if (typeof Auth === 'undefined') return false;
+    return !!(Auth.isLoggedIn() || (Auth.status && Auth.status.authenticated));
+  } catch { return false; }
+};
+
 /* ---- Avatar (deterministic colour from initial) ------------- */
 const avaPalette = {
   K: ['oklch(0.86 0.05 75)',  'oklch(0.72 0.12 60)'],
@@ -1315,4 +1349,5 @@ Object.assign(window, {
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
+  CaptureChip, useAdminSignedIn,
 });

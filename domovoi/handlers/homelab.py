@@ -186,7 +186,7 @@ class HomelabHandler(Handler):
     }
 
     def __init__(self) -> None:
-        self.fast_paths = [FastPath(_STATUS_RE, HomelabHandler._status_from_match)]
+        self.fast_paths = [FastPath(_STATUS_RE, HomelabHandler._status_from_match, early_commit="A")]
 
     async def execute(
         self, intent: Intent, ctx: Context, session: AsyncSession

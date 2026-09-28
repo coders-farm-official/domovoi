@@ -180,13 +180,16 @@ class ClockHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_TIME_RE, ClockHandler._time_from_match),
-            FastPath(_FULL_DATE_RE, ClockHandler._date_from_match),
-            FastPath(_DAY_OF_WEEK_RE, ClockHandler._day_of_week_from_match),
-            FastPath(_YEAR_RE, ClockHandler._year_from_match),
-            FastPath(_MONTH_RE, ClockHandler._month_from_match),
-            FastPath(_TOMORROW_RE, ClockHandler._tomorrow_from_match),
-            FastPath(_YESTERDAY_RE, ClockHandler._yesterday_from_match),
+            # early_commit "B" (FastPath), not "A": the clock phrases are
+            # closed here, but "what time is it … in Tokyo" is a question for
+            # the language model that begins with one of them.
+            FastPath(_TIME_RE, ClockHandler._time_from_match, early_commit="B"),
+            FastPath(_FULL_DATE_RE, ClockHandler._date_from_match, early_commit="B"),
+            FastPath(_DAY_OF_WEEK_RE, ClockHandler._day_of_week_from_match, early_commit="B"),
+            FastPath(_YEAR_RE, ClockHandler._year_from_match, early_commit="B"),
+            FastPath(_MONTH_RE, ClockHandler._month_from_match, early_commit="B"),
+            FastPath(_TOMORROW_RE, ClockHandler._tomorrow_from_match, early_commit="B"),
+            FastPath(_YESTERDAY_RE, ClockHandler._yesterday_from_match, early_commit="B"),
         ]
 
     async def execute(

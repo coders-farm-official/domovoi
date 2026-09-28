@@ -112,7 +112,7 @@ class RepeatHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_REPEAT_RE, RepeatHandler._from_match),
+            FastPath(_REPEAT_RE, RepeatHandler._from_match, early_commit="A"),
         ]
 
     async def execute(
