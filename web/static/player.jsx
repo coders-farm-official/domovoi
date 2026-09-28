@@ -1020,53 +1020,158 @@ const PlaybackProvider = ({ children }) => {
 /* ═══════════════════════════════════════════════════════════════════════
  * Global docked mini-player. Rendered by the provider so it appears on
  * every page. Collapses to nothing when the queue is empty.
+ *
+ * One bar, two layouts (styles.css, "Docked player"):
+ *   desktop  cover and title | transport over a seek bar | sleep timer,
+ *            volume, queue, cast target, and "open full player" (the Music
+ *            page). The queue and the cast target float above the bar.
+ *   phone    (760px and below) one 64px row of what a thumb needs: cover,
+ *            title/artist, play/pause, next, and "open player" — which
+ *            opens PlayerSheet, where everything else went. A 2px line on
+ *            the bar's top edge keeps the position visible.
+ * `mp-desk` marks what only a desktop shows and `mp-phone` what only a
+ * phone shows, so the phone never gets a squeezed copy of the desktop row.
  * ═══════════════════════════════════════════════════════════════════════ */
+// styles.css's phone breakpoint, for the few things CSS can't do alone.
+const _MP_PHONE = '(max-width: 760px)';
+// Listen to a MediaQueryList (null: nothing to listen to); returns the
+// unsubscribe. addListener is the pre-2020 Safari spelling.
+const _mpOnMediaChange = (mq, fn) => {
+  if (!mq) return () => {};
+  if (mq.addEventListener) { mq.addEventListener('change', fn); return () => mq.removeEventListener('change', fn); }
+  if (mq.addListener) { mq.addListener(fn); return () => mq.removeListener(fn); }
+  return () => {};
+};
 const MiniPlayer = () => {
   const p = usePlayback();
   const [showQueue, setShowQueue] = React.useState(false);
   const [showCast, setShowCast] = React.useState(false);
-  if (!p.available || !p.current) return null;
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const hasItem = !!(p.available && p.current);
+
+  // The sheet is a history entry of its own, so the phone's back gesture
+  // closes it instead of leaving the page it was opened over. Closing it
+  // any other way pops that entry again — unless something else (a tab in
+  // the strip) has already pushed past it, which closes the sheet too.
+  // Closing it in place (chevron, Escape, back) hands focus back to "open
+  // player"; a close that came with a new page leaves focus to that page.
+  const expandRef = React.useRef(null);
+  const refocusRef = React.useRef(false);
+  const openHashRef = React.useRef('');
+  const openSheet = () => {
+    setShowQueue(false);
+    setShowCast(false);
+    openHashRef.current = window.location.hash;
+    try { window.history.pushState({ domovoiPlayerSheet: true }, ''); } catch {}
+    setSheetOpen(true);
+  };
+  const closeSheet = React.useCallback((refocus) => {
+    refocusRef.current = refocus !== false;
+    setSheetOpen(false);
+    try {
+      const st = window.history.state;
+      if (st && st.domovoiPlayerSheet) window.history.back();
+    } catch {}
+  }, []);
+  React.useEffect(() => {
+    if (!sheetOpen) return undefined;
+    // Any history step while it is open leaves the entry it pushed — the
+    // back gesture, or a tab's new hash. (Not only a step to a state-less
+    // entry: after a tab and back again, the entry behind this sheet's can
+    // be an older sheet's, and back must still close this one.)
+    const onPop = () => {
+      refocusRef.current = window.location.hash === openHashRef.current;
+      setSheetOpen(false);
+    };
+    const onHash = () => { refocusRef.current = false; setSheetOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') closeSheet(); };
+    // A tab in the strip closes it — the tab already showing too, which
+    // changes no hash. React has handled the tap at its root before it
+    // bubbles up to the document, so a tab that navigated has already
+    // pushed past the sheet's entry and closeSheet doesn't go back.
+    const onTap = (e) => {
+      const t = e && e.target;
+      if (t && t.closest && t.closest('.sidebar .nav-item')) closeSheet(false);
+    };
+    // A phone turned sideways can be wider than 760px, where the sheet is
+    // never shown: close it rather than leave it open, unseen, holding a
+    // history entry the next back would silently spend.
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia(_MP_PHONE) : null;
+    const onWide = () => { if (mq && !mq.matches) closeSheet(false); };
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('hashchange', onHash);
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('click', onTap);
+    const unWide = _mpOnMediaChange(mq, onWide);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onTap);
+      unWide();
+    };
+  }, [sheetOpen, closeSheet]);
+  React.useEffect(() => {
+    if (sheetOpen || !refocusRef.current) return;
+    refocusRef.current = false;
+    const b = expandRef.current;
+    if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
+  }, [sheetOpen]);
+  // Clearing the queue from the sheet empties the player out from under it.
+  React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(false); }, [sheetOpen, hasItem, closeSheet]);
+  // The other way round: a desktop window narrowed to a phone's width
+  // hides the buttons that toggle the floating queue and cast target (and
+  // the 380px queue is wider than the screen), so close them.
+  const panelOpen = showQueue || showCast;
+  React.useEffect(() => {
+    if (!panelOpen || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia(_MP_PHONE);
+    return _mpOnMediaChange(mq, () => { if (mq.matches) { setShowQueue(false); setShowCast(false); } });
+  }, [panelOpen]);
+
+  if (!hasItem) return null;
   const it = p.current;
   const dur = p.durationSec || it.durationSec || 0;
   const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
   const remote = p.target.kind === 'room';
+  const playing = p.status === 'playing';
 
   return (
     <>
       {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}/>}
       {showCast && <CastMenu p={p} onClose={() => setShowCast(false)}/>}
+      {sheetOpen && <PlayerSheet p={p} onClose={() => closeSheet()}/>}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
           TOP of the five tabs instead of covering them. */}
-      <div className="mini-player" style={{
-        position: 'fixed', left: 0, right: 0, bottom: 'var(--dock-bottom, 0px)', zIndex: 45,
-        background: 'var(--card)', borderTop: '1px solid var(--border)',
-        boxShadow: '0 -4px 16px oklch(0 0 0 / 0.10)',
-        display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center',
-        gap: 12, padding: '8px 14px', height: 64,
-      }}>
+      <div className="mini-player">
+        <div className="mp-line mp-phone" aria-hidden="true"><span style={{ width: `${pct}%` }}/></div>
         {/* left: cover + title */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <div className="mp-info">
           <CoverTile item={it} size={44}/>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div className="mp-text">
+            <div className="mp-title">{it.title}</div>
+            <div className="mp-sub mono">
               {remote && <span style={{ color: 'var(--brand)' }}>◆ {p.target.roomId} · </span>}
               {it.artist || (it.seekable === false ? 'live stream' : '—')}
             </div>
           </div>
         </div>
         {/* center: transport + progress */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 280 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <IconButton name="skip-back" onClick={p.prev}/>
-            <button className="btn btn-primary btn-icon" onClick={p.toggle}
-                    style={{ width: 34, height: 34, borderRadius: '50%' }}>
-              <Icon name={p.status === 'playing' ? 'pause' : 'play'} size={16}/>
+        <div className="mp-center">
+          <div className="mp-transport">
+            <button className="btn btn-ghost btn-icon mp-desk" onClick={p.prev} title="previous" aria-label="previous">
+              <Icon name="skip-back" size={14}/>
             </button>
-            <IconButton name="skip-forward" onClick={p.next}/>
+            <button className="btn btn-primary btn-icon mp-play" onClick={p.toggle}
+                    title={playing ? 'pause' : 'play'} aria-label={playing ? 'pause' : 'play'}>
+              <Icon name={playing ? 'pause' : 'play'} size={16}/>
+            </button>
+            <button className="btn btn-ghost btn-icon" onClick={p.next} title="next" aria-label="next">
+              <Icon name="skip-forward" size={14}/>
+            </button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+          <div className="mp-seek mp-desk">
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', width: 34, textAlign: 'right' }}>{fmtDur(p.positionSec)}</span>
             <div onClick={(e) => {
                    if (!it.seekable) return;
@@ -1079,29 +1184,135 @@ const MiniPlayer = () => {
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', width: 34 }}>{it.seekable ? fmtDur(dur) : 'live'}</span>
           </div>
         </div>
-        {/* right: volume + queue + cast + expand */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-          {p.sleepRemainingSec != null && (
-            <span className="mono" title="sleep timer" style={{ fontSize: 10, color: 'var(--brand)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Icon name="moon" size={11}/>{p.sleepRemainingSec < 0 ? 'end' : fmtDur(p.sleepRemainingSec)}
-            </span>
-          )}
-          {!remote && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <IconButton name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} onClick={p.toggleMute}/>
-              <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
-                     onChange={(e) => p.setVolume(Number(e.target.value))}
-                     style={{ width: 70 }}/>
-            </div>
-          )}
-          <IconButton name="list-music" onClick={() => setShowQueue((s) => !s)} title="queue"/>
-          <IconButton name={remote ? 'cast' : 'monitor-speaker'} onClick={() => setShowCast((s) => !s)}
-                      title="cast target"
-                      style={remote ? { color: 'var(--brand)' } : undefined}/>
-          <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
+        {/* right: volume + queue + cast + expand (desktop) / open player (phone) */}
+        <div className="mp-side">
+          <div className="mp-side-desk mp-desk">
+            {p.sleepRemainingSec != null && (
+              <span className="mono mp-sleep" title="sleep timer">
+                <Icon name="moon" size={11}/>{p.sleepRemainingSec < 0 ? 'end' : fmtDur(p.sleepRemainingSec)}
+              </span>
+            )}
+            {!remote && (
+              <div className="mp-vol">
+                <IconButton name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} onClick={p.toggleMute}/>
+                <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
+                       onChange={(e) => p.setVolume(Number(e.target.value))}
+                       style={{ width: 70 }}/>
+              </div>
+            )}
+            <IconButton name="list-music" onClick={() => setShowQueue((s) => !s)} title="queue"/>
+            <IconButton name={remote ? 'cast' : 'monitor-speaker'} onClick={() => setShowCast((s) => !s)}
+                        title="cast target"
+                        style={remote ? { color: 'var(--brand)' } : undefined}/>
+            <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
+          </div>
+          <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
+                  title="open player" aria-label="open player"
+                  aria-haspopup="dialog" aria-expanded={sheetOpen}>
+            <Icon name="chevron-up" size={16}/>
+          </button>
         </div>
       </div>
     </>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * The phone's expanded player. Opened from the compact dock at 760px and
+ * below (styles.css never shows it wider), it covers the screen above the
+ * tab strip and carries everything the dock leaves out: the seek bar,
+ * previous, volume, the sleep-timer countdown, where it plays (this
+ * browser or a room) and the queue. Same actions as the desktop bar and
+ * its two floating panels — only the layout is the phone's. Closes with
+ * the chevron, Escape, the back gesture, or a tab in the strip.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const PlayerSheet = ({ p, onClose }) => {
+  const closeRef = React.useRef(null);
+  React.useEffect(() => {
+    const b = closeRef.current;
+    if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
+  }, []);
+  const it = p.current;
+  const dur = p.durationSec || it.durationSec || 0;
+  const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
+  const remote = p.target.kind === 'room';
+  const playing = p.status === 'playing';
+  const seekAt = (e) => {
+    if (!it.seekable) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    p.seek(((e.clientX - r.left) / r.width) * dur);
+  };
+  return (
+    // Not aria-modal: the tab strip below it stays live (a tab closes it).
+    <div className="mp-sheet" role="dialog" aria-label="now playing">
+      <div className="mp-sheet-head">
+        <button ref={closeRef} className="btn btn-ghost btn-icon" onClick={onClose}
+                title="close" aria-label="close player">
+          <Icon name="chevron-down" size={18}/>
+        </button>
+        <span className="mp-sheet-title">now playing</span>
+      </div>
+      <div className="mp-sheet-body">
+        <div className="mp-sheet-now">
+          <CoverTile item={it} size={200} radius="var(--r-md)"/>
+          <div className="mp-sheet-meta">
+            {remote && <Pill tone="live" live>casting to {p.target.roomId}</Pill>}
+            <div className="mp-sheet-name">{it.title}</div>
+            <div className="mp-sheet-by">{it.artist || (it.seekable === false ? 'live stream' : '—')}</div>
+          </div>
+        </div>
+        <div className="mp-sheet-seek">
+          <span className="mono">{fmtDur(p.positionSec)}</span>
+          <div className="mp-sheet-track" onClick={seekAt} style={{ cursor: it.seekable ? 'pointer' : 'default' }}>
+            <div><span style={{ width: `${pct}%` }}/></div>
+          </div>
+          <span className="mono">{it.seekable ? fmtDur(dur) : 'live'}</span>
+        </div>
+        <div className="mp-sheet-transport">
+          <button className="btn btn-ghost btn-icon" onClick={p.prev} title="previous" aria-label="previous">
+            <Icon name="skip-back" size={20}/>
+          </button>
+          <button className="btn btn-primary btn-icon mp-sheet-play" onClick={p.toggle}
+                  title={playing ? 'pause' : 'play'} aria-label={playing ? 'pause' : 'play'}>
+            <Icon name={playing ? 'pause' : 'play'} size={20}/>
+          </button>
+          <button className="btn btn-ghost btn-icon" onClick={p.next} title="next" aria-label="next">
+            <Icon name="skip-forward" size={20}/>
+          </button>
+        </div>
+        {!remote && (
+          <div className="mp-sheet-vol">
+            <button className="btn btn-ghost btn-icon" onClick={p.toggleMute}
+                    title={p.muted ? 'unmute' : 'mute'} aria-label={p.muted ? 'unmute' : 'mute'}>
+              <Icon name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} size={16}/>
+            </button>
+            <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
+                   aria-label="volume" onChange={(e) => p.setVolume(Number(e.target.value))}/>
+          </div>
+        )}
+        {p.sleepRemainingSec != null && (
+          <div className="mp-sheet-sleep mono" title="sleep timer">
+            <Icon name="moon" size={12}/>
+            sleep · {p.sleepRemainingSec < 0 ? 'at the end' : fmtDur(p.sleepRemainingSec)}
+          </div>
+        )}
+        <section className="mp-sheet-sec" aria-label="play on">
+          <div className="mp-sheet-sec-head">play on</div>
+          <PlayerCastTargets p={p} big/>
+        </section>
+        <section className="mp-sheet-sec" aria-label="queue">
+          <div className="mp-sheet-sec-head">
+            <span>queue · {p.queue.length}</span>
+            <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue" aria-label="clear queue"/>
+          </div>
+          <div className="mp-q-list">
+            <PlayerQueueRows queue={p.queue} index={p.index}
+                             jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
+          </div>
+          <PlayerQueueSave queue={p.queue}/>
+        </section>
+      </div>
+    </div>
   );
 };
 
@@ -1125,14 +1336,41 @@ const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
   );
 };
 
-/* Queue panel — shows the queue with drag-reorder, remove, jump-to, and
- * "save as playlist". Floats above the mini-player. */
-const QueuePanel = ({ p, onClose }) => {
+/* The queue's rows — drag to reorder, tap to jump, x to remove — shared by
+ * the desktop's floating QueuePanel and the phone sheet (styles.css sizes
+ * them: 48px rows with a 44px remove button in the sheet). Memoised on
+ * the queue and its actions, which are stable between frames, so the
+ * position ticker re-rendering the player doesn't re-render every row. */
+const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jumpTo, removeAt, moveItem }) {
   const dragFrom = React.useRef(null);
+  return (
+    <>
+      {queue.map((it, i) => (
+        <div key={it.uid} className={`mp-q-row${i === index ? ' cur' : ''}`}
+             draggable onDragStart={() => { dragFrom.current = i; }}
+             onDragOver={(e) => e.preventDefault()}
+             onDrop={() => { const f = dragFrom.current; dragFrom.current = null; if (f != null && f !== i) moveItem(f, i); }}>
+          <div className="mp-q-num mono">
+            {i === index ? <Icon name="volume-2" size={12}/> : i + 1}
+          </div>
+          <div className="mp-q-main" onClick={() => jumpTo(i)}>
+            <div className="mp-q-title">{it.title}</div>
+            <div className="mp-q-sub mono">{it.artist || '—'}</div>
+          </div>
+          <IconButton name="x" onClick={() => removeAt(i)} title="remove" aria-label={`remove ${it.title}`}/>
+        </div>
+      ))}
+      {queue.length === 0 && <div className="mp-q-empty">queue is empty</div>}
+    </>
+  );
+});
+
+/* "Save queue as playlist" — the library tracks in the queue, in order. */
+const PlayerQueueSave = ({ queue }) => {
   const [saving, setSaving] = React.useState(false);
   const [name, setName] = React.useState('');
   const saveAsPlaylist = async () => {
-    const trackIds = p.queue.filter((it) => it.kind === 'library' && it.trackId != null).map((it) => it.trackId);
+    const trackIds = queue.filter((it) => it.kind === 'library' && it.trackId != null).map((it) => it.trackId);
     if (!trackIds.length || !name.trim()) return;
     setSaving(true);
     try {
@@ -1144,53 +1382,42 @@ const QueuePanel = ({ p, onClose }) => {
     } catch (e) { setSaving(false); console.warn('save queue failed', e); }
   };
   return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
-      <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 380, maxHeight: '60vh', zIndex: 47,
-                    background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                    boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>queue · {p.queue.length}</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue"/>
-            <IconButton name="x" onClick={onClose}/>
-          </div>
-        </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {p.queue.map((it, i) => (
-            <div key={it.uid}
-                 draggable onDragStart={() => { dragFrom.current = i; }}
-                 onDragOver={(e) => e.preventDefault()}
-                 onDrop={() => { const f = dragFrom.current; dragFrom.current = null; if (f != null && f !== i) p.moveItem(f, i); }}
-                 style={{ display: 'grid', gridTemplateColumns: '20px 1fr 22px', gap: 8, alignItems: 'center',
-                          padding: '7px 12px', cursor: 'grab',
-                          background: i === p.index ? 'var(--brand-soft)' : 'transparent',
-                          borderBottom: '1px solid var(--border-soft)' }}>
-              <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', textAlign: 'right' }}>
-                {i === p.index ? <Icon name="volume-2" size={12}/> : i + 1}
-              </div>
-              <div onClick={() => p.jumpTo(i)} style={{ minWidth: 0, cursor: 'pointer' }}>
-                <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</div>
-                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.artist || '—'}</div>
-              </div>
-              <IconButton name="x" onClick={() => p.removeAt(i)}/>
-            </div>
-          ))}
-          {p.queue.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>queue is empty</div>}
-        </div>
-        <div style={{ padding: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6 }}>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="save queue as playlist…"
-                 onKeyDown={(e) => { if (e.key === 'Enter') saveAsPlaylist(); }}
-                 style={{ flex: 1, font: 'inherit', fontSize: 12, height: 30, padding: '0 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
-          <Button variant="primary" icon="save" onClick={saveAsPlaylist} disabled={saving || !name.trim()}>save</Button>
-        </div>
-      </div>
-    </>
+    <div className="mp-q-save">
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="save queue as playlist…"
+             aria-label="playlist name"
+             onKeyDown={(e) => { if (e.key === 'Enter') saveAsPlaylist(); }}/>
+      <Button variant="primary" icon="save" onClick={saveAsPlaylist} disabled={saving || !name.trim()}>save</Button>
+    </div>
   );
 };
 
-/* Cast menu — pick the playback target (this browser, or a room). */
-const CastMenu = ({ p, onClose }) => {
+/* Queue panel — the desktop bar's queue, floating above it. */
+const QueuePanel = ({ p, onClose }) => (
+  <>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
+    <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 380, maxHeight: '60vh', zIndex: 47,
+                  background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                  boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>queue · {p.queue.length}</div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue"/>
+          <IconButton name="x" onClick={onClose}/>
+        </div>
+      </div>
+      <div className="mp-q-list" style={{ overflowY: 'auto', flex: 1 }}>
+        <PlayerQueueRows queue={p.queue} index={p.index}
+                         jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
+      </div>
+      <PlayerQueueSave queue={p.queue}/>
+    </div>
+  </>
+);
+
+/* Where the player plays — this browser, or a room. The desktop bar's
+ * CastMenu floats it above the bar; the phone sheet lists it inline with
+ * 48px rows (`big`). `onPicked` runs after a switch succeeds. */
+const PlayerCastTargets = ({ p, onPicked, big = false }) => {
   const { items: nowPlaying } = useApiList('/api/music/now-playing', { eventTypes: ['music.now_playing.changed'] });
   const rooms = (nowPlaying || []).map((np) => np.room_id);
   const [busy, setBusy] = React.useState(null);   // roomId currently being cast to
@@ -1198,7 +1425,7 @@ const CastMenu = ({ p, onClose }) => {
   const pick = async (t) => {
     setErr(null);
     setBusy(t.kind === 'room' ? t.roomId : 'browser');
-    try { await p.castTo(t); onClose(); }
+    try { await p.castTo(t); if (onPicked) onPicked(); }
     catch (e) {
       // Surface the failure instead of swallowing it — a cast to a room whose
       // MPD instance isn't up returns 502 (domovoi: WinError 1225,
@@ -1216,32 +1443,40 @@ const CastMenu = ({ p, onClose }) => {
   const remote = p.target.kind === 'room';
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
-      <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 260, zIndex: 47,
-                    background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                    boxShadow: 'var(--shadow-md)', overflow: 'hidden' }}>
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 600 }}>play on</div>
-        <button onClick={() => pick({ kind: 'browser' })}
-                style={_castRow(!remote)}>
-          <Icon name="monitor" size={15}/> This browser {!remote && <Icon name="check" size={14}/>}
+      <button onClick={() => pick({ kind: 'browser' })}
+              style={_castRow(!remote, big)}>
+        <Icon name="monitor" size={15}/> This browser {!remote && <Icon name="check" size={14}/>}
+      </button>
+      {rooms.map((r) => (
+        <button key={r} onClick={() => pick({ kind: 'room', roomId: r })} disabled={busy != null}
+                style={_castRow(remote && p.target.roomId === r, big)}>
+          <Icon name={busy === r ? 'loader' : 'speaker'} size={15}/> {r}
+          {busy === r && <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>casting…</span>}
+          {remote && p.target.roomId === r && <Icon name="check" size={14}/>}
         </button>
-        {rooms.map((r) => (
-          <button key={r} onClick={() => pick({ kind: 'room', roomId: r })} disabled={busy != null}
-                  style={_castRow(remote && p.target.roomId === r)}>
-            <Icon name={busy === r ? 'loader' : 'speaker'} size={15}/> {r}
-            {busy === r && <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>casting…</span>}
-            {remote && p.target.roomId === r && <Icon name="check" size={14}/>}
-          </button>
-        ))}
-        {rooms.length === 0 && <div style={{ padding: 12, fontSize: 11, color: 'var(--fg-muted)' }}>no rooms online — connect a satellite</div>}
-        {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}
-      </div>
+      ))}
+      {rooms.length === 0 && <div style={{ padding: 12, fontSize: 11, color: 'var(--fg-muted)' }}>no rooms online — connect a satellite</div>}
+      {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}
     </>
   );
 };
-const _castRow = (active) => ({
+
+/* Cast menu — the desktop bar's playback target, floating above it. */
+const CastMenu = ({ p, onClose }) => (
+  <>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
+    <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 260, zIndex: 47,
+                  background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                  boxShadow: 'var(--shadow-md)', overflow: 'hidden' }}>
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 600 }}>play on</div>
+      <PlayerCastTargets p={p} onPicked={onClose}/>
+    </div>
+  </>
+);
+const _castRow = (active, big = false) => ({
   font: 'inherit', width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-  padding: '10px 14px', border: 'none', borderBottom: '1px solid var(--border-soft)',
+  padding: big ? '0 14px' : '10px 14px', minHeight: big ? 48 : undefined,
+  border: 'none', borderBottom: '1px solid var(--border-soft)',
   background: active ? 'var(--brand-soft)' : 'var(--card)', color: 'var(--fg)',
   cursor: 'pointer', textAlign: 'left', fontSize: 13,
 });

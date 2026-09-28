@@ -115,7 +115,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 
 ### Density, layout rules, fixed elements
 - Sidebar and topbar are fixed; the content scrolls inside its own pane on desktop.
-- Mobile collapses the sidebar to a bottom-tab strip of the five `primary` nav items; every other page is on Home's "everything" grid. The docked mini-player sits on top of the strip. Topbar stays; its "domovoi" crumb (and the desktop brand row) links to Home.
+- Mobile collapses the sidebar to a bottom-tab strip of the five `primary` nav items; every other page is on Home's "everything" grid. The docked mini-player sits on top of the strip as one compact row (cover, title, play/pause, next, "open player", 44px targets); everything else it does — seek, volume, where it plays, the queue — is in the sheet "open player" brings up over the screen above the strip, which closes with its chevron or the back gesture. Topbar stays; its "domovoi" crumb (and the desktop brand row) links to Home.
 - The command palette (`⌘K`) is centred, 640 px wide, 14 px radius, `md` shadow.
 - No transparency or backdrop-blur on the main chrome. The only blur is on the command-palette scrim (8 px) and the mobile nav scrim.
 - Imagery: there is essentially none. If artwork appears (album art), it's in a 40 × 40 rounded-6 thumbnail with a hairline border, never bled into the layout. The only "decorative" mark in the system is the cat glyph.
