@@ -436,6 +436,15 @@ class HomeModelsTest {
         assertEquals(1f, roomProgress(r, 999.0), 0f)
     }
 
+    @Test fun theCountStopsAtTheSongsEnd() {
+        // 10s in at the read, 200s long: a read 400s old is still 200s.
+        val r = room("kitchen", state = "play")
+        assertEquals(200.0, roomElapsedSec(r, stale = false, sinceReadSec = 400.0), 0.0)
+        // No length to stop at: the count runs on.
+        val live = r.copy(now_playing = r.now_playing!!.copy(song = HomeSong(title = "Night FM")))
+        assertEquals(410.0, roomElapsedSec(live, stale = false, sinceReadSec = 400.0), 0.0)
+    }
+
     @Test fun aWifiPushUpdatesOnlyRxAndTx() {
         val rooms = listOf(room("kitchen").copy(wifi = HomeWifi(40.0, 20.0)), room("den"))
         val merged = mergeWifi(rooms, mapOf("kitchen" to HomeWifi(3.0, 1.0), "nowhere" to HomeWifi(1.0, 1.0)))

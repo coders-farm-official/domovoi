@@ -378,12 +378,17 @@ internal fun mergeWifi(rooms: List<HomeRoom>, push: Map<String, HomeWifi>?): Lis
 }
 
 /** Where a room's song is now: the read's elapsed_sec plus the time since
- *  the read while it plays. A stale read (the core is down) is where it was. */
+ *  the read while it plays. A stale read (the core is down) is where it was.
+ *  Never past the song's end: between a song ending and the read that
+ *  brings the next one, the count used to run on ("0:14 / 0:13"). */
 internal fun roomElapsedSec(r: HomeRoom, stale: Boolean, sinceReadSec: Double): Double {
     val np = r.now_playing ?: return 0.0
-    if (!r.online || np.song == null) return 0.0
+    val song = np.song
+    if (!r.online || song == null) return 0.0
     val playing = np.state == "play"
-    return (np.elapsed_sec ?: 0.0) + if (playing && !stale) sinceReadSec else 0.0
+    val ran = (np.elapsed_sec ?: 0.0) + if (playing && !stale) sinceReadSec else 0.0
+    val dur = song.duration_sec ?: 0.0
+    return if (dur > 0) min(ran, dur) else ran
 }
 
 internal fun roomProgress(r: HomeRoom, elapsedSec: Double): Float {

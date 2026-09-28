@@ -725,7 +725,10 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPl
   const paused = !!song && np.state === 'pause';
   const dur = song && song.duration_sec ? song.duration_sec : 0;
   // A stale read (the core is down) is where it was, not where it would be.
-  const elapsed = song ? (np.elapsed_sec || 0) + (playing && !stale ? sinceFetchSec : 0) : 0;
+  // Never past the song's end: between a song ending and the read that
+  // brings the next one, the count used to run on ("0:14 / 0:13").
+  const ran = song ? (np.elapsed_sec || 0) + (playing && !stale ? sinceFetchSec : 0) : 0;
+  const elapsed = dur ? Math.min(ran, dur) : ran;
   const progress = dur ? Math.min(100, (elapsed / dur) * 100) : 0;
   const rx = s.wifi && s.wifi.rx_mbits;
   const weakWifi = online && rx != null && window.wifiTone && window.wifiTone(rx) === 'err';

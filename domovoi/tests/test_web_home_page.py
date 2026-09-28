@@ -389,6 +389,11 @@ SCENARIOS["rooms"] = scenario(
     " posts: w.__fetches.filter((f) => f.method === 'POST').map((f) => ({ path: f.path, body: f.body })) };",
     ls=PAIRED_LS,
 )
+# A read taken after the song ran out (the next song's read not in yet).
+SCENARIOS["room_overrun"] = scenario(
+    house(**{"GET /api/satellites": [room("kitchen", state="play", elapsed=300)]}),
+    SNAP, ls=PAIRED_LS,
+)
 SCENARIOS["stop_all"] = scenario(
     house(**{"GET /api/satellites": [room("kitchen", state="play"), room("office", state="play"),
                                      room("den")],
@@ -1000,6 +1005,14 @@ def test_rooms_order_state_and_transport(driven) -> None:
     assert "weak wi-fi" in _room(snap, "den")["text"]
     assert "screen stopped" in _room(snap, "lounge")["text"]
     assert "quiet" in _room(snap, "office")["text"]
+
+
+def test_a_rooms_count_stops_at_the_songs_end(driven) -> None:
+    # 300s into a 238s song: the bar is full and the count reads the length,
+    # never "5:00 / 3:58".
+    kitchen = _room(driven["room_overrun"], "kitchen")
+    assert "3:58 / 3:58" in kitchen["text"]
+    assert "5:00" not in kitchen["text"]
 
 
 def test_pause_and_the_play_sheet_post_to_the_room(driven) -> None:
