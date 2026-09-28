@@ -33,7 +33,7 @@ sequenceDiagram
     WS->>VID: embed(copy so far) — alongside, no side effects
     Pi->>WS: binary PCM (the rest of the silence timeout)
     STT-->>WS: transcript (held)
-    Pi->>WS: utterance_end {greeting_played, frames,<br/>last_voiced_frame}
+    Pi->>WS: utterance_end {greeting_played, greeting_clip,<br/>frames, last_voiced_frame}
     Note over WS: receive loop spawns a response task<br/>and keeps draining the socket<br/>(so a barge_in still lands)
 
     opt satellite declared capture_control, transcript is a<br/>whole closed command, silent for the tier's hold
@@ -45,7 +45,7 @@ sequenceDiagram
         WS->>STT: transcribe(pcm) — after any decode in flight
         STT-->>WS: transcript
     end
-    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC
+    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC, and end the turn<br/>if the transcript is only the greeting
     WS-->>Pi: transcript {text}
 
     WS->>VID: identify(pcm) — match only, when the held copy's embedding is used

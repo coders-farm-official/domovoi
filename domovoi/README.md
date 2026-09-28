@@ -679,12 +679,20 @@ own answer is stale. Two signals drive the offer (either one fires):
 1. **Heuristic categorizer** (`domovoi/uncertainty.py`) — pattern-
    matches the question against four time-sensitive categories:
    `current_events`, `prices_finance`, `sports_scores`, `general_recent`.
-2. **LLM self-doubt flag** — the QA call requests a JSON object
-   (`{answer, needs_verification, candidate_claim}`) so the model can
-   nominate its own answers for verification.
+2. **The answer admits it may be stale** — for something the user
+   actually asked (a closing "?" or a question word), an answer that
+   says so in its own words ("I don't have real-time info, but…", "as
+   of my last update…") (`answer_admits_staleness`). The QA answer is
+   plain text: it used to be the `answer` field of a JSON object, and a
+   small model closes that string early (a joke without its punchline,
+   "I don" for "I don't…"), and the self-reported doubt flag that came
+   with it fired on background speech rather than on stale facts.
+   An answer that ends by offering to look it up itself ("…can I
+   look that up for you?") counts too (`answer_offers_lookup`): its
+   offer is parked as-is, so a yes is kept and nothing is asked twice.
 
 When either signal fires, the bot speaks its answer and tacks on
-"Want me to check that online?". A yes routes via the existing
+"Want me to check that online?" as a sentence of its own. A yes routes via the existing
 `pending_confirmation` flow to `DoubleCheckHandler.handle_confirmation`
 which runs SearxNG on the **question itself** (not just a claim) and
 re-prompts Ollama with the results to synthesize a cited answer.

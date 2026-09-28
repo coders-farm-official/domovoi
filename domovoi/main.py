@@ -143,12 +143,18 @@ async def seed_voices() -> None:
         )
 
 
-async def load_greeting_phrases() -> list[str]:
-    """The enabled wake-word greeting texts, with ``{name}`` resolved to the
-    bot name — the same lines the satellites play on wake. Stamped into
-    ``app.state.greeting_phrases`` so the streaming layer can strip a
-    greeting that bled past the array AEC out of a transcript (see
-    domovoi/greeting_filter.py). Best-effort: a DB hiccup yields []."""
+async def load_greeting_bank() -> tuple[list[str], dict[str, str]]:
+    """The enabled wake-word greetings, with ``{name}`` resolved to the bot
+    name — the same lines the satellites play on wake — as the list of
+    texts and as a map from each rendered clip's file name
+    (``greet_<hash>.mp3``, see canned_sounds._greeting_entries) to its
+    text. Stamped into ``app.state.greeting_phrases`` /
+    ``greeting_clips`` so the streaming layer can strip a greeting that
+    bled past the array AEC out of a transcript, or drop a transcript that
+    is only the greeting — against the exact clip the satellite says it
+    played, when it says (see domovoi/greeting_filter.py). Best-effort: a
+    DB hiccup yields ([], {})."""
+    from domovoi.canned_sounds import _greeting_entries
     from domovoi.db.repositories import ClientGreetingsRepository
 
     try:
@@ -156,9 +162,11 @@ async def load_greeting_phrases() -> list[str]:
             rows = await ClientGreetingsRepository(s).all_enabled()
     except Exception as e:
         log.warning("could not load greeting phrases for transcript filtering: %s", e)
-        return []
+        return [], {}
     name = settings.bot_name
-    return [text.replace("{name}", name) for text, _ in rows]
+    phrases = [text.replace("{name}", name) for text, _ in rows]
+    clips = {mp3: text for mp3, _sidecar, text in _greeting_entries(list(rows))}
+    return phrases, clips
 
 
 def _register_core_reapply_hooks() -> None:
@@ -172,6 +180,7 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import reapply
     from domovoi.clients.ollama import reset_ollama_client
     from domovoi.clients.tts import reset_tts_client
+    from domovoi.llm_warmup import schedule_llm_warmup
 
     def _reapply_log_level() -> None:
         level = str(settings.log_level)
@@ -185,9 +194,17 @@ def _register_core_reapply_hooks() -> None:
     for field in (
         "ollama_model", "ollama_tool_model", "ollama_vision_model",
         "ollama_tool_think", "ollama_qa_think", "ollama_keep_alive",
-        "ollama_num_ctx", "ollama_tool_num_ctx",
+        "ollama_tool_keep_alive", "ollama_num_ctx", "ollama_tool_num_ctx",
     ):
         reapply.on_reapply(field, reset_ollama_client)
+    # Then load what the rebuilt client uses (domovoi/llm_warmup.py) — for
+    # the settings that decide which model is loaded, and how: a new model
+    # or context window is a fresh load, a new keep_alive re-arms the timer.
+    for field in (
+        "ollama_model", "ollama_tool_model", "ollama_keep_alive",
+        "ollama_tool_keep_alive", "ollama_num_ctx", "ollama_tool_num_ctx",
+    ):
+        reapply.on_reapply(field, schedule_llm_warmup)
     reapply.on_reapply("log_level", _reapply_log_level)
     # Saving fastlane_mode loads (shadow) or drops (off) the fast lane's
     # model on the spot (domovoi/fast_lane.py).
@@ -256,7 +273,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Enabled greeting texts, for stripping a bled-in wake greeting out of
     # transcripts (greeting_filter). Refreshed by the regenerate endpoint
     # when the bank is edited.
-    app.state.greeting_phrases = await load_greeting_phrases()
+    app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
 
     # §12 startup-hook milestone: the boot DB work above (voice seed +
     # greeting load) has run, so plugin hooks with after="core.db_ready"
@@ -570,11 +587,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # fires once plugin loading has settled the handler registry.
     WORKERS.mark_core_hook_done("core.letta_sync")
 
+    # Load the voice models into Ollama in the background, now that plugin
+    # handlers are registered and the router's tool list is final — so the
+    # first question after a restart doesn't pay the cold start. Never
+    # blocks boot (domovoi/llm_warmup.py).
+    from domovoi.llm_warmup import cancel_warm_up, schedule_warm_up
+
+    schedule_warm_up("boot")
+
     log.info("domovoi started; bot_name=%s", settings.bot_name)
     try:
         yield
     finally:
         signal_shutdown()
+        await cancel_warm_up()
         # Plugins first (reverse of startup: they loaded last), then the
         # core worker set in reverse registration order, then the probe.
         try:
@@ -2501,7 +2527,7 @@ async def _run_sounds_regenerate() -> None:
         await regenerate_canned_sounds()
         # The greeting bank may have changed — refresh the cached phrases used
         # to strip a bled-in greeting from transcripts.
-        app.state.greeting_phrases = await load_greeting_phrases()
+        app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
         notified: list[str] = []
         for sess in list(app.state.active_sessions.values()):
             try:

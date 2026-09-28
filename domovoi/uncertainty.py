@@ -9,9 +9,13 @@ None falls through to plain QA.
 The categorizer is intentionally **conservative**: it only flags
 queries whose answer is time-sensitive enough that a stale LLM
 response would be actively wrong, not merely unsatisfying. The
-Ollama JSON ``needs_verification`` flag (see
-``ollama_client.qa_with_uncertainty``) is the second leg of the
-hybrid trigger — either signal is enough.
+second leg of the trigger reads the spoken answer itself:
+``answer_admits_staleness`` catches a model that says its own
+knowledge may be out of date ("I don't have real-time info, but…"),
+and it only counts when the user actually asked a question
+(``looks_like_question``). It replaced a self-reported JSON
+``needs_verification`` flag that fired on background speech and
+refusals and almost never on a stale fact.
 
 Categories are PK'd with web_search_prefs.category (a CHECK
 constraint) — adding one here requires a migration to widen the
@@ -117,6 +121,76 @@ _SUBJECTIVE_RE = re.compile(
     r"do you think"
     r")\b"
 )
+
+
+# An answer in which the model says, in its own words, that what it knows
+# may be stale — the one self-doubt signal worth an online check. Narrow on
+# purpose: "I'm not sure who Chevy is" is not a stale fact, and an offer
+# glued onto chit-chat is noise. The later alternatives are llama3.2:3b's
+# own hedges on time-sensitive questions the categorizer lets through
+# (probe, 2026-09-28: "I'm a bit out of date, to be honest", "I might not
+# have the very latest information", "I'm not up to date on all the
+# latest sports news", "I was last updated in December 2023").
+_STALE_ANSWER_RE = re.compile(
+    r"\b("
+    r"real[- ]time (?:info\w*|data|access|updates?|news)|"
+    r"(?:knowledge|training) cut-?off|my training data|"
+    r"as of my (?:last |latest )?(?:update|knowledge|training)|"
+    r"(?:may|might|could) (?:be|have) (?:out of date|outdated|changed since)|"
+    r"(?:don't|do not|doesn't|does not) have (?:access to )?"
+    r"(?:current|up-to-date|up to date|live|the latest|recent) "
+    r"(?:info\w*|data|news|details|figures)|"
+    r"(?:i'm|i am) (?:a (?:bit|little) |slightly |probably )?"
+    r"(?:out of date|outdated|not (?:fully |always )?(?:up[- ]to[- ]date|current))|"
+    r"(?:may|might|could) not (?:have|know|be) (?:the )?(?:very |most )?"
+    r"(?:latest|newest|most recent|up[- ]to[- ]date|current)|"
+    r"(?:i was|i've been|my (?:knowledge|information|info|data) was) last updated|"
+    r"my (?:knowledge|information|info|data) (?:stopped|stops|ends|only goes|goes up to)"
+    r")\b"
+)
+
+# How a question opens once Whisper's punctuation is gone.
+_QUESTION_OPENERS = frozenset((
+    "what", "whats", "who", "whos", "whom", "whose", "when", "where", "why",
+    "how", "which", "is", "are", "was", "were", "do", "does", "did", "can",
+    "could", "will", "would", "should", "has", "have", "had",
+))
+
+
+def answer_admits_staleness(answer: str) -> bool:
+    """True when the spoken answer says the model's knowledge may be out of
+    date ("I don't have real-time info, but the latest I know of is…")."""
+    return bool(answer) and bool(_STALE_ANSWER_RE.search(answer.lower().replace("’", "'")))
+
+
+# The model closing its answer by offering, itself, to look it up ("…I'm not
+# up to date on all the latest sports news, can I look that up for you?").
+# Only the confirmation flow can keep that promise — without it a "yes"
+# goes to the model, which can't search — so the router treats it as the
+# online-check offer and parks it, without appending a second one.
+_OFFERS_LOOKUP_RE = re.compile(
+    r"\b(?:look (?:that|this|it) up|check (?:that |this |it )?online|"
+    r"search (?:for (?:that|this|it)|online|the web))\b[^.!?]*\?[\"')”’]*$"
+)
+
+
+def answer_offers_lookup(answer: str) -> bool:
+    """True when the answer ends by offering to look it up online."""
+    text = (answer or "").strip().lower().replace("’", "'")
+    return bool(text) and bool(_OFFERS_LOOKUP_RE.search(text))
+
+
+def looks_like_question(transcript: str) -> bool:
+    """True for something the user asked — Whisper's closing "?" or an
+    interrogative first word — as opposed to a remark or background speech
+    ("German. Wow.", "sir."), where an offer to check online makes no sense."""
+    text = (transcript or "").strip()
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    first = re.sub(r"[^a-z]", "", text.split()[0].lower())
+    return first in _QUESTION_OPENERS
 
 
 def categorize_question(transcript: str) -> str | None:

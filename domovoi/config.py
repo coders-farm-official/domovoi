@@ -207,7 +207,30 @@ class Settings(BaseSettings):
     # "0" to unload right after each reply. Blank = don't send it, so the
     # Ollama server's own default (or OLLAMA_KEEP_ALIVE in its systemd
     # unit) governs. Same name and syntax as Ollama's server-side variable.
+    # On a 24 GB host both default voice models fit resident together with
+    # room to spare (llama3.2:3b ~3 GB + qwen3:8b ~6 GB at a 4-8k context);
+    # a much bigger context window, or a third model such as the vision
+    # one, is what makes Ollama evict one of them anyway.
     ollama_keep_alive: str = "24h"
+    # The same for the tool-routing model alone. Blank = use
+    # ollama_keep_alive. Ignored when one model serves both roles (Ollama
+    # keeps a model for whatever the latest request asked).
+    ollama_tool_keep_alive: str = ""
+    # Load the tool-routing and Q&A models into Ollama at boot, and again
+    # after a model / keep-alive / context-window change, in the
+    # background — instead of on the first question, which then waits the
+    # whole cold start (~54 s on an all-CPU host). Off = load on first use.
+    ollama_warmup: bool = True
+    # Read timeout (seconds) for a call to a model Ollama doesn't have
+    # loaded yet: the load and the prompt prefill come before the first
+    # byte, so the ordinary ollama_timeout_sec could cut a slow load off
+    # and turn it into "my language model isn't answering". Only used when
+    # /api/ps shows the model isn't loaded.
+    ollama_load_timeout_sec: float = 300.0
+    # Say "Just a moment, I'm waking up my language model." on the
+    # satellite when a voice turn needs a model that isn't loaded, rather
+    # than leaving the room silent through the load.
+    ollama_cold_start_notice: bool = True
     searxng_url: str = "http://localhost:6888"
 
     connectivity_probe_target: str = "1.1.1.1:443"

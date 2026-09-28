@@ -22,7 +22,7 @@ _EXPECTED_KEYS = {
     "listen.max_record_seconds", "listen.followup_pre_speech_timeout",
     "listen.early_commit",
     "noise_gate.dbfs", "noise_gate.auto_calibrate",
-    "greeting.enabled", "greeting.funny_chance",
+    "greeting.enabled", "greeting.funny_chance", "greeting.reply_wait",
     "playback.gain", "playback.tts_prebuffer_sec",
     "sounds.sync_enabled", "log.level",
     "mic.enabled",

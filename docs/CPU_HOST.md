@@ -482,6 +482,23 @@ controls it and defaults to `24h`. Use `-1` to keep the models loaded
 until Ollama itself restarts, or `0` to unload after every reply. It's a
 hot setting: the next turn uses the new value. On a box with a GPU that
 also does other work, a shorter value hands the VRAM back sooner.
+*Keep tool-routing model loaded for* (`ollama_tool_keep_alive`) gives the
+router its own value; blank uses the one above. The dashboard's text chat
+sends the same value when it talks to one of the two voice models, so a
+chat can't hand them back to Ollama's 5-minute default; any other model
+(the vision one) unloads on Ollama's schedule.
+
+`keep_alive` keeps a model loaded once it is loaded. Loading it is the
+other half: Domovoi loads both voice models itself, in the background, when
+the core starts and again after a model, keep-alive or context-window
+change (`ollama_warmup`, dashboard → **Models** → *Load models ahead of
+time*), router prompt included, so the first question after a restart is a
+warm one. When a question does find a model unloaded anyway (Ollama
+restarted, or another model pushed it out of memory), the satellite says
+"Just a moment, I'm waking up my language model." (`ollama_cold_start_notice`)
+and that call gets `ollama_load_timeout_sec` (300 s) instead of the ordinary
+`ollama_timeout_sec`, so a slow load never ends in "my language model isn't
+answering".
 
 If you'd rather manage this on the Ollama side, blank out
 `ollama_keep_alive` so Domovoi sends nothing (a per-request value
@@ -507,11 +524,19 @@ the point. On a 24 GB machine, a rough accounting:
 | Whisper `small.en` int8 | ~1 GB |
 | `llama3.2:3b` | ~2.5 GB |
 | `qwen2.5:7b` | ~5 GB |
+| or `qwen3:8b` (4–8k context) | ~6 GB |
 
 That leaves real headroom, and a headless Linux host hands you several GB
 more of it than Windows does. Swap in `qwen2.5:14b` (~9 GB) and it gets tight
 once you have several rooms, each with its own MPD container — another
 argument for the 7B.
+
+The context window is part of each model's footprint while it is loaded:
+at 32k tokens `llama3.2:3b` alone is ~6 GB and `qwen3:8b` ~10 GB, so leave
+`ollama_num_ctx` / `ollama_tool_num_ctx` (and the server's
+`OLLAMA_CONTEXT_LENGTH`) at 4–8k on a 24 GB box. And a third model — the
+dashboard's vision model, or Letta's — needs its own room: loading it is
+what makes Ollama unload a voice model whatever `keep_alive` says.
 
 If the box has less than 16 GB, run one Ollama model: point
 `ollama_model` and `ollama_tool_model` at the *same* small model and

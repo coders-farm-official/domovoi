@@ -96,6 +96,14 @@ class Context(BaseModel):
     # Typed Any (like `app`) so pydantic carries the object as-is: model_copy
     # is shallow, and every copy the router makes must share this one.
     timings: Any = None
+    # ``async (text) -> None`` that speaks a short line on the satellite
+    # right away, as the start of this turn's reply, while a slow stage is
+    # still running — the router uses it to say the language model is
+    # waking up before a cold model load. Said at most once per turn; the
+    # reply's own audio follows in the same response. The streaming layer
+    # stamps it on a voice turn; None everywhere else (the line is simply
+    # not said).
+    speak_interim: Any = None
 
 
 class Response(BaseModel):

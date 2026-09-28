@@ -227,12 +227,16 @@ def test_config_greeting_defaults(tmp_path):
     cfg = _load_config(tmp_path, '[satellite]\nroom_id = "x"\n')
     assert cfg.greeting_enabled is True
     assert cfg.greeting_funny_chance == 0.2
+    assert cfg.greeting_reply_wait == 2.5
 
 
 def test_config_greeting_override(tmp_path):
-    cfg = _load_config(tmp_path, "[greeting]\nenabled = false\nfunny_chance = 0.5\n")
+    cfg = _load_config(
+        tmp_path, "[greeting]\nenabled = false\nfunny_chance = 0.5\nreply_wait = 4\n"
+    )
     assert cfg.greeting_enabled is False
     assert cfg.greeting_funny_chance == 0.5
+    assert cfg.greeting_reply_wait == 4.0
 
 
 def test_config_sounds_sync_default_and_override(tmp_path):

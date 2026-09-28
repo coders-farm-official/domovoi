@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
@@ -94,11 +95,9 @@ async def list_models(base_url: str | None = None, timeout: float = 5.0) -> list
     return models if isinstance(models, list) else []
 
 
-async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str, Any]]:
-    """Currently-loaded (VRAM-resident) models via ``GET /api/ps``.
-
-    Distinct from :func:`list_models` (on-disk). Empty list on any failure.
-    """
+async def _ps_or_none(base_url: str | None, timeout: float) -> list[dict[str, Any]] | None:
+    """``GET /api/ps``'s model list, or None when Ollama couldn't be asked —
+    which, unlike an empty list, doesn't mean "nothing is loaded"."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/ps"
@@ -109,9 +108,42 @@ async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str
             payload = resp.json()
     except Exception as e:
         log.warning("ollama /api/ps failed: %s", e)
-        return []
+        return None
     models = payload.get("models") if isinstance(payload, dict) else None
     return models if isinstance(models, list) else []
+
+
+async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str, Any]]:
+    """Currently-loaded (VRAM-resident) models via ``GET /api/ps``.
+
+    Distinct from :func:`list_models` (on-disk). Empty list on any failure.
+    """
+    return await _ps_or_none(base_url, timeout) or []
+
+
+def _model_key(name: str | None) -> str:
+    """A model name as Ollama reports it: lower case, ``:latest`` when no
+    tag was given ("llama3.2" → "llama3.2:latest")."""
+    n = (name or "").strip().lower()
+    return n if ":" in n or not n else n + ":latest"
+
+
+def _keep_alive_for_model(model: str) -> str | int | float | None:
+    """The ``keep_alive`` the voice pipeline sends for ``model``, for a
+    caller outside the voice client — the dashboard's text chat — so a chat
+    turn on the Q&A model doesn't hand it back to Ollama's 5-minute
+    default (Ollama keeps a model for whatever its latest request asked).
+    None for any other model, a vision model included: that one unloads on
+    the Ollama server's own schedule instead of crowding the voice models
+    out of memory."""
+    key = _model_key(model)
+    general = _normalize_keep_alive(settings.ollama_keep_alive)
+    if key == _model_key(settings.ollama_model):
+        return general
+    if key == _model_key(settings.ollama_tool_model):
+        tool = _normalize_keep_alive(settings.ollama_tool_keep_alive)
+        return general if tool is None else tool
+    return None
 
 
 async def delete_model(name: str, base_url: str | None = None, timeout: float = 30.0) -> None:
@@ -187,6 +219,10 @@ async def chat_stream(
     options = _num_ctx_options(settings.ollama_num_ctx)
     if options:
         body["options"] = options
+    # And the same keep_alive when this is one of the voice models.
+    keep_alive = _keep_alive_for_model(model)
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
     async with httpx.AsyncClient(timeout=timeout) as c:
         async with c.stream("POST", url, json=body) as resp:
@@ -230,6 +266,23 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+# System prompt for the spoken Q&A fallthrough (``qa_with_uncertainty``).
+# The reply is spoken exactly as the model wrote it — nothing downstream
+# trims it — so this prompt is what keeps a voice answer short: the
+# general prompt plus a sentence budget. Plain text on purpose: this
+# answer used to be a field of a JSON object, and llama3.2:3b closes a
+# JSON string early — after a question mark (the joke's setup without its
+# punchline), at a contraction's apostrophe ("I don"), with a placeholder
+# ("None") or with nothing at all. Measured 2026-09-28 on llama3.2:3b, 30
+# seeds per case: 60/60 jokes with their punchline, explanations down
+# from a median of 59 words to 43. Resist spelling out "a joke needs its
+# punchline" here: the same measurement found that naming jokes makes the
+# model reach for a long setup and stop after it, about one time in five.
+VOICE_QA_SYSTEM_PROMPT = (
+    DEFAULT_SYSTEM_PROMPT + " Most replies should be one to three sentences."
+)
+
+
 # System prompt for the tool-routing call (``RealOllamaClient.route``).
 #
 # The router runs at temperature 0 with every handler's schema on offer,
@@ -265,17 +318,21 @@ ROUTER_SYSTEM_PROMPT = (
 )
 
 
-# Wrapper around the JSON answer + self-doubt flag returned by
-# ``qa_with_uncertainty``. ``needs_verification`` is the LLM's own
-# guess at whether the answer should be checked against a web source
-# (stale training data, fast-moving facts, etc.) — paired with the
-# heuristic categorizer (``domovoi.uncertainty``) as the two
-# legs of the proactive web-search offer.
+# What ``qa_with_uncertainty`` hands the router: the spoken answer, plus
+# ``needs_verification`` — whether the client has its own reason to think
+# the answer should be checked against a web source. The real client
+# always says False: the model's self-reported doubt flag it used to ask
+# for fired on junk turns and refusals and almost never on a stale fact,
+# so the router's offer now rests on the heuristic categorizer and on the
+# answer's own words (``domovoi.uncertainty``). ``unreachable`` is True only
+# when the Ollama calls themselves failed; an empty ``answer`` with
+# ``unreachable`` False means the model answered and said nothing usable.
 @dataclass
 class QAWithUncertainty:
     answer: str
     needs_verification: bool
     candidate_claim: str = ""
+    unreachable: bool = False
 
 
 @dataclass
@@ -322,24 +379,6 @@ _EXTRACT_MEMORIES_SYSTEM_PROMPT = (
 )
 
 
-_UNCERTAINTY_SYSTEM_PROMPT = (
-    "You are {bot}, a helpful voice assistant. Answer the user's "
-    "question concisely and conversationally. Then judge whether your "
-    "answer could be stale or unreliable — anything about current "
-    "events, prices, scores, recent releases, or details from after "
-    "your training cutoff. Output ONLY a JSON object with this exact "
-    "shape, no preface or explanation:\n"
-    '{{"answer": "<your spoken answer>", '
-    '"needs_verification": <true|false>, '
-    '"candidate_claim": "<one short verifiable claim from your answer, '
-    'or empty string>"}}\n'
-    "Set needs_verification=true when the answer depends on facts "
-    "that change over time or that you're not confident about. Set "
-    "it false for timeless facts (math, definitions, well-known "
-    "history) you're confident in."
-)
-
-
 _EXTRACT_SUBJECT_SYSTEM_PROMPT = (
     "The user asked a question whose answer changes over time, so it "
     "MUST be looked up online — you must NOT answer it. Identify only: "
@@ -354,39 +393,62 @@ _EXTRACT_SUBJECT_SYSTEM_PROMPT = (
 )
 
 
-def _parse_qa_json(raw: str, fallback_answer: str = "") -> QAWithUncertainty:
-    """Parse the JSON object returned by qa_with_uncertainty.
+# A reply that is only a placeholder, not an answer. These are what
+# llama3.2:3b wrote into the old JSON "answer" field instead of a refusal
+# ("I can't provide information on…" came back as "None"); free text makes
+# them rare, and one is retried rather than spoken.
+_PLACEHOLDER_ANSWER_RE = re.compile(
+    r"^(?:none(?: found)?|null|n/?a|not applicable|unknown|no answer)[.!]?$",
+    re.IGNORECASE,
+)
+# A reply that stops on a contraction's stem ("I don", "that doesn") with no
+# closing punctuation was cut off mid-word; the live office log has "I don",
+# "I couldn" and "I didn" from the old JSON contract. "can" and "won" are
+# left out, and the match is case-sensitive ("Ask Don"): they are words in
+# their own right.
+_CUT_AT_CONTRACTION_RE = re.compile(
+    r"\b(?:don|didn|doesn|couldn|wouldn|shouldn|isn|aren|wasn|weren|hasn|"
+    r"haven|hadn|mustn|needn)$"
+)
+_SENTENCE_END = ".!?…"
+_CLOSING_QUOTES = "\"'”’)»"
 
-    Defensive on every field — models sometimes wrap the JSON in
-    prose, drop the candidate_claim, or stringify the bool. We fall
-    back to ``needs_verification=False`` on any parse failure so a
-    malformed response never spuriously triggers a web-search offer.
-    """
-    if not raw:
-        return QAWithUncertainty(answer=fallback_answer, needs_verification=False)
-    # Models occasionally bracket the JSON with prose ("Here you go:
-    # {...}"). Find the first { and last } and parse just that span.
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    blob = raw[start : end + 1]
-    try:
-        parsed = json.loads(blob)
-    except Exception:
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    if not isinstance(parsed, dict):
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    answer = str(parsed.get("answer") or "").strip() or fallback_answer
-    raw_flag = parsed.get("needs_verification")
-    if isinstance(raw_flag, bool):
-        needs = raw_flag
-    elif isinstance(raw_flag, str):
-        needs = raw_flag.strip().lower() in ("true", "yes", "1")
-    else:
-        needs = False
-    claim = str(parsed.get("candidate_claim") or "").strip()[:300]
-    return QAWithUncertainty(answer=answer, needs_verification=needs, candidate_claim=claim)
+
+def _last_complete_sentences(text: str) -> str:
+    """``text`` up to its last sentence-ending punctuation, or "" if it has
+    none — what is left of a reply after its broken last words are dropped."""
+    cut = max(text.rfind(ch) for ch in _SENTENCE_END)
+    if cut < 0:
+        return ""
+    end = cut + 1
+    while end < len(text) and text[end] in _CLOSING_QUOTES:
+        end += 1
+    return text[:end].strip()
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """A read/connect timeout from httpx (ollama-python lets them through
+    unwrapped) or asyncio, as opposed to a refused connection or an error
+    reply."""
+    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+
+
+def _clean_spoken_answer(raw: str) -> tuple[str, str | None]:
+    """Tidy a free-text QA reply for speech and say what, if anything, is
+    wrong with it: ``(text, problem)``, where ``problem`` is None for a
+    usable answer, else "empty", "placeholder" or "cut". Never shortens a
+    good answer — the prompt, not this, keeps voice answers short."""
+    text = (raw or "").strip()
+    # A reply wrapped whole in one pair of quotes would be read with them.
+    if len(text) >= 2 and text[0] == text[-1] == '"' and text.count('"') == 2:
+        text = text[1:-1].strip()
+    if not text:
+        return "", "empty"
+    if _PLACEHOLDER_ANSWER_RE.match(text):
+        return text, "placeholder"
+    if text[-1] not in _SENTENCE_END + _CLOSING_QUOTES and _CUT_AT_CONTRACTION_RE.search(text):
+        return text, "cut"
+    return text, None
 
 
 def _parse_subject_json(raw: str, fallback_query: str = "") -> SearchSubject:
@@ -663,6 +725,12 @@ class RealOllamaClient:
     _send_qa_think: bool = False
     _num_ctx: int | None = None
     _tool_num_ctx: int | None = None
+    # The cold-start machinery (`cold_models`, `for_cold_start`), bound in
+    # __init__ too. Without a URL a client can't ask Ollama what is loaded,
+    # so it reports every model warm and never swaps its HTTP client.
+    _url: str | None = None
+    _cold_twin: "RealOllamaClient | None" = None
+    _tool_keep_alive: str | int | float | None = None
 
     def __init__(
         self,
@@ -687,6 +755,9 @@ class RealOllamaClient:
                 pool=5.0,
             ),
         )
+        self._url = url
+        # See `cold_models`; shared with the cold-start twin (a shallow copy).
+        self._ctx_mismatches: dict[str, set[int]] = {}
         self._qa_model = qa_model
         self._tool_model = tool_model
         # Bound at construction like the model names (reset_ollama_client is
@@ -697,8 +768,12 @@ class RealOllamaClient:
         self._send_think = _client_accepts_think()
         # keep_alive is bound and degrades the same way — see `_chat`. A blank
         # setting means never send it (the Ollama server's default governs).
+        # The tool model can have its own (`_keep_alive_for`).
         self._keep_alive = _normalize_keep_alive(settings.ollama_keep_alive)
-        self._send_keep_alive = self._keep_alive is not None and _client_accepts_keep_alive()
+        self._tool_keep_alive = _normalize_keep_alive(settings.ollama_tool_keep_alive)
+        self._send_keep_alive = (
+            self._keep_alive is not None or self._tool_keep_alive is not None
+        ) and _client_accepts_keep_alive()
         # The QA-model calls' `think`. None (the default) leaves the field
         # out, as every QA call always has. Otherwise it's sent and degrades
         # exactly like the router's, on a latch of its own: the QA model
@@ -750,7 +825,12 @@ class RealOllamaClient:
             return None
         return {"handler": name, "args": args or {}}
 
-    async def _route_chat(self, transcript: str, tools: list[dict[str, Any]]) -> Any:
+    async def _route_chat(
+        self,
+        transcript: str,
+        tools: list[dict[str, Any]],
+        extra_options: dict[str, Any] | None = None,
+    ) -> Any:
         """The routing chat call, with a one-time retry that drops ``think``.
 
         Thinking is a per-model capability, so a server can reject the flag
@@ -760,7 +840,9 @@ class RealOllamaClient:
         single turn, not forever.
         """
         try:
-            return await self._chat_for_route(transcript, tools, send_think=self._send_think)
+            return await self._chat_for_route(
+                transcript, tools, send_think=self._send_think, extra_options=extra_options,
+            )
         except Exception as e:
             if not self._send_think or not self._looks_like_think_rejection(e):
                 raise
@@ -770,7 +852,9 @@ class RealOllamaClient:
                 self._tool_model, e,
             )
             self._send_think = False
-            return await self._chat_for_route(transcript, tools, send_think=False)
+            return await self._chat_for_route(
+                transcript, tools, send_think=False, extra_options=extra_options,
+            )
 
     @classmethod
     def _looks_like_think_rejection(cls, exc: Exception) -> bool:
@@ -794,13 +878,27 @@ class RealOllamaClient:
         )
         self._send_keep_alive = False
 
+    def _keep_alive_for(self, model: Any) -> str | int | float | None:
+        """``ollama_tool_keep_alive`` for the tool model when it has one and
+        the tool model is not also the QA model (Ollama keeps a model for
+        whatever its latest request asked, so one model can't have two);
+        ``ollama_keep_alive`` otherwise."""
+        if (
+            self._tool_keep_alive is not None
+            and model == self._tool_model
+            and model != self._qa_model
+        ):
+            return self._tool_keep_alive
+        return self._keep_alive
+
     async def _chat(self, **kwargs: Any) -> Any:
         """Every Ollama chat call funnels through here so ``keep_alive`` rides
         along on all of them — router, QA, streaming QA, uncertainty, subject
-        extraction, memory extraction. Without it Ollama falls back to its own
-        5-minute default and a CPU host pays a cold start after every quiet
-        spell between household questions: model load plus the tool-schema
-        prefill, measured at ~54 s cold against ~4 s warm for the same turn.
+        extraction, memory extraction, warm-up. Without it Ollama falls back
+        to its own 5-minute default and a CPU host pays a cold start after
+        every quiet spell between household questions: model load plus the
+        tool-schema prefill, measured at ~54 s cold against ~4 s warm for the
+        same turn.
 
         Degrades the way ``think`` does: the kwarg is omitted when the
         installed client can't take it, and if the server rejects the value
@@ -809,10 +907,11 @@ class RealOllamaClient:
         only raises once iterated, so ``stream_qa`` carries its own
         first-chunk retry.
         """
-        if not self._send_keep_alive:
+        keep_alive = self._keep_alive_for(kwargs.get("model"))
+        if not self._send_keep_alive or keep_alive is None:
             return await self._client.chat(**kwargs)
         try:
-            return await self._client.chat(keep_alive=self._keep_alive, **kwargs)
+            return await self._client.chat(keep_alive=keep_alive, **kwargs)
         except Exception as e:
             if not self._looks_like_keep_alive_rejection(e):
                 raise
@@ -820,7 +919,12 @@ class RealOllamaClient:
             return await self._client.chat(**kwargs)
 
     async def _chat_for_route(
-        self, transcript: str, tools: list[dict[str, Any]], *, send_think: bool
+        self,
+        transcript: str,
+        tools: list[dict[str, Any]],
+        *,
+        send_think: bool,
+        extra_options: dict[str, Any] | None = None,
     ) -> Any:
         extra: dict[str, Any] = {"think": self._tool_think} if send_think else {}
         return await self._chat(
@@ -844,18 +948,23 @@ class RealOllamaClient:
             # way every time and biases toward acting on borderline
             # commands instead of randomly bailing to the QA fallthrough.
             # num_ctx only when ollama_tool_num_ctx is set.
-            options={"temperature": 0, **_num_ctx_options(self._tool_num_ctx)},
+            options={
+                "temperature": 0,
+                **_num_ctx_options(self._tool_num_ctx),
+                **(extra_options or {}),
+            },
             **extra,
             )
 
     # ── the QA-model calls' optional knobs ───────────────────────────────
 
-    def _qa_extras(self) -> dict[str, Any]:
+    def _qa_extras(self, extra_options: dict[str, Any] | None = None) -> dict[str, Any]:
         """``options.num_ctx`` and ``think`` for a QA-model call — each only
         when its setting asks for it, so with both unset the call is exactly
-        what it was before they existed."""
+        what it was before they existed. ``extra_options`` joins the options
+        (the warm-up's one-token limit)."""
         extra: dict[str, Any] = {}
-        options = _num_ctx_options(self._num_ctx)
+        options = {**_num_ctx_options(self._num_ctx), **(extra_options or {})}
         if options:
             extra["options"] = options
         if self._send_qa_think:
@@ -870,18 +979,20 @@ class RealOllamaClient:
         )
         self._send_qa_think = False
 
-    async def _qa_chat(self, **kwargs: Any) -> Any:
+    async def _qa_chat(
+        self, *, extra_options: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         """A non-streaming QA-model call: ``_chat`` plus :meth:`_qa_extras`,
         with the router's one-time retry when the server rejects ``think``
         (see ``_route_chat``). ``stream_qa`` carries its own retry, because
         a streamed rejection only surfaces once the stream is iterated."""
         try:
-            return await self._chat(**kwargs, **self._qa_extras())
+            return await self._chat(**kwargs, **self._qa_extras(extra_options))
         except Exception as e:
             if not self._send_qa_think or not self._looks_like_think_rejection(e):
                 raise
             self._disable_qa_think(e)
-            return await self._chat(**kwargs, **self._qa_extras())
+            return await self._chat(**kwargs, **self._qa_extras(extra_options))
 
     def _build_messages(
         self,
@@ -966,52 +1077,181 @@ class RealOllamaClient:
         history: list[dict[str, str]] | None = None,
         profile_prefix: str | None = None,
     ) -> QAWithUncertainty:
-        """Ask the QA model for an answer plus a self-doubt flag.
+        """The spoken answer for the voice Q&A fallthrough.
 
-        Drives the proactive "want me to check that online?" offer. We
-        ask for JSON via Ollama's ``format='json'`` parameter so the
-        model is constrained to emit a parseable object — on parse
-        failure we still produce a usable ``QAWithUncertainty`` with
-        ``needs_verification=False`` so a bad parse never turns into
-        a spurious offer.
+        Plain free text from the QA model under ``VOICE_QA_SYSTEM_PROMPT``
+        — never a field of a JSON object. It used to be one
+        (``format='json'``, ``{"answer", "needs_verification",
+        "candidate_claim"}``), and llama3.2:3b closed that string early
+        often enough to be heard: the joke "What do you call a fake
+        noodle?" with no punchline, "I don" for "I don't…", "None" for a
+        refusal, or nothing at all, which the router then announced as a
+        dead language model. Same model, same questions, free text: none
+        of those (probe, 2026-09-28).
 
-        ``profile_prefix`` is the speaker's memories + favorites +
-        prefs blob. Prepended to the system prompt so QA
-        answers can lean on personal context without leaking into
-        the JSON output contract.
+        A reply that is empty, only a placeholder, or stops on a
+        contraction stem is asked for once more. If the retry is no better,
+        a cut reply keeps its complete sentences, and an empty one comes
+        back as ``answer=""`` with ``unreachable=False`` so the router can
+        say so honestly. ``unreachable=True`` is reserved for the Ollama
+        calls themselves failing. ``needs_verification`` is always False
+        here: the router judges the offer from the question and from what
+        the answer says (see ``domovoi.uncertainty``).
+
+        ``profile_prefix`` is the speaker's memories + favorites + prefs
+        blob, prepended to the system prompt so answers can lean on
+        personal context.
         """
-        system_prompt = _UNCERTAINTY_SYSTEM_PROMPT.format(bot=settings.bot_name)
+        system_prompt = VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name)
         if profile_prefix:
             system_prompt = profile_prefix.rstrip() + "\n\n" + system_prompt
         messages = self._build_messages(transcript, system_prompt, history)
-        try:
-            response = await self._qa_chat(
-                model=self._qa_model,
-                messages=messages,
-                stream=False,
-                format="json",
-            )
-        except Exception as e:
-            log.warning("qa_with_uncertainty: ollama call failed: %s", e)
-            # Fall back to plain qa so the user still gets an answer.
+        text, problem = "", "empty"
+        for attempt in (1, 2):
             try:
-                plain = await self.qa(transcript, history=history)
-            except Exception:
-                plain = ""
-            return QAWithUncertainty(
-                answer=plain, needs_verification=False, candidate_claim=""
+                response = await self._qa_chat(
+                    model=self._qa_model,
+                    messages=messages,
+                    stream=False,
+                )
+            except Exception as e:
+                log.warning(
+                    "qa_with_uncertainty: ollama call failed (attempt %d): %s",
+                    attempt, e,
+                )
+                if attempt == 2 or _is_timeout(e):
+                    # A timeout already waited the full read limit; a
+                    # second one would only double the silence.
+                    return QAWithUncertainty(
+                        answer="", needs_verification=False, unreachable=True,
+                    )
+                continue
+            raw = self._chunk_content(response)
+            text, problem = _clean_spoken_answer(raw)
+            if problem is None:
+                break
+            log.warning(
+                "qa_with_uncertainty: %s answer for %r (attempt %d): %r",
+                problem, transcript, attempt, raw,
             )
-        message = (
-            response.get("message")
-            if isinstance(response, dict)
-            else getattr(response, "message", None)
+        if problem == "cut":
+            text = _last_complete_sentences(text)
+        elif problem is not None:
+            text = ""
+        return QAWithUncertainty(answer=text, needs_verification=False)
+
+    # ── cold starts: what's loaded, a long-timeout twin, the warm-up ─────
+
+    async def cold_models(self, *roles: str) -> list[str] | None:
+        """The configured models for ``roles`` ("tool", "qa") that Ollama
+        doesn't have ready right now — not loaded, or loaded with a
+        different context window than this client asks for, which Ollama
+        answers by reloading. None when Ollama can't be asked (down, or
+        hung past the 2 s /api/ps limit): that is not a cold start, and
+        the caller must not wait on it as if it were."""
+        if self._url is None:
+            return []
+        loaded = await _ps_or_none(self._url, 2.0)
+        if loaded is None:
+            return None
+        contexts: dict[str, Any] = {}
+        for entry in loaded:
+            if not isinstance(entry, dict):
+                continue
+            for field in ("name", "model"):
+                if entry.get(field):
+                    contexts[_model_key(entry[field])] = entry.get("context_length")
+        wanted = {
+            "tool": (self._tool_model, self._tool_num_ctx),
+            "qa": (self._qa_model, self._num_ctx),
+        }
+        # Context windows /api/ps has already reported for a model that
+        # differ from the one asked for (see below). Per client, so a
+        # settings change (a new client) starts afresh.
+        mismatches: dict[str, set[int]] = self.__dict__.setdefault("_ctx_mismatches", {})
+        cold: list[str] = []
+        for role in roles:
+            model, num_ctx = wanted[role]
+            key = _model_key(model)
+            if key not in contexts:
+                cold.append(model)
+            elif num_ctx and contexts[key] and int(contexts[key]) != num_ctx:
+                # Ollama reloads a model asked for with a different window —
+                # but it also clamps a num_ctx above the model's trained
+                # length and then reports the clamped window for good: a
+                # mismatch that never reloads and never goes away. Counting
+                # it every time would say "waking up" before every answer,
+                # so a given reported window is a cold start only the first
+                # time it is seen.
+                seen = mismatches.setdefault(key, set())
+                if int(contexts[key]) not in seen:
+                    seen.add(int(contexts[key]))
+                    cold.append(model)
+        return list(dict.fromkeys(cold))
+
+    def for_cold_start(self) -> "RealOllamaClient":
+        """This client, but with a read timeout long enough for Ollama to
+        load a model before its first byte (``ollama_load_timeout_sec``).
+        The ordinary ``ollama_timeout_sec`` bounds a stalled server; with a
+        cold model the load and the prompt prefill all come before the
+        reply, and cutting that off would turn "still loading" into "my
+        language model isn't answering". Built once per client; same models
+        and knobs."""
+        if self._url is None:
+            return self
+        if self._cold_twin is None:
+            import copy
+
+            import httpx
+            from ollama import AsyncClient
+
+            twin = copy.copy(self)
+            twin._client = AsyncClient(
+                host=self._url,
+                timeout=httpx.Timeout(
+                    connect=5.0,
+                    read=max(settings.ollama_timeout_sec, settings.ollama_load_timeout_sec),
+                    write=10.0,
+                    pool=5.0,
+                ),
+            )
+            twin._cold_twin = twin
+            self._cold_twin = twin
+        return self._cold_twin
+
+    async def warm_up(self, tool_schemas: list[dict[str, Any]]) -> list[str] | None:
+        """Load the tool-routing and QA models ahead of the first voice
+        turn, each with the exact options its real calls send (a different
+        num_ctx would only make Ollama load it again), the router's system
+        prompt and tool list included so that prefix is already processed.
+        One generated token each. Returns the models it loaded, [] when
+        both were already loaded, None when Ollama couldn't be asked."""
+        cold = await self.cold_models("tool", "qa")
+        if not cold:
+            return cold
+        twin = self.for_cold_start()
+        loaded: list[str] = []
+        if self._tool_model in cold and tool_schemas:
+            await twin._warm_tool_model(tool_schemas)
+            loaded.append(self._tool_model)
+        if self._qa_model in cold and self._qa_model not in loaded:
+            await twin._warm_qa_model()
+            loaded.append(self._qa_model)
+        return loaded
+
+    async def _warm_tool_model(self, tool_schemas: list[dict[str, Any]]) -> None:
+        tools = [{"type": "function", "function": s} for s in tool_schemas]
+        await self._route_chat("hello", tools, extra_options={"num_predict": 1})
+
+    async def _warm_qa_model(self) -> None:
+        await self._qa_chat(
+            model=self._qa_model,
+            messages=self._build_messages(
+                "hello", VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name), None
+            ),
+            stream=False,
+            extra_options={"num_predict": 1},
         )
-        content = (
-            message.get("content")
-            if isinstance(message, dict)
-            else getattr(message, "content", "")
-        ) if message is not None else ""
-        return _parse_qa_json(content or "")
 
     async def extract_search_subject(
         self,

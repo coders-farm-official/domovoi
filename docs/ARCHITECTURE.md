@@ -101,7 +101,14 @@ prose:
 2. **STT.** The core transcribes the buffered utterance with Whisper
    (faster-whisper on CUDA or CPU; deterministic stub under `USE_STUBS=true`). If the
    Pi flagged `greeting_played`, a wake greeting that bled past the mic
-   array's echo cancellation is stripped from the transcript. Whisper loads
+   array's echo cancellation is stripped from the transcript, and a
+   transcript that is nothing but the greeting ends the turn unrouted (the
+   Pi names the clip it played, `greeting_clip`, so only that line
+   matches). The Pi, for its part, doesn't let the greeting end its own
+   capture: frames under it still stream but don't count toward
+   endpointing (so they never start a `speech_pause` either), and after a
+   greeting the mic partly heard it waits `greeting.reply_wait` seconds
+   for the user (exit reason `no_speech_after_greeting`). Whisper loads
    once at boot and a failed load is never fatal: the core drops to
    `whisper_cpu_fallback_model` on cpu/int8, and failing that runs without
    STT — a turn then gets a spoken "can't understand speech" notice and is
@@ -130,7 +137,10 @@ prose:
    to a parked question; 650 ms) — and only after the satellite's own
    detector has been silent that long since the last word
    (`domovoi/early_commit.py`; `early_commit_enabled`,
-   `early_commit_tier_b`, and `[listen] early_commit` per satellite).
+   `early_commit_tier_b`, and `[listen] early_commit` per satellite). On a
+   greeting turn the copy is screened for the greeting exactly as the turn
+   will be (the Pi names the clip in `speech_pause` too): a copy that is
+   only the greeting never commits.
    Anything said after the hold is lost, so the tiers are checked in CI
    against a corpus of real commands for a shorter prefix that is a
    different command (`domovoi/tests/test_early_commit.py`).
@@ -165,7 +175,7 @@ falls through to the next.
 | 2 | **LLM tool-call** | `llm` / `llm_offline` | The tool-routing Ollama model sees each handler's `tool_schema` and may pick one; the handler's `execute_from_tool()` runs (or `fallback_offline()` if it needs the network and we're offline). A handler can withhold its schema for an utterance that provably can't be its own (`Handler.offers_tool`, `router.offered_tool_schemas`): the calculator on who/why/where questions with no digit, double_check without a verification word, news without a news word, library on who/why/where questions with no library cue (`handlers/shared/tool_gate.py`) — a small tool model otherwise reads a bare factual question as a claim to verify or a subject to look up. Gated schemas go last in the list so the prompt prefix Ollama caches stays stable; a call naming a withheld tool is treated as no call. `scripts/eval_routing.py` replays a fixed corpus (`scripts/routing_corpus.json`) against a live core or straight at Ollama. |
 | 3 | **Auto-search short-circuit** | `auto_search` | For a time-sensitive question category, a *known* speaker who previously opted in to auto-search for that category gets an answer straight from SearXNG — skipping local QA entirely. |
 | 4 | **Volatile-question gate** | `volatile_offer` / `qa` | For freshness-critical categories (weather, prices, scores, current events) the local model's confident-but-stale guess is exactly the failure mode, so Domovoi doesn't guess: online it asks "want me to check <subject>?" and parks a `core.self_doubt_offer` confirmation; offline it says plainly that it can't answer. |
-| 5 | **QA fallthrough** | `qa` | General Q&A via the local Ollama QA model, with session history and a per-speaker profile prefix (memories, favorites, preferences). The model can flag its own answer for verification; either that flag or a heuristic category appends "Want me to check that online?" (parking `core.self_doubt_offer`). Otherwise the implicit memory extractor may surface one pending "should I remember that?" offer. |
+| 5 | **QA fallthrough** | `qa` | General Q&A via the local Ollama QA model, with session history and a per-speaker profile prefix (memories, favorites, preferences). The answer is the model's plain-text reply, spoken whole; an empty reply is retried once and then answered with a short "no answer" line (the "language model isn't answering" line is only for a failed call). For a question, an answer that admits it may be out of date, or a heuristic category, appends "Want me to check that online?" as its own sentence (parking `core.self_doubt_offer`); an answer that already ends by offering to look it up has that offer parked instead. Otherwise the implicit memory extractor may surface one pending "should I remember that?" offer. |
 
 **Every routed turn is persisted** by `router._persist_turn`: one `intents_log`
 row (routing decision, latency, presence), one `conversation_log` row (full

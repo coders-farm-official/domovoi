@@ -14,10 +14,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import text
 
-from domovoi.clients.ollama import (
-    QAWithUncertainty,
-    _parse_qa_json,
-)
+from domovoi.clients.ollama import QAWithUncertainty
 from domovoi.clients.searxng import SearchResult, SearxNGStubClient
 from domovoi.db.repositories import (
     PeopleRepository,
@@ -148,36 +145,6 @@ def test_parse_answer_from_sources_format_dropped() -> None:
     answer, source = _parse_answer_from_sources("Just a sentence with no labels.")
     assert "sentence" in answer
     assert source is None
-
-
-def test_parse_qa_json_well_formed() -> None:
-    raw = (
-        '{"answer": "The president is Joe Biden.", '
-        '"needs_verification": true, '
-        '"candidate_claim": "Joe Biden is the current president."}'
-    )
-    result = _parse_qa_json(raw)
-    assert result.answer.startswith("The president")
-    assert result.needs_verification is True
-    assert "Joe Biden" in result.candidate_claim
-
-
-def test_parse_qa_json_with_surrounding_prose() -> None:
-    """Model wraps the JSON in conversational prose — we should still parse."""
-    raw = (
-        "Sure! Here is the JSON object: "
-        '{"answer": "It is sunny.", "needs_verification": false, '
-        '"candidate_claim": ""} '
-        "Hope that helps!"
-    )
-    result = _parse_qa_json(raw)
-    assert result.answer == "It is sunny."
-    assert result.needs_verification is False
-
-
-def test_parse_qa_json_garbage_falls_back_safely() -> None:
-    result = _parse_qa_json("not json at all")
-    assert result.needs_verification is False  # never trigger an offer on bad parse
 
 
 # ─── Router → QA fallthrough → offer ──────────────────────────────────────
