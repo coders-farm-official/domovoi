@@ -27,6 +27,35 @@ const STATUS_PILL = {
   uninstalled: { tone: 'idle', label: 'uninstalled' },
 };
 
+/* A refused confirm as the modal shows it: the core's own message (not
+ * "422 Unprocessable Entity: {…}") and, for a failed upgrade, the
+ * migrations that ran before the failure. Those never roll back — the
+ * previous version comes back and runs against the newer schema — so the
+ * admin is told which, per database: [[database, [file, …]], …]. */
+const confirmErrorView = (e) => {
+  const err = (((e && e.detail) || {}).detail || {}).error || {};
+  const kept = (err.details && err.details.migrations_kept) || {};
+  return {
+    message: err.message || String((e && e.message) || e),
+    kept: Object.entries(kept).filter(([, files]) => Array.isArray(files) && files.length > 0),
+  };
+};
+
+const ConfirmError = ({ err }) => (
+  <div className="err">
+    {err.message}
+    {err.kept.length > 0 && (
+      <div style={{ marginTop: 6 }}>
+        These migrations ran before the failure and stay applied — the previous
+        version is back and runs against the newer schema:
+        {err.kept.map(([db, files]) => (
+          <div key={db} className="mono">{files.join(', ')} · {db}</div>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
 /* ---- The §7.5 trust/confirm modal ---------------------------- */
 /* Rendered after Phase A returns a preview; the ONLY affordance that
  * reaches Phase B. Shows the standing trust statement, permission
@@ -73,7 +102,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
       }
       onDone(res);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr(confirmErrorView(e));
     } finally {
       setBusy(false);
     }
@@ -254,7 +283,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
               version, and migrations never run backwards.
             </div>
           )}
-          {err && <div className="err">{err}</div>}
+          {err && <ConfirmError err={err}/>}
         </div>
         <div className="cal-modal-foot">
           <Button onClick={onCancel} disabled={busy}>cancel</Button>

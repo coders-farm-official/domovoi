@@ -1628,8 +1628,9 @@ The runtime forces most of this, but know the shapes:
   backwards).
 * Upgrades tear down the old version, move it aside, and run the normal
   install pipeline; on failure the old version is restored — but migrations
-  the new version already applied **stay applied**, so each released version
-  should be one-version backward compatible with its own schema.
+  the new version already applied **stay applied** (the confirm error names
+  them per database, and the dashboard shows the list), so each released
+  version should be one-version backward compatible with its own schema.
 * An upgrade of a plugin the server has already loaded is **staged for
   restart**: Python keeps the module it imported, so re-running `register()`
   would run the old code against your new manifest. The new version's

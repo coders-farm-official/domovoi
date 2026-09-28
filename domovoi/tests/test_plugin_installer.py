@@ -804,3 +804,60 @@ async def test_uninstall_never_deletes_files_in_the_checkout() -> None:
     assert out["uninstalled"] and out["bundled"] is False
     assert await reg.get_plugin(SLUG) is None
     assert (copy / "domovoi-plugin.toml").is_file()
+
+
+# ─── a failed upgrade names the migrations it left applied (§3.6) ──────────
+
+def _with_files(zip_bytes: bytes, extra: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as src, \
+            zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info))
+        for name, content in extra.items():
+            dst.writestr(name, content)
+    return buf.getvalue()
+
+
+async def test_a_failed_upgrade_names_the_migrations_it_kept() -> None:
+    """Migrations never roll back: when V003 of an upgrade fails, V002 stays
+    applied and the previous version comes back to run against it. That
+    used to reach only the server log; the admin who pressed confirm now
+    gets it in the error, per database."""
+    from fastapi import HTTPException
+
+    from domovoi.plugins_runtime.migrations import default_database_urls
+
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    upgrade = _with_files(build_fixture_zip(version="1.1.0"), {
+        "migrations/V002__add_mood.sql": "ALTER TABLE compliments_log ADD COLUMN mood TEXT;\n",
+        "migrations/V003__broken.sql": "ALTER TABLE no_such_table ADD COLUMN x INT;\n",
+    })
+    staged2 = await stage_zip(upgrade, upgrade_of=SLUG)
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_confirm(staged2.staged_id)
+
+    assert http.value.status_code == 422
+    error = http.value.detail["error"]
+    assert error["code"] == "migration_failed"
+    assert "V003__broken.sql" in error["message"]
+    [url] = default_database_urls()                 # the pinned _test DB
+    db = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    assert error["details"]["migrations_kept"] == {db: ["V002__add_mood.sql"]}
+    # The previous version is back — against the newer schema.
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.version == "1.0.0" and row.enabled
+    async with engine.connect() as conn:
+        versions = (
+            await conn.execute(text(f'SELECT version FROM "{SCHEMA}".schema_history ORDER BY 1'))
+        ).scalars().all()
+    assert versions == [1, 2]
+
+    # Trying again applies nothing new before failing, so nothing is named.
+    staged3 = await stage_zip(upgrade, upgrade_of=SLUG)
+    with pytest.raises(InstallError) as exc:
+        await confirm_upgrade(staged3.staged_id)
+    assert exc.value.code == "migration_failed"
+    assert "migrations_kept" not in exc.value.details

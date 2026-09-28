@@ -1180,7 +1180,12 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     mig_runner = PluginMigrationRunner(
         slug, staged.root / manifest.migrations_dir
     )
-    pre_upgrade_ledger = await mig_runner.ledger_max_version()
+    ledger_before = await _ledger_versions(mig_runner)
+    # Read now: a failed confirm deletes the staged tree.
+    staged_files = {
+        mf.version: mf.filename
+        for mf in discover_migrations(staged.root / manifest.migrations_dir)
+    }
     stage_for_restart = code_imported(slug) or slug in LOADER.pending_restart
 
     await LOADER.unload_plugin(slug)
@@ -1204,15 +1209,18 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         return result
     except BaseException as e:
         # Roll back: previous dir returns, old row returns, old version
-        # re-enables. Migrations that already applied STAY applied — warn
-        # loudly naming them (§3.6, DB rule 5).
-        new_ledger = await mig_runner.ledger_max_version()
-        if new_ledger > pre_upgrade_ledger:
+        # re-enables. Migrations that already applied STAY applied — say
+        # which, per database, in the log and in the error the dashboard
+        # shows (§3.6, DB rule 5).
+        kept = _kept_migrations(
+            ledger_before, await _ledger_versions(mig_runner), staged_files
+        )
+        for db, files in kept.items():
             log.error(
-                "upgrade of %s failed AFTER migrations V%03d..V%03d applied — "
-                "they stay applied; the previous version must be "
-                "one-version backward compatible (design §6.2 rule 5)",
-                slug, pre_upgrade_ledger + 1, new_ledger,
+                "upgrade of %s failed AFTER %s applied on %s — they stay "
+                "applied; the previous version must be one-version backward "
+                "compatible (design §6.2 rule 5)",
+                slug, ", ".join(files), db,
             )
         if prev_dir.is_dir() and not old_dir.exists():
             old_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1238,8 +1246,43 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         except Exception:  # pragma: no cover — double fault
             log.exception("upgrade rollback of %s failed", slug)
         if isinstance(e, InstallError):
+            if kept:
+                e.details["migrations_kept"] = kept
             raise
-        raise InstallError("upgrade_failed", f"upgrade failed: {e}") from e
+        raise InstallError(
+            "upgrade_failed", f"upgrade failed: {e}",
+            {"migrations_kept": kept} if kept else None,
+        ) from e
+
+
+async def _ledger_versions(runner: PluginMigrationRunner) -> dict[str, int]:
+    """Highest applied migration per target database, for naming what a
+    failed upgrade left applied. A database that can't be read is left out:
+    the upgrade itself reports it (an unreachable ``_test`` twin fails the
+    confirm with a 422 and a clean rollback, not here with a 500)."""
+    out: dict[str, int] = {}
+    for url in runner.database_urls:
+        try:
+            out[url] = await runner.ledger_max_version(url)
+        except Exception as e:  # noqa: BLE001 — best effort, for the report
+            log.warning("could not read %s's migration ledger: %s", runner.slug, e)
+    return out
+
+
+def _kept_migrations(
+    before: dict[str, int], after: dict[str, int], files: dict[int, str]
+) -> dict[str, list[str]]:
+    """``{database name: [migration file, ...]}`` for what a failed upgrade
+    applied and left applied — its migrations never roll back, and the
+    previous version comes back to run against them."""
+    kept: dict[str, list[str]] = {}
+    for url, now in after.items():
+        was = before.get(url)
+        if was is None or now <= was:
+            continue
+        db = url.rsplit("/", 1)[-1].split("?", 1)[0]
+        kept[db] = [files.get(v, f"V{v:03d}") for v in range(was + 1, now + 1)]
+    return kept
 
 
 # ─── the admin HTTP surface (§3.2/§7.3 gated list) ──────────────────────────

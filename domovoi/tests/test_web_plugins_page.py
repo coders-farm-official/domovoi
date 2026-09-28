@@ -6,7 +6,7 @@ server.
 Covers: an upgrade staged for restart — the "restart to finish the
 upgrade" card (wired to the dashboard's one restart) and the row pill; the
 upgrade controls, which a bundled plugin doesn't get (it updates with the
-core).
+core); a failed upgrade's error naming the migrations it left applied.
 """
 
 from __future__ import annotations
@@ -53,6 +53,21 @@ def _controls(**over) -> dict:
             "props": {"p": {**ROW, **over}}, "fnProps": ["onUpgradeZip", "onUpgradeUrl"]}
 
 
+def _confirm_error(e: dict) -> dict:
+    return {"file": PLUGINS, "preload": [COMPONENTS], "props": {"e": e},
+            "component": "((p) => React.createElement(ConfirmError, { err: confirmErrorView(p.e) }))"}
+
+
+FAILED_UPGRADE = {
+    "message": '422 Unprocessable Entity: {"detail":{"error":{"code":"migration_failed"',
+    "status": 422,
+    "detail": {"detail": {"error": {
+        "code": "migration_failed",
+        "message": "compliments: V003__broken.sql failed on domovoi: relation does not exist",
+        "details": {"migrations_kept": {"domovoi": ["V002__add_mood.sql"], "domovoi_test": []}},
+    }}},
+}
+
 SCENARIOS = {
     "card": _card({"restart_capable": True, "restart_mode": "restart"}, RADIO_WAITING),
     "card_update_unit": _card({"restart_capable": True, "restart_mode": "update"}, RADIO_WAITING),
@@ -67,6 +82,14 @@ SCENARIOS = {
     "controls_bundled_tombstone": _controls(bundled=True, install_source="bundled",
                                             status="uninstalled", enabled=False),
     "controls_dev": _controls(install_source="dev"),
+    "confirm_error_kept": _confirm_error(FAILED_UPGRADE),
+    "confirm_error_nothing_kept": _confirm_error({
+        **FAILED_UPGRADE,
+        "detail": {"detail": {"error": {"code": "upgrade_same_version",
+                                        "message": "version 1.1.0 is already installed",
+                                        "details": {}}}},
+    }),
+    "confirm_error_no_body": _confirm_error({"message": "network down"}),
 }
 
 
@@ -140,3 +163,22 @@ def test_a_bundled_plugin_offers_no_upgrade_and_says_why(rendered) -> None:
 def test_tombstones_and_dev_plugins_show_no_upgrade_controls(rendered) -> None:
     assert rendered["controls_bundled_tombstone"] == []
     assert rendered["controls_dev"] == []
+
+
+# ─── a failed upgrade names the migrations it left applied ────────────────
+
+
+def test_a_failed_upgrade_shows_the_migrations_that_stay_applied(rendered) -> None:
+    texts = _texts(rendered["confirm_error_kept"])
+    # The core's own message, not the raw "422 Unprocessable Entity: {...}".
+    assert any(t.startswith("compliments: V003__broken.sql failed") for t in texts), texts
+    assert not any("Unprocessable" in t for t in texts), texts
+    assert any("stay applied" in t and "previous" in t for t in texts), texts
+    assert "V002__add_mood.sql · domovoi" in texts
+    assert not any("domovoi_test" in t for t in texts), texts     # nothing kept there
+
+
+def test_other_confirm_errors_show_just_the_message(rendered) -> None:
+    texts = _texts(rendered["confirm_error_nothing_kept"])
+    assert texts == ["version 1.1.0 is already installed"], texts
+    assert _texts(rendered["confirm_error_no_body"]) == ["network down"]
