@@ -577,6 +577,35 @@ def test_a_miss_is_counted_when_whisper_heard_a_committable_command(lane) -> Non
     assert "fastlane_agree" not in doc and "fastlane_text" not in doc
 
 
+def test_a_capture_the_core_ended_early_is_preempted_not_missed(lane, monkeypatch) -> None:
+    """With early commit on (streaming.py, part B), the core can stop
+    listening at the same moment the lane's own hold would have run out —
+    the lane never got the quiet it waits for. Measured end to end with
+    Whisper tiny: every tier-B command read as a lane "miss" before this."""
+    monkeypatch.setattr(settings, "fastlane_mode", "shadow")
+    eng = lane([(0, "set a timer for ten minutes")])
+    cap = _capture(eng)
+    _feed(cap, _quiet(3) + _voiced(20) + _quiet(15))   # 450 ms: short of 650
+    eng.drain()
+    assert cap.decision is None
+    cap.finish(preempted=True)
+    doc = _settled(cap, "Set a timer for 10 minutes.")
+    assert doc["fastlane_missed"] is False and doc["fastlane_preempted"] is True
+    s = shadow_summary([doc])
+    assert (s["missed"], s["preempted"], s["would_commit"]) == (0, 1, 0)
+
+
+def test_a_decision_made_before_the_early_commit_still_counts(lane) -> None:
+    eng = lane([(0, "pause the music")])
+    cap = _capture(eng)
+    _feed(cap, _quiet(3) + _voiced(20) + _quiet(14))   # past the 350 ms hold
+    eng.drain()
+    assert cap.decision is not None
+    cap.finish(preempted=True)
+    doc = _settled(cap, "Pause the music.")
+    assert doc["fastlane_agree"] is True and "fastlane_preempted" not in doc
+
+
 def test_a_question_is_neither_a_commit_nor_a_miss(lane) -> None:
     eng = lane([(0, "who wrote the odyssey")])
     cap = _capture(eng)

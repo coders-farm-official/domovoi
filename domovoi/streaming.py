@@ -1536,9 +1536,10 @@ class StreamSession:
         received_at = time.perf_counter()
         self.utterance_active = False
         # The fast lane's capture ends here too (its lead is measured to
-        # the moment listening stopped, whoever stopped it).
+        # the moment listening stopped, whoever stopped it); a command it
+        # hadn't decided yet is "preempted", not missed.
         if self._fastlane is not None:
-            self._fastlane.finish(ended_at=received_at)
+            self._fastlane.finish(ended_at=received_at, preempted=True)
         pcm = bytes(self.audio_buf)
         self.audio_buf.clear()
         trigger = self._utterance_trigger

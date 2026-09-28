@@ -419,7 +419,9 @@ journalctl -u domovoi-core | grep fastlane
 ```
 
 plus a "fastlane missed ..." line when Whisper heard a command the lane
-could have taken but didn't. The turn's `intents_log.timings` carries
+could have taken but didn't (or "fastlane had not decided ..." when the
+core's own early commit stopped listening first: `fastlane_preempted`, not
+a miss). The turn's `intents_log.timings` carries
 `fastlane_seen`, `fastlane_ms` (your last voiced frame to the lane's
 decision), `fastlane_lead_ms` (how long before the satellite's
 `utterance_end` it came), `fastlane_agree`, `fastlane_after_ms` (speech

@@ -601,6 +601,10 @@ class LaneCapture:
         self.decision: Decision | None = None
         self.voiced_after_ms = 0
         self.lane_text = ""
+        # The core ended the capture itself (early commit, part B of the
+        # same design) before the lane had decided: not a miss, since the
+        # lane never heard the quiet its hold waits for.
+        self.preempted = False
 
     # ── event loop side ────────────────────────────────────────────────
 
@@ -621,9 +625,13 @@ class LaneCapture:
         if not self._engine.submit(self._drain):
             self._abandon("error")
 
-    def finish(self, ended_at: float | None = None) -> None:
-        """No more audio: stop deciding and release the stream."""
+    def finish(self, ended_at: float | None = None, *, preempted: bool = False) -> None:
+        """No more audio: stop deciding and release the stream.
+        ``preempted``: the core's early commit ended the capture, not the
+        satellite's own silence timeout."""
         with self._lock:
+            if preempted and self.ended_at is None:
+                self.preempted = True
             if self._finished and self.ended_at is not None:
                 return
             if self.ended_at is None:
@@ -1016,6 +1024,7 @@ def _settle(capture: LaneCapture, transcript: str, timings: Any) -> None:
         after_ms = capture.voiced_after_ms
         ended_at = capture.ended_at
         gave_up = capture.gave_up
+        preempted = capture.preempted
     whisper = resolve(transcript)
     record: dict[str, Any] = {"fastlane_seen": True, "fastlane_cpu_ms": capture.cpu_ms}
     if decision is not None:
@@ -1041,6 +1050,18 @@ def _settle(capture: LaneCapture, transcript: str, timings: Any) -> None:
             cmd.path, ms, lead, cmd.hold_ms, capture.room_id, decision.lane_text,
             transcript, agree,
             f"; {after_ms} ms of speech came after it" if after_ms else "",
+        )
+    elif preempted and whisper is not None and whisper.hold_ms is not None:
+        # The core's early commit stopped listening before the lane's hold
+        # ran out: with fast speech-to-text the two holds end together, so
+        # counting these as misses would say the lane can't hear commands
+        # it simply never got the silence for.
+        record["fastlane_missed"] = False
+        record["fastlane_preempted"] = True
+        log.info(
+            "fastlane had not decided %s in room=%s when the core ended the "
+            "capture early; the lane heard %r", whisper.path, capture.room_id,
+            capture.lane_text,
         )
     else:
         missed = whisper is not None and whisper.hold_ms is not None
@@ -1086,7 +1107,7 @@ def shadow_summary(docs: Iterable[Any]) -> dict[str, Any] | None:
     documents — never the lane's text or the path it matched. None when the
     lane is off and none of ``docs`` carries a shadow record, so a default
     install's latency summary is exactly what it was."""
-    observed = commits = agree = disagree = missed = cut_off = 0
+    observed = commits = agree = disagree = missed = preempted = cut_off = 0
     ms: list[float] = []
     lead: list[float] = []
     cpu: list[float] = []
@@ -1105,6 +1126,8 @@ def shadow_summary(docs: Iterable[Any]) -> dict[str, Any] | None:
             cpu.append(c)
         if doc.get("fastlane_missed") is True:
             missed += 1
+        if doc.get("fastlane_preempted") is True:
+            preempted += 1
         v = _num(doc, "fastlane_ms")
         if v is None:
             continue
@@ -1132,6 +1155,7 @@ def shadow_summary(docs: Iterable[Any]) -> dict[str, Any] | None:
         "agree": agree,
         "disagree": disagree,
         "missed": missed,
+        "preempted": preempted,
         "speech_after_commit": cut_off,
         "commit_ms": _stat(ms),
         "lead_ms": _stat(lead),
