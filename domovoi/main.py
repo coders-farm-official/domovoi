@@ -460,13 +460,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer.
+    #   podcast_feed_poller → audiobook_indexer → command_capture_pruner.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
     # PLUGIN and registers its own workers through the plugin runtime.
     from domovoi.plugins_runtime.workers import WORKERS
     from domovoi.workers.audiobook_indexer import AudiobookIndexer
+    from domovoi.workers.command_capture_pruner import CommandCapturePruner
     from domovoi.workers.memory_extractor import MemoryExtractor
     from domovoi.workers.news_fetcher import NewsFetcher
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
@@ -483,6 +484,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
+    # Opt-in command recordings: 14-day retention, the disk cap, and the
+    # sweep of rooms no longer opted in (domovoi/command_captures.py).
+    WORKERS.add_worker(CommandCapturePruner(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
@@ -2385,7 +2389,8 @@ async def admin_delete_satellite(
 
     History is kept in both modes. ``intents_log`` and ``conversation_log``
     are append-only records of things that really happened, and a room name
-    being reused later does not make them untrue.
+    being reused later does not make them untrue. The room's opt-in command
+    recordings (V016) are not history and are deleted in both modes.
     """
     from domovoi.db.repositories import (
         SatelliteApprovalRepository,
@@ -2428,11 +2433,18 @@ async def admin_delete_satellite(
 
         removed_mpd = await mpd_provisioner.remove_room(room_id)
 
+    # Command recordings are not history: they exist to tune this room's
+    # listening, and a room that is gone has nothing left to tune. Its
+    # opt-in goes too, so a new satellite reusing the name starts off.
+    from domovoi import command_captures
+
+    removed_captures = await command_captures.forget_room(room_id)
+
     log.info(
         "satellites: admin delete room=%s purge=%s (meta=%s pairing=%s "
-        "approval=%s mpd=%s)",
+        "approval=%s mpd=%s captures=%d)",
         room_id, purge, removed_meta, removed_pairing, removed_approval,
-        removed_mpd,
+        removed_mpd, removed_captures,
     )
     return {
         "room_id": room_id,

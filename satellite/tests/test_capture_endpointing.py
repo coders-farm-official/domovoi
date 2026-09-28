@@ -132,6 +132,8 @@ def test_a_pause_is_reported_once_with_the_frames_it_is_about() -> None:
         "type": "utterance_end", "greeting_played": False, "utt": 1,
         "frames": 15, "last_voiced_frame": 4,
         "exit_reason": "vad_silence_after_speech",
+        # The command-recording counts (domovoi/command_captures.py).
+        "voiced_frames": 5, "trailing_silent_frames": 10, "silence_limit_frames": 10,
     }
 
 

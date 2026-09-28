@@ -386,6 +386,14 @@ class Satellite(BaseModel):
     # Screen/kiosk state (video satellites, from the live snapshot) — null
     # for voice satellites and for offline rooms.
     display: SatelliteDisplay | None = None
+    # Whether this room is keeping its command recordings for tuning (V016:
+    # an admin opted it in, and an admin credential exists — what the core
+    # acts on), and since when. Open like the rest of this row on
+    # purpose: anyone in the house can see that a room is recording, which
+    # is what the dashboard's "recording commands for tuning" marker shows.
+    # The recordings themselves are admin-only (/api/captures).
+    capture_commands: bool = False
+    capture_since: datetime | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────

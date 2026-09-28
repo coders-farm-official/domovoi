@@ -100,7 +100,7 @@ Every endpoint below is labeled with one of these tiers:
 | **Chat callback** | `require_chat_callback`: the per-boot secret the chat agent's generated proxy tools carry in `X-Chat-Callback`. One endpoint (`POST /v1/admin/chat-tool`) wears it, because Letta's sandbox holds no admin session. A core restart mints a new secret, so the tools must be regenerated (`POST /v1/admin/chat/resync`). |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
-| **Admin, security tier** | `require_admin_security` (mutations) / `require_admin_security_read` (the device-token read): Bearer-only for mutations, cookie may render the read. **No pre-setup grace — 501 until admin setup completes**, and `--reset-admin` closes them again. Config write, service restart, satellite code push, pairing preseed / reset, satellite delete, device-token rotation. |
+| **Admin, security tier** | `require_admin_security` (mutations) / `require_admin_security_read` (the device-token read): Bearer-only for mutations, cookie may render the read. **No pre-setup grace — 501 until admin setup completes**, and `--reset-admin` closes them again. Config write, service restart, satellite code push, pairing preseed / reset, satellite delete, device-token rotation, and every route of the opt-in command recordings (§3.12a) — reads included, which take `require_admin_security_read`. |
 | **Admin, fail-closed** | `domovoi.auth.require_admin`, plugin management (it is code execution). Same posture as the security tier: **501** until admin setup completes, Bearer-only for mutations. |
 | **Outbound-fetch** | `check_outbound_fetch`: the server will fetch a caller-chosen URL. Passes with an admin Bearer session, **or** when the URL matches an installed media-provider plugin's `url_matcher` allowlist *and* the caller is within a per-source rate limit (10 requests / 60 s). |
 
@@ -574,7 +574,7 @@ proxy to the core admin endpoints with the caller's credentials forwarded.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
-| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability. |
+| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Open on purpose — anyone in the house can see that a room records; what it recorded is admin-only. |
 | `GET /api/satellites/{room_id}` | Open | — | One room. |
 | `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
 | `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
@@ -708,6 +708,34 @@ picked up by the core's background trainer. The default wake word is
 | `PATCH /api/wake-words/{id}` | `WakeWordPatch` | Edit threshold / metadata. |
 | `DELETE /api/wake-words/{id}` | — | Delete the wake word (+ artifacts). `204`. |
 
+### 3.12a Command recordings (opt-in per room)
+
+Rooms an admin opts in keep each wake-word or follow-up command that reached
+the router — the capture as a 16 kHz mono WAV plus a JSON sidecar — for 14
+days, to tune when Domovoi stops listening (early-endpointing design,
+2026-09-28). Off for every room by default; the opt-in is a row in
+`command_capture_rooms` (V016). What is and is never kept, where, and for how
+long: SECURITY_PRIVACY.md §"Command recordings for tuning".
+
+Every route is the **security tier**: reads take `require_admin_security_read`
+(Bearer or the dashboard cookie), writes `require_admin_security`
+(Bearer-only), and both answer **501 before first-run setup**. The household
+token — in the header or as `?device_token=` — is `401` here, although it
+reads every other kind of household speech. The dashboard plays audio by
+fetching it with the admin's credentials, never through a URL token.
+
+| Method & path | Request | Purpose |
+|---|---|---|
+| `GET /api/captures` | `?room_id=` (optional) | `{rooms: [{room_id, enabled, enabled_at, count, bytes}], captures: [sidecar + bytes], count, bytes, cap_bytes, retention_days, labels, problem}`, newest first. `rooms` lists every opted-in room and any room that still has recordings. A sidecar is `{version, id, room_id, captured_at, trigger, duration_ms, sample_rate, end_reason, capture: {frames, voiced_frames, trailing_silent_frames, silence_limit_frames} \| null, listen: {silence_timeout, …}, transcript, matched_handler, matched_path, interrupted, timings, label, labeled_at}` — no person, session or embedding. `problem` is why nothing can be recorded (an unsafe `COMMAND_CAPTURES_DIR`), else null. Recordings past the retention are left out. |
+| `GET /api/captures/clips/{room_id}/{capture_id}/audio` | — | The WAV, `Cache-Control: no-store`. `404` for an id that is not a capture id, a recording of another room, or one past the retention. |
+| `PATCH /api/captures/clips/{room_id}/{capture_id}` | `{label: "cut_off" \| "fine" \| "waited_too_long" \| null}` | Record whether the capture ended at the right moment ("cut off too early" / "fine" / "waited too long"); null clears it. Returns the updated sidecar. `422` any other label, `404` unknown recording. |
+| `DELETE /api/captures/clips/{room_id}/{capture_id}` | — | Delete one recording (audio and sidecar). `204`; `404` unknown. |
+| `PUT /api/captures/rooms/{room_id}` | — | Opt the room in. Idempotent (keeps the first `enabled_at`). `404` a room that has neither connected nor been adopted; `409` when `COMMAND_CAPTURES_DIR` sits in or around a directory something serves; `503` before V016 is applied. Returns `{room_id, enabled: true, enabled_at, deleted: 0}`. |
+| `DELETE /api/captures/rooms/{room_id}` | — | Opt the room out **and delete every recording it kept**, in the same request (row first, files second). Returns `{room_id, enabled: false, enabled_at: null, deleted}`. |
+
+Retiring a room (`DELETE /api/satellites/{room_id}`, and the core route
+behind it) also opts it out and deletes its recordings.
+
 ### 3.13 Files (multi-library browser)
 
 **Device tier** (`X-Device-Token` or an admin Bearer; the byte serves also
@@ -754,7 +782,10 @@ The client only ever sends a `library_id` + a **relative** `path`; the absolute
 `root_path` of each library is resolved and validated server-side and never
 serialized. Containment rejects `..`, drive-absolute (`C:/…`), UNC (`//host/…`)
 and symlink escapes; secret-shaped names under `~/.domovoi` are filtered from
-every listing/serve/copy.
+every listing/serve/copy. Whatever sits inside `~/.domovoi` (bar its media
+subdirectories) or inside `COMMAND_CAPTURES_DIR` (§3.12a) is refused by
+location as well: `404` for a typed path, and left out of a listing, a
+directory zip and an import copy, even from a library rooted above it.
 
 | Method & path | Request | Purpose |
 |---|---|---|

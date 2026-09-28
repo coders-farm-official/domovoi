@@ -40,6 +40,7 @@ from domovoi.admin_auth import (
     require_device,
     require_device_read,
 )
+from domovoi import command_captures
 from domovoi.db.repositories import notify_timers_changed
 
 from satellite import provisioning_protocol as proto
@@ -97,7 +98,8 @@ async def list_satellites() -> list[Satellite]:
     snapshot = get_cached_snapshot() or {}
     pairings = await _list_pairings()
     meta = await _list_satellite_meta()
-    return [await _satellite_for(r, snapshot, pairings, meta) for r in rooms]
+    captures = await command_captures.opted_in_rooms_or_empty()
+    return [await _satellite_for(r, snapshot, pairings, meta, captures) for r in rooms]
 
 
 # ─── USB adoption (declared BEFORE /{room_id} so "pending" is never
@@ -351,7 +353,8 @@ async def get_satellite(room_id: str) -> Satellite:
     snapshot = get_cached_snapshot() or {}
     pairings = await _list_pairings()
     meta = await _list_satellite_meta()
-    return await _satellite_for(match, snapshot, pairings, meta)
+    captures = await command_captures.opted_in_rooms_or_empty()
+    return await _satellite_for(match, snapshot, pairings, meta, captures)
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -1005,6 +1008,7 @@ async def _satellite_for(
     snapshot: dict[str, Any],
     pairings: dict[str, dict[str, Any]] | None = None,
     meta: dict[str, dict[str, Any]] | None = None,
+    captures: dict[str, Any] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
@@ -1105,6 +1109,10 @@ async def _satellite_for(
         hardware=meta_row.get("hardware"),
         adopted_at=meta_row.get("adopted_at"),
         display=display,
+        # Opt-in command recording (V016): whether the room is recording and
+        # since when — never what it recorded.
+        capture_commands=room_id in (captures or {}),
+        capture_since=(captures or {}).get(room_id),
     )
 
 

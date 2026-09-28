@@ -43,7 +43,9 @@ wake-word recordings) is for paired devices only (owner decision
 reads beside them that were deliberately left open are pinned open, so
 moving one is a decision rather than a drive-by. So are the numbers-only
 reads about the machine itself (the speech latency summary), which are
-open by design.
+open by design. The opt-in command recordings (2026-09-28) sit higher than
+the rest of the household's speech: ``require_admin_security_read``, never
+the device tier.
 """
 
 from __future__ import annotations
@@ -214,6 +216,13 @@ SECURITY_TIER_ROUTES = [
     ("web", "DELETE", "/api/satellites/{room_id}"),
     ("web", "POST", "/api/auth/device-token"),
     ("web", "POST", "/api/auth/device-token/rotate"),
+    # Opt-in command recordings (owner decision 2026-09-28): turning a room
+    # on or off, labelling and deleting what it kept. Only an admin, and
+    # nobody before setup.
+    ("web", "PUT", "/api/captures/rooms/{room_id}"),
+    ("web", "DELETE", "/api/captures/rooms/{room_id}"),
+    ("web", "PATCH", "/api/captures/clips/{room_id}/{capture_id}"),
+    ("web", "DELETE", "/api/captures/clips/{room_id}/{capture_id}"),
 ]
 
 
@@ -291,6 +300,16 @@ SPEECH_READS_ADMIN: list[tuple[str, str]] = [
     ("web", "/api/satellites/{room_id}/logs"),
 ]
 
+# Speech gated at the SECURITY tier: the opt-in command recordings (owner
+# decision 2026-09-28) are raw audio of whoever spoke near a satellite an
+# admin opted in, kept to tune end-of-turn detection. An admin reads them
+# (Bearer, or the cookie for the listing and the audio), nobody before
+# setup — and never the household token the reads above accept.
+SPEECH_READS_SECURITY: list[tuple[str, str]] = [
+    ("web", "/api/captures"),
+    ("web", "/api/captures/clips/{room_id}/{capture_id}/audio"),
+]
+
 # Reads beside the list above that were deliberately LEFT OPEN — household
 # state, or metadata without a word anybody said — pending an owner
 # decision. Pinned open so that gating one is a recorded decision (here,
@@ -364,6 +383,21 @@ def test_the_log_pull_stays_an_admin_read(label, path) -> None:
     assert admin_auth.require_device_read not in calls, (
         f"{label} GET {path} must not drop to the household tier"
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), SPEECH_READS_SECURITY,
+    ids=[f"{a} GET {p}" for a, p in SPEECH_READS_SECURITY],
+)
+def test_command_recordings_are_security_tier_reads(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_admin_security_read in calls, (
+        f"{label} GET {path} serves command recordings — it must depend on "
+        f"require_admin_security_read (admin only, 501 before setup)"
+    )
+    for weaker in (admin_auth.require_device_read, admin_auth.require_device,
+                   admin_auth.require_admin_read):
+        assert weaker not in calls, f"{label} GET {path} must not drop to {weaker.__name__}"
 
 
 @pytest.mark.parametrize(

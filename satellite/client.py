@@ -3459,11 +3459,19 @@ class Satellite:
             "greeting_played": self._greeting_played_this_turn,
             # Exact frame accounting for the core: with these it knows
             # whether a transcript it started at a pause covers every
-            # voiced frame. An older core ignores them.
+            # voiced frame. The same numbers (why the capture ended, and
+            # its voiced / trailing-silent / silence-limit frame counts)
+            # go into an opted-in room's command recording (end-of-turn
+            # tuning). An older core reads greeting_played alone. New
+            # FIELDS on an existing frame are safe both ways — unlike a new
+            # frame type, which an old core answers with `error`.
             "utt": utt,
             "frames": sent,
             "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
             "exit_reason": exit_reason,
+            "voiced_frames": voiced_count,
+            "trailing_silent_frames": silent_frames,
+            "silence_limit_frames": silence_limit,
         })
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False

@@ -117,6 +117,7 @@ from web.backend.api.files_security import (
     build_libraries,
     core_library,
     is_sensitive_name,
+    private_path_check,
     safe_join,
     unstorable_reason,
 )
@@ -559,6 +560,7 @@ async def browse(
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"cannot list directory: {e}")
 
+    private = private_path_check()
     for entry in children:
         # Symlink guard — drop anything whose realpath escapes the root.
         real = entry.resolve(strict=False)
@@ -566,7 +568,7 @@ async def browse(
             real.relative_to(root)
         except ValueError:
             continue
-        if is_sensitive_name(entry.name):
+        if is_sensitive_name(entry.name) or private(real):
             continue
         try:
             is_dir = entry.is_dir()
@@ -642,6 +644,11 @@ def _zip_directory(target: Path, root: Path) -> Response:
     in memory with an explicit Content-Length — fine for a LAN dashboard."""
     buf = io.BytesIO()
     added = 0
+    # rglob descends into a folder whose own entry is skipped below, so the
+    # location check runs on every member: a library rooted above the
+    # config dir must not zip up ~/.domovoi, nor any library the command
+    # recordings.
+    private = private_path_check()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for child in target.rglob("*"):
             if child.is_symlink():
@@ -651,7 +658,7 @@ def _zip_directory(target: Path, root: Path) -> Response:
                 real.relative_to(root)
             except ValueError:
                 continue
-            if is_sensitive_name(child.name):
+            if is_sensitive_name(child.name) or private(real):
                 continue
             if not child.is_file():
                 continue
@@ -1036,8 +1043,9 @@ def _confined_copytree(
     """Copy ``src_dir``'s contents into ``dst_dir`` (both already exist).
     Member+byte capped; a source entry that is a symlink escaping ``src_root``
     (or a secret-shaped name) is skipped, never followed."""
+    private = private_path_check()
     for child in sorted(src_dir.iterdir(), key=lambda p: p.name.lower()):
-        if is_sensitive_name(child.name):
+        if is_sensitive_name(child.name) or private(child.resolve(strict=False)):
             skipped.append(child.name)
             continue
         if child.is_symlink() and _escapes(child, src_root):

@@ -33,6 +33,7 @@ from domovoi.transport_guard import (
 from web.backend.api import acquisitions as acquisitions_api
 from web.backend.api import auth as auth_api
 from web.backend.api import calendar as calendar_api
+from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
 from web.backend.api import config as config_api
@@ -361,6 +362,7 @@ app.include_router(playlists_api.router)
 app.include_router(greetings_api.router)
 app.include_router(voices_api.router)
 app.include_router(wake_words_api.router)
+app.include_router(captures_api.router)
 app.include_router(documents_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)

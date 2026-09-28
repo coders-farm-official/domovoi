@@ -6761,6 +6761,292 @@
         }
       }
     },
+    "/api/captures": {
+      "get": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "List Captures",
+        "description": "Every room that is opted in or still has recordings, and the\nrecordings themselves (one room with ``?room_id=``), newest first.",
+        "operationId": "list_captures_api_captures_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/captures/clips/{room_id}/{capture_id}/audio": {
+      "get": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Capture Audio",
+        "description": "The recording's WAV (16 kHz mono), exactly as the satellite sent it.",
+        "operationId": "capture_audio_api_captures_clips__room_id___capture_id__audio_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/captures/clips/{room_id}/{capture_id}": {
+      "patch": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Label Capture",
+        "description": "Record whether the capture ended at the right moment.",
+        "operationId": "label_capture_api_captures_clips__room_id___capture_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Label Capture Api Captures Clips  Room Id   Capture Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Delete Capture",
+        "operationId": "delete_capture_api_captures_clips__room_id___capture_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/captures/rooms/{room_id}": {
+      "put": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Enable Room",
+        "description": "Start keeping this room's command recordings. Idempotent: a room\nalready on keeps its original ``enabled_at``.",
+        "operationId": "enable_room_api_captures_rooms__room_id__put",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Disable Room",
+        "description": "Stop keeping this room's recordings and delete every one already\nkept \u2014 row first, files second (see the module docstring).",
+        "operationId": "disable_room_api_captures_rooms__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/": {
       "get": {
         "tags": [
@@ -11120,6 +11406,110 @@
         "type": "object",
         "title": "CalendarEventPatch"
       },
+      "CaptureList": {
+        "properties": {
+          "rooms": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureRoom"
+            },
+            "type": "array",
+            "title": "Rooms"
+          },
+          "captures": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Captures"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "cap_bytes": {
+            "type": "integer",
+            "title": "Cap Bytes"
+          },
+          "retention_days": {
+            "type": "integer",
+            "title": "Retention Days"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Labels"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rooms",
+          "captures",
+          "count",
+          "bytes",
+          "cap_bytes",
+          "retention_days",
+          "labels"
+        ],
+        "title": "CaptureList"
+      },
+      "CaptureRoom": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "enabled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled At"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "default": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "enabled"
+        ],
+        "title": "CaptureRoom"
+      },
       "CastTracksRequest": {
         "properties": {
           "room_id": {
@@ -12263,6 +12653,24 @@
           "reindex_triggered"
         ],
         "title": "ImportResponse"
+      },
+      "LabelBody": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "title": "LabelBody"
       },
       "LibraryPage": {
         "properties": {
@@ -14119,6 +14527,41 @@
         ],
         "title": "RoomQueue"
       },
+      "RoomState": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "enabled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled At"
+          },
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "enabled"
+        ],
+        "title": "RoomState"
+      },
       "Satellite": {
         "properties": {
           "room_id": {
@@ -14295,6 +14738,23 @@
                 "type": "null"
               }
             ]
+          },
+          "capture_commands": {
+            "type": "boolean",
+            "title": "Capture Commands",
+            "default": false
+          },
+          "capture_since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Since"
           }
         },
         "type": "object",

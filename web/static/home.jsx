@@ -783,6 +783,9 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPl
   }
   if (kioskDead) chips.push(<Pill key="kiosk" tone="warn">screen stopped</Pill>);
   if (weakWifi) chips.push(<span key="wifi" className="home-chip"><Icon name="wifi-off" size={12}/>weak wi-fi</span>);
+  // Opt-in command recording (V016): shown to everyone, on every screen —
+  // a room that records says so where people look at it.
+  if (s.capture_commands) chips.push(<CaptureChip key="capture"/>);
 
   let actions = null;
   if (online && !stale) {

@@ -66,7 +66,9 @@ Client → Server
                            and the recording-mode branch in utterance_end
                            diverts the audio).
   text  utterance_end      {"type":"utterance_end","greeting_played":bool,"utt":N,
-                            "frames":N,"last_voiced_frame":N|null,"exit_reason":...}
+                            "frames":N,"last_voiced_frame":N|null,"exit_reason":...,
+                            "voiced_frames":N,"trailing_silent_frames":N,
+                            "silence_limit_frames":N}
                            — `greeting_played` (optional) marks turns where
                            the Pi played a wake greeting concurrent with
                            capture, so the server strips a greeting that bled
@@ -78,7 +80,12 @@ Client → Server
                            are optional too:
                            with them the server knows exactly whether a
                            speculative transcript covers everything said (see
-                           "Speculative transcription" below).
+                           "Speculative transcription" below). The reason and
+                           the frame counts (all frames, the voiced ones, the
+                           silent run it ended on and the run that ends one)
+                           are also kept, numbers only, in an opted-in room's
+                           command recording (domovoi/command_captures.py). An
+                           older core reads greeting_played alone.
   text  speech_pause       {"type":"speech_pause","utt":N,"frame":N,"last_voiced_frame":N,
                             "greeting_played":bool}
                            — ONLY when `ready.features` lists "speech_pause".
@@ -361,6 +368,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
+from domovoi import command_captures
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
@@ -420,6 +428,8 @@ _pairing_table_warned = False
 # Each runs outside its turn's task so a barge-in can't cancel it; held
 # here until done, because the event loop keeps only weak references.
 _TIMING_WRITES: set[asyncio.Task[None]] = set()
+# Same for opted-in rooms' command recordings (StreamSession._keep_capture).
+_CAPTURE_WRITES: set[asyncio.Task[str | None]] = set()
 
 
 def _is_missing_pairing_table(exc: Exception) -> bool:
@@ -888,6 +898,13 @@ class StreamSession:
         # value, not the live `wake_recording`, so a stop_wake_recording racing
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
+        # Whether a drop-in call was live at ANY point of the in-flight
+        # utterance: set at utterance_start when already in a call, and by
+        # _begin_dropin when one starts mid-capture. Read at utterance_end so
+        # a call the peer hung up before the capture closed still keeps that
+        # capture (the other room's audio on this speaker) out of an opted-in
+        # room's command recordings (domovoi/command_captures.py).
+        self._utterance_in_call: bool = False
         # Text of the reply most recently sent to this room's speaker.
         # Kept so a barge-triggered utterance can be checked against what the
         # satellite was saying when the mic opened — on a board whose AEC is
@@ -1512,6 +1529,8 @@ class StreamSession:
         self.audio_buf.clear()
         trigger = self._utterance_trigger
         self._utterance_trigger = None
+        in_call = self._utterance_in_call or self.dropin_peer is not None
+        self._utterance_in_call = False
         speculations = self._spec_history
         self._spec = None
         self._spec_history = []
@@ -1520,6 +1539,18 @@ class StreamSession:
         self._commit_on = False
         committed = _Committed(
             serial=self._utt_serial, utt=self._utt_id, frames=self._utt_frames, tier=tier,
+        )
+        # For an opted-in room's command recording: the satellite's own
+        # utterance_end comes after this, so the sidecar describes the
+        # capture as the server ended it — the frames it holds (the whole
+        # recording) and the silent run since the last voiced one.
+        capture_meta = command_captures.capture_meta(
+            {
+                "exit_reason": "server_endpoint",
+                "frames": committed.frames,
+                "trailing_silent_frames": silence_ms // FRAME_MS,
+            },
+            in_call=in_call,
         )
         self._committed = committed
         log.info(
@@ -1537,6 +1568,7 @@ class StreamSession:
                 endpoint_silence_ms=silence_ms,
                 early_commit=committed,
                 hold_ms=hold_ms,
+                capture_meta=capture_meta,
             )
         )
 
@@ -1957,6 +1989,7 @@ class StreamSession:
             # Latch the trigger now; utterance_end reads it to decide
             # clip-vs-command (immune to wake_recording flipping mid-utterance).
             self._utterance_trigger = ctrl.get("trigger")
+            self._utterance_in_call = self.dropin_peer is not None
             self._utt_id = ctrl.get("utt")
             self._reset_utterance_tracking(self._utterance_trigger)
             return
@@ -1980,6 +2013,8 @@ class StreamSession:
             self.audio_buf.clear()
             trigger = self._utterance_trigger
             self._utterance_trigger = None
+            in_call = self._utterance_in_call or self.dropin_peer is not None
+            self._utterance_in_call = False
             # Wake-word recording mode (Feature 5): a turn the Pi flagged with
             # trigger="wake_clip" is one positive training clip, NOT a command.
             # Branch on the LATCHED trigger (not the live `wake_recording`) so a
@@ -2009,6 +2044,11 @@ class StreamSession:
             # with capture; if so we strip a bled-in greeting (past the AEC)
             # from the transcript before routing.
             greeting_played = bool(ctrl.get("greeting_played"))
+            # Why the capture ended, its frame counts and whether the room
+            # was in a call at any point of it — for an opted-in room's
+            # command recording (domovoi/command_captures.py). Old
+            # satellites send none of the capture fields.
+            capture_meta = command_captures.capture_meta(ctrl, in_call=in_call)
             self._response_task = asyncio.create_task(
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
@@ -2016,6 +2056,7 @@ class StreamSession:
                     reuse=reuse,
                     speculations=speculations,
                     endpoint_silence_ms=endpoint_silence_ms,
+                    capture_meta=capture_meta,
                 )
             )
             return
@@ -2403,9 +2444,11 @@ class StreamSession:
         endpoint_silence_ms: int | None = None,
         early_commit: _Committed | None = None,
         hold_ms: int | None = None,
+        capture_meta: dict[str, Any] | None = None,
     ) -> None:
         interrupted = False
         response = None
+        transcript = ""
         # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
         # utterance_end arrival (or the early commit); a direct call starts
         # the clock now.
@@ -2736,6 +2779,12 @@ class StreamSession:
         # which would land on the write and lose the stages of exactly the
         # turns somebody talked over.
         timing_write = self._finish_turn_timings(timings, trigger=trigger, response=response)
+        # An opted-in room's command recording, scheduled here for the same
+        # reason: its own task, so the cancels below can't lose it.
+        capture_write = self._keep_capture(
+            pcm_bytes, trigger=trigger, meta=capture_meta, transcript=transcript,
+            response=response, timings=timings, interrupted=interrupted,
+        )
 
         # `expect_followup` lets handlers ask the Pi to capture the
         # user's reply without requiring a fresh wake word. Skipped on
@@ -2927,6 +2976,53 @@ class StreamSession:
         # cancel here leaves the write to finish on its own.
         if timing_write is not None:
             await asyncio.shield(timing_write)
+        if capture_write is not None:
+            await asyncio.shield(capture_write)
+
+    def _keep_capture(
+        self,
+        pcm: bytes,
+        *,
+        trigger: str | None,
+        meta: dict[str, Any] | None,
+        transcript: str,
+        response: Any,
+        timings: TurnTimings,
+        interrupted: bool,
+    ) -> asyncio.Task[str | None] | None:
+        """Start keeping this turn's audio when its room may be recording
+        (domovoi/command_captures.py decides, after asking the database).
+        Only a command turn that reached the router is a candidate: a
+        wake_word or followup trigger, a transcript, a response, and no
+        live drop-in call. Returns the write's task (None when the turn is
+        not a candidate) for the caller to await through ``asyncio.shield``;
+        like the timing write, it belongs to no turn task."""
+        if response is None or not transcript.strip():
+            return None
+        in_call = bool(meta.get("in_call")) if meta else self.dropin_peer is not None
+        if not command_captures.eligible(trigger, in_call=in_call):
+            return None
+        meta = meta or command_captures.capture_meta({}, in_call=in_call)
+        config = getattr(self.ws.app.state, "satellite_config", {}).get(self.room_id)
+        sidecar = command_captures.build_sidecar(
+            room_id=self.room_id,
+            pcm_len=len(pcm),
+            trigger=trigger,
+            meta=meta,
+            listen=command_captures.listen_settings(config),
+            transcript=transcript,
+            matched_handler=getattr(response, "matched_handler", None),
+            matched_path=getattr(response, "matched_path", None),
+            interrupted=interrupted,
+            timings=timings.row_document(),
+        )
+        write = asyncio.create_task(
+            command_captures.keep(self.room_id, pcm, sidecar),
+            name=f"command-capture:{self.room_id}",
+        )
+        _CAPTURE_WRITES.add(write)
+        write.add_done_callback(_CAPTURE_WRITES.discard)
+        return write
 
     def _log_turn_timings(
         self, timings: TurnTimings, *, trigger: str | None, matched_path: str | None
@@ -3889,6 +3985,13 @@ class StreamSession:
                 return
             self.dropin_peer = peer
             peer.dropin_peer = self
+            # A capture already open on either side now carries call audio:
+            # never an opted-in room's command recording, even if the call
+            # ends before that capture does. (getattr: the peer may be a
+            # phone, which duck-types only the drop-in surface.)
+            for side in (self, peer):
+                if getattr(side, "utterance_active", False):
+                    side._utterance_in_call = True
             # active_dropins is keyed by room_id (both directions, so a
             # membership check works for either participant). The value
             # carries enough for the web snapshot to render one row per
