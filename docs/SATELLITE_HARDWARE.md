@@ -313,6 +313,18 @@ room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
 preserving your comments, keeping a `.bak` — and restarts the satellite to
 apply (that's what the self-restart sudoers entry is for).
 
+### How a command's capture ends
+
+The satellite streams every 30 ms frame to the server as you speak, and
+ends the capture after `[listen] silence_timeout` (1.2 s) of silence. The
+server doesn't wait for that: at the first ~240 ms pause it starts
+transcribing what it already has, and at the end keeps that transcript
+only if you said nothing after it. A satellite from this release tells the
+server exactly when it heard a pause (`speech_pause`) and which frame was
+the last one with speech in it; an older satellite gets the same speed-up
+from the silence timeout it reports when it connects. The protocol
+details are in [uml/satellite-protocol.md](uml/satellite-protocol.md#speculative-transcription).
+
 ## Custom wake words
 
 `hey_jarvis` is the out-of-the-box default; **"Hey Domovoi" is the

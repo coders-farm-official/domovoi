@@ -532,6 +532,18 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", section="advanced", tier="restart", min=0, max=256,
     ),
     FieldSpec(
+        "speculative_stt_enabled", "Start transcribing at the first pause",
+        "Speech-to-text",
+        "On by default: while a satellite is still waiting out its "
+        "end-of-speech silence, Whisper starts on what it has at the first "
+        "short pause, and that transcript is used when nothing was said "
+        "after it — so the silence and the transcription overlap instead "
+        "of adding up. Each pause somebody talks past costs one extra "
+        "transcription of CPU. Off transcribes only after the satellite "
+        "stops listening.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
         "How often the Domovoi server pings each satellite's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "

@@ -403,9 +403,11 @@ async def test_a_turn_records_every_stage_in_two_writes(db_free_turn, caplog) ->
 
     # Write 1 — with the row: the stages known before routing.
     ins = db_free_turn["inserted"]
-    assert set(ins) == {"capture_audio_ms", "stt_ms", "identify_ms", "whisper"}
+    assert set(ins) == {"capture_audio_ms", "stt_ms", "stt_wait_ms", "identify_ms", "whisper"}
     assert ins["capture_audio_ms"] == 1500
     assert ins["stt_ms"] >= 120 - SLACK_MS
+    # Nothing speculative ran, so the wait was the call itself.
+    assert ins["stt_ms"] <= ins["stt_wait_ms"] <= ins["stt_ms"] + SLACK_MS
     assert ins["identify_ms"] >= 50 - SLACK_MS
     assert set(ins["whisper"]) == {"model", "device", "compute_type", "cpu_threads"}
 
@@ -831,7 +833,8 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body) == {"since", "room", "limit", "turns", "stages", "paths",
-                         "whisper_seen", "whisper"}
+                         "whisper_seen", "whisper", "speculative"}
+    assert body["speculative"] == {"turns": 0, "reused": 0, "decodes": 0}
     assert body["turns"] == 6 and body["room"] is None and body["limit"] == 1000
     assert body["stages"]["stt_ms"] == {"count": 6, "p50": 350, "p95": 1250, "max": 1500}
     assert body["stages"]["identify_ms"] == {"count": 1, "p50": 60, "p95": 60, "max": 60}
@@ -916,8 +919,12 @@ def test_a_live_stream_turn_records_its_timings(monkeypatch) -> None:
                     time.sleep(0.05)
 
         assert body["turns"] == 1
+        # This socket says nothing about its last voiced frame and never
+        # reported a silence timeout, so the endpoint silence (and with it
+        # the last-word-to-reply figure) is the one thing it can't have.
+        unknowable = {"endpoint_silence_ms", "speech_to_reply_ms"}
         for stage in STAGES:
-            assert body["stages"][stage]["count"] == 1, stage
+            assert body["stages"][stage]["count"] == (0 if stage in unknowable else 1), stage
 
         async def _row():
             async with SessionLocal() as s:
@@ -927,7 +934,7 @@ def test_a_live_stream_turn_records_its_timings(monkeypatch) -> None:
 
         (row_id, doc, latency_ms), = asyncio.run(_row())
         doc = json.loads(doc) if isinstance(doc, str) else doc
-        assert set(doc) == set(STAGES) | {"whisper"}
+        assert set(doc) == (set(STAGES) - unknowable) | {"whisper"}
         assert doc["capture_audio_ms"] == 1000
         assert doc["stt_ms"] >= 150 - SLACK_MS
         assert doc["identify_ms"] >= 40 - SLACK_MS

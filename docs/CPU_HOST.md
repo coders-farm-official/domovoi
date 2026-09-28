@@ -265,22 +265,43 @@ with no transcript in it:
 ```bash
 journalctl -u domovoi-core | grep 'turn timings'
 # turn timings room=kitchen trigger=wake_word path=fast capture_audio_ms=2130
-#   stt_ms=640 identify_ms=41 route_ms=22 tts_first_ms=95 total_ms=830
+#   endpoint_silence_ms=1200 stt_ms=640 stt_wait_ms=0 identify_ms=41 route_ms=22
+#   tts_first_ms=95 total_ms=190 speech_to_reply_ms=1390 stt=reused/1spec
 #   whisper=small.en/cpu/int8/8t
 ```
 
 | Stage | What it measures |
 |---|---|
 | `capture_audio_ms` | how much audio the satellite sent (the length of the capture) |
-| `stt_ms` | the Whisper call — the number this page is mostly about |
+| `endpoint_silence_ms` | the silence the satellite waited out after your last word before it stopped listening — `listen.silence_timeout`, give or take a frame |
+| `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
+| `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
 | `identify_ms` | voice identification (which household member spoke) |
 | `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
+| `speech_to_reply_ms` | your last word to the first reply audio: `endpoint_silence_ms + total_ms`. The number you feel. |
 
 `total_ms` starts when the satellite decides you have stopped talking,
-which is `listen.silence_timeout` (1.2 s by default) after your last word;
-that wait happens on the satellite and is not in any of these numbers.
+which is `listen.silence_timeout` (1.2 s by default) after your last word.
+`endpoint_silence_ms` is that wait, when the core can know it: satellites
+from this release report their last voiced frame, and for an older one it
+is worked out from the timeout it reported on connect; otherwise the two
+stages that need it are missing from the line.
+
+**Speculative transcription** (`speculative_stt_enabled`, on by default)
+is why `stt_wait_ms` is usually far below `stt_ms`. The satellite streams
+its audio as you speak, so at the first quarter-second pause the core
+starts Whisper on what it has, while the satellite is still counting its
+silence; at the end it uses that transcript only when nothing was said
+after it (it counts frames — it never guesses). `stt=reused/1spec` on the
+log line means it was used; `stt=full/…` means speech came after the copy
+and the whole capture was transcribed after all. On this hardware that
+takes the Whisper time out of every turn's wait up to the silence timeout:
+with a 0.6-1.0 s decode and the 1.2 s default, the transcript is usually
+ready when the satellite stops listening. Each pause somebody talks past
+costs one extra decode of CPU (at most three per utterance); the summary's
+`speculative` block counts how often the early transcript was used.
 
 The same stages are stored on each turn's `intents_log` row
 (`timings`, a JSON column; migration V015), and the dashboard's **Models**
@@ -295,6 +316,9 @@ curl -s "http://localhost:6370/v1/stats/latency?since=2026-09-28T18:00:00Z&room=
 Pass `since` as the time of your last restart when you are comparing
 Whisper settings, so the numbers are all from the settings now running
 (`whisper_seen` in the answer lists the settings the window covers).
+`speculative` in the answer is `{turns, reused, decodes}`: turns that had
+an early transcript, how many used it, and how many speculative decodes
+were started.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops

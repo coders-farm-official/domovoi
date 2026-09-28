@@ -38,7 +38,19 @@ Client → Server
                            capture) is running; false on mic-less builds. The
                            server refuses wake-recording/drop-in/chat for
                            mic-disabled rooms. Both cleared on disconnect.
-  text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip"}
+                           `speech_pause` (optional, default false) says the
+                           satellite reports its own pauses (`speech_pause` /
+                           `speech_resume` below) and its last voiced frame in
+                           `utterance_end` whenever `ready.features` lists
+                           "speech_pause"; the server then uses those instead
+                           of judging pauses from the audio itself.
+  text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
+                            "utt":N}
+                           — `utt` (optional): the satellite's own number for
+                           this capture, increasing per connection. Echoed in
+                           the capture's hints and its `utterance_end`, so a
+                           message about an older capture is recognisably
+                           stale.
                            — trigger "wake_clip" (Feature 5) marks a positive
                            wake-word TRAINING clip: the Pi is in dashboard-
                            initiated recording mode and the following PCM is a
@@ -48,11 +60,29 @@ Client → Server
                            special-case the trigger — it just buffers as usual
                            and the recording-mode branch in utterance_end
                            diverts the audio).
-  text  utterance_end      {"type":"utterance_end","greeting_played":bool}
+  text  utterance_end      {"type":"utterance_end","greeting_played":bool,"utt":N,
+                            "frames":N,"last_voiced_frame":N|null,"exit_reason":...}
                            — `greeting_played` (optional) marks turns where
                            the Pi played a wake greeting concurrent with
                            capture, so the server strips a greeting that bled
-                           past the AEC out of the transcript.
+                           past the AEC out of the transcript. `frames` (the
+                           30 ms frames this capture sent), `last_voiced_frame`
+                           (0-based index of the last one its detector called
+                           speech) and `exit_reason` ("vad_silence_after_speech",
+                           "max_record_seconds", "shutdown") are optional too:
+                           with them the server knows exactly whether a
+                           speculative transcript covers everything said (see
+                           "Speculative transcription" below).
+  text  speech_pause       {"type":"speech_pause","utt":N,"frame":N,"last_voiced_frame":N,
+                            "greeting_played":bool}
+                           — ONLY when `ready.features` lists "speech_pause".
+                           The capture has just had 8 silent frames (240 ms)
+                           after speech: `frame` is the frames sent so far,
+                           `last_voiced_frame` the last voiced one. Once per
+                           silence run. The server may start transcribing.
+  text  speech_resume      {"type":"speech_resume","utt":N,"frame":N}
+                           — ONLY when `ready.features` lists "speech_pause".
+                           Speech came back after a `speech_pause`.
   text  barge_in           {"type":"barge_in"} — sent during TTS playback
   text  noisy_capture      {"type":"noisy_capture"} — Pi-side noise-gate auto-tune
                            detected an unusably-loud capture and bailed.
@@ -123,10 +153,18 @@ Client → Server
                            the server captures it for STT instead of relaying.
 
 Server → Client
-  text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000}
+  text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000,
+                            "features":["speech_pause"]}
                            — sent only AFTER the client's hello was accepted
                            (and the room's MPD daemon provisioned). A socket
                            that never says hello never receives it.
+                           `features` lists the message types this server
+                           understands beyond protocol 0.1. A satellite sends
+                           a new type only when it is listed: an older server
+                           answers any unknown type with `error`, which the
+                           satellite takes as the end of the turn. New fields
+                           on existing messages need no listing — both sides
+                           ignore fields they don't know.
   text  transcript         {"type":"transcript","text":...}
   text  set_volume         {"type":"set_volume","level":N} — set the Pi's
                            hardware output volume (0-100). Sent BEFORE
@@ -245,16 +283,30 @@ Server owns: STT, intent routing, TTS, response lifecycle.
 A `barge_in` (or a new `utterance_start` while a response is still streaming)
 cancels the in-flight response task; clients then see a final
 `response_end` with `interrupted=true`.
+
+Speculative transcription (early endpointing, part A). The satellite ends a
+capture only after `listen.silence_timeout` (1.2 s by default) of silence,
+but its frames are here as they are spoken. So at the first ~240 ms pause
+after speech — the satellite's own `speech_pause`, or for one that doesn't
+send it `endpointing.LevelPauseDetector` on the frames — the server copies
+the buffer and starts Whisper (and voice identification) on the copy. At
+`utterance_end` it uses that transcript if and only if no frame the
+satellite called speech came after the copy: exact frame accounting, from
+`last_voiced_frame` in `utterance_end` or, for a satellite that doesn't
+report it, from the silence timeout it reported in `config_status`
+(`endpointing.last_voiced_from_timeout`). Otherwise the copy is dropped
+and the whole buffer is transcribed as before. One Whisper call per room
+at a time, speculative or not; a new `utterance_start` discards the copy.
+The greeting strip, the self-echo guard and the blank-capture guard run on
+whichever transcript is used. Off with `speculative_stt_enabled=false`.
 """
 
 from __future__ import annotations
 
-import array
 import asyncio
 import io
 import json
 import logging
-import math
 import re
 import secrets
 import time
@@ -285,6 +337,12 @@ from domovoi.db.repositories import (
     SessionRepository,
 )
 from domovoi.db.session import session_scope
+from domovoi.endpointing import (
+    FRAME_MS,
+    LevelPauseDetector,
+    last_voiced_from_timeout,
+    pcm_dbfs,
+)
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import route
@@ -351,6 +409,18 @@ PROTOCOL_VERSION = "0.1"
 PCM_INPUT_SAMPLE_RATE = 16_000  # Whisper requirement; clients must send at this rate
 DEFAULT_AUDIO_CHUNK_BYTES = 16 * 1024
 MAX_UTTERANCE_BYTES = 60 * PCM_INPUT_SAMPLE_RATE * 2  # 60s of int16 PCM
+
+# What this server understands beyond protocol 0.1, listed in `ready`. A
+# satellite sends a new message type only when it is listed here (see the
+# `ready` entry in the module docstring for why).
+CORE_FEATURES: tuple[str, ...] = ("speech_pause",)
+
+# Speculative decodes per utterance, at most. Each is a full Whisper pass
+# (faster-whisper pads every call to a 30 s window, so a partial costs what
+# a whole one does), and a capture that keeps pausing and resuming — a TV,
+# a long hesitant question — must not become decodes back to back. Past
+# the cap the turn transcribes after `utterance_end`, as it always did.
+SPECULATIVE_MAX_DECODES = 3
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -629,23 +699,49 @@ def _iter_chunks(data: bytes, size: int = DEFAULT_AUDIO_CHUNK_BYTES) -> list[byt
     return [data[i : i + size] for i in range(0, len(data), size)]
 
 
-def _pcm_dbfs(data: bytes) -> float:
-    """RMS level of a 16-bit-LE PCM frame in dBFS (full-scale = 0.0). Empty or
-    silent → a -120 floor. Cheap stdlib (no numpy) — used by the drop-in relay
-    noise gate to skip forwarding near-silent frames (bounced cross-room echo
-    / room tone)."""
-    n = len(data) // 2
-    if n == 0:
-        return -120.0
-    samples = array.array("h")
-    samples.frombytes(data[: n * 2])
-    acc = 0
-    for s in samples:
-        acc += s * s
-    rms = math.sqrt(acc / n)
-    if rms < 1.0:
-        return -120.0
-    return 20.0 * math.log10(rms / 32768.0)
+# RMS level of a 16-bit-LE PCM frame in dBFS (full-scale = 0.0; empty or
+# silent → a -120 floor). Used by the drop-in relay noise gate to skip
+# forwarding near-silent frames (bounced cross-room echo / room tone); the
+# speculative-transcription pause detector reads the same measure.
+_pcm_dbfs = pcm_dbfs
+
+
+@dataclass
+class _Heard:
+    """A transcription of (all or part of) a capture: Whisper's raw text,
+    and the voice identification that ran on the same audio, when it did."""
+
+    text: str
+    stt_ms: int
+    whisper: dict[str, Any] | None
+    ident: Any = None
+    # None: identification hasn't run on this audio; the turn runs it.
+    identify_ms: int | None = None
+
+
+@dataclass
+class _Speculation:
+    """One speculative decode of a capture, started at a pause (see the
+    module docstring). ``frames`` is how many frames the copy holds — the
+    turn may use it only when the satellite's last voiced frame is below
+    that."""
+
+    serial: int                 # the utterance it belongs to
+    frames: int
+    task: asyncio.Task[_Heard | None] | None = None
+    # The Whisper call's own time, once it has returned.
+    stt_ms: int | None = None
+
+
+def _elapsed_ms(t0: float) -> int:
+    return max(0, int(round((time.perf_counter() - t0) * 1000)))
+
+
+def _consume_outcome(fut: "asyncio.Future[Any]") -> None:
+    # A decode nobody awaits any more (its turn was cancelled, its copy
+    # discarded) must not log "exception was never retrieved".
+    if not fut.cancelled():
+        fut.exception()
 
 
 async def resolve_voice(voice_name: str | None) -> tuple[str | None, str | None]:
@@ -735,6 +831,35 @@ class StreamSession:
         # app.state) because the exchange is meaningless across a reconnect:
         # a new socket can't answer the old one's request.
         self._log_requests: dict[str, _LogRequest] = {}
+        # ── Speculative transcription (early endpointing, part A) ────
+        # See the module docstring. `_utt_serial` numbers this socket's
+        # utterances so a copy from an earlier one is never mistaken for
+        # the current one's; `_utt_frames` counts the frames buffered for
+        # the current one — the same count the satellite keeps, frame for
+        # frame, which is what makes the reuse check exact.
+        self._utt_serial = 0
+        self._utt_frames = 0
+        # The satellite's own number for the capture (utterance_start.utt).
+        self._utt_id: Any = None
+        # hello.speech_pause: the satellite reports its own pauses and its
+        # last voiced frame, so the loudness detector isn't needed.
+        self._speech_hints = False
+        # Whether the current utterance may be transcribed speculatively
+        # (decided at utterance_start), and the detector finding its pauses
+        # when the satellite doesn't report them.
+        self._spec_on = False
+        self._pause_detector: LevelPauseDetector | None = None
+        # The satellite's latest `speech_pause` for this utterance as
+        # (frames at the hint, last voiced frame), until `speech_resume`.
+        self._pi_pause: tuple[int, int] | None = None
+        # The latest copy and every one taken this utterance (for the
+        # turn's record); a pause that arrived while one was decoding.
+        self._spec: _Speculation | None = None
+        self._spec_history: list[_Speculation] = []
+        self._spec_wanted = False
+        # This room's Whisper call in flight, speculative or not: the next
+        # one waits for it, so a room never runs two at once.
+        self._decode_inflight: asyncio.Future[str] | None = None
 
     async def run(self) -> None:
         await self.ws.accept()
@@ -803,6 +928,7 @@ class StreamSession:
             "room_id": self.room_id,
             "bot_name": settings.bot_name,
             "audio_sample_rate_in": PCM_INPUT_SAMPLE_RATE,
+            "features": list(CORE_FEATURES),
         })
         try:
             while True:
@@ -835,6 +961,10 @@ class StreamSession:
         finally:
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
+            # Nobody is left to use a speculative transcript.
+            self._discard_speculation()
+            if self._decode_inflight is not None and not self._decode_inflight.done():
+                self._decode_inflight.cancel()
             # Tear down any live drop-in this session was in so the peer
             # isn't left streaming into a void (and its suppressed music is
             # restored). Runs regardless of whether a reconnect overwrote us
@@ -944,6 +1074,215 @@ class StreamSession:
             )
             return
         self.audio_buf.extend(data)
+        self._utt_frames += 1
+        # A satellite that doesn't report its own pauses: find the first
+        # short one from the frames themselves.
+        if self._pause_detector is not None and self._pause_detector.feed(data):
+            self._on_pause()
+
+    # ── Speculative transcription (early endpointing, part A) ─────────
+
+    def _speculation_possible(self, trigger: str | None) -> bool:
+        """Whether an utterance starting now may be transcribed early: only
+        when the reuse check can be exact — the satellite reports its last
+        voiced frame, or it told us the silence timeout its capture ends
+        on. A wake-word training clip is never a command."""
+        if not settings.speculative_stt_enabled or trigger == "wake_clip":
+            return False
+        if self._speech_hints:
+            return True
+        cfg = self.ws.app.state.satellite_config.get(self.room_id) or {}
+        try:
+            return float(cfg.get("listen.silence_timeout")) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _reset_utterance_tracking(self, trigger: str | None) -> None:
+        """A new utterance: forget the last one's copies (a decode still
+        running finishes on its own and is ignored) and decide whether this
+        one is transcribed early."""
+        self._utt_serial += 1
+        self._utt_frames = 0
+        self._pi_pause = None
+        self._spec = None
+        self._spec_history = []
+        self._spec_wanted = False
+        self._spec_on = self._speculation_possible(trigger)
+        self._pause_detector = (
+            LevelPauseDetector() if self._spec_on and not self._speech_hints else None
+        )
+
+    def _discard_speculation(self) -> None:
+        """Drop this utterance's copies and stop looking for pauses. The
+        current decode task is cancelled: nobody will read it."""
+        spec = self._spec
+        if spec is not None and spec.task is not None and not spec.task.done():
+            spec.task.cancel()
+        self._spec = None
+        self._spec_history = []
+        self._spec_wanted = False
+        self._spec_on = False
+        self._pause_detector = None
+        self._pi_pause = None
+
+    def _in_pause(self) -> bool:
+        if self._speech_hints:
+            return self._pi_pause is not None
+        return self._pause_detector is not None and self._pause_detector.in_pause
+
+    def _on_pause(self) -> None:
+        """The capture just paused after speech: copy what we have and start
+        transcribing it — unless a decode is already running, in which
+        case the copy is taken when it finishes (a room never runs two)."""
+        if not (self.utterance_active and self._spec_on) or self.dropped_overflow:
+            return
+        spec = self._spec
+        if spec is not None and spec.task is not None and not spec.task.done():
+            self._spec_wanted = True
+            return
+        self._start_speculation()
+
+    def _start_speculation(self) -> None:
+        self._spec_wanted = False
+        if len(self._spec_history) >= SPECULATIVE_MAX_DECODES:
+            return
+        spec = _Speculation(serial=self._utt_serial, frames=self._utt_frames)
+        spec.task = asyncio.create_task(
+            self._speculate(spec, bytes(self.audio_buf)),
+            name=f"speculative-stt:{self.room_id}",
+        )
+        spec.task.add_done_callback(lambda _t, s=spec: self._on_speculation_done(s))
+        self._spec = spec
+        self._spec_history.append(spec)
+
+    def _on_speculation_done(self, spec: _Speculation) -> None:
+        if spec is not self._spec or not self.utterance_active:
+            return
+        # A pause came and went while this one was decoding. If the
+        # capture is paused again now, take the next copy straight away.
+        if self._spec_wanted and self._in_pause():
+            self._start_speculation()
+        else:
+            self._spec_wanted = False
+
+    async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
+        """Transcribe (and identify the voice in) a copy of the capture so
+        far. Never raises: None means "no speculative transcript", and the
+        turn transcribes the whole capture as it always did."""
+        try:
+            whisper = get_whisper_client()
+        except SttUnavailableError:
+            return None
+        from domovoi.voice_identifier import identify
+
+        async def _stt() -> str:
+            text, spec.stt_ms = await self._whisper_call(whisper, pcm)
+            return text
+
+        async def _identify() -> tuple[Any, int]:
+            t0 = time.perf_counter()
+            try:
+                ident = await identify(pcm)
+            except Exception as e:
+                log.warning("voice identification failed: %s", e)
+                ident = None
+            return ident, _elapsed_ms(t0)
+
+        try:
+            text, (ident, identify_ms) = await asyncio.gather(_stt(), _identify())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(
+                "stream %s: speculative transcription failed; the turn will "
+                "transcribe the whole capture: %s", self.room_id, e,
+            )
+            return None
+        return _Heard(
+            text=text,
+            stt_ms=spec.stt_ms or 0,
+            whisper=whisper_block(whisper_runtime()),
+            ident=ident,
+            identify_ms=identify_ms,
+        )
+
+    async def _whisper_call(self, whisper: Any, pcm: bytes) -> tuple[str, int]:
+        """One Whisper call for this room — never alongside another of its
+        own. A call already running (a speculative decode, or one a
+        cancelled turn left behind) is waited out first: faster-whisper
+        can't stop a decode midway, and two at once would only share the
+        CPU. Returns the text and the call's own time."""
+        while (prev := self._decode_inflight) is not None and not prev.done():
+            await asyncio.wait({prev})
+        t0 = time.perf_counter()
+        fut = asyncio.ensure_future(whisper.transcribe(pcm))
+        fut.add_done_callback(_consume_outcome)
+        self._decode_inflight = fut
+        text = await fut
+        return text, _elapsed_ms(t0)
+
+    def _on_speech_hint(self, t: str, ctrl: dict[str, Any]) -> None:
+        """`speech_pause` / `speech_resume` from the satellite. Frames and
+        control messages share one ordered queue on the satellite, so by
+        the time a hint is read here the buffer holds exactly the frames
+        it describes — a count that disagrees means the hint is not about
+        this buffer, and it is ignored."""
+        if not (self._speech_hints and self.utterance_active):
+            return
+        utt = ctrl.get("utt")
+        if utt is not None and self._utt_id is not None and utt != self._utt_id:
+            return
+        if t == "speech_resume":
+            self._pi_pause = None
+            return
+        frame, last = ctrl.get("frame"), ctrl.get("last_voiced_frame")
+        if not (
+            type(frame) is int and frame == self._utt_frames
+            and type(last) is int and 0 <= last < frame
+        ):
+            log.debug(
+                "stream %s: ignoring a speech_pause for frame %r (buffer has %d)",
+                self.room_id, frame, self._utt_frames,
+            )
+            self._pi_pause = None
+            return
+        self._pi_pause = (frame, last)
+        self._on_pause()
+
+    def _last_voiced_frame(self, ctrl: dict[str, Any]) -> int | None:
+        """The index of the capture's last voiced frame, when it can be
+        known exactly (see ``endpointing``), else None."""
+        if self.dropped_overflow:
+            return None
+        if "last_voiced_frame" in ctrl:
+            # The satellite says so. Its frame count must agree with ours,
+            # or the numbers aren't about the same frames.
+            frames, last = ctrl.get("frames"), ctrl.get("last_voiced_frame")
+            if (
+                type(frames) is int and frames == self._utt_frames
+                and type(last) is int and 0 <= last < frames
+            ):
+                return last
+            return None
+        cfg = self.ws.app.state.satellite_config.get(self.room_id) or {}
+        timeout = cfg.get("listen.silence_timeout")
+        if timeout is None:
+            return None
+        return last_voiced_from_timeout(
+            self._utt_frames, timeout, cfg.get("listen.max_record_seconds"),
+        )
+
+    def _reusable_speculation(self, last_voiced: int | None) -> _Speculation | None:
+        """The utterance's latest copy, if every voiced frame is in it."""
+        spec = self._spec
+        if (
+            spec is None
+            or spec.serial != self._utt_serial
+            or last_voiced is None
+            or last_voiced >= spec.frames
+        ):
+            return None
+        return spec
 
     async def _await_hello(self) -> bool:
         """Block until the client's FIRST frame arrives and is an accepted
@@ -1316,6 +1655,9 @@ class StreamSession:
             self.ws.app.state.satellite_mic_enabled[self.room_id] = bool(
                 ctrl.get("mic_enabled", True)
             )
+            # Optional, absent on older clients: this satellite reports its
+            # own pauses and last voiced frame (see the module docstring).
+            self._speech_hints = bool(ctrl.get("speech_pause", False))
             # Persist the type for offline dashboard display — but ONLY when
             # the frame carried it explicitly, so an old client that omits
             # the field never resets an adoption-preseeded row to 'voice'.
@@ -1334,6 +1676,15 @@ class StreamSession:
             # Latch the trigger now; utterance_end reads it to decide
             # clip-vs-command (immune to wake_recording flipping mid-utterance).
             self._utterance_trigger = ctrl.get("trigger")
+            self._utt_id = ctrl.get("utt")
+            self._reset_utterance_tracking(self._utterance_trigger)
+            return
+        if t in ("speech_pause", "speech_resume"):
+            # Pause hints from a satellite that declared them in its hello
+            # (and only ever sent because `ready.features` listed them).
+            # Anything stale or from an undeclared sender is dropped quietly
+            # — never the unknown-type error, which ends the turn on a Pi.
+            self._on_speech_hint(t, ctrl)
             return
         if t == "utterance_end":
             if not self.utterance_active:
@@ -1357,6 +1708,20 @@ class StreamSession:
                 if self.wake_recording is not None:
                     await self._save_wake_clip(pcm)
                 return
+            # Exactly which frame was the last word, when that can be known,
+            # and whether this utterance's early transcript covers it.
+            last_voiced = self._last_voiced_frame(ctrl)
+            endpoint_silence_ms = (
+                (self._utt_frames - 1 - last_voiced) * FRAME_MS
+                if last_voiced is not None
+                else None
+            )
+            reuse = self._reusable_speculation(last_voiced)
+            speculations = self._spec_history
+            self._spec = None
+            self._spec_history = []
+            self._spec_on = False
+            self._pause_detector = None
             # The Pi flags turns where it played a wake greeting concurrent
             # with capture; if so we strip a bled-in greeting (past the AEC)
             # from the transcript before routing.
@@ -1365,6 +1730,9 @@ class StreamSession:
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
                     received_at=received_at,
+                    reuse=reuse,
+                    speculations=speculations,
+                    endpoint_silence_ms=endpoint_silence_ms,
                 )
             )
             return
@@ -1466,6 +1834,7 @@ class StreamSession:
             self.utterance_active = False
             self.audio_buf.clear()
             self.dropped_overflow = False
+            self._discard_speculation()
             self._response_task = asyncio.create_task(
                 self._respond_noisy_capture(), name="noisy-apology"
             )
@@ -1594,6 +1963,141 @@ class StreamSession:
         })
         return True
 
+    async def _transcribe_turn(
+        self,
+        pcm_bytes: bytes,
+        *,
+        timings: TurnTimings,
+        trigger: str | None,
+        reuse: _Speculation | None,
+        speculations: list[_Speculation],
+    ) -> _Heard | None:
+        """The transcribe half of a turn: the speculative transcript when
+        it covers the whole capture (``reuse``, already checked frame by
+        frame), else Whisper on the whole buffer. Records the STT stages.
+        None when speech recognition is unavailable — the turn has been
+        answered already."""
+        wait_t0 = time.perf_counter()
+        heard: _Heard | None = None
+        if reuse is not None and reuse.task is not None:
+            # Shielded: a barge-in cancelling this turn must not take the
+            # room's decode bookkeeping down with it.
+            heard = await asyncio.shield(reuse.task)
+        reused = heard is not None
+        if heard is None:
+            try:
+                whisper = get_whisper_client()
+            except SttUnavailableError as e:
+                # Whisper didn't load at boot. Explain out loud and end the
+                # turn; the helper sends its own response_end.
+                await self._respond_stt_unavailable(e, trigger=trigger)
+                return None
+            text, stt_ms = await self._whisper_call(whisper, pcm_bytes)
+            heard = _Heard(text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()))
+        timings.stages["stt_ms"] = heard.stt_ms
+        timings.stages["stt_wait_ms"] = _elapsed_ms(wait_t0)
+        timings.whisper = heard.whisper
+        if speculations:
+            timings.flags["stt_reused"] = reused
+            timings.flags["speculative_decodes"] = len(speculations)
+            timings.flags["speculative_ms"] = sum(s.stt_ms or 0 for s in speculations)
+        return heard
+
+    async def _clean_transcript(
+        self,
+        transcript: str,
+        *,
+        greeting_played: bool,
+        trigger: str | None,
+        audio_bytes: int,
+    ) -> str | None:
+        """The clean half of transcription: strip a bled-in greeting and a
+        barge-in's own echo, and end a turn with nothing in it. None when
+        the turn has been ended here (the satellite got its response_end)."""
+        # If the Pi played a wake greeting this turn, the array's AEC may
+        # have let it bleed into the capture ("Hi there. Say something
+        # mean." → greeting + command). Strip a known leading greeting so
+        # only the real command routes.
+        if greeting_played:
+            from domovoi.greeting_filter import strip_leading_greeting
+            phrases = getattr(self.ws.app.state, "greeting_phrases", [])
+            if phrases:
+                cleaned = strip_leading_greeting(transcript, phrases)
+                if cleaned != transcript:
+                    log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
+                    transcript = cleaned
+
+        # Self-echo guard. A barge-triggered capture opens WHILE the
+        # speaker is still playing and carries the frames that tripped
+        # the barge (`_barge_prefix`) into the utterance — so when the
+        # thing that tripped it was residual echo rather than a person,
+        # what arrives here is the satellite quoting itself. Only barge
+        # turns are checked: a wake-word or follow-up capture starts
+        # after playback has drained, and gating on the trigger keeps
+        # this away from the case where a user genuinely repeats a word
+        # the bot just said.
+        if trigger == "barge_in" and self._last_spoken_text:
+            from domovoi.self_echo_filter import (
+                is_self_echo,
+                strip_leading_echo,
+            )
+            if is_self_echo(transcript, self._last_spoken_text):
+                log.warning(
+                    "self-echo: dropping barge-triggered turn in room=%s — "
+                    "transcript %r is the satellite's own reply %r coming "
+                    "back through the mic. Barge-in is firing on speaker "
+                    "echo; raise [barge_in] min_speech_ms or set "
+                    "require_wake_word=true for this room.",
+                    self.room_id, transcript, self._last_spoken_text,
+                )
+                # End the turn with no speech and no DB row. interrupted=True
+                # (not False) because without a response_start this turn the
+                # Pi's `_response_audio_received` may still be set from the
+                # PREVIOUS response — and the deferred-drain branch would
+                # then park the mic thread waiting on a drain that never
+                # comes. interrupted=True takes the immediate-release path.
+                await self._safe_send_text({
+                    "type": "response_end",
+                    "interrupted": True,
+                    "expect_followup": False,
+                })
+                return None
+            cleaned = strip_leading_echo(transcript, self._last_spoken_text)
+            if cleaned != transcript:
+                log.info(
+                    "self-echo: stripped leading echo in room=%s: %r → %r",
+                    self.room_id, transcript, cleaned,
+                )
+                transcript = cleaned
+        # Nothing to route. A capture that Whisper hears as silence -
+        # the user said the wake word and nothing else, the VAD
+        # endpointed on a noise burst, or the mic delivered nothing
+        # usable - must end HERE. Routed, an empty transcript reaches
+        # the LLM fallback, which answers "I didn't quite catch that";
+        # the double-check heuristic appends "Want me to check that
+        # online?" and arms a follow-up capture, the Pi reopens the mic
+        # without a wake word, hears nothing again, and the room loops
+        # apology after apology at one LLM call and one TTS per lap.
+        # Seen on hardware: every conversation_log row for the room
+        # had user_text "" and the same reply. End the turn with no
+        # speech and no DB row; interrupted=True releases the Pi's mic
+        # immediately (see the self-echo drop above for why).
+        if not transcript.strip():
+            log.warning(
+                "blank capture in room=%s (trigger=%s, %.1fs of audio): "
+                "nothing transcribed, not routing. If this repeats after "
+                "every wake word the satellite's capture is silent - "
+                "check its log for the 'capture ended' stats line.",
+                self.room_id, trigger, audio_bytes / (16_000 * 2),
+            )
+            await self._safe_send_text({
+                "type": "response_end",
+                "interrupted": True,
+                "expect_followup": False,
+            })
+            return None
+        return transcript
+
     async def _process_utterance(
         self,
         pcm_bytes: bytes,
@@ -1601,107 +2105,33 @@ class StreamSession:
         greeting_played: bool = False,
         trigger: str | None = None,
         received_at: float | None = None,
+        reuse: _Speculation | None = None,
+        speculations: list[_Speculation] | None = None,
+        endpoint_silence_ms: int | None = None,
     ) -> None:
         interrupted = False
         response = None
         # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
         # utterance_end arrival; a direct call starts the clock now.
         timings = TurnTimings(started=received_at, audio_bytes=len(pcm_bytes))
+        if endpoint_silence_ms is not None:
+            timings.stages["endpoint_silence_ms"] = endpoint_silence_ms
         try:
-            try:
-                whisper = get_whisper_client()
-            except SttUnavailableError as e:
-                # Whisper didn't load at boot. Explain out loud and end the
-                # turn; the helper sends its own response_end.
-                await self._respond_stt_unavailable(e, trigger=trigger)
+            # ── Transcribe and clean ─────────────────────────────────────
+            heard = await self._transcribe_turn(
+                pcm_bytes, timings=timings, trigger=trigger,
+                reuse=reuse, speculations=speculations or [],
+            )
+            if heard is None:
                 return
-            stage_t0 = time.perf_counter()
-            transcript = await whisper.transcribe(pcm_bytes)
-            timings.stage("stt_ms", stage_t0)
-            timings.whisper = whisper_block(whisper_runtime())
-            # If the Pi played a wake greeting this turn, the array's AEC may
-            # have let it bleed into the capture ("Hi there. Say something
-            # mean." → greeting + command). Strip a known leading greeting so
-            # only the real command routes.
-            if greeting_played:
-                from domovoi.greeting_filter import strip_leading_greeting
-                phrases = getattr(self.ws.app.state, "greeting_phrases", [])
-                if phrases:
-                    cleaned = strip_leading_greeting(transcript, phrases)
-                    if cleaned != transcript:
-                        log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
-                        transcript = cleaned
-
-            # Self-echo guard. A barge-triggered capture opens WHILE the
-            # speaker is still playing and carries the frames that tripped
-            # the barge (`_barge_prefix`) into the utterance — so when the
-            # thing that tripped it was residual echo rather than a person,
-            # what arrives here is the satellite quoting itself. Only barge
-            # turns are checked: a wake-word or follow-up capture starts
-            # after playback has drained, and gating on the trigger keeps
-            # this away from the case where a user genuinely repeats a word
-            # the bot just said.
-            if trigger == "barge_in" and self._last_spoken_text:
-                from domovoi.self_echo_filter import (
-                    is_self_echo,
-                    strip_leading_echo,
-                )
-                if is_self_echo(transcript, self._last_spoken_text):
-                    log.warning(
-                        "self-echo: dropping barge-triggered turn in room=%s — "
-                        "transcript %r is the satellite's own reply %r coming "
-                        "back through the mic. Barge-in is firing on speaker "
-                        "echo; raise [barge_in] min_speech_ms or set "
-                        "require_wake_word=true for this room.",
-                        self.room_id, transcript, self._last_spoken_text,
-                    )
-                    # End the turn with no speech and no DB row. interrupted=True
-                    # (not False) because without a response_start this turn the
-                    # Pi's `_response_audio_received` may still be set from the
-                    # PREVIOUS response — and the deferred-drain branch would
-                    # then park the mic thread waiting on a drain that never
-                    # comes. interrupted=True takes the immediate-release path.
-                    await self._safe_send_text({
-                        "type": "response_end",
-                        "interrupted": True,
-                        "expect_followup": False,
-                    })
-                    return
-                cleaned = strip_leading_echo(transcript, self._last_spoken_text)
-                if cleaned != transcript:
-                    log.info(
-                        "self-echo: stripped leading echo in room=%s: %r → %r",
-                        self.room_id, transcript, cleaned,
-                    )
-                    transcript = cleaned
-            # Nothing to route. A capture that Whisper hears as silence -
-            # the user said the wake word and nothing else, the VAD
-            # endpointed on a noise burst, or the mic delivered nothing
-            # usable - must end HERE. Routed, an empty transcript reaches
-            # the LLM fallback, which answers "I didn't quite catch that";
-            # the double-check heuristic appends "Want me to check that
-            # online?" and arms a follow-up capture, the Pi reopens the mic
-            # without a wake word, hears nothing again, and the room loops
-            # apology after apology at one LLM call and one TTS per lap.
-            # Seen on hardware: every conversation_log row for the room
-            # had user_text "" and the same reply. End the turn with no
-            # speech and no DB row; interrupted=True releases the Pi's mic
-            # immediately (see the self-echo drop above for why).
-            if not transcript.strip():
-                log.warning(
-                    "blank capture in room=%s (trigger=%s, %.1fs of audio): "
-                    "nothing transcribed, not routing. If this repeats after "
-                    "every wake word the satellite's capture is silent - "
-                    "check its log for the 'capture ended' stats line.",
-                    self.room_id, trigger, len(pcm_bytes) / (16_000 * 2),
-                )
-                await self._safe_send_text({
-                    "type": "response_end",
-                    "interrupted": True,
-                    "expect_followup": False,
-                })
+            transcript = await self._clean_transcript(
+                heard.text, greeting_played=greeting_played, trigger=trigger,
+                audio_bytes=len(pcm_bytes),
+            )
+            if transcript is None:
                 return
 
+            # ── Respond ──────────────────────────────────────────────────
             await self._safe_send_text({"type": "transcript", "text": transcript})
 
             probe: ConnectivityProbe = self.ws.app.state.probe
@@ -1711,15 +2141,21 @@ class StreamSession:
             # downstream handlers and audit queries know who's talking
             # and how aggressively to prompt for identity. Best-effort —
             # any failure leaves person_id=None / presence_tier="high"
-            # rather than blocking the response cycle.
-            from domovoi.voice_identifier import identify
-            stage_t0 = time.perf_counter()
-            try:
-                ident = await identify(pcm_bytes)
-            except Exception as e:
-                log.warning("voice identification failed: %s", e)
-                ident = None
-            timings.stage("identify_ms", stage_t0)
+            # rather than blocking the response cycle. A speculative
+            # transcript brings its own, run on the same copy alongside
+            # the decode.
+            if heard.identify_ms is not None:
+                ident = heard.ident
+                timings.stages["identify_ms"] = heard.identify_ms
+            else:
+                from domovoi.voice_identifier import identify
+                stage_t0 = time.perf_counter()
+                try:
+                    ident = await identify(pcm_bytes)
+                except Exception as e:
+                    log.warning("voice identification failed: %s", e)
+                    ident = None
+                timings.stage("identify_ms", stage_t0)
 
             person_id = ident.person_id if ident else None
             presence_tier = ident.presence_tier if ident else None

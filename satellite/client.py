@@ -68,6 +68,13 @@ FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)  # 480
 FRAME_BYTES = FRAME_SAMPLES * 2  # int16 = 2 bytes/sample
 
+# Silent frames after speech at which a capture tells the core it has
+# paused (`speech_pause`, 240 ms), so the core can start transcribing while
+# this side keeps counting toward `listen.silence_timeout`. Sent only to a
+# core whose `ready` lists the feature — an older core answers an unknown
+# message with `error`, which ends the turn here.
+SPEECH_PAUSE_FRAMES = 8
+
 # Log format, shared by the stderr handler (journald picks that up) and by
 # the in-memory ring the dashboard reads, so a line looks identical whether
 # you read it over SSH or in the browser.
@@ -1348,6 +1355,16 @@ class Satellite:
             return False
         loop.call_soon_threadsafe(q.put_nowait, ("text", json.dumps(payload)))
         return True
+
+    def _begin_utterance(self, trigger: str) -> bool:
+        """Open a capture on the core: `utterance_start` with this
+        connection's next capture number (`utt`), which the capture's
+        hints and its `utterance_end` repeat. An older core reads only the
+        trigger."""
+        self._utt_seq += 1
+        return self._emit_text(
+            {"type": "utterance_start", "trigger": trigger, "utt": self._utt_seq}
+        )
 
     def _emit_audio(self, frame: bytes) -> bool:
         loop, q = self.loop, self.send_q
@@ -3251,6 +3268,16 @@ class Satellite:
         gate_pass_count = 0
         voiced_count = 0
 
+        # For the core (see SPEECH_PAUSE_FRAMES): this capture's number, the
+        # last frame the detector called speech (a barge-in prefix counts as
+        # speech, as `speaking` above already assumes), and whether the
+        # current silence run has been reported. Hints go only to a core
+        # that listed them in `ready`.
+        utt = self._utt_seq
+        hints = "speech_pause" in self._core_features
+        last_voiced = len(prefix_frames) - 1
+        pause_reported = False
+
         for f in prefix_frames:
             self._emit_audio(f)
             sent += 1
@@ -3278,8 +3305,23 @@ class Satellite:
                 silent_frames = 0
                 pre_speech_silent = 0
                 voiced_count += 1
+                last_voiced = sent - 1
+                if pause_reported:
+                    pause_reported = False
+                    self._emit_text({"type": "speech_resume", "utt": utt, "frame": sent})
             elif speaking:
                 silent_frames += 1
+                if hints and silent_frames == SPEECH_PAUSE_FRAMES:
+                    # Once per silence run: `frame` is what the core has
+                    # buffered when this arrives (one ordered queue).
+                    pause_reported = True
+                    self._emit_text({
+                        "type": "speech_pause",
+                        "utt": utt,
+                        "frame": sent,
+                        "last_voiced_frame": last_voiced,
+                        "greeting_played": self._greeting_played_this_turn,
+                    })
                 if silent_frames >= silence_limit:
                     exit_reason = "vad_silence_after_speech"
                     break
@@ -3361,6 +3403,13 @@ class Satellite:
         delivered = self._emit_text({
             "type": "utterance_end",
             "greeting_played": self._greeting_played_this_turn,
+            # Exact frame accounting for the core: with these it knows
+            # whether a transcript it started at a pause covers every
+            # voiced frame. An older core ignores them.
+            "utt": utt,
+            "frames": sent,
+            "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
+            "exit_reason": exit_reason,
         })
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False
@@ -3426,7 +3475,7 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
-                    self._emit_text({"type": "utterance_start", "trigger": "barge_in"})
+                    self._begin_utterance("barge_in")
                     self._barge_prefix = list(recent)
                     return "barge"
             else:
@@ -3483,7 +3532,7 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
-                    self._emit_text({"type": "utterance_start", "trigger": "barge_in"})
+                    self._begin_utterance("barge_in")
                     self._barge_prefix = []
                     return "barge"
 
@@ -3674,7 +3723,7 @@ class Satellite:
                 # Open mic, no wake gate — the whole point of chat mode. LED
                 # back to blue so each new turn reads as "your turn".
                 self._leds.set_state("listening")
-                self._emit_text({"type": "utterance_start", "trigger": "chat"})
+                self._begin_utterance("chat")
 
                 if not self._stream_capture(prefix, pre_speech_timeout_sec=pre_speech_timeout):
                     if self.shutdown_event.is_set():
@@ -3784,7 +3833,7 @@ class Satellite:
                     continue
                 wake_detected.clear()
                 log.info("wake word during drop-in — capturing command (e.g. 'hang up')")
-                self._emit_text({"type": "utterance_start", "trigger": "wake_word"})
+                self._begin_utterance("wake_word")
                 self.response_done.clear()
                 self.stop_playback.clear()
                 self.expect_followup.clear()
@@ -3939,7 +3988,7 @@ class Satellite:
                 # Stream the clip: start marker (trigger flags it as a training
                 # clip server-side), the PCM frames, then the end marker. The
                 # server writes a WAV per clip; we never wait on a response.
-                self._emit_text({"type": "utterance_start", "trigger": "wake_clip"})
+                self._begin_utterance("wake_clip")
                 for frame in buf:
                     self._emit_audio(frame)
                 self._emit_text({"type": "utterance_end", "greeting_played": False})
@@ -4118,7 +4167,7 @@ class Satellite:
                 continue
             if not woke:
                 return
-            self._emit_text({"type": "utterance_start", "trigger": "wake_word"})
+            self._begin_utterance("wake_word")
             prefix: list[bytes] = []
             # Set when this iteration is following up on the bot's own
             # question (e.g., "did I get that right?"). Caps the
@@ -4157,9 +4206,7 @@ class Satellite:
                             self.cfg.followup_pre_speech_timeout,
                         )
                         self.expect_followup.clear()
-                        self._emit_text(
-                            {"type": "utterance_start", "trigger": "followup"}
-                        )
+                        self._begin_utterance("followup")
                         prefix = []
                         pre_speech_timeout = self.cfg.followup_pre_speech_timeout
                         continue
@@ -4269,6 +4316,14 @@ class Satellite:
     _TIME_SYNC_MIN_INTERVAL_SEC = 6 * 3600
     _time_synced_at: float | None = None
 
+    # What the connected core understands beyond protocol 0.1, from its
+    # `ready` frame; empty between sessions and for a core that lists
+    # nothing. A new message type goes out only when it is in here.
+    _core_features: frozenset[str] = frozenset()
+    # This connection's capture counter: each utterance_start carries the
+    # next number (`utt`), and so does everything about that capture.
+    _utt_seq: int = 0
+
     def _sync_time_with_server(self) -> None:
         """Ask the root helper to copy the server's clock and time zone.
 
@@ -4292,9 +4347,10 @@ class Satellite:
         t = payload.get("type")
         if t == "ready":
             log.info(
-                "server ready: protocol=%s bot=%s",
+                "server ready: protocol=%s bot=%s features=%s",
                 payload.get("protocol_version"),
                 payload.get("bot_name"),
+                payload.get("features"),
             )
             # Everything this frame does for the housekeeping sits inside a
             # try/finally whose `finally` opens the microphone. Order is
@@ -4310,6 +4366,16 @@ class Satellite:
             # frame is the core accepting the session; opening the
             # microphone is the one thing it may not skip.
             try:
+                # What this core understands beyond protocol 0.1. Absent on
+                # an older core, and then nothing new is ever sent to it:
+                # it answers an unknown message with `error`, which ends
+                # the turn here.
+                features = payload.get("features")
+                self._core_features = (
+                    frozenset(f for f in features if isinstance(f, str))
+                    if isinstance(features, list)
+                    else frozenset()
+                )
                 # A `ready` frame means the (possibly just-upgraded) code
                 # connected and handshook cleanly — confirm the upgrade so
                 # the rollback watchdog stands down, and clear the pending
@@ -4767,6 +4833,13 @@ class Satellite:
                     # mic-less builds) — the server refuses wake-recording /
                     # drop-in / chat for mic-disabled rooms.
                     "mic_enabled": self.cfg.mic_enabled,
+                    # This client reports its own pauses (`speech_pause` /
+                    # `speech_resume`) and each capture's last voiced frame
+                    # whenever the core's `ready` lists the feature, so the
+                    # core can transcribe at the first pause and know
+                    # exactly whether that transcript covers everything
+                    # said. An older core ignores the field.
+                    "speech_pause": True,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if
@@ -4908,6 +4981,9 @@ class Satellite:
         # runs is dropped rather than queued. Idempotent: on a failed
         # reconnect this runs with the queue already gone.
         self.send_q = None
+        # The next core may be an older one; it says what it understands
+        # in its own `ready`.
+        self._core_features = frozenset()
         self.response_done.set()
         self.playback_active.clear()
         self.stop_playback.set()

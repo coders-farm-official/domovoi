@@ -204,7 +204,11 @@ sync_enabled = true
 # WebRTC VAD aggressiveness while capturing user speech (0–3, higher = stricter).
 vad_aggressiveness = 2
 
-# Seconds of continuous silence that ends an utterance.
+# Seconds of continuous silence that ends an utterance. The core starts
+# transcribing at the first quarter-second pause while this counts down (it
+# keeps that transcript only if you said nothing more), so a longer timeout
+# costs less than it looks; lower it for snappier turns, raise it in rooms
+# where people pause mid-sentence.
 silence_timeout = 1.2
 
 # Hard cap on a single utterance (seconds). Server also enforces 60s.

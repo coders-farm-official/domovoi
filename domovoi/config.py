@@ -303,6 +303,14 @@ class Settings(BaseSettings):
     # a person waited for every transcript. A number pins it (and, being
     # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
     whisper_cpu_threads: int = 0
+    # Speculative transcription (early endpointing, part A): start Whisper
+    # at the first ~240 ms pause in a satellite's capture instead of after
+    # its whole silence timeout, and use that transcript when no speech
+    # came after it — decided by frame accounting, never by a guess, so a
+    # turn hears exactly what it would have without it. Costs one extra
+    # decode for each pause somebody talks past. Off = transcribe only
+    # after utterance_end, as before. See domovoi/streaming.py.
+    speculative_stt_enabled: bool = True
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on

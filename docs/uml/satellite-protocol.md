@@ -24,10 +24,10 @@ sequenceDiagram
 
     Pi->>S: (WS connect /v1/stream/kitchen)
     Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives;<br/>no hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
-    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?}
+    Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?, speech_pause?}
     Note over S: pairing check (V002): claim the room on first token<br/>(trust-on-first-use), else require a matching token.<br/>Mismatch / missing-on-a-paired-room → error + close.
     Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container, then registers the session
-    S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000}
+    S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000, features}
     Pi->>S: config_status {config}          — cached per room
     Pi->>S: volume_status {level}           — cached per room
     Pi->>S: voice_status {voice}            — cached per room
@@ -37,9 +37,13 @@ sequenceDiagram
     end
 
     Note over Pi: wake word fires
-    Pi->>S: utterance_start {trigger:"wake_word"}
+    Pi->>S: utterance_start {trigger:"wake_word", utt}
     Pi->>S: binary PCM …
-    Pi->>S: utterance_end {greeting_played}
+    Pi->>S: speech_pause {utt, frame, last_voiced_frame} (features only)
+    Note over S: copy the buffer, start Whisper + voice ID on it
+    Pi->>S: binary PCM (the rest of the silence) …
+    Pi->>S: utterance_end {greeting_played, utt, frames,<br/>last_voiced_frame, exit_reason}
+    Note over S: last voiced frame inside the copy → use its transcript,<br/>otherwise transcribe the whole buffer
     S-->>Pi: transcript {text}
     S-->>Pi: response_start {text, matched_handler, matched_path,<br/>session_id, online, audio_sample_rate}
     S-->>Pi: binary PCM (TTS) …
@@ -50,9 +54,11 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. |
-| `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. |
-| `utterance_end` | `greeting_played` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. |
+| `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. `speech_pause` (optional, default false) says this client reports its own pauses (`speech_pause` / `speech_resume`) and each capture's last voiced frame whenever `ready.features` lists `"speech_pause"`; the server then uses those instead of judging pauses from the audio. |
+| `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"`, `utt?` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. `utt` (optional) is the client's own number for this capture, increasing per connection; the capture's hints and its `utterance_end` repeat it, so a message about an older capture is recognisably stale. |
+| `utterance_end` | `greeting_played`, `utt?`, `frames?`, `last_voiced_frame?`, `exit_reason?` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. `frames` (30 ms frames this capture sent), `last_voiced_frame` (0-based index of the last one the Pi's detector called speech) and `exit_reason` (`vad_silence_after_speech` \| `max_record_seconds` \| `shutdown`) let the server tell exactly whether a transcript it started at a pause covers everything said (see [Speculative transcription](#speculative-transcription)). An older server ignores them. |
+| `speech_pause` | `utt`, `frame`, `last_voiced_frame`, `greeting_played` | **Only when `ready.features` lists `"speech_pause"`.** The capture has had 8 silent frames (240 ms) after speech: `frame` is how many frames it has sent, `last_voiced_frame` the last voiced one. Once per silence run. The server may start transcribing. |
+| `speech_resume` | `utt`, `frame` | **Only when `ready.features` lists `"speech_pause"`.** Speech came back after a reported pause. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
 | `noisy_capture` | — | The Pi's noise-gate auto-tune found the capture unusably loud and bailed. The server answers with a stock apology TTS instead of transcribing. |
 | `wifi_status` | `rx_mbits`, `tx_mbits`, `ssid` | Periodic link-rate self-report (60 s default), cached per room for the "how's your wifi?" diagnostic. |
@@ -70,7 +76,7 @@ sequenceDiagram
 
 | Frame | Payload | Meaning |
 |---|---|---|
-| `ready` | `protocol_version:"0.1"`, `room_id`, `bot_name`, `audio_sample_rate_in:16000` | Handshake complete — sent only **after** the `hello` passed the pairing check and the room's MPD daemon was provisioned. A socket that never says `hello` never receives it. |
+| `ready` | `protocol_version:"0.1"`, `room_id`, `bot_name`, `audio_sample_rate_in:16000`, `features` | Handshake complete — sent only **after** the `hello` passed the pairing check and the room's MPD daemon was provisioned. A socket that never says `hello` never receives it. `features` lists the message types this server understands beyond 0.1 (`["speech_pause"]`); see [Adding to the protocol](#adding-to-the-protocol). |
 | `transcript` | `text` | What Whisper heard, before routing. |
 | `response_start` | `text`, `matched_handler`, `matched_path`, `session_id`, `online`, `audio_sample_rate` | A spoken response begins; PCM follows at the announced rate. |
 | `response_end` | `interrupted`, `expect_followup`, `pi_action?`, `pi_action_arg?` | Response finished (or was cut off). `expect_followup` asks the Pi to capture the user's reply without a fresh wake word. `pi_action` requests a Pi-local side effect after playback drains: `reassociate_wifi`, `set_voice` (arg = voice name), or `restart`. |
@@ -97,6 +103,51 @@ sequenceDiagram
 > `music_start` / `music_stop` are emitted by the music-coordination code
 > (`domovoi/streaming.py`, post-response) rather than listed in the module's
 > header contract comment — they are part of the live protocol all the same.
+
+## Adding to the protocol
+
+Both sides must keep working against the other's older version:
+
+* **New fields on an existing message** need nothing: every handler on both
+  sides reads the keys it knows and ignores the rest (the core's `hello`
+  and `utterance_start` branches, the Pi's `ready` branch).
+* **A new server → client message type** is safe: an older satellite logs
+  an unknown type at debug level and carries on.
+* **A new client → server message type is NOT safe on its own.** An older
+  server answers any unknown type with `error`, and the satellite treats
+  `error` as the end of the turn (it releases the mic, flashes the ring and
+  drops playback). So a satellite sends a new type only when the server's
+  `ready.features` lists it — and forgets the list when the session ends,
+  because the next server may be older.
+
+## Speculative transcription
+
+The Pi ends a capture only after `listen.silence_timeout` (1.2 s by default)
+of silence, but its frames reach the server as they are spoken. At the first
+~240 ms pause after speech the server copies the buffer and starts Whisper
+(and voice identification) on the copy; at `utterance_end` it uses that
+transcript **if and only if** the Pi's last voiced frame is inside the copy.
+
+* The pause: the Pi's own `speech_pause` when it sends one; otherwise the
+  server judges it from the frames' loudness against the utterance's own
+  speech level (`domovoi/endpointing.py`, `LevelPauseDetector`). This only
+  decides *when* to start — a wrong guess costs a wasted decode.
+* Whether the copy covers everything: exact frame accounting. A new Pi says
+  which frame was its last voiced one in `utterance_end`; for an older one
+  the server works it out from the `listen.silence_timeout` it reported in
+  `config_status` — its capture loop ends exactly `silence_limit` frames
+  after its last voiced frame, so the index is `frames - silence_limit - 1`
+  (not for a capture that hit `max_record_seconds`). A satellite that
+  reports neither gets no speculative transcript.
+* Speech after the copy: the copy is dropped, and the next pause takes a
+  new one once the running decode finishes — a room never has two Whisper
+  calls in flight. A new `utterance_start` or a `noisy_capture` discards
+  the copy. At most three copies per utterance.
+* Whichever transcript is used goes through the same greeting strip,
+  self-echo guard and blank-capture guard.
+
+`speculative_stt_enabled=false` turns it off. The turn's timing row says
+whether it was used (`stt_reused`) and what it cost (`speculative_ms`).
 
 ## Drop-in (open-mic relay) lifecycle
 
