@@ -580,8 +580,8 @@ const PluginNavIcon = ({ src }) => src
 /* One nav row's classes. `primary` keeps the row in the phone strip;
  * `brand-link` hides it in the desktop sidebar, where the brand row is
  * that link; `more-active` lights the home tab on a phone while a page
- * that lives on Home's "everything" grid is open, the way the app's
- * More tab does (styles.css only honours it at 760px and below). */
+ * that lives on Home's "everything" grid is open, the way the Android
+ * app's home tab does (styles.css only honours it at 760px and below). */
 const navItemClass = (it, route, primaryRoutes) => [
   'nav-item',
   route === it.route ? 'active' : '',

@@ -12,6 +12,7 @@ Read these core files before writing a screen:
 - `app/src/main/java/com/domovoi/app/net/ApiClient.kt` — `api.get/post/patch/put/delete(path, body)` return `JsonElement`; `api.upload(path, MultipartBody)`; `api.absolute(path)` for media URLs; `DomovoiJson`
 - `app/src/main/java/com/domovoi/app/net/ApiHooks.kt` — `rememberApi(keys..., eventTypes) { app -> ... }` (the useApiList/useApiObject analog), `OnStateEvents`
 - `app/src/main/java/com/domovoi/app/net/StateBus.kt` — WS events (`WsEvent(type, payload)`)
+- `app/src/main/java/com/domovoi/app/net/SharedScreen.kt` — `LocalSharedScreen`: true on a shared screen (the kitchen tablet); mask personal content when it is
 - `app/src/main/java/com/domovoi/app/ui/components/*.kt` — `DomovoiCard`, `Pill`, `Tone`, `StatusDot`, `RoomChip`, `AvatarBubble`, `PageHeader`, `SectionLabel`, `Stat`, `EmptyState`, `LoadingState`, `ErrorState`, `ConfirmDialog`, `PromptDialog`, `relTime`, `fmtDur`, `fmtBigDur`, `fmtBytes`, `fmtRemaining`, `isLive`, `DomovoiGlyph`, `SleepingDomovoi`
 - `app/src/main/java/com/domovoi/app/ui/theme/Theme.kt` — `Domovoi.colors.*` (brand/fg/fgMuted/border/card/ok/warn/err/idle + soft variants)
 - `app/src/main/java/com/domovoi/app/player/PlayItem.kt` + `PlayerController.kt` — local playback + casting
@@ -55,7 +56,11 @@ Read these core files before writing a screen:
 10. Keep helpers `private` to your file/package to avoid cross-package clashes.
 11. Compose Material3 + material-icons-extended are available. Coil
     (`coil.compose.AsyncImage`) for artwork via `api.absolute(path)`.
-12. **Plugin-backed screens are capability-gated.** If a screen's endpoints
+12. **Launchers use `Route.visibleOn(caps, shared)`** (`ui/shell/Routes.kt`),
+    never `visibleWith` alone: a shared screen leaves `SharedScreenHidden`
+    (People, Chat, Files, News) off the bottom bar, rail, drawer and Home's
+    grid alike, as the web's SHARED_SCREEN_HIDDEN does.
+13. **Plugin-backed screens are capability-gated.** If a screen's endpoints
     come from a plugin router (`/api/plugins/<slug>/...`), declare its
     capability in `Route.requiredCapability()` (`ui/shell/Routes.kt`) and it
     will only render when `GET /api/capabilities` lists that capability

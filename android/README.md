@@ -81,17 +81,36 @@ app/src/main/java/com/domovoi/app/
     ├── theme/             # domovoi design tokens (oklch → sRGB), light/dark
     ├── components/        # Pill, StatusDot, cards, dialogs, Domovoi glyphs, fmt helpers
     ├── shell/             # adaptive nav: bottom bar (phone) / rail (medium) / sidebar (tablet)
-    └── screens/           # chat, music, podcasts, audiobooks, videos, images, news,
-                           # people, satellites, calendar, stations, documents,
+    └── screens/           # home, chat, music, podcasts, audiobooks, videos, images,
+                           # news, people, satellites, calendar, stations, documents,
                            # local (offline MediaStore music+videos), settings, manual
 ```
 
-Responsive behavior: compact widths get a bottom bar (Music /
-Satellites / Calendar / People / More) with list→detail screens
-stacked full-screen; medium gets a navigation rail; expanded gets the
-web's permanent sidebar with badge counts and side-by-side
-list + detail panes. The mini player docks above the navigation on
-every size.
+The app opens on **Home**, as the dashboard opens on `#home`: the house
+at a glance (rooms and what they are playing, every timer counting down,
+problems worth knowing about, today's events, an announce box), built
+from the same open reads as the web page. Home is also where the app
+falls back when a screen's plugin goes away, and the top-left brand
+leads back to it: the "domovoi" crumb in the topbar, the rail's glyph,
+the drawer's brand row.
+
+Responsive behavior: compact widths get the web phone strip as a bottom
+bar (Home / Music / Satellites / Calendar / Chat); every other screen,
+Settings and the manual included, is a tile on Home's "everything"
+grid, and the home tab stays lit while one of them is open. List→detail
+screens stack full-screen. Medium gets a navigation rail (Home first);
+expanded gets the web's permanent sidebar with badge counts and
+side-by-side list + detail panes, and Home spreads into the web
+desktop's two columns once its pane is wide enough. The mini player
+docks above the navigation on every size.
+
+A **shared screen** (an admin marks the device in the dashboard's
+Settings → Devices; the kitchen tablet) is learned from this install's
+own device registration and remembered per server. While it is on, Home
+shows calendar times as "busy", a reminder as its room, and problems as
+one neutral line, and People, Chat, Files and News drop off every
+launcher. Presentational, exactly as on the web: the tablet still holds
+the household token (see docs/SECURITY_PRIVACY.md).
 
 Conventions for adding screens: see `CONVENTIONS.md`.
 
@@ -122,3 +141,9 @@ web-dashboard plugin pages only; this app stays provider-agnostic.
 - No server administration (greetings, voices, wake words, models,
   configuration) — by design; Settings → Server settings opens the
   dashboard instead.
+- Home shows the problem rows a household member may see and never the
+  admin-only ones (satellites waiting for approval or adoption, updates,
+  disk) or the "this box isn't claimed yet" row: the app has no admin
+  session to read them with. A plugin problem opens the dashboard's
+  plugin list in the browser. The "everything" grid lists the app's own
+  screens; plugin web pages stay on the dashboard.
