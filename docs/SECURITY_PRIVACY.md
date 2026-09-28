@@ -463,6 +463,27 @@ its reads; what it no longer gets is the push. Pair it once, from the
 dashboard's Settings → Connection, and the socket connects like any other
 household client.
 
+**The speech latency summary is open too, and carries only numbers.**
+`GET /v1/stats/latency` (and its dashboard proxy `GET /api/stats/latency`,
+the "recent speech timings" line on the Models page) reports how long
+recent voice turns took, per stage: per-stage counts and p50 / p95 / max
+milliseconds, how many turns took each route (`fast`, `qa`, ...), and the
+Whisper settings (model, device, compute type, CPU threads). It reads one
+column, `intents_log.timings`, which the core fills with integers and the
+Whisper settings and never with text, plus the row's route and time. No
+transcript, no reply, no person, no session and no presence tier is read,
+so none can be returned; the `room` filter is an input, echoed back, and
+never a list of rooms. What it does reveal is that turns happened, when
+(by narrowing `since`) and in which room (by naming it). That is already
+an open read: a room's session list (`GET /api/satellites/{room_id}/sessions`)
+gives times and turn counts, and the people roster gives when each person
+was last heard (both above, pinned open in
+`domovoi/tests/test_route_auth_matrix.py`). This adds how long the machine
+took, which is what a person tuning Whisper needs without holding a
+credential, the same reasoning that keeps `/v1/health`'s `stt` state open.
+The route-walk pins both routes open, so gating them is a recorded
+decision.
+
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
 (`POST /api/devices/register`, itself device tier now), and the server takes
@@ -837,7 +858,7 @@ All of it on hardware you own. Locations, verified against the code:
 
 | Where | What |
 |---|---|
-| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
+| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the open latency summary reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas. |
 | **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |

@@ -56,6 +56,7 @@ from web.backend.api import podcasts as podcasts_api
 from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
+from web.backend.api import stats as stats_api
 from web.backend.api import videos as videos_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
@@ -370,6 +371,7 @@ app.include_router(images_api.router)
 app.include_router(chat_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
+app.include_router(stats_api.router)
 
 
 @app.get(BUNDLE_ROUTE)

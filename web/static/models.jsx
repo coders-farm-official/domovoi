@@ -11,6 +11,7 @@
  *                         pull-by-name box; installs run as background jobs
  *                         with a live progress bar over the model_jobs bus.
  *   5. STT catalog      — the Whisper size/compute set; select → whisper_model.
+ *                         Headed by the recent speech timings line.
  *   6. TTS + wake       — folded-in summaries reusing the existing pages,
  *                         with links to their full management tabs.
  *
@@ -183,6 +184,71 @@ const SttStatusBanner = ({ stt }) => {
                                           color: 'var(--fg-muted)' }}>{detail}</pre>
         </details>
       )}
+    </div>
+  );
+};
+
+/* ---- recent speech timings ------------------------------------- */
+/* One line under speech recognition: how long the recent voice turns
+ * waited on Whisper, and from the end of speech to the first reply audio,
+ * from /api/stats/latency (numbers only — the core's per-turn stage
+ * timings). What makes a Whisper change (a smaller model, more threads)
+ * a number here instead of a feeling. */
+const _speechMs = (ms) => (ms == null ? '—'
+  : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`);
+
+const SpeechTimingsLine = ({ data, error, loading }) => {
+  const muted = { fontSize: 12, color: 'var(--fg-muted)' };
+  let body;
+  if (error) {
+    const detail = (error.detail && error.detail.detail) || error.message;
+    body = <span style={muted}>unavailable{detail ? ` — ${detail}` : ''}</span>;
+  } else if (loading && !data) {
+    body = <span style={muted}>loading…</span>;
+  } else if (!data || !data.turns) {
+    body = <span style={muted}>no timed turns in the last 7 days</span>;
+  } else {
+    const st = data.stages || {};
+    const stt = st.stt_ms || {};
+    const total = st.total_ms || {};
+    const w = data.whisper || {};
+    const settingsSeen = (data.whisper_seen || []).length;
+    body = (
+      <span style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'inline-flex',
+                     flexWrap: 'wrap', columnGap: 8, rowGap: 2 }}>
+        <span>{data.turns} {data.turns === 1 ? 'turn' : 'turns'}, last 7 days</span>
+        <span>·</span>
+        <span title="Whisper time per turn — median, then 95th percentile">
+          transcribe <span className="mono" style={{ color: 'var(--fg)' }}>{_speechMs(stt.p50)}</span>
+          {' '}p50 · <span className="mono">{_speechMs(stt.p95)}</span> p95
+        </span>
+        <span>·</span>
+        <span title="end of speech to the first reply audio — median">
+          reply starts <span className="mono" style={{ color: 'var(--fg)' }}>{_speechMs(total.p50)}</span> p50
+        </span>
+        {w.model && (
+          <React.Fragment>
+            <span>·</span>
+            <span className="mono">
+              {w.model} · {w.device}{w.cpu_threads ? ` · ${w.cpu_threads} threads` : ''}
+            </span>
+          </React.Fragment>
+        )}
+        {settingsSeen > 1 && (
+          <span title="the window spans a Whisper settings change, so these numbers mix both">
+            (mixes {settingsSeen} whisper settings)
+          </span>
+        )}
+      </span>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '9px 14px',
+                  borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-muted)', minWidth: 130 }}>
+        recent speech timings
+      </span>
+      {body}
     </div>
   );
 };
@@ -410,6 +476,10 @@ const ModelsPanel = () => {
     useApiObject('/api/models/active');
   const { items: jobs } = useApiList('/api/models/jobs', { eventTypes: ['model_jobs.changed'],
     pickItems: (d) => (d && d.jobs) || [] });
+  // Open, numbers only. Fetched once per visit — a turn's timings don't
+  // move while you look at the page.
+  const { data: speechTimings, error: speechTimingsError, loading: speechTimingsLoading } =
+    useApiObject('/api/stats/latency', { quiet: true });
 
   // Re-poll hardware on a light cadence so VRAM/util stay live-ish.
   React.useEffect(() => {
@@ -561,6 +631,8 @@ const ModelsPanel = () => {
 
       <Card title="Speech-to-text (Whisper)"
             sub="Selecting a row writes whisper_model and its compute type — a restart-tier change. auto runs float16 on a GPU and int8 on the CPU; int8 halves VRAM at near-identical accuracy.">
+        <SpeechTimingsLine data={speechTimings} error={speechTimingsError}
+                           loading={speechTimingsLoading}/>
         {catWhisper.map((m, i) => (
           <SttRow key={`${m.name}-${m.compute}-${i}`} m={m} hw={hw} active={sttActive}
                   onSelect={(row) => switchModel({ role: 'stt' }, row.name, row.compute)}/>

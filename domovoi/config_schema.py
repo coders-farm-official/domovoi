@@ -522,6 +522,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(
+        "whisper_cpu_threads", "Whisper CPU threads", "Speech-to-text",
+        "How many CPU threads Whisper transcribes with when it runs on the "
+        "CPU (the cpu device, or the CPU fallback model). 0 (the default) "
+        "uses one per physical core; a number pins it. More threads means "
+        "a shorter wait after every command, up to the core count, but "
+        "leaves less CPU for the language model while it works. Ignored on "
+        "cuda. Takes effect after a restart.",
+        "int", section="advanced", tier="restart", min=0, max=256,
+    ),
+    FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
         "How often the Domovoi server pings each satellite's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "

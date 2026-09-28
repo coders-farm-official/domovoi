@@ -271,7 +271,11 @@ from sqlalchemy import text
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
-from domovoi.clients.whisper import SttUnavailableError, get_whisper_client
+from domovoi.clients.whisper import (
+    SttUnavailableError,
+    get_whisper_client,
+    whisper_runtime,
+)
 from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
 from domovoi.db.repositories import (
@@ -284,6 +288,12 @@ from domovoi.db.session import session_scope
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import route
+from domovoi.turn_timings import (
+    TurnTimings,
+    merge_post_route,
+    timings_for_row,
+    whisper_block,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1323,6 +1333,9 @@ class StreamSession:
         if t == "utterance_end":
             if not self.utterance_active:
                 return
+            # The turn's clock starts here: everything the person waits
+            # for after the satellite stops listening (turn_timings.total_ms).
+            received_at = time.monotonic()
             self.utterance_active = False
             pcm = bytes(self.audio_buf)
             self.audio_buf.clear()
@@ -1346,6 +1359,7 @@ class StreamSession:
             self._response_task = asyncio.create_task(
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
+                    received_at=received_at,
                 )
             )
             return
@@ -1581,9 +1595,13 @@ class StreamSession:
         *,
         greeting_played: bool = False,
         trigger: str | None = None,
+        received_at: float | None = None,
     ) -> None:
         interrupted = False
         response = None
+        # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
+        # utterance_end arrival; a direct call starts the clock now.
+        timings = TurnTimings(started=received_at, audio_bytes=len(pcm_bytes))
         try:
             try:
                 whisper = get_whisper_client()
@@ -1592,7 +1610,10 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return
+            stage_t0 = time.monotonic()
             transcript = await whisper.transcribe(pcm_bytes)
+            timings.stage("stt_ms", stage_t0)
+            timings.whisper = whisper_block(whisper_runtime())
             # If the Pi played a wake greeting this turn, the array's AEC may
             # have let it bleed into the capture ("Hi there. Say something
             # mean." → greeting + command). Strip a known leading greeting so
@@ -1687,11 +1708,13 @@ class StreamSession:
             # any failure leaves person_id=None / presence_tier="high"
             # rather than blocking the response cycle.
             from domovoi.voice_identifier import identify
+            stage_t0 = time.monotonic()
             try:
                 ident = await identify(pcm_bytes)
             except Exception as e:
                 log.warning("voice identification failed: %s", e)
                 ident = None
+            timings.stage("identify_ms", stage_t0)
 
             person_id = ident.person_id if ident else None
             presence_tier = ident.presence_tier if ident else None
@@ -1726,6 +1749,7 @@ class StreamSession:
                 satellite_volume=satellite_volume,
                 voice=satellite_voice,
                 app=self.ws.app,
+                timings=timings,
             )
             intent = Intent(
                 transcript=transcript,
@@ -1759,8 +1783,12 @@ class StreamSession:
                         session_id=self.session_id,
                         exiting=_is_chat_exit(transcript),
                     )
+                    # The chat row carries the pre-route stages (see
+                    # _persist_chat_turn); nothing to merge afterwards.
+                    self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
                     return
 
+            stage_t0 = time.monotonic()
             async with session_scope() as s:
                 response = await route(intent, ctx, s)
                 # Third-party intro hybrid hook. Two mutually-exclusive
@@ -1826,8 +1854,11 @@ class StreamSession:
                             ),
                             {"t": response.text, "sid": str(response.session_id)},
                         )
+            # The whole routing transaction, commit included.
+            timings.stage("route_ms", stage_t0)
             self.session_id = response.session_id
 
+            tts_t0 = time.monotonic()
             tts = get_tts_client()
             sentences = _split_sentences(response.text) or [response.text or ""]
 
@@ -1892,6 +1923,8 @@ class StreamSession:
             try:
                 for chunk in _iter_chunks(first_pcm):
                     await self.ws.send_bytes(chunk)
+                    # First call only: tts_first_ms + total_ms.
+                    timings.first_audio(tts_t0)
 
                 for i, _ in enumerate(sentences[1:], start=1):
                     assert next_task is not None
@@ -1914,6 +1947,8 @@ class StreamSession:
                         pcm = _resample_pcm(pcm, pcm_sr, sr)
                     for chunk in _iter_chunks(pcm):
                         await self.ws.send_bytes(chunk)
+                        # A first sentence that rendered to no audio at all.
+                        timings.first_audio(tts_t0)
             finally:
                 # Cancel any in-flight synth on early exit (barge-in,
                 # WS drop, exception) so we don't leak a background
@@ -1939,6 +1974,9 @@ class StreamSession:
                 "interrupted": True,
                 "expect_followup": False,
             })
+            # A turn can fail after its row committed (TTS down): record
+            # how far it got.
+            await self._finish_turn_timings(timings, trigger=trigger, response=response)
             return
 
         # `expect_followup` lets handlers ask the Pi to capture the
@@ -2125,6 +2163,45 @@ class StreamSession:
             and getattr(response, "dropin_action", None)
         ):
             await self._handle_dropin_action(response)
+
+        # Last, so the write never delays anything the satellite is waiting
+        # for (the end frame, music, a fan-out).
+        await self._finish_turn_timings(timings, trigger=trigger, response=response)
+
+    def _log_turn_timings(
+        self, timings: TurnTimings, *, trigger: str | None, matched_path: str | None
+    ) -> None:
+        """One INFO line per voice turn with its stage timings — numbers,
+        the trigger and the route taken; never the transcript. This is the
+        line to grep on the Domovoi server (``journalctl -u domovoi-core |
+        grep 'turn timings'``)."""
+        log.info(
+            "turn timings room=%s trigger=%s path=%s %s",
+            self.room_id, trigger, matched_path, timings.describe(),
+        )
+
+    async def _finish_turn_timings(
+        self, timings: TurnTimings, *, trigger: str | None, response: Any
+    ) -> None:
+        """Log the turn's timings and merge the stages that only exist
+        after routing (route_ms, tts_first_ms, total_ms) into its
+        intents_log row. Best-effort: the row already holds the pre-route
+        stages, and a failure here must never touch the turn."""
+        self._log_turn_timings(
+            timings, trigger=trigger,
+            matched_path=getattr(response, "matched_path", None),
+        )
+        patch = timings.post_route_patch()
+        if timings.intents_log_id is None or not patch:
+            return
+        try:
+            async with session_scope() as s:
+                await merge_post_route(s, timings.intents_log_id, patch)
+        except Exception as e:
+            log.warning(
+                "turn timings: could not record the post-route stages for "
+                "room=%s: %s", self.room_id, e,
+            )
 
     async def _handle_dropin_action(self, response: Any) -> None:
         """Act on `response.dropin_action` after the originating turn.
@@ -2573,6 +2650,10 @@ class StreamSession:
 
         try:
             async with session_scope() as s:
+                # The voice turn's pre-route stages (speech-to-text, voice
+                # identification), same as a routed turn's row. Nothing is
+                # merged in later: Letta streams the reply, so there is no
+                # route or first-sentence stage.
                 await IntentLogRepository(s).log(
                     room_id=ctx.room_id,
                     transcript=transcript,
@@ -2582,6 +2663,7 @@ class StreamSession:
                     latency_ms=latency_ms,
                     person_id=ctx.person_id,
                     presence_tier=ctx.presence_tier,
+                    timings=await timings_for_row(s, ctx.timings),
                 )
                 await ConversationLogRepository(s).record_turn(
                     session_id=session_id,

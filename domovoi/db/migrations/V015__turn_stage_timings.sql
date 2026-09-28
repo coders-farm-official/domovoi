@@ -1,0 +1,47 @@
+-- V015 — Where a voice turn's time goes, stage by stage.
+--
+-- `intents_log.latency_ms` has always been only the router's share of a
+-- turn: its clock starts inside route(), after speech-to-text has finished,
+-- and stops before any reply audio exists. Speech-to-text, voice
+-- identification and the first sentence of text-to-speech were invisible,
+-- and they are most of what a person waits for after they stop talking.
+-- The early-endpointing work (design notes 2026-09-28, phase 1) has to be
+-- sized on real numbers from the Domovoi server, so a voice turn now
+-- records each stage here.
+--
+-- One nullable JSONB column holding integer milliseconds:
+--
+--   capture_audio_ms  length of the audio the satellite sent
+--   stt_ms            the Whisper call
+--   identify_ms       voice identification
+--   route_ms          the routing transaction (route(), hooks, commit)
+--   tts_first_ms      routed response -> first reply audio on the socket
+--   total_ms          utterance_end received -> first reply audio on the socket
+--   whisper           {model, device, compute_type, cpu_threads} that ran
+--
+-- ── Why one JSONB column and not a column per stage ─────────────────────
+--
+-- The stage list is going to grow: phase 2 adds a speculative transcription
+-- (was it reused, how early did it start) and phase 3 an early commit (did
+-- the core end the capture, after how long a pause). A column per stage
+-- would mean a migration per phase for what is diagnostic data, and ten or
+-- more mostly-NULL columns on the busiest audit table. The Whisper settings
+-- ride along on every row, so a before/after comparison (4 threads against
+-- 8, small.en against base.en) splits on the row itself rather than on a
+-- guess about when the setting changed. Nothing indexes or joins on these
+-- values; the latency summary reads the recent rows and does the arithmetic.
+--
+-- ── What is NOT in it ──────────────────────────────────────────────────
+--
+-- No text and no identity: no transcript, no reply, no person, no session.
+-- Those already live in their own columns and tables, behind their own
+-- tiers. The latency summary (GET /v1/stats/latency) reads only this
+-- column, room_id, matched_path and at, which is what lets it be open.
+--
+-- NULL for every row that predates this column, for turns that did not
+-- come from a satellite (a typed /v1/intent, a dashboard action), and for
+-- a turn routed while this column was missing (the core checks before it
+-- writes, so a server restarted ahead of its migration keeps routing).
+-- IF NOT EXISTS so a database patched by hand ahead of Flyway (a test
+-- lane) still takes this migration cleanly.
+ALTER TABLE intents_log ADD COLUMN IF NOT EXISTS timings JSONB;

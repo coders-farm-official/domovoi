@@ -294,13 +294,22 @@ Watch the core's log while you do it. At startup it prints the model load
 that gap is boot cost, paid once, and the first one also includes
 downloading the model.
 
-**Per-turn latency is not logged.** It's written to the database instead:
-one row per routed turn in `intents_log`, with `latency_ms` covering the
-whole turn (STT → routing → handler), not STT alone. To read it:
+**Per-turn latency** is written to the database: one row per routed turn
+in `intents_log`. Its `latency_ms` is the router's share only — it starts
+after speech-to-text and stops before any reply audio — so it is the
+right number for comparing a fast path with a language-model turn, and
+the wrong one for "how long did I wait". To read it:
 
 ```bash
 docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, matched_handler, matched_path, latency_ms, transcript FROM intents_log ORDER BY at DESC LIMIT 10;"
 ```
+
+A turn spoken to a satellite also records every stage — speech-to-text,
+voice identification, routing, the first reply audio, and the total from
+the end of speech — in a `turn timings` log line and on its row, and
+`curl -s http://localhost:6370/v1/stats/latency` summarises them. The
+typed turns above have no speech, so they record none. See
+[CPU_HOST.md — Measuring turn latency](CPU_HOST.md#measuring-turn-latency).
 
 **Write down what you see** — on a CPU host that's your baseline for
 deciding whether to move up or down a Whisper size. Compare a fast-path

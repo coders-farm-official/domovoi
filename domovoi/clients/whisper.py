@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 import wave
 from pathlib import Path
@@ -112,6 +113,42 @@ def compute_pair_problem(device: str | None, compute_type: str | None) -> str | 
     return None
 
 
+def _physical_cores() -> int | None:
+    """Physical core count, or None when psutil can't say (it returns
+    None on some virtualised hosts, and may be missing entirely)."""
+    try:
+        import psutil
+
+        n = psutil.cpu_count(logical=False)
+    except Exception:
+        return None
+    return int(n) if n else None
+
+
+def resolve_cpu_threads(configured: int | None = None) -> int:
+    """How many threads CTranslate2 gets when Whisper runs on the CPU.
+
+    ``configured`` is ``whisper_cpu_threads`` (read from settings when not
+    given). A positive value is used as written. ``0`` (the default) means
+    one thread per PHYSICAL core — the encoder is dense matrix work, and a
+    second hyperthread on the same core adds little but contention — and
+    where that can't be read, half the logical count. Never below 1.
+
+    faster-whisper's own default is 4 threads on any machine, which is what
+    every CPU host ran before this setting existed: on the 8-core Domovoi
+    server half the cores sat idle while a person waited for a transcript.
+    """
+    n = settings.whisper_cpu_threads if configured is None else configured
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n
+    auto = _physical_cores() or (os.cpu_count() or 2) // 2
+    return max(1, auto)
+
+
 def _load_hint(model: str, device: str, compute_type: str, exc: Exception) -> str:
     """Turn a Whisper load failure into an actionable message.
 
@@ -154,9 +191,20 @@ class FasterWhisperClient:
         # Import lazily so USE_STUBS=true doesn't require faster-whisper installed.
         from faster_whisper import WhisperModel
 
-        log.info("loading Whisper model=%s device=%s compute=%s", model, device, compute_type)
+        # CPU threads only on a cpu device (whisper_cpu_threads). On cuda
+        # the argument is left out, exactly as before, so a GPU host loads
+        # the same way it always did.
+        kwargs: dict[str, Any] = {"device": device, "compute_type": compute_type}
+        self.cpu_threads: int | None = None
+        if _norm(device) == "cpu":
+            self.cpu_threads = resolve_cpu_threads()
+            kwargs["cpu_threads"] = self.cpu_threads
+        log.info(
+            "loading Whisper model=%s device=%s compute=%s%s", model, device, compute_type,
+            f" cpu_threads={self.cpu_threads}" if self.cpu_threads else "",
+        )
         try:
-            self._model = WhisperModel(model, device=device, compute_type=compute_type)
+            self._model = WhisperModel(model, **kwargs)
         except Exception as e:
             raise RuntimeError(_load_hint(model, device, compute_type, e)) from e
         log.info("Whisper ready")
@@ -397,6 +445,24 @@ def stt_status() -> dict[str, Any]:
     if _status is None:
         return _status_doc("not_loaded")
     return {**_status, "configured": dict(_status["configured"])}
+
+
+def whisper_runtime() -> dict[str, Any]:
+    """What is transcribing right now, flat, for the per-turn timing record
+    and the latency summary: ``{state, model, device, compute_type,
+    cpu_threads}``. The model fields are None unless something loaded
+    (``stub`` included); ``cpu_threads`` is None off the cpu, and for a
+    client that doesn't report one."""
+    st = stt_status()
+    loaded = st.get("loaded") or {}
+    threads = getattr(_client, "cpu_threads", None)
+    return {
+        "state": st.get("state"),
+        "model": loaded.get("model"),
+        "device": loaded.get("device"),
+        "compute_type": loaded.get("compute_type"),
+        "cpu_threads": threads if isinstance(threads, int) else None,
+    }
 
 
 # Backward-compat alias used by existing code.
