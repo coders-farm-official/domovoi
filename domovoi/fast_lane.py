@@ -37,9 +37,10 @@ names the fast paths whose match is a whole command. Anything else (an
 open slot such as ``^play (.+)$``, a reminder's free-text message, a
 plugin's fast path, a question for the language model) never commits.
 Tier A paths hold 350 ms of quiet, tier B paths (a duration, a number, a
-calculation, the clock) 650 ms, and a bare word (``stop``, ``pause``) or
-``go back`` is always tier B: most of them start a longer, different
-command (``stop the timer``, ``go back a chapter``).
+label, a calculation, the clock, words that can start a longer question)
+650 ms, and a bare word (``stop``, ``pause``) or ``go back`` is always
+tier B: most of them start a longer, different command (``stop the
+timer``, ``go back a chapter``).
 
 Settings (``domovoi/config.py``): ``fastlane_mode`` off | shadow (off by
 default; applies without a restart), ``fastlane_model`` and
@@ -119,18 +120,13 @@ TIERS: dict[tuple[str, str], int] = {
     ("music", "_now_playing_from_match"): HOLD_A_MS,
     ("music", "_volume_up_from_match"): HOLD_A_MS,
     ("music", "_volume_down_from_match"): HOLD_A_MS,
-    ("timer", "_cancel_from_match"): HOLD_A_MS,
     ("timer", "_status_from_match"): HOLD_A_MS,
-    ("repeat", "_from_match"): HOLD_A_MS,
     ("dropin", "_end_from_match"): HOLD_A_MS,
     ("spoken_audio", "_next_chapter_from_match"): HOLD_A_MS,
     ("spoken_audio", "_prev_chapter_from_match"): HOLD_A_MS,
     ("spoken_audio", "_time_left_from_match"): HOLD_A_MS,
-    ("spoken_audio", "_now_listening_from_match"): HOLD_A_MS,
-    ("reminder", "_list_from_match"): HOLD_A_MS,
     ("wifi", "_status_from_match"): HOLD_A_MS,
     ("homelab", "_status_from_match"): HOLD_A_MS,
-    ("library", "_count_from_match"): HOLD_A_MS,
     ("voice", "_list_from_match"): HOLD_A_MS,
     ("voice", "_current_from_match"): HOLD_A_MS,
     ("playlist", "_play_favorites_from_match"): HOLD_A_MS,
@@ -141,6 +137,15 @@ TIERS: dict[tuple[str, str], int] = {
     # gets names wrong ("remind me to call ma'am in ten minutes" for "mom",
     # 7 clips of 9 on this box's TTS test set) where Whisper does not.
     ("timer", "_create_from_match"): HOLD_B_MS,
+    # "cancel the timer" + "for the pasta": the pattern's own optional label.
+    ("timer", "_cancel_from_match"): HOLD_B_MS,
+    # Closed patterns whose words start a question for the language model:
+    # "what was that" + "song", "what are my reminders" + "for tomorrow",
+    # "how many albums" + "does Adele have", "what's this book" + "about".
+    ("repeat", "_from_match"): HOLD_B_MS,
+    ("reminder", "_list_from_match"): HOLD_B_MS,
+    ("library", "_count_from_match"): HOLD_B_MS,
+    ("spoken_audio", "_now_listening_from_match"): HOLD_B_MS,
     ("music", "_volume_set_from_match"): HOLD_B_MS,
     ("music", "_play_random_from_match"): HOLD_B_MS,
     ("dismiss", "_from_match"): HOLD_B_MS,
@@ -269,18 +274,21 @@ def ensure_model(
 ) -> Path:
     """The directory holding ``spec``'s files, downloading, verifying and
     unpacking it first when it isn't there yet. Nothing unverified is ever
-    left where the loader looks."""
+    left where the loader looks, and the files already there are checked
+    against their pinned digests on every call (about 0.1 s for this
+    model), not just when they arrived: sherpa-onnx ends the whole process
+    (``exit()``, not an exception) on a model file with the wrong metadata,
+    so a file swapped or damaged after its download must never reach it."""
     root = root or MODELS_ROOT
     target = model_dir(spec, root)
     marker = target / _VERIFIED_MARKER
-    try:
-        if marker.read_text(encoding="utf-8").strip() == spec.sha256:
-            if all((target / f).is_file() for f, _ in spec.files.values()):
-                return target
-    except OSError:
-        pass
     if target.is_dir() and _files_verified(target, spec):
-        marker.write_text(spec.sha256 + "\n", encoding="utf-8")
+        try:
+            current = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current != spec.sha256:
+            marker.write_text(spec.sha256 + "\n", encoding="utf-8")
         return target
 
     root.mkdir(parents=True, exist_ok=True)
@@ -693,7 +701,10 @@ class LaneCapture:
                 with self._lock:
                     self.voiced_after_ms += FRAME_MS
         self._frames += 1
-        if not self._decoding:
+        # Nothing is decided after finish(), so the rest of a batch that was
+        # in flight at utterance_end isn't decoded: that is the moment
+        # Whisper starts on the same CPU.
+        if not self._decoding or self._finished:
             return
         if self._frames * FRAME_MS > MAX_DECODE_MS:
             self._stop_decoding("long")
@@ -818,6 +829,7 @@ class FastLaneEngine:
 # ─── The lane's lifecycle ──────────────────────────────────────────────────
 
 _LOCK = threading.Lock()
+_FETCH_LOCK = threading.Lock()
 _ENGINE: FastLaneEngine | None = None
 _STATE = "off"        # off | loading | ready | unavailable
 _GENERATION = 0
@@ -911,10 +923,16 @@ def _load(gen: int) -> None:
     except ImportError:
         _fail(gen, 'sherpa-onnx is not installed (pip install -e ".[fastlane]")')
         return
+    except Exception as e:  # a wheel whose native library won't load (OSError)
+        _fail(gen, f"sherpa-onnx is installed but won't load: {type(e).__name__}: {e}")
+        return
     threads = max(1, int(getattr(settings, "fastlane_cpu_threads", 1) or 1))
     try:
         t0 = time.perf_counter()
-        directory = ensure_model(spec)
+        # One fetch at a time: turning the lane off and on again during the
+        # first download starts a second loader on the same paths.
+        with _FETCH_LOCK:
+            directory = ensure_model(spec)
         recognizer = build_recognizer(spec, directory, threads=threads)
     except Exception as e:
         _fail(gen, f"{type(e).__name__}: {e}")
@@ -950,17 +968,22 @@ def open_capture(
     chat: bool = False,
 ) -> LaneCapture | None:
     """``utterance_start``: close the room's previous capture, and open a
-    new one when the lane is on, ready and the turn could be a command."""
-    close(previous)
-    if _mode() != "shadow":
+    new one when the lane is on, ready and the turn could be a command.
+    Never raises: it runs inside the satellite's message loop."""
+    try:
+        close(previous)
+        if _mode() != "shadow":
+            return None
+        engine = _ENGINE
+        if engine is None:
+            start()  # still loading, or unavailable (logged once): no lane
+            return None
+        if chat or trigger not in ELIGIBLE_TRIGGERS:
+            return None
+        return engine.open_capture(room_id=room_id, trigger=str(trigger))
+    except Exception as e:  # shadow must never cost a turn
+        log.warning("fastlane: could not open a capture in room=%s: %s", room_id, e)
         return None
-    engine = _ENGINE
-    if engine is None:
-        start()  # still loading, or unavailable (logged once): no lane
-        return None
-    if chat or trigger not in ELIGIBLE_TRIGGERS:
-        return None
-    return engine.open_capture(room_id=room_id, trigger=str(trigger))
 
 
 def close(capture: LaneCapture | None) -> None:

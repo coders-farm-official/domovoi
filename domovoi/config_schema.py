@@ -544,9 +544,11 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "fastlane_model", "Fast lane model", "Speech-to-text",
-        "Which pinned streaming model the fast lane runs "
-        "(nemo-fastconformer-en-80ms-int8). Takes effect after a restart.",
-        "str", section="advanced", tier="restart",
+        "Which pinned streaming model the fast lane runs; each one is "
+        "downloaded from a fixed address and checked against a fixed "
+        "SHA-256. Takes effect after a restart.",
+        "choice", section="advanced", tier="restart",
+        choices=["nemo-fastconformer-en-80ms-int8"],
     ),
     FieldSpec(
         "fastlane_cpu_threads", "Fast lane CPU threads", "Speech-to-text",

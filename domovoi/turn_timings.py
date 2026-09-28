@@ -47,8 +47,9 @@ No identity is ever put in the column, and no text either, with one
 opt-in exception: while ``fastlane_mode`` is ``shadow``, a turn the
 streaming fast lane would have committed carries ``fastlane_text``, the
 closed command the lane heard ("pause the music"), next to the
-``fastlane_*`` numbers (domovoi/fast_lane.py). It is the same words the
-row's own ``transcript`` column already holds. The summary
+``fastlane_*`` numbers (domovoi/fast_lane.py): the lane's own hearing of
+the words whose Whisper transcript the row's ``transcript`` column
+already holds. The summary
 (:func:`latency_summary`, ``GET /v1/stats/latency``) reads only the
 column's numbers, ``matched_path`` and the time — never ``fastlane_text``
 or ``fastlane_path`` — which is what lets that endpoint be open.

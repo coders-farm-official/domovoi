@@ -335,16 +335,19 @@ python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
 then `FASTLANE_MODE=shadow` in `domovoi/.env` and a restart, or
 Settings → Speech-to-text → *Fast lane* → **shadow**, which applies at
 once. The model downloads on first enable into
-`~/.domovoi/models/fastlane/`, checked against a pinned SHA-256. Without
-the extra, shadow mode logs once that the lane is unavailable and nothing
-else changes.
+`~/.domovoi/models/fastlane/` from the sherpa-onnx project's GitHub
+releases, checked against a pinned SHA-256 (and its files again on every
+load). It is NVIDIA NeMo's
+`stt_en_fastconformer_hybrid_large_streaming_80ms` (CC-BY-4.0) in
+sherpa-onnx's int8 export. Without the extra, shadow mode logs once that
+the lane is unavailable and nothing else changes.
 
 What it commits on, and after how much quiet:
 
 | Hold | Commands |
 |---|---|
-| 350 ms | Closed phrases: pause / resume / stop the music, next / previous song, volume up / down, what's playing, cancel or stop the timer, repeat that, hang up, next / previous chapter, the list-and-status questions |
-| 650 ms | A number or a duration: set a timer, set the volume to N, skip N seconds, a calculation; the clock ("what time is it" can become "... in Tokyo"); a bare word ("stop", "pause", "next") and "go back", which often start a longer command |
+| 350 ms | Closed phrases: pause / resume / stop the music, next / previous song, volume up / down, what's playing, how long is left on the timer, hang up, next / previous chapter, the wifi, server and voice questions, play / shuffle my favorites |
+| 650 ms | A number, a duration or a label: set a timer, cancel or stop the timer ("... for the pasta"), set the volume to N, skip N seconds, a calculation; the clock ("what time is it" can become "... in Tokyo"); phrases that can start a question ("what was that ... song", "what are my reminders ... for tomorrow", "how many albums ... does Adele have", "what's this book ... about"); a bare word ("stop", "pause", "next") and "go back", which often start a longer command |
 | never | Open slots (`play ...`, `remember ...`, `announce ...`), a reminder's message, plugin commands, anything for the language model |
 
 What you see: one line per turn it would have acted on,
@@ -379,6 +382,7 @@ TTS voices are not a household):
 | Last word to the lane's decision, 350 ms hold | p50 0.39 s, p95 0.63 s (real-time, one room); 0.41 / 0.67 s with three rooms talking at once |
 | Last word to the lane's decision, 650 ms hold | p50 0.66 s, p95 0.69 s |
 | CPU, one worker thread | real-time factor 0.16 (0.13 with 2 threads): about a sixth of one core per room while someone talks, nothing when nobody does; ~0.4 s of CPU per command |
+| The rest of the core | sherpa-onnx lets go of Python's lock while it decodes, so the core's event loop keeps running: its longest gap stayed under 1.5 ms with the lane following one or three rooms, apart from a single 10-34 ms gap per run. The lane also stops decoding a room at its `utterance_end`, the moment Whisper starts on that room's audio |
 | Memory | +200 MB for the model, +7 MB per room talking; loads in about 1 s |
 | Commits right | 181 of 182 on the single commands (the one miss: "what's *by* plus three") |
 | Commands caught | 181 of 252 single commands (72%; the 252 include 9 reminders it never takes). The rest were misheard and would simply have waited for Whisper. For scale: Whisper tiny got 211 of the 252 right, large-v3 77 of 84 on three of the voices |

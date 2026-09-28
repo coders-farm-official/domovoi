@@ -43,7 +43,7 @@ Every optional outbound touchpoint, sourced from the code:
 |---|---|---|---|
 | Edge TTS — **opt-in, not the default** | Response text | Microsoft Edge TTS service | Nothing to disable: the default engine is `piper` (fully local). This row applies only if you switch to `edge` yourself (Settings gear → TTS engine, or `TTS_ENGINE=edge`) |
 | Connectivity probe | A TCP dial, no payload | `1.1.1.1:443` every 30 s | Change `CONNECTIVITY_PROBE_TARGET` to a LAN host (the probe is how Domovoi knows it's offline — don't remove it, repoint it) |
-| Model downloads | One-time fetches | Whisper models, Piper voices (Hugging Face), Ollama model pulls | Nothing recurring — happens at setup / first use of a new model or voice |
+| Model downloads | One-time fetches | Whisper models, Piper voices (Hugging Face), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | Nothing recurring — happens at setup / first use of a new model or voice |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching; `NEWS_AUTO_FETCH` (topic feeds) is already off by default |
 | "Double-check that" / web answers | Search queries | Your own SearXNG container (localhost-only, port 6888), which queries public search engines | Don't start the `searxng` container — the handler degrades gracefully and says it can't check |
 | Radio plugin: station directory | Station-name searches | radio-browser.info | Disable or uninstall the radio plugin from the dashboard's Plugins page |

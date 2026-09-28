@@ -148,7 +148,7 @@ def _capture(engine: FastLaneEngine, room: str = "kitchen", trigger: str = "wake
         ("Pause the music.", "music._pause_from_match", HOLD_A_MS),
         ("pause the music", "music._pause_from_match", HOLD_A_MS),
         ("please turn the volume down", "music._volume_down_from_match", HOLD_A_MS),
-        ("stop the timer", "timer._cancel_from_match", HOLD_A_MS),
+        ("stop the timer", "timer._cancel_from_match", HOLD_B_MS),  # "... for the pasta"
         ("skip this one", "music._next_from_match", HOLD_A_MS),
         ("set a timer for ten minutes", "timer._create_from_match", HOLD_B_MS),
         ("What time is it?", "clock._time_from_match", HOLD_B_MS),
@@ -317,7 +317,14 @@ how's the wifi
 what voices do you have
 how many songs do i have
 list my reminders
-how much time left on the timer""".splitlines()
+how much time left on the timer
+cancel the timer for the pasta
+stop the timer called eggs
+what was that song
+what did you say about the weather
+what are my reminders for tomorrow
+how many albums does adele have
+what's this book about""".splitlines()
 
 
 def test_no_tier_a_prefix_cuts_off_a_different_command() -> None:
@@ -408,7 +415,10 @@ def test_speech_that_resumes_before_the_hold_commits_nothing(lane) -> None:
     _feed(cap, _voiced(10) + _quiet(5))
     eng.drain()
     assert cap.decision is None
-    _feed(cap, _quiet(8))  # now 390 ms after "the timer"
+    _feed(cap, _quiet(8))  # now 390 ms after "the timer", which can take a label
+    eng.drain()
+    assert cap.decision is None
+    _feed(cap, _quiet(9))  # 660 ms
     eng.drain()
     assert cap.decision.command.path == "timer._cancel_from_match"
     cap.finish()
@@ -470,6 +480,48 @@ def test_a_backlog_drops_the_capture_instead_of_deciding_late(lane) -> None:
     cap.finish()
     eng.drain()
     assert eng.live_streams == 0
+
+
+def test_the_batch_in_flight_at_utterance_end_is_not_decoded(lane) -> None:
+    """utterance_end is when Whisper starts on the same CPU: the lane stops
+    decoding there, even in the middle of a batch it already took."""
+    eng = lane([(0, "pause the music")])
+    inside = threading.Event()
+    release = threading.Event()
+    accepted: list[float] = []
+
+    class _SlowStream(_Stream):
+        def accept_waveform(self, sample_rate: int, samples) -> None:
+            accepted.append(self.ms)
+            if len(accepted) == 1:
+                inside.set()
+                release.wait(5)
+            super().accept_waveform(sample_rate, samples)
+
+    eng.recognizer.create_stream = _SlowStream
+    cap = _capture(eng)
+    gate = threading.Event()
+    eng.submit(gate.wait)
+    for f in _voiced(10):  # one batch of ten frames
+        cap.feed(f)
+    gate.set()
+    assert inside.wait(5)  # the worker is inside the batch's first frame
+    cap.finish()
+    release.set()
+    eng.drain()
+    assert len(accepted) == 1
+    assert eng.live_streams == 0
+
+
+def test_opening_a_capture_never_raises_into_the_socket_loop(lane, monkeypatch, caplog) -> None:
+    eng = lane([(0, "pause the music")])
+
+    def _boom(**kw):
+        raise RuntimeError("no more threads")
+
+    monkeypatch.setattr(eng, "open_capture", _boom)
+    assert fast_lane.open_capture("kitchen", "wake_word") is None
+    assert any("could not open a capture" in r.getMessage() for r in caplog.records)
 
 
 # ─── settling against Whisper ────────────────────────────────────────────
@@ -842,7 +894,9 @@ def test_settings_default_off_and_never_on_by_accident() -> None:
     assert Settings.model_fields["fastlane_cpu_threads"].default == 1
     mode = FIELD_BY_NAME["fastlane_mode"]
     assert (mode.type, mode.tier, mode.choices) == ("choice", "reapply", ["off", "shadow"])
-    assert FIELD_BY_NAME["fastlane_model"].tier == "restart"
+    model = FIELD_BY_NAME["fastlane_model"]
+    assert (model.type, model.tier) == ("choice", "restart")
+    assert model.choices == list(fast_lane.MODELS)
     assert FIELD_BY_NAME["fastlane_cpu_threads"].tier == "restart"
 
 
@@ -995,6 +1049,47 @@ def test_a_file_that_fails_its_hash_is_refused(tmp_path) -> None:
     with pytest.raises(ModelError, match="joiner.onnx"):
         fast_lane.ensure_model(bad, root, fetch=_fetcher(archive, []))
     assert list(root.iterdir()) == []
+
+
+def test_a_file_changed_after_the_download_is_never_handed_to_the_loader(tmp_path) -> None:
+    """sherpa-onnx ends the process on a model file with the wrong metadata,
+    so the marker alone never vouches for the files: they are checked on
+    every call, and a damaged set is fetched again."""
+    src = tmp_path / "src"
+    src.mkdir()
+    archive = _archive(src, _FILES)
+    spec = _spec(archive, _FILES)
+    root = tmp_path / "models"
+    calls: list = []
+    target = fast_lane.ensure_model(spec, root, fetch=_fetcher(archive, calls))
+    (target / "encoder.onnx").write_bytes(b"dec" * 100)  # another valid-looking file
+    assert (target / ".verified").is_file()
+    again = fast_lane.ensure_model(spec, root, fetch=_fetcher(archive, calls))
+    assert len(calls) == 2
+    assert (again / "encoder.onnx").read_bytes() == _FILES["stub/encoder.onnx"]
+
+
+def test_a_native_library_that_will_not_load_is_unavailable_not_stuck(monkeypatch, caplog) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _import(name, *args, **kwargs):
+        if name == "sherpa_onnx":
+            raise OSError("libonnxruntime.so: cannot open shared object file")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(settings, "use_stubs", False)
+    monkeypatch.setattr(settings, "fastlane_mode", "shadow")
+    monkeypatch.setattr(builtins, "__import__", _import)
+    fast_lane.install_engine(None)
+    try:
+        fast_lane.start()
+        assert _wait_state("unavailable") == "unavailable"
+        assert any("won't load" in r.getMessage() for r in caplog.records)
+    finally:
+        monkeypatch.setattr(builtins, "__import__", real_import)
+        fast_lane.install_engine(None)
 
 
 def test_the_pinned_model_is_the_default_and_fully_pinned() -> None:
