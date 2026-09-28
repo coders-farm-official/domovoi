@@ -574,7 +574,7 @@ proxy to the core admin endpoints with the caller's credentials forwarded.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
-| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether an admin opted the room in to command recording (§3.12a), and since when. Open on purpose — anyone in the house can see that a room records; what it recorded is admin-only. |
+| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Open on purpose — anyone in the house can see that a room records; what it recorded is admin-only. |
 | `GET /api/satellites/{room_id}` | Open | — | One room. |
 | `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
 | `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
@@ -782,7 +782,10 @@ The client only ever sends a `library_id` + a **relative** `path`; the absolute
 `root_path` of each library is resolved and validated server-side and never
 serialized. Containment rejects `..`, drive-absolute (`C:/…`), UNC (`//host/…`)
 and symlink escapes; secret-shaped names under `~/.domovoi` are filtered from
-every listing/serve/copy.
+every listing/serve/copy. Whatever sits inside `~/.domovoi` (bar its media
+subdirectories) or inside `COMMAND_CAPTURES_DIR` (§3.12a) is refused by
+location as well: `404` for a typed path, and left out of a listing, a
+directory zip and an import copy, even from a library rooted above it.
 
 | Method & path | Request | Purpose |
 |---|---|---|

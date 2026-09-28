@@ -185,7 +185,13 @@ def test_no_other_web_route_serves_the_directory() -> None:
     for mod in (REPO_ROOT / "web" / "backend" / "api").glob("*.py"):
         if mod.name in ("captures.py",):
             continue
-        assert "command_captures_dir" not in mod.read_text(encoding="utf-8"), mod.name
+        src = mod.read_text(encoding="utf-8")
+        if mod.name == "files_security.py":
+            # Named there only to REFUSE it: safe_join's guard.
+            assert src.count("command_captures_dir") == 1, mod.name
+            assert "def _is_command_captures" in src and "if _is_command_captures(target)" in src
+            continue
+        assert "command_captures_dir" not in src, mod.name
 
 
 # ─── the real flow ───────────────────────────────────────────────────────
@@ -390,6 +396,8 @@ async def test_reset_admin_pauses_every_room(rooms, fake_turn) -> None:
     async with _client({**XRW, **bearer(admin)}) as c:
         assert (await c.put("/api/captures/rooms/kitchen")).status_code == 200
     assert await cc.room_opted_in("kitchen") is True
+    async with _client() as anon:
+        assert (await _satellite(anon, "kitchen"))["capture_commands"] is True
     async with engine.begin() as conn:       # what --reset-admin does to the credential
         await conn.execute(text("DELETE FROM admin_auth"))
     assert await cc.room_opted_in("kitchen") is False
@@ -397,6 +405,8 @@ async def test_reset_admin_pauses_every_room(rooms, fake_turn) -> None:
     assert cc.list_captures() == []
     async with _client() as anon:
         assert (await anon.get("/api/captures")).status_code == 501
+        # The marker says what the core does: paused, not recording.
+        assert (await _satellite(anon, "kitchen"))["capture_commands"] is False
 
 
 @requires_db

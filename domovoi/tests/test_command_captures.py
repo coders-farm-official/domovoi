@@ -256,6 +256,37 @@ def test_an_unsafe_directory_is_never_written_or_swept(monkeypatch, tmp_path) ->
     assert song.exists()
 
 
+def test_a_directory_that_turned_unsafe_still_forgets_what_it_kept(monkeypatch, tmp_path) -> None:
+    """Recordings kept while the directory was fine, then a media library
+    configured around it: recording stops, but the 14 days still hold for
+    the recordings provably ours — and nothing else there is touched."""
+    now = datetime.now(timezone.utc)
+    caps = tmp_path / "srv" / "caps"
+    monkeypatch.setattr(settings, "command_captures_dir", str(caps))
+    old = _write("kitchen", when=now - timedelta(days=15))
+    fresh = _write("kitchen", when=now - timedelta(days=1))
+    lookalike = cc.room_dir("kitchen") / "20260101T000000000Z-0000abcd.wav"
+    lookalike.write_bytes(b"somebody's song")
+    os.utime(lookalike, (1_000_000_000, 1_000_000_000))
+    monkeypatch.setattr(settings, "music_dir", str(tmp_path / "srv"))
+    assert "music_dir" in (cc.root_problem() or "")
+    assert cc.purge_expired(now) == 1
+    assert not cc.capture_paths("kitchen", old)[0].exists()
+    assert not cc.capture_paths("kitchen", old)[1].exists()
+    assert cc.capture_paths("kitchen", fresh)[0].exists()
+    assert lookalike.exists(), "no sidecar vouches for it, so it is not ours"
+
+
+@pytest.mark.parametrize("relative", ["captures", "./captures", ""])
+def test_a_relative_directory_is_refused(monkeypatch, relative) -> None:
+    """The core writes and the dashboard deletes, each from its own working
+    directory: a relative setting would make an opt-out delete nothing."""
+    monkeypatch.setattr(settings, "command_captures_dir", relative)
+    assert "absolute" in (cc.root_problem() or "")
+    with pytest.raises(cc.CaptureDirRefused):
+        _write("kitchen")
+
+
 def test_the_default_directory_is_inside_no_files_library() -> None:
     """The Files surface only ever serves its libraries, and the recordings
     are in none of them."""
@@ -287,6 +318,71 @@ def test_a_library_rooted_above_the_config_dir_cannot_reach_into_it(monkeypatch,
         fs.safe_join(home, ".domovoi/device-token.txt")
     assert fs.safe_join(home, ".domovoi/audiobooks/a.m4b") == config / "audiobooks" / "a.m4b"
     assert fs.safe_join(home, "Music/a.mp3") == home / "Music" / "a.mp3"
+
+
+def test_a_moved_directory_is_still_no_files_download(monkeypatch, tmp_path) -> None:
+    """COMMAND_CAPTURES_DIR moved outside the config dir — onto a drive the
+    Files tab lists, or under a plugin's library root, neither of which
+    root_problem can know about — is still refused by every Files path."""
+    from web.backend.api import files_security as fs
+
+    drive = (tmp_path / "usb").resolve()
+    caps = drive / "domovoi-captures"
+    (caps / "kitchen").mkdir(parents=True)
+    (drive / "films").mkdir()
+    monkeypatch.setattr(settings, "command_captures_dir", str(caps))
+    cid = "20260928T101530123Z-3f9a1c2b"
+    for rel in (f"domovoi-captures/kitchen/{cid}.wav", "domovoi-captures/kitchen",
+                "domovoi-captures"):
+        with pytest.raises(HTTPException) as e:
+            fs.safe_join(drive, rel)
+        assert e.value.status_code == 404, rel
+    assert fs.safe_join(drive, "films/a.mkv") == drive / "films" / "a.mkv"
+    # A library rooted INSIDE the recordings lists nothing at all.
+    with pytest.raises(HTTPException):
+        fs.safe_join(caps / "kitchen", "")
+    with pytest.raises(HTTPException):
+        fs.safe_join(caps / "kitchen", f"{cid}.json")
+
+
+def test_the_tree_walks_leave_the_recordings_and_the_config_dir_out(monkeypatch, tmp_path) -> None:
+    """safe_join guards a path somebody typed; a directory zip, an import
+    copy and a listing walk the children of a folder it allowed. None of
+    them may carry ~/.domovoi (a library rooted above it) or the recordings
+    (wherever they were moved)."""
+    import zipfile
+
+    from web.backend.api import files as files_api
+    from web.backend.api import files_security as fs
+
+    home = (tmp_path / "home").resolve()
+    config = home / ".domovoi"
+    (config / "wake_clips" / "hey").mkdir(parents=True)
+    (config / "wake_clips" / "hey" / "clip_001.wav").write_bytes(b"voice")
+    (config / "device-token.txt").write_text("secret", encoding="utf-8")
+    moved = home / "usb" / "caps"
+    (moved / "kitchen").mkdir(parents=True)
+    (moved / "kitchen" / "20260928T101530123Z-3f9a1c2b.wav").write_bytes(b"speech")
+    (home / "Music").mkdir()
+    (home / "Music" / "a.mp3").write_bytes(b"song")
+    monkeypatch.setattr(fs, "CONFIG_DIR", config)
+    monkeypatch.setattr(settings, "command_captures_dir", str(moved))
+
+    resp = files_api._zip_directory(home, home)
+    names = set(zipfile.ZipFile(io.BytesIO(resp.body)).namelist())
+    assert names == {"Music/a.mp3"}, names
+
+    dest = tmp_path / "imported"
+    dest.mkdir()
+    skipped: list[str] = []
+    files_api._confined_copytree(home, dest, home, [5000], [10**9], skipped)
+    copied = {p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()}
+    assert copied == {"Music/a.mp3"}, copied
+    assert ".domovoi" in skipped and "caps" in skipped
+
+    private = fs.private_path_check()
+    assert private(config / "device-token.txt") and private(moved / "kitchen")
+    assert not private(home / "Music" / "a.mp3")
 
 
 # ─── the files ───────────────────────────────────────────────────────────
@@ -404,6 +500,23 @@ def test_the_cap_is_enforced_on_every_write(monkeypatch) -> None:
     second = cc._write_and_cap("kitchen", big, _sidecar(when=now))
     assert [c["id"] for c in cc.list_captures()] == [second]
     assert first != second
+
+
+def test_retention_also_runs_on_the_write_path(monkeypatch) -> None:
+    """The pruner is a worker, and workers are skipped under USE_STUBS; a
+    core that records must forget on its own too — at most once per
+    pruner interval, so a busy room doesn't rescan the disk every turn."""
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(cc, "_last_write_purge", None)
+    stale = _write(when=now - timedelta(days=15))
+    cc._write_and_cap("kitchen", PCM, _sidecar(when=now))
+    assert not cc.capture_paths("kitchen", stale)[0].exists()
+    stale_again = _write(when=now - timedelta(days=15))
+    cc._write_and_cap("kitchen", PCM, _sidecar(when=now))
+    assert cc.capture_paths("kitchen", stale_again)[0].exists(), "throttled to the pruner interval"
+    monkeypatch.setattr(cc, "_last_write_purge", None)
+    cc._write_and_cap("kitchen", PCM, _sidecar(when=now))
+    assert not cc.capture_paths("kitchen", stale_again)[0].exists()
 
 
 def test_rooms_no_longer_opted_in_are_swept() -> None:
@@ -669,6 +782,52 @@ async def test_a_command_during_a_drop_in_call_is_never_kept(turn) -> None:
     sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
     sess.dropin_peer = types.SimpleNamespace(room_id="garage")  # type: ignore[assignment]
     await _say(sess, "wake_word", END)
+    assert turn["routed"] == 1
+    assert cc.list_captures() == []
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_peer_hung_up_mid_capture_is_still_never_kept(turn) -> None:
+    """The capture opened during the call ("hey jarvis, hang up" — or any
+    command) and the other room hung up before it closed: the audio still
+    carries that room, so the call is judged over the whole capture."""
+    sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
+    sess.dropin_peer = types.SimpleNamespace(room_id="garage")  # type: ignore[assignment]
+    await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+    await sess._on_audio(PCM)
+    sess.dropin_peer = None                  # the peer's hang-up
+    await sess._on_control({"type": "utterance_end", **END})
+    await sess._response_task
+    assert turn["routed"] == 1
+    assert cc.list_captures() == []
+    # The latch is per utterance: the next command, with no call, is kept.
+    await _say(sess, "wake_word", END)
+    assert len(cc.list_captures()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_starts_and_ends_mid_capture_is_never_kept(turn, monkeypatch) -> None:
+    """Another room drops in while this one is mid-command, and the call is
+    gone again before the capture closes."""
+    monkeypatch.setattr(settings, "dropin_silence_timeout_sec", 0)
+
+    async def _no_music(_sess) -> None:
+        return None
+
+    sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
+    caller = StreamSession(_FakeWS(), "garage")  # type: ignore[arg-type]
+    caller.ws.app.state.dropin_lock = asyncio.Lock()
+    caller.ws.app.state.active_dropins = {}
+    caller.ws.app.state.satellite_full_duplex = {}
+    for s in (sess, caller):
+        monkeypatch.setattr(s, "_suppress_music_for", _no_music)
+    await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+    await sess._on_audio(PCM)
+    await caller._begin_dropin(sess)         # the real pairing path
+    assert sess.dropin_peer is caller
+    sess.dropin_peer = caller.dropin_peer = None   # and hung up again
+    await sess._on_control({"type": "utterance_end", **END})
+    await sess._response_task
     assert turn["routed"] == 1
     assert cc.list_captures() == []
 

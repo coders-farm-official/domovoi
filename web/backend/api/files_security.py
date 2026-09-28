@@ -45,7 +45,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 
@@ -200,6 +200,9 @@ def safe_join(root: Path, rel: str | None) -> Path:
     ``relative_to`` check. An empty ``rel`` is the library root itself.
     """
     if rel is None or not rel.strip():
+        # A library rooted inside the recordings (see below) lists nothing.
+        if _is_command_captures(root):
+            raise HTTPException(status_code=404, detail="not found")
         return root
     norm = rel.replace("\\", "/").strip()
     # Reject Windows drive-absolute ("C:/…") and UNC ("//host/share") BEFORE
@@ -230,7 +233,41 @@ def safe_join(root: Path, rel: str | None) -> Path:
     # (audiobooks, podcasts, the plugin data sandbox) pass.
     if _is_sensitive(target, _allowed_under_config()):
         raise HTTPException(status_code=404, detail="not found")
+    # The opt-in command recordings, wherever COMMAND_CAPTURES_DIR points.
+    # The default sits under the config dir (refused just above); an
+    # operator who moves it onto a drive or into a plugin's library root
+    # must still not have made household speech a Files download. Their
+    # only reader is the admin API (web/backend/api/captures.py).
+    if _is_command_captures(target):
+        raise HTTPException(status_code=404, detail="not found")
     return target
+
+
+def private_path_check() -> Callable[[Path], bool]:
+    """What :func:`safe_join` refuses by location rather than by spelling —
+    the config dir's non-media contents and the command recordings — as a
+    predicate for the tree walks (a directory zip, a copy, a listing),
+    which meet paths safe_join never saw: the children of a folder it DID
+    allow. Built once per walk, not per entry."""
+    allowed = _allowed_under_config()
+    return lambda p: _is_sensitive(p, allowed) or _is_command_captures(p)
+
+
+def _is_command_captures(p: Path) -> bool:
+    """True when ``p`` is, or sits inside, ``COMMAND_CAPTURES_DIR``. A
+    relative setting names no fixed place (the core refuses to record into
+    one), so it guards nothing here either."""
+    raw = getattr(core_settings, "command_captures_dir", None)
+    if not raw:
+        return False
+    try:
+        configured = Path(str(raw)).expanduser()
+        if not configured.is_absolute():
+            return False
+        p.expanduser().resolve(strict=False).relative_to(configured.resolve(strict=False))
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def _is_sensitive(p: Path, allowed_under_config: set[Path]) -> bool:

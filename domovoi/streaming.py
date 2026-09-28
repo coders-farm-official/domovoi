@@ -737,6 +737,13 @@ class StreamSession:
         # value, not the live `wake_recording`, so a stop_wake_recording racing
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
+        # Whether a drop-in call was live at ANY point of the in-flight
+        # utterance: set at utterance_start when already in a call, and by
+        # _begin_dropin when one starts mid-capture. Read at utterance_end so
+        # a call the peer hung up before the capture closed still keeps that
+        # capture (the other room's audio on this speaker) out of an opted-in
+        # room's command recordings (domovoi/command_captures.py).
+        self._utterance_in_call: bool = False
         # Text of the reply most recently sent to this room's speaker.
         # Kept so a barge-triggered utterance can be checked against what the
         # satellite was saying when the mic opened — on a board whose AEC is
@@ -1347,6 +1354,7 @@ class StreamSession:
             # Latch the trigger now; utterance_end reads it to decide
             # clip-vs-command (immune to wake_recording flipping mid-utterance).
             self._utterance_trigger = ctrl.get("trigger")
+            self._utterance_in_call = self.dropin_peer is not None
             return
         if t == "utterance_end":
             if not self.utterance_active:
@@ -1359,6 +1367,8 @@ class StreamSession:
             self.audio_buf.clear()
             trigger = self._utterance_trigger
             self._utterance_trigger = None
+            in_call = self._utterance_in_call or self.dropin_peer is not None
+            self._utterance_in_call = False
             # Wake-word recording mode (Feature 5): a turn the Pi flagged with
             # trigger="wake_clip" is one positive training clip, NOT a command.
             # Branch on the LATCHED trigger (not the live `wake_recording`) so a
@@ -1375,11 +1385,10 @@ class StreamSession:
             # from the transcript before routing.
             greeting_played = bool(ctrl.get("greeting_played"))
             # Why the capture ended, its frame counts and whether the room
-            # was in a call — for an opted-in room's command recording
-            # (domovoi/command_captures.py). Old satellites send none of it.
-            capture_meta = command_captures.capture_meta(
-                ctrl, in_call=self.dropin_peer is not None,
-            )
+            # was in a call at any point of it — for an opted-in room's
+            # command recording (domovoi/command_captures.py). Old
+            # satellites send none of the capture fields.
+            capture_meta = command_captures.capture_meta(ctrl, in_call=in_call)
             self._response_task = asyncio.create_task(
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
@@ -3223,6 +3232,13 @@ class StreamSession:
                 return
             self.dropin_peer = peer
             peer.dropin_peer = self
+            # A capture already open on either side now carries call audio:
+            # never an opted-in room's command recording, even if the call
+            # ends before that capture does. (getattr: the peer may be a
+            # phone, which duck-types only the drop-in surface.)
+            for side in (self, peer):
+                if getattr(side, "utterance_active", False):
+                    side._utterance_in_call = True
             # active_dropins is keyed by room_id (both directions, so a
             # membership check works for either participant). The value
             # carries enough for the web snapshot to render one row per

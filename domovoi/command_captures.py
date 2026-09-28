@@ -223,6 +223,12 @@ def root_problem() -> str | None:
     Checked before every write and every sweep, not once at boot: the
     setting is read live, and a wrong answer here is household speech on a
     route that hands files to anybody on the network."""
+    raw = str(settings.command_captures_dir or "").strip()
+    if not raw or not Path(raw).expanduser().is_absolute():
+        # The core writes and the dashboard deletes; each would resolve a
+        # relative path against its own working directory, and an opt-out
+        # would then delete nothing the core had kept.
+        return f"COMMAND_CAPTURES_DIR must be an absolute path (it is {raw!r})"
     root = captures_root()
     if root == Path(root.anchor) or len(root.parts) <= 1:
         return f"{root} is a whole filesystem root"
@@ -381,9 +387,21 @@ async def opted_in_rooms(session: Any | None = None) -> dict[str, datetime]:
 
 
 async def opted_in_rooms_or_empty() -> dict[str, datetime]:
-    """For display only (the satellites list): {} on any failure."""
+    """For display only (the satellites list's "recording" marker): the
+    rooms that record right now — opted in AND an admin credential exists,
+    the same two conditions :func:`room_opted_in` gives the core, so the
+    marker neither hides a room that records nor claims one that
+    ``--reset-admin`` paused. {} on any failure (and the core, asking the
+    same database, keeps nothing then either)."""
     try:
-        return await opted_in_rooms()
+        async with session_scope() as s:
+            rows = await s.execute(
+                text(
+                    "SELECT room_id, enabled_at FROM command_capture_rooms "
+                    "WHERE EXISTS (SELECT 1 FROM admin_auth WHERE id = 1)"
+                )
+            )
+            return {r[0]: r[1] for r in rows.all()}
     except Exception as e:  # noqa: BLE001
         log.debug("command captures: opt-in list unavailable: %s", e)
         return {}
@@ -598,22 +616,38 @@ def _inventory(root: Path) -> list[_Rec]:
     return sorted(recs.values(), key=lambda r: (r.when, r.cid))
 
 
+def _delete_rec(rec: _Rec) -> bool:
+    """Delete one inventoried recording's files by the paths the inventory
+    already holds (no second directory listing per recording, which made a
+    large cap reduction quadratic). True when it still had its audio."""
+    had_audio = rec.wav is not None and _unlink(rec.wav)
+    if rec.side is not None:
+        _unlink(rec.side)
+    return had_audio
+
+
 def purge_expired(now: datetime | None = None) -> int:
     """Delete recordings older than :func:`retention_days`, recordings missing
     half their pair for more than an hour, and stale half-written files.
-    Returns the number of recordings deleted."""
-    if root_problem():
-        return 0
+    Returns the number of recordings deleted.
+
+    A directory :func:`root_problem` refuses is still held to the retention
+    — recording stops there, forgetting must not (the directory can turn
+    unsafe AFTER it filled: a media library later configured around it) —
+    but only for complete pairs whose sidecar names its own id and room,
+    i.e. files this module provably wrote; nothing else there is touched."""
     now = now or datetime.now(timezone.utc)
     root = captures_root()
     cutoff = now - timedelta(days=retention_days())
+    if root_problem():
+        return _purge_expired_verified(root, cutoff)
     orphan_cutoff = now - timedelta(seconds=_STALE_TMP_SEC)
     gone = 0
     for rec in _inventory(root):
         expired = rec.when < cutoff
         orphan = (rec.wav is None or rec.side is None) and rec.when < orphan_cutoff
         if expired or orphan:
-            gone += _delete_ids(rec.room_dir, {rec.cid})
+            gone += int(_delete_rec(rec))
     stale_before = time.time() - _STALE_TMP_SEC
     for d in _room_dirs(root):
         for _cid, p in list(_capture_files(d)):
@@ -624,6 +658,31 @@ def purge_expired(now: datetime | None = None) -> int:
                 except OSError:
                     pass
         _rmdir_if_empty(d)
+    return gone
+
+
+def _purge_expired_verified(root: Path, cutoff: datetime) -> int:
+    """:func:`purge_expired` for a refused directory: expired, complete,
+    self-describing recordings only. A filesystem root, the home directory
+    or the config directory was refused from the start, so nothing of ours
+    can be directly under it and it is not scanned at all."""
+    home = Path.home().expanduser().resolve(strict=False)
+    if root == Path(root.anchor) or root in (home, (home / ".domovoi").resolve(strict=False)):
+        return 0
+    gone = 0
+    for rec in _inventory(root):
+        if rec.when >= cutoff or rec.wav is None or rec.side is None:
+            continue
+        side = _read_sidecar(rec.side)
+        rid = side.get("room_id") if side else None
+        if (
+            side is None
+            or side.get("id") != rec.cid
+            or not isinstance(rid, str)
+            or room_dir_name(rid) != rec.room_dir.name
+        ):
+            continue
+        gone += int(_delete_rec(rec))
     return gone
 
 
@@ -639,7 +698,7 @@ def enforce_cap(max_bytes: int | None = None) -> int:
     for rec in recs:
         if total <= limit:
             break
-        _delete_ids(rec.room_dir, {rec.cid})
+        _delete_rec(rec)
         total -= rec.size
         gone += 1
     return gone
@@ -770,8 +829,25 @@ def set_label(
 # ─── The core's two entry points ──────────────────────────────────────────
 
 
+# time.monotonic() of the last retention pass run from the write path.
+_last_write_purge: float | None = None
+
+
 def _write_and_cap(room_id: str, pcm: bytes, sidecar: dict[str, Any]) -> str:
+    """Write, then hold the cap — and, at most once per pruner interval, the
+    retention too. The pruner does both hourly, but it is a worker, and
+    workers are skipped under USE_STUBS: a core that can record must never
+    rely on it alone to forget."""
+    global _last_write_purge
     capture_id = write_capture(room_id, pcm, sidecar)
+    try:
+        every = max(60.0, float(settings.command_capture_pruner_interval_sec))
+    except (TypeError, ValueError):
+        every = 3600.0
+    now = time.monotonic()
+    if _last_write_purge is None or now - _last_write_purge >= every:
+        _last_write_purge = now
+        purge_expired()
     enforce_cap()
     return capture_id
 
