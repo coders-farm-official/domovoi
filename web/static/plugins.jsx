@@ -62,7 +62,11 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
       const res = await apiPost(`/api/plugins/install/${stagedId}/confirm`);
       // Installed but refused at load (contract check) is a 200 with
       // loaded:false — say so, with the reason, instead of "complete".
-      if (res && res.loaded === false) {
+      // An upgrade of a plugin the server already runs is staged for the
+      // restart instead (restart_required): installed, not loaded yet.
+      if (res && res.restart_required) {
+        fire(`${verb} of ${p.name} ${p.version || ''} is installed — restart to finish it`);
+      } else if (res && res.loaded === false) {
         fire(`${verb} of ${p.name} ${p.version || ''} did not load: ${res.error || res.status || 'load error'}`);
       } else {
         fire(`${verb} complete: ${p.name} ${p.version || ''}`);
@@ -416,8 +420,51 @@ const useBrowserPluginErrors = (slug) => {
 
 const PHASE_LABEL = { load: 'failed to load in your browser', render: 'crashed while rendering' };
 
+/* ---- Upgrades waiting for a restart --------------------------- */
+/* A running plugin can't be swapped in place — the server keeps the
+ * module it imported — so its upgrade is staged: installed, migrated and
+ * registered, loaded at the next restart. GET /api/config/version lists
+ * what is waiting (the core's staged upgrades, plus any plugin the web
+ * process still runs an older copy of); the button is the same restart
+ * as Settings → Version. */
+const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
+  const [restarting, setRestarting] = React.useState(false);
+  if (!pending.length) return null;
+  const capable = !!(version && version.restart_capable);
+  const updateUnit = !!(version && version.restart_mode === 'update');
+  const restart = () => restartDomovoiServer({
+    core: version, fire,
+    question: 'Restart the Domovoi services to finish the plugin upgrade?',
+    onStart: () => setRestarting(true),
+    onSettled,
+  }).finally(() => setRestarting(false));
+  return (
+    <Card title="restart to finish the upgrade"
+          sub="installed and migrated — the new version loads when the Domovoi services restart">
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="mono" style={{ fontSize: 12 }}>{pending.map(pluginUpgradeLabel).join(' · ')}</div>
+        {capable ? (
+          <div>
+            <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
+              {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to finish the upgrade'}
+            </Button>
+          </div>
+        ) : (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            {(version && version.restart_hint) || 'This host can’t restart itself.'} Run by hand:
+            <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
+              {updateUnit ? 'sudo systemctl start domovoi-update.service'
+                          : 'sudo systemctl restart domovoi-core domovoi-web'}
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
+
 /* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
   const [open, setOpen] = React.useState(false);
   const [ghUrl, setGhUrl] = React.useState('');
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
@@ -437,6 +484,7 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
             {p.install_source === 'dev' && <Pill tone="warn">DEV</Pill>}
             <Pill tone={pill.tone}>{pill.label}</Pill>
             {!p.enabled && p.status !== 'uninstalled' && <Pill tone="idle">disabled</Pill>}
+            {restartPending && <Pill tone="warn">restart to finish the upgrade</Pill>}
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {p.publisher || 'unknown publisher'} · {p.license || 'no license'}
@@ -538,8 +586,16 @@ const PluginRow = ({ p, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgrad
 /* ---- The page -------------------------------------------------- */
 const PluginsPage = () => {
   const [fire, toastNode] = useToast();
-  const { data, refresh } = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'] });
+  const { data, refresh: refreshList } = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'] });
   const plugins = (data && data.plugins) || [];
+  // Upgrades staged for the next restart (open read, same as Settings →
+  // Version): the core marks one when it confirms it, so re-read on every
+  // plugins change and after each action here.
+  const { data: version, refresh: refreshVersion } = useApiObject(
+    '/api/config/version', { eventTypes: ['plugins.changed'], quiet: true });
+  const waiting = pendingRestart(version).plugins;
+  const waitingSlugs = new Set(waiting.map((w) => w.slug));
+  const refresh = () => { refreshList(); refreshVersion(); };
   const flow = useInstallFlow(fire, refresh);
   const [ghUrl, setGhUrl] = React.useState('');
   const [uninstalling, setUninstalling] = React.useState(null);
@@ -552,6 +608,7 @@ const PluginsPage = () => {
     try {
       const res = await apiPost(`/api/plugins/${p.slug}/enable`);
       if (res && res.enabled === false) fire(`enable failed: ${res.error || res.status || 'plugin did not load'}`);
+      else if (res && res.restart_required) fire(`enabled ${p.name} — restart to finish its upgrade`);
       else fire(`enabled ${p.name}`);
       refresh();
     }
@@ -577,6 +634,8 @@ const PluginsPage = () => {
         }
       />
 
+      <PluginRestartCard version={version} pending={waiting} fire={fire} onSettled={refresh}/>
+
       <Card title="install from GitHub"
             sub="public repos only — the repo (or release tag) must contain a domovoi-plugin.toml at its root">
         <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -601,7 +660,7 @@ const PluginsPage = () => {
         ) : (
           <div>
             {plugins.map((p) => (
-              <PluginRow key={p.slug} p={p}
+              <PluginRow key={p.slug} p={p} restartPending={waitingSlugs.has(p.slug)}
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
@@ -614,8 +673,9 @@ const PluginsPage = () => {
       <div className="meta" style={{ maxWidth: 680 }}>
         Plugins are ordinary Python running inside your Domovoi server — there is no
         sandbox. The admin password gates who can install; the trust screen tells you
-        what you're agreeing to. Code changes to an already-loaded plugin need a core
-        restart to take effect.
+        what you're agreeing to. A running plugin's code can't be swapped in place, so
+        its upgrade finishes when the Domovoi services restart — this page offers the
+        restart when one is waiting.
       </div>
 
       {flow.modal}

@@ -1630,6 +1630,17 @@ The runtime forces most of this, but know the shapes:
   install pipeline; on failure the old version is restored — but migrations
   the new version already applied **stay applied**, so each released version
   should be one-version backward compatible with its own schema.
+* An upgrade of a plugin the server has already loaded is **staged for
+  restart**: Python keeps the module it imported, so re-running `register()`
+  would run the old code against your new manifest. The new version's
+  migrations run, its files replace the old ones and its registry row is
+  written, but it loads at the next restart of the Domovoi services. Confirm
+  answers `restart_required: true`; `GET /v1/admin/version` and
+  `GET /v1/plugins` list the upgrade as pending, and the dashboard's Plugins
+  page and Settings → Version offer the restart (the same one that loads
+  pulled code — it bounces core and web). Until then the plugin is not
+  loaded in the core. A plugin whose code the server never imported (its
+  import failed at boot, say) is hot-loaded as before.
 * Dev-mode plugins refuse the upgrade endpoint — just restart.
 
 ### 6.8 Trust and permissions honesty
@@ -1658,10 +1669,13 @@ history) is why the default is keep.
 
 ### 6.10 Assorted sharp edges
 
-* **Code changes need a core restart.** Enable/disable re-runs `register()`
-  against the cached module; it never re-imports. Same for upgraded web
-  modules in the dashboard process — it shows a "restart the web process"
-  toast.
+* **Code changes need a restart.** Enable/disable re-runs `register()`
+  against the cached module; it never re-imports. Same for web modules in
+  the dashboard process: it remembers the version it imported, and when the
+  registry moves past it (an upgrade, a `domovoi plugin dev` re-register)
+  `GET /api/config/version` lists the plugin in `plugins_pending_restart` and
+  the dashboard offers the restart of the Domovoi services (core and web
+  together) that loads it.
 * **Import budget**: > 10 s to import your core entry module, or initializing
   CUDA during import, fails the load. Lazy-load heavy libraries.
 * **Windows is a first-class host.** No emoji/arrows in console output

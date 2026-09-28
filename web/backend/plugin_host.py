@@ -38,8 +38,11 @@ snapshot callables resolve against the plugin web module's module-level
 Hot pickup: the ListenTask subscribes this module's :func:`resync` to
 the ``plugins_changed`` NOTIFY channel. New plugins mount live;
 *upgraded* plugin web code cannot be re-imported into a running
-process (same corollary as design §3.4) — the dashboard shows a
-"restart the web process" toast for that case.
+process (same corollary as design §3.4). The host remembers the version
+it mounted (:meth:`PluginHost.stale_mounts`), and ``GET
+/api/config/version`` lists a plugin whose registry row has moved past it
+next to the core's own staged upgrades, so Settings → Version and the
+Plugins page offer the restart that loads it.
 """
 
 from __future__ import annotations
@@ -246,6 +249,21 @@ async def fetch_plugin_rows() -> list[dict[str, Any]]:
     return out
 
 
+def _on_disk_version(install_dir: Path) -> str | None:
+    """``[plugin].version`` of the manifest next to the code being imported,
+    or None when it can't be read. The row can lag the files it describes
+    (a bundled plugin after a pull, before the core refreshes its row), and
+    what this process runs is the code on disk."""
+    import tomllib
+
+    try:
+        with open(install_dir / "domovoi-plugin.toml", "rb") as f:
+            version = (tomllib.load(f).get("plugin") or {}).get("version")
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, str) and version else None
+
+
 # ─── The host state ────────────────────────────────────────────────────────
 
 
@@ -302,6 +320,9 @@ class PluginHost:
         self.app: FastAPI | None = None
         self.rows: dict[str, dict[str, Any]] = {}       # slug → registry row
         self.mounted: set[str] = set()                   # router already included
+        # slug → the version of the web module this process imported. A
+        # row that moves past it needs a restart to reach this process.
+        self.mounted_versions: dict[str, str] = {}
         self.load_errors: dict[str, str] = {}            # slug → error string
         self.snapshots: dict[str, Callable[[], Awaitable[Any]]] = {}
         self._manifest_cache: dict[str, Any] | None = None
@@ -474,12 +495,34 @@ class PluginHost:
                     continue
                 self.snapshots[channel] = self._snapshot_wrapper(slug, fn)
             self.mounted.add(slug)
+            self.mounted_versions[slug] = (
+                _on_disk_version(Path(install_dir)) or row["version"]
+            )
             self.load_errors.pop(slug, None)
             log.info("mounted plugin web module %s (%d router(s))",
                      slug, len(ctx.routers))
         except Exception as e:
             self.load_errors[slug] = f"{type(e).__name__}: {e}"
             log.exception("plugin %s web module failed to load", slug)
+
+    def stale_mounts(self) -> list[dict[str, Any]]:
+        """Plugins whose web module this process imported at one version
+        while the registry now says another (an upgrade, a dev re-register,
+        a core that refreshed a bundled row). Python won't re-import it, so
+        each needs a restart of the Domovoi services to reach this process.
+        Same entry shape as the core's ``plugins_pending_restart``."""
+        out: list[dict[str, Any]] = []
+        for slug in sorted(self.mounted_versions):
+            r = self.rows.get(slug)
+            if not r or r["status"] == "uninstalled":
+                continue
+            running = self.mounted_versions[slug]
+            if r["version"] != running:
+                out.append(
+                    {"slug": slug, "from_version": running,
+                     "to_version": r["version"], "where": ["web"]}
+                )
+        return out
 
     def _sink_static_mount(self) -> None:
         """Move the catch-all ``/`` StaticFiles mount (name="static") to

@@ -120,6 +120,7 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     # default, locked 14). Leaving it registered would leak its handler
     # into the registry-shape tests that run later.
     await LOADER.shutdown()
+    LOADER.pending_restart.clear()    # an upgrade test's staged restart
     await reg.delete_plugin(SLUG)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
@@ -470,10 +471,16 @@ async def test_upgrade_happy_path() -> None:
 
     staged2 = await stage_zip(build_fixture_zip(version="1.1.0"), upgrade_of=SLUG)
     result = await confirm_upgrade(staged2.staged_id)
-    assert result["loaded"] and result["upgraded_from"] == "1.0.0"
+    # The running 1.0.0 module stays cached in this process, so the new
+    # version is staged for the next restart rather than hot-loaded
+    # (test_plugin_upgrade_restart.py covers the restart itself).
+    assert result["upgraded_from"] == "1.0.0"
+    assert result["restart_required"] is True and result["loaded"] is False
     row = await reg.get_plugin(SLUG)
     assert row is not None and row.version == "1.1.0" and row.enabled
-    assert "compliments" in HANDLER_BY_NAME
+    assert row.status == "ok"
+    assert "compliments" not in HANDLER_BY_NAME
+    assert LOADER.pending_restart[SLUG]["to_version"] == "1.1.0"
     # The .previous copy is cleaned up on success.
     assert list(installer.previous_root().iterdir()) == []
 

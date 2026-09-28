@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
-from domovoi.plugins_runtime.loader import LOADER, installed_root
+from domovoi.plugins_runtime.loader import LOADER, code_imported, installed_root
 from domovoi.plugins_runtime.lockfile import (
     LockfileError,
     LockRequirement,
@@ -795,7 +795,11 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
 
 # ─── Phase B — confirm (§3.2 steps 9–15 + rollback matrix) ─────────────────
 
-async def confirm_install(staged_id: str) -> dict[str, Any]:
+async def confirm_install(staged_id: str, *, load: bool = True) -> dict[str, Any]:
+    """Phase B. ``load=False`` (an upgrade staged for restart, see
+    :func:`confirm_upgrade`) runs every step but the hot load (13): the
+    new version is installed and registered, and loads at the next
+    restart."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -874,6 +878,19 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
             )
         registry_inserted = True
 
+        if not load:
+            # Staged for restart: this process already imported the plugin,
+            # so loading now would register the cached OLD module against
+            # this manifest. Chat drops the unloaded plugin's tools until
+            # the restart brings the new ones.
+            _STAGED.pop(staged_id, None)
+            await _best_effort_resync()
+            return {
+                "installed": True, "loaded": False, "slug": slug,
+                "version": manifest.version, "status": "ok",
+                "restart_required": True,
+            }
+
         # Step 13 — hot load + contract checks. Failure here is NOT rolled
         # back like earlier steps: status='load_error', enabled=false, files
         # + schema kept for inspection (§3.2 matrix row 13).
@@ -889,6 +906,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
                 "slug": slug,
                 "status": "load_error",
                 "error": str(e),
+                "restart_required": False,
             }
 
         # Step 14 — Letta/chat resync (non-fatal).
@@ -906,6 +924,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
         result: dict[str, Any] = {
             "installed": True, "loaded": True, "slug": slug,
             "version": manifest.version, "status": "ok",
+            "restart_required": False,
         }
         if resync_warning:
             result["warning"] = resync_warning
@@ -1005,6 +1024,10 @@ async def enable_plugin(slug: str) -> dict[str, Any]:
     runner = PluginMigrationRunner(slug, install_dir / manifest.migrations_dir)
     await _apply_migrations(runner)
     await reg.set_enabled(slug, True)
+    if slug in LOADER.pending_restart:
+        # Upgraded after this process imported the old code: the new
+        # version loads at the restart the upgrade is waiting for.
+        return {"enabled": True, "slug": slug, "restart_required": True}
     try:
         await LOADER.load_plugin(slug=slug, install_dir=install_dir, manifest=manifest)
     except Exception as e:
@@ -1041,8 +1064,9 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
     if row is None:
         raise InstallError("not_installed", f"plugin {slug!r} is not installed")
 
-    # 1. Full disable teardown.
+    # 1. Full disable teardown. A staged upgrade has nothing left to finish.
     await LOADER.unload_plugin(slug)
+    LOADER.pending_restart.pop(slug, None)
 
     manifest = row.manifest or {}
     migrations_dir = (manifest.get("assets") or {}).get("migrations_dir", "migrations")
@@ -1084,7 +1108,17 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
 
 async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     """Confirm a staged UPGRADE: teardown old → move old dir to .previous →
-    run the normal confirm pipeline → best-effort restore on failure."""
+    run the normal confirm pipeline → best-effort restore on failure.
+
+    When this process has already imported the plugin (the usual case: it
+    was running), the new code is NOT hot-loaded — ``import_module`` would
+    return the cached old module, so ``register()`` would run the old code
+    against the new manifest, and a new worker or handler would then fail
+    the contract check and leave the plugin disabled. The upgrade is staged
+    for restart instead: migrations applied, files swapped, row written,
+    ``restart_required: true`` in the answer and a
+    ``LOADER.pending_restart`` marker that ``/v1/admin/version`` and
+    ``/v1/plugins`` report until the Domovoi services restart."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -1103,6 +1137,7 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         slug, staged.root / manifest.migrations_dir
     )
     pre_upgrade_ledger = await mig_runner.ledger_max_version()
+    stage_for_restart = code_imported(slug) or slug in LOADER.pending_restart
 
     await LOADER.unload_plugin(slug)
     old_row = row
@@ -1115,8 +1150,12 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     await reg.delete_plugin(slug)
 
     try:
-        result = await confirm_install(staged_id)
+        result = await confirm_install(staged_id, load=not stage_for_restart)
         shutil.rmtree(prev_dir, ignore_errors=True)
+        if stage_for_restart:
+            LOADER.stage_restart(
+                slug, from_version=old_row.version, to_version=manifest.version
+            )
         result["upgraded_from"] = old_row.version
         return result
     except BaseException as e:
@@ -1143,7 +1182,9 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
                 source_ref=old_row.source_ref, install_dir=old_row.install_dir,
                 manifest=old_row.manifest, pip_report=old_row.pip_report,
             )
-            if old_row.enabled:
+            # Not while an earlier upgrade waits for its restart: the cached
+            # module is older still than the version just put back.
+            if old_row.enabled and slug not in LOADER.pending_restart:
                 old_manifest = parse_manifest(
                     (old_dir / "domovoi-plugin.toml").read_text(encoding="utf-8")
                 )

@@ -470,9 +470,15 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
         add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings', at: last && last.finished_at,
               text: 'the last update was rolled back' });
       }
-      if (version.restart_required) {
+      const restartWaiting = pendingRestart(version);
+      if (restartWaiting.code) {
         add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings',
               text: "a restart is pending · the pulled code isn't running yet" });
+      } else if (restartWaiting.plugins.length) {
+        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#plugins',
+              text: restartWaiting.plugins.length === 1
+                ? `a restart is pending · the ${restartWaiting.plugins[0].slug} upgrade isn't running yet`
+                : `a restart is pending · ${restartWaiting.plugins.length} plugin upgrades aren't running yet` });
       }
     }
     const disk = hardware && hardware.disk;

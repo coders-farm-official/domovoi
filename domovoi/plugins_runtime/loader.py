@@ -12,6 +12,15 @@ replace the torn-down context's on the app — ``domovoi.plugin_http``),
 and disable is a context teardown. **Code changes therefore need a core
 restart** — stated plainly per design §3.4; the dev loop is
 ``domovoi plugin dev`` (§3.8).
+
+The same holds for an upgrade: once this process has imported a
+plugin's package, ``import_module`` hands back the OLD module however the
+files on disk changed. So an upgrade of such a plugin is staged for the
+restart instead of hot-loaded (``installer.confirm_upgrade``): files
+swapped, migrations applied, row written, and a marker in
+:attr:`PluginLoader.pending_restart` that ``/v1/plugins`` and
+``/v1/admin/version`` report until the process restarts and imports the
+new code — the marker lives exactly as long as the stale import does.
 """
 
 from __future__ import annotations
@@ -191,6 +200,10 @@ class PluginLoader:
         self.loaded: dict[str, LoadedPlugin] = {}
         self._app: Any | None = None
         self.unregistered_dirs: list[str] = []   # dashboard flag (§3.7 step 3)
+        # slug → {slug, from_version, to_version, since}: an upgrade whose
+        # new code waits for the next restart (see the module docstring).
+        # In memory on purpose: a restart is what clears it.
+        self.pending_restart: dict[str, dict[str, Any]] = {}
 
     def bind_app(self, app: Any) -> None:
         self._app = app
@@ -220,6 +233,15 @@ class PluginLoader:
                 "bootstrap.register_nvidia_dlls() — the import order is "
                 "load-bearing (design §4.1); fix the startup sequence"
             )
+        if slug in self.pending_restart:
+            # The cached module is the version before the staged upgrade;
+            # registering it against the new manifest is the bug the
+            # staging exists to prevent.
+            raise RuntimeError(
+                f"plugin {slug!r} was upgraded to "
+                f"{self.pending_restart[slug]['to_version']} — restart the "
+                f"Domovoi services to load it"
+            )
         if slug in self.loaded:
             log.info("plugin %s already loaded — re-registering", slug)
             await self.unload_plugin(slug)
@@ -228,6 +250,11 @@ class PluginLoader:
         dir_str = str(install_dir)
         if dir_str not in sys.path:
             sys.path.insert(0, dir_str)
+        if not code_imported(slug):
+            # A directory swapped in since the last import (an upgrade of a
+            # plugin this process never imported) must not be looked up
+            # through a stale finder listing.
+            importlib.invalidate_caches()
 
         cuda_before = _cuda_initialized()
         t0 = time.monotonic()
@@ -365,6 +392,26 @@ class PluginLoader:
     async def shutdown(self) -> None:
         for slug in list(self.loaded):
             await self.unload_plugin(slug)
+
+    # ── upgrades staged for the next restart ─────────────────────────────────
+
+    def stage_restart(self, slug: str, *, from_version: str, to_version: str) -> None:
+        """Record that ``slug``'s installed version waits for a restart.
+        A second upgrade before that restart keeps the first
+        ``from_version``: the code this process imported is still that one."""
+        earlier = self.pending_restart.get(slug)
+        self.pending_restart[slug] = {
+            "slug": slug,
+            "from_version": earlier["from_version"] if earlier else from_version,
+            "to_version": to_version,
+            "since": earlier["since"] if earlier else _utc_now_iso(),
+            # Which process holds the old code (the web adds its own).
+            "where": ["core"],
+        }
+
+    def pending_restarts(self) -> list[dict[str, Any]]:
+        """Every staged upgrade, in slug order (``/v1/admin/version``)."""
+        return [dict(self.pending_restart[s]) for s in sorted(self.pending_restart)]
 
     # ── §3.7 boot-time discovery ─────────────────────────────────────────────
 
@@ -567,6 +614,22 @@ class PluginLoader:
                 await reg.set_status(slug, status, last_error)
         except Exception as e:  # noqa: BLE001 — status write is best-effort
             log.debug("could not write plugin %s status: %s", slug, e)
+
+
+def code_imported(slug: str) -> bool:
+    """Whether this process has imported any module of ``slug``'s package
+    (``domovoi_plugin_<slug>``, fixed by the manifest rules). Python never
+    re-imports a cached module, so loading a newer copy of such a plugin
+    needs a restart. A failed import still leaves the package's
+    ``__init__`` cached, which is why the whole prefix counts."""
+    pkg = f"domovoi_plugin_{slug}"
+    return any(name == pkg or name.startswith(pkg + ".") for name in list(sys.modules))
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _cuda_initialized() -> bool:

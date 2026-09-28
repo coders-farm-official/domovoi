@@ -498,3 +498,87 @@ async def test_plugin_realtime_channel_cannot_displace_core_helper(tmp_path) -> 
         await HOST.resync(web_app)
         # Core helper survives the plugin's teardown resync too.
         assert StatePollLoop._CHANNEL_HELPERS["news"] is _snapshot_news
+
+
+# ─── An upgraded plugin's web module needs a restart (§3.4 corollary) ─────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_row_that_moves_past_the_mounted_version_asks_for_a_restart(
+    fake_plugin, monkeypatch,
+) -> None:
+    """This process imported the plugin's web module at one version; the
+    registry row moving on (an upgrade, a dev re-register) cannot re-import
+    it. /api/config/version must say so next to the core's own answer, so
+    the dashboard offers the restart instead of claiming the upgrade is
+    live."""
+    from domovoi.db.session import session_scope
+    from web.backend.api import config as config_api
+
+    mounted = HOST.mounted_versions[_SLUG]
+    assert mounted == "1.0.0"
+    assert all(s["slug"] != _SLUG for s in HOST.stale_mounts())
+
+    async with session_scope() as s:
+        await s.execute(
+            text("UPDATE plugins SET version = '1.1.0' WHERE slug = :slug"),
+            {"slug": _SLUG},
+        )
+    await HOST.resync(web_app)
+
+    assert [s for s in HOST.stale_mounts() if s["slug"] == _SLUG] == [
+        {"slug": _SLUG, "from_version": "1.0.0", "to_version": "1.1.0", "where": ["web"]}
+    ]
+
+    async def core_version(path, timeout=10.0, headers=None):
+        assert path == "/v1/admin/version"
+        return 200, {"running_sha": "abc1234", "checkout_sha": "abc1234",
+                     "restart_required": False, "code_restart_required": False,
+                     "plugins_pending_restart": []}
+
+    monkeypatch.setattr(config_api, "get_admin", core_version)
+    async with _web() as client:
+        r = await client.get("/api/config/version")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["restart_required"] is True
+    assert body["code_restart_required"] is False
+    assert {"slug": _SLUG, "from_version": "1.0.0", "to_version": "1.1.0",
+            "where": ["web"]} in body["plugins_pending_restart"]
+
+
+def test_web_pending_restarts_fold_into_the_core_answer() -> None:
+    from web.backend.api.config import merge_web_pending_restarts
+
+    core = {"restart_required": False, "plugins_pending_restart": [
+        {"slug": "radio", "from_version": "1.1.0", "to_version": "1.2.0",
+         "since": "2026-09-28T00:00:00+00:00", "where": ["core"]},
+    ]}
+    merged = merge_web_pending_restarts(core, [
+        {"slug": "radio", "from_version": "1.1.0", "to_version": "1.2.0", "where": ["web"]},
+        {"slug": "sleep", "from_version": "0.3.0", "to_version": "0.4.0", "where": ["web"]},
+    ])
+    assert merged["restart_required"] is True
+    assert [(p["slug"], p["where"]) for p in merged["plugins_pending_restart"]] == [
+        ("radio", ["core", "web"]), ("sleep", ["web"]),
+    ]
+    assert core["plugins_pending_restart"][0]["where"] == ["core"]   # not mutated
+
+    # Nothing waiting anywhere: the core's answer passes through, and an
+    # older core without the field reads as an empty list.
+    quiet = merge_web_pending_restarts({"restart_required": False}, [])
+    assert quiet == {"restart_required": False, "plugins_pending_restart": []}
+
+
+def test_the_mounted_version_is_read_from_the_code_on_disk(tmp_path) -> None:
+    """A bundled row can lag the checkout it describes until the core
+    refreshes it, so the version this process runs comes from the manifest
+    next to the code it imported."""
+    (tmp_path / "domovoi-plugin.toml").write_text(
+        '[plugin]\nslug = "x"\nversion = "1.2.0"\n', encoding="utf-8"
+    )
+    assert plugin_host._on_disk_version(tmp_path) == "1.2.0"
+    assert plugin_host._on_disk_version(tmp_path / "missing") is None
+    (tmp_path / "domovoi-plugin.toml").write_text("[plugin\n", encoding="utf-8")
+    assert plugin_host._on_disk_version(tmp_path) is None
