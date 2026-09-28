@@ -1563,7 +1563,9 @@ Uninstall-with-purge drops the role along with the schema. Migrations are
 checksummed into `plugin_<slug>.schema_history`, and an already-applied file
 that changed on disk refuses to load. No down-migrations, ever. Each apply
 targets both the prod DB and its `_test` sibling; on a fresh install a
-failure anywhere drops the brand-new schema everywhere (both-or-neither).
+failure anywhere drops the brand-new schema everywhere (both-or-neither)
+— on each database where that install created it, never a schema that
+was already there.
 
 ### 6.4 The offline contract, and the bus is not durable
 

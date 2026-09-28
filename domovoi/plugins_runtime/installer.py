@@ -816,10 +816,13 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
     runner = PluginMigrationRunner(slug, staged.root / manifest.migrations_dir)
     # A schema that pre-exists (reinstall-after-keep, §3.5) carries user
     # data — rollback must NEVER drop it; only a brand-new schema is
-    # dropped on failure (§3.2 matrix row 10).
-    schema_was_fresh = not await runner.schema_exists()
+    # dropped on failure (§3.2 matrix row 10). Decided per database: a
+    # _test schema an earlier install left behind is not brand new.
+    fresh_urls: list[str] = []
 
     try:
+        fresh_urls = await runner.missing_schema_urls()
+
         # Step 9b — real pip install.
         if manifest.python_requirements:
             lock = staged.root / (manifest.lockfile or "requirements.lock")
@@ -908,13 +911,13 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
 
     except InstallError:
         await _rollback(
-            staged, pip_report, schema_was_fresh, moved_to,
+            staged, pip_report, fresh_urls, moved_to,
             registry_inserted, runner,
         )
         raise
     except Exception as e:
         await _rollback(
-            staged, pip_report, schema_was_fresh, moved_to,
+            staged, pip_report, fresh_urls, moved_to,
             registry_inserted, runner,
         )
         raise InstallError("install_failed", f"install failed: {e}") from e
@@ -937,15 +940,15 @@ def hash_tree_excluding(root: Path, exclude_names: set[str]) -> str:
 async def _rollback(
     staged: StagedInstall,
     pip_report: dict[str, Any] | None,
-    schema_was_fresh: bool,
+    fresh_urls: list[str],
     moved_to: Path | None,
     registry_inserted: bool,
     runner: PluginMigrationRunner,
 ) -> None:
     """§3.2 failure matrix, rows 9–12 (later rows don't roll back). The
-    schema is dropped only when it was BRAND NEW this install — a kept
-    schema from an earlier uninstall (§3.5 reinstall-after-keep) carries
-    user data and survives."""
+    schema is dropped only on the databases where it was BRAND NEW this
+    install (``fresh_urls``) — a kept schema from an earlier uninstall
+    (§3.5 reinstall-after-keep) carries user data and survives."""
     slug = staged.manifest.slug
     if registry_inserted:
         try:
@@ -954,9 +957,9 @@ async def _rollback(
             log.exception("rollback: registry delete failed")
     if moved_to is not None:
         shutil.rmtree(moved_to, ignore_errors=True)
-    if schema_was_fresh:
+    if fresh_urls:
         try:
-            await runner.drop_schema()
+            await runner.drop_schema(only=fresh_urls)
         except Exception:  # pragma: no cover
             log.exception("rollback: schema drop failed")
     if pip_report:

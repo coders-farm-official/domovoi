@@ -25,7 +25,8 @@ small Python runner instead (Flyway multi-history config is fragile):
   moves with its table rather than on its own.
 * **Both-DB application** (locked 5): prod first, then the derived
   ``_test`` DB; on a fresh install a ``_test`` failure drops the brand
-  new schema on both (both-or-neither).
+  new schema on both (both-or-neither) — only where this run created it,
+  never a schema that was already there.
 * **Checksum validation**: sha256 per file; an already-applied version
   whose file checksum differs refuses the catch-up (append-only, no
   down-migrations — the same discipline as core).
@@ -421,34 +422,41 @@ class PluginMigrationRunner:
         finally:
             await engine.dispose()
 
+    async def missing_schema_urls(self) -> list[str]:
+        """The targets with no ``plugin_<slug>`` schema yet — the ones a
+        failed fresh install may drop again, and the only ones."""
+        return [u for u in self.database_urls if not await self.schema_exists(u)]
+
     async def apply_all(self) -> dict[str, list[str]]:
         """Apply pending migrations to every target DB (prod first, then
-        ``_test``). Fresh-install both-or-neither (§3.2 step 10): when the
-        schema did not exist on the PRIMARY DB before this run, any
-        failure anywhere drops the brand-new schema on every target (no
-        user data can exist in it). On catch-up (schema pre-existed —
-        possibly with user data) failures abort without dropping:
-        already-applied files stay applied (append-only discipline).
+        ``_test``). Fresh-install both-or-neither (§3.2 step 10): any
+        failure drops the schema on every target where THIS run created
+        it (no user data can exist there yet). A schema that already
+        existed on a target — a catch-up, a reinstall after keep, or a
+        ``_test`` twin an earlier install left behind — is never dropped:
+        its already-applied files stay applied (append-only discipline).
         Returns {url: [applied filenames]}."""
         files = discover_migrations(self.migrations_dir)
         if not files:
             return {}
         self.lint_all()
-        primary_fresh = not await self.schema_exists(self.database_urls[0])
+        created: list[str] = []
         applied: dict[str, list[str]] = {}
         try:
             for url in self.database_urls:
+                # Probed per target, just before this run touches it.
+                if not await self.schema_exists(url):
+                    created.append(url)
                 applied[url] = await self._apply_to(url, files)
         except Exception:
-            if primary_fresh:
-                for url in self.database_urls:
-                    try:
-                        await self.drop_schema(url)
-                    except Exception as drop_err:  # pragma: no cover
-                        log.error(
-                            "rollback DROP SCHEMA %s on %s failed: %s",
-                            self.schema, url, drop_err,
-                        )
+            for url in created:
+                try:
+                    await self.drop_schema(url)
+                except Exception as drop_err:  # pragma: no cover
+                    log.error(
+                        "rollback DROP SCHEMA %s on %s failed: %s",
+                        self.schema, url, drop_err,
+                    )
             raise
         return applied
 
@@ -474,13 +482,22 @@ class PluginMigrationRunner:
         finally:
             await engine.dispose()
 
-    async def drop_schema(self, url: str | None = None) -> None:
+    async def drop_schema(
+        self, url: str | None = None, *, only: list[str] | None = None
+    ) -> None:
         """``DROP SCHEMA IF EXISTS plugin_<slug> CASCADE`` — uninstall-purge
-        and fresh-install rollback. Applied to one URL, or all targets.
-        When every target is dropped the plugin's NOLOGIN role goes too
-        (best effort: a role still owning objects elsewhere stays, and a
-        leftover role is inert — no login, no privilege on anything)."""
-        urls = [url] if url else self.database_urls
+        and fresh-install rollback. Applied to one URL, to ``only`` the
+        listed targets (a failed install drops just the schemas it
+        created), or to all targets. When every target is dropped the
+        plugin's NOLOGIN role goes too (best effort: a role still owning
+        objects elsewhere stays, and a leftover role is inert — no login,
+        no privilege on anything); while any target keeps its schema, the
+        role stays with it."""
+        if url is not None:
+            urls, forget = [url], False
+        else:
+            urls = list(self.database_urls if only is None else only)
+            forget = set(self.database_urls) <= set(urls)
         for u in urls:
             engine = create_async_engine(u, poolclass=NullPool)
             try:
@@ -491,7 +508,7 @@ class PluginMigrationRunner:
                     await driver.execute(
                         f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE'
                     )
-                    if url is None:
+                    if forget:
                         # Drop the role's one remaining grant in this DB;
                         # after the last target nothing depends on it.
                         await self._forget_role(driver, last=(u == urls[-1]))
