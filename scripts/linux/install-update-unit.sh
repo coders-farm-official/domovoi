@@ -24,20 +24,29 @@
 #      never guesses.
 #   3. The grant, /etc/sudoers.d/domovoi-update (0440), put in place only
 #      after visudo -cf passed on a copy, then visudo -c on the whole
-#      configuration; if that fails, the previous state is put back. Then
-#      the grant is checked as the service user with the probe the core
-#      itself runs (sudo -n -l, domovoi/self_restart.py).
+#      configuration. Then the grant is checked as the service user with
+#      the probe the core itself runs (sudo -n -l, domovoi/self_restart.py).
 #   4. /etc/systemd/system/domovoi-update.service, exactly as the doc gives
 #      it, and systemctl daemon-reload. The unit goes in after the grant is
 #      verified, not before: the core offers the full update as soon as it
 #      sees the unit file, and without the grant its Restart button would
 #      stop working instead of falling back to the plain bounce.
-#   5. With --apply: systemctl start domovoi-update.service, which waits
+#   5. With --fix-ownership, the chown of the venv.
+#   6. With --apply: systemctl start domovoi-update.service, which waits
 #      for the run, then the status from its last-result.json.
+#
+# A stop anywhere in 3 and 4, expected or not (a failed check, a failed
+# write, Ctrl-C), takes back the grant and the unit this run put there, so
+# the Restart button keeps doing what it did before. The baseline from 2
+# stays: it is the SHA the core runs now, which a later run could no longer
+# learn once something restarts the core.
 #
 # What is already in place is left alone, so a second run changes nothing
 # and says so. A file it replaces is kept beside it as
-# <name>.bak-<UTC timestamp>, a name sudo and systemd both ignore.
+# <name>.bak-<UTC timestamp>, a name sudo and systemd both ignore. Files are
+# written by rename from a mktemp name in the same directory, and only into
+# directories no one but root can write (the pre-flight checks the update
+# state directory and /etc/default/domovoi-update for that).
 #
 # Settings: the options in usage() below, and the same
 # /etc/default/domovoi-update that apply-update.sh reads (DOMOVOI_UPDATE_DIR,
@@ -47,9 +56,12 @@
 # DOMOVOI_INSTALL_ROOT is for the tests only
 # (scripts/linux/tests/test-install-update-unit.sh): a directory put in
 # front of every system path this reads or writes (/etc/..., /var/lib/...,
-# /run/systemd/system, /usr/bin/systemctl). Never set it on a real host. The
-# checkout and the venv are real paths either way, since the unit names
-# them.
+# /run/systemd/system, /usr/bin/systemctl). It takes effect only together
+# with DOMOVOI_INSTALL_TEST_HARNESS=1; either one without the other, or a
+# ROOT that isn't an absolute directory other than /, makes the script
+# refuse to run rather than write the real /etc for a caller who meant a
+# sandbox. Never set either on a real host. The checkout and the venv are
+# real paths either way, since the unit names them.
 
 set -euo pipefail
 
@@ -57,8 +69,20 @@ PROG=install-update-unit
 SCRIPT_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 ORIG_ARGS=("$@")
 
-ROOT=${DOMOVOI_INSTALL_ROOT:-}
-ROOT=${ROOT%/}
+ROOT=""
+if [ -n "${DOMOVOI_INSTALL_ROOT:-}" ] || [ -n "${DOMOVOI_INSTALL_TEST_HARNESS:-}" ]; then
+  if [ "${DOMOVOI_INSTALL_TEST_HARNESS:-}" != 1 ] || [[ ${DOMOVOI_INSTALL_ROOT:-} != /* ]] \
+      || [ ! -d "$DOMOVOI_INSTALL_ROOT" ] || [ "$(cd "$DOMOVOI_INSTALL_ROOT" && pwd -P)" = / ]; then
+    printf '%s: DOMOVOI_INSTALL_ROOT and DOMOVOI_INSTALL_TEST_HARNESS are for its test harness only, and only together; unset both and run it again\n' "$PROG" >&2
+    exit 2
+  fi
+  ROOT=${DOMOVOI_INSTALL_ROOT%/}
+else
+  # Root runs what it finds on PATH; take it from no one's shell setup.
+  # sudo's secure_path is this already.
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+  export PATH
+fi
 
 UNIT_NAME=domovoi-update.service
 UNITS=(domovoi-db.service domovoi-core.service domovoi-web.service)
@@ -88,6 +112,7 @@ CORE_URL=http://127.0.0.1:6370
 UPDATE_DIR=""
 APPLIED_FILE=""
 VENV=""
+VENV_OK=0        # VENV holds an interpreter
 HEAD_SHA=""
 BASELINE=""      # the rollback baseline: recorded already, or about to be
 RECORD_SHA=""    # set when applied_sha has to be written
@@ -96,8 +121,16 @@ SUDOERS_RULE=""
 SUDOERS_STATE=""
 UNIT_STATE=""
 LAST_BACKUP=""
+NOT_ROOT_ONLY=""
 TMPD=""
 DONE=()          # what this run changed, for the summary and for a stop
+# How to take back this run's grant and unit while they aren't both in
+# place and loaded: "remove", or the kept copy to put back. Empty once
+# there is nothing to take back.
+GRANT_UNDO=""
+UNIT_UNDO=""
+REPORTED=0       # a stop, or the --apply result, has already said how it ended
+PHASE=""         # "apply" while the update runs
 
 usage() {
   cat <<'EOF'
@@ -116,7 +149,9 @@ upgrade for existing installs", has the detail.
   --repo DIR        the checkout (default: domovoi-core.service's
                     WorkingDirectory, else /opt/domovoi)
   --user NAME       the service user (default: the owner of the checkout)
-  --core-url URL    where the core answers (default: http://127.0.0.1:6370)
+  --core-url URL    where the core answers, on this box: http://127.0.0.1,
+                    localhost or [::1], with a port (default:
+                    http://127.0.0.1:6370)
   -h, --help        this text
 EOF
 }
@@ -133,22 +168,105 @@ say() { printf '%s\n' "$*"; }
 line() { printf '  %-8s %s\n' "$1" "$2"; }
 more() { printf '  %-8s %s\n' "" "$1"; }
 
-# Stop with a reason and what to do about it, and say what, if anything,
-# this run had already changed.
+err() { printf '%s\n' "$*" >&2; }
+
+# Stop with a reason and what to do about it, take back what can be, and
+# say what, if anything, this run changed.
 stop() {
-  local l d
+  local l
   printf '\n%s: stopped: %s\n' "$PROG" "$1" >&2
   shift
   for l in "$@"; do
     [ -z "$l" ] || printf '  %s\n' "$l" >&2
   done
-  if [ "${#DONE[@]}" -eq 0 ]; then
-    printf 'Nothing was changed.\n' >&2
-  else
-    printf 'Changed before the stop:\n' >&2
-    for d in "${DONE[@]}"; do printf '  %s\n' "$d" >&2; done
-  fi
+  finish_stop
   exit 1
+}
+
+finish_stop() {
+  local d
+  REPORTED=1
+  undo_changes
+  if [ "${#DONE[@]}" -eq 0 ]; then
+    err "Nothing was changed."
+  else
+    err "Changed before the stop:"
+    for d in "${DONE[@]}"; do err "  $d"; done
+  fi
+}
+
+# Any other way out: set -e on a command that failed, or a signal.
+on_exit() {
+  local rc=$?
+  set +e
+  if [ "$rc" != 0 ] && [ "$REPORTED" != 1 ]; then
+    printf '\n%s: stopped before it finished (exit %s)\n' "$PROG" "$rc" >&2
+    if [ "$PHASE" = apply ]; then
+      err "  The update itself runs on in systemd: journalctl -u domovoi-update -f"
+    fi
+    finish_stop
+  fi
+  if [ -n "$TMPD" ]; then rm -rf "$TMPD"; fi
+}
+
+# Drop $1 from DONE: it was taken back.
+forget() {
+  local d kept=()
+  for d in "${DONE[@]}"; do
+    [ "$d" = "$1" ] || kept+=("$d")
+  done
+  DONE=("${kept[@]}")
+}
+
+# Take file $1 back to how it was before this run: remove it ($2 = remove),
+# or put the kept copy $2 back with mode $3.
+restore_file() {
+  if [ "$2" = remove ]; then rm -f "$1"; else put_file "$1" "$2" "$3"; fi
+}
+
+# Take back the unit, then the grant, if this run put them there and they
+# aren't both in place and loaded yet. Says what it did; never stops on its
+# own failure, but says what is left and how to fix it.
+undo_changes() {
+  local how
+  if [ -n "$UNIT_UNDO" ]; then
+    how=$UNIT_UNDO
+    UNIT_UNDO=""
+    if restore_file "$UNIT_FILE" "$how" 0644; then
+      forget "installed $UNIT_FILE"
+      if [ "$how" = remove ]; then err "  undone: removed the new $UNIT_FILE"
+      else err "  undone: put the previous $UNIT_FILE back"; fi
+      if systemctl daemon-reload >/dev/null 2>&1; then
+        forget "systemctl daemon-reload"
+      else
+        err "  systemctl daemon-reload failed after that: run sudo systemctl daemon-reload"
+      fi
+    elif [ "$how" = remove ]; then
+      err "  NOT undone: $UNIT_FILE is still there, and the Restart button starts it. Run:"
+      err "    sudo rm $UNIT_FILE && sudo systemctl daemon-reload"
+    else
+      err "  NOT undone: $UNIT_FILE is the new one; the previous one is $how. Run:"
+      err "    sudo cp -p $how $UNIT_FILE && sudo systemctl daemon-reload"
+    fi
+  fi
+  if [ -n "$GRANT_UNDO" ]; then
+    how=$GRANT_UNDO
+    GRANT_UNDO=""
+    if restore_file "$SUDOERS_FILE" "$how" 0440; then
+      forget "installed $SUDOERS_FILE"
+      if [ "$how" = remove ]; then err "  undone: removed the new $SUDOERS_FILE"
+      else err "  undone: put the previous $SUDOERS_FILE back"; fi
+    elif [ "$how" = remove ]; then
+      err "  NOT undone: $SUDOERS_FILE is still there. Run: sudo rm $SUDOERS_FILE"
+    else
+      err "  NOT undone: $SUDOERS_FILE is the new one; the previous one is $how. Run:"
+      err "    sudo cp -p $how $SUDOERS_FILE"
+    fi
+    if ! visudo -c >/dev/null 2>&1; then
+      err "  sudo's configuration fails visudo -c now. Fix it at once (sudo visudo -c says where):"
+      err "  while it fails, sudo may refuse to run anything; pkexec visudo is the way back in."
+    fi
+  fi
 }
 
 dry() { [ "$DRY_RUN" = 1 ]; }
@@ -193,13 +311,52 @@ file_state() {
 }
 
 # Put file $2 in place as $1, root-owned with mode $3, by rename from a
-# dot-name beside it. sudo skips names with a dot in sudoers.d and systemd
-# skips names without a unit suffix, so neither ever reads half a file.
+# mktemp dot-name beside it, never a name fixed in advance. sudo skips names
+# with a dot in sudoers.d and systemd skips names without a unit suffix, so
+# neither ever reads half a file. On failure $1 is as it was, and it
+# returns non-zero.
 put_file() {
   local target=$1 src=$2 mode=$3 tmp
-  tmp=$(dirname "$target")/.$(basename "$target").new
-  install -m "$mode" -o root -g root "$src" "$tmp"
-  mv -f "$tmp" "$target"
+  tmp=$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX") || return 1
+  if install -m "$mode" -o root -g root "$src" "$tmp" && mv -f "$tmp" "$target"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# Can no one but root write $1 and every directory above it? Root writes
+# there by rename, and a directory anyone else can write would let them
+# swap a symlink in between root's steps. A path that doesn't exist yet is
+# judged by the nearest directory above it that does; symlinks on the way
+# are resolved first. When the answer is no, NOT_ROOT_ONLY names the first
+# path that fails.
+root_only() {
+  local p=$1 st
+  NOT_ROOT_ONLY=$1
+  while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname "$p"); done
+  p=$(readlink -f "$p" 2>/dev/null) || return 1
+  [ -n "$p" ] || return 1
+  while :; do
+    st=$(stat -c '%u %a' "$p" 2>/dev/null) || st=""
+    if ! [[ $st =~ ^0\ ([0-7]{3,4})$ ]] || (( 8#${BASH_REMATCH[1]} & 8#022 )); then
+      NOT_ROOT_ONLY=$p
+      return 1
+    fi
+    [ "$p" != / ] || break
+    p=$(dirname "$p")
+  done
+  NOT_ROOT_ONLY=""
+  return 0
+}
+
+# Stop unless root_only $1: $2 says what root keeps there.
+need_root_only() {
+  root_only "$1" && return 0
+  stop "$NOT_ROOT_ONLY can be written by a user other than root" \
+    "$2" \
+    "A directory or file another user can write would let them change what root does there." \
+    "Fix: sudo chown root:root $NOT_ROOT_ONLY && sudo chmod go-w $NOT_ROOT_ONLY, then run this again."
 }
 
 # Copy $1 to $1.bak-<UTC timestamp>, mode and owner kept; LAST_BACKUP names it.
@@ -237,6 +394,15 @@ result_field() {
 
 # ─── Pre-flight: read everything, change nothing ─────────────────────────
 
+# domovoi-update.service runs as root with what this file sets, so only
+# root may be able to change it.
+check_defaults_file() {
+  [ -e "$DEFAULTS_FILE" ] || [ -L "$DEFAULTS_FILE" ] || return 0
+  need_root_only "$DEFAULTS_FILE" \
+    "domovoi-update.service runs as root with the settings in $DEFAULTS_FILE."
+  line ok "$DEFAULTS_FILE can be changed by root alone"
+}
+
 check_systemd() {
   local u state missing=()
   command -v systemctl >/dev/null 2>&1 \
@@ -267,9 +433,10 @@ check_repo() {
   wd=${wd%/}
   if [ -z "$REPO" ]; then REPO=${wd:-$DEFAULT_REPO}; fi
   REPO=${REPO%/}
-  [[ $REPO =~ ^/[A-Za-z0-9._/@+-]+$ ]] \
-    || stop "the checkout path must be absolute and plain (letters, digits and . _ / @ + -): $REPO" \
+  if ! [[ $REPO =~ ^/[A-Za-z0-9._/@+-]+$ ]] || [[ $REPO/ == *//* || $REPO/ == */./* || $REPO/ == */../* ]]; then
+    stop "the checkout path must be absolute and plain (letters, digits and . _ / @ + -, no . or .. parts): $REPO" \
       "It goes into the unit's ExecStart line as it is."
+  fi
   [ -d "$REPO" ] \
     || stop "no checkout at $REPO" "Pass --repo with the directory domovoi-core.service runs from."
   if [ -n "$wd" ] && [ "$(canon "$wd")" != "$(canon "$REPO")" ]; then
@@ -347,23 +514,34 @@ check_venv() {
     esac
   fi
   VENV=${VENV:-$REPO/.venv}
-  if [ ! -x "$VENV/bin/python" ]; then
+  if [[ $VENV != /?* ]] || [ ! -x "$VENV/bin/python" ]; then
     line warning "no venv interpreter at $VENV/bin/python"
     more "An update that changes dependencies would abort. If the venv is elsewhere, set"
-    more "DOMOVOI_VENV in $DEFAULTS_FILE."
+    more "DOMOVOI_VENV in $DEFAULTS_FILE to its absolute path."
     return 0
   fi
-  foreign=$(find "$VENV" ! -user "$SVC_USER" -print -quit 2>/dev/null || true)
+  VENV_OK=1
+  # The directory itself, symlinks resolved: find and chown -R don't follow
+  # a symlink, so both have to be handed the real venv.
+  VENV=$(readlink -f "$VENV")
+  # Printed, so no control characters from a file name.
+  foreign=$(find "$VENV" ! -user "$SVC_USER" -print -quit 2>/dev/null | tr -cd '[:print:]' || true)
   if [ -z "$foreign" ]; then
     line ok "$VENV belongs to $SVC_USER"
-  elif [ "$FIX_OWNERSHIP" = 1 ]; then
+  elif [ "$FIX_OWNERSHIP" = 1 ] && [ -f "$VENV/pyvenv.cfg" ] && [[ $VENV == /?*/?* ]]; then
     NEED_CHOWN=1
     line fix "$VENV isn't all $SVC_USER's (first found: $foreign); --fix-ownership hands it over"
   else
     line warning "$VENV isn't all $SVC_USER's (first found: $foreign)"
     more "pip runs as $SVC_USER, so an update that changes dependencies would abort. Fix:"
     more "  sudo chown -R $SVC_USER: $VENV"
-    more "or run this again with --fix-ownership."
+    if [ "$FIX_OWNERSHIP" = 1 ]; then
+      # A chown -R as root on the wrong directory (DOMOVOI_VENV=/opt, say)
+      # would hand a whole tree to the service user.
+      more "--fix-ownership leaves it alone: $VENV doesn't look like a venv (no pyvenv.cfg, or at the top level)."
+    else
+      more "or run this again with --fix-ownership."
+    fi
   fi
 }
 
@@ -383,7 +561,7 @@ check_docker() {
 # through to the next engine without an error.
 check_piper() {
   local v
-  [ -x "$VENV/bin/python" ] || return 0
+  [ "$VENV_OK" = 1 ] || return 0
   v=$(as_user "$VENV/bin/python" -m pip --disable-pip-version-check show piper-tts 2>/dev/null \
       | sed -n 's/^Version:[[:space:]]*//p' | head -n 1 | tr -d '\r') || v=""
   if [ -z "$v" ]; then
@@ -407,7 +585,10 @@ check_piper() {
 # took HEAD as its baseline would see nothing to apply.
 read_running_sha() {
   local url=${CORE_URL%/}/v1/admin/version body rc=0 running full
-  body=$(curl -fsS --max-time 10 "$url" 2>/dev/null) || rc=$?
+  # -q first: no ~/.curlrc. Straight to the core on this box, never through
+  # a proxy from the environment, no other protocol, nothing large.
+  body=$(curl -q -fsS --noproxy '*' --proto '=http,https' --max-time 10 --max-filesize 1048576 \
+    "$url" 2>/dev/null) || rc=$?
   if [ "$rc" != 0 ]; then
     stop "the core isn't answering at $url (curl exit $rc), and no rollback baseline is recorded yet" \
       "The baseline is the SHA the core is running, and only the running core can say which that is." \
@@ -428,6 +609,11 @@ read_running_sha() {
       "The rollback baseline has to be a commit the update can reset to." \
       "If the core runs another checkout, pass --repo. If the commit is missing here, fetch it (sudo -u $SVC_USER git -C $REPO fetch) and run this again."
   fi
+  # git prefers a branch or tag over a short SHA of the same spelling.
+  if [[ $full != "$running"* ]]; then
+    stop "$running names ${full:0:12} in $REPO, a branch or tag of that name rather than the commit the core runs" \
+      "Rename or delete that ref as $SVC_USER (git -C $REPO show-ref $running shows it), then run this again."
+  fi
   RECORD_SHA=$full
   BASELINE=$full
   line ok "the core runs ${full:0:12}; that becomes the rollback baseline"
@@ -436,13 +622,26 @@ read_running_sha() {
 check_baseline() {
   local s
   s=$(defaults_get DOMOVOI_UPDATE_DIR)
-  UPDATE_DIR=$ROOT${s:-$DEFAULT_UPDATE_DIR}
+  s=${s:-$DEFAULT_UPDATE_DIR}
+  s=${s%/}
+  # apply-update.sh runs from /, so a relative path would name another place.
+  [[ $s == /?* ]] || stop "DOMOVOI_UPDATE_DIR in $DEFAULTS_FILE must be an absolute path: $s"
+  UPDATE_DIR=$ROOT$s
   APPLIED_FILE=$UPDATE_DIR/applied_sha
-  if [ ! -e "$APPLIED_FILE" ]; then
+  if [ -L "$UPDATE_DIR" ] || { [ -e "$UPDATE_DIR" ] && [ ! -d "$UPDATE_DIR" ]; }; then
+    stop "$UPDATE_DIR isn't a plain directory (it is a symlink, or a file)" \
+      "Root keeps the rollback baseline and every update's result there. Look at it, and move it aside if it isn't meant to be there."
+  fi
+  need_root_only "$UPDATE_DIR" \
+    "Root keeps the rollback baseline and every update's result in $UPDATE_DIR, and writes them there by rename."
+  if [ ! -e "$APPLIED_FILE" ] && [ ! -L "$APPLIED_FILE" ]; then
     read_running_sha
     return 0
   fi
-  s=$(head -c 200 "$APPLIED_FILE" 2>/dev/null | tr -d '[:space:]') || s=""
+  s=""
+  if [ -f "$APPLIED_FILE" ] && [ ! -L "$APPLIED_FILE" ]; then
+    s=$(head -c 200 "$APPLIED_FILE" 2>/dev/null | tr -d '[:space:]') || s=""
+  fi
   if is_sha "$s" && as_user git -C "$REPO" cat-file -e "$s^{commit}" 2>/dev/null; then
     BASELINE=$s
     line ok "rollback baseline already recorded: ${s:0:12} ($APPLIED_FILE)"
@@ -494,43 +693,31 @@ record_baseline() {
   if dry; then line would "record $RECORD_SHA in $APPLIED_FILE"; return 0; fi
   if [ ! -d "$UPDATE_DIR" ]; then install -d -m 0755 -o root -g root "$UPDATE_DIR"; fi
   printf '%s\n' "$RECORD_SHA" >"$TMPD/applied_sha"
-  put_file "$APPLIED_FILE" "$TMPD/applied_sha" 0644
+  put_file "$APPLIED_FILE" "$TMPD/applied_sha" 0644 || stop "couldn't write $APPLIED_FILE"
   DONE+=("recorded $RECORD_SHA in $APPLIED_FILE")
   line done "recorded $RECORD_SHA in $APPLIED_FILE"
 }
 
-fix_ownership() {
-  [ "$NEED_CHOWN" = 1 ] || return 0
-  if dry; then line would "chown -R $SVC_USER: $VENV"; return 0; fi
-  chown -R "$SVC_USER:" "$VENV"
-  DONE+=("chown -R $SVC_USER: $VENV")
-  line done "chown -R $SVC_USER: $VENV"
-}
-
 install_grant() {
-  local out backup="" undo
+  local out how=remove
   case $SUDOERS_STATE in new|empty|differs) ;; *) return 0 ;; esac
   if dry; then line would "install $SUDOERS_FILE (0440): $SUDOERS_RULE"; return 0; fi
   if [ "$SUDOERS_STATE" != new ]; then
     keep_copy "$SUDOERS_FILE"
-    backup=$LAST_BACKUP
-    line kept "the previous $SUDOERS_FILE as $backup"
+    how=$LAST_BACKUP
+    line kept "the previous $SUDOERS_FILE as $how"
   fi
-  put_file "$SUDOERS_FILE" "$TMPD/sudoers" 0440
-  if ! out=$(visudo -c 2>&1); then
-    # Put back what was there, so sudo keeps working for everyone.
-    if [ -n "$backup" ]; then
-      put_file "$SUDOERS_FILE" "$backup" 0440
-      undo="put the previous file back"
-    else
-      rm -f "$SUDOERS_FILE"
-      undo="removed it again"
-    fi
-    if ! visudo -c >/dev/null 2>&1; then undo="$undo, but visudo -c still fails: run sudo visudo -c now"; fi
-    stop "visudo -c failed with the new $SUDOERS_FILE in place, so this $undo" "$(tail_of "$out")" \
-      "The update unit was not installed."
+  # From here until the unit is loaded, a stop puts this back (undo_changes).
+  GRANT_UNDO=$how
+  if ! put_file "$SUDOERS_FILE" "$TMPD/sudoers" 0440; then
+    GRANT_UNDO=""
+    stop "couldn't write $SUDOERS_FILE (it is as it was)"
   fi
   DONE+=("installed $SUDOERS_FILE")
+  if ! out=$(visudo -c 2>&1); then
+    stop "visudo -c failed with the new $SUDOERS_FILE in place" "$(tail_of "$out")" \
+      "The update unit was not installed."
+  fi
   line done "installed $SUDOERS_FILE: $SUDOERS_RULE"
 }
 
@@ -543,14 +730,14 @@ verify_grant() {
   fi
   if ! as_user sudo -n -l "${GRANT_ARGV[@]}" >/dev/null 2>&1; then
     stop "sudo doesn't let $SVC_USER run: ${GRANT_ARGV[*]}" \
-      "The rule is in $SUDOERS_FILE, so something else in sudoers overrides it. See: sudo -u $SVC_USER sudo -n -l ${GRANT_ARGV[*]}" \
+      "The rule passes visudo, so either something later in sudoers overrides it, or sudo doesn't read $(dirname "$SUDOERS_FILE") (/etc/sudoers needs its @includedir line)." \
       "The update unit was not installed, so the Restart button keeps doing what it did before."
   fi
   line ok "$SVC_USER may run: ${GRANT_ARGV[*]}"
 }
 
 install_unit() {
-  local reload=0 state
+  local reload=0 state out how=remove
   case $UNIT_STATE in
     new|differs)
       reload=1
@@ -559,9 +746,14 @@ install_unit() {
       else
         if [ "$UNIT_STATE" = differs ]; then
           keep_copy "$UNIT_FILE"
-          line kept "the previous $UNIT_FILE as $LAST_BACKUP"
+          how=$LAST_BACKUP
+          line kept "the previous $UNIT_FILE as $how"
         fi
-        put_file "$UNIT_FILE" "$TMPD/unit" 0644
+        UNIT_UNDO=$how
+        if ! put_file "$UNIT_FILE" "$TMPD/unit" 0644; then
+          UNIT_UNDO=""
+          stop "couldn't write $UNIT_FILE (it is as it was)"
+        fi
         DONE+=("installed $UNIT_FILE")
         line done "installed $UNIT_FILE"
       fi
@@ -574,20 +766,41 @@ install_unit() {
   esac
   if [ "$reload" = 1 ]; then
     if dry; then line would "systemctl daemon-reload"; return 0; fi
-    systemctl daemon-reload
+    if ! out=$(systemctl daemon-reload 2>&1); then
+      stop "systemctl daemon-reload failed: $(tail_of "$out" 1)"
+    fi
     DONE+=("systemctl daemon-reload")
     line done "systemctl daemon-reload"
   fi
   dry && return 0
   state=$(unit_prop "$UNIT_NAME" LoadState)
-  [ "$state" = loaded ] \
-    || stop "systemd doesn't load $UNIT_NAME (LoadState: ${state:-unknown})" "See: systemctl status $UNIT_NAME"
+  if [ "$state" != loaded ]; then
+    stop "systemd doesn't load $UNIT_NAME (LoadState: ${state:-unknown})" \
+      "journalctl -b | grep $UNIT_NAME may say why."
+  fi
+  # The grant and the unit are both in and loaded: nothing is taken back
+  # from here on.
+  GRANT_UNDO=""
+  UNIT_UNDO=""
   return 0
+}
+
+# Last among the changes, because a chown can't be taken back.
+fix_ownership() {
+  [ "$NEED_CHOWN" = 1 ] || return 0
+  if dry; then line would "chown -R $SVC_USER: $VENV"; return 0; fi
+  if ! chown -R "$SVC_USER:" "$VENV"; then
+    stop "chown -R $SVC_USER: $VENV failed" \
+      "The update unit and its grant are in place. Fix the venv's ownership by hand before an update needs it."
+  fi
+  DONE+=("chown -R $SVC_USER: $VENV")
+  line done "chown -R $SVC_USER: $VENV"
 }
 
 # --apply: run the update once, the way the button will, and report it.
 apply_now() {
   local rc=0 result=$UPDATE_DIR/last-result.json status mode from to err
+  PHASE=apply
   if [ -f "$result" ]; then cp "$result" "$TMPD/before.json"; fi
   say ""
   say "Applying: systemctl start $UNIT_NAME"
@@ -625,6 +838,7 @@ apply_now() {
       ;;
   esac
   more "Detail: journalctl -u domovoi-update -n 200"
+  REPORTED=1
   exit 1
 }
 
@@ -664,6 +878,10 @@ main() {
       *) usage_error "unknown option: $1" ;;
     esac
   done
+  # The running SHA has to come from the core on this box, the one that
+  # runs this checkout. Not echoed: a URL can carry a password.
+  [[ $CORE_URL =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?/?$ ]] \
+    || usage_error "--core-url must be the core on this box: http://127.0.0.1:PORT, http://localhost:PORT or http://[::1]:PORT"
 
   if [ "$(id -u)" != 0 ]; then
     local args=""
@@ -673,10 +891,14 @@ main() {
   fi
 
   umask 022
+  trap on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
   TMPD=$(mktemp -d)
-  trap 'rm -rf "$TMPD"' EXIT
 
+  if [ -n "$ROOT" ]; then say "(test harness: system paths under $ROOT)"; fi
   if dry; then say "Pre-flight (dry run: nothing is changed)"; else say "Pre-flight (nothing is changed yet)"; fi
+  check_defaults_file
   check_systemd
   check_repo
   check_user
@@ -689,11 +911,11 @@ main() {
 
   say ""
   if dry; then say "Would change"; else say "Changes"; fi
-  fix_ownership
   record_baseline
   install_grant
   verify_grant
   install_unit
+  fix_ownership
 
   say ""
   if dry; then

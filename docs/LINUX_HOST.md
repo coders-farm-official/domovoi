@@ -660,10 +660,13 @@ take them:
 - **Checks first, and changes nothing while it does.** systemd is running;
   `domovoi-db`, `domovoi-core` and `domovoi-web` are installed; git works
   in the checkout as the service user; `docker compose` works for that
-  user. If one of these fails it stops and says why. Two things only warn:
-  a venv the service user doesn't wholly own (it prints the `chown` that
-  fixes it, and `--fix-ownership` runs it), and `piper-tts` older than 1.3
-  in the venv.
+  user; only root can write `/var/lib/domovoi-update` (or whatever
+  `DOMOVOI_UPDATE_DIR` names), the directories above it and
+  `/etc/default/domovoi-update`. If one of these fails it stops and says
+  why. Two things only warn: a venv the service user doesn't wholly own (it
+  prints the `chown` that fixes it, and `--fix-ownership` runs it, last,
+  and only on a directory with a `pyvenv.cfg`), and `piper-tts` older than
+  1.3 in the venv.
 - **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
   when that file doesn't exist yet: the `running_sha` the core reports on
   `/v1/admin/version`, `-dirty` stripped, checked as a commit of the
@@ -684,14 +687,22 @@ take them:
   and prints the status from `last-result.json`. Step 4 below says what
   each status means.
 
+If it stops after it has put the grant or the unit in place (a failed
+check, a failed write, Ctrl-C), it takes both back, so the Restart button
+keeps doing what it did before. The recorded baseline stays: it is still
+the SHA the core runs, and a later run couldn't learn it once something
+restarts the core.
+
 A second run changes nothing and says so. A file it replaces is kept
 beside it as `<name>.bak-<timestamp>`, a name sudo and systemd both ignore.
 Its defaults are this page's layout: the checkout is `domovoi-core.service`'s
 `WorkingDirectory` (else `/opt/domovoi`), the service user is the
 checkout's owner and must be the core unit's `User=`, and the core answers
 on `http://127.0.0.1:6370`. `--repo`, `--user` and `--core-url` change
-them, and it reads `/etc/default/domovoi-update` the way the unit will.
-`--help` lists the options.
+them; `--core-url` has to be this box (`127.0.0.1`, `localhost` or
+`[::1]`), because the SHA it reports must be the one this checkout runs.
+It reads `/etc/default/domovoi-update` the way the unit will. `--help`
+lists the options.
 
 If something restarted the core onto the pulled code before the installer
 ran, that code is what it records. Flyway still runs on every update, but

@@ -26,8 +26,13 @@
 #   * curl serves version.json as GET /v1/admin/version, or fails (core-down);
 #   * id -u says 0 (or what uid holds); install drops -o/-g (there is no root
 #     user to hand files to here) and runs the real install;
-#   * stat -c %U says what owner holds; find ... ! -user prints what foreign
-#     holds (a path the service user doesn't own); chown only logs;
+#   * stat -c %U says what owner holds; stat -c '%u %a' says root-owned 755
+#     unless the path is listed in insecure-paths; find ... ! -user prints
+#     what foreign holds (a path the service user doesn't own); chown only
+#     logs; cp fails on a .bak- copy when backup-fail is set;
+#   * systemctl daemon-reload fails once when reload-fail is set, and
+#     domovoi-update.service never loads when update-unit-unloadable is set;
+#     install fails on the unit's temp file when install-fail-unit is set;
 #   * the venv's python answers `pip show piper-tts` with piper-version
 #     (1.3.0), or not at all when piper-missing is set.
 #
@@ -51,7 +56,8 @@ SHIM_REAL_INSTALL=$(command -v install)
 SHIM_REAL_STAT=$(command -v stat)
 SHIM_REAL_FIND=$(command -v find)
 SHIM_REAL_ID=$(command -v id)
-export SHIM_REAL_GIT SHIM_REAL_INSTALL SHIM_REAL_STAT SHIM_REAL_FIND SHIM_REAL_ID
+SHIM_REAL_CP=$(command -v cp)
+export SHIM_REAL_GIT SHIM_REAL_INSTALL SHIM_REAL_STAT SHIM_REAL_FIND SHIM_REAL_ID SHIM_REAL_CP
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 
@@ -81,7 +87,8 @@ if [ "${1-}" = show ]; then
   prop=${3-} unit=${5-}
   case "$unit $prop" in
     "domovoi-update.service LoadState")
-      if [ -f "$loaded" ]; then echo loaded; else echo not-found; fi ;;
+      if [ -f "$SHIM_STATE/update-unit-unloadable" ]; then echo bad-setting
+      elif [ -f "$loaded" ]; then echo loaded; else echo not-found; fi ;;
     "domovoi-update.service NeedDaemonReload")
       if [ -f "$loaded" ] && [ -f "$unit_file" ] && ! cmp -s "$unit_file" "$loaded"; then echo yes; else echo no; fi ;;
     *" LoadState")
@@ -95,6 +102,10 @@ if [ "${1-}" = show ]; then
 fi
 case "${1-}" in
   daemon-reload)
+    if [ -f "$SHIM_STATE/reload-fail" ]; then
+      rm -f "$SHIM_STATE/reload-fail"
+      echo "Failed to reload daemon: Connection timed out" >&2; exit 1
+    fi
     if [ -f "$unit_file" ]; then cp "$unit_file" "$loaded"; else rm -f "$loaded"; fi ;;
   start)
     if [ "${2-}" = domovoi-update.service ]; then
@@ -161,6 +172,7 @@ SH
 #!/usr/bin/env bash
 url=${!#}
 echo "curl $url" >>"$SHIM_STATE/calls.log"
+echo "curl-args $*" >>"$SHIM_STATE/calls.log"
 if [ -f "$SHIM_STATE/core-down" ]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
 cat "$SHIM_STATE/version.json"
 SH
@@ -195,6 +207,9 @@ SH
   cat >"$bin/install" <<'SH'
 #!/usr/bin/env bash
 echo "install $*" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/install-fail-unit" ] && [[ ${!#} == */.domovoi-update.service.* ]]; then
+  echo "install: cannot create regular file '${!#}': No space left on device" >&2; exit 1
+fi
 args=()
 while [ $# -gt 0 ]; do
   case $1 in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
@@ -205,7 +220,20 @@ SH
   cat >"$bin/stat" <<'SH'
 #!/usr/bin/env bash
 if [ "${1-}" = -c ] && [ "${2-}" = %U ]; then cat "$SHIM_STATE/owner"; exit 0; fi
+if [ "${1-}" = -c ] && [ "${2-}" = '%u %a' ]; then
+  echo "stat -c %u %a ${3-}" >>"$SHIM_STATE/calls.log"
+  if grep -qxF -- "${3-}" "$SHIM_STATE/insecure-paths" 2>/dev/null; then echo "1001 775"; else echo "0 755"; fi
+  exit 0
+fi
 exec "$SHIM_REAL_STAT" "$@"
+SH
+
+  cat >"$bin/cp" <<'SH'
+#!/usr/bin/env bash
+if [ -f "$SHIM_STATE/backup-fail" ] && [[ " $* " == *.bak-* ]]; then
+  echo "cp: cannot create regular file: No space left on device" >&2; exit 1
+fi
+exec "$SHIM_REAL_CP" "$@"
 SH
 
   cat >"$bin/find" <<'SH'
@@ -286,8 +314,20 @@ new_case() {
 # run_install [ARGS...]: run the script against the current case.
 run_install() {
   RC=0
-  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" TMPDIR="$CASE/tmp" \
-    bash "$SCRIPT" "$@" >"$CASE/output.log" 2>&1 || RC=$?
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$SCRIPT" "$@" >"$CASE/output.log" 2>&1 || RC=$?
+}
+
+# run_env VAR=VALUE... -- ARGS...: run the script with only the test
+# variables given (neither DOMOVOI_INSTALL_ROOT nor
+# DOMOVOI_INSTALL_TEST_HARNESS otherwise), for the cases about them.
+run_env() {
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  RC=0
+  env -u DOMOVOI_INSTALL_ROOT -u DOMOVOI_INSTALL_TEST_HARNESS PATH="$CASE/bin:$PATH" \
+    TMPDIR="$CASE/tmp" "${envs[@]}" bash "$SCRIPT" "$@" >"$CASE/output.log" 2>&1 || RC=$?
 }
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
@@ -355,17 +395,22 @@ case_fresh_install() {
   check "the unit is the doc's" eq "$(cat "$UNIT")" "$(expected_unit)"
   check "the grant is the doc's one rule" eq "$(cat "$SUDOERS")" "$RULE"
   check "grant installed 0440 root:root" called "install -m 0440 -o root -g root"
-  check "unit installed 0644 root:root" starts "install -m 0644 -o root -g root .*/\.domovoi-update\.service\.new$"
-  check "baseline installed 0644 root:root" starts "install -m 0644 -o root -g root .*/\.applied_sha\.new$"
+  check "unit installed 0644 root:root, from a mktemp name" \
+    starts "install -m 0644 -o root -g root .*/etc/systemd/system/\.domovoi-update\.service\.[A-Za-z0-9]\{6\}$"
+  check "baseline installed 0644 root:root, from a mktemp name" \
+    starts "install -m 0644 -o root -g root .*/\.applied_sha\.[A-Za-z0-9]\{6\}$"
+  check "grant installed from a mktemp name" \
+    starts "install -m 0440 -o root -g root .*/etc/sudoers\.d/\.domovoi-update\.[A-Za-z0-9]\{6\}$"
   check "no dot-files left behind" eq "$(ls -A "$ROOT/etc/sudoers.d" "$ROOT/etc/systemd/system" "$UPD" | grep -c '^\.')" 0
   check "sudoers checked as it is, first" before "visudo -c" "visudo -cf"
   check "the rule checked alone before it goes in" before "visudo -cf" "install -m 0440"
   check "the whole config checked after it went in" eq "$(count_x "visudo -c")" 2
   check "the grant verified as the service user, with the core's probe" \
     called "sudo -n -u tester -- sudo -n -l $GRANT_CMD"
-  check "the grant goes in before the unit" before "install -m 0440" ".domovoi-update.service.new"
-  check "the grant verified before the unit goes in" before "sudo -n -l" ".domovoi-update.service.new"
-  check "daemon-reload after the unit" before ".domovoi-update.service.new" "systemctl daemon-reload"
+  check "the grant goes in before the unit" before "install -m 0440" "/.domovoi-update.service."
+  check "the grant verified before the unit goes in" before "sudo -n -l" "/.domovoi-update.service."
+  check "daemon-reload after the unit" before "/.domovoi-update.service." "systemctl daemon-reload"
+  check "the state dir's path checked for root-only" called "stat -c %u %a $ROOT"
   check "systemd loaded it" test -f "$STATE/loaded-update-unit"
   check "docker compose checked as the service user" \
     called "sudo -n -u tester -- docker compose -f $REPO/domovoi/docker-compose.yml ps --quiet"
@@ -458,7 +503,7 @@ case_full_check_fails_puts_old_grant_back() {
   run_install
   check "exit 1" eq "$RC" 1
   check "the previous grant is back" eq "$(cat "$SUDOERS")" "tester ALL=(root) NOPASSWD: /bin/true"
-  check "says so" said "so this put the previous file back"
+  check "says so" said "undone: put the previous $SUDOERS back"
   check "checked before, after, and after the undo" eq "$(count_x "visudo -c")" 3
   check "the unit is not installed" absent "$UNIT"
   check "no daemon-reload" not_called "daemon-reload"
@@ -474,7 +519,7 @@ case_full_check_fails_removes_new_grant() {
   check "exit 1" eq "$RC" 1
   check "the new grant is gone" absent "$SUDOERS"
   check "no dot-file left" eq "$(ls -A "$ROOT/etc/sudoers.d" | wc -l | tr -d ' ')" 0
-  check "says so" said "so this removed it again"
+  check "says so" said "undone: removed the new $SUDOERS"
   check "names visudo's complaint" said "duplicate Defaults near line 1"
   check "the unit is not installed" absent "$UNIT"
   end_case
@@ -488,6 +533,9 @@ case_grant_not_effective() {
   check "says sudo refuses" said "sudo doesn't let tester run: $GRANT_CMD"
   check "the unit is not installed, so the button keeps its old job" absent "$UNIT"
   check "says so" said "keeps doing what it did before"
+  check "the useless grant is taken back" absent "$SUDOERS"
+  check "and says so" said "undone: removed the new $SUDOERS"
+  check "sudoers checked again after that" eq "$(count_x "visudo -c")" 3
   end_case
 }
 
@@ -618,6 +666,7 @@ case_fix_ownership() {
   run_install --fix-ownership
   check "exit 0" eq "$RC" 0
   check "hands the venv over" called "chown -R tester: $VENV"
+  check "last, once the unit is in: a chown can't be taken back" before "systemctl daemon-reload" "chown -R"
   check "no warning left" not_said warning
   end_case
 }
@@ -770,6 +819,171 @@ case_apply_reports_a_rollback() {
   end_case
 }
 
+case_install_root_needs_the_harness_flag() {
+  new_case install_root_needs_the_harness_flag
+  run_env DOMOVOI_INSTALL_ROOT="$ROOT" -- --dry-run
+  check "the root alone: refused" eq "$RC" 2
+  check "says why" said "for its test harness only, and only together"
+  run_env DOMOVOI_INSTALL_TEST_HARNESS=1 DOMOVOI_INSTALL_ROOT=relative/root -- --dry-run
+  check "a relative root: refused" eq "$RC" 2
+  run_env DOMOVOI_INSTALL_TEST_HARNESS=yes DOMOVOI_INSTALL_ROOT="$ROOT" -- --dry-run
+  check "any flag value but 1: refused" eq "$RC" 2
+  check "calls nothing" eq "$(wc -c <"$STATE/calls.log" | tr -d ' ')" 0
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_state_dir_writable_by_others_stops() {
+  new_case state_dir_writable_by_others_stops
+  mkdir -p "$UPD"
+  echo "$UPD" >"$STATE/insecure-paths"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "names it" said "$UPD can be written by a user other than root"
+  check "gives the fix" said "sudo chown root:root $UPD && sudo chmod go-w $UPD"
+  check "the core isn't asked" not_called "curl"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_state_dir_parent_writable_by_others_stops() {
+  new_case state_dir_parent_writable_by_others_stops
+  mkdir -p "$ROOT/var/lib"
+  echo "$ROOT/var/lib" >"$STATE/insecure-paths"
+  run_install
+  check "exit 1: judged by the nearest directory that exists" eq "$RC" 1
+  check "names that directory" said "$ROOT/var/lib can be written by a user other than root"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_defaults_file_writable_by_others_stops() {
+  new_case defaults_file_writable_by_others_stops
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPDATE_KEEP_BACKUPS=5\n' >"$ROOT/etc/default/domovoi-update"
+  echo "$ROOT/etc/default/domovoi-update" >"$STATE/insecure-paths"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "names it" said "$ROOT/etc/default/domovoi-update can be written by a user other than root"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_relative_state_dir_stops() {
+  new_case relative_state_dir_stops
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPDATE_DIR=var/lib/domovoi-update\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says it must be absolute" said "DOMOVOI_UPDATE_DIR in $ROOT/etc/default/domovoi-update must be an absolute path"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_core_url_must_be_this_box() {
+  new_case core_url_must_be_this_box
+  run_install --core-url http://192.168.1.20:6370
+  check "a LAN address: refused" eq "$RC" 2
+  check "says it must be this box" said "--core-url must be the core on this box"
+  run_install --core-url http://admin:hunter2@127.0.0.1:6370
+  check "credentials in the URL: refused" eq "$RC" 2
+  check "and never printed" not_said hunter2
+  run_install --core-url=file:///etc/shadow
+  check "another scheme: refused" eq "$RC" 2
+  check "the core is never asked" not_called "curl"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_curl_is_hardened() {
+  new_case curl_is_hardened
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "no .curlrc, no proxy, http(s) only" \
+    called "curl-args -q -fsS --noproxy * --proto =http,https --max-time 10 --max-filesize 1048576 http://127.0.0.1:6370/v1/admin/version"
+  end_case
+}
+
+case_ref_named_like_the_sha_stops() {
+  new_case ref_named_like_the_sha_stops
+  g branch -q "${SHA_A:0:7}" "$SHA_B"   # a branch spelled like the running SHA
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the name resolves elsewhere" said "${SHA_A:0:7} names ${SHA_B:0:12} in $REPO, a branch or tag of that name"
+  check "the wrong commit isn't recorded" nothing_installed
+  end_case
+}
+
+case_unit_write_fails_takes_the_grant_back() {
+  new_case unit_write_fails_takes_the_grant_back
+  : >"$STATE/install-fail-unit"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the unit couldn't be written" said "couldn't write $UNIT (it is as it was)"
+  check "no unit" absent "$UNIT"
+  check "the grant is taken back" absent "$SUDOERS"
+  check "and says so" said "undone: removed the new $SUDOERS"
+  check "no temp files left" eq "$(ls -A "$ROOT/etc/sudoers.d" "$ROOT/etc/systemd/system" | grep -c '^\.')" 0
+  check "the baseline stays" file_is "$UPD/applied_sha" "$SHA_A"
+  check "and is the one change reported" said "Changed before the stop:"
+  end_case
+}
+
+case_daemon_reload_fails_takes_everything_back() {
+  new_case daemon_reload_fails_takes_everything_back
+  : >"$STATE/reload-fail"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the reload failed" said "systemctl daemon-reload failed: Failed to reload daemon"
+  check "the unit is taken back" absent "$UNIT"
+  check "so is the grant" absent "$SUDOERS"
+  check "and systemd reloaded without the unit" eq "$(count_x "systemctl daemon-reload")" 2
+  check "says both" said "undone: removed the new $UNIT"
+  end_case
+}
+
+case_unit_not_loaded_puts_the_old_one_back() {
+  new_case unit_not_loaded_puts_the_old_one_back
+  printf '[Service]\nExecStart=/bin/true\n' >"$UNIT"
+  cp "$UNIT" "$STATE/loaded-update-unit"
+  : >"$STATE/update-unit-unloadable"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says systemd doesn't load it" said "systemd doesn't load domovoi-update.service (LoadState: bad-setting)"
+  check "the previous unit is back" eq "$(cat "$UNIT")" "$(printf '[Service]\nExecStart=/bin/true')"
+  check "says so" said "undone: put the previous $UNIT back"
+  check "the new grant is gone" absent "$SUDOERS"
+  end_case
+}
+
+case_unexpected_failure_takes_back() {
+  new_case unexpected_failure_takes_back
+  printf '[Service]\nExecStart=/bin/true\n' >"$UNIT"
+  cp "$UNIT" "$STATE/loaded-update-unit"
+  : >"$STATE/backup-fail"   # keeping a copy of the old unit fails, under set -e
+  run_install
+  check "exits non-zero" test "$RC" -ne 0
+  check "says it stopped" said "stopped before it finished"
+  check "the grant it had installed is taken back" absent "$SUDOERS"
+  check "and says so" said "undone: removed the new $SUDOERS"
+  check "the old unit is untouched" eq "$(cat "$UNIT")" "$(printf '[Service]\nExecStart=/bin/true')"
+  end_case
+}
+
+case_fix_ownership_only_for_a_venv() {
+  new_case fix_ownership_only_for_a_venv
+  mkdir -p "$ROOT/etc/default" "$CASE/opt/bin"
+  cp "$VENV/bin/python" "$CASE/opt/bin/python"   # an interpreter, but no pyvenv.cfg
+  printf 'DOMOVOI_VENV=%s\n' "$CASE/opt" >"$ROOT/etc/default/domovoi-update"
+  echo "$CASE/opt/something" >"$STATE/foreign"
+  run_install --fix-ownership
+  check "exit 0: a warning" eq "$RC" 0
+  check "won't chown -R a directory that isn't a venv" not_called "chown"
+  check "says why" said "doesn't look like a venv"
+  check "still gives the manual fix" said "sudo chown -R tester: $CASE/opt"
+  end_case
+}
+
 case_fresh_install
 case_idempotent_rerun
 case_existing_files_replaced_and_kept
@@ -804,6 +1018,19 @@ case_defaults_file_user_must_agree
 case_defaults_file_update_dir
 case_apply_runs_the_update
 case_apply_reports_a_rollback
+case_install_root_needs_the_harness_flag
+case_state_dir_writable_by_others_stops
+case_state_dir_parent_writable_by_others_stops
+case_defaults_file_writable_by_others_stops
+case_relative_state_dir_stops
+case_core_url_must_be_this_box
+case_curl_is_hardened
+case_ref_named_like_the_sha_stops
+case_unit_write_fails_takes_the_grant_back
+case_daemon_reload_fails_takes_everything_back
+case_unit_not_loaded_puts_the_old_one_back
+case_unexpected_failure_takes_back
+case_fix_ownership_only_for_a_venv
 
 echo "install-update-unit harness: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]
