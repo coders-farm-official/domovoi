@@ -502,26 +502,26 @@ class PluginLoader:
                         child,
                     )
 
-        # 3. Load enabled rows in slug order (deterministic — §3.7 step 4).
+        # 3. Bundled rows follow THIS checkout, before anything loads: every
+        #    other plugin's contract checks read them too. Tombstones stay
+        #    as they are (§3.5).
+        for slug in sorted(rows):
+            row = rows[slug]
+            if not row.bundled or row.status == "uninstalled":
+                continue
+            try:
+                await self._sync_bundled_row(row)
+            except Exception as e:  # noqa: BLE001 — per-plugin isolation
+                log.error("plugin %s: could not refresh its registry row: %s", slug, e)
+        rows = {r.slug: r for r in await reg.list_plugins()}
+
+        # 4. Load enabled rows in slug order (deterministic — §3.7 step 4).
         for slug in sorted(rows):
             row = rows[slug]
             if not row.enabled or row.status == "uninstalled":
                 set_plugin_enabled(slug, False)
                 continue
             install_dir = Path(row.install_dir)
-            if row.bundled:
-                # A bundled plugin's home is defined by THIS checkout's
-                # plugins/ dir, not by the absolute path stored when the row
-                # was first registered — that path goes stale whenever the
-                # repo moves (or the row was written from another checkout).
-                current = (bundled_root() / slug).resolve()
-                if current.is_dir() and str(current) != row.install_dir:
-                    log.info(
-                        "plugin %s: healing bundled install dir %s -> %s",
-                        slug, row.install_dir, current,
-                    )
-                    await reg.update_plugin(slug, install_dir=str(current))
-                    install_dir = current
             if not install_dir.is_dir():
                 log.error("plugin %s: install dir %s missing", slug, install_dir)
                 await reg.set_status(
@@ -549,6 +549,57 @@ class PluginLoader:
                     pass
 
     # ── helpers ──────────────────────────────────────────────────────────────
+
+    async def _sync_bundled_row(self, row: reg.PluginRecord) -> None:
+        """Bring a bundled plugin's registry row up to the checkout.
+
+        The row is written once, at first registration (step 1), and a pull
+        changes the files under it but nothing else. Yet the web shell
+        (pages, nav, scripts, realtime), the Plugins page, the capabilities
+        Android reads and every other plugin's corpus and route checks all
+        read the row. So each boot:
+
+        * heals ``install_dir`` — a bundled plugin's home is THIS checkout's
+          ``plugins/<slug>``, not the absolute path stored when the row was
+          first written, which goes stale whenever the repo moves (or the
+          row came from another checkout);
+        * refreshes name, version, domovoi_api, publisher, license and the
+          manifest JSONB from the manifest on disk. update_plugin's IS
+          DISTINCT FROM guard keeps an unchanged row silent (no NOTIFY).
+
+        An unreadable or invalid manifest refreshes nothing; for an enabled
+        row the load that follows records the error."""
+        slug = row.slug
+        fields: dict[str, Any] = {}
+        install_dir = Path(row.install_dir)
+        current = (bundled_root() / slug).resolve()
+        if current.is_dir() and str(current) != row.install_dir:
+            log.info(
+                "plugin %s: healing bundled install dir %s -> %s",
+                slug, row.install_dir, current,
+            )
+            fields["install_dir"] = str(current)
+            install_dir = current
+        try:
+            manifest = parse_manifest(
+                (install_dir / "domovoi-plugin.toml").read_text(encoding="utf-8")
+            )
+        except (OSError, ManifestError) as e:
+            log.debug("plugin %s: bundled manifest not refreshed: %s", slug, e)
+            manifest = None
+        if manifest is not None and manifest.slug == slug:
+            if manifest.version != row.version:
+                log.info(
+                    "plugin %s: registry row follows the checkout, %s -> %s",
+                    slug, row.version, manifest.version,
+                )
+            fields.update(
+                name=manifest.name, version=manifest.version,
+                domovoi_api=manifest.domovoi_api, publisher=manifest.publisher,
+                license=manifest.license, manifest=manifest.raw,
+            )
+        if fields:
+            await reg.update_plugin(slug, **fields)
 
     async def _foreign_web_routes(self, *, exclude: str) -> list[tuple[str, str]]:
         """``(route, slug)`` for every page of every ENABLED plugin except

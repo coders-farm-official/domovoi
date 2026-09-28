@@ -1642,6 +1642,11 @@ The runtime forces most of this, but know the shapes:
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.
 * Dev-mode plugins refuse the upgrade endpoint — just restart.
+* A bundled plugin (shipped in the repo's `plugins/`) updates with the
+  Domovoi checkout. Every core boot refreshes its registry row — name,
+  version, `domovoi_api`, publisher, license and the stored manifest the
+  dashboard and the other plugins' checks read — from the manifest on disk,
+  so a pull plus a restart is the whole upgrade.
 
 ### 6.8 Trust and permissions honesty
 
