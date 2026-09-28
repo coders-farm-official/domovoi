@@ -532,6 +532,30 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", section="advanced", tier="restart", min=0, max=256,
     ),
     FieldSpec(
+        "fastlane_mode", "Fast lane", "Speech-to-text",
+        "A small streaming recognizer that follows each command while it is "
+        "being spoken and notices a finished simple one (pause, volume up, a "
+        "timer) before the satellite stops listening. 'shadow' only LOGS what "
+        "it would have done and whether Whisper agreed (GET /v1/stats/latency "
+        "counts them); every reply is exactly what it would have been. 'off' "
+        "(the default) loads nothing. Needs the fastlane extra; the model "
+        "(a 103 MB download) arrives on first enable. Applies immediately.",
+        "choice", section="advanced", tier="reapply", choices=["off", "shadow"],
+    ),
+    FieldSpec(
+        "fastlane_model", "Fast lane model", "Speech-to-text",
+        "Which pinned streaming model the fast lane runs "
+        "(nemo-fastconformer-en-80ms-int8). Takes effect after a restart.",
+        "str", section="advanced", tier="restart",
+    ),
+    FieldSpec(
+        "fastlane_cpu_threads", "Fast lane CPU threads", "Speech-to-text",
+        "CPU threads for the fast lane's single worker, shared by every room. "
+        "1 keeps up with several rooms talking at once on a modern CPU. "
+        "Takes effect after a restart.",
+        "int", section="advanced", tier="restart", min=1, max=16,
+    ),
+    FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
         "How often the Domovoi server pings each satellite's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "

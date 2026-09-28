@@ -189,6 +189,11 @@ def _register_core_reapply_hooks() -> None:
     ):
         reapply.on_reapply(field, reset_ollama_client)
     reapply.on_reapply("log_level", _reapply_log_level)
+    # Saving fastlane_mode loads (shadow) or drops (off) the fast lane's
+    # model on the spot (domovoi/fast_lane.py).
+    from domovoi import fast_lane
+
+    reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
 
 
 @asynccontextmanager
@@ -233,6 +238,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # cpu, and failing that the core runs without speech recognition (the
     # Models page shows why) — see domovoi/clients/whisper.py.
     load_whisper_client()
+    # The streaming fast lane (domovoi/fast_lane.py): with fastlane_mode
+    # =shadow, fetch its model on first enable and load it on a background
+    # thread. Never blocks startup; off (the default) does nothing.
+    from domovoi import fast_lane
+
+    fast_lane.start()
 
     # Seed the voice registry from the live TTS settings if it's empty, so
     # the per-voice clip renderer and the streaming voice resolver have a
@@ -574,6 +585,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # enter it repeatedly in one process) registers a fresh set
         # instead of accumulating duplicates.
         WORKERS.remove_owner("core")
+        fast_lane.shutdown()
         await probe.stop()
         connectivity_mod.set_current_probe(None)
         log.info("domovoi stopped")

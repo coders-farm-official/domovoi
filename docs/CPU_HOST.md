@@ -310,6 +310,89 @@ Compare the two paths and you can see exactly what the LLM costs on your
 hardware — which is the number that should drive your model choices, not
 the table above.
 
+### The streaming fast lane
+
+Every command still waits for the satellite's `listen.silence_timeout`
+(1.2 s) and then for one Whisper decode, however simple it was. The fast
+lane is a second, much smaller recognizer that follows each capture while
+you are still talking (sherpa-onnx running a streaming NeMo FastConformer,
+`domovoi/fast_lane.py`). When what it has heard so far is a complete
+simple command, such as "pause the music", "volume up" or "set a timer
+for ten minutes", and the room has then been quiet for a moment, it knows
+the command well before the satellite stops listening.
+
+For now it only runs in **shadow mode**: it writes down what it would
+have done and whether Whisper agreed, and every reply is exactly what it
+would have been without it. Those records decide whether it may ever act.
+
+Turn it on:
+
+```bash
+pip install -e ".[fastlane]"              # sherpa-onnx; not part of any other extra
+python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
+```
+
+then `FASTLANE_MODE=shadow` in `domovoi/.env` and a restart, or
+Settings → Speech-to-text → *Fast lane* → **shadow**, which applies at
+once. The model downloads on first enable into
+`~/.domovoi/models/fastlane/`, checked against a pinned SHA-256. Without
+the extra, shadow mode logs once that the lane is unavailable and nothing
+else changes.
+
+What it commits on, and after how much quiet:
+
+| Hold | Commands |
+|---|---|
+| 350 ms | Closed phrases: pause / resume / stop the music, next / previous song, volume up / down, what's playing, cancel or stop the timer, repeat that, hang up, next / previous chapter, the list-and-status questions |
+| 650 ms | A number or a duration: set a timer, set the volume to N, skip N seconds, a calculation; the clock ("what time is it" can become "... in Tokyo"); a bare word ("stop", "pause", "next") and "go back", which often start a longer command |
+| never | Open slots (`play ...`, `remember ...`, `announce ...`), a reminder's message, plugin commands, anything for the language model |
+
+What you see: one line per turn it would have acted on,
+
+```bash
+journalctl -u domovoi-core | grep fastlane
+# fastlane would commit music._pause_from_match at +391ms (806 ms before
+#   utterance_end, hold 350 ms) in room=kitchen; lane heard 'pause the
+#   music'; whisper later said 'Pause the music.'; agree=True
+```
+
+plus a "fastlane missed ..." line when Whisper heard a command the lane
+could have taken but didn't. The turn's `intents_log.timings` carries
+`fastlane_seen`, `fastlane_ms` (your last voiced frame to the lane's
+decision), `fastlane_lead_ms` (how long before the satellite's
+`utterance_end` it came), `fastlane_agree`, `fastlane_after_ms` (speech
+that came after the decision: a real commit would have cut you off),
+`fastlane_cpu_ms`, and the lane's own text and path. The latency summary
+counts them without the text:
+
+```bash
+curl -s http://localhost:6370/v1/stats/latency | python3 -m json.tool   # the "fastlane" block
+docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, transcript, timings->>'fastlane_text' AS lane FROM intents_log WHERE timings->>'fastlane_agree' = 'false' ORDER BY at DESC LIMIT 20;"
+```
+
+**Measured, on the dev box** (i9-14900KF, 333 Piper-TTS command clips in
+nine voices shaped like a satellite capture; not yet on the Beelink, and
+TTS voices are not a household):
+
+| | |
+|---|---|
+| Last word to the lane's decision, 350 ms hold | p50 0.39 s, p95 0.63 s (real-time, one room); 0.41 / 0.67 s with three rooms talking at once |
+| Last word to the lane's decision, 650 ms hold | p50 0.66 s, p95 0.69 s |
+| CPU, one worker thread | real-time factor 0.16 (0.13 with 2 threads): about a sixth of one core per room while someone talks, nothing when nobody does; ~0.4 s of CPU per command |
+| Memory | +200 MB for the model, +7 MB per room talking; loads in about 1 s |
+| Commits right | 181 of 182 on the single commands (the one miss: "what's *by* plus three") |
+| Commands caught | 181 of 252 single commands (72%; the 252 include 9 reminders it never takes). The rest were misheard and would simply have waited for Whisper. For scale: Whisper tiny got 211 of the 252 right, large-v3 77 of 84 on three of the voices |
+| Mid-command pauses | "set a timer for ten minutes ... for the pasta" with a 700 ms pause committed early in 7 of 9 clips, which is what a 650 ms hold does; "stop ... the timer", "next ... chapter" and "what time is it ... in Tokyo" waited correctly |
+
+So if it were allowed to act, a command it catches would start answering
+about 0.6-0.8 s after the last word on the 350 ms hold and 0.9-1.1 s on
+the 650 ms one (its decision plus roughly 0.25-0.45 s for voice
+identification, routing, the first sentence of speech and the satellite
+starting to play), against 1.2 s plus a Whisper decode plus the same
+0.25-0.45 s today.
+The lane uses one worker thread for every room; `fastlane_cpu_threads`
+(default 1) is what it may use.
+
 ---
 
 ## Memory budget

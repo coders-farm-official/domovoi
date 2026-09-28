@@ -43,9 +43,15 @@ started (:func:`merge_post_route`), off the latency path, in a task a
 barge-in can't cancel, and best-effort: a turn whose follow-up write fails
 keeps its pre-route stages.
 
-No text and no identity is ever put in the column, and the summary
-(:func:`latency_summary`, ``GET /v1/stats/latency``) reads only the column,
-``matched_path`` and the time — which is what lets that endpoint be open.
+No identity is ever put in the column, and no text either, with one
+opt-in exception: while ``fastlane_mode`` is ``shadow``, a turn the
+streaming fast lane would have committed carries ``fastlane_text``, the
+closed command the lane heard ("pause the music"), next to the
+``fastlane_*`` numbers (domovoi/fast_lane.py). It is the same words the
+row's own ``transcript`` column already holds. The summary
+(:func:`latency_summary`, ``GET /v1/stats/latency``) reads only the
+column's numbers, ``matched_path`` and the time — never ``fastlane_text``
+or ``fastlane_path`` — which is what lets that endpoint be open.
 """
 
 from __future__ import annotations
@@ -107,7 +113,7 @@ class TurnTimings:
     every copy the router makes shares this one object.
     """
 
-    __slots__ = ("started", "stages", "whisper", "intents_log_id")
+    __slots__ = ("started", "stages", "whisper", "intents_log_id", "extra")
 
     def __init__(self, *, started: float | None = None, audio_bytes: int = 0) -> None:
         # time.perf_counter() at utterance_end receipt; now when not given.
@@ -120,6 +126,14 @@ class TurnTimings:
         # turn's row carries the timings; None means there is nothing to
         # merge into.
         self.intents_log_id: int | None = None
+        # Keys that ride along with the stages but aren't stages: the fast
+        # lane's shadow record (fastlane_*, domovoi/fast_lane.py). Written
+        # with the row; the summary never reads them as stages.
+        self.extra: dict[str, Any] = {}
+
+    def note(self, **fields: Any) -> None:
+        """Add non-stage keys to the row document (see ``extra``)."""
+        self.extra.update(fields)
 
     def stage(self, name: str, t0: float) -> None:
         """Record stage ``name`` as the time since ``t0`` (a
@@ -138,6 +152,7 @@ class TurnTimings:
         """The JSON the turn's row is written with: every stage known now,
         plus the Whisper block."""
         doc: dict[str, Any] = dict(self.stages)
+        doc.update(self.extra)
         if self.whisper is not None:
             doc["whisper"] = dict(self.whisper)
         return doc
@@ -377,9 +392,17 @@ async def latency_summary(
             params,
         )
     ).all()
-    return {
+    doc = {
         "since": since_utc.isoformat(),
         "room": room or None,
         "limit": SUMMARY_ROW_CAP,
         **summarize((r[0], r[1]) for r in rows),
     }
+    # The fast lane's shadow counts, when it is on or the window has any
+    # (domovoi/fast_lane.py); absent otherwise, so the answer is unchanged.
+    from domovoi.fast_lane import shadow_summary
+
+    fastlane = shadow_summary(r[0] for r in rows)
+    if fastlane is not None:
+        doc["fastlane"] = fastlane
+    return doc

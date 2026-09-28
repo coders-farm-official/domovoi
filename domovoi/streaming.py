@@ -268,6 +268,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
+from domovoi import fast_lane
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
@@ -735,6 +736,10 @@ class StreamSession:
         # app.state) because the exchange is meaningless across a reconnect:
         # a new socket can't answer the old one's request.
         self._log_requests: dict[str, _LogRequest] = {}
+        # The streaming fast lane's view of the capture in flight
+        # (domovoi/fast_lane.py, shadow mode: it decides nothing here).
+        # None whenever fastlane_mode is off.
+        self._fastlane: fast_lane.LaneCapture | None = None
 
     async def run(self) -> None:
         await self.ws.accept()
@@ -835,6 +840,7 @@ class StreamSession:
         finally:
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
+            self._fastlane = fast_lane.close(self._fastlane)
             # Tear down any live drop-in this session was in so the peer
             # isn't left streaming into a void (and its suppressed music is
             # restored). Runs regardless of whether a reconnect overwrote us
@@ -944,6 +950,8 @@ class StreamSession:
             )
             return
         self.audio_buf.extend(data)
+        if self._fastlane is not None:
+            self._fastlane.feed(data)
 
     async def _await_hello(self) -> bool:
         """Block until the client's FIRST frame arrives and is an accepted
@@ -1334,6 +1342,10 @@ class StreamSession:
             # Latch the trigger now; utterance_end reads it to decide
             # clip-vs-command (immune to wake_recording flipping mid-utterance).
             self._utterance_trigger = ctrl.get("trigger")
+            self._fastlane = fast_lane.open_capture(
+                self.room_id, self._utterance_trigger,
+                previous=self._fastlane, chat=self.conversational_mode,
+            )
             return
         if t == "utterance_end":
             if not self.utterance_active:
@@ -1342,6 +1354,8 @@ class StreamSession:
             # for after the satellite stops listening (turn_timings.total_ms).
             received_at = time.perf_counter()
             self.utterance_active = False
+            if self._fastlane is not None:
+                self._fastlane.finish(ended_at=received_at)
             pcm = bytes(self.audio_buf)
             self.audio_buf.clear()
             trigger = self._utterance_trigger
@@ -1466,6 +1480,7 @@ class StreamSession:
             self.utterance_active = False
             self.audio_buf.clear()
             self.dropped_overflow = False
+            self._fastlane = fast_lane.close(self._fastlane)
             self._response_task = asyncio.create_task(
                 self._respond_noisy_capture(), name="noisy-apology"
             )
@@ -1792,6 +1807,11 @@ class StreamSession:
                     # _persist_chat_turn); nothing to merge afterwards.
                     self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
                     return
+
+            # Shadow only (domovoi/fast_lane.py): what the streaming fast lane
+            # would have done, against what Whisper heard, logged and noted
+            # on the timings. The routing below is untouched.
+            self._fastlane = fast_lane.settle(self._fastlane, transcript, timings)
 
             stage_t0 = time.perf_counter()
             async with session_scope() as s:

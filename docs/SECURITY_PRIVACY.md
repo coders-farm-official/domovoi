@@ -470,7 +470,14 @@ recent voice turns took, per stage: per-stage counts and p50 / p95 / max
 milliseconds, how many turns took each route (`fast`, `qa`, ...), and the
 Whisper settings (model, device, compute type, CPU threads). It reads one
 column, `intents_log.timings`, which the core fills with integers and the
-Whisper settings and never with text, plus the row's route and time. No
+Whisper settings, plus the row's route and time. The one text that column
+can hold is opt-in: while the streaming fast lane runs in shadow mode
+(`fastlane_mode`, off by default), a turn it would have acted on also
+records `fastlane_text`, the closed command it heard ("pause the music"),
+and the fast path it matched: the same words the row's own `transcript`
+column holds, kept so a disagreement with Whisper can be read later. The
+summary reads the lane's counts and milliseconds and never those two
+keys. No
 transcript, no reply, no person, no session and no presence tier is read,
 so none can be returned; the `room` filter is an input, echoed back, and
 never a list of rooms. What it does reveal is that turns happened, when

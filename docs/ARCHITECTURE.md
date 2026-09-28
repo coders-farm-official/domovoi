@@ -153,6 +153,19 @@ merged into the row by id once the reply is playing, off the latency path.
 `latency_ms` stays the router's share alone. `GET /v1/stats/latency`
 summarises the stages, numbers only.
 
+With `fastlane_mode=shadow` (off by default; the `fastlane` extra) a
+second, streaming recognizer (`domovoi/fast_lane.py`, sherpa-onnx) reads
+the same 30 ms frames while the person is still talking. One worker thread
+serves every room: `StreamSession` opens a capture at `utterance_start`
+(wake-word and follow-up turns only), feeds it each frame from `_on_audio`,
+ends it at `utterance_end`, and just before routing asks it what it would
+have done. When its partial transcript was a complete closed command
+(a tiered fast path, matched the router's way) followed by the tier's hold
+of quiet (350 ms, or 650 ms for numbers, the clock and bare words), it
+logs that decision against Whisper's transcript and adds `fastlane_*` keys
+to the turn's `timings`. It never routes, replies or ends a capture: the
+turn is exactly the same with it on or off.
+
 ---
 
 ## 3. Handler priority bands
