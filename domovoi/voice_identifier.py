@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -110,17 +111,37 @@ def _presence_tier_from_last_seen(last_seen) -> str:
     return "high"
 
 
-async def identify(pcm_int16: bytes) -> IdentificationResult:
-    """Embed + match + compute presence. Best-effort — failures degrade
-    to ``person_id=None, presence_tier="high"`` so the core
-    keeps working when the embedder's broken or the DB hiccups.
+async def embed_voice(pcm_int16: bytes) -> np.ndarray | None:
+    """Job 1 alone: the utterance's embedding, or None when the embedder
+    can't make one. Pure — no database, no drift counter, no last_seen —
+    so it can run on a speculative copy of a capture that the turn may
+    never use (``domovoi/streaming.py``, "Speculative transcription").
+    The rest of :func:`identify` has side effects and runs once per turn.
     """
     embedder = get_voice_embedder()
     try:
-        embedding = await embedder.embed(pcm_int16)
+        return await embedder.embed(pcm_int16)
     except Exception as e:
         log.warning("voice embedder threw: %s", e)
-        embedding = None
+        return None
+
+
+# `identify(embedding=...)` default: embed the audio here.
+_EMBED_HERE: Any = object()
+
+
+async def identify(pcm_int16: bytes, *, embedding: Any = _EMBED_HERE) -> IdentificationResult:
+    """Embed + match + compute presence. Best-effort — failures degrade
+    to ``person_id=None, presence_tier="high"`` so the core
+    keeps working when the embedder's broken or the DB hiccups.
+
+    ``embedding``: :func:`embed_voice`'s result for this same audio, when
+    it was computed already (alongside a speculative decode); then only
+    the matching runs here. Either way this is the one call per turn that
+    touches ``last_seen`` and the drift counter.
+    """
+    if embedding is _EMBED_HERE:
+        embedding = await embed_voice(pcm_int16)
 
     if embedding is None:
         # Sub-second clip, embedder unavailable, etc. Use a high tier so

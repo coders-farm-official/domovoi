@@ -776,6 +776,12 @@ class Handler(ABC):
   path: `FastPath(pattern, method, offline_ok=False)` marks a path the router
   auto-falls-back while offline; the default is `True`. Setting `offline_ok`
   on a `"no"`/`"yes"` handler's path is a contract failure.
+* **Early commit is core-only.** `FastPath(..., early_commit="A"|"B")` lets
+  a core fast path end a satellite's capture before its silence timeout
+  when a transcript taken at a pause fully matches it (the core checks
+  every tier against a corpus of real commands). A plugin fast path never
+  ends a capture early; setting `early_commit` on one is ignored, with an
+  install-time warning.
 * **Confirmations**: to park a yes/no question, declare
   `confirmation_kinds = ("<slug>.<kind>",)` and call
   `sdk.sessions.request_confirmation(...)`; the router resumes you via

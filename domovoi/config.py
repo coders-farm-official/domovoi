@@ -303,6 +303,33 @@ class Settings(BaseSettings):
     # a person waited for every transcript. A number pins it (and, being
     # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
     whisper_cpu_threads: int = 0
+    # Speculative transcription (early endpointing, part A): start Whisper
+    # at the first ~240 ms pause in a satellite's capture instead of after
+    # its whole silence timeout, and use that transcript when no speech
+    # came after it — decided by frame accounting, never by a guess, so a
+    # turn hears exactly what it would have without it. Costs one extra
+    # decode for each pause somebody talks past. Off = transcribe only
+    # after utterance_end, as before. See domovoi/streaming.py.
+    speculative_stt_enabled: bool = True
+    # Early commit (early endpointing, part B): when the transcript taken
+    # at a pause is a whole closed command (a fast path that opted in,
+    # FastPath.early_commit), the core ends the satellite's capture itself
+    # after a short hold instead of its whole silence timeout. Only
+    # satellites that declare capture_control are ever ended early, so a
+    # core update alone changes nothing until they upgrade. Whatever is
+    # said after the hold is lost; see domovoi/early_commit.py. Works on
+    # the speculative transcript, so it needs speculative_stt_enabled too.
+    early_commit_enabled: bool = True
+    # Tier B — phrases a pause can split (a timer or reminder duration,
+    # "volume 40", the clock, every one-word command) — on the longer hold.
+    # On because the owner chose it for the first release (2026-09-28);
+    # false keeps early commit to the closed tier-A phrases.
+    early_commit_tier_b: bool = True
+    # The holds: the satellite's own detector must have heard this long of
+    # silence since the last word. On a CPU-only server the decode itself
+    # usually takes longer, so the effective hold is the decode time.
+    early_commit_hold_a_ms: int = 350
+    early_commit_hold_b_ms: int = 650
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on

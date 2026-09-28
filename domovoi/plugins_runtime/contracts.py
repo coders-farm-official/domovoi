@@ -149,16 +149,11 @@ def dry_run_winner(transcript: str, handlers: list[Handler]) -> str | None:
     """Replicate the router's normalization + band-ordered fast-path scan
     WITHOUT dispatching. ``handlers`` must be band-sorted (the live
     registry list is)."""
-    from domovoi.router import _LEADING_FILLER_RE
+    from domovoi.router import first_fast_path, normalize_transcript, strip_leading_filler
 
-    t = transcript.lower().strip().rstrip(".,!?")
-    t = _LEADING_FILLER_RE.sub("", t)
-    for handler in handlers:
-        for entry in handler.fast_paths:
-            fp = as_fast_path(entry)
-            if fp.pattern.match(t):
-                return handler.name
-    return None
+    t = strip_leading_filler(normalize_transcript(transcript))
+    hit = first_fast_path(t, handlers)
+    return hit[0].name if hit is not None else None
 
 
 # ─── greedy-catch-all heuristic (§4.2 registration check) ───────────────────
@@ -236,6 +231,14 @@ def check_handlers(
                     f"handler {name!r}: fast path {fp.pattern.pattern!r} sets "
                     f"offline_ok but requires_network={rn!r} (only 'degraded' "
                     f"handlers may)"
+                )
+            if getattr(fp, "early_commit", None) is not None:
+                # Only core tiers are checked against the prefix-hazard
+                # corpus, so a plugin's is ignored (domovoi/early_commit.py).
+                report.warnings.append(
+                    f"handler {name!r}: fast path {fp.pattern.pattern!r} sets "
+                    f"early_commit={fp.early_commit!r}, which is ignored on "
+                    f"plugin fast paths: they never end a capture early"
                 )
             if is_greedy_unanchored(fp.pattern) and (band or 0) < 900:
                 report.errors.append(

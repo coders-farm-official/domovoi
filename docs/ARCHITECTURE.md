@@ -106,6 +106,34 @@ prose:
    `whisper_cpu_fallback_model` on cpu/int8, and failing that runs without
    STT — a turn then gets a spoken "can't understand speech" notice and is
    not routed (`domovoi/clients/whisper.py`; state on `/v1/admin/hardware`).
+   **Speculative transcription:** the Pi only sends `utterance_end` after
+   `listen.silence_timeout` (1.2 s) of silence, but its frames arrive as
+   they are spoken, so at the first ~240 ms pause the core copies the
+   buffer and starts Whisper and the voice embedding on the copy. At
+   `utterance_end` it uses that transcript if and only if the Pi's last
+   voiced frame is inside the copy — exact frame accounting, from
+   `last_voiced_frame` in `utterance_end` (new satellites, which also send
+   `speech_pause` hints) or from the silence timeout an older satellite
+   reported in `config_status` (`domovoi/endpointing.py`); otherwise the
+   whole buffer is transcribed as before. One Whisper call per room at a
+   time. The silence and the transcription overlap instead of adding up
+   (`speculative_stt_enabled`).
+   **Early commit:** when that early transcript is a whole closed command,
+   the core doesn't wait for the rest of the silence — it sends the
+   satellite `end_capture` and answers. Only for satellites that declared
+   `capture_control` in their hello (and report their pauses), only for
+   wake-word and follow-up turns, only for a transcript the router's own
+   dry run (`router.plan_route`) sends down a fast path that opted in with
+   `FastPath.early_commit` — tier A for closed phrases ("pause the
+   music", 350 ms hold), tier B for phrases a pause can split (a timer's
+   duration, "volume 40", the clock, any one-word command, a whole yes/no
+   to a parked question; 650 ms) — and only after the satellite's own
+   detector has been silent that long since the last word
+   (`domovoi/early_commit.py`; `early_commit_enabled`,
+   `early_commit_tier_b`, and `[listen] early_commit` per satellite).
+   Anything said after the hold is lost, so the tiers are checked in CI
+   against a corpus of real commands for a shorter prefix that is a
+   different command (`domovoi/tests/test_early_commit.py`).
 3. **Voice identification** (best-effort, pre-router): the utterance is
    embedded and matched against enrolled voice profiles, yielding
    `person_id` + `presence_tier` in the turn's `Context`.
@@ -145,13 +173,16 @@ user/assistant text), and an append to the session's `recent_turns`. This is
 centralized and non-optional — see [Invariants](#9-invariants).
 
 A turn spoken to a satellite also carries a per-stage stopwatch
-(`domovoi/turn_timings.py`, on `Context.timings`): capture length,
-speech-to-text, voice identification and the Whisper that ran are written
-in that same `intents_log` insert (`timings`, V015); the routing
-transaction, the first reply audio and the total from `utterance_end` are
-merged into the row by id once the reply is playing, off the latency path.
-`latency_ms` stays the router's share alone. `GET /v1/stats/latency`
-summarises the stages, numbers only.
+(`domovoi/turn_timings.py`, on `Context.timings`): capture length, the
+silence waited out after the last word, speech-to-text (the call, and the
+wait it actually cost), voice identification and the Whisper that ran are
+written in that same `intents_log` insert (`timings`, V015), with whether a
+speculative transcript was used and whether the core ended the capture
+early (and on which tier); the routing transaction, the first reply
+audio, the total from `utterance_end` and the last word to the first reply
+audio are merged into the row by id once the reply is playing, off the
+latency path. `latency_ms` stays the router's share alone.
+`GET /v1/stats/latency` summarises the stages, numbers only.
 
 ---
 

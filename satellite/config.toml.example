@@ -204,7 +204,11 @@ sync_enabled = true
 # WebRTC VAD aggressiveness while capturing user speech (0–3, higher = stricter).
 vad_aggressiveness = 2
 
-# Seconds of continuous silence that ends an utterance.
+# Seconds of continuous silence that ends an utterance. The core starts
+# transcribing at the first quarter-second pause while this counts down (it
+# keeps that transcript only if you said nothing more), so a longer timeout
+# costs less than it looks; lower it for snappier turns, raise it in rooms
+# where people pause mid-sentence.
 silence_timeout = 1.2
 
 # Hard cap on a single utterance (seconds). Server also enforces 60s.
@@ -216,6 +220,13 @@ max_record_seconds = 30
 # and drop back to wake-word listen rather than holding the mic open for
 # the full max_record_seconds.
 followup_pre_speech_timeout = 8.0
+
+# Let the core stop listening as soon as what it has heard is a whole
+# command ("pause the music", "set a timer for ten minutes") — after a short
+# pause instead of the full silence_timeout — so it answers sooner. Anything
+# said after that pause is lost; set false in a room where people pause
+# mid-command. Also switchable for the whole server (early_commit_enabled).
+early_commit = true
 
 [barge_in]
 # Off by default: nothing interrupts Domovoi while he is talking. Turn on to

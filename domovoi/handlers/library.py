@@ -158,7 +158,7 @@ class LibraryHandler(Handler):
             FastPath(_FIND_RE, LibraryHandler._find_from_match),
             FastPath(_HAVE_RE, LibraryHandler._have_from_match),
             FastPath(_ADDED_WHEN_RE, LibraryHandler._added_from_match),
-            FastPath(_COUNT_RE, LibraryHandler._count_from_match),
+            FastPath(_COUNT_RE, LibraryHandler._count_from_match, early_commit="A"),
             FastPath(_ENRICH_RE, LibraryHandler._enrich_from_match),
         ]
 

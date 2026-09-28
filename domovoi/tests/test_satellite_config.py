@@ -20,6 +20,7 @@ _EXPECTED_KEYS = {
     "barge_in.vad_aggressiveness_during_tts",
     "listen.vad_aggressiveness", "listen.silence_timeout",
     "listen.max_record_seconds", "listen.followup_pre_speech_timeout",
+    "listen.early_commit",
     "noise_gate.dbfs", "noise_gate.auto_calibrate",
     "greeting.enabled", "greeting.funny_chance",
     "playback.gain", "playback.tts_prebuffer_sec",

@@ -15,6 +15,9 @@ Core and plugin handlers share this exact surface (design §4.3/§4.3.1):
   ``(pattern, method)`` tuples are accepted as sugar and normalized at
   registration (``normalize_fast_paths``); ``FastPath`` also supports
   2-tuple unpacking so tuple-style iteration keeps working.
+* ``FastPath.early_commit`` opts a path in to ending a satellite's
+  capture early when a transcript taken at a pause fully matches it
+  (default never; see the field's note).
 * ``handle_confirmation`` is ON the ABC (no more duck-typing). Kinds
   are declared in ``confirmation_kinds`` and namespaced — ``core.<kind>``
   for core handlers, ``<slug>.<kind>`` for plugins — so two features can
@@ -59,6 +62,9 @@ class HandlerDisplay:
     icon: str | None = None
 
 
+EarlyCommitTier = Literal["A", "B"]
+
+
 @dataclass(frozen=True)
 class FastPath:
     """One anchored-regex dispatch entry.
@@ -68,11 +74,26 @@ class FastPath:
     ``False`` marks a path the router must auto-fallback while offline.
     For "no"/"yes" handlers it MUST stay ``None`` — contract-checked in
     test_registry (and at plugin install time, design §13.2).
+
+    ``early_commit`` opts the path in to ending a satellite's capture early
+    (``domovoi/early_commit.py``): when a transcript taken at a pause fully
+    matches this path, the core may stop listening after a short hold
+    instead of the satellite's whole silence timeout — and whatever the
+    person says after that hold is lost. ``None`` (the default) never.
+    ``"A"`` (short hold) is for closed phrases nothing extends ("pause the
+    music", "what's playing"); ``"B"`` (longer hold) for phrases a pause
+    can split — a duration, a number, a clock question that an "in Tokyo"
+    can follow — and every one-word transcript is held as ``"B"``
+    whatever its path says. Never on a path with an open slot (``play
+    (.+)``). Core handlers only: a plugin's tier is ignored.
+    ``domovoi/tests/test_early_commit.py`` checks every tier against a
+    corpus of real commands for a shorter prefix that means something else.
     """
 
     pattern: re.Pattern[str]
     method: FastPathMethod
     offline_ok: bool | None = None
+    early_commit: EarlyCommitTier | None = None
 
     def __iter__(self) -> Iterator[Any]:
         # 2-tuple unpacking sugar: `for pattern, method in handler.fast_paths`.

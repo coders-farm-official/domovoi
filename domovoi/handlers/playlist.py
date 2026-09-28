@@ -109,8 +109,10 @@ class PlaylistHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_PLAY_FAVORITES_RE, PlaylistHandler._play_favorites_from_match),
-            FastPath(_SHUFFLE_FAVORITES_RE, PlaylistHandler._shuffle_favorites_from_match),
+            # early_commit (FastPath): "B", because "play my favorites … in
+            # the kitchen" is music's play-anything, not this path.
+            FastPath(_PLAY_FAVORITES_RE, PlaylistHandler._play_favorites_from_match, early_commit="B"),
+            FastPath(_SHUFFLE_FAVORITES_RE, PlaylistHandler._shuffle_favorites_from_match, early_commit="A"),
             FastPath(_MAKE_PLAYLIST_RE, PlaylistHandler._make_from_match),
             # Before _ADD_TO_PLAYLIST_RE so "add X after this" wins over the
             # "add ... to my X playlist" pattern.

@@ -14,10 +14,26 @@ The stages, in pipeline order, all integer milliseconds:
 ``capture_audio_ms``
     Length of the audio the satellite sent (the capture itself, not a
     duration on the core's clock: 32 bytes per ms of 16 kHz int16).
+``endpoint_silence_ms``
+    The silence the satellite waited out after the last word before the
+    turn's clock started: the frames after its last voiced frame, 30 ms
+    each. Exact when the satellite reports that frame in
+    ``utterance_end``; worked out from its ``listen.silence_timeout`` for
+    one that doesn't; absent when neither is known.
 ``stt_ms``
-    The Whisper call.
+    The Whisper call whose transcript the turn used: the whole capture's,
+    or the speculative one started at the first pause (``stt_reused``).
+``stt_wait_ms``
+    From the turn's start to that transcript being ready — what
+    speech-to-text actually cost the person. ``stt_ms`` (plus any wait for
+    a decode of this room's already in flight) when nothing was reused;
+    close to 0 when the speculative decode finished while the satellite
+    was still counting silence.
 ``identify_ms``
-    Voice identification (the embedding plus the profile lookup).
+    Voice identification (the embedding plus the profile lookup). When
+    the turn used a speculative transcript at least
+    ``voice_profile_min_utterance_sec`` long, the embedding was computed
+    alongside that decode and this is the lookup alone.
 ``route_ms``
     The routing transaction: ``route()`` (fast path or language model, the
     handler, the audit writes), the voice-profile hooks, and the commit.
@@ -26,12 +42,29 @@ The stages, in pipeline order, all integer milliseconds:
     socket: the voice lookup, the first sentence's synthesis and the
     ``response_start`` frame.
 ``total_ms``
-    From the moment ``utterance_end`` arrived to that first audio chunk.
+    From the moment ``utterance_end`` arrived (or the server ended the
+    capture early itself) to that first audio chunk.
     What the stages above don't account for is the small glue between
     them (the transcript frame, the chat-mode check).
+``speech_to_reply_ms``
+    ``endpoint_silence_ms + total_ms``: the last word to the first reply
+    audio, the number a person actually feels. Only when
+    ``endpoint_silence_ms`` is known.
 
 Plus ``whisper``: the model, device, compute type and CPU threads that
 actually transcribed, so a before/after comparison splits on the row.
+And, on a turn whose capture was transcribed speculatively while the
+satellite was still counting silence (``domovoi/streaming.py``,
+"Speculative transcription"): ``stt_reused`` (true when the turn used
+that transcript), ``speculative_decodes`` (how many were started for the
+utterance) and ``speculative_ms`` (their Whisper time, used or not — the
+CPU the speculation cost). These ride the row but are not stages: the
+summary counts them instead (``speculative``). A turn whose capture the
+server ended early (part B, ``domovoi/early_commit.py``) also carries
+``early_commit`` (the tier, "A" or "B"), ``early_commit_hold_ms``, and — once
+the satellite's own ``utterance_end`` for it arrives — ``post_commit_voiced_ms``:
+how much speech came after the server stopped listening (0 when none; the
+misfire the hold exists to prevent). Counted under ``early_commit``.
 
 Where it is stored: ``intents_log.timings`` (V015, JSONB). The stages known
 before routing ride ``Context.timings`` into ``router._persist_turn``, so
@@ -69,15 +102,23 @@ PCM_BYTES_PER_MS = 32
 # exactly these keys and reads nothing else back out of the column.
 STAGES = (
     "capture_audio_ms",
+    "endpoint_silence_ms",
     "stt_ms",
+    "stt_wait_ms",
     "identify_ms",
     "route_ms",
     "tts_first_ms",
     "total_ms",
+    "speech_to_reply_ms",
 )
 # The stages that only exist once the routing transaction has committed;
 # merged into the row afterwards (see the module docstring).
 POST_ROUTE_STAGES = ("route_ms", "tts_first_ms", "total_ms")
+# Merged afterwards as well, but only when the turn has them: the last word
+# to the reply needs the endpoint silence, and a capture the server ended
+# early learns whether speech came after the commit from the satellite's
+# own late utterance_end.
+LATE_STAGES = ("speech_to_reply_ms", "post_commit_voiced_ms")
 
 # What the per-turn `whisper` block carries, from clients.whisper.whisper_runtime.
 WHISPER_KEYS = ("model", "device", "compute_type", "cpu_threads")
@@ -107,7 +148,7 @@ class TurnTimings:
     every copy the router makes shares this one object.
     """
 
-    __slots__ = ("started", "stages", "whisper", "intents_log_id")
+    __slots__ = ("started", "stages", "flags", "whisper", "intents_log_id")
 
     def __init__(self, *, started: float | None = None, audio_bytes: int = 0) -> None:
         # time.perf_counter() at utterance_end receipt; now when not given.
@@ -115,6 +156,10 @@ class TurnTimings:
         self.stages: dict[str, int] = {
             "capture_audio_ms": max(0, int(audio_bytes)) // PCM_BYTES_PER_MS,
         }
+        # What the stages don't say on their own (was the transcript the
+        # speculative one, how many were decoded). Written with the row,
+        # never summarized as a stage.
+        self.flags: dict[str, Any] = {}
         self.whisper: dict[str, Any] | None = None
         # Set by router._persist_turn (or the chat-turn writer) once this
         # turn's row carries the timings; None means there is nothing to
@@ -133,23 +178,42 @@ class TurnTimings:
             return
         self.stages["tts_first_ms"] = _ms_since(tts_started)
         self.stages["total_ms"] = _ms_since(self.started)
+        silence = self.stages.get("endpoint_silence_ms")
+        if silence is not None:
+            self.stages["speech_to_reply_ms"] = silence + self.stages["total_ms"]
 
     def row_document(self) -> dict[str, Any]:
         """The JSON the turn's row is written with: every stage known now,
-        plus the Whisper block."""
+        the flags, plus the Whisper block."""
         doc: dict[str, Any] = dict(self.stages)
+        doc.update(self.flags)
         if self.whisper is not None:
             doc["whisper"] = dict(self.whisper)
         return doc
 
     def post_route_patch(self) -> dict[str, int]:
-        """The stages the row doesn't have yet (see POST_ROUTE_STAGES)."""
-        return {k: self.stages[k] for k in POST_ROUTE_STAGES if k in self.stages}
+        """The stages the row doesn't have yet (see POST_ROUTE_STAGES and
+        LATE_STAGES)."""
+        return {
+            k: self.stages[k]
+            for k in POST_ROUTE_STAGES + LATE_STAGES
+            if k in self.stages
+        }
 
     def describe(self) -> str:
         """One log-line fragment: ``stt_ms=640 identify_ms=41 ...`` in
         pipeline order, then the Whisper that ran. No text, no identity."""
         parts = [f"{k}={self.stages[k]}" for k in STAGES if k in self.stages]
+        if "stt_reused" in self.flags:
+            parts.append(
+                f"stt={'reused' if self.flags['stt_reused'] else 'full'}"
+                f"/{self.flags.get('speculative_decodes', 0)}spec"
+            )
+        if "early_commit" in self.flags:
+            parts.append(
+                f"early_commit={self.flags['early_commit']}"
+                f"/{self.stages.get('early_commit_hold_ms', '?')}ms"
+            )
         if self.whisper and self.whisper.get("model"):
             w = self.whisper
             threads = w.get("cpu_threads")
@@ -285,8 +349,12 @@ def _whisper_key(doc: dict[str, Any]) -> tuple[Any, ...] | None:
 
 
 def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
-    """Per-stage ``{count, p50, p95, max}``, the matched-path mix and the
-    Whisper settings seen, over ``(timings, matched_path)`` rows.
+    """Per-stage ``{count, p50, p95, max}``, the matched-path mix, the
+    Whisper settings seen, how the speculative transcripts fared
+    (``speculative``: turns that had one, how many used it, decodes
+    started) and the captures the server ended early (``early_commit``:
+    how many, by tier, and how many of those cut in on speech), over
+    ``(timings, matched_path)`` rows.
 
     Pure — the endpoint's arithmetic, testable without a database. A row
     whose ``timings`` isn't a JSON object is skipped; a stage that is
@@ -299,6 +367,8 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     paths: dict[str, int] = {}
     seen: dict[tuple[Any, ...], int] = {}
     turns = 0
+    speculative = {"turns": 0, "reused": 0, "decodes": 0}
+    early_commit = {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
     for raw, matched_path in rows:
         doc = raw
         if isinstance(doc, (str, bytes)):
@@ -313,6 +383,20 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
             v = _stage_value(doc, stage)
             if v is not None:
                 values[stage].append(v)
+        reused = doc.get("stt_reused")
+        if isinstance(reused, bool):
+            speculative["turns"] += 1
+            speculative["reused"] += int(reused)
+            decodes = _stage_value(doc, "speculative_decodes")
+            if decodes is not None:
+                speculative["decodes"] += int(decodes)
+        tier = doc.get("early_commit")
+        if tier in ("A", "B"):
+            early_commit["turns"] += 1
+            early_commit[tier] += 1
+            cut_in = _stage_value(doc, "post_commit_voiced_ms")
+            if cut_in:
+                early_commit["cut_in"] += 1
         if isinstance(matched_path, str) and matched_path:
             paths[matched_path] = paths.get(matched_path, 0) + 1
         wk = _whisper_key(doc)
@@ -340,6 +424,8 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
         "stages": stages,
         "paths": dict(sorted(paths.items(), key=lambda kv: (-kv[1], kv[0]))),
         "whisper_seen": whisper_seen,
+        "speculative": speculative,
+        "early_commit": early_commit,
     }
 
 
