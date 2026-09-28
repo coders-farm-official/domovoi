@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
@@ -230,6 +231,23 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+# System prompt for the spoken Q&A fallthrough (``qa_with_uncertainty``).
+# The reply is spoken exactly as the model wrote it — nothing downstream
+# trims it — so this prompt is what keeps a voice answer short: the
+# general prompt plus a sentence budget. Plain text on purpose: this
+# answer used to be a field of a JSON object, and llama3.2:3b closes a
+# JSON string early — after a question mark (the joke's setup without its
+# punchline), at a contraction's apostrophe ("I don"), with a placeholder
+# ("None") or with nothing at all. Measured 2026-09-28 on llama3.2:3b, 30
+# seeds per case: 60/60 jokes with their punchline, explanations down
+# from a median of 59 words to 43. Resist spelling out "a joke needs its
+# punchline" here: the same measurement found that naming jokes makes the
+# model reach for a long setup and stop after it, about one time in five.
+VOICE_QA_SYSTEM_PROMPT = (
+    DEFAULT_SYSTEM_PROMPT + " Most replies should be one to three sentences."
+)
+
+
 # System prompt for the tool-routing call (``RealOllamaClient.route``).
 #
 # The router runs at temperature 0 with every handler's schema on offer,
@@ -265,17 +283,21 @@ ROUTER_SYSTEM_PROMPT = (
 )
 
 
-# Wrapper around the JSON answer + self-doubt flag returned by
-# ``qa_with_uncertainty``. ``needs_verification`` is the LLM's own
-# guess at whether the answer should be checked against a web source
-# (stale training data, fast-moving facts, etc.) — paired with the
-# heuristic categorizer (``domovoi.uncertainty``) as the two
-# legs of the proactive web-search offer.
+# What ``qa_with_uncertainty`` hands the router: the spoken answer, plus
+# ``needs_verification`` — whether the client has its own reason to think
+# the answer should be checked against a web source. The real client
+# always says False: the model's self-reported doubt flag it used to ask
+# for fired on junk turns and refusals and almost never on a stale fact,
+# so the router's offer now rests on the heuristic categorizer and on the
+# answer's own words (``domovoi.uncertainty``). ``unreachable`` is True only
+# when the Ollama calls themselves failed; an empty ``answer`` with
+# ``unreachable`` False means the model answered and said nothing usable.
 @dataclass
 class QAWithUncertainty:
     answer: str
     needs_verification: bool
     candidate_claim: str = ""
+    unreachable: bool = False
 
 
 @dataclass
@@ -322,24 +344,6 @@ _EXTRACT_MEMORIES_SYSTEM_PROMPT = (
 )
 
 
-_UNCERTAINTY_SYSTEM_PROMPT = (
-    "You are {bot}, a helpful voice assistant. Answer the user's "
-    "question concisely and conversationally. Then judge whether your "
-    "answer could be stale or unreliable — anything about current "
-    "events, prices, scores, recent releases, or details from after "
-    "your training cutoff. Output ONLY a JSON object with this exact "
-    "shape, no preface or explanation:\n"
-    '{{"answer": "<your spoken answer>", '
-    '"needs_verification": <true|false>, '
-    '"candidate_claim": "<one short verifiable claim from your answer, '
-    'or empty string>"}}\n'
-    "Set needs_verification=true when the answer depends on facts "
-    "that change over time or that you're not confident about. Set "
-    "it false for timeless facts (math, definitions, well-known "
-    "history) you're confident in."
-)
-
-
 _EXTRACT_SUBJECT_SYSTEM_PROMPT = (
     "The user asked a question whose answer changes over time, so it "
     "MUST be looked up online — you must NOT answer it. Identify only: "
@@ -354,39 +358,62 @@ _EXTRACT_SUBJECT_SYSTEM_PROMPT = (
 )
 
 
-def _parse_qa_json(raw: str, fallback_answer: str = "") -> QAWithUncertainty:
-    """Parse the JSON object returned by qa_with_uncertainty.
+# A reply that is only a placeholder, not an answer. These are what
+# llama3.2:3b wrote into the old JSON "answer" field instead of a refusal
+# ("I can't provide information on…" came back as "None"); free text makes
+# them rare, and one is retried rather than spoken.
+_PLACEHOLDER_ANSWER_RE = re.compile(
+    r"^(?:none(?: found)?|null|n/?a|not applicable|unknown|no answer)[.!]?$",
+    re.IGNORECASE,
+)
+# A reply that stops on a contraction's stem ("I don", "that doesn") with no
+# closing punctuation was cut off mid-word; the live office log has "I don",
+# "I couldn" and "I didn" from the old JSON contract. "can" and "won" are
+# left out, and the match is case-sensitive ("Ask Don"): they are words in
+# their own right.
+_CUT_AT_CONTRACTION_RE = re.compile(
+    r"\b(?:don|didn|doesn|couldn|wouldn|shouldn|isn|aren|wasn|weren|hasn|"
+    r"haven|hadn|mustn|needn)$"
+)
+_SENTENCE_END = ".!?…"
+_CLOSING_QUOTES = "\"'”’)»"
 
-    Defensive on every field — models sometimes wrap the JSON in
-    prose, drop the candidate_claim, or stringify the bool. We fall
-    back to ``needs_verification=False`` on any parse failure so a
-    malformed response never spuriously triggers a web-search offer.
-    """
-    if not raw:
-        return QAWithUncertainty(answer=fallback_answer, needs_verification=False)
-    # Models occasionally bracket the JSON with prose ("Here you go:
-    # {...}"). Find the first { and last } and parse just that span.
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    blob = raw[start : end + 1]
-    try:
-        parsed = json.loads(blob)
-    except Exception:
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    if not isinstance(parsed, dict):
-        return QAWithUncertainty(answer=raw.strip(), needs_verification=False)
-    answer = str(parsed.get("answer") or "").strip() or fallback_answer
-    raw_flag = parsed.get("needs_verification")
-    if isinstance(raw_flag, bool):
-        needs = raw_flag
-    elif isinstance(raw_flag, str):
-        needs = raw_flag.strip().lower() in ("true", "yes", "1")
-    else:
-        needs = False
-    claim = str(parsed.get("candidate_claim") or "").strip()[:300]
-    return QAWithUncertainty(answer=answer, needs_verification=needs, candidate_claim=claim)
+
+def _last_complete_sentences(text: str) -> str:
+    """``text`` up to its last sentence-ending punctuation, or "" if it has
+    none — what is left of a reply after its broken last words are dropped."""
+    cut = max(text.rfind(ch) for ch in _SENTENCE_END)
+    if cut < 0:
+        return ""
+    end = cut + 1
+    while end < len(text) and text[end] in _CLOSING_QUOTES:
+        end += 1
+    return text[:end].strip()
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """A read/connect timeout from httpx (ollama-python lets them through
+    unwrapped) or asyncio, as opposed to a refused connection or an error
+    reply."""
+    return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
+
+
+def _clean_spoken_answer(raw: str) -> tuple[str, str | None]:
+    """Tidy a free-text QA reply for speech and say what, if anything, is
+    wrong with it: ``(text, problem)``, where ``problem`` is None for a
+    usable answer, else "empty", "placeholder" or "cut". Never shortens a
+    good answer — the prompt, not this, keeps voice answers short."""
+    text = (raw or "").strip()
+    # A reply wrapped whole in one pair of quotes would be read with them.
+    if len(text) >= 2 and text[0] == text[-1] == '"' and text.count('"') == 2:
+        text = text[1:-1].strip()
+    if not text:
+        return "", "empty"
+    if _PLACEHOLDER_ANSWER_RE.match(text):
+        return text, "placeholder"
+    if text[-1] not in _SENTENCE_END + _CLOSING_QUOTES and _CUT_AT_CONTRACTION_RE.search(text):
+        return text, "cut"
+    return text, None
 
 
 def _parse_subject_json(raw: str, fallback_query: str = "") -> SearchSubject:
@@ -966,52 +993,68 @@ class RealOllamaClient:
         history: list[dict[str, str]] | None = None,
         profile_prefix: str | None = None,
     ) -> QAWithUncertainty:
-        """Ask the QA model for an answer plus a self-doubt flag.
+        """The spoken answer for the voice Q&A fallthrough.
 
-        Drives the proactive "want me to check that online?" offer. We
-        ask for JSON via Ollama's ``format='json'`` parameter so the
-        model is constrained to emit a parseable object — on parse
-        failure we still produce a usable ``QAWithUncertainty`` with
-        ``needs_verification=False`` so a bad parse never turns into
-        a spurious offer.
+        Plain free text from the QA model under ``VOICE_QA_SYSTEM_PROMPT``
+        — never a field of a JSON object. It used to be one
+        (``format='json'``, ``{"answer", "needs_verification",
+        "candidate_claim"}``), and llama3.2:3b closed that string early
+        often enough to be heard: the joke "What do you call a fake
+        noodle?" with no punchline, "I don" for "I don't…", "None" for a
+        refusal, or nothing at all, which the router then announced as a
+        dead language model. Same model, same questions, free text: none
+        of those (probe, 2026-09-28).
 
-        ``profile_prefix`` is the speaker's memories + favorites +
-        prefs blob. Prepended to the system prompt so QA
-        answers can lean on personal context without leaking into
-        the JSON output contract.
+        A reply that is empty, only a placeholder, or stops on a
+        contraction stem is asked for once more. If the retry is no better,
+        a cut reply keeps its complete sentences, and an empty one comes
+        back as ``answer=""`` with ``unreachable=False`` so the router can
+        say so honestly. ``unreachable=True`` is reserved for the Ollama
+        calls themselves failing. ``needs_verification`` is always False
+        here: the router judges the offer from the question and from what
+        the answer says (see ``domovoi.uncertainty``).
+
+        ``profile_prefix`` is the speaker's memories + favorites + prefs
+        blob, prepended to the system prompt so answers can lean on
+        personal context.
         """
-        system_prompt = _UNCERTAINTY_SYSTEM_PROMPT.format(bot=settings.bot_name)
+        system_prompt = VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name)
         if profile_prefix:
             system_prompt = profile_prefix.rstrip() + "\n\n" + system_prompt
         messages = self._build_messages(transcript, system_prompt, history)
-        try:
-            response = await self._qa_chat(
-                model=self._qa_model,
-                messages=messages,
-                stream=False,
-                format="json",
-            )
-        except Exception as e:
-            log.warning("qa_with_uncertainty: ollama call failed: %s", e)
-            # Fall back to plain qa so the user still gets an answer.
+        text, problem = "", "empty"
+        for attempt in (1, 2):
             try:
-                plain = await self.qa(transcript, history=history)
-            except Exception:
-                plain = ""
-            return QAWithUncertainty(
-                answer=plain, needs_verification=False, candidate_claim=""
+                response = await self._qa_chat(
+                    model=self._qa_model,
+                    messages=messages,
+                    stream=False,
+                )
+            except Exception as e:
+                log.warning(
+                    "qa_with_uncertainty: ollama call failed (attempt %d): %s",
+                    attempt, e,
+                )
+                if attempt == 2 or _is_timeout(e):
+                    # A timeout already waited the full read limit; a
+                    # second one would only double the silence.
+                    return QAWithUncertainty(
+                        answer="", needs_verification=False, unreachable=True,
+                    )
+                continue
+            raw = self._chunk_content(response)
+            text, problem = _clean_spoken_answer(raw)
+            if problem is None:
+                break
+            log.warning(
+                "qa_with_uncertainty: %s answer for %r (attempt %d): %r",
+                problem, transcript, attempt, raw,
             )
-        message = (
-            response.get("message")
-            if isinstance(response, dict)
-            else getattr(response, "message", None)
-        )
-        content = (
-            message.get("content")
-            if isinstance(message, dict)
-            else getattr(message, "content", "")
-        ) if message is not None else ""
-        return _parse_qa_json(content or "")
+        if problem == "cut":
+            text = _last_complete_sentences(text)
+        elif problem is not None:
+            text = ""
+        return QAWithUncertainty(answer=text, needs_verification=False)
 
     async def extract_search_subject(
         self,

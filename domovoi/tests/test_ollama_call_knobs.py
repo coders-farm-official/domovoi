@@ -230,13 +230,15 @@ async def test_server_rejection_retries_once_and_latches_off():
 
 
 async def test_json_paths_recover_from_a_rejection_without_degrading():
-    """qa_with_uncertainty would fall back to plain qa on a failed call;
-    a think rejection must be retried before that, not turn into one."""
+    """qa_with_uncertainty retries a failed call once as its own answer
+    retry; a think rejection must be retried (and latched) before that,
+    not spend it. The spoken answer is plain text, never format=json."""
     chat = _FakeChat(reject_think=True)
     c = _client(chat, qa_think=False)
     out = await c.qa_with_uncertainty("who won in 1998")
-    assert out.answer == "hi"
-    assert [call.get("format") for call in chat.calls] == ["json", "json"]
+    assert out.answer == _CONTENT and out.unreachable is False
+    assert [call.get("format") for call in chat.calls] == [None, None]
+    assert chat.values("think") == [False, "<absent>"]
 
 
 async def test_stream_rejection_retries_before_the_first_chunk():
@@ -548,7 +550,7 @@ async def test_wire_carries_each_knob_to_its_own_role(monkeypatch):
         assert body["model"] == "llama3.2:3b"
         assert body["options"] == {"num_ctx": 8192}
         assert body["think"] is False
-    assert uncertainty["format"] == "json"
+    assert "format" not in uncertainty                     # a spoken answer is plain text
     assert route["model"] == "qwen3:8b"
     assert route["options"] == {"temperature": 0, "num_ctx": 16384}
     assert route["think"] is False                         # ollama_tool_think, not QA's

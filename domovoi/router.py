@@ -24,7 +24,12 @@ from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.turn_timings import timings_for_row
-from domovoi.uncertainty import VOLATILE_CATEGORIES, categorize_question
+from domovoi.uncertainty import (
+    VOLATILE_CATEGORIES,
+    answer_admits_staleness,
+    categorize_question,
+    looks_like_question,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,16 +48,39 @@ _VOLATILE_SUBJECT_FALLBACK = {
 }
 
 
-# Spoken when the QA stage comes back with nothing to say. The only way
-# that happens is an Ollama failure — `qa_with_uncertainty` catches the
-# connection error, retries plain `qa`, and returns ``answer=""`` when
-# that fails too. Mirrors the plain wording of the volatile gate's
-# offline line: state what's broken, then what still works, so the user
-# can tell a dead language model from a dead satellite.
+# Spoken when the QA model can't be reached — `qa_with_uncertainty`
+# reports ``unreachable`` only when its Ollama calls themselves failed.
+# Mirrors the plain wording of the volatile gate's offline line: state
+# what's broken, then what still works, so the user can tell a dead
+# language model from a dead satellite.
 _LLM_UNREACHABLE_TEXT = (
     "My language model isn't answering right now — timers, music and "
     "the clock still work."
 )
+
+# Spoken when the model answered but said nothing usable (an empty reply
+# twice running). The model is up, so the outage line above would be a
+# lie; this one is true and short. Office row #187 on 2026-09-28 was this
+# case announced as an outage: Domovoi's own greeting "Back so soon?"
+# came back through the mic, llama3.2:3b returned an empty answer to it
+# in under a second, and the user heard that the model was down.
+_NO_ANSWER_TEXT = "Sorry, I don't have an answer for that."
+
+_ONLINE_CHECK_OFFER = "Want me to check that online?"
+
+
+def _end_sentence(text: str) -> str:
+    """``text`` closed with a full stop if it doesn't already end a
+    sentence, so an offer appended after it is heard as its own sentence
+    ("…to answer that. Want me to check…", not "…to answer that Want me
+    to check…")."""
+    text = text.rstrip()
+    if not text:
+        return text
+    tail = text.rstrip("\"'”’)»")
+    if tail and tail[-1] in ".!?…":
+        return text
+    return text + "."
 
 
 # Yes/no detection for the multi-turn confirmation flow. Tight on
@@ -601,36 +629,47 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
 
-    # Plain QA path — also pulls a self-doubt flag so the LLM can
-    # nominate its own answers for verification (e.g. "X happened in
-    # 2024 but my training data may be stale"). Either the heuristic
-    # category OR the self-doubt flag triggers the offer; the offer is
-    # suppressed offline because we can't actually run the search.
+    # Plain QA path. The answer is spoken exactly as the model wrote it.
+    # The "want me to check that online?" offer rides on it only for a
+    # real reason: a time-sensitive category (normally already taken by
+    # the volatile gate above), or — for something the user actually
+    # asked — the client's own flag or an answer that says in so many
+    # words that it may be out of date. Suppressed offline because we
+    # can't actually run the search.
     qa = await ollama_client.qa_with_uncertainty(
         intent.transcript,
         history=history,
         profile_prefix=profile_prefix or None,
     )
-    answer = qa.answer
-    if not answer.strip():
-        # Ollama is unreachable: `qa_with_uncertainty` degrades to an
-        # empty answer once its own plain-`qa` retry has failed too, and
-        # empty text synthesises to zero audio — the turn ends in total
-        # silence, which the user can't tell apart from a dead satellite
-        # (F-V011). Speak a fixed line instead, and stamp it
-        # ``matched_path="error"`` so the audit trail separates "the
-        # model was down" from a real answer. The fast paths named in the
-        # line are the ones that keep working without the LLM.
-        log.warning(
-            "qa returned an empty answer for %r — the LLM is unreachable; "
-            "speaking the fallback line instead of silence",
-            intent.transcript,
-        )
+    answer = qa.answer.strip()
+    if getattr(qa, "unreachable", False) or not answer:
+        # Empty text synthesises to zero audio — the turn would end in
+        # total silence, which the user can't tell apart from a dead
+        # satellite (F-V011) — so a fixed line is spoken either way. Which
+        # line depends on why: the Ollama calls failed (say the model is
+        # down, stamp matched_path="error" so the audit trail separates an
+        # outage from a real answer; the fast paths named in the line keep
+        # working without the LLM), or the model is up and answered with
+        # nothing usable even on its retry (say so, as a normal qa turn).
+        unreachable = bool(getattr(qa, "unreachable", False))
+        if unreachable:
+            log.warning(
+                "qa: the LLM is unreachable for %r; speaking the outage line "
+                "instead of silence",
+                intent.transcript,
+            )
+        else:
+            log.warning(
+                "qa: the LLM gave no usable answer for %r; speaking the "
+                "no-answer line",
+                intent.transcript,
+            )
+        path = "error" if unreachable else "qa"
         response = Response(
-            text=_LLM_UNREACHABLE_TEXT,
+            text=_LLM_UNREACHABLE_TEXT if unreachable else _NO_ANSWER_TEXT,
             session_id=session_id,
             matched_handler=None,
-            matched_path="error",
+            matched_path=path,
             online=ctx.online,
             expect_followup=False,
         )
@@ -641,16 +680,17 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             ctx=ctx,
             response=response,
             matched_handler=None,
-            matched_path="error",
+            matched_path=path,
             latency_ms=_elapsed_ms(),
         )
         return response
-    should_offer = ctx.online and (
-        category is not None or qa.needs_verification
+    self_doubt = looks_like_question(intent.transcript) and (
+        qa.needs_verification or answer_admits_staleness(answer)
     )
+    should_offer = ctx.online and (category is not None or self_doubt)
     expect_followup = False
     if should_offer:
-        answer = answer.rstrip() + " Want me to check that online?"
+        answer = _end_sentence(answer) + " " + _ONLINE_CHECK_OFFER
         try:
             await request_confirmation(
                 session,
@@ -659,7 +699,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 handler="double_check",
                 data={
                     "question": intent.transcript,
-                    "candidate_claim": qa.candidate_claim,
+                    # An answer WAS spoken, so a "no" can honestly say
+                    # "sticking with my answer" (double_check keys that
+                    # off a non-empty claim).
+                    "candidate_claim": (qa.candidate_claim or qa.answer).strip()[:300],
                     "category": category or "general_recent",
                 },
             )
@@ -668,7 +711,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             log.warning("couldn't park self_doubt_offer pending_confirmation: %s", e)
             # If we couldn't park the confirmation, drop the offer text
             # so we don't promise something the next "yes" can't honor.
-            answer = qa.answer
+            answer = qa.answer.strip()
     elif ctx.person_id is not None:
         # No higher-priority offer is firing — see if the implicit
         # memory extractor has parked anything to surface. Mutually
@@ -677,7 +720,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         offer = await _maybe_offer_pending_memory(ctx, session)
         if offer is not None:
             offer_text, memory_id = offer
-            answer = answer.rstrip() + " " + offer_text
+            answer = _end_sentence(answer) + " " + offer_text
             try:
                 await request_confirmation(
                     session,
@@ -692,7 +735,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                     "couldn't park pending_memory_offer pending_confirmation: %s", e
                 )
                 # Drop the offer text if we can't park it.
-                answer = qa.answer
+                answer = qa.answer.strip()
 
     response = Response(
         text=answer,

@@ -208,30 +208,87 @@ def _parse_verdict(text: str) -> tuple[str, str | None, str | None]:
     return verdict, source, reason
 
 
+# Spoken when the answer-from-sources reply has no answer in it at all
+# (an ANSWER field that was only the NONE sentinel) — the prompt's own
+# wording for "the results don't say".
+_NO_CLEAR_ANSWER_TEXT = "The search didn't turn up a clear answer."
+
+# The SOURCE field written on the ANSWER line instead of its own:
+# "ANSWER: … cocaine. SOURCE: NONE".
+_INLINE_SOURCE_RE = re.compile(r"\s*\bSOURCE:\s*", re.IGNORECASE)
+# The bare NONE sentinel left at the end of an answer when the model drops
+# the "SOURCE:" label ("ANSWER: … cocaine. NONE" — office row #157 spoke
+# it). Upper case and a word of its own only, so an answer that ends
+# "…there are none." is left alone.
+_TRAILING_NONE_RE = re.compile(r"(?:^|(?<=[\s.!?…,;:]))NONE[.!]?$")
+
+
+def _strip_none_sentinel(text: str) -> str:
+    """``text`` without a trailing bare NONE sentinel."""
+    text = text.strip()
+    while True:
+        stripped = _TRAILING_NONE_RE.sub("", text).rstrip()
+        if stripped == text:
+            return text
+        text = stripped
+
+
+def _split_source(value: str) -> tuple[str, str | None]:
+    """Split "answer SOURCE: url" into ``(answer, url)``; the url is None
+    for NONE or nothing."""
+    m = _INLINE_SOURCE_RE.search(value)
+    if m is None:
+        return value, None
+    head, tail = value[: m.start()], value[m.end():].strip()
+    url = tail.split()[0] if tail else ""
+    return head, (url if url and url.upper() != "NONE" else None)
+
+
 def _parse_answer_from_sources(text: str) -> tuple[str, str | None]:
     """Pull (answer, source_url) out of the answer-from-sources prompt.
 
-    Falls back to returning the raw text as the answer and no source
-    on parse failure — better to speak something than to silently
-    blank out when the model drops the format.
+    Tolerates the ways a small model bends the two-line format: the
+    answer running on to a second line, the SOURCE field (or a bare NONE
+    for it) written on the ANSWER line — neither the SOURCE label nor the
+    NONE sentinel is ever spoken. Falls back to the raw text as the
+    answer when the model drops the format entirely — better to speak
+    something than to silently blank out.
     """
-    answer = ""
+    parts: list[str] = []
     source: str | None = None
+    labelled = False
+    in_answer = False
+    unlabelled: list[str] = []
     for line in (text or "").splitlines():
         line = line.strip()
-        if line.upper().startswith("ANSWER:"):
-            v = line.split(":", 1)[1].strip()
+        upper = line.upper()
+        if upper.startswith("ANSWER:"):
+            labelled = in_answer = True
+            v, inline_source = _split_source(line.split(":", 1)[1])
+            if inline_source:
+                source = inline_source
+            if _INLINE_SOURCE_RE.search(line):
+                in_answer = False
+            v = v.strip()
             if v:
-                answer = v
-        elif line.upper().startswith("SOURCE:"):
+                # A second ANSWER line replaces the first, as it always has.
+                parts = [v]
+        elif upper.startswith("SOURCE:"):
+            in_answer = False
             s = line.split(":", 1)[1].strip()
             if s and s.upper() != "NONE":
                 source = s
-    if not answer:
-        # Model dropped the format — speak whatever it produced rather
-        # than nothing.
-        answer = (text or "").strip()
-    return answer, source
+        elif line and in_answer:
+            parts.append(line)
+        elif line:
+            unlabelled.append(line)
+    if labelled:
+        answer = _strip_none_sentinel(" ".join(parts))
+        return (answer or _NO_CLEAR_ANSWER_TEXT), source
+    # Model dropped the format — speak whatever it produced rather than
+    # nothing, minus a trailing sentinel.
+    answer = _strip_none_sentinel(" ".join(unlabelled))
+    return (answer or _NO_CLEAR_ANSWER_TEXT), source
 
 
 def _format_voice_response(

@@ -827,8 +827,10 @@ class _RecordingLogRepo:
 class _DeadOllamaClient:
     """What the real client degrades to when Ollama is unreachable:
     route() swallows the connection error and returns None, and
-    qa_with_uncertainty() returns answer="" after its plain-qa retry
-    fails too (domovoi/clients/ollama.py)."""
+    qa_with_uncertainty() returns answer="" with unreachable=True once its
+    retry has failed too (domovoi/clients/ollama.py)."""
+
+    unreachable = True
 
     async def route(self, transcript, tool_schemas):
         return None
@@ -837,8 +839,15 @@ class _DeadOllamaClient:
         from domovoi.clients.ollama import QAWithUncertainty
 
         return QAWithUncertainty(
-            answer="", needs_verification=False, candidate_claim=""
+            answer="", needs_verification=False, candidate_claim="",
+            unreachable=self.unreachable,
         )
+
+
+class _SpeechlessOllamaClient(_DeadOllamaClient):
+    """The model is up and answered, with nothing usable, twice."""
+
+    unreachable = False
 
 
 @pytest.mark.asyncio
@@ -886,3 +895,43 @@ async def test_dead_llm_speaks_a_line_instead_of_silence(monkeypatch) -> None:
     # And the turn is logged as an error, not as a successful qa answer.
     assert intent_rows and intent_rows[-1]["matched_path"] == "error"
     assert convo_rows and convo_rows[-1]["assistant_text"] == response.text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_answer_from_a_live_model_is_not_an_outage(monkeypatch) -> None:
+    """Office row #187 (2026-09-28): the model answered "Back so soon." with
+    an empty string in under a second, and the user was told the language
+    model wasn't answering. Only a failed call is an outage; an empty
+    answer gets its own honest line and stays a qa turn."""
+    import domovoi.router as router_mod
+
+    assert _dry_run_winner("Back so soon.") is None   # reaches the QA fallthrough
+
+    intent_rows: list[dict] = []
+    convo_rows: list[dict] = []
+
+    class _IntentRepo(_RecordingLogRepo):
+        rows = intent_rows
+
+    class _ConvoRepo(_RecordingLogRepo):
+        rows = convo_rows
+
+    monkeypatch.setattr(router_mod, "SessionRepository", _FakeSessionRepo)
+    monkeypatch.setattr(router_mod, "IntentLogRepository", _IntentRepo)
+    monkeypatch.setattr(router_mod, "ConversationLogRepository", _ConvoRepo)
+    monkeypatch.setattr(
+        router_mod, "get_ollama_client", lambda: _SpeechlessOllamaClient()
+    )
+
+    response = await route(
+        Intent(transcript="Back so soon.", room_id="office"),
+        Context(room_id="office", online=True),
+        None,
+    )
+
+    assert response.text == router_mod._NO_ANSWER_TEXT
+    assert response.text != router_mod._LLM_UNREACHABLE_TEXT
+    assert response.matched_path == "qa"
+    assert response.expect_followup is False
+    assert intent_rows[-1]["matched_path"] == "qa"
+    assert convo_rows[-1]["assistant_text"] == router_mod._NO_ANSWER_TEXT

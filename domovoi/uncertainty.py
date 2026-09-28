@@ -9,9 +9,13 @@ None falls through to plain QA.
 The categorizer is intentionally **conservative**: it only flags
 queries whose answer is time-sensitive enough that a stale LLM
 response would be actively wrong, not merely unsatisfying. The
-Ollama JSON ``needs_verification`` flag (see
-``ollama_client.qa_with_uncertainty``) is the second leg of the
-hybrid trigger — either signal is enough.
+second leg of the trigger reads the spoken answer itself:
+``answer_admits_staleness`` catches a model that says its own
+knowledge may be out of date ("I don't have real-time info, but…"),
+and it only counts when the user actually asked a question
+(``looks_like_question``). It replaced a self-reported JSON
+``needs_verification`` flag that fired on background speech and
+refusals and almost never on a stale fact.
 
 Categories are PK'd with web_search_prefs.category (a CHECK
 constraint) — adding one here requires a migration to widen the
@@ -117,6 +121,49 @@ _SUBJECTIVE_RE = re.compile(
     r"do you think"
     r")\b"
 )
+
+
+# An answer in which the model says, in its own words, that what it knows
+# may be stale — the one self-doubt signal worth an online check. Narrow on
+# purpose: "I'm not sure who Chevy is" is not a stale fact, and an offer
+# glued onto chit-chat is noise.
+_STALE_ANSWER_RE = re.compile(
+    r"\b("
+    r"real[- ]time (?:info\w*|data|access|updates?|news)|"
+    r"(?:knowledge|training) cut-?off|my training data|"
+    r"as of my (?:last |latest )?(?:update|knowledge|training)|"
+    r"(?:may|might|could) (?:be|have) (?:out of date|outdated|changed since)|"
+    r"(?:don't|do not|doesn't|does not) have (?:access to )?"
+    r"(?:current|up-to-date|up to date|live|the latest|recent) "
+    r"(?:info\w*|data|news|details|figures)"
+    r")\b"
+)
+
+# How a question opens once Whisper's punctuation is gone.
+_QUESTION_OPENERS = frozenset((
+    "what", "whats", "who", "whos", "whom", "whose", "when", "where", "why",
+    "how", "which", "is", "are", "was", "were", "do", "does", "did", "can",
+    "could", "will", "would", "should", "has", "have", "had",
+))
+
+
+def answer_admits_staleness(answer: str) -> bool:
+    """True when the spoken answer says the model's knowledge may be out of
+    date ("I don't have real-time info, but the latest I know of is…")."""
+    return bool(answer) and bool(_STALE_ANSWER_RE.search(answer.lower().replace("’", "'")))
+
+
+def looks_like_question(transcript: str) -> bool:
+    """True for something the user asked — Whisper's closing "?" or an
+    interrogative first word — as opposed to a remark or background speech
+    ("German. Wow.", "sir."), where an offer to check online makes no sense."""
+    text = (transcript or "").strip()
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    first = re.sub(r"[^a-z]", "", text.split()[0].lower())
+    return first in _QUESTION_OPENERS
 
 
 def categorize_question(transcript: str) -> str | None:
