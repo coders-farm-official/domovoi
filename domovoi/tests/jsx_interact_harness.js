@@ -32,7 +32,9 @@
 //   text(), click(sel), type(sel, value), change(sel, value),
 //   submit(sel), key(sel, key), plain(el), calls, fnCalls, hookCalls,
 //   api, settle(),
-//   global(name) (a sandbox global, e.g. what a `setup` stub recorded).
+//   global(name) (a sandbox global, e.g. what a `setup` stub recorded),
+//   ancestors(el) (the host elements around el, nearest first), inside(el, sel)
+//   (whether any of them matches sel — e.g. a control in a wrapper CSS hides).
 //   sel is {type?, text?, title?, placeholder?, icon?, value?, name?, nth?}
 //   or a predicate (el) => boolean; `text` and `title` match substrings.
 'use strict';
@@ -129,24 +131,31 @@ const createRuntime = () => {
 
   let rootEl = null;
   let out = [];
+  // Each rendered element's nearest host ancestor, kept beside the element
+  // records (never on them) so what a scenario returns is unchanged.
+  const parentOf = new WeakMap();
 
   const textOf = (children) =>
     (children || []).filter((c) => typeof c === 'string' || typeof c === 'number').join('');
 
-  const renderNode = (node, pathKey) => {
+  const renderNode = (node, pathKey, parentEl = null) => {
     if (node == null || typeof node === 'boolean') return;
     if (Array.isArray(node)) {
       node.forEach((c, i) => {
         const k = c && typeof c === 'object' && c.props && c.props.key != null ? `k${c.props.key}` : String(i);
-        renderNode(c, `${pathKey}/${k}`);
+        renderNode(c, `${pathKey}/${k}`, parentEl);
       });
       return;
     }
     if (typeof node !== 'object') return;   // text: already on the parent's `text`
-    if (node.type === Fragment) { renderNode(node.props.children, `${pathKey}/frag`); return; }
+    if (node.type === Fragment) { renderNode(node.props.children, `${pathKey}/frag`, parentEl); return; }
     if (typeof node.type === 'function') {
       const name = node.type.name || 'anon';
-      if (LEAF_COMPONENTS.has(name)) { out.push({ type: name, props: node.props, text: '' }); return; }
+      if (LEAF_COMPONENTS.has(name)) {
+        const leaf = { type: name, props: node.props, text: '' };
+        out.push(leaf); parentOf.set(leaf, parentEl);
+        return;
+      }
       const key = `${pathKey}/${name}`;
       let f = fibers.get(key);
       if (!f) { f = { hooks: [], pending: [], alive: true }; fibers.set(key, f); }
@@ -155,12 +164,12 @@ const createRuntime = () => {
       current = f; hookIdx = 0;
       let result;
       try { result = node.type(node.props); } finally { current = prevCurrent; hookIdx = prevIdx; }
-      renderNode(result, key);
+      renderNode(result, key, parentEl);
       return;
     }
     const el = { type: String(node.type), props: node.props, text: textOf(node.props.children) };
-    out.push(el);
-    renderNode(node.props.children, `${pathKey}/${el.type}`);
+    out.push(el); parentOf.set(el, parentEl);
+    renderNode(node.props.children, `${pathKey}/${el.type}`, el);
   };
 
   const flush = () => {
@@ -195,6 +204,7 @@ const createRuntime = () => {
     mount(el) { rootEl = el; return flush(); },
     rerender() { return flush(); },
     tree() { return out; },
+    parent(el) { return parentOf.get(el) || null; },
   };
 };
 
@@ -348,6 +358,12 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
       return all[nth] || null;
     },
     text() { return rt.tree().map((el) => el.text).filter(Boolean); },
+    ancestors(el) {
+      const up = [];
+      for (let a = rt.parent(el); a; a = rt.parent(a)) up.push(a);
+      return up;
+    },
+    inside(el, sel) { return h.ancestors(el).some((a) => matches(a, sel)); },
     plain(el) {
       if (!el) return null;
       const props = {};

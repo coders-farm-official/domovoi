@@ -365,8 +365,12 @@ def test_the_mini_player_docks_above_the_strip_on_a_phone() -> None:
     assert "--phone-nav-h: 56px" in css
     assert "--dock-bottom: var(--phone-nav-h)" in phone
     assert "grid-template-rows: var(--topbar-h) 1fr var(--phone-nav-h)" in phone
+    # The bar is styled in styles.css ("Docked player"), where its phone
+    # layout lives too (test_web_player_phone.py drives that).
+    bar = re.search(r"^\.mini-player \{(.*?)\}", css, re.S | re.M).group(1)
+    assert "position: fixed; left: 0; right: 0; bottom: var(--dock-bottom, 0px); z-index: 45;" in bar
     player = _src("player.jsx")
-    assert "position: 'fixed', left: 0, right: 0, bottom: 'var(--dock-bottom, 0px)', zIndex: 45" in player
+    assert '<div className="mini-player">' in player
     # The queue panel and cast menu float above the player, so they move with it.
     assert player.count("bottom: 'calc(var(--dock-bottom, 0px) + 76px)'") == 2
     assert "bottom: 76," not in player
