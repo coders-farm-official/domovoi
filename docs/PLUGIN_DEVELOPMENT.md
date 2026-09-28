@@ -1539,20 +1539,35 @@ rejects:
 * anything that would step outside the migration's role or path:
   `SET`/`RESET ROLE`, `SET SESSION AUTHORIZATION`, `RESET ALL`,
   `SET`/`RESET search_path` / `set_config(...)`, `DO` blocks, `COPY`,
-  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`;
+  `ALTER SYSTEM`, `CREATE`/`ALTER`/`DROP ROLE`, `LOAD`, and
+  `SET standard_conforming_strings` / `client_encoding` / `NAMES` (they
+  change how the server reads the SQL after them);
 * transaction control — `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`,
   `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION`. The
   runner already wraps each file in its own transaction; a `COMMIT` would
   end it, and the rest of the file would run as the application user in
   `public`. Don't wrap a file in `BEGIN; … COMMIT;`. A PL/pgSQL
-  `BEGIN … END` inside a dollar-quoted function body is fine.
+  `BEGIN … END` inside a dollar-quoted function body is fine, and so is
+  `CASE … END` anywhere. Write function bodies dollar-quoted
+  (`AS $$ … $$`): a SQL-standard `BEGIN ATOMIC … END` body isn't quoted,
+  so its closing `END` reads as transaction control and the file is
+  refused.
+
+The lint reads the file the way Postgres does — comments, `'…'` and
+`E'…'` literals, quoted identifiers and dollar quotes (any tag) — so
+nothing it takes for a string or a comment runs as code; the runner pins
+`standard_conforming_strings = on` for each file to keep that true.
 
 `INSERT`/`UPDATE`/`DELETE` on your own tables (seed rows, backfills) are
 fine. The lint is a tripwire in front of the role — the role is what
 Postgres enforces. As a backstop, before recording a file as applied the
 runner checks it finished in the runner's transaction, as the plugin
 role, on the pinned path; a file that didn't is rolled back as far as it
-still can be and is not recorded. The application's database user must be a superuser
+still can be and is not recorded. Role, lint and check keep an honest
+migration inside its schema; they are not a wall against a hostile one
+(the connection's own user can always switch back to itself, from a
+PL/pgSQL `EXECUTE` no lint can read) — a plugin is trusted code, see
+§6.8. The application's database user must be a superuser
 or hold `CREATEROLE` (the docker-compose and harness users are the
 bootstrap superuser; a hardened deployment grants `CREATEROLE`), or the
 first plugin install fails with a message saying so. Objects an earlier

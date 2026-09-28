@@ -14,10 +14,17 @@ small Python runner instead (Flyway multi-history config is fragile):
 * Per file: one transaction wrapping ``SET LOCAL search_path =
   "plugin_<slug>"`` (the plugin schema ONLY — an unqualified name that
   does not exist there is an error, never a fall-through to ``public``)
-  + ``SET LOCAL ROLE plugin_<slug>`` + the file's SQL + ``RESET ROLE`` +
-  the ledger insert. The role holds no privilege on core tables, cannot
-  ``COPY`` to a program or file, alter the server, or create roles;
-  the search path keeps a plugin's own unqualified names honest.
+  + ``SET LOCAL standard_conforming_strings = on`` + ``SET LOCAL ROLE
+  plugin_<slug>`` + the file's SQL + ``RESET ROLE`` + the ledger insert.
+  The role holds no privilege on core tables, cannot ``COPY`` to a
+  program or file, alter the server, or create roles; the search path
+  keeps a plugin's own unqualified names honest.
+* What this is for: keeping an honest migration inside its own schema.
+  It is not a wall against a hostile plugin — the connection's session
+  user can always ``SET ROLE`` back to itself (a PL/pgSQL ``EXECUTE``
+  can do that where no lint can read it), and a plugin is Python running
+  inside the server with its database credentials anyway (the install
+  preview says so: there is no sandbox, PLUGIN_DEVELOPMENT.md §6.8).
 * Objects an earlier runner (or a hand-applied fix) left owned by the
   application user are re-owned to the plugin role before a catch-up
   runs, so ``ALTER TABLE`` on a shipped table keeps working. That step is
@@ -38,7 +45,11 @@ small Python runner instead (Flyway multi-history config is fragile):
   ROLE``, ``SET SESSION AUTHORIZATION``, ``SET/RESET search_path`` /
   ``set_config``, transaction control (``BEGIN``, ``COMMIT``,
   ``ROLLBACK``, ``SAVEPOINT`` …), ``DO`` blocks, ``COPY``,
-  ``ALTER SYSTEM``, ``CREATE/ALTER/DROP ROLE``, ``LOAD``.
+  ``ALTER SYSTEM``, ``CREATE/ALTER/DROP ROLE``, ``LOAD``, and the
+  settings that change how the server reads the text after them
+  (``standard_conforming_strings``, ``client_encoding``/``NAMES``). The
+  lint tokenizes the file the way the server does (comments, literals,
+  dollar quotes), so nothing it takes for a string runs as code.
 * **Sandbox check**: before a file's ledger row is written, the runner
   confirms the file finished where it started — in the runner's
   transaction, as the plugin role, on the pinned path. A file that
@@ -151,6 +162,14 @@ _FORBIDDEN_STATEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\s*(create|alter|drop)\s+(database|tablespace)\b", re.I),
      "CREATE/ALTER/DROP DATABASE or TABLESPACE is forbidden in a plugin "
      "migration"),
+    # These change how the server reads the text that follows — a later
+    # file on the same connection included — so the lint could no longer
+    # tell a string from code the way the server does.
+    (re.compile(
+        r"^\s*(set|reset)\s+(local\s+|session\s+)?"
+        r"(standard_conforming_strings|client_encoding|names)\b", re.I),
+     "SET standard_conforming_strings / client_encoding / NAMES is "
+     "forbidden — they change how the server reads the SQL after them"),
 )
 # Transaction control ends the runner's per-file transaction, and the SET
 # LOCAL role and search_path end with it: every statement after it runs as
@@ -170,26 +189,66 @@ _TRANSACTION_CONTROL_MSG = (
     "and schema"
 )
 
-# A dollar-quote delimiter: $$ or $tag$. A tag never starts with a digit,
-# so $1 is a parameter, not a quote.
-_DOLLAR_TAG_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
+# A dollar-quote delimiter: $$ or $tag$. Postgres's tag characters are its
+# identifier characters minus '$' — ASCII letters, '_', digits after the
+# first, and ANY non-ASCII character — so $é$ is a quote, and $1 is a
+# parameter, not one.
+_DOLLAR_TAG_RE = re.compile(
+    r"\$(?:[A-Za-z_\u0080-\U0010ffff][A-Za-z0-9_\u0080-\U0010ffff]*)?\$"
+)
 
 
-def _is_ident_char(ch: str) -> bool:
-    return ch.isalnum() or ch in "_$"
+def _ident_start(ch: str) -> bool:
+    """Postgres's ``ident_start``: an ASCII letter, '_', or any non-ASCII
+    character (the server lexes bytes >= 0x80 as letters)."""
+    return ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ch == "_" or ch >= "\x80"
+
+
+def _ident_cont(ch: str) -> bool:
+    """Postgres's ``ident_cont``: ``ident_start`` plus digits and '$' —
+    so ``a$$`` and ``é$$`` are identifiers, never a dollar quote."""
+    return _ident_start(ch) or ("0" <= ch <= "9") or ch == "$"
+
+
+def _skip_literal(sql: str, i: int, *, escapes: bool) -> int:
+    """Index just past the ``'…'`` literal whose opening quote is at
+    ``i`` (end of text when it never closes). ``escapes``: an ``E'…'``
+    literal, where a backslash escapes the next character."""
+    n = len(sql)
+    i += 1
+    while i < n:
+        if escapes and sql[i] == "\\":
+            i += 2
+        elif sql[i] == "'":
+            if sql.startswith("''", i):
+                i += 2
+            else:
+                return i + 1
+        else:
+            i += 1
+    return n
 
 
 def _strip_sql_noise(sql: str, *, dollar_bodies: bool = True) -> str:
     """Blank comments and string literals so the lint doesn't
     false-positive on prose (e.g. a COMMENT ON saying 'public API').
 
-    One left-to-right pass, the way Postgres's own scanner reads it, so a
-    ``--`` inside a literal, a nested ``/* */`` or an ``E'\\''`` escape
-    can't hide the code after it. Literals become ``''``, comments a
-    space, quoted identifiers stay as written. A dollar-quoted body
-    (``$$ … $$``, ``$fn$ … $fn$``) keeps its text by default and is linted
-    like top-level SQL — stricter, never looser; with
-    ``dollar_bodies=False`` it collapses to ``$$``."""
+    One left-to-right pass, token by token the way Postgres's own scanner
+    reads the file, so nothing the server runs as code can sit inside what
+    the lint takes for a string or a comment: a ``--`` inside a literal, a
+    nested ``/* */``, an ``E'\\''`` escape, a quote inside a dollar-quoted
+    body, a non-ASCII dollar tag (``$é$``) and an identifier ending in
+    ``$$`` all read as they do to the server. Literals become ``''``,
+    comments a space, identifiers and quoted identifiers stay as written.
+
+    A dollar-quoted body (``$$ … $$``, ``$fn$ … $fn$``) is always found by
+    its delimiters first. By default its text is then scanned on its own
+    and linted like top-level SQL — stricter, never looser; with
+    ``dollar_bodies=False`` it collapses to ``$$``.
+
+    Literals are read with ``standard_conforming_strings`` on (only
+    ``E'…'`` honours backslashes); the runner pins that per file and the
+    lint refuses a file that changes it."""
     out: list[str] = []
     i, n = 0, len(sql)
     while i < n:
@@ -208,24 +267,31 @@ def _strip_sql_noise(sql: str, *, dollar_bodies: bool = True) -> str:
                 else:
                     i += 1
             out.append(" ")
+        elif _ident_start(ch):
+            # A whole identifier or keyword, '$' included — the server never
+            # starts a dollar quote in the middle of one.
+            end = i + 1
+            while end < n and _ident_cont(sql[end]):
+                end += 1
+            word = sql[i:end]
+            if word in ("e", "E") and sql.startswith("'", end):
+                # E'…' honours backslash escapes.
+                i = _skip_literal(sql, end, escapes=True)
+                out.append("''")
+            else:
+                out.append(word)
+                i = end
+        elif "0" <= ch <= "9":
+            # A number (with any trailing letters): never an identifier, so
+            # a '$' right after it may open a dollar quote.
+            end = i + 1
+            while end < n and (sql[end].isascii() and (sql[end].isalnum() or sql[end] in "_.")):
+                end += 1
+            out.append(sql[i:end])
+            i = end
         elif ch == "'":
-            # E'…' honours backslash escapes; every other literal only ''.
-            escapes = (
-                i > 0 and sql[i - 1] in "eE"
-                and (i < 2 or not _is_ident_char(sql[i - 2]))
-            )
-            i += 1
-            while i < n:
-                if escapes and sql[i] == "\\":
-                    i += 2
-                elif sql[i] == "'":
-                    if sql.startswith("''", i):
-                        i += 2
-                    else:
-                        i += 1
-                        break
-                else:
-                    i += 1
+            # Every other literal escapes a quote only by doubling it.
+            i = _skip_literal(sql, i, escapes=False)
             out.append("''")
         elif ch == '"':
             end = i + 1
@@ -239,15 +305,17 @@ def _strip_sql_noise(sql: str, *, dollar_bodies: bool = True) -> str:
             # One token: a ';' inside it is no statement boundary.
             out.append(sql[i:end + 1].replace(";", "_"))
             i = end + 1
-        elif ch == "$" and not dollar_bodies and not (i > 0 and _is_ident_char(sql[i - 1])):
-            m = _DOLLAR_TAG_RE.match(sql, i)
-            if m is None:
-                out.append(ch)
-                i += 1
-                continue
-            end = sql.find(m.group(0), m.end())
-            i = n if end < 0 else end + len(m.group(0))
-            out.append("$$")
+        elif ch == "$" and (m := _DOLLAR_TAG_RE.match(sql, i)) is not None:
+            # Reached only between tokens (an identifier's own '$' went
+            # with it above), so this is a dollar quote; $1 never matches.
+            tag = m.group(0)
+            end = sql.find(tag, m.end())
+            body = sql[m.end():] if end < 0 else sql[m.end():end]
+            i = n if end < 0 else end + len(tag)
+            if dollar_bodies:
+                out.append("$$" + _strip_sql_noise(body) + "$$")
+            else:
+                out.append("$$")
         else:
             out.append(ch)
             i += 1
@@ -596,6 +664,9 @@ class PluginMigrationRunner:
             await driver.execute("BEGIN")
             try:
                 await driver.execute(f'SET LOCAL search_path = "{self.schema}"')
+                # The lint read the file's literals this way; so does the
+                # server now, whatever its own default says.
+                await driver.execute("SET LOCAL standard_conforming_strings = on")
                 await driver.execute(f'SET LOCAL ROLE "{self.role}"')
                 pinned = await driver.fetchrow(_SANDBOX_SQL)
                 await driver.execute(mf.sql)

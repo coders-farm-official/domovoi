@@ -25,6 +25,7 @@ from domovoi.plugins_runtime.migrations import (
     MigrationSandboxError,
     PluginMigrationRunner,
     SqlLintError,
+    sql_lint,
 )
 from domovoi.tests.conftest import requires_db
 
@@ -36,7 +37,7 @@ SLUG = "migguard"
 SCHEMA = f"plugin_{SLUG}"
 ROLE = f"plugin_{SLUG}"
 # Where escaped statements land: public, as the application user.
-PROBES = ("migguard_escape_probe", "migguard_tail_probe")
+PROBES = ("migguard_escape_probe", "migguard_tail_probe", "migguard_quote_probe")
 
 
 async def _driver_do(fn):
@@ -182,3 +183,49 @@ async def test_a_plpgsql_body_passes_the_lint_and_the_check(migdir: Path) -> Non
     assert names == ["V001__trigger.sql"]
     assert await _ledger() == [1]
     assert await _where("things") == (SCHEMA, ROLE)
+
+
+async def test_a_quote_inside_a_dollar_quote_hides_nothing(migdir: Path) -> None:
+    """``$$'$$`` is a one-character string to the server. A lint that
+    looked for quotes inside the body opened a literal there, and the SET
+    ROLE excursion after it ran as the application user in public — with
+    the role back before the file ended, so the runner's own check saw
+    nothing. The lint reads it the way the server does and refuses the
+    file before anything runs."""
+    app_user = engine.url.username   # the connection's session user
+    (migdir / "V001__quote.sql").write_text(
+        "CREATE TABLE inside_t (id INT);\n"
+        "SELECT $$'$$;\n"
+        f'SET ROLE "{app_user}";\n'
+        f"CREATE TABLE public.{PROBES[2]} (id INT);\n"
+        f"SET ROLE {ROLE};\n"
+        "SELECT $$'$$;\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SqlLintError, match="SET/RESET ROLE"):
+        await PluginMigrationRunner(SLUG, migdir).apply_all()
+    assert await _where(PROBES[2]) is None
+    assert await _where("inside_t") is None
+
+
+async def test_literals_read_the_way_the_lint_read_them(migdir: Path) -> None:
+    r"""The lint reads ``'a\'`` as a complete literal (a backslash only
+    escapes inside ``E'…'``). A connection whose
+    ``standard_conforming_strings`` is off would read it as an escaped
+    quote and the rest of the file as the inside of a string; the runner
+    pins the setting per file, so the server reads the file as the lint
+    did."""
+    sql = "CREATE TABLE lit_t (v TEXT);\nINSERT INTO lit_t VALUES ('a\\');\n"
+    assert sql_lint(sql, SLUG) == []
+    runner = PluginMigrationRunner(SLUG, migdir)
+
+    async def go(drv) -> str:
+        await drv.execute("SET standard_conforming_strings = off")
+        try:
+            assert await runner._apply_files(drv, [_file(sql)]) == ["V001__t.sql"]
+            return await drv.fetchval(f'SELECT v FROM "{SCHEMA}".lit_t')
+        finally:
+            await drv.execute("RESET standard_conforming_strings")
+
+    assert await _driver_do(go) == "a\\"
+    assert await _ledger() == [1]

@@ -5,9 +5,10 @@ Two tiers:
 
 * DB-free — the extended SQL lint, and the exact statement sequence the
   runner issues per file (recorded from a fake asyncpg connection):
-  ``SET LOCAL search_path = "plugin_<slug>"`` with NO ``public``, then
-  ``SET LOCAL ROLE plugin_<slug>``, the file, ``RESET ROLE``, the ledger
-  row. These never hide behind ``requires_db``.
+  ``SET LOCAL search_path = "plugin_<slug>"`` with NO ``public``,
+  ``standard_conforming_strings`` pinned on, then ``SET LOCAL ROLE
+  plugin_<slug>``, the file, ``RESET ROLE``, the ledger row. These never
+  hide behind ``requires_db``.
 * DB-backed — an unqualified statement naming a core table fails and the
   core rows are untouched; explicit ``public.`` DML and ``COPY … TO
   PROGRAM`` are refused by Postgres even when the lint is bypassed; the
@@ -168,6 +169,64 @@ def test_sql_lint_allows_block_syntax_and_lookalikes(sql: str) -> None:
     assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
 
 
+# The lint must read a file token by token the way the server does. The
+# quoting cases are valid SQL whose statements the server RUNS, but that a
+# scanner reading quotes and dollar quotes differently takes for the
+# inside of a string. The $$'$$, $é$ and €$$ ones and the settings got
+# through the lint before; the first ran on real Postgres with no trace
+# in the runner's check (the role is back before the file ends).
+@pytest.mark.parametrize(
+    "sql,fragment",
+    [
+        # A lone quote inside a dollar-quoted string is just a character
+        # to the server; a scanner that looks for quotes inside the body
+        # opens a literal there and swallows the statements after it.
+        ("SELECT $$'$$;\nSET ROLE domovoi;\nCREATE TABLE public.escape_probe (id INT);\n"
+         f"SET ROLE {ROLE};\nSELECT $$'$$;", "SET/RESET ROLE"),
+        ("SELECT $$'$$;\nSET LOCAL search_path = public;\nSELECT $$'$$;", "search_path"),
+        ("SELECT $x$'$x$;\nDELETE FROM public.people;\nSELECT $x$'$x$;", "DML against the public"),
+        # A tag may be any non-ASCII character: $é$ is a dollar quote.
+        ("SELECT $é$'$é$;\nCOMMIT;\nCREATE TABLE escape_probe (id INT);\n"
+         "SELECT $é$'$é$;", "transaction control"),
+        # An identifier may end in $$ (and start with any non-ASCII
+        # character): that is no dollar quote.
+        ("SELECT 1 AS €$$;\nCOMMIT;\nSELECT 1 AS €$$;", "transaction control"),
+        ("SELECT 1 AS a$$;\nCOMMIT;\nSELECT 1 AS a$$;", "transaction control"),
+        # Settings that change how the server reads what follows.
+        ("SET standard_conforming_strings = off;", "standard_conforming_strings"),
+        ("set session standard_conforming_strings to off;", "standard_conforming_strings"),
+        ("SET client_encoding = 'SJIS';", "client_encoding"),
+        ("SET NAMES 'BIG5';", "NAMES"),
+        # A SQL-standard function body isn't quoted: its END reads as
+        # transaction control (documented: write bodies dollar-quoted).
+        ("CREATE FUNCTION one() RETURNS INT LANGUAGE sql\nBEGIN ATOMIC\n  SELECT 1;\nEND;",
+         "transaction control"),
+    ],
+)
+def test_sql_lint_reads_quotes_the_way_the_server_does(sql: str, fragment: str) -> None:
+    violations = sql_lint(sql, SLUG)
+    assert any(fragment.lower() in v.lower() for v in violations), (sql, violations)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Any tag, any body: still block syntax, still one string.
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $é$\n"
+        "BEGIN\n  RETURN CASE WHEN 1 = 1 THEN 1 ELSE 0 END;\nEND\n$é$;",
+        # A quote, a '--' and a ';' inside a body are the body's business.
+        "CREATE FUNCTION g() RETURNS TEXT LANGUAGE plpgsql AS $$\n"
+        "BEGIN\n  RAISE NOTICE 'it''s -- fine; really';\n  RETURN E'a\\'b';\nEND;\n$$;",
+        "CREATE FUNCTION h(x INT) RETURNS INT LANGUAGE sql AS $body$ SELECT $1 + 1 $body$;",
+        # Identifiers with '$' in them, and CASE … END at a line start.
+        "CREATE TABLE a$b (c$1 INT, été INT);",
+        "UPDATE a$b SET c$1 =\n  CASE WHEN c$1 > 0 THEN 1\n  ELSE 0\nEND;",
+    ],
+)
+def test_sql_lint_still_allows_what_the_server_reads_as_one_string(sql: str) -> None:
+    assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
+
+
 # ─── the statement sequence (DB-free, fake connection) ────────────────────
 
 
@@ -248,9 +307,12 @@ async def test_each_file_runs_after_set_local_role_with_the_schema_only_path() -
     applied = await _runner()._apply_files(drv, [_file(1, sql)])
     assert applied == ["V001__t.sql"]
     i = _file_begin(drv.calls, sql)
-    assert drv.calls[i:i + 9] == [
+    assert drv.calls[i:i + 10] == [
         "BEGIN",
         f'SET LOCAL search_path = "{SCHEMA}"',      # the plugin schema ONLY
+        # Literals read the way the lint read them, whatever the server's
+        # own default.
+        "SET LOCAL standard_conforming_strings = on",
         f'SET LOCAL ROLE "{ROLE}"',
         _SANDBOX_SQL,                               # where the file starts…
         sql,
