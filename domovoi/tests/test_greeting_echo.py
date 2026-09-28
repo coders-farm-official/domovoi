@@ -159,6 +159,35 @@ async def test_a_command_after_the_greeting_still_routes(monkeypatch, routed) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "heard,clip_text,reaches",
+    [
+        # "Yes?" played, bled in, and the person answered "yes" after it.
+        ("Yes? Yes.", "Yes?", "Yes."),
+        ("Yes? Yes.", None, "Yes."),
+        # Any greeting stripped off the front; what is left is a bank line.
+        ("Back so soon? Yes.", None, "Yes."),
+        ("Back so soon? Hello.", None, "Hello."),
+    ],
+    ids=["yes-after-yes-clip", "yes-after-yes-bank", "yes-after-back-bank", "hello-after-back-bank"],
+)
+async def test_what_follows_a_stripped_greeting_is_the_user(
+    monkeypatch, routed, heard, clip_text, reaches,
+) -> None:
+    """The greeting plays once. Once it has been stripped off the front of
+    a transcript, whatever follows it was said after it — by the person —
+    even when those words are also a line of the greeting bank. A "yes"
+    that answers a parked question must not be dropped as the greeting."""
+    clip = (
+        next(mp3 for mp3, text in _CLIPS.items() if text == clip_text) if clip_text else None
+    )
+    await _turn(
+        monkeypatch, heard, greeting_played=True, trigger="wake_word", greeting_clip=clip,
+    )
+    assert routed == [reaches]
+
+
+@pytest.mark.asyncio
 async def test_a_different_bank_line_is_the_user_when_the_clip_is_known(monkeypatch, routed) -> None:
     """"Back so soon?" played; "Hello." is the person, not the greeting."""
     await _turn(

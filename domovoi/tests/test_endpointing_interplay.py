@@ -189,6 +189,35 @@ def test_a_copy_of_the_greeting_alone_never_ends_the_capture(commit_on, monkeypa
     assert doc["early_commit"] == "A" and doc["stt_reused"] is True
 
 
+@pytest.mark.parametrize("clip", [YES_CLIP, None], ids=["clip-named", "whole-bank"])
+def test_the_persons_yes_after_the_greeting_yes_commits_and_answers(
+    commit_on, monkeypatch, clip,
+) -> None:
+    """The greeting "Yes?" came back through the mic and the person, with a
+    question parked, answered "yes" after it: the copy is "Yes? Yes.". The
+    greeting is stripped off its front; what is left was said after the
+    greeting, so it is the person's answer — not the greeting heard twice.
+    It commits (tier B) and the answer is routed, not dropped."""
+    _park_a_question(monkeypatch)
+    whisper = commit_on["whisper"] = _WatchedWhisper("Yes? Yes.")
+    with TestClient(app) as tc, tc.websocket_connect("/v1/stream/kitchen") as ws:
+        _bank()
+        _hello(ws)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        # The greeting's frames (not counted by the satellite), then "yes".
+        _send(ws, [LOUD] * 30 + [QUIET] * 8)
+        ws.send_text(_pause(1, 38, 29, clip))
+        time.sleep(0.2)
+        _send(ws, [QUIET] * (HOLD_B_FRAMES - 8))
+        _await_commit()
+        assert ws.receive_json() == {"type": "end_capture", "utt": 1}
+        assert _finish_turn(ws) == "Yes."
+    assert len(whisper.calls) == 1
+    (said, doc), = commit_on["routed"]
+    assert said == "Yes."
+    assert doc["early_commit"] == "B" and doc["stt_reused"] is True
+
+
 @pytest.mark.parametrize("satellite", ["hints", "old"])
 def test_a_reused_copy_of_the_greeting_alone_is_dropped(pipeline, satellite) -> None:
     """The copy covers every voiced frame, so it is the turn's transcript —
@@ -253,6 +282,11 @@ def _decision_session(monkeypatch, *, pending: bool = True):
         # The greeting, then the answer: judged on the answer.
         (True, BACK_CLIP, "Back so soon? Yes.", ("B", 650)),
         (True, BACK_CLIP, "Back so soon? Pause the music.", ("A", 350)),
+        # ... even when the answer is a word the greeting bank also has:
+        # what follows a stripped greeting was said after it, by the person.
+        (True, YES_CLIP, "Yes? Yes.", ("B", 650)),
+        (True, None, "Back so soon? Yes.", ("B", 650)),
+        (True, None, "Yes? Yes.", ("B", 650)),
         # Without the strip, the break inside it would keep it open.
         (False, None, "Back so soon? Pause the music.", None),
     ],

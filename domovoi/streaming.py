@@ -2370,14 +2370,22 @@ class StreamSession:
         a command. Matched against ``_greeting_candidates(clip)``. Pure:
         the turn (``_clean_transcript``) and the early-commit check
         (``_commit_decision``) both screen with it, so a transcript the
-        turn would drop is never one a capture is ended early for."""
+        turn would drop is never one a capture is ended early for.
+
+        Only a transcript nothing was stripped from can be the greeting
+        alone. The greeting plays once: when it has been found at the front
+        and stripped, what follows it was said after it — by the person —
+        even if those words are also a greeting line ("Yes? Yes." is the
+        greeting "Yes?" and then a "yes" answering a parked question)."""
         from domovoi.greeting_filter import is_greeting_only, strip_leading_greeting
 
         phrases, played = self._greeting_candidates(clip)
         if not phrases:
             return transcript, False
         cleaned = strip_leading_greeting(transcript, phrases)
-        return cleaned, is_greeting_only(cleaned, phrases, played=played)
+        if cleaned != transcript:
+            return cleaned, False
+        return transcript, is_greeting_only(transcript, phrases, played=played)
 
     async def _speak_system_line(self, text: str, *, matched_handler: str) -> bool:
         """Speak a fixed line that isn't an intent's answer (the
