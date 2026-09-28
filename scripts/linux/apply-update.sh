@@ -21,8 +21,10 @@
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
 #      the rollback below could not restore that tree.
 #   2. pg_dump -Fc the database through the compose Postgres container into
-#      the backups dir (newest DOMOVOI_UPDATE_KEEP_BACKUPS kept). A failed
-#      backup aborts the update before anything is stopped.
+#      the backups dir, and its <db>_test twin when that exists (plugin
+#      migrations are applied to both). The newest
+#      DOMOVOI_UPDATE_KEEP_BACKUPS of each are kept. A failed backup aborts
+#      the update before anything is stopped.
 #   3. Stop domovoi-web and domovoi-core.
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed.
@@ -32,10 +34,18 @@
 #   6. systemctl restart domovoi-db: compose up plus Flyway.
 #   7. Start core and web; both must answer their health endpoint within
 #      DOMOVOI_UPDATE_HEALTH_TIMEOUT seconds.
-#   On any failure in 3-7: stop both again, `git reset --keep` back to the
+#   8. Every plugin that loaded before the update still loads: none that was
+#      enabled and not at load_error in the plugins registry is at load_error
+#      now. The core keeps a failing plugin from taking it down, so its
+#      health endpoint stays green through one.
+#   On any failure in 3-8: stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
-#   flyway_schema_history grew, restart, and record the new SHA as bad_sha so
-#   the version panel stops offering it.
+#   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
+#   (the core applies plugin migrations at boot, so step 7 can run them),
+#   restore the <db>_test dump if a plugin ledger there grew, switch back
+#   on every plugin the failed boot's load errors switched off, restart,
+#   check health and plugins again, and record the new SHA as bad_sha so the
+#   version panel stops offering it.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -72,6 +82,14 @@ WEB_HEALTH_URL=${DOMOVOI_WEB_HEALTH_URL:-http://127.0.0.1:6369/api/health}
 PG_CONTAINER=${DOMOVOI_PG_CONTAINER:-domovoi-postgres}
 PG_USER=${DOMOVOI_PG_USER:-domovoi}
 PG_DB=${DOMOVOI_PG_DB:-domovoi}
+# The plugin runtime applies every plugin migration to the database and
+# then to its <db>_test twin (default_database_urls() in
+# domovoi/plugins_runtime/migrations.py), so that twin is backed up and
+# restored too when it exists. A database already named *_test has none.
+case $PG_DB in
+  *_test) TEST_DB="" ;;
+  *) TEST_DB=${PG_DB}_test ;;
+esac
 
 CORE_UNIT=domovoi-core.service
 WEB_UNIT=domovoi-web.service
@@ -104,8 +122,15 @@ DEPS_CHANGED=0
 MPD_CHANGED=0
 MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
+LEDGERS_BEFORE=""
+LEDGERS_AFTER=""
+PLUGINS_BEFORE=""
+TEST_LEDGERS_BEFORE=""
+TEST_LEDGERS_AFTER=""
 BACKUP_FILE=""
+TEST_BACKUP_FILE=""
 DB_RESTORED=0
+TEST_DB_RESTORED=0
 STEPS=()
 LAST_ERROR=""
 RESULT_READY=0
@@ -204,8 +229,12 @@ write_result() {
     printf '  "mpd_changed": %s,\n' "$(json_bool "$MPD_CHANGED")"
     printf '  "migrations_before": %s,\n' "$(json_int_or_null "$MIGRATIONS_BEFORE")"
     printf '  "migrations_after": %s,\n' "$(json_int_or_null "$MIGRATIONS_AFTER")"
+    printf '  "plugin_migrations_before": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_BEFORE")")"
+    printf '  "plugin_migrations_after": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_AFTER")")"
     printf '  "backup": %s,\n' "$(json_str_or_null "$BACKUP_FILE")"
+    printf '  "test_backup": %s,\n' "$(json_str_or_null "$TEST_BACKUP_FILE")"
     printf '  "db_restored": %s,\n' "$(json_bool "$DB_RESTORED")"
+    printf '  "test_db_restored": %s,\n' "$(json_bool "$TEST_DB_RESTORED")"
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
     printf '  "steps": [%s]\n' "$steps"
     printf '}'
@@ -396,16 +425,133 @@ migration_count() {
   printf '%s' "$n"
 }
 
-backup_db() {
-  local f partial
-  mkdir -p "$BACKUP_DIR" || return 1
-  # Dumps hold every secret in the database. Each one is 0600 regardless
-  # (umask below); the dir is closed too where the filesystem allows it.
-  chmod 0700 "$BACKUP_DIR" || echo "warning: could not chmod 0700 $BACKUP_DIR"
-  f=$BACKUP_DIR/pre-${HEAD_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ).dump
-  partial=$f.partial
-  echo "dumping $PG_DB from container $PG_CONTAINER to $f"
-  if ! (umask 077; pg_exec pg_dump -Fc -U "$PG_USER" "$PG_DB" >"$partial"); then
+# Plugins keep their own migration ledgers, one per plugin schema
+# (plugin_<slug>.schema_history, a row per applied file), and the core
+# applies pending plugin migrations when it boots, so starting the new code
+# can grow them without Flyway noticing. One "plugin_<slug> <rows>" line per
+# ledger; query_to_xml runs the count for each schema the catalog lists, so
+# one query covers any number of plugins.
+LEDGER_SQL="SELECT n.nspname || ' ' || (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.schema_history', n.nspname), false, true, '')))[1]::text FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid WHERE n.nspname ~ '^plugin_[a-z][a-z0-9_]*$' AND c.relname = 'schema_history' AND c.relkind IN ('r', 'p') ORDER BY 1"
+
+# The plugin ledgers of database $1, after a "ledgers" line that tells an
+# empty answer (no plugin has migrations) from a failed read.
+ledger_snapshot() {
+  local out line
+  out=$(pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$1" -tAc "$LEDGER_SQL" 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    [ -z "$line" ] || [[ $line =~ ^plugin_[a-z0-9_]+\ [0-9]+$ ]] || return 1
+  done <<<"$out"
+  printf 'ledgers\n%s' "$out"
+}
+
+# Did any plugin ledger gain rows between snapshots $1 and $2? A ledger
+# only $2 has counts from zero. Either snapshot unknown: no, the same rule
+# migrations_grew applies to Flyway.
+ledgers_grew() {
+  [ "${1%%$'\n'*}" = ledgers ] && [ "${2%%$'\n'*}" = ledgers ] || return 1
+  { printf '%s\n' "$1" | sed '1d; s/^/B /'; printf '%s\n' "$2" | sed '1d; s/^/A /'; } \
+    | awk '$1 == "B" { before[$2] = $3; next }
+           $1 == "A" && $3 + 0 > before[$2] + 0 { grew = 1 }
+           END { exit grew ? 0 : 1 }'
+}
+
+# Total rows across a snapshot's ledgers, or nothing when it's unknown.
+ledger_total() {
+  [ "${1%%$'\n'*}" = ledgers ] || return 0
+  printf '%s\n' "$1" | sed '1d' | awk '{ n += $2 } END { print n + 0 }'
+}
+
+# The plugins registry, one "slug|t|status|last_error" line per row (t or f
+# for enabled; last_error on one line and cut short). A single text column,
+# so what psql -tA prints is exactly the value.
+PLUGINS_SQL="SELECT slug || '|' || CASE WHEN enabled THEN 't' ELSE 'f' END || '|' || status || '|' || left(regexp_replace(coalesce(last_error, ''), '[[:space:]]+', ' ', 'g'), 200) FROM plugins ORDER BY slug"
+
+# Followed by the quoted slugs, parenthesised. Only rows a load error
+# switched off; a plugin somebody disabled by hand stays disabled.
+REENABLE_SQL="UPDATE plugins SET enabled = true, updated_at = now() WHERE NOT enabled AND status = 'load_error' AND slug IN"
+
+# The registry after a "plugins" line (the same trick as ledger_snapshot).
+# The core writes each plugin's status into it as it loads the plugin, and
+# it loads them before it starts answering /v1/health (discovery runs inside
+# its startup), so after a passing health check the rows are this boot's.
+# Read through the Postgres container like the migration counts: no admin
+# credential, and nothing that depends on the shape of an HTTP answer.
+plugin_states() {
+  local out
+  out=$(pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$PLUGINS_SQL" 2>/dev/null) || return 1
+  printf 'plugins\n%s' "$out"
+}
+
+# Plugins that loaded before the update (enabled and not at load_error in
+# registry snapshot $1) and are at load_error in snapshot $2. With $3 =
+# errors, one "slug: last_error" line each; with $3 = off, the slugs of
+# those the load error also switched off. Nothing when either snapshot is
+# unknown. A plugin that was already failing or disabled before the update
+# isn't this update's doing, and a plugin new with it had nothing to lose.
+plugins_broken() {
+  [ "${1%%$'\n'*}" = plugins ] && [ "${2%%$'\n'*}" = plugins ] || return 0
+  { printf '%s\n' "$1" | sed '1d; s/^/B|/'; printf '%s\n' "$2" | sed '1d; s/^/A|/'; } \
+    | awk -F'|' -v mode="$3" '
+        $1 == "B" { if ($3 == "t" && $4 != "load_error" && $4 != "uninstalled") up[$2] = 1; next }
+        $1 != "A" || !($2 in up) || $4 != "load_error" { next }
+        mode == "off" { if ($3 == "f") print $2; next }
+        { err = $0; for (i = 0; i < 4; i++) sub(/^[^|]*[|]/, "", err)
+          print $2 (err == "" ? "" : ": " err) }'
+}
+
+# After the health check: every plugin that loaded before the update still
+# loads. The loader keeps plugin failures from taking the core down, so the
+# health endpoints stay green through them; without this a plugin the new
+# code breaks would vanish from the house under an "ok" update.
+check_plugins() {
+  local now broken line list=""
+  if [ "${PLUGINS_BEFORE%%$'\n'*}" != plugins ]; then
+    echo "no pre-update plugin snapshot to compare against; not checked"
+    return 0
+  fi
+  now=$(plugin_states) || { echo "cannot read the plugins registry"; return 1; }
+  broken=$(plugins_broken "$PLUGINS_BEFORE" "$now" errors)
+  if [ -z "$broken" ]; then
+    echo "every plugin that loaded before the update still loads"
+    return 0
+  fi
+  while IFS= read -r line; do list+="${list:+; }$line"; done <<<"$broken"
+  echo "plugins that loaded before the update are at load_error now: $list"
+  return 1
+}
+
+# The loader switches a plugin off when its import, register() or contract
+# check fails (a failed migration catch-up leaves it on), and a boot skips a
+# switched-off plugin. Rolling the code back alone would leave every plugin
+# the new code broke off for good, so switch each one back on (slugs in $@)
+# while the core is stopped, and the previous SHA's boot loads it again.
+reenable_plugins() {
+  local slug in=""
+  for slug in "$@"; do
+    [[ $slug =~ ^[a-z][a-z0-9_]{1,31}$ ]] || { echo "not a plugin slug: $slug"; return 1; }
+    in+="${in:+, }'$slug'"
+  done
+  echo "switching back on what the failed boot switched off: $*"
+  pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$REENABLE_SQL ($in)"
+}
+
+# Does the <db>_test twin exist? Without it there is nothing to back up or
+# restore, and the plugin runtime has nothing to migrate there either.
+resolve_test_db() {
+  [ -n "$TEST_DB" ] || return 0
+  if [ "$(psql_admin "SELECT 1 FROM pg_database WHERE datname = '$TEST_DB'" 2>/dev/null)" = 1 ]; then
+    log "$TEST_DB exists: it is backed up and restored with $PG_DB"
+  else
+    TEST_DB=""
+  fi
+}
+
+# pg_dump -Fc database $1 into file $2, and check pg_restore can read it.
+# On failure no file is left behind.
+dump_db() {
+  local db=$1 f=$2 partial=$2.partial
+  echo "dumping $db from container $PG_CONTAINER to $f"
+  if ! (umask 077; pg_exec pg_dump -Fc -U "$PG_USER" "$db" >"$partial"); then
     rm -f "$partial"; return 1
   fi
   if [ ! -s "$partial" ]; then
@@ -416,53 +562,76 @@ backup_db() {
     echo "pg_restore cannot read the dump"; rm -f "$partial"; return 1
   fi
   mv -f "$partial" "$f" || { rm -f "$partial"; return 1; }
-  BACKUP_FILE=$f
+}
+
+backup_db() {
+  local base
+  mkdir -p "$BACKUP_DIR" || return 1
+  # Dumps hold every secret in the database. Each one is 0600 regardless
+  # (umask in dump_db); the dir is closed too where the filesystem allows it.
+  chmod 0700 "$BACKUP_DIR" || echo "warning: could not chmod 0700 $BACKUP_DIR"
+  base=$BACKUP_DIR/pre-${HEAD_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)
+  dump_db "$PG_DB" "$base.dump" || return 1
+  BACKUP_FILE=$base.dump
+  if [ -n "$TEST_DB" ]; then
+    dump_db "$TEST_DB" "$base.test.dump" || return 1
+    TEST_BACKUP_FILE=$base.test.dump
+  fi
   prune_backups
 }
 
+# Two series, each pruned to the newest KEEP_BACKUPS: the database's
+# pre-<sha>-<timestamp>.dump and the test twin's .test.dump beside it.
 prune_backups() {
-  local old
   [[ $KEEP_BACKUPS =~ ^[0-9]+$ ]] && [ "$KEEP_BACKUPS" -ge 1 ] || return 0
+  prune_series 'pre-*Z.dump'
+  prune_series 'pre-*Z.test.dump'
+}
+
+prune_series() {
+  local old name
   # Newest first; everything past the first KEEP_BACKUPS goes. Names carry
-  # no whitespace (pre-<sha>-<timestamp>.dump).
-  old=$(cd "$BACKUP_DIR" && ls -1t -- pre-*.dump 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))") || return 0
-  local name
+  # no whitespace. $1 is a glob, deliberately unquoted.
+  old=$(cd "$BACKUP_DIR" && ls -1t -- $1 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))") || return 0
   for name in $old; do
     echo "pruning old backup $name"
     rm -f -- "${BACKUP_DIR:?}/$name"
   done
 }
 
-# Restore the pre-update dump into a fresh database, then swap it in by
+# Restore dump $2 into a fresh database, then swap it in for database $1 by
 # rename. `pg_restore --clean` into the live database would leave behind
 # every object a failed migration CREATED (it only drops what the dump
 # contains), and the re-run of that migration after a fix would then fail on
 # "already exists". The replaced database is kept as <db>_failed_<ts> for
 # inspection; drop it by hand once it's no longer interesting.
-restore_db() {
-  local ts tmpdb olddb
-  [ -n "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ] || { echo "no backup to restore"; return 1; }
+restore_into() {
+  local db=$1 dump=$2 ts tmpdb olddb
+  [ -n "$dump" ] && [ -s "$dump" ] || { echo "no backup of $db to restore"; return 1; }
   ts=$(date -u +%Y%m%d%H%M%S)
-  tmpdb=${PG_DB}_restore_$ts
-  olddb=${PG_DB}_failed_$ts
+  tmpdb=${db}_restore_$ts
+  olddb=${db}_failed_$ts
   psql_admin "CREATE DATABASE \"$tmpdb\" OWNER \"$PG_USER\"" || return 1
   if ! docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$tmpdb" \
-      --single-transaction --exit-on-error <"$BACKUP_FILE"; then
+      --single-transaction --exit-on-error <"$dump"; then
     psql_admin "DROP DATABASE IF EXISTS \"$tmpdb\"" || true
     return 1
   fi
-  psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$PG_DB' AND pid <> pg_backend_pid()" >/dev/null || true
-  if ! psql_admin "ALTER DATABASE \"$PG_DB\" RENAME TO \"$olddb\""; then
+  psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid()" >/dev/null || true
+  if ! psql_admin "ALTER DATABASE \"$db\" RENAME TO \"$olddb\""; then
     psql_admin "DROP DATABASE IF EXISTS \"$tmpdb\"" || true
     return 1
   fi
-  if ! psql_admin "ALTER DATABASE \"$tmpdb\" RENAME TO \"$PG_DB\""; then
-    psql_admin "ALTER DATABASE \"$olddb\" RENAME TO \"$PG_DB\"" || true
+  if ! psql_admin "ALTER DATABASE \"$tmpdb\" RENAME TO \"$db\""; then
+    psql_admin "ALTER DATABASE \"$olddb\" RENAME TO \"$db\"" || true
     return 1
   fi
-  echo "restored $BACKUP_FILE; the replaced database is kept as $olddb"
-  DB_RESTORED=1
+  echo "restored $dump; the replaced database is kept as $olddb"
 }
+
+restore_db() { restore_into "$PG_DB" "$BACKUP_FILE" && DB_RESTORED=1; }
+
+restore_test_db() { restore_into "$TEST_DB" "$TEST_BACKUP_FILE" && TEST_DB_RESTORED=1; }
 
 pip_as() {
   as_user "$VENV_DIR/bin/python" -m pip --disable-pip-version-check --no-input "$@"
@@ -604,6 +773,7 @@ full_update() {
   fi
   add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
   write_result running
+  resolve_test_db
 
   if ! run_step backup backup_db; then
     if [ "$REQUIRE_BACKUP" = 1 ]; then
@@ -613,6 +783,9 @@ full_update() {
     log "continuing without a backup (DOMOVOI_UPDATE_REQUIRE_BACKUP=$REQUIRE_BACKUP)"
   fi
   MIGRATIONS_BEFORE=$(migration_count || true)
+  LEDGERS_BEFORE=$(ledger_snapshot "$PG_DB" || true)
+  if [ -n "$TEST_DB" ]; then TEST_LEDGERS_BEFORE=$(ledger_snapshot "$TEST_DB" || true); fi
+  PLUGINS_BEFORE=$(plugin_states || true)
   if [ "$DEPS_CHANGED" = 1 ]; then
     run_step snapshot-venv snapshot_venv || rm -f "$FREEZE_FILE"
   fi
@@ -631,7 +804,9 @@ full_update() {
     SERVICES_STOPPED=0
     run_step health wait_healthy || failed=health
   fi
+  if [ -z "$failed" ]; then run_step plugins check_plugins || failed=plugins; fi
   MIGRATIONS_AFTER=$(migration_count || true)
+  LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
 
   if [ -z "$failed" ]; then
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
@@ -651,7 +826,7 @@ rb_failed() {
 }
 
 rollback() {
-  local failed_step=$1 cause=$2 rb="" rb_err=""
+  local failed_step=$1 cause=$2 rb="" rb_err="" now off
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
@@ -665,9 +840,31 @@ rollback() {
     if [ "$MPD_CHANGED" = 1 ]; then
       run_step rollback-mpd rebuild_mpd || rb_failed rollback-mpd
     fi
+    # With the core stopped, so these are final: Flyway's count, and every
+    # plugin's ledger (the new code's boot may have applied its plugin
+    # migrations even though it then failed its health check).
     MIGRATIONS_AFTER=$(migration_count || true)
-    if migrations_grew; then
+    LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
+    if migrations_grew || ledgers_grew "$LEDGERS_BEFORE" "$LEDGERS_AFTER"; then
       run_step restore-db restore_db || rb_failed restore-db
+    fi
+    # The plugin runtime applied the same migrations to the test twin, after
+    # the database itself; that one can have grown on its own.
+    if [ -n "$TEST_DB" ]; then
+      TEST_LEDGERS_AFTER=$(ledger_snapshot "$TEST_DB" || true)
+      if ledgers_grew "$TEST_LEDGERS_BEFORE" "$TEST_LEDGERS_AFTER"; then
+        run_step restore-test-db restore_test_db || rb_failed restore-test-db
+      fi
+    fi
+    # Plugins the failed boot switched off (a restored database has them on
+    # already, and then there are none).
+    if now=$(plugin_states); then
+      off=$(plugins_broken "$PLUGINS_BEFORE" "$now" off)
+      if [ -n "$off" ]; then
+        # Slugs carry no whitespace; one argument each.
+        # shellcheck disable=SC2086
+        run_step reenable-plugins reenable_plugins $off || rb_failed reenable-plugins
+      fi
     fi
   else
     # The tree could not go back, so neither may the database: old data
@@ -677,7 +874,12 @@ rollback() {
   run_step rollback-migrate restart_db || rb_failed rollback-migrate
   run_step rollback-start start_services || rb_failed rollback-start
   SERVICES_STOPPED=0
-  run_step rollback-health wait_healthy || rb_failed rollback-health
+  if run_step rollback-health wait_healthy; then
+    # Back on the previous SHA, whatever loaded before the update loads again.
+    run_step rollback-plugins check_plugins || rb_failed rollback-plugins
+  else
+    rb_failed rollback-health
+  fi
 
   BAD_SHA=$HEAD_SHA
   write_atomic "$BAD_FILE" "$HEAD_SHA"$'\n'
