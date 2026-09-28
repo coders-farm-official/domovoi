@@ -316,6 +316,11 @@ APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
 # every hello. Reset only by a process restart.
 _pairing_table_warned = False
 
+# In-flight post-route timing writes (StreamSession._finish_turn_timings).
+# Each runs outside its turn's task so a barge-in can't cancel it; held
+# here until done, because the event loop keeps only weak references.
+_TIMING_WRITES: set[asyncio.Task[None]] = set()
+
 
 def _is_missing_pairing_table(exc: Exception) -> bool:
     """True when ``exc`` is 'relation satellite_pairings does not exist' — the
@@ -1335,7 +1340,7 @@ class StreamSession:
                 return
             # The turn's clock starts here: everything the person waits
             # for after the satellite stops listening (turn_timings.total_ms).
-            received_at = time.monotonic()
+            received_at = time.perf_counter()
             self.utterance_active = False
             pcm = bytes(self.audio_buf)
             self.audio_buf.clear()
@@ -1610,7 +1615,7 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return
-            stage_t0 = time.monotonic()
+            stage_t0 = time.perf_counter()
             transcript = await whisper.transcribe(pcm_bytes)
             timings.stage("stt_ms", stage_t0)
             timings.whisper = whisper_block(whisper_runtime())
@@ -1708,7 +1713,7 @@ class StreamSession:
             # any failure leaves person_id=None / presence_tier="high"
             # rather than blocking the response cycle.
             from domovoi.voice_identifier import identify
-            stage_t0 = time.monotonic()
+            stage_t0 = time.perf_counter()
             try:
                 ident = await identify(pcm_bytes)
             except Exception as e:
@@ -1788,7 +1793,7 @@ class StreamSession:
                     self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
                     return
 
-            stage_t0 = time.monotonic()
+            stage_t0 = time.perf_counter()
             async with session_scope() as s:
                 response = await route(intent, ctx, s)
                 # Third-party intro hybrid hook. Two mutually-exclusive
@@ -1858,7 +1863,7 @@ class StreamSession:
             timings.stage("route_ms", stage_t0)
             self.session_id = response.session_id
 
-            tts_t0 = time.monotonic()
+            tts_t0 = time.perf_counter()
             tts = get_tts_client()
             sentences = _split_sentences(response.text) or [response.text or ""]
 
@@ -1976,8 +1981,21 @@ class StreamSession:
             })
             # A turn can fail after its row committed (TTS down): record
             # how far it got.
-            await self._finish_turn_timings(timings, trigger=trigger, response=response)
+            timing_write = self._finish_turn_timings(
+                timings, trigger=trigger, response=response,
+            )
+            if timing_write is not None:
+                await asyncio.shield(timing_write)
             return
+
+        # The turn's timings, before anything below can be cancelled: the
+        # log line now, and the post-route write in a task of its own that
+        # runs alongside the end frame and the fan-outs and is awaited
+        # last. Its own task because a barge-in cancels this one and the
+        # satellite's utterance_start, right behind it, cancels it again —
+        # which would land on the write and lose the stages of exactly the
+        # turns somebody talked over.
+        timing_write = self._finish_turn_timings(timings, trigger=trigger, response=response)
 
         # `expect_followup` lets handlers ask the Pi to capture the
         # user's reply without requiring a fresh wake word. Skipped on
@@ -2164,9 +2182,11 @@ class StreamSession:
         ):
             await self._handle_dropin_action(response)
 
-        # Last, so the write never delays anything the satellite is waiting
-        # for (the end frame, music, a fan-out).
-        await self._finish_turn_timings(timings, trigger=trigger, response=response)
+        # Last, so waiting on the write never delays anything the satellite
+        # is waiting for (the end frame, music, a fan-out). Shielded: a
+        # cancel here leaves the write to finish on its own.
+        if timing_write is not None:
+            await asyncio.shield(timing_write)
 
     def _log_turn_timings(
         self, timings: TurnTimings, *, trigger: str | None, matched_path: str | None
@@ -2180,23 +2200,37 @@ class StreamSession:
             self.room_id, trigger, matched_path, timings.describe(),
         )
 
-    async def _finish_turn_timings(
+    def _finish_turn_timings(
         self, timings: TurnTimings, *, trigger: str | None, response: Any
-    ) -> None:
-        """Log the turn's timings and merge the stages that only exist
-        after routing (route_ms, tts_first_ms, total_ms) into its
-        intents_log row. Best-effort: the row already holds the pre-route
-        stages, and a failure here must never touch the turn."""
+    ) -> asyncio.Task[None] | None:
+        """Log the turn's timings and start merging the stages that only
+        exist after routing (route_ms, tts_first_ms, total_ms) into its
+        intents_log row. Returns the write's task (None when there is
+        nothing to merge) for the caller to await through
+        ``asyncio.shield``: the write belongs to no turn task, so no cancel
+        of the turn can abort it. Best-effort: the row already holds the
+        pre-route stages, and a failure here must never touch the turn."""
         self._log_turn_timings(
             timings, trigger=trigger,
             matched_path=getattr(response, "matched_path", None),
         )
         patch = timings.post_route_patch()
         if timings.intents_log_id is None or not patch:
-            return
+            return None
+        write = asyncio.create_task(
+            self._write_post_route_timings(timings.intents_log_id, patch),
+            name=f"turn-timings:{self.room_id}",
+        )
+        # The loop keeps only weak references to tasks; hold this one until
+        # it is done, whether or not anyone is still awaiting it.
+        _TIMING_WRITES.add(write)
+        write.add_done_callback(_TIMING_WRITES.discard)
+        return write
+
+    async def _write_post_route_timings(self, row_id: int, patch: dict[str, int]) -> None:
         try:
             async with session_scope() as s:
-                await merge_post_route(s, timings.intents_log_id, patch)
+                await merge_post_route(s, row_id, patch)
         except Exception as e:
             log.warning(
                 "turn timings: could not record the post-route stages for "

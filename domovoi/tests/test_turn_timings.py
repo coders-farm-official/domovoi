@@ -64,8 +64,9 @@ MIGRATIONS = REPO_ROOT / "domovoi" / "db" / "migrations"
 # Words that must never surface in a timing record or the summary.
 SECRET = "remind me to call the pharmacy about my prescription"
 
-# Timer resolution on Windows is ~15.6 ms; a measured stage may come in
-# just under the sleep that drove it.
+# asyncio schedules sleeps on time.monotonic(), which ticks every ~15.6 ms
+# on Windows before Python 3.13; a stage measured on perf_counter may come
+# in just under the sleep that drove it.
 SLACK_MS = 20
 
 
@@ -120,7 +121,7 @@ def test_the_capture_length_comes_from_the_audio_itself() -> None:
 
 def test_stages_first_audio_and_the_post_route_patch(monkeypatch) -> None:
     clock = [100.0]
-    monkeypatch.setattr(turn_timings.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(turn_timings.time, "perf_counter", lambda: clock[0])
     t = TurnTimings(started=100.0, audio_bytes=32_000)
     clock[0] = 100.250
     t.stage("stt_ms", 100.0)
@@ -392,7 +393,7 @@ async def test_a_turn_records_every_stage_in_two_writes(db_free_turn, caplog) ->
     ws = _FakeWS()
     sess = StreamSession(ws, "kitchen")  # type: ignore[arg-type]
     caplog.set_level(logging.INFO, logger="domovoi.streaming")
-    t_end = time.monotonic()
+    t_end = time.perf_counter()
     await sess._process_utterance(b"\x00" * 48_000, trigger="wake_word", received_at=t_end)
 
     # The turn itself is untouched: transcript, start, audio, end.
@@ -417,7 +418,7 @@ async def test_a_turn_records_every_stage_in_two_writes(db_free_turn, caplog) ->
     assert patch["tts_first_ms"] >= 80 - SLACK_MS
     # End of speech to first audio covers every stage in between.
     assert patch["total_ms"] >= ins["stt_ms"] + ins["identify_ms"] + patch["route_ms"] + patch["tts_first_ms"] - 3
-    assert patch["total_ms"] <= int((time.monotonic() - t_end) * 1000) + 1
+    assert patch["total_ms"] <= int((time.perf_counter() - t_end) * 1000) + 1
 
     # One log line, numbers only.
     lines = [r.getMessage() for r in caplog.records if "turn timings" in r.getMessage()]
@@ -467,6 +468,49 @@ async def test_no_row_no_merge(db_free_turn, monkeypatch) -> None:
     ws = _FakeWS()
     await StreamSession(ws, "kitchen")._process_utterance(b"\x00" * 3200)  # type: ignore[arg-type]
     assert db_free_turn["merged"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_barged_in_turn_still_records_its_post_route_stages(
+    db_free_turn, monkeypatch, caplog,
+) -> None:
+    """A satellite that hears someone talk over the reply sends ``barge_in``
+    and, right behind it, ``utterance_start``: two cancels of the same turn
+    task. The second lands while the turn is writing its post-route stages,
+    and must not take them with it — the turns people interrupt are the
+    long, slow ones the numbers most need."""
+    async def _route(intent, ctx, session):
+        db_free_turn["inserted"] = ctx.timings.row_document()
+        ctx.timings.intents_log_id = 4242
+        return Response(text="Here is a long answer. It goes on for a while.",
+                        matched_handler="qa", matched_path="qa", online=True)
+
+    async def _slow_merge(s, row_id, patch):
+        await asyncio.sleep(0.05)
+        db_free_turn["merged"].append((row_id, patch))
+
+    monkeypatch.setattr(streaming, "route", _route)
+    monkeypatch.setattr(streaming, "merge_post_route", _slow_merge)
+    caplog.set_level(logging.INFO, logger="domovoi.streaming")
+    ws = _FakeWS()
+    sess = StreamSession(ws, "kitchen")  # type: ignore[arg-type]
+    task = asyncio.create_task(sess._process_utterance(b"\x00" * 3200, trigger="wake_word"))
+    # The first sentence is playing; the second is still being synthesized.
+    while not ws.sent_bytes:
+        await asyncio.sleep(0.005)
+    task.cancel()                     # barge_in
+    await asyncio.sleep(0.01)         # the turn winds down and starts its write
+    task.cancel()                     # utterance_start, right behind it
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert ws.sent_text[-1]["type"] == "response_end"
+    assert ws.sent_text[-1]["interrupted"] is True
+    await asyncio.sleep(0.1)          # the write finishes on its own
+
+    (row_id, patch), = db_free_turn["merged"]
+    assert row_id == 4242 and set(patch) == set(POST_ROUTE_STAGES)
+    lines = [r.getMessage() for r in caplog.records if "turn timings" in r.getMessage()]
+    assert len(lines) == 1 and "path=qa" in lines[0] and "total_ms=" in lines[0]
 
 
 # ─── the core endpoint without a database ────────────────────────────────

@@ -38,9 +38,10 @@ before routing ride ``Context.timings`` into ``router._persist_turn``, so
 they land in the same INSERT, in the same transaction, as every routed
 turn's audit row always has. ``route_ms``, ``tts_first_ms`` and
 ``total_ms`` only exist after that transaction has committed, so the
-streaming layer merges them into the same row by id once the turn is over
-(:func:`merge_post_route`), off the latency path and best-effort: a turn
-whose follow-up write fails keeps its pre-route stages.
+streaming layer merges them into the same row by id once the reply has
+started (:func:`merge_post_route`), off the latency path, in a task a
+barge-in can't cancel, and best-effort: a turn whose follow-up write fails
+keeps its pre-route stages.
 
 No text and no identity is ever put in the column, and the summary
 (:func:`latency_summary`, ``GET /v1/stats/latency``) reads only the column,
@@ -88,7 +89,12 @@ SUMMARY_ROW_CAP = 1000
 
 
 def _ms_since(t0: float) -> int:
-    return max(0, int(round((time.monotonic() - t0) * 1000)))
+    # time.perf_counter(), not time.monotonic(): both only ever go forward,
+    # but on Windows before Python 3.13 monotonic() ticks every 15.6 ms,
+    # which would round a 20 ms route or a 40 ms voice lookup to a multiple
+    # of the tick. Every mark handed to a TurnTimings (the utterance_end
+    # receipt, each stage's start) comes from perf_counter too.
+    return max(0, int(round((time.perf_counter() - t0) * 1000)))
 
 
 class TurnTimings:
@@ -104,8 +110,8 @@ class TurnTimings:
     __slots__ = ("started", "stages", "whisper", "intents_log_id")
 
     def __init__(self, *, started: float | None = None, audio_bytes: int = 0) -> None:
-        # time.monotonic() at utterance_end receipt; now when not given.
-        self.started = time.monotonic() if started is None else started
+        # time.perf_counter() at utterance_end receipt; now when not given.
+        self.started = time.perf_counter() if started is None else started
         self.stages: dict[str, int] = {
             "capture_audio_ms": max(0, int(audio_bytes)) // PCM_BYTES_PER_MS,
         }
@@ -116,8 +122,8 @@ class TurnTimings:
         self.intents_log_id: int | None = None
 
     def stage(self, name: str, t0: float) -> None:
-        """Record stage ``name`` as the time since ``t0`` (a monotonic mark
-        taken just before the stage started)."""
+        """Record stage ``name`` as the time since ``t0`` (a
+        ``time.perf_counter()`` mark taken just before the stage started)."""
         self.stages[name] = _ms_since(t0)
 
     def first_audio(self, tts_started: float) -> None:
@@ -144,7 +150,7 @@ class TurnTimings:
         """One log-line fragment: ``stt_ms=640 identify_ms=41 ...`` in
         pipeline order, then the Whisper that ran. No text, no identity."""
         parts = [f"{k}={self.stages[k]}" for k in STAGES if k in self.stages]
-        if self.whisper:
+        if self.whisper and self.whisper.get("model"):
             w = self.whisper
             threads = w.get("cpu_threads")
             parts.append(

@@ -213,10 +213,14 @@ const SpeechTimingsLine = ({ data, error, loading }) => {
     const total = st.total_ms || {};
     const w = data.whisper || {};
     const settingsSeen = (data.whisper_seen || []).length;
+    // The summary reads at most `limit` turns; at the cap it is the latest
+    // that many, not every turn of the week.
+    const capped = data.limit && data.turns >= data.limit;
     body = (
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'inline-flex',
                      flexWrap: 'wrap', columnGap: 8, rowGap: 2 }}>
-        <span>{data.turns} {data.turns === 1 ? 'turn' : 'turns'}, last 7 days</span>
+        <span>{capped ? `latest ${data.turns} turns`
+          : `${data.turns} ${data.turns === 1 ? 'turn' : 'turns'}, last 7 days`}</span>
         <span>·</span>
         <span title="Whisper time per turn — median, then 95th percentile">
           transcribe <span className="mono" style={{ color: 'var(--fg)' }}>{_speechMs(stt.p50)}</span>
