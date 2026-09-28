@@ -378,9 +378,10 @@ const useToast = () => {
    * just happened to the surface the operator is looking at, so it has to
    * clear whatever that surface is — the same argument that raised
    * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
-   * phone's tab strip (it is 0 on a desktop). */
+   * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
+   * docked player while one shows (styles.css, html.mp-docked). */
   const node = items.length > 0 && (
-    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
+    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
                   gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (

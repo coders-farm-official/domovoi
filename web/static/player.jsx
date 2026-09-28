@@ -364,6 +364,19 @@ const PlaybackContext = React.createContext({
 
 const usePlayback = () => React.useContext(PlaybackContext);
 
+/* The volume a browser starts at, from what it stored last time (a string,
+ * or null when it never stored one). Nothing stored is full volume:
+ * `Number(null)` is 0, which used to start every new browser silent — and
+ * the effect below then stored that 0, so it stayed silent, with the
+ * volume only reachable from the desktop bar or the phone's player sheet.
+ * A stored 0 is read the same way: it is what that bug left behind, and
+ * starting muted-by-volume is never what someone opening the player
+ * wants (mute itself is not remembered either). */
+const _playerStartVolume = (raw) => {
+  const v = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 1;
+};
+
 const PlaybackProvider = ({ children }) => {
   // ── Queue + current item ───────────────────────────────────────────
   const [queue, setQueue] = React.useState([]);
@@ -373,8 +386,8 @@ const PlaybackProvider = ({ children }) => {
   const [durationSec, setDurationSec] = React.useState(0);
   const [buffered, setBuffered] = React.useState(0);
   const [volume, setVolumeState] = React.useState(() => {
-    const v = Number(localStorage.getItem('domovoi-player-volume'));
-    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1;
+    try { return _playerStartVolume(localStorage.getItem('domovoi-player-volume')); }
+    catch { return 1; }
   });
   const [muted, setMuted] = React.useState(false);
   const [eqBands, setEqBands] = React.useState(() => {
@@ -1119,6 +1132,15 @@ const MiniPlayer = () => {
   }, [sheetOpen]);
   // Clearing the queue from the sheet empties the player out from under it.
   React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(false); }, [sheetOpen, hasItem, closeSheet]);
+  // While the bar shows, <html> carries .mp-docked: styles.css turns it
+  // into --player-h, which toasts and notices add to their offset so they
+  // float above the bar instead of over its play button.
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (!hasItem || !root || !root.classList) return undefined;
+    root.classList.add('mp-docked');
+    return () => root.classList.remove('mp-docked');
+  }, [hasItem]);
   // The other way round: a desktop window narrowed to a phone's width
   // hides the buttons that toggle the floating queue and cast target (and
   // the 380px queue is wider than the screen), so close them.
@@ -1418,7 +1440,7 @@ const QueuePanel = ({ p, onClose }) => (
  * CastMenu floats it above the bar; the phone sheet lists it inline with
  * 48px rows (`big`). `onPicked` runs after a switch succeeds. */
 const PlayerCastTargets = ({ p, onPicked, big = false }) => {
-  const { items: nowPlaying } = useApiList('/api/music/now-playing', { eventTypes: ['music.now_playing.changed'] });
+  const { items: nowPlaying, loading } = useApiList('/api/music/now-playing', { eventTypes: ['music.now_playing.changed'] });
   const rooms = (nowPlaying || []).map((np) => np.room_id);
   const [busy, setBusy] = React.useState(null);   // roomId currently being cast to
   const [err, setErr] = React.useState(null);
@@ -1455,7 +1477,14 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
           {remote && p.target.roomId === r && <Icon name="check" size={14}/>}
         </button>
       ))}
-      {rooms.length === 0 && <div style={{ padding: 12, fontSize: 11, color: 'var(--fg-muted)' }}>no rooms online — connect a satellite</div>}
+      {/* The rooms read takes a moment (it asks every room's MPD), and
+          the phone sheet mounts this list afresh on every open: until
+          it answers, say so rather than "no rooms online". */}
+      {rooms.length === 0 && (
+        <div style={{ padding: 12, fontSize: 11, color: 'var(--fg-muted)' }}>
+          {loading ? 'looking for rooms…' : 'no rooms online — connect a satellite'}
+        </div>
+      )}
       {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}
     </>
   );

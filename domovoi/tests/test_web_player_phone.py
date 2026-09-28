@@ -342,6 +342,36 @@ SCENARIOS = {
         "return { q, cast, castClosed, acts: acts(), hash: W().location.hash, sheet: !!sheet() };",
         api=ROOMS,
     ),
+    # The rooms read is still out: the sheet's "play on" says it is looking,
+    # not that there are none.
+    "sheet_rooms_loading": _scenario(
+        "h.render(); await openSheet();"
+        "return h.findAll((e) => e.type === 'div' && inSheet(e) && typeof e.text === 'string'"
+        "  && /rooms/.test(e.text)).map((e) => e.text);",
+        setup=" useApiList = () => ({ items: [], loading: true, error: null,"
+              " refresh: () => Promise.resolve(), setItems: () => {} });",
+    ),
+    "sheet_no_rooms": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "return h.findAll((e) => e.type === 'div' && inSheet(e) && typeof e.text === 'string'"
+        "  && /rooms/.test(e.text)).map((e) => e.text);",
+        api={"GET /api/music/now-playing": []},
+    ),
+    # <html> carries .mp-docked exactly while the bar shows.
+    "docked_class": _scenario(
+        "const list = () => h.global('document').documentElement.classList.list.slice();"
+        "h.render(); const shown = list();"
+        "const P = W().__P; P.current = null; P.queue = []; P.index = -1; h.rerender();"
+        "return { shown, gone: list() };",
+        setup=" document.documentElement.classList = { list: [],"
+              " add(c) { this.list.push(c); }, remove(c) { this.list = this.list.filter((x) => x !== c); } };",
+    ),
+    # What a browser starts at, from what it stored (or nothing).
+    "start_volume": _scenario(
+        "return W().__vols;",
+        component="(window.__vols = [null, '', '  ', '0', '0.4', ' 0.25 ', '1', '1.5', '-1', 'abc']"
+                  ".map(_playerStartVolume), MiniPlayer)",
+    ),
     # The Music page's Player tab carries its phone classes.
     "now_playing_panel": _scenario(
         "h.render(); return { head: !!h.find(cls('np-head')), transport: !!h.find(cls('np-transport')),"
@@ -707,6 +737,31 @@ def test_the_desktop_queue_and_cast_panels_still_work(driven) -> None:
     player = _src("player.jsx")
     # The floating panels move with the bar, as before.
     assert player.count("bottom: 'calc(var(--dock-bottom, 0px) + 76px)'") == 2
+
+
+def test_the_sheet_says_it_is_looking_for_rooms_until_they_answer(driven) -> None:
+    # The rooms read asks every room's MPD (1.6 s on the live check), and
+    # the sheet mounts the list afresh on every open.
+    assert driven["sheet_rooms_loading"] == ["looking for rooms…"]
+    assert driven["sheet_no_rooms"] == ["no rooms online — connect a satellite"]
+
+
+def test_html_is_marked_docked_only_while_the_bar_shows(driven) -> None:
+    assert driven["docked_class"] == {"shown": ["mp-docked"], "gone": []}
+
+
+def test_a_new_browser_starts_at_full_volume(driven) -> None:
+    """``Number(null)`` is 0: every new browser started silent and stored
+    that 0, and a phone's bar has no volume control to notice it by."""
+    #                            null '' '  ' '0'  '0.4' ' 0.25 ' '1' '1.5' '-1' 'abc'
+    assert driven["start_volume"] == [1, 1, 1, 1, 0.4, 0.25, 1, 1, 1, 1]
+    assert "_playerStartVolume(localStorage.getItem('domovoi-player-volume'))" in _src("player.jsx")
+
+
+def test_the_bar_volume_slider_is_amber() -> None:
+    # The bar lives outside .main, so `.main input[type="range"]` missed it.
+    desktop, _ = _player_css()
+    assert "accent-color: var(--brand);" in _rule(desktop, '.mini-player input[type="range"]')
 
 
 # ─── the Music page's Player tab ─────────────────────────────────────────

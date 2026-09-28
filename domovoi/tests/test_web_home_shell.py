@@ -451,15 +451,41 @@ def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
     assert "4" in given["text"]
 
 
-def test_toasts_clear_the_phone_strip() -> None:
-    """Fixed at bottom: 24px they covered the tab strip for up to 12 s."""
-    lifted = "bottom: 'calc(var(--dock-bottom, 0px) + 24px)'"
+def test_toasts_clear_the_phone_strip_and_the_docked_player() -> None:
+    """Fixed at bottom: 24px they covered the tab strip for up to 12 s;
+    lifted by the strip alone they still covered the docked player's play
+    button (measured at 375px: three "queued" toasts over the bar)."""
+    lifted = "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'"
     comps = _src("components.jsx")
     toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
     assert lifted in toast and "bottom: 24," not in toast
     html = _src("index.html")
     assert lifted in html                                            # "plugins changed"
-    assert "bottom:calc(var(--dock-bottom, 0px) + 24px)" in html     # "Domovoi has been updated"
+    assert "bottom:calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)" in html  # "Domovoi has been updated"
+    # --player-h is the bar's own height, and only while the bar shows.
+    css = _src("styles.css")
+    assert re.search(r"^html\.mp-docked \{ --player-h: 64px; \}", css, re.M)
+    bar = re.search(r"^\.mini-player \{(.*?)\}", css, re.S | re.M).group(1)
+    assert "height: 64px;" in bar
+
+
+def test_a_page_header_wraps_on_a_phone() -> None:
+    """Music's upload, rescan and enrich ran 9-83px off a 375px screen,
+    with the page title squeezed into a column beside them."""
+    phone = _phone_block(_src("styles.css"))
+    head = re.search(r"\.page-header \{([^}]*)\}", phone).group(1)
+    assert "flex-wrap: wrap" in head and "align-items: flex-start" in head
+    assert "flex-wrap: wrap" in re.search(r"\.page-header \.actions \{([^}]*)\}", phone).group(1)
+
+
+def test_a_new_page_starts_at_its_top() -> None:
+    """.main is the one scroller every page shares: a tab tapped from a
+    page scrolled 600px down opened the next page 865px down."""
+    html = _src("index.html")
+    assert '<main className="main" ref={mainRef}>' in html
+    effect = re.search(r"React\.useLayoutEffect\(\(\) => \{(.*?)\}, \[(\w+)\]\);", html, re.S)
+    assert effect and effect.group(2) == "route"
+    assert "mainRef.current.scrollTop = 0" in effect.group(1)
 
 
 def test_the_service_worker_is_the_dashboards_not_the_music_players() -> None:
