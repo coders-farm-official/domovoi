@@ -34,9 +34,15 @@ small Python runner instead (Flyway multi-history config is fragile):
   ``CREATE EXTENSION``, DDL or DML naming ``public.`` or a foreign
   ``plugin_*`` schema, cross-schema ``REFERENCES``, and the statements
   that would step outside the migration's role or path — ``SET/RESET
-  ROLE``, ``SET SESSION AUTHORIZATION``, ``SET search_path`` /
-  ``set_config``, ``DO`` blocks, ``COPY``, ``ALTER SYSTEM``,
-  ``CREATE/ALTER/DROP ROLE``, ``LOAD``.
+  ROLE``, ``SET SESSION AUTHORIZATION``, ``SET/RESET search_path`` /
+  ``set_config``, transaction control (``BEGIN``, ``COMMIT``,
+  ``ROLLBACK``, ``SAVEPOINT`` …), ``DO`` blocks, ``COPY``,
+  ``ALTER SYSTEM``, ``CREATE/ALTER/DROP ROLE``, ``LOAD``.
+* **Sandbox check**: before a file's ledger row is written, the runner
+  confirms the file finished where it started — in the runner's
+  transaction, as the plugin role, on the pinned path. A file that
+  didn't (whatever slipped past the lint) is rolled back as far as it
+  still can be and is not recorded (:class:`MigrationSandboxError`).
 
 Multi-statement SQL files are executed through the raw asyncpg
 connection's simple-query protocol (SQLAlchemy's prepared-statement
@@ -66,6 +72,11 @@ class MigrationError(RuntimeError):
 
 class MigrationChecksumError(MigrationError):
     """An already-applied migration file changed on disk (drift)."""
+
+
+class MigrationSandboxError(MigrationError):
+    """A migration file ended its transaction or left its role or search
+    path; it was rolled back as far as possible and not recorded."""
 
 
 class SqlLintError(ValueError):
@@ -103,7 +114,7 @@ _PUBLIC_DML_RE = re.compile(
 )
 _PLUGIN_SCHEMA_REF_RE = re.compile(r"\bplugin_([a-z0-9_]+)\s*\.", re.I)
 _SET_SEARCH_PATH_RE = re.compile(
-    r"\bset\s+(?:local\s+|session\s+)?search_path\b", re.I
+    r"\b(?:re)?set\s+(?:local\s+|session\s+)?search_path\b", re.I
 )
 _SET_CONFIG_RE = re.compile(r"\bset_config\s*\(", re.I)
 _REFERENCES_RE = re.compile(
@@ -140,15 +151,106 @@ _FORBIDDEN_STATEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
      "CREATE/ALTER/DROP DATABASE or TABLESPACE is forbidden in a plugin "
      "migration"),
 )
+# Transaction control ends the runner's per-file transaction, and the SET
+# LOCAL role and search_path end with it: every statement after it runs as
+# the application user on the default path, i.e. in public. Checked at
+# statement start OUTSIDE dollar-quoted bodies, where a PL/pgSQL
+# BEGIN … END is block syntax, not transaction control.
+_TRANSACTION_CONTROL_RE = re.compile(
+    r"^\s*(begin|start\s+transaction|commit|end|rollback|abort|savepoint|"
+    r"release|prepare\s+transaction)\b",
+    re.I,
+)
+_TRANSACTION_CONTROL_MSG = (
+    "transaction control (BEGIN/START TRANSACTION, COMMIT/END, "
+    "ROLLBACK/ABORT, SAVEPOINT/RELEASE, PREPARE TRANSACTION) is forbidden — "
+    "the runner wraps each file in its own transaction as the plugin role, "
+    "and ending it early would run the rest of the file outside that role "
+    "and schema"
+)
+
+# A dollar-quote delimiter: $$ or $tag$. A tag never starts with a digit,
+# so $1 is a parameter, not a quote.
+_DOLLAR_TAG_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 
 
-def _strip_sql_noise(sql: str) -> str:
-    """Drop comments and string literals so the lint doesn't false-positive
-    on prose (e.g. a COMMENT ON saying 'public API')."""
-    sql = re.sub(r"--[^\n]*", " ", sql)
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
-    sql = re.sub(r"'(?:[^']|'')*'", "''", sql)
-    return sql
+def _is_ident_char(ch: str) -> bool:
+    return ch.isalnum() or ch in "_$"
+
+
+def _strip_sql_noise(sql: str, *, dollar_bodies: bool = True) -> str:
+    """Blank comments and string literals so the lint doesn't
+    false-positive on prose (e.g. a COMMENT ON saying 'public API').
+
+    One left-to-right pass, the way Postgres's own scanner reads it, so a
+    ``--`` inside a literal, a nested ``/* */`` or an ``E'\\''`` escape
+    can't hide the code after it. Literals become ``''``, comments a
+    space, quoted identifiers stay as written. A dollar-quoted body
+    (``$$ … $$``, ``$fn$ … $fn$``) keeps its text by default and is linted
+    like top-level SQL — stricter, never looser; with
+    ``dollar_bodies=False`` it collapses to ``$$``."""
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if sql.startswith("--", i):
+            end = sql.find("\n", i)
+            i = n if end < 0 else end
+            out.append(" ")
+        elif sql.startswith("/*", i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if sql.startswith("/*", i):
+                    depth, i = depth + 1, i + 2
+                elif sql.startswith("*/", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            out.append(" ")
+        elif ch == "'":
+            # E'…' honours backslash escapes; every other literal only ''.
+            escapes = (
+                i > 0 and sql[i - 1] in "eE"
+                and (i < 2 or not _is_ident_char(sql[i - 2]))
+            )
+            i += 1
+            while i < n:
+                if escapes and sql[i] == "\\":
+                    i += 2
+                elif sql[i] == "'":
+                    if sql.startswith("''", i):
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+            out.append("''")
+        elif ch == '"':
+            end = i + 1
+            while end < n:
+                if sql.startswith('""', end):
+                    end += 2
+                elif sql[end] == '"':
+                    break
+                else:
+                    end += 1
+            # One token: a ';' inside it is no statement boundary.
+            out.append(sql[i:end + 1].replace(";", "_"))
+            i = end + 1
+        elif ch == "$" and not dollar_bodies and not (i > 0 and _is_ident_char(sql[i - 1])):
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m is None:
+                out.append(ch)
+                i += 1
+                continue
+            end = sql.find(m.group(0), m.end())
+            i = n if end < 0 else end + len(m.group(0))
+            out.append("$$")
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _statements(text: str) -> list[str]:
@@ -181,7 +283,7 @@ def sql_lint(sql: str, slug: str) -> list[str]:
         )
     if _SET_SEARCH_PATH_RE.search(text) or _SET_CONFIG_RE.search(text):
         errors.append(
-            "SET search_path / set_config is forbidden — the migration "
+            "SET/RESET search_path / set_config is forbidden — the migration "
             f"runner owns search_path (it pins plugin_{slug} per file); a "
             "migration that resets it can slip unqualified DDL into another "
             "schema"
@@ -192,6 +294,11 @@ def sql_lint(sql: str, slug: str) -> list[str]:
             if pattern.match(stmt) and message not in seen:
                 seen.add(message)
                 errors.append(message)
+    if any(
+        _TRANSACTION_CONTROL_RE.match(stmt)
+        for stmt in _statements(_strip_sql_noise(sql, dollar_bodies=False))
+    ):
+        errors.append(_TRANSACTION_CONTROL_MSG)
     for m in _PLUGIN_SCHEMA_REF_RE.finditer(text):
         if m.group(1) != slug:
             errors.append(
@@ -259,6 +366,15 @@ def default_database_urls() -> list[str]:
 
 
 # ─── the runner ─────────────────────────────────────────────────────────────
+
+# Where a migration file runs, read just before it starts and again just
+# after it finishes: the transaction (pg_current_xact_id() pins one, so a
+# COMMIT inside the file shows as a different id), the role, and the path.
+_SANDBOX_SQL = (
+    "SELECT pg_current_xact_id()::text AS xact, current_user::text AS who, "
+    "current_setting('search_path') AS path"
+)
+
 
 class PluginMigrationRunner:
     """Applies one plugin's chain to one or more databases."""
@@ -444,13 +560,16 @@ class PluginMigrationRunner:
 
         for mf in pending:
             # One transaction per file: pinned search_path (the plugin
-            # schema ONLY) + the plugin role + script + back to the
-            # application user for the ledger row.
+            # schema ONLY) + the plugin role + script + a check that the
+            # script is still inside all three + back to the application
+            # user for the ledger row.
             await driver.execute("BEGIN")
             try:
                 await driver.execute(f'SET LOCAL search_path = "{self.schema}"')
                 await driver.execute(f'SET LOCAL ROLE "{self.role}"')
+                pinned = await driver.fetchrow(_SANDBOX_SQL)
                 await driver.execute(mf.sql)
+                await self._check_sandbox(driver, mf, pinned, label)
                 await driver.execute("RESET ROLE")
                 await driver.execute(
                     f'INSERT INTO "{self.schema}".schema_history '
@@ -464,6 +583,37 @@ class PluginMigrationRunner:
             applied_names.append(mf.filename)
             log.info("plugin %s: applied %s on %s", self.slug, mf.filename, label)
         return applied_names
+
+    async def _check_sandbox(self, driver, mf: MigrationFile, pinned, label: str) -> None:
+        """Refuse to record a file that did not finish where it started:
+        in the runner's transaction, as the plugin role, on the pinned
+        search path. A ``COMMIT``/``ROLLBACK`` in the file ends the
+        transaction (the ``SET LOCAL`` role and path go with it); a role
+        or path change moves it elsewhere. The lint refuses all of these;
+        this is the backstop for whatever slips past it. The caller's
+        ``ROLLBACK`` then undoes whatever is still open."""
+        now = await driver.fetchrow(_SANDBOX_SQL)
+        drift: list[str] = []
+        if now["xact"] != pinned["xact"]:
+            drift.append(
+                "it ended the runner's transaction, so statements after "
+                "that point may already be committed outside the plugin "
+                "role and schema"
+            )
+        if now["who"] != pinned["who"]:
+            drift.append(f"it finished as {now['who']}, not {pinned['who']}")
+        if now["path"] != pinned["path"]:
+            drift.append(
+                f"it finished with search_path {now['path']!r}, not "
+                f"{pinned['path']!r}"
+            )
+        if drift:
+            where = f" on {label}" if label else ""
+            raise MigrationSandboxError(
+                f"{self.slug}: {mf.filename} left the migration sandbox"
+                f"{where}: " + "; ".join(drift) + ". Rolled back what was "
+                "still open; not recorded as applied."
+            )
 
     async def _ensure_role(self, driver) -> None:
         """Create the plugin's ``NOLOGIN`` role if it is missing, make the

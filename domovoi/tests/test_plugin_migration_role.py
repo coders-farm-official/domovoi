@@ -26,7 +26,9 @@ from sqlalchemy import text
 
 from domovoi.db.session import engine
 from domovoi.plugins_runtime.migrations import (
+    _SANDBOX_SQL,
     MigrationFile,
+    MigrationSandboxError,
     PluginMigrationRunner,
     SqlLintError,
     sql_lint,
@@ -101,6 +103,70 @@ def test_sql_lint_allows_own_schema_work(sql: str) -> None:
     assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The escape: everything after the COMMIT runs as the app user.
+        "CREATE TABLE t (id INT);\nCOMMIT;\nCREATE TABLE escape_probe (id INT);",
+        "commit;",
+        "END;",
+        "ROLLBACK;",
+        "abort;",
+        "BEGIN;\nCREATE TABLE t (id INT);\nCOMMIT;",     # a well-meant wrapper
+        "START TRANSACTION;",
+        "SAVEPOINT a;",
+        "RELEASE SAVEPOINT a;",
+        "release a;",
+        "PREPARE TRANSACTION 'x';",
+        "COMMIT PREPARED 'x';",
+        "COMMIT AND CHAIN;",
+        "/* the end */ COMMIT;",
+        "-- done\nCOMMIT;",
+        # A '--' or an E'\'' inside a literal can't hide what follows it.
+        "INSERT INTO t VALUES ('--'); COMMIT; CREATE TABLE p (id INT);",
+        "INSERT INTO t VALUES (E'it\\'s'); COMMIT;",
+        # After a function body, it is top level again.
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END $$;\nCOMMIT;",
+    ],
+)
+def test_sql_lint_rejects_transaction_control(sql: str) -> None:
+    violations = sql_lint(sql, SLUG)
+    assert any("transaction control" in v for v in violations), (sql, violations)
+
+
+def test_sql_lint_rejects_reset_search_path() -> None:
+    assert any("search_path" in v for v in sql_lint("RESET search_path;", SLUG))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # PL/pgSQL BEGIN … END, END IF and nested blocks are block syntax
+        # inside a dollar-quoted body, not transaction control.
+        "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$\n"
+        "BEGIN\n"
+        "  IF NEW.x IS NULL THEN\n    NEW.x := 0;\n  END IF;\n"
+        "  BEGIN\n    NEW.y := 1 / NEW.x;\n"
+        "  EXCEPTION WHEN division_by_zero THEN\n    NEW.y := NULL;\n  END;\n"
+        "  RETURN NEW;\n"
+        "END;\n$$;",
+        "CREATE FUNCTION f() RETURNS INT LANGUAGE plpgsql AS $fn$ BEGIN RETURN 1; END $fn$;",
+        # Names and prose that merely contain the words.
+        "CREATE TABLE t (begin_at TIMESTAMPTZ, end_at TIMESTAMPTZ, commit_sha TEXT, "
+        "release_date DATE, savepoint_n INT);",
+        "UPDATE t SET end_at = now() WHERE commit_sha IS NULL;",
+        "COMMENT ON TABLE t IS 'COMMIT; ROLLBACK';",
+        "-- COMMIT when done\nCREATE TABLE t (id INT);",
+        "/* outer /* nested; COMMIT; */ still a comment; END; */ CREATE TABLE t (id INT);",
+        "CREATE TABLE t (note TEXT DEFAULT '--'); CREATE INDEX t_note ON t (note);",
+        "INSERT INTO t (note) VALUES (E'it\\'s'), ('; end');",
+        'CREATE TABLE "end" (id INT); CREATE TABLE "x;commit" (id INT);',
+    ],
+)
+def test_sql_lint_allows_block_syntax_and_lookalikes(sql: str) -> None:
+    assert sql_lint(sql, SLUG) == [], sql_lint(sql, SLUG)
+
+
 # ─── the statement sequence (DB-free, fake connection) ────────────────────
 
 
@@ -143,7 +209,14 @@ class FakeDriver:
             return {"?column?": 1} if self.role_exists else None
         if "current_user AS who" in sql:
             return {"who": "domovoi", "super": self.superuser, "member": self.member}
+        if sql == _SANDBOX_SQL:
+            return self.sandbox()
         return None
+
+    def sandbox(self) -> dict[str, Any]:
+        """Where the runner finds itself around a file: well-behaved files
+        leave the transaction, role and path exactly as they were."""
+        return {"xact": "742", "who": ROLE, "path": SCHEMA}
 
 
 def _file(version: int, sql: str) -> MigrationFile:
@@ -174,11 +247,13 @@ async def test_each_file_runs_after_set_local_role_with_the_schema_only_path() -
     applied = await _runner()._apply_files(drv, [_file(1, sql)])
     assert applied == ["V001__t.sql"]
     i = _file_begin(drv.calls, sql)
-    assert drv.calls[i:i + 7] == [
+    assert drv.calls[i:i + 9] == [
         "BEGIN",
         f'SET LOCAL search_path = "{SCHEMA}"',      # the plugin schema ONLY
         f'SET LOCAL ROLE "{ROLE}"',
+        _SANDBOX_SQL,                               # where the file starts…
         sql,
+        _SANDBOX_SQL,                               # …and where it finished
         "RESET ROLE",
         f'INSERT INTO "{SCHEMA}".schema_history (version, filename, checksum) '
         "VALUES ($1, $2, $3)",
@@ -283,6 +358,38 @@ async def test_a_failing_file_rolls_back_and_the_role_is_reset_by_the_transactio
         await _runner()._apply_files(drv, [_file(1, sql)])
     assert drv.calls[-1] == "ROLLBACK"
     assert "COMMIT" not in drv.calls[_file_begin(drv.calls, sql):]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "after,fragment",
+    [
+        # A COMMIT in the file: new transaction, app user, default path.
+        ({"xact": "743", "who": "domovoi", "path": '"$user", public'},
+         "ended the runner's transaction"),
+        ({"xact": "742", "who": "domovoi", "path": SCHEMA}, "finished as domovoi"),
+        ({"xact": "742", "who": ROLE, "path": '"$user", public'}, "search_path"),
+    ],
+)
+async def test_a_file_that_leaves_the_sandbox_is_rolled_back_and_not_recorded(
+    after: dict[str, Any], fragment: str
+) -> None:
+    class Escaping(FakeDriver):
+        reads = 0
+
+        def sandbox(self) -> dict[str, Any]:
+            self.reads += 1
+            return super().sandbox() if self.reads == 1 else after
+
+    drv = Escaping()
+    sql = "CREATE TABLE things (id INT);"
+    with pytest.raises(MigrationSandboxError, match=fragment) as exc:
+        await _runner()._apply_files(drv, [_file(1, sql)], label="y_test")
+    assert "V001__t.sql" in str(exc.value) and "y_test" in str(exc.value)
+    tail = drv.calls[_file_begin(drv.calls, sql):]
+    assert tail[-1] == "ROLLBACK"
+    assert not any("schema_history (version" in c for c in tail)     # no ledger row
+    assert "COMMIT" not in tail and "RESET ROLE" not in tail
 
 
 # ─── against Postgres ─────────────────────────────────────────────────────
