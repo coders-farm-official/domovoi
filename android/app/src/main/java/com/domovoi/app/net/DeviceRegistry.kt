@@ -26,6 +26,9 @@ data class DeviceRow(
     val name: String = "",
     val platform: String? = null,
     @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    /** Whether an admin marked this device a shared screen (V014). Absent
+     *  from a server older than shared screens — see [sharedScreenAnswer]. */
+    @SerialName("shared_screen") val sharedScreen: Boolean? = null,
 )
 
 /** "Pixel 8" rather than "google/shiba" — what a person would recognise in a
@@ -44,8 +47,11 @@ fun suggestedDeviceName(): String {
 }
 
 /** Upsert this device's row and refresh last_seen_at. Returns null on any
- *  failure — the app works unnamed, queue entries just carry no tag. */
+ *  failure — the app works unnamed, queue entries just carry no tag. The
+ *  answer also says whether this install is a shared screen, which is
+ *  remembered for the server that gave it (net/SharedScreen.kt). */
 suspend fun registerDevice(app: AppContainer): DeviceRow? = runCatching {
+    val server = app.prefs.serverUrl.value
     app.api.post(
         "/api/devices/register",
         buildJsonObject {
@@ -54,12 +60,14 @@ suspend fun registerDevice(app: AppContainer): DeviceRow? = runCatching {
             put("platform", "android")
             put("user_agent", "Android ${Build.VERSION.RELEASE}; ${Build.MODEL}")
         },
-    ).decode<DeviceRow>()
+    ).decode<DeviceRow>().also { app.prefs.setSharedScreen(server, sharedScreenAnswer(it)) }
 }.getOrNull()
 
 /** Rename this device. Throws so the Settings panel can report the failure. */
-suspend fun renameDevice(app: AppContainer, name: String): DeviceRow =
-    app.api.patch(
+suspend fun renameDevice(app: AppContainer, name: String): DeviceRow {
+    val server = app.prefs.serverUrl.value
+    return app.api.patch(
         "/api/devices/${android.net.Uri.encode(app.prefs.deviceId)}",
         buildJsonObject { put("name", name) },
-    ).decode()
+    ).decode<DeviceRow>().also { app.prefs.setSharedScreen(server, sharedScreenAnswer(it)) }
+}
