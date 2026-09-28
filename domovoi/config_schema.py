@@ -551,7 +551,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "short hold instead of the satellite's full end-of-speech silence, "
         "and answer. Anything said after the hold is lost. Only satellites "
         "running this release's code are ended early; each can opt out in "
-        "its own Listening settings.",
+        "its own Listening settings. Needs \"Start transcribing at the "
+        "first pause\" on.",
         "bool", section="advanced", tier="hot",
     ),
     FieldSpec(

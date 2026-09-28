@@ -317,7 +317,8 @@ class Settings(BaseSettings):
     # after a short hold instead of its whole silence timeout. Only
     # satellites that declare capture_control are ever ended early, so a
     # core update alone changes nothing until they upgrade. Whatever is
-    # said after the hold is lost; see domovoi/early_commit.py.
+    # said after the hold is lost; see domovoi/early_commit.py. Works on
+    # the speculative transcript, so it needs speculative_stt_enabled too.
     early_commit_enabled: bool = True
     # Tier B — phrases a pause can split (a timer or reminder duration,
     # "volume 40", the clock, every one-word command) — on the longer hold.
