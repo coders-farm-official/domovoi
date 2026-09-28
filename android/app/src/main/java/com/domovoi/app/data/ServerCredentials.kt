@@ -70,4 +70,19 @@ object ServerCredentials {
     fun decodeTrusted(raw: String?): Set<String> = runCatching {
         Json.decodeFromString(kotlinx.serialization.builtins.SetSerializer(String.serializer()), raw ?: "[]")
     }.getOrDefault(emptySet())
+
+    // ── Shared-screen answers, one per server ──────────────────────────
+
+    /** [url]'s last answer (null: it has never answered), looked up the way
+     *  [Prefs.setSharedScreen] stores it — by the normalised address. */
+    fun sharedAnswerFor(answers: Map<String, Boolean>, url: String): Boolean? =
+        answers[normalize(url)]
+
+    fun encodeSharedAnswers(answers: Map<String, Boolean>): String =
+        Json.encodeToString(MapSerializer(String.serializer(), Boolean.serializer()), answers)
+
+    /** Never throws: a corrupt or absent blob means "no server has answered yet". */
+    fun decodeSharedAnswers(raw: String?): Map<String, Boolean> = runCatching {
+        Json.decodeFromString(MapSerializer(String.serializer(), Boolean.serializer()), raw ?: "{}")
+    }.getOrDefault(emptyMap())
 }

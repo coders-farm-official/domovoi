@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
@@ -53,13 +54,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.LocalSharedScreen
+import com.domovoi.app.net.canRegister
+import com.domovoi.app.net.isSharedScreen
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.rememberCapabilities
@@ -149,7 +158,7 @@ private fun ShellContent() {
         )
         return
     }
-    var route by rememberSaveable { mutableStateOf(Route.Music) }
+    var route by rememberSaveable { mutableStateOf(StartRoute) }
     val backStack = remember { mutableStateListOf<Route>() }
     val navigate: (Route) -> Unit = { r ->
         if (r != route) {
@@ -170,22 +179,48 @@ private fun ShellContent() {
     LaunchedEffect(connected) { if (connected) capsState.refresh() }
     // Introduce this install to the server (id + a seeded name) so room
     // queues can say "added by <device>". Idempotent; the server keeps any
-    // name the user has since chosen. Re-run on reconnect and on a server
-    // switch, because a different server has never heard of us.
+    // name the user has since chosen. Re-run on reconnect, on a server
+    // switch (a different server has never heard of us) and when the
+    // household token changes. The answer also says whether this install
+    // is a shared screen (net/SharedScreen.kt), which is how a freshly
+    // paired kitchen tablet learns it is one — so a paired install asks
+    // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
-    LaunchedEffect(connected, shellServerUrl) {
-        if (connected && shellServerUrl.isNotBlank()) registerDevice(app)
+    val paired = !deviceToken.isNullOrBlank()
+    LaunchedEffect(connected, shellServerUrl, deviceToken) {
+        if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
+    // ...and again every couple of minutes while the app is on screen, and
+    // on coming back to it: nothing pushes an admin's shared-screen change,
+    // and a wall tablet never leaves Home. The register is an upsert, so
+    // asking is cheap (the web's DeviceIdentity.boot does the same).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, shellServerUrl) {
+        var lastAsked = System.currentTimeMillis()
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                if (System.currentTimeMillis() - lastAsked >= REASK_GAP_MS &&
+                    canRegister(app.bus.connected.value, app.prefs.isPaired())
+                ) {
+                    lastAsked = System.currentTimeMillis()
+                    registerDevice(app)
+                }
+                delay(REASK_EVERY_MS)
+            }
+        }
+    }
+    val sharedAnswers by app.prefs.sharedScreens.collectAsState()
+    val shared = isSharedScreen(ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl), paired)
     // If the active route lost its capability (plugin uninstalled,
     // different server), fall back home rather than rendering a stub.
     LaunchedEffect(caps, route) {
         if (!route.visibleWith(caps)) {
             backStack.clear()
-            route = Route.Music
+            route = StartRoute
         }
     }
 
-    CompositionLocalProvider(LocalCapabilities provides caps) {
+    CompositionLocalProvider(LocalCapabilities provides caps, LocalSharedScreen provides shared) {
         val counts = rememberSidebarCounts()
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 
@@ -196,6 +231,13 @@ private fun ShellContent() {
         }
     }
 }
+
+/** Shared-screen re-ask cadence while the app is on screen... */
+private const val REASK_EVERY_MS = 2 * 60 * 1000L
+
+/** ...and the least gap between two asks, so coming back to the app (which
+ *  restarts the loop above) re-asks at most this often. */
+private const val REASK_GAP_MS = 15 * 1000L
 
 // ---------------------------------------------------------------------------
 // The soft keyboard, and why the shells have to deal with it
@@ -434,10 +476,15 @@ private fun OfflineShell() {
 }
 
 // ---------------------------------------------------------------------------
-// Compact: bottom bar (4 primaries + More hub), mini player docked above it.
+// Compact: bottom bar (the web phone strip: home, music, satellites,
+// calendar, chat), mini player docked above it. Everything else is on
+// Home's "everything" grid, and while one of those screens is open the home
+// tab is the one lit, as on the web strip (and as the More tab was).
 // ---------------------------------------------------------------------------
 @Composable
 private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
+    val caps = LocalCapabilities.current
+    val shared = LocalSharedScreen.current
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = { TopChrome { Topbar(route, navigate) } },
@@ -445,8 +492,9 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    CompactRoutes.forEach { r ->
-                        val selected = route == r || (r == Route.More && route in OverflowRoutes)
+                    // A shared screen keeps four: Chat is one person's own.
+                    CompactRoutes.filter { it.visibleOn(caps, shared) }.forEach { r ->
+                        val selected = route == r || (r == Route.Home && route in EverythingRoutes)
                         NavigationBarItem(
                             selected = selected,
                             onClick = { navigate(r) },
@@ -466,7 +514,7 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            ScreenRouter(route, navigate)
+            ScreenRouter(route, navigate, counts)
         }
     }
 }
@@ -477,13 +525,23 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
 @Composable
 private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
+    val shared = LocalSharedScreen.current
     // No Scaffold here, so the shrink is on the root: imePadding() ends the
     // whole shell — rail included — at the top of the keyboard.
     Row(Modifier.fillMaxSize().imePadding()) {
         NavigationRail(containerColor = Domovoi.colors.card) {
-            Box(Modifier.padding(vertical = 10.dp)) { DomovoiGlyph(24) }
+            // The top-left glyph is the way home, as the brand is everywhere.
+            Box(
+                Modifier
+                    .padding(vertical = 4.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .clickable(onClickLabel = "home") { navigate(Route.Home) },
+                contentAlignment = Alignment.Center,
+            ) { DomovoiGlyph(24) }
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
-                (WorkspaceRoutes.filter { it.visibleWith(caps) } + Route.Settings).forEach { r ->
+                // Home leads the rail, as it leads the phone's bottom bar.
+                (listOf(Route.Home) + WorkspaceRoutes.filter { it.visibleOn(caps, shared) } + Route.Settings).forEach { r ->
                     NavigationRailItem(
                         selected = route == r,
                         onClick = { navigate(r) },
@@ -495,7 +553,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
         }
         Column(Modifier.weight(1f)) {
             TopChrome { Topbar(route, navigate) }
-            Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
+            Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
             BottomChromeColumn()
         }
     }
@@ -507,11 +565,26 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
 @Composable
 private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
+    val shared = LocalSharedScreen.current
     // As RailShell: no Scaffold, so the root carries the keyboard inset.
     Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
             Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // The brand row is the way home, as on the web desktop, so
+                // the workspace list below leaves Home out.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(
+                            if (route == Route.Home) Domovoi.colors.brandSoft else androidx.compose.ui.graphics.Color.Transparent,
+                            RoundedCornerShape(6.dp),
+                        )
+                        .clickable(onClickLabel = "home") { navigate(Route.Home) }
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     DomovoiGlyph(22)
                     Text("domovoi", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
                     Text("/ android", style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgSubtle)
@@ -522,7 +595,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
                     color = Domovoi.colors.fgSubtle,
                     modifier = Modifier.padding(top = 18.dp, bottom = 6.dp, start = 4.dp),
                 )
-                WorkspaceRoutes.filter { it.visibleWith(caps) }
+                WorkspaceRoutes.filter { it.visibleOn(caps, shared) }
                     .forEach { r -> SidebarItem(r, route == r, counts) { navigate(r) } }
                 Text(
                     "system",
@@ -536,7 +609,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
         }
         Column(Modifier.weight(1f)) {
             TopChrome { Topbar(route, navigate) }
-            Box(Modifier.weight(1f)) { ScreenRouter(route, navigate) }
+            Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
             BottomChromeColumn()
         }
     }
@@ -609,7 +682,17 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("domovoi", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgSubtle)
+            // The "domovoi" crumb is the way home: the web phone topbar's
+            // crumb, and the only top-left brand a phone has.
+            Box(
+                Modifier
+                    .heightIn(min = 40.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClickLabel = "home") { navigate(Route.Home) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("domovoi", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgSubtle)
+            }
             Text(" / ", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgFaint)
             Text(route.label.lowercase(), style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
             Box(Modifier.weight(1f))
