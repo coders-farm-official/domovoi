@@ -90,6 +90,12 @@ SCENARIOS = {
                                         "details": {}}}},
     }),
     "confirm_error_no_body": _confirm_error({"message": "network down"}),
+    # The web process's own refusal: a plain {detail: "..."} body.
+    "confirm_error_string_detail": _confirm_error({
+        "message": '503 Service Unavailable: {"detail":"the Domovoi core service is not running"}',
+        "status": 503,
+        "detail": {"detail": "the Domovoi core service is not running — plugin management needs it up"},
+    }),
 }
 
 
@@ -182,3 +188,74 @@ def test_other_confirm_errors_show_just_the_message(rendered) -> None:
     texts = _texts(rendered["confirm_error_nothing_kept"])
     assert texts == ["version 1.1.0 is already installed"], texts
     assert _texts(rendered["confirm_error_no_body"]) == ["network down"]
+    assert _texts(rendered["confirm_error_string_detail"]) == [
+        "the Domovoi core service is not running — plugin management needs it up"
+    ]
+
+
+# ─── staging and enable refusals read as sentences ───────────────────────
+#
+# Install/upgrade staging and enable report through data.js
+# (reportMutationFailure → apiErrorText). The core's refusals there are
+# coded, {detail: {error: {code, message, details}}} — a bundled plugin's
+# zip, a migration that drifted — and used to reach the toast as the JSON
+# around the message. Run against the REAL data.js.
+
+DATA_JS_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const box = {
+  window: {}, console, setTimeout, clearTimeout,
+  fetch: async () => { throw new Error('no network here'); },
+  Auth: { headers: () => ({}) },
+  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  navigator: { userAgent: 'harness' },
+};
+box.globalThis = box;
+vm.createContext(box);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), box, { filename: 'data.js' });
+const w = box.window;
+const coded = (code, message) => ({
+  message: `422 Unprocessable Entity: {"detail":{"error":{"code":"${code}"`, status: 422,
+  detail: { detail: { error: { code, message, details: { slug: 'radio' } } } },
+});
+const out = {};
+const fired = [];
+w.reportMutationFailure((t) => fired.push(t), 'install',
+  coded('bundled_plugin', "bundled plugins update with the core — 'radio' ships inside the Domovoi checkout"));
+out.install = fired[0];
+out.enable = w.mutationErrorText(coded('migration_drift',
+  'radio: applied migration V001__radio_schema.sql differs from the file on disk'), 'enable', { kept: false });
+out.plain = w.apiErrorText({ message: 'x', detail: { detail: 'admin session required' } });
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.fixture(scope="module")
+def refusals(tmp_path_factory) -> dict:
+    node = shutil.which("node")
+    assert node, "node is required to exercise web/static/data.js (see jsxcheck)"
+    harness = tmp_path_factory.mktemp("plugin-refusals") / "refusals.js"
+    harness.write_text(DATA_JS_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        [node, str(harness), str(REPO_ROOT / "web/static/data.js")],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_a_bundled_plugin_zip_is_refused_in_a_sentence(refusals) -> None:
+    said = refusals["install"]
+    assert said.startswith("install failed: bundled plugins update with the core"), said
+    assert "{" not in said and "Unprocessable" not in said, said
+
+
+def test_a_migration_refusal_on_enable_is_a_sentence(refusals) -> None:
+    said = refusals["enable"]
+    assert said.startswith("enable failed: radio: applied migration V001__radio_schema.sql"), said
+    assert "{" not in said and "migration_drift" not in said, said
+
+
+def test_a_plain_detail_still_reads_as_before(refusals) -> None:
+    assert refusals["plain"] == "admin session required"

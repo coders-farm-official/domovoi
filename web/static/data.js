@@ -592,13 +592,18 @@ const clipSentence = (s, max) => {
  * `err.detail` is the PARSED RESPONSE BODY, not a string — FastAPI's is
  * `{detail: "..."}`, so the useful text is one level down. Reaching for
  * `e.detail` directly renders "[object Object]" in a toast, which is how this
- * helper came to exist. Falls back to the message (which already carries
+ * helper came to exist. A coded refusal (the plugin installer's
+ * `{detail: {error: {code, message, details}}}`) gives its message, not the
+ * JSON around it. Falls back to the message (which already carries
  * "<status> <statusText>: <body>") and finally to String(e).
  *
  * `max` is a size, not a policy: pass 0 where the text can wrap. */
 const apiErrorText = (e, max = 160) => {
   const nested = e && e.detail && e.detail.detail;
+  const coded = nested && typeof nested === 'object' && nested.error
+    && typeof nested.error.message === 'string' && nested.error.message;
   const text = (typeof nested === 'string' && nested)
+    || coded
     || (nested && JSON.stringify(nested))
     || (e && e.message)
     || String(e);

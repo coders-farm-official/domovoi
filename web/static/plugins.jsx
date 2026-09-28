@@ -33,10 +33,14 @@ const STATUS_PILL = {
  * previous version comes back and runs against the newer schema — so the
  * admin is told which, per database: [[database, [file, …]], …]. */
 const confirmErrorView = (e) => {
-  const err = (((e && e.detail) || {}).detail || {}).error || {};
+  const body = ((e && e.detail) || {}).detail;
+  const err = (body && body.error) || {};
   const kept = (err.details && err.details.migrations_kept) || {};
   return {
-    message: err.message || String((e && e.message) || e),
+    // A plain {detail: "…"} (the web process's own 502/503, a 403) is a
+    // sentence too; only a request that got no answer at all falls back
+    // to the bare error.
+    message: err.message || (typeof body === 'string' && body) || String((e && e.message) || e),
     kept: Object.entries(kept).filter(([, files]) => Array.isArray(files) && files.length > 0),
   };
 };
@@ -392,7 +396,9 @@ const useInstallFlow = (fire, refresh) => {
         fire(`${existingSlug} is already installed — staging as an upgrade`);
         return stageZip(file, existingSlug);
       }
-      fire(`validation failed: ${e.message}`);
+      // The core's own sentence ("install failed: bundled plugins update
+      // with the core — …"), not "422 Unprocessable Entity: {…}".
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
     }
   };
 
@@ -407,7 +413,7 @@ const useInstallFlow = (fire, refresh) => {
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
-      fire(`validation failed: ${e.message}`);
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
     }
   };
 
