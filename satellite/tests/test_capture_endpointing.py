@@ -148,9 +148,27 @@ def test_speech_after_a_reported_pause_is_reported_too() -> None:
     assert kinds == ["utterance_start", "speech_pause", "speech_resume", "speech_pause", "utterance_end"]
     _, p1, resume, p2, end = texts(out)
     assert (p1["frame"], p1["last_voiced_frame"]) == (11, 2)
-    assert resume == {"type": "speech_resume", "utt": 7, "frame": 13}
+    assert resume == {"type": "speech_resume", "utt": 7, "frame": 12}
     assert (p2["frame"], p2["last_voiced_frame"]) == (22, 13)
     assert (end["utt"], end["frames"], end["last_voiced_frame"]) == (7, 24, 13)
+
+
+def test_the_resume_reaches_the_core_before_the_frame_that_resumed_speech() -> None:
+    """The core counts every frame that reaches it while a reported pause
+    stands as silence toward its early-commit hold. So the voiced frame
+    that ends the pause must come AFTER `speech_resume` in the stream —
+    otherwise, at a pause exactly the hold long, the core would commit on
+    a frame the satellite had just called speech."""
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=1.2)
+        sat._begin_utterance("wake_word")
+        out = capture(sat, loop, [FRAME] * 3 + [SILENCE] * 11 + [FRAME] * 2 + [SILENCE] * 40)
+    finally:
+        loop.close()
+    i = next(n for n, m in enumerate(out) if m != "audio" and m["type"] == "speech_resume")
+    # 3 voiced + 11 silent frames went out before it — not the voiced 15th.
+    assert out[:i].count("audio") == out[i]["frame"] == 3 + 11
 
 
 def test_a_silence_run_shorter_than_the_hint_says_nothing() -> None:

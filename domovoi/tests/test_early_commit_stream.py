@@ -257,12 +257,36 @@ def test_speech_after_the_pause_keeps_the_capture_open(commit_on) -> None:
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _hello(ws)
         _speak_then_pause(ws)
-        _send(ws, [LOUD])
-        ws.send_text(json.dumps({"type": "speech_resume", "utt": 1, "frame": 29}))
-        _send(ws, [LOUD] * 10 + [QUIET] * 30)
+        ws.send_text(json.dumps({"type": "speech_resume", "utt": 1, "frame": 28}))
+        _send(ws, [LOUD] * 11 + [QUIET] * 30)
         _barrier(ws)
         assert _session().utterance_active, "no pause reported since the speech came back"
         ws.send_text(_end(1, frames=69, last=38))
+        assert _finish_turn(ws) == "Pause the music in the kitchen."
+    assert len(whisper.calls) == 2
+
+
+def test_speech_back_one_frame_short_of_the_hold_is_never_cut_off(commit_on) -> None:
+    """The satellite sends `speech_resume` before the voiced frame that
+    ends the pause, so every frame the core counts toward the hold is one
+    the satellite called silence: speech that comes back on the frame that
+    would have completed the hold never gets a commit on its first
+    syllable."""
+    whisper = commit_on["whisper"] = _WatchedWhisper(
+        "Pause the music.", "Pause the music in the kitchen.",
+    )
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _speak_then_pause(ws)              # voiced 0-19, hint at 28
+        # Silent through frame 30: 11 frames (330 ms) — the 12th would
+        # complete the 350 ms hold, and it is speech.
+        _send(ws, [QUIET] * (HOLD_A_FRAMES - 8 - 1))
+        frames += HOLD_A_FRAMES - 8 - 1
+        ws.send_text(json.dumps({"type": "speech_resume", "utt": 1, "frame": frames}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 40)
+        _barrier(ws)
+        assert _session().utterance_active, "committed on the frame that resumed speech"
+        ws.send_text(_end(1, frames=frames + 50, last=frames + 9))
         assert _finish_turn(ws) == "Pause the music in the kitchen."
     assert len(whisper.calls) == 2
 
@@ -302,6 +326,32 @@ def test_a_session_in_chat_mode_never_ends_early(commit_on, monkeypatch) -> None
         assert _session().utterance_active
         ws.send_text(_end(1, frames=60, last=19))
         _finish_turn(ws)
+
+
+def test_a_parked_payload_of_an_odd_shape_never_drops_the_satellite(commit_on, monkeypatch) -> None:
+    """The check runs inside the socket's receive loop: an exception in it
+    must mean "no early commit", not a closed connection."""
+    async def _context(self):
+        return {"handler": ["not", "a", "name"], "kind": "core.x"}, False
+
+    monkeypatch.setattr(StreamSession, "_read_commit_context", _context)
+    commit_on["whisper"] = _WatchedWhisper("Yes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        sess = _session()
+        _speak_then_pause(ws, trigger="followup", voiced=10)
+        _send(ws, [QUIET] * 32)
+        # Not a ping barrier: a dropped connection would leave it waiting
+        # for a pong forever. Watch the session read every frame instead.
+        deadline = time.monotonic() + 5
+        while sess._utt_frames < 50 and time.monotonic() < deadline:
+            if app.state.active_sessions.get("kitchen") is not sess:
+                break
+            time.sleep(0.01)
+        assert app.state.active_sessions.get("kitchen") is sess, "the satellite was dropped"
+        assert sess._utt_frames == 50 and sess.utterance_active
+        ws.send_text(_end(1, frames=50, last=9))
+        assert _finish_turn(ws) == "Yes."
 
 
 def test_an_unreadable_session_never_ends_early(commit_on, monkeypatch) -> None:

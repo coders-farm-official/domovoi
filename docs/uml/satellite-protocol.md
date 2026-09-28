@@ -58,7 +58,7 @@ sequenceDiagram
 | `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"`, `utt?` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. `utt` (optional) is the client's own number for this capture, increasing per connection; the capture's hints and its `utterance_end` repeat it, so a message about an older capture is recognisably stale. |
 | `utterance_end` | `greeting_played`, `utt?`, `frames?`, `last_voiced_frame?`, `exit_reason?` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. `frames` (30 ms frames this capture sent), `last_voiced_frame` (0-based index of the last one the Pi's detector called speech) and `exit_reason` (`vad_silence_after_speech` \| `max_record_seconds` \| `shutdown` \| `server_endpoint`) let the server tell exactly whether a transcript it started at a pause covers everything said (see [Speculative transcription](#speculative-transcription)). An older server ignores them. |
 | `speech_pause` | `utt`, `frame`, `last_voiced_frame`, `greeting_played` | **Only when `ready.features` lists `"speech_pause"`.** The capture has had 8 silent frames (240 ms) after speech: `frame` is how many frames it has sent, `last_voiced_frame` the last voiced one. Once per silence run. The server may start transcribing. |
-| `speech_resume` | `utt`, `frame` | **Only when `ready.features` lists `"speech_pause"`.** Speech came back after a reported pause. |
+| `speech_resume` | `utt`, `frame` | **Only when `ready.features` lists `"speech_pause"`.** Speech came back after a reported pause. Sent *before* the audio of the frame that resumed it (`frame` is the frames sent before it), so every frame the server receives while a pause stands is one the Pi called silence — the early-commit hold is counted on exactly that. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
 | `noisy_capture` | — | The Pi's noise-gate auto-tune found the capture unusably loud and bailed. The server answers with a stock apology TTS instead of transcribing. |
 | `wifi_status` | `rx_mbits`, `tx_mbits`, `ssid` | Periodic link-rate self-report (60 s default), cached per room for the "how's your wifi?" diagnostic. |
@@ -196,7 +196,10 @@ All of these must hold:
 Whatever is said after the hold is lost — "set a timer for ten minutes …
 for the pasta" gets no label. Tiers are core-only (a plugin's is ignored)
 and are checked in CI against a corpus of real commands: a tier-A command
-may never be a shorter prefix of a different command
+may never be a shorter prefix of a different fast-path command; a
+continuation that turns it into a question for the language model
+("pause the music … in the kitchen") is the accepted cost, and the
+known ones ("what time is it … in Tokyo") are kept to tier B
 (`domovoi/tests/test_early_commit.py`). `early_commit_enabled=false`
 stops it everywhere, `early_commit_tier_b=false` keeps it to tier A, and a
 satellite's `[listen] early_commit=false` stops it for that room. The

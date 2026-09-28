@@ -279,9 +279,8 @@ def test_speech_after_the_copy_means_a_second_copy_at_the_next_pause(pipeline) -
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 7}))
         _send(ws, [LOUD] * 20 + [QUIET] * 8)
         ws.send_text(_pause(7, 28, 19))
-        _send(ws, [LOUD])
-        ws.send_text(json.dumps({"type": "speech_resume", "utt": 7, "frame": 29}))
-        _send(ws, [LOUD] * 9 + [QUIET] * 8)
+        ws.send_text(json.dumps({"type": "speech_resume", "utt": 7, "frame": 28}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 8)
         ws.send_text(_pause(7, 46, 37))
         # Real time: the satellite still has ~1 s of silence to count, and
         # the first decode finishes inside it — the second copy is taken
@@ -446,8 +445,8 @@ def test_at_most_a_few_copies_per_utterance(pipeline) -> None:
             frames += 13
             ws.send_text(_pause(1, frames, frames - 9))
             time.sleep(0.05)     # let each decode finish before the next pause
+            ws.send_text(json.dumps({"type": "speech_resume", "utt": 1, "frame": frames}))
             _send(ws, [LOUD])
-            ws.send_text(json.dumps({"type": "speech_resume", "utt": 1, "frame": frames + 1}))
             frames += 1
         _send(ws, [QUIET] * 40)
         frames += 40

@@ -3311,9 +3311,10 @@ class Satellite:
         # last frame the detector called speech (a barge-in prefix counts as
         # speech, as `speaking` above already assumes), and whether the
         # current silence run has been reported. Hints go only to a core
-        # that listed them in `ready`.
+        # that listed them in `ready` — checked at each hint, not once per
+        # capture: a session that drops mid-capture may come back to an
+        # older core, which answers an unknown type with `error`.
         utt = self._utt_seq
-        hints = "speech_pause" in self._core_features
         last_voiced = len(prefix_frames) - 1
         pause_reported = False
 
@@ -3335,26 +3336,35 @@ class Satellite:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
                 continue
-            self._emit_audio(frame)
-            sent += 1
             d = _frame_dbfs(frame)
             capture_dbfs.append(d)
             loud = d >= self.cfg.noise_gate_dbfs
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
+            if is_speech and pause_reported:
+                # BEFORE this frame's audio: the core counts every frame
+                # that reaches it while a reported pause stands as silence
+                # toward its early-commit hold, so the one that ends the
+                # pause must not get there first. `frame` is what the core
+                # holds when this arrives, as in `speech_pause`.
+                pause_reported = False
+                if "speech_pause" in self._core_features:
+                    self._emit_text({"type": "speech_resume", "utt": utt, "frame": sent})
+            self._emit_audio(frame)
+            sent += 1
             if is_speech:
                 speaking = True
                 silent_frames = 0
                 pre_speech_silent = 0
                 voiced_count += 1
                 last_voiced = sent - 1
-                if pause_reported:
-                    pause_reported = False
-                    self._emit_text({"type": "speech_resume", "utt": utt, "frame": sent})
             elif speaking:
                 silent_frames += 1
-                if hints and silent_frames == SPEECH_PAUSE_FRAMES:
+                if (
+                    silent_frames == SPEECH_PAUSE_FRAMES
+                    and "speech_pause" in self._core_features
+                ):
                     # Once per silence run: `frame` is what the core has
                     # buffered when this arrives (one ordered queue).
                     pause_reported = True

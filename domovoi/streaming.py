@@ -88,7 +88,12 @@ Client → Server
                            silence run. The server may start transcribing.
   text  speech_resume      {"type":"speech_resume","utt":N,"frame":N}
                            — ONLY when `ready.features` lists "speech_pause".
-                           Speech came back after a `speech_pause`.
+                           Speech came back after a `speech_pause`. Sent
+                           BEFORE the audio of the frame that resumed it
+                           (`frame` = frames sent before it), so every frame
+                           that arrives while a pause stands is one the
+                           satellite called silence — the early-commit hold
+                           counts on that.
   text  barge_in           {"type":"barge_in"} — sent during TTS playback
   text  noisy_capture      {"type":"noisy_capture"} — Pi-side noise-gate auto-tune
                            detected an unusably-loud capture and bailed.
@@ -1445,17 +1450,28 @@ class StreamSession:
         decision: tuple[str, int] | tuple[()] = ()
         if context is not None and not context[1]:
             text = heard.text
-            if self._hint_greeting:
-                from domovoi.greeting_filter import strip_leading_greeting
-                phrases = getattr(self.ws.app.state, "greeting_phrases", [])
-                if phrases:
-                    text = strip_leading_greeting(text, phrases)
-            ec = early_commit_for(text, pending=context[0])
-            if ec is not None:
-                if ec.tier == TIER_A:
-                    decision = (ec.tier, int(settings.early_commit_hold_a_ms))
-                elif settings.early_commit_tier_b:
-                    decision = (ec.tier, int(settings.early_commit_hold_b_ms))
+            # This runs inside the socket's receive loop (an audio frame, a
+            # hint) or a done-callback: whatever goes wrong here — a parked
+            # confirmation payload of an odd shape, say — means "don't end
+            # early", never a dropped satellite connection.
+            try:
+                if self._hint_greeting:
+                    from domovoi.greeting_filter import strip_leading_greeting
+                    phrases = getattr(self.ws.app.state, "greeting_phrases", [])
+                    if phrases:
+                        text = strip_leading_greeting(text, phrases)
+                ec = early_commit_for(text, pending=context[0])
+                if ec is not None:
+                    if ec.tier == TIER_A:
+                        decision = (ec.tier, int(settings.early_commit_hold_a_ms))
+                    elif settings.early_commit_tier_b:
+                        decision = (ec.tier, int(settings.early_commit_hold_b_ms))
+            except Exception as e:
+                log.warning(
+                    "stream %s: early-commit check failed; this capture runs to "
+                    "the satellite's own silence timeout: %s", self.room_id, e,
+                )
+                decision = ()
         spec.commit = decision
         return decision or None
 
