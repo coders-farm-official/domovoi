@@ -37,3 +37,15 @@ fun sharedScreenAnswer(row: DeviceRow): Boolean = row.sharedScreen ?: false
  * can't learn (its registration would be refused), so it is never masked.
  */
 fun isSharedScreen(answer: Boolean?, paired: Boolean): Boolean = answer ?: paired
+
+/**
+ * Whether the shell may send this install's registration now: when the
+ * live connection is up (the server evidently lets this install in), or
+ * when it is paired. The second half matters because a paired install
+ * counts as shared until it has an answer ([isSharedScreen]), so it must be
+ * able to get one over plain HTTP while the socket is down (a proxy that
+ * doesn't pass WebSocket upgrades, say) — gated on the socket alone, such a
+ * phone would lose Chat and see "busy" for good. An unpaired install with
+ * no socket is not asked for: its registration would only be refused.
+ */
+fun canRegister(connected: Boolean, paired: Boolean): Boolean = connected || paired

@@ -64,8 +64,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.LocalSharedScreen
+import com.domovoi.app.net.canRegister
 import com.domovoi.app.net.isSharedScreen
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.LocalCapabilities
@@ -181,10 +183,12 @@ private fun ShellContent() {
     // switch (a different server has never heard of us) and when the
     // household token changes. The answer also says whether this install
     // is a shared screen (net/SharedScreen.kt), which is how a freshly
-    // paired kitchen tablet learns it is one.
+    // paired kitchen tablet learns it is one — so a paired install asks
+    // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
+    val paired = !deviceToken.isNullOrBlank()
     LaunchedEffect(connected, shellServerUrl, deviceToken) {
-        if (connected && shellServerUrl.isNotBlank()) registerDevice(app)
+        if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
     // ...and again every couple of minutes while the app is on screen, and
     // on coming back to it: nothing pushes an admin's shared-screen change,
@@ -195,7 +199,9 @@ private fun ShellContent() {
         var lastAsked = System.currentTimeMillis()
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                if (System.currentTimeMillis() - lastAsked >= REASK_GAP_MS && app.bus.connected.value) {
+                if (System.currentTimeMillis() - lastAsked >= REASK_GAP_MS &&
+                    canRegister(app.bus.connected.value, app.prefs.isPaired())
+                ) {
                     lastAsked = System.currentTimeMillis()
                     registerDevice(app)
                 }
@@ -204,10 +210,7 @@ private fun ShellContent() {
         }
     }
     val sharedAnswers by app.prefs.sharedScreens.collectAsState()
-    val shared = isSharedScreen(
-        sharedAnswers[shellServerUrl],
-        paired = !deviceToken.isNullOrBlank(),
-    )
+    val shared = isSharedScreen(ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl), paired)
     // If the active route lost its capability (plugin uninstalled,
     // different server), fall back home rather than rendering a stub.
     LaunchedEffect(caps, route) {

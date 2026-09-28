@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -239,11 +240,13 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val attention = attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered())
 
     // First run: a house with nothing in it yet gets one hint, taken from
-    // the manual. Only then is the manual asked for.
+    // the manual. Only then is the manual asked for. The answer is wrapped
+    // so "asked, and got nothing" is data too: the hint waits for it rather
+    // than flashing the fallback phrase first.
     val firstRun = sats.data?.isEmpty() == true && timers.data != null && tv.active.isEmpty() &&
         cal.data?.isEmpty() == true
     val manual = rememberApi(firstRun) { a ->
-        if (firstRun) runCatching { HomeApi.manual(a.api) }.getOrNull() else null
+        if (firstRun) ManualAnswer(runCatching { HomeApi.manual(a.api) }.getOrNull()) else null
     }
 
     // ── actions (device tier; a refusal routes the phone to pairing) ──
@@ -321,15 +324,35 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             }
         }
     }
-    val onAnnounce: suspend (String) -> Boolean = { msg ->
-        try {
-            toast(announceToast(HomeApi.announceAll(app.api, msg), if (coreDown) 0 else onlineRooms.size))
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            toast(failureText("broadcast", e))
-            false
+    // The announce box's words and its send live here, not in the section:
+    // the section is a LazyColumn item, and scrolling it out of view while a
+    // send is in flight would cancel the request (and its toast) with it.
+    var announceMsg by rememberSaveable { mutableStateOf("") }
+    var announcing by remember { mutableStateOf(false) }
+    val announceOnline = if (coreDown) 0 else onlineRooms.size
+    val onAnnounce: () -> Unit = {
+        // Explicit feedback on the no-op branches (the web Broadcast's rule):
+        // a silent bail reads as a broken button.
+        val msg = announceMsg.trim()
+        when {
+            msg.isEmpty() -> toast("type a message first")
+            announceOnline == 0 -> toast("no satellites connected — nothing to broadcast to")
+            announcing -> Unit
+            else -> {
+                announcing = true
+                scope.launch {
+                    try {
+                        toast(announceToast(HomeApi.announceAll(app.api, msg), announceOnline))
+                        announceMsg = ""
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast(failureText("broadcast", e))
+                    } finally {
+                        announcing = false
+                    }
+                }
+            }
         }
     }
     val open: (HomeTarget) -> Unit = { t ->
@@ -384,7 +407,10 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         )
     }
     val announceSec: @Composable () -> Unit = {
-        HomeAnnounce(onlineCount = if (coreDown) 0 else onlineRooms.size, compact = compact, onSend = onAnnounce)
+        HomeAnnounce(
+            msg = announceMsg, onMsgChange = { announceMsg = it }, sending = announcing,
+            onlineCount = announceOnline, compact = compact, onSend = onAnnounce,
+        )
     }
     val todaySec: @Composable () -> Unit = {
         HomeToday(
@@ -406,8 +432,9 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             verticalArrangement = Arrangement.spacedBy(gap),
         ) {
             item(key = "header") { header() }
-            if (firstRun && !manual.loading) {
-                item(key = "firstrun") { HomeFirstRun(hintPhrase(manual.data)) { navigate(Route.Manual) } }
+            val hint = manual.data
+            if (firstRun && hint != null) {
+                item(key = "firstrun") { HomeFirstRun(hintPhrase(hint.manual)) { navigate(Route.Manual) } }
             }
             if (twoCol) {
                 item(key = "cols") {
@@ -460,6 +487,9 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         )
     }
 }
+
+/** The manual read on a first run: [manual] is null when it failed. */
+private class ManualAnswer(val manual: HomeManual?)
 
 /** Hand a URL to whatever browser the system has; false when nothing can. */
 private fun openInBrowser(context: Context, url: String): Boolean =

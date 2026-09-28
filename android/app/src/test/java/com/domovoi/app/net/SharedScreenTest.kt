@@ -60,4 +60,26 @@ class SharedScreenTest {
         assertEquals(emptyMap<String, Boolean>(), ServerCredentials.decodeSharedAnswers(null))
         assertEquals(emptyMap<String, Boolean>(), ServerCredentials.decodeSharedAnswers("{not json"))
     }
+
+    @Test fun anAnswerIsFoundUnderTheAddressItWasStoredBy() {
+        // Stored by the normalised address (Prefs.setSharedScreen); a saved
+        // server URL with a trailing slash must still find it, or a paired
+        // phone would read "unanswered" — shared — for good.
+        val answers = mapOf("http://10.0.0.5:6369" to false)
+        assertEquals(false, ServerCredentials.sharedAnswerFor(answers, "http://10.0.0.5:6369/"))
+        assertEquals(false, ServerCredentials.sharedAnswerFor(answers, " http://10.0.0.5:6369 "))
+        assertNull(ServerCredentials.sharedAnswerFor(answers, "http://10.0.0.9:6369"))
+    }
+
+    @Test fun aPairedPhoneAsksEvenWithTheLiveConnectionDown() {
+        // Unanswered and paired means masked, so the answer must be
+        // reachable over plain HTTP: a socket that never comes up (a proxy
+        // that drops WebSocket upgrades) must not leave Chat hidden forever.
+        assertTrue(canRegister(connected = false, paired = true))
+        assertTrue(canRegister(connected = true, paired = true))
+        // A server that streams to an unpaired phone lets it register too...
+        assertTrue(canRegister(connected = true, paired = false))
+        // ...but an unpaired phone with no socket would only be refused.
+        assertFalse(canRegister(connected = false, paired = false))
+    }
 }

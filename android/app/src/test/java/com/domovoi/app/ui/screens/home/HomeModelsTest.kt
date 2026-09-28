@@ -244,6 +244,22 @@ class HomeModelsTest {
         assertEquals(listOf(4L), days[1].rows.map { it.event.id })
     }
 
+    @Test fun aPhonesThreeRowsNeverLeaveABareDayLabel() {
+        val now = ms("2026-09-28T19:00:00Z")          // 2:00pm Monday in Chicago
+        val events = listOf(
+            HomeEvent(1, "A", "2026-09-28T20:00:00Z"),
+            HomeEvent(2, "B", "2026-09-28T21:00:00Z"),
+            HomeEvent(3, "C", "2026-09-28T22:00:00Z"),
+            HomeEvent(4, "Gym", "2026-09-29T15:00:00Z"),  // tomorrow: the fourth row
+        )
+        // Cut to a phone's three, "tomorrow" has nothing left to head.
+        val phone = todayDays(events, now, zone, shared = false, limit = HOME_PHONE_ROWS)
+        assertEquals(listOf("today"), phone.map { it.label })
+        assertEquals(listOf(1L, 2L, 3L), phone.single().rows.map { it.event.id })
+        // A wider screen keeps both days.
+        assertEquals(listOf("today", "tomorrow"), todayDays(events, now, zone, shared = false).map { it.label })
+    }
+
     @Test fun anEmptyTodaySaysSoAndNamesTheNextOne() {
         val now = ms("2026-09-28T19:00:00Z")
         val later = HomeEvent(5, "Trip", "2026-10-01T13:00:00Z")

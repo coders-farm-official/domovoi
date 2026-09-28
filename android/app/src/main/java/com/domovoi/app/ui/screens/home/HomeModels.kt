@@ -627,16 +627,24 @@ internal data class TodayDay(val label: String, val rows: List<TodayRow>)
 
 /**
  * Today's and tomorrow's events still to come or under way (at most
- * [HOME_TODAY_ROWS]), under "today" / "tomorrow". Never the description; a
- * shared screen gets the times and "busy" only. Empty when there is none —
- * then [todayEmptyText] says so.
+ * [limit]: [HOME_TODAY_ROWS], or [HOME_PHONE_ROWS] on a phone), under
+ * "today" / "tomorrow". The cap is applied before the grouping, so a day
+ * whose every row was cut leaves no bare label behind. Never the
+ * description; a shared screen gets the times and "busy" only. Empty when
+ * there is none — then [todayEmptyText] says so.
  */
-internal fun todayDays(events: List<HomeEvent>, nowMs: Long, zone: ZoneId, shared: Boolean): List<TodayDay> {
+internal fun todayDays(
+    events: List<HomeEvent>,
+    nowMs: Long,
+    zone: ZoneId,
+    shared: Boolean,
+    limit: Int = HOME_TODAY_ROWS,
+): List<TodayDay> {
     val d1 = dayStartMs(nowMs, zone, 1)
     val d2 = dayStartMs(nowMs, zone, 2)
     val shown = events.sortedBy { eventStartMs(it) }
         .filter { eventStartMs(it) < d2 && eventEndMs(it) >= nowMs }
-        .take(HOME_TODAY_ROWS)
+        .take(limit)
     fun row(e: HomeEvent): TodayRow {
         val start = eventStartMs(e)
         return TodayRow(

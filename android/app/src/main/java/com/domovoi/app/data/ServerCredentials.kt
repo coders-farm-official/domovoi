@@ -73,6 +73,11 @@ object ServerCredentials {
 
     // ── Shared-screen answers, one per server ──────────────────────────
 
+    /** [url]'s last answer (null: it has never answered), looked up the way
+     *  [Prefs.setSharedScreen] stores it — by the normalised address. */
+    fun sharedAnswerFor(answers: Map<String, Boolean>, url: String): Boolean? =
+        answers[normalize(url)]
+
     fun encodeSharedAnswers(answers: Map<String, Boolean>): String =
         Json.encodeToString(MapSerializer(String.serializer(), Boolean.serializer()), answers)
 

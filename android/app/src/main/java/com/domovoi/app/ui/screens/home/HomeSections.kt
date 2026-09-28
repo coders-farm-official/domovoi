@@ -53,7 +53,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,7 +69,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
@@ -83,7 +81,6 @@ import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 // ---------------------------------------------------------------------------
@@ -862,36 +859,19 @@ private fun SheetOption(icon: androidx.compose.ui.graphics.vector.ImageVector, t
 
 // ─── announce ─────────────────────────────────────────────────────────────
 
-/** "Say something in every room" — the Satellites broadcast, in one line. */
+/** "Say something in every room" — the Satellites broadcast, in one line.
+ *  The words and the send are the screen's (HomeScreen), so a send in
+ *  flight outlives this item scrolling out of view. */
 @Composable
-internal fun HomeAnnounce(onlineCount: Int, compact: Boolean, onSend: suspend (String) -> Boolean) {
-    val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
-    var msg by rememberSaveable { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
+internal fun HomeAnnounce(
+    msg: String,
+    onMsgChange: (String) -> Unit,
+    sending: Boolean,
+    onlineCount: Int,
+    compact: Boolean,
+    onSend: () -> Unit,
+) {
     val none = onlineCount == 0
-    fun send() {
-        // Explicit feedback on the no-op branches (the web Broadcast's rule):
-        // a silent bail reads as a broken button.
-        val m = msg.trim()
-        if (m.isEmpty()) {
-            toast("type a message first")
-            return
-        }
-        if (none) {
-            toast("no satellites connected — nothing to broadcast to")
-            return
-        }
-        if (sending) return
-        sending = true
-        scope.launch {
-            try {
-                if (onSend(m)) msg = ""
-            } finally {
-                sending = false
-            }
-        }
-    }
     HomeCard(
         "announce",
         action = {
@@ -906,17 +886,17 @@ internal fun HomeAnnounce(onlineCount: Int, compact: Boolean, onSend: suspend (S
         ) {
             OutlinedTextField(
                 value = msg,
-                onValueChange = { msg = it },
+                onValueChange = onMsgChange,
                 placeholder = { Text("say something in every room", color = Domovoi.colors.fgSubtle) },
                 enabled = !none,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
                 modifier = Modifier.weight(1f),
             )
             Button(
-                onClick = { send() },
+                onClick = onSend,
                 enabled = msg.isNotBlank() && !none && !sending,
                 contentPadding = if (compact) PaddingValues(0.dp) else PaddingValues(horizontal = 14.dp),
                 modifier = Modifier.heightIn(min = 44.dp).then(if (compact) Modifier.width(52.dp) else Modifier),
@@ -947,13 +927,14 @@ internal fun HomeToday(
 ) {
     HomeCard("today", action = { HomeLink("calendar", onClick = onOpenCalendar) }) {
         val list = events.orEmpty()
-        val days = if (answered && !failed) todayDays(list, nowMs, zone, shared) else emptyList()
+        // A phone shows three; the rest are one tap away, on Calendar.
+        val limit = if (compact) HOME_PHONE_ROWS else HOME_TODAY_ROWS
+        val days = if (answered && !failed) todayDays(list, nowMs, zone, shared, limit) else emptyList()
         when {
             !answered -> QuietLine("checking…")
             failed -> QuietLine("calendar unavailable")
             days.isEmpty() -> QuietLine(todayEmptyText(list, nowMs, zone, shared))
             else -> {
-                var n = 0
                 Column(Modifier.padding(bottom = 4.dp)) {
                     days.forEach { d ->
                         Text(
@@ -962,11 +943,7 @@ internal fun HomeToday(
                             color = Domovoi.colors.fgMuted,
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp),
                         )
-                        d.rows.forEach { row ->
-                            val idx = n++
-                            // A phone shows three; the rest are one tap away.
-                            if (!(compact && idx >= HOME_PHONE_ROWS)) TodayRowView(row, zone, onOpenCalendar)
-                        }
+                        d.rows.forEach { row -> TodayRowView(row, zone, onOpenCalendar) }
                     }
                 }
             }
