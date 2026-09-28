@@ -27,6 +27,7 @@ from sqlalchemy import text
 from domovoi.db.session import engine
 from domovoi.plugins_runtime.migrations import (
     _SANDBOX_SQL,
+    MigrationError,
     MigrationFile,
     MigrationSandboxError,
     PluginMigrationRunner,
@@ -329,7 +330,7 @@ async def test_a_failed_re_own_rolls_the_whole_adopt_step_back() -> None:
                 raise RuntimeError("cannot re-own")
 
     drv = FailSecond(foreign_relations=[("things", "r"), ("v", "v")])
-    with pytest.raises(RuntimeError, match="cannot re-own"):
+    with pytest.raises(MigrationError, match=f"could not prepare role {ROLE}.*cannot re-own"):
         await _runner()._apply_files(drv, [_file(1, "SELECT 1;")])
     assert drv.calls[-1] == "ROLLBACK"
     assert "COMMIT" not in drv.calls
@@ -354,10 +355,14 @@ async def test_a_failing_file_rolls_back_and_the_role_is_reset_by_the_transactio
 
     drv = Boom()
     sql = "DELETE FROM admin_sessions;"
-    with pytest.raises(RuntimeError):
-        await _runner()._apply_files(drv, [_file(1, sql)])
+    with pytest.raises(MigrationError) as exc:
+        await _runner()._apply_files(drv, [_file(1, sql)], label="y_test")
     assert drv.calls[-1] == "ROLLBACK"
     assert "COMMIT" not in drv.calls[_file_begin(drv.calls, sql):]
+    # One error family for callers: the file, the database and the
+    # driver's message, with the driver's exception as the cause.
+    assert str(exc.value) == f"{SLUG}: V001__t.sql failed on y_test: relation does not exist"
+    assert isinstance(exc.value.__cause__, RuntimeError)
 
 
 @pytest.mark.asyncio

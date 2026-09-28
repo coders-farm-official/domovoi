@@ -52,6 +52,8 @@ from domovoi.plugins_runtime.manifest import (
     validate_plugin_dir,
 )
 from domovoi.plugins_runtime.migrations import (
+    MigrationChecksumError,
+    MigrationError,
     PluginMigrationRunner,
     SqlLintError,
     discover_migrations,
@@ -830,7 +832,7 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
 
         # Step 10 — migrations, both DBs (the runner owns fresh-install
         # both-or-neither internally).
-        await runner.apply_all()
+        await _apply_migrations(runner)
 
         # Step 11 — move staging → installed/<slug>/.
         meta_file.unlink(missing_ok=True)
@@ -923,6 +925,20 @@ async def confirm_install(staged_id: str) -> dict[str, Any]:
         raise InstallError("install_failed", f"install failed: {e}") from e
 
 
+async def _apply_migrations(runner: PluginMigrationRunner) -> None:
+    """``runner.apply_all()`` with the runner's refusals and failures
+    raised as InstallError, so every admin endpoint answers a 422 naming
+    the file and the reason instead of an unhandled 500."""
+    try:
+        await runner.apply_all()
+    except MigrationChecksumError as e:
+        raise InstallError("migration_drift", str(e)) from e
+    except SqlLintError as e:
+        raise InstallError("migration_lint", str(e)) from e
+    except MigrationError as e:
+        raise InstallError("migration_failed", str(e)) from e
+
+
 def hash_tree_excluding(root: Path, exclude_names: set[str]) -> str:
     h = hashlib.sha256()
     for path in sorted(root.rglob("*")):
@@ -987,7 +1003,7 @@ async def enable_plugin(slug: str) -> dict[str, Any]:
     # Migration catch-up on BOTH DBs (a newer version may have been copied
     # in while disabled), then load + contract checks + resync.
     runner = PluginMigrationRunner(slug, install_dir / manifest.migrations_dir)
-    await runner.apply_all()
+    await _apply_migrations(runner)
     await reg.set_enabled(slug, True)
     try:
         await LOADER.load_plugin(slug=slug, install_dir=install_dir, manifest=manifest)

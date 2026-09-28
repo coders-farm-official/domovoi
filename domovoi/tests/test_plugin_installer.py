@@ -339,6 +339,37 @@ async def test_disable_enable_roundtrip() -> None:
     assert row is not None and row.enabled
 
 
+async def test_enable_refuses_checksum_drift_with_a_422() -> None:
+    """An applied migration edited on disk while the plugin was disabled:
+    enable refuses with ``migration_drift`` — a 422 from the admin API —
+    and the plugin stays disabled. The runner's MigrationChecksumError
+    used to escape api_enable (which only catches InstallError) as a 500."""
+    from fastapi import HTTPException
+
+    staged = await stage_zip(build_fixture_zip())
+    await confirm_install(staged.staged_id)
+    await disable_plugin(SLUG)
+    v1 = installer.installed_root() / SLUG / "migrations" / "V001__compliments_schema.sql"
+    v1.write_text(
+        v1.read_text(encoding="utf-8") + "\n-- edited after it was applied\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallError) as exc:
+        await enable_plugin(SLUG)
+    assert exc.value.code == "migration_drift"
+    assert "V001__compliments_schema.sql" in str(exc.value)
+
+    with pytest.raises(HTTPException) as http:
+        await installer.api_enable(SLUG)
+    assert http.value.status_code == 422
+    assert http.value.detail["error"]["code"] == "migration_drift"
+
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and not row.enabled
+    assert "compliments" not in HANDLER_BY_NAME
+
+
 # ─── uninstall keep / purge (§3.5) ──────────────────────────────────────────
 
 async def test_uninstall_keep_preserves_schema() -> None:

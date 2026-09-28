@@ -570,10 +570,23 @@ class PluginMigrationRunner:
         if not pending:
             return applied_names
 
+        # Failures below come out as MigrationError naming the step, the
+        # file and the database (the driver's error rides along as the
+        # cause), so callers handle one family instead of raw DB errors.
+        where = f" on {label}" if label else ""
+
         # The plugin role, its grants, and ownership of whatever an
         # earlier runner left behind — only when there is work to do.
-        await self._ensure_role(driver)
-        await self._adopt_schema_objects(driver)
+        try:
+            await self._ensure_role(driver)
+            await self._adopt_schema_objects(driver)
+        except MigrationError:
+            raise
+        except Exception as e:
+            raise MigrationError(
+                f"{self.slug}: could not prepare role {self.role} for "
+                f"schema {self.schema}{where}: {e}"
+            ) from e
 
         for mf in pending:
             # One transaction per file: pinned search_path (the plugin
@@ -594,8 +607,12 @@ class PluginMigrationRunner:
                     mf.version, mf.filename, mf.checksum,
                 )
                 await driver.execute("COMMIT")
-            except BaseException:
+            except BaseException as e:
                 await driver.execute("ROLLBACK")
+                if isinstance(e, Exception) and not isinstance(e, MigrationError):
+                    raise MigrationError(
+                        f"{self.slug}: {mf.filename} failed{where}: {e}"
+                    ) from e
                 raise
             applied_names.append(mf.filename)
             log.info("plugin %s: applied %s on %s", self.slug, mf.filename, label)
