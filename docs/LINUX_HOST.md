@@ -484,8 +484,10 @@ instead of bouncing core and web, and each run does this:
    touching nothing, if the dependencies changed but the service user
    can't write the venv (step 5 would fail, and so would its rollback).
 3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
-   `/var/lib/domovoi-update/backups/` (the newest 5 are kept). If the backup
-   fails, the update stops there and nothing has been stopped.
+   `/var/lib/domovoi-update/backups/`, and `domovoi_test` next to it
+   (`pre-<sha>-<time>.test.dump`) when that database exists: plugin
+   migrations are applied to both. The newest 5 of each are kept. If either
+   backup fails, the update stops there and nothing has been stopped.
 4. Stop `domovoi-web` and `domovoi-core`.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv the way [Install](#install) builds it (CPU
@@ -508,9 +510,12 @@ plugin's pending migrations when it starts, so a pull that adds one to a
 bundled plugin changes the database in step 8, not step 7. Rolling the code
 back without them would leave that plugin's schema ahead of its code, and a
 corrected release of the same migration would then be refused as an edited
-file. The restore goes into a fresh database that is then renamed to
-`domovoi`; the replaced one is kept as `domovoi_failed_<timestamp>` for
-inspection, and you drop it by hand when you're done with it. Then it restarts and health-checks again, and
+file. `domovoi_test` gets the same treatment on its own evidence: its dump
+is restored if a plugin ledger in it grew. The restore goes into a fresh
+database that is then renamed to `domovoi` (or `domovoi_test`); the
+replaced one is kept as `domovoi_failed_<timestamp>` (or
+`domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
+when you're done with it. Then it restarts and health-checks again, and
 records the commit it rolled back as `bad_sha`. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
@@ -572,6 +577,7 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 # DOMOVOI_PG_CONTAINER=domovoi-postgres
 # DOMOVOI_PG_USER=domovoi
+# Its <db>_test twin is backed up and restored with it whenever that exists.
 # DOMOVOI_PG_DB=domovoi
 # Where the core records the pre-pull SHA (its UPDATE_STATE_DIR). Default: ~<service user>/.domovoi/update
 # DOMOVOI_CORE_STATE_DIR=/home/domovoi/.domovoi/update

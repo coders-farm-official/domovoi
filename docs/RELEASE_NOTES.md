@@ -10,7 +10,8 @@ a way that would otherwise get reported as a bug.
 
 Nothing changes until you install `domovoi-update.service`: without it,
 **Restart to apply changes** bounces `domovoi-core` and `domovoi-web`
-exactly as before. To have it also back up the database, re-sync
+exactly as before. To have it also back up the database (and
+`domovoi_test`, which plugin migrations write to as well), re-sync
 dependencies, rebuild the MPD image, run Flyway, health-check and roll back
 on failure, follow [LINUX_HOST.md, "One-time upgrade for existing
 installs"](LINUX_HOST.md#one-time-upgrade-for-existing-installs). Its

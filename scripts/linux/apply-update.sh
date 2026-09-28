@@ -21,8 +21,10 @@
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
 #      the rollback below could not restore that tree.
 #   2. pg_dump -Fc the database through the compose Postgres container into
-#      the backups dir (newest DOMOVOI_UPDATE_KEEP_BACKUPS kept). A failed
-#      backup aborts the update before anything is stopped.
+#      the backups dir, and its <db>_test twin when that exists (plugin
+#      migrations are applied to both). The newest
+#      DOMOVOI_UPDATE_KEEP_BACKUPS of each are kept. A failed backup aborts
+#      the update before anything is stopped.
 #   3. Stop domovoi-web and domovoi-core.
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed.
@@ -36,8 +38,8 @@
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
 #   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
 #   (the core applies plugin migrations at boot, so step 7 can run them),
-#   restart, and record the new SHA as bad_sha so the version panel stops
-#   offering it.
+#   restore the <db>_test dump if a plugin ledger there grew, restart, and
+#   record the new SHA as bad_sha so the version panel stops offering it.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -74,6 +76,14 @@ WEB_HEALTH_URL=${DOMOVOI_WEB_HEALTH_URL:-http://127.0.0.1:6369/api/health}
 PG_CONTAINER=${DOMOVOI_PG_CONTAINER:-domovoi-postgres}
 PG_USER=${DOMOVOI_PG_USER:-domovoi}
 PG_DB=${DOMOVOI_PG_DB:-domovoi}
+# The plugin runtime applies every plugin migration to the database and
+# then to its <db>_test twin (default_database_urls() in
+# domovoi/plugins_runtime/migrations.py), so that twin is backed up and
+# restored too when it exists. A database already named *_test has none.
+case $PG_DB in
+  *_test) TEST_DB="" ;;
+  *) TEST_DB=${PG_DB}_test ;;
+esac
 
 CORE_UNIT=domovoi-core.service
 WEB_UNIT=domovoi-web.service
@@ -108,8 +118,12 @@ MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
 LEDGERS_BEFORE=""
 LEDGERS_AFTER=""
+TEST_LEDGERS_BEFORE=""
+TEST_LEDGERS_AFTER=""
 BACKUP_FILE=""
+TEST_BACKUP_FILE=""
 DB_RESTORED=0
+TEST_DB_RESTORED=0
 STEPS=()
 LAST_ERROR=""
 RESULT_READY=0
@@ -211,7 +225,9 @@ write_result() {
     printf '  "plugin_migrations_before": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_BEFORE")")"
     printf '  "plugin_migrations_after": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_AFTER")")"
     printf '  "backup": %s,\n' "$(json_str_or_null "$BACKUP_FILE")"
+    printf '  "test_backup": %s,\n' "$(json_str_or_null "$TEST_BACKUP_FILE")"
     printf '  "db_restored": %s,\n' "$(json_bool "$DB_RESTORED")"
+    printf '  "test_db_restored": %s,\n' "$(json_bool "$TEST_DB_RESTORED")"
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
     printf '  "steps": [%s]\n' "$steps"
     printf '}'
@@ -438,16 +454,23 @@ ledger_total() {
   printf '%s\n' "$1" | sed '1d' | awk '{ n += $2 } END { print n + 0 }'
 }
 
-backup_db() {
-  local f partial
-  mkdir -p "$BACKUP_DIR" || return 1
-  # Dumps hold every secret in the database. Each one is 0600 regardless
-  # (umask below); the dir is closed too where the filesystem allows it.
-  chmod 0700 "$BACKUP_DIR" || echo "warning: could not chmod 0700 $BACKUP_DIR"
-  f=$BACKUP_DIR/pre-${HEAD_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ).dump
-  partial=$f.partial
-  echo "dumping $PG_DB from container $PG_CONTAINER to $f"
-  if ! (umask 077; pg_exec pg_dump -Fc -U "$PG_USER" "$PG_DB" >"$partial"); then
+# Does the <db>_test twin exist? Without it there is nothing to back up or
+# restore, and the plugin runtime has nothing to migrate there either.
+resolve_test_db() {
+  [ -n "$TEST_DB" ] || return 0
+  if [ "$(psql_admin "SELECT 1 FROM pg_database WHERE datname = '$TEST_DB'" 2>/dev/null)" = 1 ]; then
+    log "$TEST_DB exists: it is backed up and restored with $PG_DB"
+  else
+    TEST_DB=""
+  fi
+}
+
+# pg_dump -Fc database $1 into file $2, and check pg_restore can read it.
+# On failure no file is left behind.
+dump_db() {
+  local db=$1 f=$2 partial=$2.partial
+  echo "dumping $db from container $PG_CONTAINER to $f"
+  if ! (umask 077; pg_exec pg_dump -Fc -U "$PG_USER" "$db" >"$partial"); then
     rm -f "$partial"; return 1
   fi
   if [ ! -s "$partial" ]; then
@@ -458,53 +481,76 @@ backup_db() {
     echo "pg_restore cannot read the dump"; rm -f "$partial"; return 1
   fi
   mv -f "$partial" "$f" || { rm -f "$partial"; return 1; }
-  BACKUP_FILE=$f
+}
+
+backup_db() {
+  local base
+  mkdir -p "$BACKUP_DIR" || return 1
+  # Dumps hold every secret in the database. Each one is 0600 regardless
+  # (umask in dump_db); the dir is closed too where the filesystem allows it.
+  chmod 0700 "$BACKUP_DIR" || echo "warning: could not chmod 0700 $BACKUP_DIR"
+  base=$BACKUP_DIR/pre-${HEAD_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)
+  dump_db "$PG_DB" "$base.dump" || return 1
+  BACKUP_FILE=$base.dump
+  if [ -n "$TEST_DB" ]; then
+    dump_db "$TEST_DB" "$base.test.dump" || return 1
+    TEST_BACKUP_FILE=$base.test.dump
+  fi
   prune_backups
 }
 
+# Two series, each pruned to the newest KEEP_BACKUPS: the database's
+# pre-<sha>-<timestamp>.dump and the test twin's .test.dump beside it.
 prune_backups() {
-  local old
   [[ $KEEP_BACKUPS =~ ^[0-9]+$ ]] && [ "$KEEP_BACKUPS" -ge 1 ] || return 0
+  prune_series 'pre-*Z.dump'
+  prune_series 'pre-*Z.test.dump'
+}
+
+prune_series() {
+  local old name
   # Newest first; everything past the first KEEP_BACKUPS goes. Names carry
-  # no whitespace (pre-<sha>-<timestamp>.dump).
-  old=$(cd "$BACKUP_DIR" && ls -1t -- pre-*.dump 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))") || return 0
-  local name
+  # no whitespace. $1 is a glob, deliberately unquoted.
+  old=$(cd "$BACKUP_DIR" && ls -1t -- $1 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))") || return 0
   for name in $old; do
     echo "pruning old backup $name"
     rm -f -- "${BACKUP_DIR:?}/$name"
   done
 }
 
-# Restore the pre-update dump into a fresh database, then swap it in by
+# Restore dump $2 into a fresh database, then swap it in for database $1 by
 # rename. `pg_restore --clean` into the live database would leave behind
 # every object a failed migration CREATED (it only drops what the dump
 # contains), and the re-run of that migration after a fix would then fail on
 # "already exists". The replaced database is kept as <db>_failed_<ts> for
 # inspection; drop it by hand once it's no longer interesting.
-restore_db() {
-  local ts tmpdb olddb
-  [ -n "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ] || { echo "no backup to restore"; return 1; }
+restore_into() {
+  local db=$1 dump=$2 ts tmpdb olddb
+  [ -n "$dump" ] && [ -s "$dump" ] || { echo "no backup of $db to restore"; return 1; }
   ts=$(date -u +%Y%m%d%H%M%S)
-  tmpdb=${PG_DB}_restore_$ts
-  olddb=${PG_DB}_failed_$ts
+  tmpdb=${db}_restore_$ts
+  olddb=${db}_failed_$ts
   psql_admin "CREATE DATABASE \"$tmpdb\" OWNER \"$PG_USER\"" || return 1
   if ! docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$tmpdb" \
-      --single-transaction --exit-on-error <"$BACKUP_FILE"; then
+      --single-transaction --exit-on-error <"$dump"; then
     psql_admin "DROP DATABASE IF EXISTS \"$tmpdb\"" || true
     return 1
   fi
-  psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$PG_DB' AND pid <> pg_backend_pid()" >/dev/null || true
-  if ! psql_admin "ALTER DATABASE \"$PG_DB\" RENAME TO \"$olddb\""; then
+  psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid()" >/dev/null || true
+  if ! psql_admin "ALTER DATABASE \"$db\" RENAME TO \"$olddb\""; then
     psql_admin "DROP DATABASE IF EXISTS \"$tmpdb\"" || true
     return 1
   fi
-  if ! psql_admin "ALTER DATABASE \"$tmpdb\" RENAME TO \"$PG_DB\""; then
-    psql_admin "ALTER DATABASE \"$olddb\" RENAME TO \"$PG_DB\"" || true
+  if ! psql_admin "ALTER DATABASE \"$tmpdb\" RENAME TO \"$db\""; then
+    psql_admin "ALTER DATABASE \"$olddb\" RENAME TO \"$db\"" || true
     return 1
   fi
-  echo "restored $BACKUP_FILE; the replaced database is kept as $olddb"
-  DB_RESTORED=1
+  echo "restored $dump; the replaced database is kept as $olddb"
 }
+
+restore_db() { restore_into "$PG_DB" "$BACKUP_FILE" && DB_RESTORED=1; }
+
+restore_test_db() { restore_into "$TEST_DB" "$TEST_BACKUP_FILE" && TEST_DB_RESTORED=1; }
 
 pip_as() {
   as_user "$VENV_DIR/bin/python" -m pip --disable-pip-version-check --no-input "$@"
@@ -646,6 +692,7 @@ full_update() {
   fi
   add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
   write_result running
+  resolve_test_db
 
   if ! run_step backup backup_db; then
     if [ "$REQUIRE_BACKUP" = 1 ]; then
@@ -656,6 +703,7 @@ full_update() {
   fi
   MIGRATIONS_BEFORE=$(migration_count || true)
   LEDGERS_BEFORE=$(ledger_snapshot "$PG_DB" || true)
+  if [ -n "$TEST_DB" ]; then TEST_LEDGERS_BEFORE=$(ledger_snapshot "$TEST_DB" || true); fi
   if [ "$DEPS_CHANGED" = 1 ]; then
     run_step snapshot-venv snapshot_venv || rm -f "$FREEZE_FILE"
   fi
@@ -716,6 +764,14 @@ rollback() {
     LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
     if migrations_grew || ledgers_grew "$LEDGERS_BEFORE" "$LEDGERS_AFTER"; then
       run_step restore-db restore_db || rb_failed restore-db
+    fi
+    # The plugin runtime applied the same migrations to the test twin, after
+    # the database itself; that one can have grown on its own.
+    if [ -n "$TEST_DB" ]; then
+      TEST_LEDGERS_AFTER=$(ledger_snapshot "$TEST_DB" || true)
+      if ledgers_grew "$TEST_LEDGERS_BEFORE" "$TEST_LEDGERS_AFTER"; then
+        run_step restore-test-db restore_test_db || rb_failed restore-test-db
+      fi
     fi
   else
     # The tree could not go back, so neither may the database: old data

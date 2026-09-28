@@ -10,7 +10,8 @@
 # The shims model just enough of the real thing to test the decisions:
 #   * each database is a file holding its flyway_schema_history row count,
 #     plus a ledgers-<db> file of "plugin_<slug> <rows>" lines, one per
-#     plugin migration ledger;
+#     plugin migration ledger; every case starts with domovoi and its
+#     domovoi_test twin;
 #   * `systemctl restart domovoi-db.service` is Flyway: it raises the count
 #     to the number of migration files in the checkout and never lowers it;
 #   * `systemctl start domovoi-core.service` is the core's boot: every
@@ -126,8 +127,10 @@ SH
   cat >"$bin/pg_dump" <<'SH'
 #!/usr/bin/env bash
 echo "pg_dump $*" >>"$SHIM_STATE/calls.log"
-if [ -f "$SHIM_STATE/fail-pg_dump" ]; then echo "pg_dump: connection refused" >&2; exit 1; fi
 db=${!#}
+if [ -f "$SHIM_STATE/fail-pg_dump" ] || [ -f "$SHIM_STATE/fail-pg_dump-$db" ]; then
+  echo "pg_dump: connection refused" >&2; exit 1
+fi
 echo "DOMOVOI-FAKE-DUMP migrations=$(cat "$SHIM_STATE/db-$db")"
 sed 's/^/ledger /' "$SHIM_STATE/ledgers-$db" 2>/dev/null
 exit 0
@@ -170,6 +173,9 @@ case "$sql" in
     exists "$db"; cat "$(dbfile "$db")" ;;
   *query_to_xml*schema_history*)
     exists "$db"; cat "$(ledgers "$db")" 2>/dev/null ;;
+  "SELECT 1 FROM pg_database WHERE datname = '"*"'")
+    name=${sql#*datname = \'}; name=${name%\'}
+    if [ -f "$(dbfile "$name")" ]; then echo 1; fi ;;
   CREATE\ DATABASE*)
     name=$(printf '%s' "$sql" | sed 's/^CREATE DATABASE "\([^"]*\)".*/\1/')
     echo 0 >"$(dbfile "$name")"; : >"$(ledgers "$name")" ;;
@@ -276,6 +282,10 @@ new_case() {
   printf 'domovoi-postgres\ndomovoi-mpd-kitchen\ndomovoi-mpd-office\n' >"$STATE/containers"
   echo 1 >"$STATE/db-domovoi"
   echo "plugin_radio 1" >"$STATE/ledgers-domovoi"
+  # The test twin compose creates at initdb: no Flyway run there, but the
+  # plugin runtime migrates it too.
+  echo 0 >"$STATE/db-domovoi_test"
+  echo "plugin_radio 1" >"$STATE/ledgers-domovoi_test"
 
   g init -q -b main
   printf '[project]\nname = "domovoi"\nversion = "0"\n' >"$REPO/pyproject.toml"
@@ -414,7 +424,12 @@ case_deps_changed_as_root() {
   check "systemctl does not go through runuser" not_called "runuser -u tester -- systemctl"
   check "no MPD rebuild" not_called "docker build"
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
-  check "one backup kept" eq "$(ls "$UPD/backups" | grep -c '^pre-.*\.dump$')" 1
+  check "one backup kept" eq "$(ls "$UPD/backups" | grep -c '^pre-.*Z\.dump$')" 1
+  check "backs up the test twin too" called "docker exec domovoi-postgres pg_dump -Fc -U domovoi domovoi_test"
+  check "one test backup kept" eq "$(ls "$UPD/backups" | grep -c '^pre-.*Z\.test\.dump$')" 1
+  check "both dumps verified" eq "$(grep -c '^pg_restore --list' "$STATE/calls.log")" 2
+  check "test backup in the result" eq "$(field test_backup | grep -c '\.test\.dump"$')" 1
+  check "no test restore on success" eq "$(field test_db_restored)" false
   check "no bad_sha" eq "$(field bad_sha)" null
   end_case
 }
@@ -526,6 +541,67 @@ case_plugin_migration_health_failure_restores() {
   check "flyway untouched by the restore" file_is "$STATE/db-domovoi" 1
   check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
   check "restore happens with core stopped" before "reset --keep" "pg_restore -U domovoi -d"
+  # The same migration reached the test twin; it goes back too.
+  check "test twin restored" eq "$(field test_db_restored)" true
+  check "test twin restored into a fresh database" called 'CREATE DATABASE "domovoi_test_restore_'
+  check "test twin swapped in by rename" called 'RENAME TO "domovoi_test"'
+  check "test twin ledger back to one row" file_is "$STATE/ledgers-domovoi_test" "plugin_radio1"
+  check "replaced test twin kept aside" eq "$(ls "$STATE" | grep -c '^db-domovoi_test_failed_')" 1
+  check "test twin restored from its own dump" called "pg_restore -U domovoi -d domovoi_test_restore_"
+  end_case
+}
+
+case_test_twin_restored_on_its_own() {
+  new_case test_twin_restored_on_its_own
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # The main database already had V002 (an earlier catch-up reached it but
+  # not the twin), so only the twin's ledger moves on B's boot.
+  echo "plugin_radio 2" >"$STATE/ledgers-domovoi"
+  printf 'ALTER TABLE stations ADD COLUMN played_at timestamptz;\n' >"$REPO/plugins/radio/migrations/V002__played.sql"
+  local sha_b; sha_b=$(commit_all "B: plugin migration + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "main database left alone" eq "$(field db_restored)" false
+  check "no restore into the main database" not_called 'CREATE DATABASE "domovoi_restore_'
+  check "test twin restored" eq "$(field test_db_restored)" true
+  check "test twin ledger back to one row" file_is "$STATE/ledgers-domovoi_test" "plugin_radio1"
+  check "main ledger untouched" file_is "$STATE/ledgers-domovoi" "plugin_radio2"
+  end_case
+}
+
+case_no_test_twin() {
+  new_case no_test_twin
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  rm -f "$STATE/db-domovoi_test" "$STATE/ledgers-domovoi_test"
+  printf 'ALTER TABLE stations ADD COLUMN played_at timestamptz;\n' >"$REPO/plugins/radio/migrations/V002__played.sql"
+  local sha_b; sha_b=$(commit_all "B: plugin migration + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "asked whether the twin exists" called "SELECT 1 FROM pg_database WHERE datname = 'domovoi_test'"
+  check "no dump of a missing twin" not_called "pg_dump -Fc -U domovoi domovoi_test"
+  check "no test backup" eq "$(field test_backup)" null
+  check "main database still backed up" eq "$(ls "$UPD/backups" | grep -c 'Z\.dump$')" 1
+  check "main database still restored" eq "$(field db_restored)" true
+  check "no test restore" eq "$(field test_db_restored)" false
+  check "no twin created by the restore" test ! -f "$STATE/db-domovoi_test"
+  end_case
+}
+
+case_test_twin_backup_failure_aborts() {
+  new_case test_twin_backup_failure_aborts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  : >"$STATE/fail-pg_dump-domovoi_test"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "error says the backup failed" eq "$(field error | grep -c 'pre-update backup failed')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no partial test dump left" eq "$(ls "$UPD/backups" | grep -c 'partial')" 0
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
   end_case
 }
 
@@ -541,6 +617,8 @@ case_plugin_migration_kept_when_healthy() {
   check "no restore on success" eq "$(field db_restored)" false
   check "no pg_restore into a database" not_called "pg_restore -U domovoi -d"
   check "the new plugin migration stays" file_is "$STATE/ledgers-domovoi" "plugin_radio2"
+  check "and stays in the test twin" file_is "$STATE/ledgers-domovoi_test" "plugin_radio2"
+  check "no test restore on success" eq "$(field test_db_restored)" false
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
   end_case
 }
@@ -636,13 +714,22 @@ case_backups_pruned() {
     echo old >"$UPD/backups/pre-00000000000$i-2026010${i}T000000Z.dump"
     touch -d "2026-01-0$i" "$UPD/backups/pre-00000000000$i-2026010${i}T000000Z.dump"
   done
+  # Test-twin dumps are their own series: these three don't push any main
+  # dump out, and only one of them survives next to the new one.
+  for i in 4 5 6; do
+    echo old >"$UPD/backups/pre-00000000000$i-2026010${i}T000000Z.test.dump"
+    touch -d "2026-01-0$i" "$UPD/backups/pre-00000000000$i-2026010${i}T000000Z.test.dump"
+  done
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   commit_all "B: code" >/dev/null
   KEEP_BACKUPS=2 run_update
   check "status ok" eq "$(field status)" '"ok"'
-  check "keeps the newest two" eq "$(ls "$UPD/backups" | grep -c '\.dump$')" 2
-  check "the new dump survives" eq "$(ls "$UPD/backups" | grep -c "^pre-$(g rev-parse HEAD | cut -c1-12)-")" 1
+  check "keeps the newest two" eq "$(ls "$UPD/backups" | grep -c 'Z\.dump$')" 2
+  check "the new dump survives" eq "$(ls "$UPD/backups" | grep -c "^pre-$(g rev-parse HEAD | cut -c1-12)-.*Z\.dump$")" 1
   check "the newest old dump survives" eq "$(ls "$UPD/backups" | grep -c '^pre-000000000003-')" 1
+  check "keeps the newest two test dumps" eq "$(ls "$UPD/backups" | grep -c 'Z\.test\.dump$')" 2
+  check "the new test dump survives" eq "$(ls "$UPD/backups" | grep -c "^pre-$(g rev-parse HEAD | cut -c1-12)-.*Z\.test\.dump$")" 1
+  check "the newest old test dump survives" eq "$(ls "$UPD/backups" | grep -c '^pre-000000000006-')" 1
   end_case
 }
 
@@ -766,6 +853,9 @@ case_migration_health_failure_rolls_back
 case_flyway_failure_without_growth
 case_plugin_migration_health_failure_restores
 case_plugin_migration_kept_when_healthy
+case_test_twin_restored_on_its_own
+case_no_test_twin
+case_test_twin_backup_failure_aborts
 case_dirty_tree_refused
 case_untracked_files_do_not_block
 case_backup_failure_aborts
