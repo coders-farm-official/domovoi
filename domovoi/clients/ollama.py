@@ -95,11 +95,9 @@ async def list_models(base_url: str | None = None, timeout: float = 5.0) -> list
     return models if isinstance(models, list) else []
 
 
-async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str, Any]]:
-    """Currently-loaded (VRAM-resident) models via ``GET /api/ps``.
-
-    Distinct from :func:`list_models` (on-disk). Empty list on any failure.
-    """
+async def _ps_or_none(base_url: str | None, timeout: float) -> list[dict[str, Any]] | None:
+    """``GET /api/ps``'s model list, or None when Ollama couldn't be asked —
+    which, unlike an empty list, doesn't mean "nothing is loaded"."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/ps"
@@ -110,9 +108,42 @@ async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str
             payload = resp.json()
     except Exception as e:
         log.warning("ollama /api/ps failed: %s", e)
-        return []
+        return None
     models = payload.get("models") if isinstance(payload, dict) else None
     return models if isinstance(models, list) else []
+
+
+async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str, Any]]:
+    """Currently-loaded (VRAM-resident) models via ``GET /api/ps``.
+
+    Distinct from :func:`list_models` (on-disk). Empty list on any failure.
+    """
+    return await _ps_or_none(base_url, timeout) or []
+
+
+def _model_key(name: str | None) -> str:
+    """A model name as Ollama reports it: lower case, ``:latest`` when no
+    tag was given ("llama3.2" → "llama3.2:latest")."""
+    n = (name or "").strip().lower()
+    return n if ":" in n or not n else n + ":latest"
+
+
+def _keep_alive_for_model(model: str) -> str | int | float | None:
+    """The ``keep_alive`` the voice pipeline sends for ``model``, for a
+    caller outside the voice client — the dashboard's text chat — so a chat
+    turn on the Q&A model doesn't hand it back to Ollama's 5-minute
+    default (Ollama keeps a model for whatever its latest request asked).
+    None for any other model, a vision model included: that one unloads on
+    the Ollama server's own schedule instead of crowding the voice models
+    out of memory."""
+    key = _model_key(model)
+    general = _normalize_keep_alive(settings.ollama_keep_alive)
+    if key == _model_key(settings.ollama_model):
+        return general
+    if key == _model_key(settings.ollama_tool_model):
+        tool = _normalize_keep_alive(settings.ollama_tool_keep_alive)
+        return general if tool is None else tool
+    return None
 
 
 async def delete_model(name: str, base_url: str | None = None, timeout: float = 30.0) -> None:
@@ -188,6 +219,10 @@ async def chat_stream(
     options = _num_ctx_options(settings.ollama_num_ctx)
     if options:
         body["options"] = options
+    # And the same keep_alive when this is one of the voice models.
+    keep_alive = _keep_alive_for_model(model)
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
     async with httpx.AsyncClient(timeout=timeout) as c:
         async with c.stream("POST", url, json=body) as resp:
@@ -690,6 +725,12 @@ class RealOllamaClient:
     _send_qa_think: bool = False
     _num_ctx: int | None = None
     _tool_num_ctx: int | None = None
+    # The cold-start machinery (`cold_models`, `for_cold_start`), bound in
+    # __init__ too. Without a URL a client can't ask Ollama what is loaded,
+    # so it reports every model warm and never swaps its HTTP client.
+    _url: str | None = None
+    _cold_twin: "RealOllamaClient | None" = None
+    _tool_keep_alive: str | int | float | None = None
 
     def __init__(
         self,
@@ -714,6 +755,7 @@ class RealOllamaClient:
                 pool=5.0,
             ),
         )
+        self._url = url
         self._qa_model = qa_model
         self._tool_model = tool_model
         # Bound at construction like the model names (reset_ollama_client is
@@ -724,8 +766,12 @@ class RealOllamaClient:
         self._send_think = _client_accepts_think()
         # keep_alive is bound and degrades the same way — see `_chat`. A blank
         # setting means never send it (the Ollama server's default governs).
+        # The tool model can have its own (`_keep_alive_for`).
         self._keep_alive = _normalize_keep_alive(settings.ollama_keep_alive)
-        self._send_keep_alive = self._keep_alive is not None and _client_accepts_keep_alive()
+        self._tool_keep_alive = _normalize_keep_alive(settings.ollama_tool_keep_alive)
+        self._send_keep_alive = (
+            self._keep_alive is not None or self._tool_keep_alive is not None
+        ) and _client_accepts_keep_alive()
         # The QA-model calls' `think`. None (the default) leaves the field
         # out, as every QA call always has. Otherwise it's sent and degrades
         # exactly like the router's, on a latch of its own: the QA model
@@ -777,7 +823,12 @@ class RealOllamaClient:
             return None
         return {"handler": name, "args": args or {}}
 
-    async def _route_chat(self, transcript: str, tools: list[dict[str, Any]]) -> Any:
+    async def _route_chat(
+        self,
+        transcript: str,
+        tools: list[dict[str, Any]],
+        extra_options: dict[str, Any] | None = None,
+    ) -> Any:
         """The routing chat call, with a one-time retry that drops ``think``.
 
         Thinking is a per-model capability, so a server can reject the flag
@@ -787,7 +838,9 @@ class RealOllamaClient:
         single turn, not forever.
         """
         try:
-            return await self._chat_for_route(transcript, tools, send_think=self._send_think)
+            return await self._chat_for_route(
+                transcript, tools, send_think=self._send_think, extra_options=extra_options,
+            )
         except Exception as e:
             if not self._send_think or not self._looks_like_think_rejection(e):
                 raise
@@ -797,7 +850,9 @@ class RealOllamaClient:
                 self._tool_model, e,
             )
             self._send_think = False
-            return await self._chat_for_route(transcript, tools, send_think=False)
+            return await self._chat_for_route(
+                transcript, tools, send_think=False, extra_options=extra_options,
+            )
 
     @classmethod
     def _looks_like_think_rejection(cls, exc: Exception) -> bool:
@@ -821,13 +876,27 @@ class RealOllamaClient:
         )
         self._send_keep_alive = False
 
+    def _keep_alive_for(self, model: Any) -> str | int | float | None:
+        """``ollama_tool_keep_alive`` for the tool model when it has one and
+        the tool model is not also the QA model (Ollama keeps a model for
+        whatever its latest request asked, so one model can't have two);
+        ``ollama_keep_alive`` otherwise."""
+        if (
+            self._tool_keep_alive is not None
+            and model == self._tool_model
+            and model != self._qa_model
+        ):
+            return self._tool_keep_alive
+        return self._keep_alive
+
     async def _chat(self, **kwargs: Any) -> Any:
         """Every Ollama chat call funnels through here so ``keep_alive`` rides
         along on all of them — router, QA, streaming QA, uncertainty, subject
-        extraction, memory extraction. Without it Ollama falls back to its own
-        5-minute default and a CPU host pays a cold start after every quiet
-        spell between household questions: model load plus the tool-schema
-        prefill, measured at ~54 s cold against ~4 s warm for the same turn.
+        extraction, memory extraction, warm-up. Without it Ollama falls back
+        to its own 5-minute default and a CPU host pays a cold start after
+        every quiet spell between household questions: model load plus the
+        tool-schema prefill, measured at ~54 s cold against ~4 s warm for the
+        same turn.
 
         Degrades the way ``think`` does: the kwarg is omitted when the
         installed client can't take it, and if the server rejects the value
@@ -836,10 +905,11 @@ class RealOllamaClient:
         only raises once iterated, so ``stream_qa`` carries its own
         first-chunk retry.
         """
-        if not self._send_keep_alive:
+        keep_alive = self._keep_alive_for(kwargs.get("model"))
+        if not self._send_keep_alive or keep_alive is None:
             return await self._client.chat(**kwargs)
         try:
-            return await self._client.chat(keep_alive=self._keep_alive, **kwargs)
+            return await self._client.chat(keep_alive=keep_alive, **kwargs)
         except Exception as e:
             if not self._looks_like_keep_alive_rejection(e):
                 raise
@@ -847,7 +917,12 @@ class RealOllamaClient:
             return await self._client.chat(**kwargs)
 
     async def _chat_for_route(
-        self, transcript: str, tools: list[dict[str, Any]], *, send_think: bool
+        self,
+        transcript: str,
+        tools: list[dict[str, Any]],
+        *,
+        send_think: bool,
+        extra_options: dict[str, Any] | None = None,
     ) -> Any:
         extra: dict[str, Any] = {"think": self._tool_think} if send_think else {}
         return await self._chat(
@@ -871,18 +946,23 @@ class RealOllamaClient:
             # way every time and biases toward acting on borderline
             # commands instead of randomly bailing to the QA fallthrough.
             # num_ctx only when ollama_tool_num_ctx is set.
-            options={"temperature": 0, **_num_ctx_options(self._tool_num_ctx)},
+            options={
+                "temperature": 0,
+                **_num_ctx_options(self._tool_num_ctx),
+                **(extra_options or {}),
+            },
             **extra,
             )
 
     # ── the QA-model calls' optional knobs ───────────────────────────────
 
-    def _qa_extras(self) -> dict[str, Any]:
+    def _qa_extras(self, extra_options: dict[str, Any] | None = None) -> dict[str, Any]:
         """``options.num_ctx`` and ``think`` for a QA-model call — each only
         when its setting asks for it, so with both unset the call is exactly
-        what it was before they existed."""
+        what it was before they existed. ``extra_options`` joins the options
+        (the warm-up's one-token limit)."""
         extra: dict[str, Any] = {}
-        options = _num_ctx_options(self._num_ctx)
+        options = {**_num_ctx_options(self._num_ctx), **(extra_options or {})}
         if options:
             extra["options"] = options
         if self._send_qa_think:
@@ -897,18 +977,20 @@ class RealOllamaClient:
         )
         self._send_qa_think = False
 
-    async def _qa_chat(self, **kwargs: Any) -> Any:
+    async def _qa_chat(
+        self, *, extra_options: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         """A non-streaming QA-model call: ``_chat`` plus :meth:`_qa_extras`,
         with the router's one-time retry when the server rejects ``think``
         (see ``_route_chat``). ``stream_qa`` carries its own retry, because
         a streamed rejection only surfaces once the stream is iterated."""
         try:
-            return await self._chat(**kwargs, **self._qa_extras())
+            return await self._chat(**kwargs, **self._qa_extras(extra_options))
         except Exception as e:
             if not self._send_qa_think or not self._looks_like_think_rejection(e):
                 raise
             self._disable_qa_think(e)
-            return await self._chat(**kwargs, **self._qa_extras())
+            return await self._chat(**kwargs, **self._qa_extras(extra_options))
 
     def _build_messages(
         self,
@@ -1055,6 +1137,105 @@ class RealOllamaClient:
         elif problem is not None:
             text = ""
         return QAWithUncertainty(answer=text, needs_verification=False)
+
+    # ── cold starts: what's loaded, a long-timeout twin, the warm-up ─────
+
+    async def cold_models(self, *roles: str) -> list[str] | None:
+        """The configured models for ``roles`` ("tool", "qa") that Ollama
+        doesn't have ready right now — not loaded, or loaded with a
+        different context window than this client asks for, which Ollama
+        answers by reloading. None when Ollama can't be asked (down, or
+        hung past the 2 s /api/ps limit): that is not a cold start, and
+        the caller must not wait on it as if it were."""
+        if self._url is None:
+            return []
+        loaded = await _ps_or_none(self._url, 2.0)
+        if loaded is None:
+            return None
+        contexts: dict[str, Any] = {}
+        for entry in loaded:
+            if not isinstance(entry, dict):
+                continue
+            for field in ("name", "model"):
+                if entry.get(field):
+                    contexts[_model_key(entry[field])] = entry.get("context_length")
+        wanted = {
+            "tool": (self._tool_model, self._tool_num_ctx),
+            "qa": (self._qa_model, self._num_ctx),
+        }
+        cold: list[str] = []
+        for role in roles:
+            model, num_ctx = wanted[role]
+            key = _model_key(model)
+            if key not in contexts:
+                cold.append(model)
+            elif num_ctx and contexts[key] and int(contexts[key]) != num_ctx:
+                cold.append(model)
+        return list(dict.fromkeys(cold))
+
+    def for_cold_start(self) -> "RealOllamaClient":
+        """This client, but with a read timeout long enough for Ollama to
+        load a model before its first byte (``ollama_load_timeout_sec``).
+        The ordinary ``ollama_timeout_sec`` bounds a stalled server; with a
+        cold model the load and the prompt prefill all come before the
+        reply, and cutting that off would turn "still loading" into "my
+        language model isn't answering". Built once per client; same models
+        and knobs."""
+        if self._url is None:
+            return self
+        if self._cold_twin is None:
+            import copy
+
+            import httpx
+            from ollama import AsyncClient
+
+            twin = copy.copy(self)
+            twin._client = AsyncClient(
+                host=self._url,
+                timeout=httpx.Timeout(
+                    connect=5.0,
+                    read=max(settings.ollama_timeout_sec, settings.ollama_load_timeout_sec),
+                    write=10.0,
+                    pool=5.0,
+                ),
+            )
+            twin._cold_twin = twin
+            self._cold_twin = twin
+        return self._cold_twin
+
+    async def warm_up(self, tool_schemas: list[dict[str, Any]]) -> list[str] | None:
+        """Load the tool-routing and QA models ahead of the first voice
+        turn, each with the exact options its real calls send (a different
+        num_ctx would only make Ollama load it again), the router's system
+        prompt and tool list included so that prefix is already processed.
+        One generated token each. Returns the models it loaded, [] when
+        both were already loaded, None when Ollama couldn't be asked."""
+        cold = await self.cold_models("tool", "qa")
+        if not cold:
+            return cold
+        twin = self.for_cold_start()
+        loaded: list[str] = []
+        if self._tool_model in cold and tool_schemas:
+            await twin._warm_tool_model(tool_schemas)
+            loaded.append(self._tool_model)
+        if self._qa_model in cold and self._qa_model not in loaded:
+            await twin._warm_qa_model()
+            loaded.append(self._qa_model)
+        return loaded
+
+    async def _warm_tool_model(self, tool_schemas: list[dict[str, Any]]) -> None:
+        tools = [{"type": "function", "function": s} for s in tool_schemas]
+        await self._route_chat("hello", tools, extra_options={"num_predict": 1})
+
+    async def _warm_qa_model(self) -> None:
+        await self._qa_chat(
+            model=self._qa_model,
+            messages=self._build_messages(
+                "hello", VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name), None
+            ),
+            stream=False,
+            extra_options={"num_predict": 1},
+        )
 
     async def extract_search_subject(
         self,

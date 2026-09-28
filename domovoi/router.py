@@ -68,6 +68,44 @@ _NO_ANSWER_TEXT = "Sorry, I don't have an answer for that."
 
 _ONLINE_CHECK_OFFER = "Want me to check that online?"
 
+# Said the moment a voice turn needs a model Ollama hasn't loaded, so the
+# room isn't silent through the load (~54 s on an all-CPU host).
+_COLD_START_TEXT = "Just a moment, I'm waking up my language model."
+
+
+async def _ready_for(client, ctx: Context, role: str):
+    """The Ollama client to use for the ``role`` ("tool" or "qa") model on
+    this turn. When that model isn't loaded, this is a cold start, not an
+    outage: say so in the room (``ctx.speak_interim``, once per turn, if
+    ``ollama_cold_start_notice``), and hand back the client's cold-start
+    twin, whose read timeout covers a model load — the ordinary timeout
+    could otherwise end a slow load in "my language model isn't
+    answering". Clients without the cold-start API (the stub, test fakes)
+    are returned as they are; so is every client when Ollama can't be
+    asked what's loaded, which is not a cold start."""
+    check = getattr(client, "cold_models", None)
+    if check is None:
+        return client
+    try:
+        cold = await check(role)
+    except Exception as e:  # noqa: BLE001 — never let the probe fail a turn
+        log.debug("cold-model check failed: %s", e)
+        return client
+    if not cold:
+        return client
+    log.info(
+        "cold start in room=%s: %s not loaded in Ollama — loading it for this turn",
+        ctx.room_id, ", ".join(cold),
+    )
+    speak = getattr(ctx, "speak_interim", None)
+    if speak is not None and settings.ollama_cold_start_notice:
+        try:
+            await speak(_COLD_START_TEXT)
+        except Exception as e:  # noqa: BLE001
+            log.warning("cold-start notice failed: %s", e)
+    twin = getattr(client, "for_cold_start", None)
+    return twin() if callable(twin) else client
+
 
 def _end_sentence(text: str) -> str:
     """``text`` closed with a full stop if it doesn't already end a
@@ -438,6 +476,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
 
     # 2. LLM tool-call fallback (the stub client returns None).
     tool_schemas = offered_tool_schemas(transcript)
+    ollama_client = await _ready_for(ollama_client, ctx, "tool")
     tool_call = await ollama_client.route(intent.transcript, tool_schemas)
     if tool_call is not None:
         handler = HANDLER_BY_NAME.get(tool_call.get("handler", ""))
@@ -539,6 +578,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # auto-search short-circuit so an opted-in speaker still auto-searches.
     if category is not None and category in VOLATILE_CATEGORIES:
         if ctx.online:
+            ollama_client = await _ready_for(ollama_client, ctx, "qa")
             subj = await ollama_client.extract_search_subject(
                 intent.transcript, history=history,
             )
@@ -636,6 +676,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # asked — the client's own flag or an answer that says in so many
     # words that it may be out of date. Suppressed offline because we
     # can't actually run the search.
+    ollama_client = await _ready_for(ollama_client, ctx, "qa")
     qa = await ollama_client.qa_with_uncertainty(
         intent.transcript,
         history=history,

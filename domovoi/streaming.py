@@ -677,6 +677,51 @@ async def resolve_voice(voice_name: str | None) -> tuple[str | None, str | None]
     return (v["engine"], v["model_ref"])
 
 
+class _InterimSpeech:
+    """A short line spoken as the opening of a turn's reply while the rest
+    of the turn is still being worked out — the router's "Just a moment,
+    I'm waking up my language model." before a cold model load
+    (``Context.speak_interim``). It opens the turn's one response: a
+    response_start and its audio now; the reply's audio follows later in
+    the same response, at the same rate, with no second response_start.
+    Said at most once per turn. A TTS failure just means it isn't said."""
+
+    def __init__(self, session: "StreamSession", voice: str | None) -> None:
+        self._session = session
+        self._voice = voice
+        self.started = False
+        self.text = ""
+        self.sample_rate = 0
+
+    async def say(self, text: str) -> None:
+        if self.started:
+            return
+        sess = self._session
+        try:
+            engine, voice = await resolve_voice(self._voice)
+            pcm, sr = _wav_to_pcm(
+                await get_tts_client().synthesize(text, engine=engine, voice=voice)
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("stream %s: interim line TTS failed: %s", sess.room_id, e)
+            return
+        self.started, self.text, self.sample_rate = True, text, sr
+        await sess._safe_send_text({
+            "type": "response_start",
+            "text": text,
+            "matched_handler": "cold_start",
+            "matched_path": "system",
+            "session_id": str(sess.session_id) if sess.session_id else None,
+            "online": True,
+            "audio_sample_rate": sr,
+        })
+        for chunk in _iter_chunks(pcm):
+            try:
+                await sess.ws.send_bytes(chunk)
+            except Exception:
+                return  # Pi went away; the turn's own send path will notice
+
+
 class StreamSession:
     """Per-connection state machine.
 
@@ -1792,6 +1837,9 @@ class StreamSession:
             # default). VoiceHandler reads it via Context.voice to answer
             # "what voice are you using".
             satellite_voice = self.ws.app.state.satellite_voice.get(self.room_id)
+            # Lets the router say a line before a slow stage (a cold model
+            # load) instead of leaving the room silent through it.
+            interim = _InterimSpeech(self, satellite_voice)
             ctx = Context(
                 room_id=self.room_id,
                 session_id=self.session_id,
@@ -1806,6 +1854,7 @@ class StreamSession:
                 voice=satellite_voice,
                 app=self.ws.app,
                 timings=timings,
+                speak_interim=interim.say,
             )
             intent = Intent(
                 transcript=transcript,
@@ -1941,15 +1990,25 @@ class StreamSession:
                     "level": max(0, min(100, int(response.satellite_volume))),
                 })
 
-            await self._safe_send_text({
-                "type": "response_start",
-                "text": response.text,
-                "matched_handler": response.matched_handler,
-                "matched_path": response.matched_path,
-                "session_id": str(response.session_id) if response.session_id else None,
-                "online": response.online,
-                "audio_sample_rate": sr,
-            })
+            if interim.started:
+                # An interim line (the cold-start notice) already opened
+                # this turn's response: the reply carries on in it, at the
+                # rate the Pi is already playing, with no second
+                # response_start. The self-echo guard hears both.
+                if sr != interim.sample_rate:
+                    first_pcm = _resample_pcm(first_pcm, sr, interim.sample_rate)
+                    sr = interim.sample_rate
+                self._last_spoken_text = f"{interim.text} {response.text}"
+            else:
+                await self._safe_send_text({
+                    "type": "response_start",
+                    "text": response.text,
+                    "matched_handler": response.matched_handler,
+                    "matched_path": response.matched_path,
+                    "session_id": str(response.session_id) if response.session_id else None,
+                    "online": response.online,
+                    "audio_sample_rate": sr,
+                })
 
             async def _synth(s: str) -> tuple[bytes, int]:
                 # Keep each sentence's OWN sample rate — the engine fallback

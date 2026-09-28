@@ -293,6 +293,11 @@ def test_reapply_hook_resets_the_client():
         _register_core_reapply_hooks()
         registered = set(reapply.registered_fields())
         assert {"ollama_keep_alive", "ollama_tool_think"} <= registered
-        assert reapply.run_for(["ollama_keep_alive"]) == ["ollama_keep_alive:reset_ollama_client"]
+        # Reset first, then (in the background, a no-op under stubs) load
+        # the models again with the new value — domovoi/llm_warmup.py.
+        assert reapply.run_for(["ollama_keep_alive"]) == [
+            "ollama_keep_alive:reset_ollama_client",
+            "ollama_keep_alive:schedule_llm_warmup",
+        ]
     finally:
         reapply._HOOKS.clear()

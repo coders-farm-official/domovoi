@@ -245,6 +245,30 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         pattern=OLLAMA_KEEP_ALIVE_PATTERN,
         pattern_help="expected an Ollama duration such as 24h, 90m, -1 or 0",
     ),
+    FieldSpec(
+        "ollama_tool_keep_alive", "Keep tool-routing model loaded for", "Models",
+        "The same as 'Keep models loaded for', for the tool-routing model "
+        "alone. Leave blank to use that setting. Ignored when one model "
+        "serves both roles. Applies immediately.",
+        "str", tier="reapply",
+        pattern=OLLAMA_KEEP_ALIVE_PATTERN,
+        pattern_help="expected an Ollama duration such as 24h, 90m, -1 or 0",
+    ),
+    FieldSpec(
+        "ollama_warmup", "Load models ahead of time", "Models",
+        "Load the tool-routing and Q&A models into Ollama when Domovoi "
+        "starts and after any model, keep-alive or context-window change, "
+        "so the first question after a restart doesn't wait for them (up to "
+        "a minute on a CPU host). Turn off to load them on first use.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "ollama_cold_start_notice", "Say when the model is waking up", "Models",
+        "When a spoken question needs a model that isn't loaded yet, say "
+        "\"Just a moment, I'm waking up my language model\" right away "
+        "instead of staying silent while it loads.",
+        "bool", tier="hot",
+    ),
 
     # ─── Voice & speech ────────────────────────────────────────────────
     FieldSpec(
