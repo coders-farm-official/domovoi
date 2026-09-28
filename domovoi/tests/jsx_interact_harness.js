@@ -22,10 +22,14 @@
 // Usage: node jsx_interact_harness.js <repo-root> '<scenarios json>'
 //        node jsx_interact_harness.js <repo-root> @<file holding that json>
 //   (the file form for scenario sets past Windows' ~32 KB command line)
-//   scenario: { files, component, props?, fnProps?, api?, setup?, script }
+//   scenario: { files, component, props?, fnProps?, api?, setup?, refs?, script }
 //   setup    — JS source evaluated INSIDE the sandbox before the files
 //              load, for a scenario that needs a different Auth /
 //              ServerStore / navigator than the defaults below.
+//   refs     — true: an object `ref` on a host element gets a stand-in
+//              node whose focus() is recorded (h.focused()); off by
+//              default, so components that measure or scroll through a
+//              ref keep seeing null.
 //   script   — a JS function body run with (h) — the helpers below —
 //              whose return value is the scenario's result (JSON).
 // Helpers on h: render(), rerender(), tree(), find(sel), findAll(sel),
@@ -34,7 +38,8 @@
 //   api, settle(),
 //   global(name) (a sandbox global, e.g. what a `setup` stub recorded),
 //   ancestors(el) (the host elements around el, nearest first), inside(el, sel)
-//   (whether any of them matches sel — e.g. a control in a wrapper CSS hides).
+//   (whether any of them matches sel — e.g. a control in a wrapper CSS hides),
+//   focused() (with `refs`: the elements focus() was called on, in order).
 //   sel is {type?, text?, title?, placeholder?, icon?, value?, name?, nth?}
 //   or a predicate (el) => boolean; `text` and `title` match substrings.
 'use strict';
@@ -65,7 +70,7 @@ const depsEqual = (a, b) =>
   Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
 
 /* ── the tiny React ─────────────────────────────────────────────────── */
-const createRuntime = () => {
+const createRuntime = ({ refs = false } = {}) => {
   const Fragment = Symbol('Fragment');
   const fibers = new Map();          // path → { hooks, pending, alive }
   let current = null;
@@ -134,6 +139,7 @@ const createRuntime = () => {
   // Each rendered element's nearest host ancestor, kept beside the element
   // records (never on them) so what a scenario returns is unchanged.
   const parentOf = new WeakMap();
+  const focused = [];
 
   const textOf = (children) =>
     (children || []).filter((c) => typeof c === 'string' || typeof c === 'number').join('');
@@ -169,6 +175,9 @@ const createRuntime = () => {
     }
     const el = { type: String(node.type), props: node.props, text: textOf(node.props.children) };
     out.push(el); parentOf.set(el, parentEl);
+    if (refs && node.props.ref && typeof node.props.ref === 'object') {
+      node.props.ref.current = { focus: () => { focused.push(el); } };
+    }
     renderNode(node.props.children, `${pathKey}/${el.type}`, el);
   };
 
@@ -205,6 +214,7 @@ const createRuntime = () => {
     rerender() { return flush(); },
     tree() { return out; },
     parent(el) { return parentOf.get(el) || null; },
+    focused() { return focused.slice(); },
   };
 };
 
@@ -239,8 +249,8 @@ const makeApi = (table) => {
 };
 
 /* ── one scenario ───────────────────────────────────────────────────── */
-const run = async ({ files, component, props = {}, fnProps = [], api: table = {}, setup = '', script }) => {
-  const rt = createRuntime();
+const run = async ({ files, component, props = {}, fnProps = [], api: table = {}, setup = '', refs = false, script }) => {
+  const rt = createRuntime({ refs });
   const React = rt.React;
   const api = makeApi(table);
   const window = {
@@ -253,7 +263,8 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
   const sandbox = {
     window, console, React, setTimeout, clearTimeout, setInterval: () => 0, clearInterval: noop,
     URLSearchParams, FormData, encodeURIComponent, decodeURIComponent,
-    document: { documentElement: { getAttribute: () => null, setAttribute: noop }, createElement: () => ({ setAttribute: noop, style: {} }) },
+    document: { documentElement: { getAttribute: () => null, setAttribute: noop }, createElement: () => ({ setAttribute: noop, style: {} }),
+                addEventListener: noop, removeEventListener: noop },
     localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
     navigator: { userAgent: 'harness' },
     apiGet: (p) => api.call('GET', p),
@@ -364,6 +375,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
       return up;
     },
     inside(el, sel) { return h.ancestors(el).some((a) => matches(a, sel)); },
+    focused() { return rt.focused().map((el) => h.plain(el)); },
     plain(el) {
       if (!el) return null;
       const props = {};

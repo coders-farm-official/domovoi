@@ -1032,6 +1032,16 @@ const PlaybackProvider = ({ children }) => {
  * `mp-desk` marks what only a desktop shows and `mp-phone` what only a
  * phone shows, so the phone never gets a squeezed copy of the desktop row.
  * ═══════════════════════════════════════════════════════════════════════ */
+// styles.css's phone breakpoint, for the few things CSS can't do alone.
+const _MP_PHONE = '(max-width: 760px)';
+// Listen to a MediaQueryList (null: nothing to listen to); returns the
+// unsubscribe. addListener is the pre-2020 Safari spelling.
+const _mpOnMediaChange = (mq, fn) => {
+  if (!mq) return () => {};
+  if (mq.addEventListener) { mq.addEventListener('change', fn); return () => mq.removeEventListener('change', fn); }
+  if (mq.addListener) { mq.addListener(fn); return () => mq.removeListener(fn); }
+  return () => {};
+};
 const MiniPlayer = () => {
   const p = usePlayback();
   const [showQueue, setShowQueue] = React.useState(false);
@@ -1043,13 +1053,20 @@ const MiniPlayer = () => {
   // closes it instead of leaving the page it was opened over. Closing it
   // any other way pops that entry again — unless something else (a tab in
   // the strip) has already pushed past it, which closes the sheet too.
+  // Closing it in place (chevron, Escape, back) hands focus back to "open
+  // player"; a close that came with a new page leaves focus to that page.
+  const expandRef = React.useRef(null);
+  const refocusRef = React.useRef(false);
+  const openHashRef = React.useRef('');
   const openSheet = () => {
     setShowQueue(false);
     setShowCast(false);
+    openHashRef.current = window.location.hash;
     try { window.history.pushState({ domovoiPlayerSheet: true }, ''); } catch {}
     setSheetOpen(true);
   };
-  const closeSheet = React.useCallback(() => {
+  const closeSheet = React.useCallback((refocus) => {
+    refocusRef.current = refocus !== false;
     setSheetOpen(false);
     try {
       const st = window.history.state;
@@ -1058,20 +1075,59 @@ const MiniPlayer = () => {
   }, []);
   React.useEffect(() => {
     if (!sheetOpen) return undefined;
-    const onPop = (e) => { if (!(e && e.state && e.state.domovoiPlayerSheet)) setSheetOpen(false); };
-    const onHash = () => setSheetOpen(false);
+    // Any history step while it is open leaves the entry it pushed — the
+    // back gesture, or a tab's new hash. (Not only a step to a state-less
+    // entry: after a tab and back again, the entry behind this sheet's can
+    // be an older sheet's, and back must still close this one.)
+    const onPop = () => {
+      refocusRef.current = window.location.hash === openHashRef.current;
+      setSheetOpen(false);
+    };
+    const onHash = () => { refocusRef.current = false; setSheetOpen(false); };
     const onKey = (e) => { if (e.key === 'Escape') closeSheet(); };
+    // A tab in the strip closes it — the tab already showing too, which
+    // changes no hash. React has handled the tap at its root before it
+    // bubbles up to the document, so a tab that navigated has already
+    // pushed past the sheet's entry and closeSheet doesn't go back.
+    const onTap = (e) => {
+      const t = e && e.target;
+      if (t && t.closest && t.closest('.sidebar .nav-item')) closeSheet(false);
+    };
+    // A phone turned sideways can be wider than 760px, where the sheet is
+    // never shown: close it rather than leave it open, unseen, holding a
+    // history entry the next back would silently spend.
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia(_MP_PHONE) : null;
+    const onWide = () => { if (mq && !mq.matches) closeSheet(false); };
     window.addEventListener('popstate', onPop);
     window.addEventListener('hashchange', onHash);
     window.addEventListener('keydown', onKey);
+    document.addEventListener('click', onTap);
+    const unWide = _mpOnMediaChange(mq, onWide);
     return () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('hashchange', onHash);
       window.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onTap);
+      unWide();
     };
   }, [sheetOpen, closeSheet]);
+  React.useEffect(() => {
+    if (sheetOpen || !refocusRef.current) return;
+    refocusRef.current = false;
+    const b = expandRef.current;
+    if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
+  }, [sheetOpen]);
   // Clearing the queue from the sheet empties the player out from under it.
-  React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(); }, [sheetOpen, hasItem, closeSheet]);
+  React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(false); }, [sheetOpen, hasItem, closeSheet]);
+  // The other way round: a desktop window narrowed to a phone's width
+  // hides the buttons that toggle the floating queue and cast target (and
+  // the 380px queue is wider than the screen), so close them.
+  const panelOpen = showQueue || showCast;
+  React.useEffect(() => {
+    if (!panelOpen || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia(_MP_PHONE);
+    return _mpOnMediaChange(mq, () => { if (mq.matches) { setShowQueue(false); setShowCast(false); } });
+  }, [panelOpen]);
 
   if (!hasItem) return null;
   const it = p.current;
@@ -1084,7 +1140,7 @@ const MiniPlayer = () => {
     <>
       {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}/>}
       {showCast && <CastMenu p={p} onClose={() => setShowCast(false)}/>}
-      {sheetOpen && <PlayerSheet p={p} onClose={closeSheet}/>}
+      {sheetOpen && <PlayerSheet p={p} onClose={() => closeSheet()}/>}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
           TOP of the five tabs instead of covering them. */}
@@ -1150,7 +1206,7 @@ const MiniPlayer = () => {
                         style={remote ? { color: 'var(--brand)' } : undefined}/>
             <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
           </div>
-          <button className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
+          <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
                   title="open player" aria-label="open player"
                   aria-haspopup="dialog" aria-expanded={sheetOpen}>
             <Icon name="chevron-up" size={16}/>

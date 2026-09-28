@@ -13,7 +13,10 @@ player", every button 30px. At 760px and below it is now:
   and carries seek, previous, volume, the sleep countdown, where it plays
   (this browser or a room) and the queue. It closes with its chevron,
   Escape, the back gesture (it is a history entry of its own) or a tab in
-  the strip, and when the queue it shows is cleared.
+  the strip (the one already showing too), when the queue it shows is
+  cleared, and when the screen grows past 760px (a phone turned
+  sideways). Focus goes to its close button when it opens and back to
+  "open player" when it closes in place.
 * the desktop bar and its floating queue / cast target are unchanged.
 
 The components run in domovoi/tests/jsx_interact_harness.js (the
@@ -52,6 +55,28 @@ window.removeEventListener = (t, fn) => {
 };
 window.__fire = (t, ev) => window.__listeners.filter((l) => l.t === t)
   .forEach((l) => l.fn(Object.assign({ type: t }, ev || {})));
+// The document's listeners land on the same list as 'document:<type>'.
+document.addEventListener = (t, fn) => { window.__listeners.push({ t: 'document:' + t, fn }); };
+document.removeEventListener = (t, fn) => {
+  window.__listeners = window.__listeners.filter((l) => !(l.t === 'document:' + t && l.fn === fn));
+};
+// A tap somewhere: `inside` is the selector its target's closest() finds.
+window.__tap = (inside) => window.__fire('document:click',
+  { target: { closest: (sel) => (sel === inside ? {} : null) } });
+// The 760px media query: a phone until __resize(false).
+window.__phone = true;
+window.__mqFns = [];
+window.__mqAsked = [];
+window.matchMedia = (q) => {
+  window.__mqAsked.push(q);
+  return {
+    media: q,
+    get matches() { return window.__phone; },
+    addEventListener(t, fn) { window.__mqFns.push(fn); },
+    removeEventListener(t, fn) { window.__mqFns = window.__mqFns.filter((f) => f !== fn); },
+  };
+};
+window.__resize = (phone) => { window.__phone = phone; window.__mqFns.slice().forEach((fn) => fn()); };
 window.__pushes = [];
 window.__backs = 0;
 window.__stack = [];
@@ -111,17 +136,22 @@ const controls = (pred) => h.findAll((e) => (e.type === 'button' || e.type === '
                  inSave: h.inside(e, cls('mp-q-save')), text: e.text,
                  phone: shownOn(e, 'mp-desk'), desk: shownOn(e, 'mp-phone') }));
 const openSheet = () => h.click(cls('mp-expand'));
+const focused = () => h.focused().map((e) => e.props['aria-label']);
 const acts = () => W().__acts.slice();
 """
 
 
 def _scenario(script: str, *, p: dict | None = None, api: dict | None = None,
-              component: str = "MiniPlayer", files: list[str] | None = None) -> dict:
+              component: str = "MiniPlayer", files: list[str] | None = None,
+              setup: str = "", refs: bool = True) -> dict:
     return {
         "files": files or FILES,
         "component": f"(PlaybackContext._value = window.__P, {component})",
         "api": api or {},
-        "setup": PRELUDE + f" window.__P = window.__makeP({json.dumps(p or {})});",
+        "setup": PRELUDE + f" window.__P = window.__makeP({json.dumps(p or {})});" + setup,
+        # focus() on a ref is recorded (h.focused()); off for a component
+        # that draws through its ref (the Player tab's visualizer canvas).
+        "refs": refs,
         "script": HELPERS + script,
     }
 
@@ -159,32 +189,79 @@ SCENARIOS = {
         " expanded: h.find(cls('mp-expand')).props['aria-expanded'],"
         " heads: h.findAll(cls('mp-sheet-sec-head')).map((e) => e.text || h.findAll((x) => x.type === 'span'"
         "   && h.inside(x, (a) => a === e)).map((x) => x.text).join('')),"
-        " listeners: W().__listeners.map((l) => l.t).sort() };"
+        " listeners: W().__listeners.map((l) => l.t).sort(), media: W().__mqFns.length,"
+        " asked: W().__mqAsked.slice(), focused: focused() };"
         "await h.click((e) => e.type === 'button' && e.props['aria-label'] === 'close player');"
         "return { opened, closed: !sheet(), backs: W().__backs, state: W().history.state,"
-        " listeners: W().__listeners.map((l) => l.t) };",
+        " listeners: W().__listeners.map((l) => l.t), media: W().__mqFns.length,"
+        " focused: focused() };",
     ),
     "sheet_back_gesture": _scenario(
         "h.render(); await openSheet();"
         "W().history.back(); W().__backs = 0;"   # what the browser does on the gesture...
         "W().__fire('popstate', { state: W().history.state }); h.rerender();"  # ...then tells the page
-        "return { closed: !sheet(), backs: W().__backs, bar: !!bar() };",
+        "return { closed: !sheet(), backs: W().__backs, bar: !!bar(), focused: focused() };",
     ),
-    "sheet_forward_into_it_is_ignored": _scenario(
+    # A tab away and back again leaves an older sheet's entry behind the
+    # page; open the sheet there and back lands on that entry, which still
+    # carries the sheet's state. It must close this sheet all the same.
+    "sheet_back_onto_an_older_sheet_entry": _scenario(
         "h.render(); await openSheet();"
-        "W().__fire('popstate', { state: { domovoiPlayerSheet: true } }); h.rerender();"
-        "return { open: !!sheet(), backs: W().__backs };",
+        "W().history.back(); W().__backs = 0;"
+        "W().__fire('popstate', { state: W().history.state }); h.rerender();"
+        "return { landedOn: W().history.state, closed: !sheet(), backs: W().__backs };",
+        setup=" window.history.state = { domovoiPlayerSheet: true };",
     ),
     "sheet_route_change": _scenario(
         "h.render(); await openSheet();"
         "W().__fire('hashchange'); h.rerender();"
-        "return { closed: !sheet(), backs: W().__backs };",
+        "return { closed: !sheet(), backs: W().__backs, focused: focused() };",
+    ),
+    # A tab that navigates: by the time the tap reaches the document the
+    # browser has pushed past the sheet's entry (and fired popstate for
+    # the new hash).
+    "sheet_strip_tab_to_another_page": _scenario(
+        "h.render(); await openSheet();"
+        "W().history.pushState(null); W().location.hash = '#calendar';"
+        "W().__fire('popstate', { state: null }); W().__tap('.sidebar .nav-item'); h.rerender();"
+        "return { closed: !sheet(), backs: W().__backs, state: W().history.state, focused: focused() };",
+    ),
+    # The tab already showing changes no hash: only the tap tells.
+    "sheet_strip_tab_already_showing": _scenario(
+        "h.render(); await openSheet();"
+        "W().__tap('.topbar'); h.rerender(); const openAfterOther = !!sheet();"
+        "W().__tap('.sidebar .nav-item'); h.rerender();"
+        "return { openAfterOther, closed: !sheet(), backs: W().__backs, state: W().history.state,"
+        " focused: focused() };",
     ),
     "sheet_escape": _scenario(
         "h.render(); await openSheet();"
         "W().__fire('keydown', { key: 'Enter' }); h.rerender(); const stillOpen = !!sheet();"
         "W().__fire('keydown', { key: 'Escape' }); h.rerender();"
-        "return { stillOpen, closed: !sheet(), backs: W().__backs };",
+        "return { stillOpen, closed: !sheet(), backs: W().__backs, focused: focused() };",
+    ),
+    # A phone turned sideways past 760px, where the sheet never shows.
+    "sheet_screen_grows_past_a_phone": _scenario(
+        "h.render(); await openSheet();"
+        "W().__resize(true); h.rerender(); const openOnPhone = !!sheet();"
+        "W().__resize(false); h.rerender();"
+        "return { openOnPhone, closed: !sheet(), backs: W().__backs, state: W().history.state,"
+        " media: W().__mqFns.length, focused: focused() };",
+    ),
+    # A desktop window narrowed to a phone: the floating panels close.
+    "desktop_panels_close_on_a_phone": _scenario(
+        "W().__phone = false; h.render(); const idle = W().__mqFns.length;"
+        "await h.click((e) => e.type === 'button' && e.props.title === 'queue');"
+        "const queueOpen = !!h.find(cls('mp-q-save')); const media = W().__mqFns.length;"
+        "W().__resize(false); h.rerender(); const stillOpen = !!h.find(cls('mp-q-save'));"
+        "W().__resize(true); h.rerender(); const queueClosed = !h.find(cls('mp-q-save'));"
+        "W().__phone = false;"
+        "await h.click((e) => e.type === 'button' && e.props.title === 'cast target');"
+        "const castOpen = h.text().includes('play on');"
+        "W().__resize(true); h.rerender();"
+        "return { idle, queueOpen, media, stillOpen, queueClosed, castOpen,"
+        " castClosed: !h.text().includes('play on'), after: W().__mqFns.length };",
+        api=ROOMS,
     ),
     "sheet_closes_when_the_queue_is_cleared": _scenario(
         "h.render(); await openSheet();"
@@ -272,6 +349,7 @@ SCENARIOS = {
         p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
         component="NowPlayingPanel",
         files=FILES + ["web/static/music_player_panel.jsx"],
+        refs=False,
     ),
 }
 
@@ -454,30 +532,69 @@ def test_open_player_opens_the_sheet_as_a_history_entry(driven) -> None:
     assert o["state"] == {"domovoiPlayerSheet": True}
     assert o["expanded"] is True
     assert sorted(o["heads"]) == ["play on", "queue · 3"]
-    assert o["listeners"] == ["hashchange", "keydown", "popstate"]
+    assert o["listeners"] == ["document:click", "hashchange", "keydown", "popstate"]
+    # It watches the phone breakpoint (styles.css's) while it is open.
+    assert o["media"] == 1 and o["asked"] == ["(max-width: 760px)"]
+    # Focus lands on its close button.
+    assert o["focused"] == ["close player"]
 
 
 def test_the_close_chevron_pops_the_entry_it_pushed(driven) -> None:
     c = driven["sheet_open_close"]
     assert c["closed"] is True
     assert c["backs"] == 1 and c["state"] is None
-    assert c["listeners"] == []
+    assert c["listeners"] == [] and c["media"] == 0
+    # ...and goes back to the button that opened it.
+    assert c["focused"] == ["close player", "open player"]
 
 
 def test_the_back_gesture_closes_the_sheet_and_nothing_more(driven) -> None:
     """The browser has already gone back; the sheet must not go back again
     (that would leave the page it was opened over)."""
     g = driven["sheet_back_gesture"]
-    assert g == {"closed": True, "backs": 0, "bar": True}
-    assert driven["sheet_forward_into_it_is_ignored"] == {"open": True, "backs": 0}
+    assert g == {"closed": True, "backs": 0, "bar": True, "focused": ["close player", "open player"]}
+
+
+def test_back_onto_an_older_sheet_entry_still_closes_the_sheet(driven) -> None:
+    b = driven["sheet_back_onto_an_older_sheet_entry"]
+    assert b == {"landedOn": {"domovoiPlayerSheet": True}, "closed": True, "backs": 0}
 
 
 def test_a_tab_in_the_strip_closes_the_sheet_without_going_back(driven) -> None:
-    assert driven["sheet_route_change"] == {"closed": True, "backs": 0}
+    # Focus stays with the page the tab brought up.
+    assert driven["sheet_route_change"] == {"closed": True, "backs": 0, "focused": ["close player"]}
+    t = driven["sheet_strip_tab_to_another_page"]
+    assert t == {"closed": True, "backs": 0, "state": None, "focused": ["close player"]}
+
+
+def test_the_tab_already_showing_closes_the_sheet_and_pops_its_entry(driven) -> None:
+    t = driven["sheet_strip_tab_already_showing"]
+    # A tap anywhere else leaves it open.
+    assert t["openAfterOther"] is True
+    assert t["closed"] is True and t["backs"] == 1 and t["state"] is None
+    assert t["focused"] == ["close player"]
 
 
 def test_escape_closes_the_sheet(driven) -> None:
-    assert driven["sheet_escape"] == {"stillOpen": True, "closed": True, "backs": 1}
+    assert driven["sheet_escape"] == {"stillOpen": True, "closed": True, "backs": 1,
+                                      "focused": ["close player", "open player"]}
+
+
+def test_a_screen_grown_past_a_phone_closes_the_sheet(driven) -> None:
+    """Past 760px styles.css never shows the sheet: left open, it would sit
+    unseen on a history entry the next back spends doing nothing."""
+    g = driven["sheet_screen_grows_past_a_phone"]
+    assert g == {"openOnPhone": True, "closed": True, "backs": 1, "state": None,
+                 "media": 0, "focused": ["close player"]}
+
+
+def test_a_desktop_narrowed_to_a_phone_closes_the_floating_panels(driven) -> None:
+    d = driven["desktop_panels_close_on_a_phone"]
+    # Only an open panel listens.
+    assert d["idle"] == 0 and d["media"] == 1
+    assert d["queueOpen"] is True and d["stillOpen"] is True and d["queueClosed"] is True
+    assert d["castOpen"] is True and d["castClosed"] is True
+    assert d["after"] == 0
 
 
 def test_clearing_the_queue_closes_the_sheet(driven) -> None:
