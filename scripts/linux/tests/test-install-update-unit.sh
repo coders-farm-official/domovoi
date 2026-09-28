@@ -1,0 +1,809 @@
+#!/usr/bin/env bash
+# Hermetic tests for scripts/linux/install-update-unit.sh.
+#
+# Each case builds a throwaway git repo (commit A, which the "core" is
+# running, then commit B, pulled but not applied), a fake venv, a fake root
+# directory the script reads and writes through DOMOVOI_INSTALL_ROOT, and
+# PATH shims for systemctl, visudo, sudo, curl, git, docker, id, install,
+# stat, find and chown that log every call and can be told to fail. Nothing
+# touches systemd, sudoers, Docker or a real core, so this runs under Git
+# Bash as well as on Linux.
+#
+# The shims model just enough of the real thing to test the decisions:
+#   * systemctl show answers LoadState for the three domovoi units (loaded,
+#     unless listed in missing-units) and the core unit's User= (core-user),
+#     WorkingDirectory (the repo) and ExecStart (the venv's python);
+#     domovoi-update.service is loaded once daemon-reload has read its file,
+#     and NeedDaemonReload says whether the file changed since;
+#     `start domovoi-update.service` writes last-result.json with the status
+#     in apply-status (ok);
+#   * sudo -u USER runs the command as given; sudo -n -l CMD succeeds when
+#     the installed sudoers file holds exactly "USER ALL=(root) NOPASSWD: CMD"
+#     (and sudo-deny isn't set);
+#   * visudo -cf fails when visudo-reject is set; visudo -c fails when
+#     visudo-broken is set, or when visudo-fail-with-rule is set and the new
+#     rule is in place;
+#   * curl serves version.json as GET /v1/admin/version, or fails (core-down);
+#   * id -u says 0 (or what uid holds); install drops -o/-g (there is no root
+#     user to hand files to here) and runs the real install;
+#   * stat -c %U says what owner holds; find ... ! -user prints what foreign
+#     holds (a path the service user doesn't own); chown only logs;
+#   * the venv's python answers `pip show piper-tts` with piper-version
+#     (1.3.0), or not at all when piper-missing is set.
+#
+# Usage: bash scripts/linux/tests/test-install-update-unit.sh
+# Exit status is non-zero if any case failed.
+
+set -uo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT=$(cd "$HERE/.." && pwd)/install-update-unit.sh
+WORK=$(mktemp -d)
+KEEP_WORK=${KEEP_WORK:-0}
+cleanup() { if [ "$KEEP_WORK" = 1 ]; then echo "work dir kept: $WORK"; else rm -rf "$WORK"; fi; }
+trap cleanup EXIT
+
+# Hermetic git: no user or system config (hooks, signing, autocrlf).
+: >"$WORK/gitconfig"
+export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
+SHIM_REAL_GIT=$(command -v git)
+SHIM_REAL_INSTALL=$(command -v install)
+SHIM_REAL_STAT=$(command -v stat)
+SHIM_REAL_FIND=$(command -v find)
+SHIM_REAL_ID=$(command -v id)
+export SHIM_REAL_GIT SHIM_REAL_INSTALL SHIM_REAL_STAT SHIM_REAL_FIND SHIM_REAL_ID
+export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
+export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
+
+GRANT_CMD="/usr/bin/systemctl --no-block start domovoi-update.service"
+RULE="tester ALL=(root) NOPASSWD: $GRANT_CMD"
+
+PASSED=0
+FAILED=0
+CASE_FAILED=0
+
+fail() { echo "    FAIL: $*"; CASE_FAILED=1; }
+check() { local what=$1; shift; if ! "$@"; then fail "$what"; fi; }
+
+# ─── fixtures ────────────────────────────────────────────────────────────
+
+write_shims() {
+  local bin=$1
+  mkdir -p "$bin"
+
+  cat >"$bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+echo "systemctl $*" >>"$SHIM_STATE/calls.log"
+unit_file=$SHIM_ROOT/etc/systemd/system/domovoi-update.service
+loaded=$SHIM_STATE/loaded-update-unit
+if [ "${1-}" = show ]; then
+  # show -p PROP --value UNIT
+  prop=${3-} unit=${5-}
+  case "$unit $prop" in
+    "domovoi-update.service LoadState")
+      if [ -f "$loaded" ]; then echo loaded; else echo not-found; fi ;;
+    "domovoi-update.service NeedDaemonReload")
+      if [ -f "$loaded" ] && [ -f "$unit_file" ] && ! cmp -s "$unit_file" "$loaded"; then echo yes; else echo no; fi ;;
+    *" LoadState")
+      if grep -qxF -- "$unit" "$SHIM_STATE/missing-units" 2>/dev/null; then echo not-found; else echo loaded; fi ;;
+    "domovoi-core.service User") cat "$SHIM_STATE/core-user" ;;
+    "domovoi-core.service WorkingDirectory") echo "$SHIM_REPO" ;;
+    "domovoi-core.service ExecStart")
+      echo "{ path=$SHIM_VENV/bin/python ; argv[]=$SHIM_VENV/bin/python -m domovoi.main ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" ;;
+  esac
+  exit 0
+fi
+case "${1-}" in
+  daemon-reload)
+    if [ -f "$unit_file" ]; then cp "$unit_file" "$loaded"; else rm -f "$loaded"; fi ;;
+  start)
+    if [ "${2-}" = domovoi-update.service ]; then
+      [ -f "$loaded" ] || { echo "Failed to start domovoi-update.service: Unit domovoi-update.service not found." >&2; exit 5; }
+      status=$(cat "$SHIM_STATE/apply-status" 2>/dev/null || echo ok)
+      upd=$SHIM_ROOT/var/lib/domovoi-update
+      from=$(tr -d '[:space:]' <"$upd/applied_sha")
+      to=$("$SHIM_REAL_GIT" -C "$SHIM_REPO" rev-parse HEAD)
+      err=null
+      [ "$status" = ok ] || err='"health failed (exit 1): not healthy after 120s: core down, web up"'
+      printf '{\n  "status": "%s",\n  "mode": "update",\n  "from_sha": "%s",\n  "to_sha": "%s",\n  "error": %s,\n  "steps": []\n}\n' \
+        "$status" "$from" "$to" "$err" >"$upd/last-result.json"
+      if [ "$status" != ok ]; then
+        echo "Job for domovoi-update.service failed because the control process exited with error code." >&2
+        exit 1
+      fi
+    fi ;;
+esac
+exit 0
+SH
+
+  cat >"$bin/sudo" <<'SH'
+#!/usr/bin/env bash
+echo "sudo $*" >>"$SHIM_STATE/calls.log"
+user="" list=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    -n) shift ;;
+    -u) user=$2; shift 2 ;;
+    -l) list=1; shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+if [ "$list" = 1 ]; then
+  # sudo -l CMD: may the calling user run exactly CMD?
+  [ ! -f "$SHIM_STATE/sudo-deny" ] || exit 1
+  grep -qxF -- "${SHIM_SUDO_AS:-root} ALL=(root) NOPASSWD: $*" "$SHIM_ROOT/etc/sudoers.d/domovoi-update" 2>/dev/null
+  exit $?
+fi
+if [ -n "$user" ]; then export SHIM_SUDO_AS=$user; fi
+exec "$@"
+SH
+
+  cat >"$bin/visudo" <<'SH'
+#!/usr/bin/env bash
+echo "visudo $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -cf ]; then
+  if [ -f "$SHIM_STATE/visudo-reject" ]; then echo "$2:1:38: syntax error"; echo ">>> $2: syntax error near line 1 <<<"; exit 1; fi
+  echo "$2: parsed OK"; exit 0
+fi
+if [ "${1-}" = -c ] && [ $# -eq 1 ]; then
+  if [ -f "$SHIM_STATE/visudo-broken" ]; then echo ">>> /etc/sudoers.d/other: syntax error near line 3 <<<"; exit 1; fi
+  if [ -f "$SHIM_STATE/visudo-fail-with-rule" ] \
+      && grep -qF -- '--no-block start domovoi-update.service' "$SHIM_ROOT/etc/sudoers.d/domovoi-update" 2>/dev/null; then
+    echo ">>> /etc/sudoers.d/domovoi-update: duplicate Defaults near line 1 <<<"; exit 1
+  fi
+  echo "/etc/sudoers: parsed OK"; exit 0
+fi
+echo "visudo: unexpected: $*" >&2; exit 2
+SH
+
+  cat >"$bin/curl" <<'SH'
+#!/usr/bin/env bash
+url=${!#}
+echo "curl $url" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/core-down" ]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
+cat "$SHIM_STATE/version.json"
+SH
+
+  cat >"$bin/docker" <<'SH'
+#!/usr/bin/env bash
+echo "docker $*" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/docker-denied" ]; then
+  echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" >&2
+  exit 1
+fi
+echo 0123456789ab
+SH
+
+  cat >"$bin/git" <<'SH'
+#!/usr/bin/env bash
+echo "git $*" >>"$SHIM_STATE/calls.log"
+exec "$SHIM_REAL_GIT" "$@"
+SH
+
+  cat >"$bin/id" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -u ]; then
+  if [ $# -eq 1 ]; then cat "$SHIM_STATE/uid" 2>/dev/null || echo 0; exit 0; fi
+  if [ "$2" = root ]; then echo 0; exit 0; fi
+  if grep -qxF -- "$2" "$SHIM_STATE/no-users" 2>/dev/null; then echo "id: '$2': no such user" >&2; exit 1; fi
+  echo 1001; exit 0
+fi
+exec "$SHIM_REAL_ID" "$@"
+SH
+
+  cat >"$bin/install" <<'SH'
+#!/usr/bin/env bash
+echo "install $*" >>"$SHIM_STATE/calls.log"
+args=()
+while [ $# -gt 0 ]; do
+  case $1 in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
+done
+exec "$SHIM_REAL_INSTALL" "${args[@]}"
+SH
+
+  cat >"$bin/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -c ] && [ "${2-}" = %U ]; then cat "$SHIM_STATE/owner"; exit 0; fi
+exec "$SHIM_REAL_STAT" "$@"
+SH
+
+  cat >"$bin/find" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" -user "*) echo "find $*" >>"$SHIM_STATE/calls.log"; cat "$SHIM_STATE/foreign" 2>/dev/null; exit 0 ;;
+esac
+exec "$SHIM_REAL_FIND" "$@"
+SH
+
+  cat >"$bin/chown" <<'SH'
+#!/usr/bin/env bash
+echo "chown $*" >>"$SHIM_STATE/calls.log"
+SH
+
+  chmod +x "$bin"/*
+}
+
+write_venv() {
+  local venv=$1
+  mkdir -p "$venv/bin"
+  : >"$venv/pyvenv.cfg"
+  cat >"$venv/bin/python" <<'SH'
+#!/usr/bin/env bash
+echo "python $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -m ] && [ "${2-}" = pip ] && [[ " $* " == *" show piper-tts "* ]]; then
+  if [ -f "$SHIM_STATE/piper-missing" ]; then echo "WARNING: Package(s) not found: piper-tts" >&2; exit 1; fi
+  printf 'Name: piper-tts\nVersion: %s\nSummary: fast local TTS\n' "$(cat "$SHIM_STATE/piper-version" 2>/dev/null || echo 1.3.0)"
+fi
+exit 0
+SH
+  chmod +x "$venv/bin/python"
+}
+
+g() { git -C "$REPO" "$@"; }
+
+commit_all() { g add -A >/dev/null && g commit -q -m "$1" && g rev-parse HEAD; }
+
+# new_case NAME: a repo at commit B with the core running commit A, the
+# shims, a venv, and an empty fake root. Sets CASE, REPO, STATE, ROOT, VENV,
+# UPD, UNIT, SUDOERS, SHA_A, SHA_B and exports the shim env.
+new_case() {
+  CASE_NAME=$1
+  CASE_FAILED=0
+  CASE=$WORK/$1
+  REPO=$CASE/repo
+  STATE=$CASE/state
+  ROOT=$CASE/root
+  VENV=$CASE/venv
+  UPD=$ROOT/var/lib/domovoi-update
+  UNIT=$ROOT/etc/systemd/system/domovoi-update.service
+  SUDOERS=$ROOT/etc/sudoers.d/domovoi-update
+  mkdir -p "$REPO/scripts/linux" "$REPO/domovoi" "$STATE" "$CASE/tmp" \
+    "$ROOT/run/systemd/system" "$ROOT/etc/systemd/system" "$ROOT/etc/sudoers.d" "$ROOT/usr/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$ROOT/usr/bin/systemctl"
+  chmod +x "$ROOT/usr/bin/systemctl"
+  write_shims "$CASE/bin"
+  write_venv "$VENV"
+  : >"$STATE/calls.log"
+  echo tester >"$STATE/owner"
+  echo tester >"$STATE/core-user"
+
+  g init -q -b main
+  printf '#!/usr/bin/env bash\necho apply\n' >"$REPO/scripts/linux/apply-update.sh"
+  printf 'services: {}\n' >"$REPO/domovoi/docker-compose.yml"
+  printf 'print("a")\n' >"$REPO/app.py"
+  SHA_A=$(commit_all A)
+  printf 'print("b")\n' >"$REPO/app.py"
+  SHA_B=$(commit_all "B: pulled, not applied")
+  # What the core serves: short SHAs, the running one dirty. The note field
+  # stands for everything else in the answer, none of which may be printed.
+  printf '{"sha":"%s-dirty","running_sha":"%s-dirty","checkout_sha":"%s","restart_required":true,"note":"SENTINEL-BODY-NOT-PRINTED"}\n' \
+    "${SHA_A:0:7}" "${SHA_A:0:7}" "${SHA_B:0:7}" >"$STATE/version.json"
+
+  export SHIM_STATE=$STATE SHIM_REPO=$REPO SHIM_VENV=$VENV SHIM_ROOT=$ROOT
+}
+
+# run_install [ARGS...]: run the script against the current case.
+run_install() {
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" TMPDIR="$CASE/tmp" \
+    bash "$SCRIPT" "$@" >"$CASE/output.log" 2>&1 || RC=$?
+}
+
+called() { grep -qF -- "$1" "$STATE/calls.log"; }
+not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
+starts() { grep -q -- "^$1" "$STATE/calls.log"; }
+none_start() { ! grep -q -- "^$1" "$STATE/calls.log"; }
+count_x() { grep -cxF -- "$1" "$STATE/calls.log"; }
+line_of() { grep -nF -- "$1" "$STATE/calls.log" | head -n 1 | cut -d: -f1; }
+before() {  # before A B: the first call matching A precedes the first matching B
+  local a b
+  a=$(line_of "$1"); b=$(line_of "$2")
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
+}
+said() { grep -qF -- "$1" "$CASE/output.log"; }
+not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
+eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
+file_is() { [ -f "$1" ] && eq "$(tr -d '[:space:]' <"$1")" "$2"; }
+absent() { [ ! -e "$1" ]; }
+
+# Every path and every file's checksum under the fake root.
+tree_sig() {
+  (cd "$ROOT" && "$SHIM_REAL_FIND" . | LC_ALL=C sort && "$SHIM_REAL_FIND" . -type f -exec cksum {} + | LC_ALL=C sort)
+}
+
+expected_unit() {
+  printf '%s\n' \
+    '[Unit]' \
+    'Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)' \
+    'After=docker.service network-online.target' \
+    'Wants=network-online.target' \
+    '' \
+    '[Service]' \
+    'Type=oneshot' \
+    'EnvironmentFile=-/etc/default/domovoi-update' \
+    "ExecStart=/bin/bash $REPO/scripts/linux/apply-update.sh" \
+    'TimeoutStartSec=30min'
+}
+
+nothing_installed() {
+  absent "$UNIT" && absent "$SUDOERS" && absent "$UPD/applied_sha" \
+    && none_start "install " && not_called "daemon-reload" && not_called "chown"
+}
+
+end_case() {
+  if [ "$CASE_FAILED" = 0 ]; then
+    PASSED=$((PASSED + 1)); echo "ok   $CASE_NAME"
+  else
+    FAILED=$((FAILED + 1)); echo "FAIL $CASE_NAME"
+    echo "    --- calls"; sed 's/^/    /' "$STATE/calls.log"
+    echo "    --- output"; sed 's/^/    /' "$CASE/output.log"
+  fi
+}
+
+# ─── cases ───────────────────────────────────────────────────────────────
+
+case_fresh_install() {
+  new_case fresh_install
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "asks the running core" called "curl http://127.0.0.1:6370/v1/admin/version"
+  check "verifies the running SHA, -dirty stripped, as the service user" \
+    called "sudo -n -u tester -- git -C $REPO rev-parse --verify --quiet ${SHA_A:0:7}^{commit}"
+  check "records the running SHA in full, not HEAD" file_is "$UPD/applied_sha" "$SHA_A"
+  check "creates the state dir 0755 root:root" called "install -d -m 0755 -o root -g root $UPD"
+  check "the unit is the doc's" eq "$(cat "$UNIT")" "$(expected_unit)"
+  check "the grant is the doc's one rule" eq "$(cat "$SUDOERS")" "$RULE"
+  check "grant installed 0440 root:root" called "install -m 0440 -o root -g root"
+  check "unit installed 0644 root:root" starts "install -m 0644 -o root -g root .*/\.domovoi-update\.service\.new$"
+  check "baseline installed 0644 root:root" starts "install -m 0644 -o root -g root .*/\.applied_sha\.new$"
+  check "no dot-files left behind" eq "$(ls -A "$ROOT/etc/sudoers.d" "$ROOT/etc/systemd/system" "$UPD" | grep -c '^\.')" 0
+  check "sudoers checked as it is, first" before "visudo -c" "visudo -cf"
+  check "the rule checked alone before it goes in" before "visudo -cf" "install -m 0440"
+  check "the whole config checked after it went in" eq "$(count_x "visudo -c")" 2
+  check "the grant verified as the service user, with the core's probe" \
+    called "sudo -n -u tester -- sudo -n -l $GRANT_CMD"
+  check "the grant goes in before the unit" before "install -m 0440" ".domovoi-update.service.new"
+  check "the grant verified before the unit goes in" before "sudo -n -l" ".domovoi-update.service.new"
+  check "daemon-reload after the unit" before ".domovoi-update.service.new" "systemctl daemon-reload"
+  check "systemd loaded it" test -f "$STATE/loaded-update-unit"
+  check "docker compose checked as the service user" \
+    called "sudo -n -u tester -- docker compose -f $REPO/domovoi/docker-compose.yml ps --quiet"
+  check "piper checked as the service user" called "sudo -n -u tester -- $VENV/bin/python -m pip"
+  check "venv ownership checked" called "find $VENV ! -user tester -print -quit"
+  check "no update started without --apply" not_called "systemctl start"
+  check "no ownership change without --fix-ownership" not_called "chown"
+  check "says the checkout is ahead of the running code" said "is ahead of the running code (${SHA_A:0:12})"
+  check "says how to apply it" said "sudo systemctl start domovoi-update.service"
+  check "never prints the core's answer" not_said SENTINEL
+  check "no warnings" not_said warning
+  end_case
+}
+
+case_idempotent_rerun() {
+  new_case idempotent_rerun
+  run_install
+  check "first run exit 0" eq "$RC" 0
+  local sig; sig=$(tree_sig)
+  : >"$STATE/calls.log"
+  run_install
+  check "second run exit 0" eq "$RC" 0
+  check "says nothing changed" said "Nothing to change"
+  check "every file as it was" eq "$(tree_sig)" "$sig"
+  check "nothing installed" none_start "install "
+  check "no daemon-reload" not_called "daemon-reload"
+  check "the core isn't asked again" not_called "curl"
+  check "the baseline is kept" file_is "$UPD/applied_sha" "$SHA_A"
+  check "the grant is still verified" called "sudo -n -l $GRANT_CMD"
+  check "no backups" eq "$(ls "$ROOT/etc/systemd/system" "$ROOT/etc/sudoers.d" | grep -c 'bak')" 0
+  end_case
+}
+
+case_existing_files_replaced_and_kept() {
+  new_case existing_files_replaced_and_kept
+  printf '[Service]\nExecStart=/bin/true\n' >"$UNIT"
+  cp "$UNIT" "$STATE/loaded-update-unit"
+  printf 'tester ALL=(root) NOPASSWD: /bin/true\n' >"$SUDOERS"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "unit replaced by the doc's" eq "$(cat "$UNIT")" "$(expected_unit)"
+  check "old unit kept beside it" eq "$(cat "$UNIT".bak-*)" "$(printf '[Service]\nExecStart=/bin/true')"
+  check "grant replaced" eq "$(cat "$SUDOERS")" "$RULE"
+  check "old grant kept beside it" eq "$(cat "$SUDOERS".bak-*)" "tester ALL=(root) NOPASSWD: /bin/true"
+  check "the kept grant's name has a dot, so sudo skips it" eq "$(ls "$ROOT/etc/sudoers.d" | grep -c '^domovoi-update\.bak-')" 1
+  check "systemd re-read the unit" called "systemctl daemon-reload"
+  check "and has the new one" eq "$(cat "$STATE/loaded-update-unit")" "$(expected_unit)"
+  end_case
+}
+
+case_unit_in_place_but_not_loaded() {
+  new_case unit_in_place_but_not_loaded
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  expected_unit >"$UNIT"
+  echo "$RULE" >"$SUDOERS"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "nothing installed" none_start "install "
+  check "but systemd is told to read it" called "systemctl daemon-reload"
+  check "which is a change" said "Done:"
+  end_case
+}
+
+case_candidate_rule_rejected() {
+  new_case candidate_rule_rejected
+  : >"$STATE/visudo-reject"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says visudo rejected the rule" said "visudo rejects the rule"
+  check "nothing installed, not even the baseline" nothing_installed
+  check "says nothing changed" said "Nothing was changed."
+  end_case
+}
+
+case_sudoers_already_broken() {
+  new_case sudoers_already_broken
+  : >"$STATE/visudo-broken"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says sudoers is already broken" said "sudoers already fails visudo -c"
+  check "names where" said "/etc/sudoers.d/other: syntax error"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_full_check_fails_puts_old_grant_back() {
+  new_case full_check_fails_puts_old_grant_back
+  printf 'tester ALL=(root) NOPASSWD: /bin/true\n' >"$SUDOERS"
+  : >"$STATE/visudo-fail-with-rule"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "the previous grant is back" eq "$(cat "$SUDOERS")" "tester ALL=(root) NOPASSWD: /bin/true"
+  check "says so" said "so this put the previous file back"
+  check "checked before, after, and after the undo" eq "$(count_x "visudo -c")" 3
+  check "the unit is not installed" absent "$UNIT"
+  check "no daemon-reload" not_called "daemon-reload"
+  check "says what it had changed before" said "Changed before the stop:"
+  check "the baseline stays recorded" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_full_check_fails_removes_new_grant() {
+  new_case full_check_fails_removes_new_grant
+  : >"$STATE/visudo-fail-with-rule"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "the new grant is gone" absent "$SUDOERS"
+  check "no dot-file left" eq "$(ls -A "$ROOT/etc/sudoers.d" | wc -l | tr -d ' ')" 0
+  check "says so" said "so this removed it again"
+  check "names visudo's complaint" said "duplicate Defaults near line 1"
+  check "the unit is not installed" absent "$UNIT"
+  end_case
+}
+
+case_grant_not_effective() {
+  new_case grant_not_effective
+  : >"$STATE/sudo-deny"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says sudo refuses" said "sudo doesn't let tester run: $GRANT_CMD"
+  check "the unit is not installed, so the button keeps its old job" absent "$UNIT"
+  check "says so" said "keeps doing what it did before"
+  end_case
+}
+
+case_core_unreachable_stops() {
+  new_case core_unreachable_stops
+  : >"$STATE/core-down"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the core isn't answering" said "the core isn't answering at http://127.0.0.1:6370/v1/admin/version"
+  check "says why HEAD won't do" said "a pull may have moved it past the running code"
+  check "nothing installed, and HEAD not recorded" nothing_installed
+  check "says nothing changed" said "Nothing was changed."
+  end_case
+}
+
+case_core_url_option() {
+  new_case core_url_option
+  run_install --core-url http://127.0.0.1:6399/
+  check "exit 0" eq "$RC" 0
+  check "asks the given core" called "curl http://127.0.0.1:6399/v1/admin/version"
+  end_case
+}
+
+case_core_does_not_know() {
+  new_case core_does_not_know
+  printf '{"sha":"unknown","running_sha":"unknown","checkout_sha":"%s"}\n' "${SHA_B:0:7}" >"$STATE/version.json"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the core can't say" said "doesn't say which commit it runs (running_sha: unknown)"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_sha_not_in_repo_stops() {
+  new_case sha_not_in_repo_stops
+  printf '{"running_sha":"eeeeeeeeeeee","checkout_sha":"%s"}\n' "${SHA_B:0:7}" >"$STATE/version.json"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says it isn't a commit here" said "the core runs eeeeeeeeeeee, which isn't a commit in $REPO"
+  check "says how to fetch it" said "sudo -u tester git -C $REPO fetch"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_existing_baseline_kept() {
+  new_case existing_baseline_kept
+  mkdir -p "$UPD" && echo "$SHA_B" >"$UPD/applied_sha"
+  : >"$STATE/core-down"   # not needed when the baseline is recorded
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "the core isn't asked" not_called "curl"
+  check "the baseline is untouched" file_is "$UPD/applied_sha" "$SHA_B"
+  check "says it was already recorded" said "rollback baseline already recorded: ${SHA_B:0:12}"
+  check "nothing waiting" said "Nothing is waiting"
+  end_case
+}
+
+case_garbage_baseline_stops() {
+  new_case garbage_baseline_stops
+  mkdir -p "$UPD" && printf 'not-a-sha; rm -rf /\n' >"$UPD/applied_sha"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says it holds no commit" said "doesn't hold a commit of $REPO"
+  check "never echoes the file" not_said "rm -rf"
+  check "file untouched" eq "$(cat "$UPD/applied_sha")" 'not-a-sha; rm -rf /'
+  check "no unit, no grant" eq "$(absent "$UNIT" && absent "$SUDOERS" && echo none)" none
+  end_case
+}
+
+case_dry_run_changes_nothing() {
+  new_case dry_run_changes_nothing
+  echo "$VENV/lib/site-packages/numpy/__init__.py" >"$STATE/foreign"
+  local sig; sig=$(tree_sig)
+  run_install --dry-run --apply --fix-ownership
+  check "exit 0" eq "$RC" 0
+  check "every file as it was" eq "$(tree_sig)" "$sig"
+  check "nothing installed" nothing_installed
+  check "no update started" not_called "systemctl start"
+  check "the rule is still checked" called "visudo -cf"
+  check "says it would record the running SHA" said "record $SHA_A in $UPD/applied_sha"
+  check "says it would install the grant" said "would    install $SUDOERS"
+  check "says it would install the unit" said "would    install $UNIT"
+  check "says it would chown" said "would    chown -R tester: $VENV"
+  check "says it would reload" said "would    systemctl daemon-reload"
+  check "says it would start the update" said "it would then run: systemctl start domovoi-update.service"
+  check "says nothing was changed" said "Dry run: nothing was changed."
+  end_case
+}
+
+case_not_root_refuses() {
+  new_case not_root_refuses
+  echo 1000 >"$STATE/uid"
+  run_install --apply
+  check "exit 1" eq "$RC" 1
+  check "says to use sudo, with the same options" said "sudo bash $SCRIPT --apply"
+  check "calls nothing" eq "$(wc -c <"$STATE/calls.log" | tr -d ' ')" 0
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_help_needs_no_root() {
+  new_case help_needs_no_root
+  echo 1000 >"$STATE/uid"
+  run_install --help
+  check "exit 0" eq "$RC" 0
+  check "prints usage" said "Usage: sudo bash scripts/linux/install-update-unit.sh"
+  run_install --bogus
+  check "unknown option exits 2" eq "$RC" 2
+  end_case
+}
+
+case_venv_owned_by_root_warns() {
+  new_case venv_owned_by_root_warns
+  echo "$VENV/lib/site-packages/numpy/__init__.py" >"$STATE/foreign"
+  run_install
+  check "exit 0: a warning, not a stop" eq "$RC" 0
+  check "warns" said "warning  $VENV isn't all tester's (first found: $VENV/lib/site-packages/numpy/__init__.py)"
+  check "gives the exact fix" said "sudo chown -R tester: $VENV"
+  check "and the option" said "--fix-ownership"
+  check "changes no ownership by itself" not_called "chown"
+  check "still installs the unit" eq "$(cat "$UNIT")" "$(expected_unit)"
+  end_case
+}
+
+case_fix_ownership() {
+  new_case fix_ownership
+  echo "$VENV/lib/site-packages/numpy/__init__.py" >"$STATE/foreign"
+  run_install --fix-ownership
+  check "exit 0" eq "$RC" 0
+  check "hands the venv over" called "chown -R tester: $VENV"
+  check "no warning left" not_said warning
+  end_case
+}
+
+case_piper_too_old_warns() {
+  new_case piper_too_old_warns
+  echo 1.2.0 >"$STATE/piper-version"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "warns" said "piper-tts 1.2.0 in $VENV is older than 1.3"
+  check "gives the fix" said "sudo -u tester $VENV/bin/python -m pip install 'piper-tts>=1.3'"
+  end_case
+}
+
+case_piper_missing_warns() {
+  new_case piper_missing_warns
+  : >"$STATE/piper-missing"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "warns" said "piper-tts isn't installed in $VENV"
+  end_case
+}
+
+case_piper_newer_is_fine() {
+  new_case piper_newer_is_fine
+  echo 1.10.2 >"$STATE/piper-version"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "1.10 counts as newer than 1.3" said "ok       piper-tts 1.10.2"
+  end_case
+}
+
+case_docker_denied_stops() {
+  new_case docker_denied_stops
+  : >"$STATE/docker-denied"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says compose fails for the user" said "docker compose doesn't work for tester: permission denied"
+  check "gives the usual fix" said "sudo usermod -aG docker tester"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_missing_unit_stops() {
+  new_case missing_unit_stops
+  echo domovoi-web.service >"$STATE/missing-units"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "names it" said "not installed: domovoi-web.service (not-found)"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_no_systemd_stops() {
+  new_case no_systemd_stops
+  rm -rf "$ROOT/run/systemd"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says systemd isn't running" said "systemd isn't running as the init system"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_masked_unit_stops() {
+  new_case masked_unit_stops
+  : >"$UNIT"   # an empty unit file is how systemd reads a mask, too
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says it is masked" said "is masked"
+  check "says how to unmask" said "sudo systemctl unmask domovoi-update.service"
+  check "the mask is untouched" test ! -s "$UNIT"
+  check "nothing else installed" eq "$(absent "$SUDOERS" && absent "$UPD/applied_sha" && echo none)" none
+  end_case
+}
+
+case_user_mismatch_stops() {
+  new_case user_mismatch_stops
+  echo someone >"$STATE/core-user"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says who the core runs as" said "domovoi-core.service runs as someone, but the service user here is tester (the owner of $REPO)"
+  check "suggests --user" said "pass --user someone"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_root_owned_checkout_needs_user() {
+  new_case root_owned_checkout_needs_user
+  echo root >"$STATE/owner"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the default user is root" said "root (the owner of $REPO) is root"
+  run_install --user tester
+  check "--user tester goes ahead" eq "$RC" 0
+  check "grant for tester" eq "$(cat "$SUDOERS")" "$RULE"
+  end_case
+}
+
+case_other_repo_stops() {
+  new_case other_repo_stops
+  mkdir -p "$CASE/elsewhere"
+  run_install --repo "$CASE/elsewhere"
+  check "exit 1" eq "$RC" 1
+  check "says where the core runs from" said "domovoi-core.service runs from $REPO, not $CASE/elsewhere"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_defaults_file_user_must_agree() {
+  new_case defaults_file_user_must_agree
+  mkdir -p "$ROOT/etc/default"
+  printf '# local settings\nDOMOVOI_USER="someone"\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "names the setting" said "sets DOMOVOI_USER=someone, but the core runs as tester"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_defaults_file_update_dir() {
+  new_case defaults_file_update_dir
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPDATE_DIR=/srv/domovoi-update\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "records the baseline where the update will look" file_is "$ROOT/srv/domovoi-update/applied_sha" "$SHA_A"
+  check "not in the default dir" absent "$UPD/applied_sha"
+  end_case
+}
+
+case_apply_runs_the_update() {
+  new_case apply_runs_the_update
+  run_install --apply
+  check "exit 0" eq "$RC" 0
+  check "starts the unit" called "systemctl start domovoi-update.service"
+  check "after systemd loaded it" before "systemctl daemon-reload" "systemctl start domovoi-update.service"
+  check "reports the result" said "result   ok (mode update, ${SHA_A:0:12} -> ${SHA_B:0:12})"
+  end_case
+}
+
+case_apply_reports_a_rollback() {
+  new_case apply_reports_a_rollback
+  echo rolled_back >"$STATE/apply-status"
+  run_install --apply
+  check "exit 1" eq "$RC" 1
+  check "reports the status" said "result   rolled_back"
+  check "and the error" said "health failed (exit 1)"
+  check "points at the journal" said "journalctl -u domovoi-update -n 200"
+  check "the unit stays installed" test -f "$UNIT"
+  end_case
+}
+
+case_fresh_install
+case_idempotent_rerun
+case_existing_files_replaced_and_kept
+case_unit_in_place_but_not_loaded
+case_candidate_rule_rejected
+case_sudoers_already_broken
+case_full_check_fails_puts_old_grant_back
+case_full_check_fails_removes_new_grant
+case_grant_not_effective
+case_core_unreachable_stops
+case_core_url_option
+case_core_does_not_know
+case_sha_not_in_repo_stops
+case_existing_baseline_kept
+case_garbage_baseline_stops
+case_dry_run_changes_nothing
+case_not_root_refuses
+case_help_needs_no_root
+case_venv_owned_by_root_warns
+case_fix_ownership
+case_piper_too_old_warns
+case_piper_missing_warns
+case_piper_newer_is_fine
+case_docker_denied_stops
+case_missing_unit_stops
+case_no_systemd_stops
+case_masked_unit_stops
+case_user_mismatch_stops
+case_root_owned_checkout_needs_user
+case_other_repo_stops
+case_defaults_file_user_must_agree
+case_defaults_file_update_dir
+case_apply_runs_the_update
+case_apply_reports_a_rollback
+
+echo "install-update-unit harness: $PASSED passed, $FAILED failed"
+[ "$FAILED" -eq 0 ]

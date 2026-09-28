@@ -14,10 +14,20 @@ exactly as before. To have it also back up the database (and
 `domovoi_test`, which plugin migrations write to as well), re-sync
 dependencies, rebuild the MPD image, run Flyway, health-check, check that
 every plugin that loaded before still loads, and roll back on failure,
-follow [LINUX_HOST.md, "One-time upgrade for existing
-installs"](LINUX_HOST.md#one-time-upgrade-for-existing-installs). Its
-step 1 records the SHA the box is running, so do it **before** anything
-restarts onto this release.
+pull this release, **don't press Restart**, and run one command over SSH:
+
+```bash
+sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --apply
+```
+
+It checks the box first and stops, changing nothing, if the box can't take
+the unit (`--dry-run` shows what it would do). It records the SHA the core is still
+running as the rollback baseline, which is why it has to run **before**
+anything restarts onto this release. Then it installs the sudoers grant
+(checked with `visudo`) and the unit, and `--apply` runs the first update
+and prints its result. [LINUX_HOST.md, "One-time upgrade for existing
+installs"](LINUX_HOST.md#one-time-upgrade-for-existing-installs) says what
+it checks and keeps the manual steps.
 
 ### What changed
 

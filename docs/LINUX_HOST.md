@@ -472,6 +472,8 @@ when *it* starts. A migration that never ran looks like a broken release
 
 A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
 that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
+On a box that already runs the three units, one command installs it: see
+[One-time upgrade for existing installs](#one-time-upgrade-for-existing-installs).
 Once it's installed, the panel's **Restart to apply changes** starts it
 instead of bouncing core and web, and each run does this:
 
@@ -630,7 +632,81 @@ migrations. Not found, the button bounces core and web exactly as before.
 ### One-time upgrade for existing installs
 
 For a box already running the three units above, such as the household's
-first server. Run these over SSH, as your admin user, in this order.
+first server. One command sets it up. Over SSH, as your admin user:
+
+1. Pull, but don't press Restart yet. Use **Pull the latest** in the
+   dashboard, or:
+
+   ```bash
+   sudo -u domovoi git -C /opt/domovoi pull --ff-only
+   ```
+
+   The pull brings the installer. The core keeps running the old code until
+   something restarts it, and that old SHA is the one the installer records
+   as the rollback baseline.
+
+2. Run the installer. `--dry-run` says what it would do and changes
+   nothing; `--apply` goes on to run the update once, the way the button
+   will:
+
+   ```bash
+   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --apply
+   ```
+
+It does what the manual steps below do, after checking that the box can
+take them:
+
+- **Checks first, and changes nothing while it does.** systemd is running;
+  `domovoi-db`, `domovoi-core` and `domovoi-web` are installed; git works
+  in the checkout as the service user; `docker compose` works for that
+  user. If one of these fails it stops and says why. Two things only warn:
+  a venv the service user doesn't wholly own (it prints the `chown` that
+  fixes it, and `--fix-ownership` runs it), and `piper-tts` older than 1.3
+  in the venv.
+- **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
+  when that file doesn't exist yet: the `running_sha` the core reports on
+  `/v1/admin/version`, `-dirty` stripped, checked as a commit of the
+  checkout by the service user. If the core isn't answering, or the SHA
+  isn't in the checkout, it stops instead of guessing. HEAD is no stand-in,
+  because a pull moves it past the running code.
+- **Installs the grant** in `/etc/sudoers.d/domovoi-update` (mode 0440),
+  only after `visudo -cf` has accepted it on its own. Then `visudo -c`
+  checks the whole configuration, and if that fails the previous state is
+  put back. Then it asks sudo, as the service user, exactly what the core
+  asks before it offers the button.
+- **Installs the unit** exactly as shown above, and runs
+  `systemctl daemon-reload`. The unit goes in after the grant is verified,
+  because the core offers the full update as soon as it sees the unit file,
+  and without the grant the button would stop working instead of falling
+  back to the plain bounce.
+- With `--apply`, **starts the update** (`systemctl start` waits for it)
+  and prints the status from `last-result.json`. Step 4 below says what
+  each status means.
+
+A second run changes nothing and says so. A file it replaces is kept
+beside it as `<name>.bak-<timestamp>`, a name sudo and systemd both ignore.
+Its defaults are this page's layout: the checkout is `domovoi-core.service`'s
+`WorkingDirectory` (else `/opt/domovoi`), the service user is the
+checkout's owner and must be the core unit's `User=`, and the core answers
+on `http://127.0.0.1:6370`. `--repo`, `--user` and `--core-url` change
+them, and it reads `/etc/default/domovoi-update` the way the unit will.
+`--help` lists the options.
+
+If something restarted the core onto the pulled code before the installer
+ran, that code is what it records. Flyway still runs on every update, but
+new dependencies or a new MPD image from that pull won't be installed:
+re-sync the venv as in [Install](#install) if `pyproject.toml` changed.
+
+From then on, **Pull the latest** followed by **Restart to apply changes**
+runs the whole pipeline, and **last update** in the version panel shows how
+it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
+It's used only if the unit is ever removed or masked.
+
+#### By hand
+
+The same, without the installer. Run these over SSH, as your admin user,
+in this order.
 
 1. Record the SHA the box is **running** now as the last known-good one.
    Do this first, before you pull. The `/v1/admin/version` endpoint is
@@ -702,11 +778,6 @@ first server. Run these over SSH, as your admin user, in this order.
    ```bash
    sudo -u domovoi sudo -n -l /usr/bin/systemctl --no-block start domovoi-update.service
    ```
-
-From then on, **Pull the latest** followed by **Restart to apply changes**
-runs the whole pipeline, and **last update** in the version panel shows how
-it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
-It's used only if the unit is ever removed or masked.
 
 ---
 
