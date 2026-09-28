@@ -903,12 +903,14 @@ def _fail(gen: int, detail: str) -> None:
     with _LOCK:
         if gen != _GENERATION:
             return
+        # Logged before the state flips, so "unavailable" always has its
+        # reason in the log already.
+        log.warning(
+            "fastlane: shadow mode is on but the lane is unavailable: %s. Voice "
+            "turns are unaffected. Save fastlane_mode again (or restart) to retry.",
+            detail,
+        )
         _STATE = "unavailable"
-    log.warning(
-        "fastlane: shadow mode is on but the lane is unavailable: %s. Voice "
-        "turns are unaffected. Save fastlane_mode again (or restart) to retry.",
-        detail,
-    )
 
 
 def _load(gen: int) -> None:
