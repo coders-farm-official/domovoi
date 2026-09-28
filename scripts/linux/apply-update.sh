@@ -827,6 +827,7 @@ rb_failed() {
 
 rollback() {
   local failed_step=$1 cause=$2 rb="" rb_err="" now off
+  local -a offs=()
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
@@ -859,11 +860,13 @@ rollback() {
     # Plugins the failed boot switched off (a restored database has them on
     # already, and then there are none).
     if now=$(plugin_states); then
-      off=$(plugins_broken "$PLUGINS_BEFORE" "$now" off)
+      # A plain assignment under set -e: a failing awk here must cost the
+      # re-enable, not the rest of the rollback.
+      off=$(plugins_broken "$PLUGINS_BEFORE" "$now" off) || off=""
       if [ -n "$off" ]; then
-        # Slugs carry no whitespace; one argument each.
-        # shellcheck disable=SC2086
-        run_step reenable-plugins reenable_plugins $off || rb_failed reenable-plugins
+        # One slug per line, one argument each, never globbed.
+        mapfile -t offs <<<"$off"
+        run_step reenable-plugins reenable_plugins "${offs[@]}" || rb_failed reenable-plugins
       fi
     fi
   else
