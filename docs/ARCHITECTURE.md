@@ -153,6 +153,14 @@ merged into the row by id once the reply is playing, off the latency path.
 `latency_ms` stays the router's share alone. `GET /v1/stats/latency`
 summarises the stages, numbers only.
 
+In a room an admin opted in to **command recording** (V016, off for every
+room by default), a routed wake-word or follow-up command also keeps its
+audio and a sidecar (transcript, route, timings, why the satellite ended the
+capture) under `~/.domovoi/captures/`, written after the reply is on its way
+and deleted after 14 days (`domovoi/command_captures.py`). It exists to tune
+end-of-turn detection; SECURITY_PRIVACY.md has what is never kept and who
+can read it.
+
 ---
 
 ## 3. Handler priority bands
