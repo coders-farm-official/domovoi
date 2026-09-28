@@ -825,11 +825,14 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
 
 # ─── Phase B — confirm (§3.2 steps 9–15 + rollback matrix) ─────────────────
 
-async def confirm_install(staged_id: str, *, load: bool = True) -> dict[str, Any]:
+async def confirm_install(
+    staged_id: str, *, load: bool = True, enabled: bool = True
+) -> dict[str, Any]:
     """Phase B. ``load=False`` (an upgrade staged for restart, see
     :func:`confirm_upgrade`) runs every step but the hot load (13): the
     new version is installed and registered, and loads at the next
-    restart."""
+    restart. ``enabled=False`` (an upgrade of a disabled plugin) writes the
+    row disabled and loads nothing."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -892,7 +895,7 @@ async def confirm_install(staged_id: str, *, load: bool = True) -> dict[str, Any
             # zip/github install always becomes a normal non-bundled row.
             await reg.update_plugin(
                 slug,
-                status="ok", enabled=True, version=manifest.version,
+                status="ok", enabled=enabled, version=manifest.version,
                 install_dir=str(dest), manifest=manifest.raw,
                 pip_report=pip_report, install_source=staged.install_source,
                 source_ref=staged.source_ref, bundled=False, last_error=None,
@@ -901,24 +904,25 @@ async def confirm_install(staged_id: str, *, load: bool = True) -> dict[str, Any
             await reg.insert_plugin(
                 slug=slug, name=manifest.name, version=manifest.version,
                 publisher=manifest.publisher, license=manifest.license,
-                domovoi_api=manifest.domovoi_api, enabled=True, bundled=False,
+                domovoi_api=manifest.domovoi_api, enabled=enabled, bundled=False,
                 install_source=staged.install_source,
                 source_ref=staged.source_ref, install_dir=str(dest),
                 manifest=manifest.raw, pip_report=pip_report,
             )
         registry_inserted = True
 
-        if not load:
+        if not (load and enabled):
             # Staged for restart: this process already imported the plugin,
             # so loading now would register the cached OLD module against
-            # this manifest. Chat drops the unloaded plugin's tools until
-            # the restart brings the new ones.
+            # this manifest. Or disabled, which loads nothing either way.
+            # Chat drops the unloaded plugin's tools until a load brings
+            # the new ones.
             _STAGED.pop(staged_id, None)
             await _best_effort_resync()
             return {
                 "installed": True, "loaded": False, "slug": slug,
                 "version": manifest.version, "status": "ok",
-                "restart_required": True,
+                "enabled": enabled, "restart_required": not load,
             }
 
         # Step 13 — hot load + contract checks. Failure here is NOT rolled
@@ -1199,7 +1203,11 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     await reg.delete_plugin(slug)
 
     try:
-        result = await confirm_install(staged_id, load=not stage_for_restart)
+        # A disabled plugin stays disabled: the upgrade swaps its files and
+        # schema, it doesn't switch it on.
+        result = await confirm_install(
+            staged_id, load=not stage_for_restart, enabled=old_row.enabled
+        )
         shutil.rmtree(prev_dir, ignore_errors=True)
         if stage_for_restart:
             LOADER.stage_restart(

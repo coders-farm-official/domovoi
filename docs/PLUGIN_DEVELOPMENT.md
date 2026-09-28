@@ -1642,6 +1642,8 @@ The runtime forces most of this, but know the shapes:
   pulled code — it bounces core and web). Until then the plugin is not
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.
+* A disabled plugin stays disabled through an upgrade: its files, schema and
+  row move to the new version, and nothing loads until someone enables it.
 * Dev-mode plugins refuse the upgrade endpoint — just restart.
 * A bundled plugin (shipped in the repo's `plugins/`) updates with the
   Domovoi checkout. Every core boot refreshes its registry row — name,

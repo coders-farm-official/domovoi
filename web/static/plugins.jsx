@@ -92,8 +92,11 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
       // Installed but refused at load (contract check) is a 200 with
       // loaded:false — say so, with the reason, instead of "complete".
       // An upgrade of a plugin the server already runs is staged for the
-      // restart instead (restart_required): installed, not loaded yet.
-      if (res && res.restart_required) {
+      // restart instead (restart_required): installed, not loaded yet. An
+      // upgrade of a disabled plugin leaves it disabled.
+      if (res && res.enabled === false) {
+        fire(`${verb} of ${p.name} ${p.version || ''} is installed — it stays disabled`);
+      } else if (res && res.restart_required) {
         fire(`${verb} of ${p.name} ${p.version || ''} is installed — restart to finish it`);
       } else if (res && res.loaded === false) {
         fire(`${verb} of ${p.name} ${p.version || ''} did not load: ${res.error || res.status || 'load error'}`);

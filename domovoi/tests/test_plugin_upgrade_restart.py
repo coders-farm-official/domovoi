@@ -301,3 +301,55 @@ async def test_a_plugin_this_process_never_imported_is_upgraded_in_place() -> No
     assert LOADER.loaded[SLUG].manifest.version == "1.1.0"
     assert "compliment_counter" in WORKERS.worker_names(SLUG)
     assert SLUG not in LOADER.pending_restart
+
+
+# ─── a disabled plugin stays disabled through an upgrade ──────────────────
+
+
+async def test_upgrading_a_disabled_plugin_keeps_it_disabled() -> None:
+    """The upgrade used to delete the row and re-insert it enabled, then
+    hot-load it: a plugin the admin had switched off came back on."""
+    await _install()
+    await disable_plugin(SLUG)
+
+    staged = await stage_zip(build_zip("1.1.0"), upgrade_of=SLUG)
+    result = await confirm_upgrade(staged.staged_id)
+
+    assert result["enabled"] is False and result["loaded"] is False
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and row.version == "1.1.0" and not row.enabled
+    assert SLUG not in LOADER.loaded
+    assert "compliments" not in HANDLER_BY_NAME
+    # This process still holds the 1.0.0 module, so enabling before a
+    # restart would register it: the upgrade waits for the restart.
+    assert result["restart_required"] is True
+    assert LOADER.pending_restart[SLUG]["to_version"] == "1.1.0"
+
+    await _simulate_restart()
+    assert SLUG not in LOADER.loaded                 # still off after the restart
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and not row.enabled
+
+    out = await enable_plugin(SLUG)
+    assert out == {"enabled": True, "slug": SLUG}
+    assert LOADER.loaded[SLUG].manifest.version == "1.1.0"
+
+
+async def test_a_disabled_plugin_never_imported_needs_no_restart() -> None:
+    """Disabled since boot: nothing cached, so enabling it later simply
+    imports the new version."""
+    await _install()
+    await disable_plugin(SLUG)
+    _forget_imports()
+
+    staged = await stage_zip(build_zip("1.1.0", new_worker=True), upgrade_of=SLUG)
+    result = await confirm_upgrade(staged.staged_id)
+
+    assert result["enabled"] is False and result["restart_required"] is False
+    assert SLUG not in LOADER.pending_restart
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and not row.enabled and SLUG not in LOADER.loaded
+
+    out = await enable_plugin(SLUG)
+    assert out == {"enabled": True, "slug": SLUG}
+    assert "compliment_counter" in WORKERS.worker_names(SLUG)
