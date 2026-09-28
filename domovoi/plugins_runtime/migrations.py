@@ -20,7 +20,9 @@ small Python runner instead (Flyway multi-history config is fragile):
   the search path keeps a plugin's own unqualified names honest.
 * Objects an earlier runner (or a hand-applied fix) left owned by the
   application user are re-owned to the plugin role before a catch-up
-  runs, so ``ALTER TABLE`` on a shipped table keeps working.
+  runs, so ``ALTER TABLE`` on a shipped table keeps working. That step is
+  one transaction; a sequence a column owns (``SERIAL``/``IDENTITY``)
+  moves with its table rather than on its own.
 * **Both-DB application** (locked 5): prod first, then the derived
   ``_test`` DB; on a fresh install a ``_test`` failure drops the brand
   new schema on both (both-or-neither).
@@ -510,13 +512,42 @@ class PluginMigrationRunner:
         """Re-own every relation, routine and type in the plugin schema
         (except the runner's ledger) to the plugin role, so a catch-up
         migration can ALTER what an earlier runner created as the
-        application user. No-op once everything is owned by the role."""
+        application user. No-op once everything is owned by the role.
+
+        A sequence that belongs to a table column (``SERIAL``,
+        ``BIGSERIAL``, ``IDENTITY``, or ``ALTER SEQUENCE … OWNED BY``) is
+        left out: Postgres refuses ``ALTER SEQUENCE … OWNER`` on it, and
+        the owning table's ``ALTER TABLE … OWNER`` moves it along. The
+        whole step is one transaction, so a failure part-way leaves
+        ownership exactly as it was, never half re-owned."""
+        await driver.execute("BEGIN")
+        try:
+            counts = await self._reown_all(driver)
+            await driver.execute("COMMIT")
+        except BaseException:
+            await driver.execute("ROLLBACK")
+            raise
+        if any(counts):
+            log.info(
+                "plugin %s: re-owned %d relation(s), %d routine(s), %d type(s) to %s",
+                self.slug, *counts, self.role,
+            )
+
+    async def _reown_all(self, driver) -> tuple[int, int, int]:
+        """The statements of :meth:`_adopt_schema_objects`, inside its
+        transaction. Returns (relations, routines, types) re-owned."""
         rels = await driver.fetch(
             "SELECT c.relname, c.relkind::text AS relkind FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') "
             "AND c.relname <> 'schema_history' "
-            "AND pg_get_userbyid(c.relowner) <> $2",
+            "AND pg_get_userbyid(c.relowner) <> $2 "
+            # Column-owned sequences travel with their table (see above).
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+            "WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid "
+            "AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0 "
+            "AND d.deptype IN ('a', 'i')) "
+            "ORDER BY c.relname",
             self.schema, self.role,
         )
         kinds = {
@@ -550,11 +581,7 @@ class PluginMigrationRunner:
             await driver.execute(
                 f'ALTER {keyword} "{self.schema}"."{r["typname"]}" OWNER TO "{self.role}"'
             )
-        if rels or routines or types:
-            log.info(
-                "plugin %s: re-owned %d relation(s), %d routine(s), %d type(s) to %s",
-                self.slug, len(rels), len(routines), len(types), self.role,
-            )
+        return len(rels), len(routines), len(types)
 
     async def _forget_role(self, driver, *, last: bool) -> None:
         """Revoke the role's ``USAGE`` on ``public`` in this DB (the only

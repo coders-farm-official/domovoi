@@ -160,13 +160,20 @@ def _runner() -> PluginMigrationRunner:
     return PluginMigrationRunner(SLUG, Path("unused"), database_urls=["postgresql://x/y_test"])
 
 
+def _file_begin(calls: list[str], sql: str) -> int:
+    """Index of the BEGIN that opens ``sql``'s own transaction (the adopt
+    step runs its own transaction first)."""
+    at = calls.index(sql)
+    return max(i for i, c in enumerate(calls[:at]) if c == "BEGIN")
+
+
 @pytest.mark.asyncio
 async def test_each_file_runs_after_set_local_role_with_the_schema_only_path() -> None:
     drv = FakeDriver()
     sql = "CREATE TABLE things (id INT);"
     applied = await _runner()._apply_files(drv, [_file(1, sql)])
     assert applied == ["V001__t.sql"]
-    i = drv.calls.index("BEGIN")
+    i = _file_begin(drv.calls, sql)
     assert drv.calls[i:i + 7] == [
         "BEGIN",
         f'SET LOCAL search_path = "{SCHEMA}"',      # the plugin schema ONLY
@@ -212,19 +219,46 @@ async def test_a_non_superuser_application_user_is_made_a_member() -> None:
 
 @pytest.mark.asyncio
 async def test_objects_left_by_an_earlier_runner_are_re_owned_before_catchup() -> None:
+    v2 = "ALTER TABLE things ADD COLUMN x INT;"
     drv = FakeDriver(
         ledger={1: ("V001__t.sql", _file(1, "CREATE TABLE things (id INT);").checksum)},
-        foreign_relations=[("things", "r"), ("things_id_seq", "S"), ("v", "v")],
+        # A free-standing sequence: column-owned ones never reach this list
+        # (the catalogue query leaves them out — see the pg_depend check
+        # below, and test_plugin_migrations_adopt.py on real Postgres).
+        foreign_relations=[("things", "r"), ("ticket_seq", "S"), ("v", "v")],
     )
-    await _runner()._apply_files(
-        drv, [_file(1, "CREATE TABLE things (id INT);"), _file(2, "ALTER TABLE things ADD COLUMN x INT;")]
-    )
-    assert f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"' in drv.calls
-    assert f'ALTER SEQUENCE "{SCHEMA}"."things_id_seq" OWNER TO "{ROLE}"' in drv.calls
+    await _runner()._apply_files(drv, [_file(1, "CREATE TABLE things (id INT);"), _file(2, v2)])
+    table = f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"'
+    assert table in drv.calls
+    assert f'ALTER SEQUENCE "{SCHEMA}"."ticket_seq" OWNER TO "{ROLE}"' in drv.calls
     assert f'ALTER VIEW "{SCHEMA}"."v" OWNER TO "{ROLE}"' in drv.calls
-    assert drv.calls.index(f'ALTER TABLE "{SCHEMA}"."things" OWNER TO "{ROLE}"') < drv.calls.index("BEGIN")
-    # Only V002 ran.
-    assert drv.calls.count("BEGIN") == 1
+    (query,) = [c for c in drv.calls if "FROM pg_class" in c]
+    assert "pg_depend" in query and "refobjsubid > 0" in query and "('a', 'i')" in query
+    # The re-owning is its own transaction, committed before V002's opens.
+    t = drv.calls.index(table)
+    adopt_begin = max(i for i, c in enumerate(drv.calls[:t]) if c == "BEGIN")
+    adopt_commit = drv.calls.index("COMMIT", t)
+    assert query in drv.calls[adopt_begin:t]
+    assert adopt_commit < _file_begin(drv.calls, v2)
+    # Only V002 ran (one BEGIN for the adopt step, one for the file).
+    assert drv.calls.count("BEGIN") == 2
+    assert v2 in drv.calls and "CREATE TABLE things (id INT);" not in drv.calls
+
+
+@pytest.mark.asyncio
+async def test_a_failed_re_own_rolls_the_whole_adopt_step_back() -> None:
+    class FailSecond(FakeDriver):
+        async def execute(self, sql: str, *args: Any) -> None:
+            await super().execute(sql, *args)
+            if sql.startswith('ALTER VIEW'):
+                raise RuntimeError("cannot re-own")
+
+    drv = FailSecond(foreign_relations=[("things", "r"), ("v", "v")])
+    with pytest.raises(RuntimeError, match="cannot re-own"):
+        await _runner()._apply_files(drv, [_file(1, "SELECT 1;")])
+    assert drv.calls[-1] == "ROLLBACK"
+    assert "COMMIT" not in drv.calls
+    assert "SELECT 1;" not in drv.calls          # no file ran
 
 
 @pytest.mark.asyncio
@@ -244,10 +278,11 @@ async def test_a_failing_file_rolls_back_and_the_role_is_reset_by_the_transactio
                 raise RuntimeError("relation does not exist")
 
     drv = Boom()
+    sql = "DELETE FROM admin_sessions;"
     with pytest.raises(RuntimeError):
-        await _runner()._apply_files(drv, [_file(1, "DELETE FROM admin_sessions;")])
+        await _runner()._apply_files(drv, [_file(1, sql)])
     assert drv.calls[-1] == "ROLLBACK"
-    assert "COMMIT" not in drv.calls
+    assert "COMMIT" not in drv.calls[_file_begin(drv.calls, sql):]
 
 
 # ─── against Postgres ─────────────────────────────────────────────────────
