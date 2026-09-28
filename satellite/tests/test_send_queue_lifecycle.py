@@ -60,6 +60,7 @@ def make_sat(*, loop=None):
         room_id="kitchen",
         sat_type="voice",
         mic_enabled=True,
+        early_commit=True,
         wifi_enabled=False,
         device=types.SimpleNamespace(supports_full_duplex=False),
         # `_stream_capture`
@@ -90,6 +91,8 @@ def make_sat(*, loop=None):
     sat.raw_q = queue.Queue()
     sat.shutdown_event = threading.Event()
     sat._greeting_played_this_turn = False
+    sat._end_capture = threading.Event()
+    sat._capture_lock = threading.Lock()
     return sat
 
 

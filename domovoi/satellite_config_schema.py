@@ -94,6 +94,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "up and returning to wake-word listen.",
         "float", min=2.0, max=20.0, unit="sec",
     ),
+    FieldSpec(
+        "listen.early_commit", "Stop listening early on a whole command",
+        "Listening",
+        "On by default: when what the server has heard so far is a whole "
+        "command (\"pause the music\", \"set a timer for ten minutes\"), it "
+        "stops this satellite listening after a short pause instead of the "
+        "full end-of-speech silence, and answers sooner. Anything said after "
+        "that pause is lost — turn off in a room where people pause "
+        "mid-command. Needs early commit on for the whole server too.",
+        "bool",
+    ),
 
     # ─── Noise gate ────────────────────────────────────────────────────
     FieldSpec(

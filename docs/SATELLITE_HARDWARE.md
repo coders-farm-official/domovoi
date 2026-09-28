@@ -325,6 +325,17 @@ the last one with speech in it; an older satellite gets the same speed-up
 from the silence timeout it reports when it connects. The protocol
 details are in [uml/satellite-protocol.md](uml/satellite-protocol.md#speculative-transcription).
 
+A satellite from this release can also be stopped by the server: when
+what it has heard so far is a whole command ("pause the music", "set a
+timer for ten minutes"), the server ends the capture after a short pause
+(350-650 ms) instead of the full silence timeout, and answers sooner.
+Anything said after that pause is lost, so a room where people pause
+mid-command can opt out: `[listen] early_commit = false` in its
+`config.toml`, or **Stop listening early on a whole command** in the
+satellite's Listening settings on the dashboard. An older satellite is
+never stopped early — it doesn't know how. Details:
+[uml/satellite-protocol.md](uml/satellite-protocol.md#early-commit).
+
 ## Custom wake words
 
 `hey_jarvis` is the out-of-the-box default; **"Hey Domovoi" is the

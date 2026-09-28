@@ -231,16 +231,20 @@ class MusicHandler(Handler):
             # Random/shuffle BEFORE _PLAY_ANY_RE so "play a song" hits the
             # local-library random pick rather than falling through to
             # an external search for the literal string "a song."
-            FastPath(_PLAY_RANDOM_RE, MusicHandler._play_random_from_match),
-            FastPath(_PAUSE_RE, MusicHandler._pause_from_match),
-            FastPath(_RESUME_RE, MusicHandler._resume_from_match),
-            FastPath(_STOP_RE, MusicHandler._stop_from_match),
-            FastPath(_NEXT_RE, MusicHandler._next_from_match),
-            FastPath(_PREV_RE, MusicHandler._prev_from_match),
-            FastPath(_NOW_PLAYING_RE, MusicHandler._now_playing_from_match),
-            FastPath(_VOLUME_SET_RE, MusicHandler._volume_set_from_match),
-            FastPath(_VOLUME_UP_RE, MusicHandler._volume_up_from_match),
-            FastPath(_VOLUME_DOWN_RE, MusicHandler._volume_down_from_match),
+            FastPath(_PLAY_RANDOM_RE, MusicHandler._play_random_from_match, early_commit="B"),
+            # early_commit (FastPath): the transport and volume phrases are
+            # closed ("A"); "go back" also starts "go back a chapter", and a
+            # volume number or a random pick can be split by a pause ("B").
+            # The one-word forms ("stop", "next", "resume") are held as "B".
+            FastPath(_PAUSE_RE, MusicHandler._pause_from_match, early_commit="A"),
+            FastPath(_RESUME_RE, MusicHandler._resume_from_match, early_commit="A"),
+            FastPath(_STOP_RE, MusicHandler._stop_from_match, early_commit="A"),
+            FastPath(_NEXT_RE, MusicHandler._next_from_match, early_commit="A"),
+            FastPath(_PREV_RE, MusicHandler._prev_from_match, early_commit="B"),
+            FastPath(_NOW_PLAYING_RE, MusicHandler._now_playing_from_match, early_commit="A"),
+            FastPath(_VOLUME_SET_RE, MusicHandler._volume_set_from_match, early_commit="B"),
+            FastPath(_VOLUME_UP_RE, MusicHandler._volume_up_from_match, early_commit="A"),
+            FastPath(_VOLUME_DOWN_RE, MusicHandler._volume_down_from_match, early_commit="A"),
             FastPath(_RESCAN_RE, MusicHandler._rescan_from_match),
             # Keep _PLAY_ANY_RE last — it's the greediest pattern and must only
             # match when no more specific play-X-by-Y pattern matched above.

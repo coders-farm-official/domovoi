@@ -103,7 +103,7 @@ class DropInHandler(Handler):
     def __init__(self) -> None:
         self.fast_paths = [
             FastPath(_START_RE, DropInHandler._start_from_match),
-            FastPath(_END_RE, DropInHandler._end_from_match),
+            FastPath(_END_RE, DropInHandler._end_from_match, early_commit="A"),
         ]
 
     # ─── Fast-path adapters ───────────────────────────────────────────

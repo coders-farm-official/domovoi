@@ -221,6 +221,13 @@ max_record_seconds = 30
 # the full max_record_seconds.
 followup_pre_speech_timeout = 8.0
 
+# Let the core stop listening as soon as what it has heard is a whole
+# command ("pause the music", "set a timer for ten minutes") — after a short
+# pause instead of the full silence_timeout — so it answers sooner. Anything
+# said after that pause is lost; set false in a room where people pause
+# mid-command. Also switchable for the whole server (early_commit_enabled).
+early_commit = true
+
 [barge_in]
 # Off by default: nothing interrupts Domovoi while he is talking. Turn on to
 # cut him off mid-sentence - with the wake word (require_wake_word below, on

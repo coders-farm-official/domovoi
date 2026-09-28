@@ -44,6 +44,11 @@ Client → Server
                            `utterance_end` whenever `ready.features` lists
                            "speech_pause"; the server then uses those instead
                            of judging pauses from the audio itself.
+                           `capture_control` (optional, default false) says the
+                           satellite honours `end_capture` (below). Only then
+                           does the server ever end a capture early — for any
+                           other client the reply would play into a capture
+                           that is still open.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
                             "utt":N}
                            — `utt` (optional): the satellite's own number for
@@ -69,7 +74,8 @@ Client → Server
                            30 ms frames this capture sent), `last_voiced_frame`
                            (0-based index of the last one its detector called
                            speech) and `exit_reason` ("vad_silence_after_speech",
-                           "max_record_seconds", "shutdown") are optional too:
+                           "max_record_seconds", "shutdown", "server_endpoint")
+                           are optional too:
                            with them the server knows exactly whether a
                            speculative transcript covers everything said (see
                            "Speculative transcription" below).
@@ -154,7 +160,7 @@ Client → Server
 
 Server → Client
   text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000,
-                            "features":["speech_pause"]}
+                            "features":["speech_pause","end_capture"]}
                            — sent only AFTER the client's hello was accepted
                            (and the room's MPD daemon provisioned). A socket
                            that never says hello never receives it.
@@ -165,6 +171,18 @@ Server → Client
                            satellite takes as the end of the turn. New fields
                            on existing messages need no listing — both sides
                            ignore fields they don't know.
+  text  end_capture        {"type":"end_capture","utt":N}
+                           — stop capturing now: the server has heard a whole
+                           command (early commit, see below) and is answering.
+                           Sent only to a satellite whose hello declared
+                           `capture_control`, and only for a capture that
+                           carried `utt`; the satellite ignores one whose
+                           `utt` is not the capture it is running (a late one
+                           must not end the next capture). It still sends
+                           `utterance_end` (exit_reason "server_endpoint"),
+                           which the server reads only to log whether speech
+                           came after it stopped listening. An older
+                           satellite ignores the type.
   text  transcript         {"type":"transcript","text":...}
   text  set_volume         {"type":"set_volume","level":N} — set the Pi's
                            hardware output volume (0-100). Sent BEFORE
@@ -299,6 +317,24 @@ and the whole buffer is transcribed as before. One Whisper call per room
 at a time, speculative or not; a new `utterance_start` discards the copy.
 The greeting strip, the self-echo guard and the blank-capture guard run on
 whichever transcript is used. Off with `speculative_stt_enabled=false`.
+
+Early commit (part B). When that early transcript is a whole, closed
+command, waiting out the rest of the silence buys nothing: the server ends
+the capture itself (`end_capture`) and answers. Only for a satellite that
+declared `capture_control` and reports its pauses, only for wake_word and
+follow-up turns (never chat, barge-in, a wake-word training clip or a
+mid-call command), only when the transcript fully matches a fast path that
+opted in (`FastPath.early_commit`, judged by `domovoi/early_commit.py` on
+the router's own dry run, a parked yes/no answer included), and only once
+the satellite's own detector has heard no speech for the tier's hold since
+the last voiced frame — which must be inside the transcribed copy. Tier A
+(closed phrases) holds `early_commit_hold_a_ms` (350), tier B (a duration,
+a number, a clock question, any one-word command) `early_commit_hold_b_ms`
+(650). A `noisy_capture` for a committed capture is ignored; the
+satellite's late `utterance_end` is read only to log speech that came after
+the commit. Off with `early_commit_enabled=false` (tier B alone:
+`early_commit_tier_b=false`); per satellite, `[listen] early_commit=false`
+on the Pi stops it declaring `capture_control`.
 """
 
 from __future__ import annotations
@@ -337,6 +373,7 @@ from domovoi.db.repositories import (
     SessionRepository,
 )
 from domovoi.db.session import session_scope
+from domovoi.early_commit import TIER_A, early_commit_for
 from domovoi.endpointing import (
     FRAME_MS,
     LevelPauseDetector,
@@ -413,7 +450,12 @@ MAX_UTTERANCE_BYTES = 60 * PCM_INPUT_SAMPLE_RATE * 2  # 60s of int16 PCM
 # What this server understands beyond protocol 0.1, listed in `ready`. A
 # satellite sends a new message type only when it is listed here (see the
 # `ready` entry in the module docstring for why).
-CORE_FEATURES: tuple[str, ...] = ("speech_pause",)
+CORE_FEATURES: tuple[str, ...] = ("speech_pause", "end_capture")
+
+# The turns a server may end early: a command after the wake word, or the
+# answer to a question it just asked. Never a chat turn (Letta, long
+# replies), a barge-in, or anything else.
+EARLY_COMMIT_TRIGGERS = frozenset({"wake_word", "followup"})
 
 # Speculative decodes per utterance, at most. Each is a full Whisper pass
 # (faster-whisper pads every call to a 30 s window, so a partial costs what
@@ -731,6 +773,22 @@ class _Speculation:
     task: asyncio.Task[_Heard | None] | None = None
     # The Whisper call's own time, once it has returned.
     stt_ms: int | None = None
+    # Early commit: (tier, hold_ms) once judged, or () for "never" — the
+    # decision is made once per copy (StreamSession._commit_decision).
+    commit: tuple[str, int] | tuple[()] | None = None
+
+
+@dataclass
+class _Committed:
+    """A capture this server ended early, until the satellite's own
+    `utterance_end` for it arrives (read only to log speech after the
+    commit) or the next utterance starts."""
+
+    serial: int
+    utt: Any
+    frames: int                 # frames the server had when it committed
+    tier: str
+    timings: TurnTimings | None = None
 
 
 def _elapsed_ms(t0: float) -> int:
@@ -860,6 +918,19 @@ class StreamSession:
         # This room's Whisper call in flight, speculative or not: the next
         # one waits for it, so a room never runs two at once.
         self._decode_inflight: asyncio.Future[str] | None = None
+        # ── Early commit (part B) ─────────────────────────────────────
+        # hello.capture_control: the satellite honours `end_capture`.
+        self._capture_control = False
+        # Whether the current utterance may be ended early (decided at
+        # utterance_start), and the session state its dry run needs —
+        # the parked confirmation and the chat-mode flag — read once per
+        # utterance while the person is still talking.
+        self._commit_on = False
+        self._commit_ctx_task: asyncio.Task[tuple[Any, bool] | None] | None = None
+        # greeting_played as the satellite's latest `speech_pause` said it.
+        self._hint_greeting = False
+        # The capture ended early, until its late `utterance_end`.
+        self._committed: _Committed | None = None
 
     async def run(self) -> None:
         await self.ws.accept()
@@ -963,6 +1034,7 @@ class StreamSession:
                 self._response_task.cancel()
             # Nobody is left to use a speculative transcript.
             self._discard_speculation()
+            self._committed = None
             if self._decode_inflight is not None and not self._decode_inflight.done():
                 self._decode_inflight.cancel()
             # Tear down any live drop-in this session was in so the peer
@@ -1079,6 +1151,9 @@ class StreamSession:
         # short one from the frames themselves.
         if self._pause_detector is not None and self._pause_detector.feed(data):
             self._on_pause()
+        # Every silent frame after a reported pause brings the hold closer.
+        if self._commit_on and self._pi_pause is not None:
+            self._maybe_commit()
 
     # ── Speculative transcription (early endpointing, part A) ─────────
 
@@ -1111,6 +1186,16 @@ class StreamSession:
         self._pause_detector = (
             LevelPauseDetector() if self._spec_on and not self._speech_hints else None
         )
+        self._committed = None
+        self._hint_greeting = False
+        self._commit_on = self._early_commit_possible(trigger)
+        self._commit_ctx_task = (
+            asyncio.create_task(
+                self._read_commit_context(), name=f"commit-context:{self.room_id}"
+            )
+            if self._commit_on
+            else None
+        )
 
     def _discard_speculation(self) -> None:
         """Drop this utterance's copies and stop looking for pauses. The
@@ -1124,6 +1209,11 @@ class StreamSession:
         self._spec_on = False
         self._pause_detector = None
         self._pi_pause = None
+        self._commit_on = False
+        ctx_task = self._commit_ctx_task
+        if ctx_task is not None and not ctx_task.done():
+            ctx_task.cancel()
+        self._commit_ctx_task = None
 
     def _in_pause(self) -> bool:
         if self._speech_hints:
@@ -1164,6 +1254,9 @@ class StreamSession:
             self._start_speculation()
         else:
             self._spec_wanted = False
+            # On slow hardware the decode outlasts the hold: the silence
+            # is already long enough by the time the transcript exists.
+            self._maybe_commit()
 
     async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
         """Transcribe (and identify the voice in) a copy of the capture so
@@ -1247,7 +1340,9 @@ class StreamSession:
             self._pi_pause = None
             return
         self._pi_pause = (frame, last)
+        self._hint_greeting = bool(ctrl.get("greeting_played"))
         self._on_pause()
+        self._maybe_commit()
 
     def _last_voiced_frame(self, ctrl: dict[str, Any]) -> int | None:
         """The index of the capture's last voiced frame, when it can be
@@ -1283,6 +1378,156 @@ class StreamSession:
         ):
             return None
         return spec
+
+    # ── Early commit (early endpointing, part B) ──────────────────────
+
+    def _early_commit_possible(self, trigger: str | None) -> bool:
+        """Whether an utterance starting now may be ended early: see the
+        module docstring for every condition that must hold."""
+        return bool(
+            settings.early_commit_enabled
+            and self._capture_control
+            and self._speech_hints
+            and self._spec_on
+            and trigger in EARLY_COMMIT_TRIGGERS
+            and self._utt_id is not None
+            and self.dropin_peer is None
+            and self.wake_recording is None
+            and not self.conversational_mode
+        )
+
+    async def _read_commit_context(self) -> tuple[Any, bool] | None:
+        """What the router dry run needs from the session: the parked
+        ``pending_confirmation`` (a yes/no answer resumes it) and whether
+        the session is in chat mode (then nothing commits early). A read,
+        nothing more; None when it can't be read — then nothing commits
+        early either."""
+        if self.session_id is None:
+            return None, False
+        try:
+            async with session_scope() as s:
+                ctx = await SessionRepository(s).get_context(self.session_id) or {}
+        except Exception as e:
+            log.debug("stream %s: early commit can't read the session: %s", self.room_id, e)
+            return None
+        return ctx.get("pending_confirmation"), bool(ctx.get("conversational_mode"))
+
+    def _commit_decision(self, spec: _Speculation, heard: _Heard) -> tuple[str, int] | None:
+        """(tier, hold_ms) when this copy's transcript may end the capture
+        early, else None. Judged once per copy — except while the session
+        read is still out, when the answer is "not yet"."""
+        if spec.commit is not None:
+            return spec.commit or None
+        ctx_task = self._commit_ctx_task
+        if ctx_task is None or not ctx_task.done():
+            return None
+        context = None
+        if not ctx_task.cancelled() and ctx_task.exception() is None:
+            context = ctx_task.result()
+        decision: tuple[str, int] | tuple[()] = ()
+        if context is not None and not context[1]:
+            text = heard.text
+            if self._hint_greeting:
+                from domovoi.greeting_filter import strip_leading_greeting
+                phrases = getattr(self.ws.app.state, "greeting_phrases", [])
+                if phrases:
+                    text = strip_leading_greeting(text, phrases)
+            ec = early_commit_for(text, pending=context[0])
+            if ec is not None:
+                if ec.tier == TIER_A:
+                    decision = (ec.tier, int(settings.early_commit_hold_a_ms))
+                elif settings.early_commit_tier_b:
+                    decision = (ec.tier, int(settings.early_commit_hold_b_ms))
+        spec.commit = decision
+        return decision or None
+
+    def _maybe_commit(self) -> None:
+        """End the capture now if everything allows it: a finished copy of
+        this utterance whose transcript commits early, every voiced frame
+        inside it, and the satellite's own detector silent for the hold."""
+        if not (self._commit_on and self.utterance_active) or self.dropped_overflow:
+            return
+        pause, spec = self._pi_pause, self._spec
+        if pause is None or spec is None or spec.serial != self._utt_serial:
+            return
+        task = spec.task
+        if task is None or not task.done() or task.cancelled() or task.exception() is not None:
+            return
+        heard = task.result()
+        last_voiced = pause[1]
+        if heard is None or last_voiced >= spec.frames:
+            return
+        decision = self._commit_decision(spec, heard)
+        if decision is None:
+            return
+        tier, hold_ms = decision
+        silence_ms = (self._utt_frames - 1 - last_voiced) * FRAME_MS
+        if silence_ms < hold_ms:
+            return
+        self._commit_early(spec, tier=tier, hold_ms=hold_ms, silence_ms=silence_ms)
+
+    def _commit_early(
+        self, spec: _Speculation, *, tier: str, hold_ms: int, silence_ms: int
+    ) -> None:
+        """Stop listening: close the utterance exactly as `utterance_end`
+        would, and start the turn — which tells the satellite
+        (`end_capture`) before anything else."""
+        received_at = time.perf_counter()
+        self.utterance_active = False
+        pcm = bytes(self.audio_buf)
+        self.audio_buf.clear()
+        trigger = self._utterance_trigger
+        self._utterance_trigger = None
+        speculations = self._spec_history
+        self._spec = None
+        self._spec_history = []
+        self._spec_on = False
+        self._pause_detector = None
+        self._commit_on = False
+        committed = _Committed(
+            serial=self._utt_serial, utt=self._utt_id, frames=self._utt_frames, tier=tier,
+        )
+        self._committed = committed
+        log.info(
+            "early commit room=%s trigger=%s tier=%s hold_ms=%d silence_ms=%d frames=%d",
+            self.room_id, trigger, tier, hold_ms, silence_ms, committed.frames,
+        )
+        self._response_task = asyncio.create_task(
+            self._process_utterance(
+                pcm,
+                greeting_played=self._hint_greeting,
+                trigger=trigger,
+                received_at=received_at,
+                reuse=spec,
+                speculations=speculations,
+                endpoint_silence_ms=silence_ms,
+                early_commit=committed,
+                hold_ms=hold_ms,
+            )
+        )
+
+    def _note_late_utterance_end(self, ctrl: dict[str, Any]) -> None:
+        """The satellite's own `utterance_end` for a capture this server
+        already ended. Nothing to do but say whether the person was still
+        talking — the misfire the hold is meant to prevent, made visible."""
+        committed = self._committed
+        if committed is None or ctrl.get("utt") != committed.utt:
+            return
+        self._committed = None
+        last, frames = ctrl.get("last_voiced_frame"), ctrl.get("frames")
+        if type(last) is not int or type(frames) is not int:
+            return
+        voiced_after_ms = max(0, last - committed.frames + 1) * FRAME_MS
+        if committed.timings is not None:
+            committed.timings.stages["post_commit_voiced_ms"] = voiced_after_ms
+        if voiced_after_ms:
+            log.warning(
+                "early commit room=%s tier=%s cut in on speech: the satellite "
+                "heard speech %d ms past the point the server stopped "
+                "listening (%d frames sent, the server had %d). If this "
+                "repeats, turn early_commit_tier_b off or raise the hold.",
+                self.room_id, committed.tier, voiced_after_ms, frames, committed.frames,
+            )
 
     async def _await_hello(self) -> bool:
         """Block until the client's FIRST frame arrives and is an accepted
@@ -1656,8 +1901,10 @@ class StreamSession:
                 ctrl.get("mic_enabled", True)
             )
             # Optional, absent on older clients: this satellite reports its
-            # own pauses and last voiced frame (see the module docstring).
+            # own pauses and last voiced frame, and honours `end_capture`
+            # (see the module docstring).
             self._speech_hints = bool(ctrl.get("speech_pause", False))
+            self._capture_control = bool(ctrl.get("capture_control", False))
             # Persist the type for offline dashboard display — but ONLY when
             # the frame carried it explicitly, so an old client that omits
             # the field never resets an adoption-preseeded row to 'voice'.
@@ -1688,6 +1935,8 @@ class StreamSession:
             return
         if t == "utterance_end":
             if not self.utterance_active:
+                # Late for a capture this server ended early (or a stray).
+                self._note_late_utterance_end(ctrl)
                 return
             # The turn's clock starts here: everything the person waits
             # for after the satellite stops listening (turn_timings.total_ms).
@@ -1829,6 +2078,16 @@ class StreamSession:
             # apology TTS so the user hears feedback (rather than dead
             # air) and the satellite has already recalibrated against
             # the new ambient on its end.
+            committed = self._committed
+            if committed is not None and committed.serial == self._utt_serial:
+                # This server already ended the capture and is answering
+                # it; a satellite that honours end_capture skips its noise
+                # check on that exit, so this is a stray — the answer stands.
+                log.info(
+                    "stream %s: ignoring noisy_capture for a capture the server "
+                    "already ended", self.room_id,
+                )
+                return
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             self.utterance_active = False
@@ -2108,14 +2367,25 @@ class StreamSession:
         reuse: _Speculation | None = None,
         speculations: list[_Speculation] | None = None,
         endpoint_silence_ms: int | None = None,
+        early_commit: _Committed | None = None,
+        hold_ms: int | None = None,
     ) -> None:
         interrupted = False
         response = None
         # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
-        # utterance_end arrival; a direct call starts the clock now.
+        # utterance_end arrival (or the early commit); a direct call starts
+        # the clock now.
         timings = TurnTimings(started=received_at, audio_bytes=len(pcm_bytes))
         if endpoint_silence_ms is not None:
             timings.stages["endpoint_silence_ms"] = endpoint_silence_ms
+        if early_commit is not None:
+            # This server ended the capture: tell the satellite first, so
+            # it stops listening before the reply starts playing.
+            early_commit.timings = timings
+            timings.flags["early_commit"] = early_commit.tier
+            if hold_ms is not None:
+                timings.stages["early_commit_hold_ms"] = hold_ms
+            await self._safe_send_text({"type": "end_capture", "utt": early_commit.utt})
         try:
             # ── Transcribe and clean ─────────────────────────────────────
             heard = await self._transcribe_turn(

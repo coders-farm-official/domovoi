@@ -303,6 +303,40 @@ ready when the satellite stops listening. Each pause somebody talks past
 costs one extra decode of CPU (at most three per utterance); the summary's
 `speculative` block counts how often the early transcript was used.
 
+**Early commit** (`early_commit_enabled`, on by default; satellites from
+this release only) goes one step further for simple commands: when the
+early transcript is a whole closed command, the core stops the satellite
+listening without waiting out its silence timeout and answers. The core
+logs each one:
+
+```bash
+journalctl -u domovoi-core | grep 'early commit'
+# early commit room=kitchen trigger=wake_word tier=A hold_ms=350 silence_ms=840 frames=71
+```
+
+`silence_ms` is how long after your last word it stopped listening, which
+becomes the turn's `endpoint_silence_ms`; the turn's log line carries
+`early_commit=A/350ms`. Tier A (closed phrases like "pause the music",
+"volume up", "what's playing") needs 350 ms of silence, tier B (a timer or
+reminder with a duration, "volume 40", the clock, one-word commands) 650
+ms (`early_commit_hold_a_ms`, `early_commit_hold_b_ms`). On a CPU-only
+server the decode itself usually takes longer than either hold, so in
+practice the capture ends when the transcript is ready: about
+`240 ms + stt_ms` after your last word instead of `silence_timeout +
+stt_ms` before this release. For "set a timer for ten minutes" on an
+8-core server with small.en that is roughly 0.8-1.2 s to the end of
+listening plus 0.2-0.4 s to the first reply audio (`speech_to_reply_ms`);
+getting under a second needs a faster decode (base.en, a GPU, or a
+dedicated fast recognizer for simple commands).
+
+Whatever is said after the hold is lost ("set a timer for ten minutes …
+for the pasta" gets no label). When the satellite heard speech after the
+core stopped listening, the core logs `early commit … cut in on speech`
+and records `post_commit_voiced_ms` on the turn; the summary's
+`early_commit` block counts them (`cut_in`). If a room sees those, turn
+the room's **Stop listening early on a whole command** off (satellite
+Listening settings), or `early_commit_tier_b` off for the whole house.
+
 The same stages are stored on each turn's `intents_log` row
 (`timings`, a JSON column; migration V015), and the dashboard's **Models**
 page shows the recent medians under speech-to-text. For the whole
@@ -318,7 +352,8 @@ Whisper settings, so the numbers are all from the settings now running
 (`whisper_seen` in the answer lists the settings the window covers).
 `speculative` in the answer is `{turns, reused, decodes}`: turns that had
 an early transcript, how many used it, and how many speculative decodes
-were started.
+were started; `early_commit` is `{turns, A, B, cut_in}` for the captures
+the core ended early.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops

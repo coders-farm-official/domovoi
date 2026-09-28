@@ -297,7 +297,7 @@ class DoubleCheckHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_VERIFY_RE, DoubleCheckHandler._from_match),
+            FastPath(_VERIFY_RE, DoubleCheckHandler._from_match, early_commit="B"),
             FastPath(_VERIFY_CLAIM_RE, DoubleCheckHandler._from_claim_match),
         ]
 

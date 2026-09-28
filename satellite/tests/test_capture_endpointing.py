@@ -82,6 +82,8 @@ def make_sat(loop, *, silence_timeout: float = 0.3, max_record_seconds: float = 
     sat.shutdown_event = threading.Event()
     sat._greeting_played_this_turn = False
     sat._core_features = features
+    sat._end_capture = threading.Event()
+    sat._capture_lock = threading.Lock()
     return sat
 
 
@@ -256,3 +258,136 @@ def test_a_capped_capture_is_one_the_formula_refuses() -> None:
         loop.close()
     assert end["exit_reason"] == "max_record_seconds"
     assert last_voiced_from_timeout(end["frames"], 0.3, 5.0) is None
+
+
+# ─── the core ending a capture (early commit) ─────────────────────────────
+
+
+class HookedQueue(queue.Queue):
+    """A mic queue that runs `hook` after the n-th frame is taken — the
+    moment an `end_capture` "arrives" in these tests."""
+
+    def __init__(self, at: int, hook) -> None:
+        super().__init__()
+        self.at, self.hook, self.taken = at, hook, 0
+
+    def get(self, *a, **kw):
+        item = super().get(*a, **kw)
+        self.taken += 1
+        if self.taken == self.at:
+            self.hook()
+        return item
+
+
+def _run_with_end_capture(sat, loop, frames, *, at: int, utt=None) -> list:
+    """Capture `frames`; after the `at`-th, the receiver handles an
+    end_capture for `utt` (default: the capture running)."""
+    def arrive() -> None:
+        sat._handle_text_frame({"type": "end_capture", "utt": sat._capture_utt if utt is None else utt})
+
+    hooked = HookedQueue(at, arrive)
+    for f in frames:
+        hooked.put(f)
+    sat.raw_q = hooked
+    return capture(sat, loop, [])
+
+
+def test_end_capture_for_the_running_capture_ends_it_at_the_next_frame() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=1.2)
+        sat._begin_utterance("wake_word")
+        out = _run_with_end_capture(sat, loop, [FRAME] * 20 + [SILENCE] * 60, at=32)
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["type"] == "utterance_end"
+    assert end["exit_reason"] == "server_endpoint"
+    assert end["frames"] == 32, "no frame is sent after the end_capture"
+    assert end["last_voiced_frame"] == 19
+    assert out.count("audio") == 32
+    assert sat._capture_utt is None, "between captures nothing is running"
+    assert sat._leds.states[-1] == "thinking"
+
+
+def test_a_stale_end_capture_does_not_end_the_capture_it_does_not_name() -> None:
+    """The follow-up capture starts right after the reply; an end_capture
+    meant for the previous one, arriving late, must not cut it off."""
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.3)
+        sat._begin_utterance("wake_word")
+        sat._begin_utterance("followup")         # this capture is utt 2
+        out = _run_with_end_capture(sat, loop, [FRAME] * 20 + [SILENCE] * 12, at=5, utt=1)
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["exit_reason"] == "vad_silence_after_speech" and end["utt"] == 2
+
+
+def test_an_end_capture_between_captures_does_not_leak_into_the_next() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.3)
+        sat._begin_utterance("wake_word")
+        capture(sat, loop, [FRAME] * 5 + [SILENCE] * 10)
+        # Late, for the capture that just ended on its own.
+        sat._handle_text_frame({"type": "end_capture", "utt": 1})
+        assert not sat._end_capture.is_set()
+        sat._begin_utterance("followup")
+        end = texts(capture(sat, loop, [FRAME] * 5 + [SILENCE] * 10))[-1]
+    finally:
+        loop.close()
+    assert end["exit_reason"] == "vad_silence_after_speech" and end["utt"] == 2
+
+
+def test_a_capture_the_core_ended_is_never_reported_noisy() -> None:
+    """The core is already answering it; a noisy_capture would make it
+    cancel that answer for an apology."""
+    def loud_room(loop):
+        sat = make_sat(loop, silence_timeout=0.3)
+        sat.cfg.noise_gate_auto_calibrate = True
+        sat.cfg.noise_gate_noisy_capture_dbfs = -20.0     # FRAME is ~-12 dBFS
+        sat._maybe_recalibrate = lambda samples: None
+        sat._begin_utterance("wake_word")
+        return sat
+
+    loop = asyncio.new_event_loop()
+    try:
+        # Control: the same loud capture, ended by its own silence, is noisy.
+        sat = loud_room(loop)
+        out = capture(sat, loop, [FRAME] * 40 + [SILENCE] * 10)
+        assert texts(out)[-1] == {"type": "noisy_capture"}
+        sat = loud_room(loop)
+        out = _run_with_end_capture(sat, loop, [FRAME] * 45, at=40)
+    finally:
+        loop.close()
+    assert texts(out)[-1]["type"] == "utterance_end"
+    assert texts(out)[-1]["exit_reason"] == "server_endpoint"
+
+
+def test_the_hello_declares_capture_control_from_the_rooms_setting(tmp_path) -> None:
+    src = inspect.getsource(client.Satellite._run_session)
+    hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
+    assert '"capture_control": self.cfg.early_commit' in hello
+
+    example = (client.Path(client.__file__).parent / "config.toml.example").read_text(encoding="utf-8")
+    path = tmp_path / "config.toml"
+    path.write_text(example, encoding="utf-8")
+    cfg = client.Config.load(path)
+    assert cfg.early_commit is True
+    path.write_text(example.replace("early_commit = true", "early_commit = false"), encoding="utf-8")
+    assert client.Config.load(path).early_commit is False
+    # Absent (an older config.toml): on.
+    path.write_text(example.replace("early_commit = true", ""), encoding="utf-8")
+    assert client.Config.load(path).early_commit is True
+
+
+def test_the_setting_is_reported_and_editable_from_the_dashboard() -> None:
+    from domovoi.satellite_config_schema import FIELD_BY_NAME
+
+    sat = object.__new__(client.Satellite)
+    sat.cfg = types.SimpleNamespace(**{f: None for f in client.Config.__dataclass_fields__})
+    sat.cfg.early_commit = False
+    assert sat._config_report()["listen.early_commit"] is False
+    assert FIELD_BY_NAME["listen.early_commit"].type == "bool"

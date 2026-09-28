@@ -147,8 +147,8 @@ class VoiceHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
-            FastPath(_LIST_RE, VoiceHandler._list_from_match),
-            FastPath(_CURRENT_RE, VoiceHandler._current_from_match),
+            FastPath(_LIST_RE, VoiceHandler._list_from_match, early_commit="A"),
+            FastPath(_CURRENT_RE, VoiceHandler._current_from_match, early_commit="A"),
             FastPath(_SAMPLE_RE, VoiceHandler._sample_from_match),
             FastPath(_SWITCH_RE, VoiceHandler._switch_from_match),
         ]

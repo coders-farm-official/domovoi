@@ -36,6 +36,9 @@ sequenceDiagram
     Pi->>WS: utterance_end {greeting_played, frames,<br/>last_voiced_frame}
     Note over WS: receive loop spawns a response task<br/>and keeps draining the socket<br/>(so a barge_in still lands)
 
+    opt satellite declared capture_control, transcript is a<br/>whole closed command, silent for the tier's hold
+        WS-->>Pi: end_capture {utt} — early commit, before utterance_end
+    end
     alt last voiced frame inside the copy
         Note over WS: use the held transcript and voice ID
     else speech came after the copy (or no copy)

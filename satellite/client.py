@@ -425,6 +425,10 @@ class Config:
     wifi_cooldown_sec: float
     wifi_degraded_after_disconnect_sec: float
     log_level: str
+    # [listen] early_commit: let the core end a capture early when what it
+    # has heard so far is a whole command (declared as `capture_control` in
+    # the hello). Defaulted so a Config built without it keeps working.
+    early_commit: bool = True
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -613,6 +617,11 @@ class Config:
                 wifi.get("degraded_after_disconnect_sec", 30.0)
             ),
             log_level=str(logc.get("level", "INFO")).upper(),
+            # The core may stop this satellite listening as soon as it has
+            # heard a whole command ("pause the music"), instead of waiting
+            # out silence_timeout. Whatever is said after that is lost —
+            # turn off in a room where people pause mid-command.
+            early_commit=bool(listen.get("early_commit", True)),
         )
 
 
@@ -967,6 +976,12 @@ class Satellite:
         # past the AEC out of the transcript. Set when a greeting plays,
         # reset when reported (and at the start of each wake decision).
         self._greeting_played_this_turn = False
+
+        # The core's early commit: set by an `end_capture` for the capture
+        # in progress, checked by `_stream_capture` before every frame, and
+        # cleared when each capture starts. See `_capture_utt`.
+        self._end_capture = threading.Event()
+        self._capture_lock = threading.Lock()
 
         # State-indicator LEDs. Backend depends on the device profile:
         # APA102 over SPI on the ReSpeaker HAT, or the WS2812 ring driven
@@ -2316,6 +2331,7 @@ class Satellite:
             "listen.silence_timeout": c.silence_timeout,
             "listen.max_record_seconds": c.max_record_seconds,
             "listen.followup_pre_speech_timeout": c.followup_pre_speech_timeout,
+            "listen.early_commit": c.early_commit,
             "greeting.enabled": c.greeting_enabled,
             "greeting.funny_chance": c.greeting_funny_chance,
             "sounds.sync_enabled": c.sounds_sync_enabled,
@@ -3241,7 +3257,30 @@ class Satellite:
         cleanly — the server responds with a stock apology TTS
         and the satellite re-derives its noise gate against the new
         ambient on the way back to wake-word listen.
+
+        The core can also end the capture (early commit): an
+        `end_capture` naming this capture sets `_end_capture`, checked
+        before every frame, and the capture ends there — exit reason
+        `server_endpoint`, no noisy-capture check (the core is already
+        answering; an apology would cancel that answer), and an
+        `utterance_end` all the same, which the core reads only to log
+        whether speech came after it stopped listening.
         """
+        with self._capture_lock:
+            self._capture_utt = self._utt_seq
+            self._end_capture.clear()
+        try:
+            return self._capture(prefix_frames, pre_speech_timeout_sec)
+        finally:
+            with self._capture_lock:
+                self._capture_utt = None
+
+    def _capture(
+        self,
+        prefix_frames: list[bytes],
+        pre_speech_timeout_sec: float | None,
+    ) -> bool:
+        """The capture loop itself; see `_stream_capture`."""
         self._leds.set_state("listening")
         vad = webrtcvad.Vad(self.cfg.vad_aggressiveness)
         speaking = bool(prefix_frames)
@@ -3288,6 +3327,10 @@ class Satellite:
         # going false (max_frames or shutdown_event without speech).
         exit_reason = "max_record_seconds"
         while sent < max_frames and not self.shutdown_event.is_set():
+            if self._end_capture.is_set():
+                # The core has heard a whole command and is answering it.
+                exit_reason = "server_endpoint"
+                break
             try:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
@@ -3377,7 +3420,8 @@ class Satellite:
         # rare in practice, exactly the case the user-facing apology
         # is meant for.
         if (
-            self.cfg.noise_gate_auto_calibrate
+            exit_reason != "server_endpoint"
+            and self.cfg.noise_gate_auto_calibrate
             and len(capture_dbfs) >= 30  # ~1 s, otherwise too small a sample
         ):
             finite = [d for d in capture_dbfs if d != float("-inf")]
@@ -4323,6 +4367,12 @@ class Satellite:
     # This connection's capture counter: each utterance_start carries the
     # next number (`utt`), and so does everything about that capture.
     _utt_seq: int = 0
+    # The capture `_stream_capture` is running, by number, while it runs
+    # (None between captures). An `end_capture` for any other number is
+    # stale — the capture it meant already ended on its own — and must not
+    # end this one. Read by the receiver, written by the mic thread, both
+    # under `_capture_lock`.
+    _capture_utt: int | None = None
 
     def _sync_time_with_server(self) -> None:
         """Ask the root helper to copy the server's clock and time zone.
@@ -4769,6 +4819,18 @@ class Satellite:
                 asyncio.create_task(self._send_logs(rid, want))
             else:
                 log.warning("get_logs: no request_id in payload; ignoring")
+        elif t == "end_capture":
+            # The core has heard a whole command and is answering: stop
+            # the capture it names — but only that one. A late end_capture
+            # (the capture already ended on its own silence and the next,
+            # a follow-up, has started) names an older number and is
+            # dropped.
+            utt = payload.get("utt")
+            with self._capture_lock:
+                if utt is not None and utt == self._capture_utt:
+                    self._end_capture.set()
+                    return
+            log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)
         elif t == "pong":
             pass
         else:
@@ -4840,6 +4902,11 @@ class Satellite:
                     # exactly whether that transcript covers everything
                     # said. An older core ignores the field.
                     "speech_pause": True,
+                    # This client stops a capture on `end_capture` — the
+                    # core's early commit. Only a client that says so is
+                    # ever ended early; [listen] early_commit=false opts
+                    # this room out.
+                    "capture_control": self.cfg.early_commit,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if

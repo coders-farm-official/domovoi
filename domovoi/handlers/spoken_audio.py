@@ -162,12 +162,12 @@ class SpokenAudioHandler(Handler):
         self.fast_paths = [
             FastPath(_PLAY_LATEST_RE, SpokenAudioHandler._play_latest_from_match),
             FastPath(_PLAY_BOOK_RE, SpokenAudioHandler._play_book_from_match),
-            FastPath(_NEXT_CHAPTER_RE, SpokenAudioHandler._next_chapter_from_match),
-            FastPath(_PREV_CHAPTER_RE, SpokenAudioHandler._prev_chapter_from_match),
-            FastPath(_SKIP_RE, SpokenAudioHandler._skip_from_match),
+            FastPath(_NEXT_CHAPTER_RE, SpokenAudioHandler._next_chapter_from_match, early_commit="A"),
+            FastPath(_PREV_CHAPTER_RE, SpokenAudioHandler._prev_chapter_from_match, early_commit="A"),
+            FastPath(_SKIP_RE, SpokenAudioHandler._skip_from_match, early_commit="B"),
             FastPath(_SET_SPEED_RE, SpokenAudioHandler._set_speed_from_match),
-            FastPath(_TIME_LEFT_RE, SpokenAudioHandler._time_left_from_match),
-            FastPath(_NOW_LISTENING_RE, SpokenAudioHandler._now_listening_from_match),
+            FastPath(_TIME_LEFT_RE, SpokenAudioHandler._time_left_from_match, early_commit="A"),
+            FastPath(_NOW_LISTENING_RE, SpokenAudioHandler._now_listening_from_match, early_commit="A"),
             # Before the real subscribe path so "subscribe to podcast" asks
             # which show instead of subscribing to a show named "podcast".
             FastPath(_SUBSCRIBE_BARE_RE, SpokenAudioHandler._subscribe_bare_from_match),
