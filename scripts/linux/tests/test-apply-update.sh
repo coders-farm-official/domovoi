@@ -8,10 +8,16 @@
 # under Git Bash as well as on Linux.
 #
 # The shims model just enough of the real thing to test the decisions:
-#   * each database is a file holding its flyway_schema_history row count;
+#   * each database is a file holding its flyway_schema_history row count,
+#     plus a ledgers-<db> file of "plugin_<slug> <rows>" lines, one per
+#     plugin migration ledger;
 #   * `systemctl restart domovoi-db.service` is Flyway: it raises the count
 #     to the number of migration files in the checkout and never lowers it;
-#   * pg_dump writes the count into the dump and pg_restore reads it back;
+#   * `systemctl start domovoi-core.service` is the core's boot: every
+#     plugin in the checkout's plugins/ catches its ledger up to its
+#     migration files, in each database that exists (never un-applies);
+#   * pg_dump writes the count and the ledgers into the dump and pg_restore
+#     reads them back;
 #   * psql CREATE/DROP/ALTER ... RENAME DATABASE move those files around;
 #   * curl can fail while HEAD is a given SHA (the "new code is broken" case).
 #
@@ -69,6 +75,23 @@ if [ "${1-}" = restart ] && [ "${2-}" = domovoi-db.service ]; then
   fi
   if [ "$files" -gt "$cur" ]; then echo "$files" >"$SHIM_STATE/db-domovoi"; fi
 fi
+if [ "${1-}" = start ] && [[ " $* " == *" domovoi-core.service "* ]]; then
+  # The core's boot: plugin migration catch-up, main database then _test.
+  for mig in "$SHIM_REPO"/plugins/*/migrations; do
+    [ -d "$mig" ] || continue
+    ledger=plugin_$(basename "$(dirname "$mig")")
+    files=$(ls "$mig"/V*.sql 2>/dev/null | wc -l | tr -d ' ')
+    for db in domovoi domovoi_test; do
+      [ -f "$SHIM_STATE/db-$db" ] || continue
+      f=$SHIM_STATE/ledgers-$db
+      cur=$(awk -v l="$ledger" '$1 == l { print $2 }' "$f" 2>/dev/null)
+      if [ "$files" -gt "${cur:-0}" ]; then
+        { grep -v "^$ledger " "$f" 2>/dev/null; echo "$ledger $files"; } >"$f.new"
+        mv "$f.new" "$f"
+      fi
+    done
+  done
+fi
 exit 0
 SH
 
@@ -106,6 +129,8 @@ echo "pg_dump $*" >>"$SHIM_STATE/calls.log"
 if [ -f "$SHIM_STATE/fail-pg_dump" ]; then echo "pg_dump: connection refused" >&2; exit 1; fi
 db=${!#}
 echo "DOMOVOI-FAKE-DUMP migrations=$(cat "$SHIM_STATE/db-$db")"
+sed 's/^/ledger /' "$SHIM_STATE/ledgers-$db" 2>/dev/null
+exit 0
 SH
 
   cat >"$bin/pg_restore" <<'SH'
@@ -119,7 +144,9 @@ while [ $# -gt 0 ]; do
 done
 if [ -n "$db" ]; then
   [ -f "$SHIM_STATE/db-$db" ] || { echo "pg_restore: no database $db" >&2; exit 1; }
-  echo "${body##*migrations=}" >"$SHIM_STATE/db-$db"
+  head=${body%%$'\n'*}
+  echo "${head##*migrations=}" >"$SHIM_STATE/db-$db"
+  printf '%s\n' "$body" | sed -n 's/^ledger //p' >"$SHIM_STATE/ledgers-$db"
 fi
 exit 0
 SH
@@ -136,20 +163,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 dbfile() { printf '%s/db-%s' "$SHIM_STATE" "$1"; }
+ledgers() { printf '%s/ledgers-%s' "$SHIM_STATE" "$1"; }
+exists() { [ -f "$(dbfile "$1")" ] || { echo "psql: database $1 does not exist" >&2; exit 2; }; }
 case "$sql" in
   "SELECT count(*) FROM flyway_schema_history")
-    cat "$(dbfile "$db")" 2>/dev/null || { echo "psql: database $db does not exist" >&2; exit 2; } ;;
+    exists "$db"; cat "$(dbfile "$db")" ;;
+  *query_to_xml*schema_history*)
+    exists "$db"; cat "$(ledgers "$db")" 2>/dev/null ;;
   CREATE\ DATABASE*)
     name=$(printf '%s' "$sql" | sed 's/^CREATE DATABASE "\([^"]*\)".*/\1/')
-    echo 0 >"$(dbfile "$name")" ;;
+    echo 0 >"$(dbfile "$name")"; : >"$(ledgers "$name")" ;;
   DROP\ DATABASE*)
     name=$(printf '%s' "$sql" | sed 's/^DROP DATABASE IF EXISTS "\([^"]*\)".*/\1/')
-    rm -f "$(dbfile "$name")" ;;
+    rm -f "$(dbfile "$name")" "$(ledgers "$name")" ;;
   ALTER\ DATABASE*)
     from=$(printf '%s' "$sql" | sed 's/^ALTER DATABASE "\([^"]*\)" RENAME TO "\([^"]*\)"$/\1/')
     to=$(printf '%s' "$sql" | sed 's/^ALTER DATABASE "\([^"]*\)" RENAME TO "\([^"]*\)"$/\2/')
     [ -f "$(dbfile "$from")" ] && [ ! -f "$(dbfile "$to")" ] || { echo "psql: rename failed" >&2; exit 1; }
-    mv "$(dbfile "$from")" "$(dbfile "$to")" ;;
+    mv "$(dbfile "$from")" "$(dbfile "$to")"
+    if [ -f "$(ledgers "$from")" ]; then mv "$(ledgers "$from")" "$(ledgers "$to")"; fi ;;
   SELECT\ pg_terminate_backend*) ;;
   *) echo "psql: unexpected SQL: $sql" >&2; exit 1 ;;
 esac
@@ -243,6 +275,7 @@ new_case() {
   : >"$STATE/calls.log"
   printf 'domovoi-postgres\ndomovoi-mpd-kitchen\ndomovoi-mpd-office\n' >"$STATE/containers"
   echo 1 >"$STATE/db-domovoi"
+  echo "plugin_radio 1" >"$STATE/ledgers-domovoi"
 
   g init -q -b main
   printf '[project]\nname = "domovoi"\nversion = "0"\n' >"$REPO/pyproject.toml"
@@ -251,6 +284,9 @@ new_case() {
   printf 'music_directory "/music"\n' >"$REPO/domovoi/mpd.conf"
   printf 'CREATE TABLE a (id int);\n' >"$REPO/domovoi/db/migrations/V001__a.sql"
   printf 'print("a")\n' >"$REPO/domovoi/app.py"
+  # A bundled plugin with one migration, already applied (ledgers above).
+  mkdir -p "$REPO/plugins/radio/migrations"
+  printf 'CREATE TABLE stations (id bigserial PRIMARY KEY);\n' >"$REPO/plugins/radio/migrations/V001__stations.sql"
   SHA_A=$(commit_all A)
 
   export SHIM_STATE=$STATE SHIM_REPO=$REPO
@@ -464,6 +500,48 @@ case_flyway_failure_without_growth() {
   check "no pg_restore into a database" not_called "pg_restore -U domovoi -d"
   check "core never started on the bad SHA" eq "$(grep -c 'systemctl start domovoi-core.service' "$STATE/calls.log")" 1
   check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
+  end_case
+}
+
+case_plugin_migration_health_failure_restores() {
+  new_case plugin_migration_health_failure_restores
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # No core migration: only the bundled plugin's ledger moves, and only
+  # when the new core boots (its migration catch-up), after Flyway ran.
+  printf 'ALTER TABLE stations ADD COLUMN played_at timestamptz;\n' >"$REPO/plugins/radio/migrations/V002__played.sql"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: plugin migration + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "flyway count before" eq "$(field migrations_before)" 1
+  check "flyway count did not move" eq "$(field migrations_after)" 1
+  check "plugin ledgers before" eq "$(field plugin_migrations_before)" 1
+  check "plugin ledgers grew" eq "$(field plugin_migrations_after)" 2
+  check "db restored for the plugin migration alone" eq "$(field db_restored)" true
+  check "restores into a fresh database" called 'CREATE DATABASE "domovoi_restore_'
+  check "swaps it in by rename" called 'RENAME TO "domovoi"'
+  check "plugin ledger back to one row" file_is "$STATE/ledgers-domovoi" "plugin_radio1"
+  check "flyway untouched by the restore" file_is "$STATE/db-domovoi" 1
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "restore happens with core stopped" before "reset --keep" "pg_restore -U domovoi -d"
+  end_case
+}
+
+case_plugin_migration_kept_when_healthy() {
+  new_case plugin_migration_kept_when_healthy
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'ALTER TABLE stations ADD COLUMN played_at timestamptz;\n' >"$REPO/plugins/radio/migrations/V002__played.sql"
+  local sha_b; sha_b=$(commit_all "B: plugin migration")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "plugin ledgers reported" eq "$(field plugin_migrations_after)" 2
+  check "no restore on success" eq "$(field db_restored)" false
+  check "no pg_restore into a database" not_called "pg_restore -U domovoi -d"
+  check "the new plugin migration stays" file_is "$STATE/ledgers-domovoi" "plugin_radio2"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
   end_case
 }
 
@@ -686,6 +764,8 @@ case_mpd_changed
 case_mpd_conf_only
 case_migration_health_failure_rolls_back
 case_flyway_failure_without_growth
+case_plugin_migration_health_failure_restores
+case_plugin_migration_kept_when_healthy
 case_dirty_tree_refused
 case_untracked_files_do_not_block
 case_backup_failure_aborts

@@ -501,10 +501,16 @@ instead of bouncing core and web, and each run does this:
 If any of 4-8 fails, it rolls back: `git reset --keep` to the previous SHA
 (never `--hard`), the venv re-synced and every package put back at its
 exact pre-update version, the old MPD image rebuilt, and, if
-`flyway_schema_history` grew, the pre-update dump restored. The restore goes
-into a fresh database that is then renamed to `domovoi`; the replaced one
-is kept as `domovoi_failed_<timestamp>` for inspection, and you drop it by
-hand when you're done with it. Then it restarts and health-checks again, and
+`flyway_schema_history` or any plugin's migration ledger
+(`plugin_<slug>.schema_history`) grew, the pre-update dump restored.
+Plugin migrations count because Flyway never sees them: the core applies a
+plugin's pending migrations when it starts, so a pull that adds one to a
+bundled plugin changes the database in step 8, not step 7. Rolling the code
+back without them would leave that plugin's schema ahead of its code, and a
+corrected release of the same migration would then be refused as an edited
+file. The restore goes into a fresh database that is then renamed to
+`domovoi`; the replaced one is kept as `domovoi_failed_<timestamp>` for
+inspection, and you drop it by hand when you're done with it. Then it restarts and health-checks again, and
 records the commit it rolled back as `bad_sha`. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 

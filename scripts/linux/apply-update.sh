@@ -34,8 +34,10 @@
 #      DOMOVOI_UPDATE_HEALTH_TIMEOUT seconds.
 #   On any failure in 3-7: stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
-#   flyway_schema_history grew, restart, and record the new SHA as bad_sha so
-#   the version panel stops offering it.
+#   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
+#   (the core applies plugin migrations at boot, so step 7 can run them),
+#   restart, and record the new SHA as bad_sha so the version panel stops
+#   offering it.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -104,6 +106,8 @@ DEPS_CHANGED=0
 MPD_CHANGED=0
 MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
+LEDGERS_BEFORE=""
+LEDGERS_AFTER=""
 BACKUP_FILE=""
 DB_RESTORED=0
 STEPS=()
@@ -204,6 +208,8 @@ write_result() {
     printf '  "mpd_changed": %s,\n' "$(json_bool "$MPD_CHANGED")"
     printf '  "migrations_before": %s,\n' "$(json_int_or_null "$MIGRATIONS_BEFORE")"
     printf '  "migrations_after": %s,\n' "$(json_int_or_null "$MIGRATIONS_AFTER")"
+    printf '  "plugin_migrations_before": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_BEFORE")")"
+    printf '  "plugin_migrations_after": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_AFTER")")"
     printf '  "backup": %s,\n' "$(json_str_or_null "$BACKUP_FILE")"
     printf '  "db_restored": %s,\n' "$(json_bool "$DB_RESTORED")"
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
@@ -394,6 +400,42 @@ migration_count() {
   n=$(pg_exec psql -U "$PG_USER" -d "$PG_DB" -tAc 'SELECT count(*) FROM flyway_schema_history' 2>/dev/null | tr -d '[:space:]') || return 1
   [[ $n =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$n"
+}
+
+# Plugins keep their own migration ledgers, one per plugin schema
+# (plugin_<slug>.schema_history, a row per applied file), and the core
+# applies pending plugin migrations when it boots, so starting the new code
+# can grow them without Flyway noticing. One "plugin_<slug> <rows>" line per
+# ledger; query_to_xml runs the count for each schema the catalog lists, so
+# one query covers any number of plugins.
+LEDGER_SQL="SELECT n.nspname || ' ' || (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.schema_history', n.nspname), false, true, '')))[1]::text FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid WHERE n.nspname ~ '^plugin_[a-z][a-z0-9_]*$' AND c.relname = 'schema_history' AND c.relkind IN ('r', 'p') ORDER BY 1"
+
+# The plugin ledgers of database $1, after a "ledgers" line that tells an
+# empty answer (no plugin has migrations) from a failed read.
+ledger_snapshot() {
+  local out line
+  out=$(pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$1" -tAc "$LEDGER_SQL" 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    [ -z "$line" ] || [[ $line =~ ^plugin_[a-z0-9_]+\ [0-9]+$ ]] || return 1
+  done <<<"$out"
+  printf 'ledgers\n%s' "$out"
+}
+
+# Did any plugin ledger gain rows between snapshots $1 and $2? A ledger
+# only $2 has counts from zero. Either snapshot unknown: no, the same rule
+# migrations_grew applies to Flyway.
+ledgers_grew() {
+  [ "${1%%$'\n'*}" = ledgers ] && [ "${2%%$'\n'*}" = ledgers ] || return 1
+  { printf '%s\n' "$1" | sed '1d; s/^/B /'; printf '%s\n' "$2" | sed '1d; s/^/A /'; } \
+    | awk '$1 == "B" { before[$2] = $3; next }
+           $1 == "A" && $3 + 0 > before[$2] + 0 { grew = 1 }
+           END { exit grew ? 0 : 1 }'
+}
+
+# Total rows across a snapshot's ledgers, or nothing when it's unknown.
+ledger_total() {
+  [ "${1%%$'\n'*}" = ledgers ] || return 0
+  printf '%s\n' "$1" | sed '1d' | awk '{ n += $2 } END { print n + 0 }'
 }
 
 backup_db() {
@@ -613,6 +655,7 @@ full_update() {
     log "continuing without a backup (DOMOVOI_UPDATE_REQUIRE_BACKUP=$REQUIRE_BACKUP)"
   fi
   MIGRATIONS_BEFORE=$(migration_count || true)
+  LEDGERS_BEFORE=$(ledger_snapshot "$PG_DB" || true)
   if [ "$DEPS_CHANGED" = 1 ]; then
     run_step snapshot-venv snapshot_venv || rm -f "$FREEZE_FILE"
   fi
@@ -632,6 +675,7 @@ full_update() {
     run_step health wait_healthy || failed=health
   fi
   MIGRATIONS_AFTER=$(migration_count || true)
+  LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
 
   if [ -z "$failed" ]; then
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
@@ -665,8 +709,12 @@ rollback() {
     if [ "$MPD_CHANGED" = 1 ]; then
       run_step rollback-mpd rebuild_mpd || rb_failed rollback-mpd
     fi
+    # With the core stopped, so these are final: Flyway's count, and every
+    # plugin's ledger (the new code's boot may have applied its plugin
+    # migrations even though it then failed its health check).
     MIGRATIONS_AFTER=$(migration_count || true)
-    if migrations_grew; then
+    LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
+    if migrations_grew || ledgers_grew "$LEDGERS_BEFORE" "$LEDGERS_AFTER"; then
       run_step restore-db restore_db || rb_failed restore-db
     fi
   else

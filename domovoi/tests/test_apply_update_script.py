@@ -6,17 +6,25 @@ shims for systemctl, docker, pg_dump, pg_restore, psql and curl). This
 wrapper keeps them in the suite. On Windows it needs Git for Windows' bash;
 System32's bash.exe is the WSL launcher, which would run the harness in a
 different machine entirely, so it is never used.
+
+The shims can't judge SQL, so the queries the script sends through the
+Postgres container run here against the real test database: the same text,
+through the driver, inside a transaction that is rolled back.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from domovoi.db.session import engine
+from domovoi.tests.conftest import requires_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "linux" / "apply-update.sh"
@@ -66,3 +74,76 @@ def test_apply_update_harness():
     )
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
     assert " 0 failed" in proc.stdout
+
+
+# ─── the script's SQL, on real Postgres ───────────────────────────────────
+
+
+def _script_sql(name: str) -> str:
+    """The value of NAME="..." in the script. Only plain double-quoted
+    one-liners, which bash leaves as written (test_sql_survives_bash
+    proves it for each)."""
+    m = re.search(rf'^{name}="(.*)"$', SCRIPT.read_text(encoding="utf-8"), re.M)
+    assert m, f"{name} not found in {SCRIPT.name}"
+    return m.group(1)
+
+
+SQL_NAMES = ("LEDGER_SQL",)
+
+
+@requires_bash
+@pytest.mark.parametrize("name", SQL_NAMES)
+def test_sql_survives_bash(name):
+    proc = subprocess.run(
+        [BASH, "-c", 'eval "$(grep "^$1=" "$2")"; printf %s "${!1}"', "_", name,
+         SCRIPT.as_posix()],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == _script_sql(name)
+
+
+async def _in_rolled_back_tx(statements: list[str], query: str) -> list[str]:
+    """Run STATEMENTS then QUERY on the raw driver connection (the exact
+    text, no SQLAlchemy parameter handling), roll everything back, and
+    return the query's first column."""
+    async with engine.connect() as conn:
+        raw = (await conn.get_raw_connection()).driver_connection
+        tx = raw.transaction()
+        await tx.start()
+        try:
+            for stmt in statements:
+                await raw.execute(stmt)
+            return [r[0] for r in await raw.fetch(query)]
+        finally:
+            await tx.rollback()
+
+
+def _ledger_ddl(schema: str, rows: int) -> list[str]:
+    ddl = [
+        f'CREATE SCHEMA "{schema}"',
+        f'CREATE TABLE "{schema}".schema_history (version INT PRIMARY KEY, '
+        "filename TEXT NOT NULL, checksum TEXT NOT NULL)",
+    ]
+    ddl += [
+        f"INSERT INTO \"{schema}\".schema_history VALUES ({v}, 'V{v:03d}__x.sql', 'c')"
+        for v in range(1, rows + 1)
+    ]
+    return ddl
+
+
+@requires_db
+async def test_ledger_sql_counts_every_plugin_ledger():
+    rows = await _in_rolled_back_tx(
+        _ledger_ddl("plugin_zzupd_three", 3)
+        + _ledger_ddl("plugin_zzupd_empty", 0)
+        # Not a plugin's: the name doesn't fit the slug, or the prefix.
+        + _ledger_ddl("plugin_ZZupd", 2)
+        + _ledger_ddl("zzupd_plugin", 2),
+        _script_sql("LEDGER_SQL"),
+    )
+    assert "plugin_zzupd_three 3" in rows
+    assert "plugin_zzupd_empty 0" in rows
+    assert not [r for r in rows if "ZZupd" in r or r.startswith("zzupd")]
+    # Every line is what the script's parser accepts.
+    assert all(re.fullmatch(r"plugin_[a-z0-9_]+ [0-9]+", r) for r in rows), rows
