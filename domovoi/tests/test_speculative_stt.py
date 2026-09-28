@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import threading
 import time
 import wave
 from contextlib import asynccontextmanager
@@ -180,7 +181,7 @@ def pipeline(monkeypatch):
             matched_path="fast", online=True,
         )
 
-    async def _identify(pcm):
+    async def _identify(pcm, **kw):
         return None
 
     monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
@@ -472,6 +473,169 @@ def test_noisy_capture_discards_the_copy(pipeline) -> None:
         sess = app.state.active_sessions["kitchen"]
         assert sess._spec is None and not sess._spec_on
     assert pipeline["routed"] == []
+
+
+# ─── voice identification: embedded early, matched once ───────────────────
+
+
+@pytest.fixture
+def voice_id(pipeline, monkeypatch):
+    """Records each speculative embedding (its audio length) and each
+    identify() call (audio length, and the embedding it was handed)."""
+    seen: dict = {"embed": [], "identify": []}
+
+    async def _embed(pcm):
+        seen["embed"].append(len(pcm))
+        return ("embedding of", len(pcm))
+
+    async def _identify(pcm, **kw):
+        seen["identify"].append((len(pcm), kw.get("embedding", "embed it here")))
+        return None
+
+    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", _embed)
+    monkeypatch.setattr("domovoi.voice_identifier.identify", _identify)
+    return seen
+
+
+def test_a_reused_copy_hands_its_embedding_to_the_one_identification(pipeline, voice_id, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    pipeline["whisper"] = _WatchedWhisper("set a timer for ten minutes", delay=0.05)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 30 + [QUIET] * 8)
+        ws.send_text(_pause(1, 38, 29))
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(1, frames=70, last=29))
+        _finish_turn(ws)
+    assert voice_id["embed"] == [38 * FRAME_BYTES]
+    assert voice_id["identify"] == [(70 * FRAME_BYTES, ("embedding of", 38 * FRAME_BYTES))]
+
+
+def test_a_copy_too_short_to_embed_leaves_the_embedding_to_the_turn(pipeline, voice_id, monkeypatch) -> None:
+    """Below the embedder's minimum the copy gets no embedding, but the
+    whole capture (copy + trailing silence) may clear it: the turn embeds
+    its own audio, as it did before speculation existed."""
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    pipeline["whisper"] = _WatchedWhisper("stop", delay=0.05)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 15 + [QUIET] * 8)          # 690 ms copy
+        ws.send_text(_pause(1, 23, 14))
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(1, frames=55, last=14))
+        _finish_turn(ws)
+    assert voice_id["embed"] == []
+    assert voice_id["identify"] == [(55 * FRAME_BYTES, "embed it here")]
+    (_, doc), = pipeline["routed"]
+    assert doc["stt_reused"] is True
+
+
+def test_a_discarded_copy_is_never_identified(pipeline, voice_id) -> None:
+    """Identification has side effects (last_seen, the drift counter and
+    its re-enrolment), so a copy the turn throws away was only embedded:
+    the turn identifies once, from its own audio, as it always did."""
+    pipeline["whisper"] = _WatchedWhisper("set a timer", "set a timer for ten minutes", delay=0.05)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 20 + [QUIET] * 8)
+        ws.send_text(_pause(1, 28, 19))
+        time.sleep(0.1)
+        _send(ws, [LOUD] * 10 + [QUIET] * 40)
+        ws.send_text(_end(1, frames=78, last=37))
+        _finish_turn(ws)
+        # And a copy left behind by an utterance that was started over.
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 2}))
+        _send(ws, [LOUD] * 20 + [QUIET] * 8)
+        ws.send_text(_pause(2, 28, 19))
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 3}))
+        _send(ws, [LOUD] * 5 + [QUIET] * 5)
+        ws.send_text(_end(3, frames=10, last=4))
+        _finish_turn(ws)
+    assert voice_id["identify"] == [
+        (78 * FRAME_BYTES, "embed it here"),
+        (10 * FRAME_BYTES, "embed it here"),
+    ]
+
+
+def test_embedding_alone_touches_nothing(monkeypatch) -> None:
+    """embed_voice is the pure part: no database, no drift counter. And
+    identify() handed an embedding doesn't embed again."""
+    from domovoi import voice_identifier
+
+    def _no_db():
+        raise AssertionError("the database was touched")
+
+    monkeypatch.setattr(voice_identifier, "session_scope", _no_db)
+    hits = dict(voice_identifier._NEAR_THRESHOLD_HITS)
+    emb = asyncio.run(voice_identifier.embed_voice(LOUD * 40))
+    assert emb is not None and emb.shape == (voice_identifier.EMBEDDING_DIM,)
+    assert voice_identifier._NEAR_THRESHOLD_HITS == hits
+
+    def _no_embedder():
+        raise AssertionError("embedded twice")
+
+    monkeypatch.setattr(voice_identifier, "get_voice_embedder", _no_embedder)
+    # The database part fails here (on purpose) and degrades as it always
+    # has; the embedding handed in is the one the result carries.
+    result = asyncio.run(voice_identifier.identify(LOUD * 40, embedding=emb))
+    assert result.embedding is emb and result.person_id is None
+
+
+class _ThreadWhisper:
+    """The real client's shape: the decode runs in a worker thread
+    (asyncio.to_thread), which cancelling the awaiting task cannot stop."""
+
+    def __init__(self, text: str, delay: float) -> None:
+        self.text, self.delay = text, delay
+        self.lock = threading.Lock()
+        self.running = 0
+        self.max_running = 0
+        self.calls = 0
+
+    def _decode(self) -> str:
+        with self.lock:
+            self.calls += 1
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+        try:
+            time.sleep(self.delay)
+        finally:
+            with self.lock:
+                self.running -= 1
+        return self.text
+
+    async def transcribe(self, pcm: bytes) -> str:
+        return await asyncio.to_thread(self._decode)
+
+    async def transcribe_wav_bytes(self, wav: bytes) -> str:
+        return self.text
+
+
+def test_a_cancelled_copy_still_holds_the_rooms_decoder_until_its_thread_ends(pipeline) -> None:
+    """noisy_capture cancels the copy being decoded, but the decode thread
+    runs on; the next utterance's decode waits for it rather than run
+    beside it."""
+    whisper = pipeline["whisper"] = _ThreadWhisper("pause", delay=0.6)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 8)
+        ws.send_text(_pause(1, 18, 9))
+        ws.send_text(json.dumps({"type": "noisy_capture"}))
+        assert ws.receive_json()["type"] == "response_start"
+        ws.receive_bytes()
+        assert ws.receive_json()["type"] == "response_end"
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 2}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 8)
+        ws.send_text(_pause(2, 18, 9))
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(2, frames=50, last=9))
+        assert _finish_turn(ws) == "pause"
+    assert whisper.calls == 2
+    assert whisper.max_running == 1
 
 
 # ─── a satellite that doesn't report its pauses ───────────────────────────

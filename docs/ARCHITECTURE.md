@@ -109,7 +109,7 @@ prose:
    **Speculative transcription:** the Pi only sends `utterance_end` after
    `listen.silence_timeout` (1.2 s) of silence, but its frames arrive as
    they are spoken, so at the first ~240 ms pause the core copies the
-   buffer and starts Whisper and voice identification on the copy. At
+   buffer and starts Whisper and the voice embedding on the copy. At
    `utterance_end` it uses that transcript if and only if the Pi's last
    voiced frame is inside the copy — exact frame accounting, from
    `last_voiced_frame` in `utterance_end` (new satellites, which also send

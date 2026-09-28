@@ -30,7 +30,7 @@ sequenceDiagram
     Pi->>WS: binary PCM (16 kHz mono int16, streamed)
     Note over WS: first ~240 ms pause after speech<br/>(speech_pause, or judged from the frames)
     WS->>STT: transcribe(copy so far) — speculative
-    WS->>VID: identify(copy so far) — alongside
+    WS->>VID: embed(copy so far) — alongside, no side effects
     Pi->>WS: binary PCM (the rest of the silence timeout)
     STT-->>WS: transcript (held)
     Pi->>WS: utterance_end {greeting_played, frames,<br/>last_voiced_frame}
@@ -40,7 +40,7 @@ sequenceDiagram
         WS-->>Pi: end_capture {utt} — early commit, before utterance_end
     end
     alt last voiced frame inside the copy
-        Note over WS: use the held transcript and voice ID
+        Note over WS: use the held transcript and embedding
     else speech came after the copy (or no copy)
         WS->>STT: transcribe(pcm) — after any decode in flight
         STT-->>WS: transcript
@@ -48,7 +48,7 @@ sequenceDiagram
     Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC
     WS-->>Pi: transcript {text}
 
-    WS->>VID: identify(pcm) — unless the held copy's result is used
+    WS->>VID: identify(pcm) — match only, when the held copy's embedding is used
     VID-->>WS: person_id, presence_tier, embedding (best-effort)
 
     Note over WS: chat-mode check: if the session is in<br/>conversational mode, bypass the router<br/>entirely (Letta turn) — not shown here

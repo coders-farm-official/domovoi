@@ -276,7 +276,7 @@ journalctl -u domovoi-core | grep 'turn timings'
 | `endpoint_silence_ms` | the silence the satellite waited out after your last word before it stopped listening — `listen.silence_timeout`, give or take a frame |
 | `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
 | `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
-| `identify_ms` | voice identification (which household member spoke) |
+| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran alongside that decode, so this is only the lookup |
 | `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |

@@ -30,7 +30,10 @@ The stages, in pipeline order, all integer milliseconds:
     close to 0 when the speculative decode finished while the satellite
     was still counting silence.
 ``identify_ms``
-    Voice identification (the embedding plus the profile lookup).
+    Voice identification (the embedding plus the profile lookup). When
+    the turn used a speculative transcript at least
+    ``voice_profile_min_utterance_sec`` long, the embedding was computed
+    alongside that decode and this is the lookup alone.
 ``route_ms``
     The routing transaction: ``route()`` (fast path or language model, the
     handler, the audit writes), the voice-profile hooks, and the commit.
