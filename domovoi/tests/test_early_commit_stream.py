@@ -420,6 +420,42 @@ def test_a_late_utterance_end_for_another_capture_is_ignored(commit_on) -> None:
     assert "post_commit_voiced_ms" not in timings.stages
 
 
+def test_an_early_commit_is_kept_like_any_command_recording(commit_on, monkeypatch) -> None:
+    """With opt-in command recordings (domovoi/command_captures.py): a
+    capture the core ended itself is kept like one the satellite ended —
+    the recording is every frame the core held when it stopped listening,
+    and the sidecar says the core ended it."""
+    kept: list = []
+
+    async def _keep(room_id, pcm, sidecar):
+        kept.append((room_id, len(pcm), sidecar))
+        return sidecar["id"]
+
+    monkeypatch.setattr("domovoi.command_captures.keep", _keep)
+    commit_on["whisper"] = _WatchedWhisper("Pause the music.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _speak_then_pause(ws)
+        _send(ws, [QUIET] * (HOLD_A_FRAMES - 8))
+        frames += HOLD_A_FRAMES - 8
+        assert ws.receive_json() == {"type": "end_capture", "utt": 1}
+        assert _finish_turn(ws) == "Pause the music."
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            "voiced_frames": 20, "trailing_silent_frames": HOLD_A_FRAMES,
+            "silence_limit_frames": 40,
+        }))
+        _barrier(ws)
+    ((room, pcm_len, sidecar),) = kept
+    assert room == "kitchen" and pcm_len == frames * 960
+    assert sidecar["trigger"] == "wake_word"
+    assert sidecar["transcript"] == "Pause the music."
+    assert sidecar["end_reason"] == "server_endpoint"
+    assert sidecar["capture"] == {"frames": frames, "trailing_silent_frames": HOLD_A_FRAMES}
+    assert sidecar["timings"]["early_commit"] == "A"
+
+
 def test_early_commit_needs_every_condition() -> None:
     """The gate at utterance_start, condition by condition."""
     ws = types.SimpleNamespace(app=types.SimpleNamespace(state=types.SimpleNamespace(satellite_config={})))

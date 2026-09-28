@@ -647,6 +647,9 @@ class _FakeWS:
                 satellite_voice={}, wifi_status={}, satellite_volume={},
                 greeting_phrases=[], resumable_music={}, current_playlist={},
                 active_sessions={}, probe=types.SimpleNamespace(online=True),
+                # Every real app has it (main.py); the speculative-transcription
+                # gate reads a satellite's reported silence timeout from it.
+                satellite_config={},
             )
         )
         self.sent_text: list[dict] = []
