@@ -131,6 +131,12 @@ threshold = 0.5
 enabled = true
 # Probability (0–1) a wake greeting is a funny one rather than a plain one.
 funny_chance = 0.2
+# When the mic does hear some of the greeting (AEC isn't perfect), the
+# capture ignores it for endpointing and then waits this many seconds for
+# you to start talking before it sends what it has — so pausing after
+# "Back so soon?" no longer ends the capture on the greeting alone. The
+# server drops a capture that is only the greeting.
+reply_wait = 2.5
 
 [chat]
 # Conversational chat mode (Feature #8) has NO satellite-side config knob —

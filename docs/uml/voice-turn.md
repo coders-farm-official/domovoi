@@ -28,12 +28,12 @@ sequenceDiagram
     Note over Pi: wake word detected<br/>(openWakeWord, on-Pi)
     Pi->>WS: utterance_start {trigger:"wake_word"}
     Pi->>WS: binary PCM (16 kHz mono int16, streamed)
-    Pi->>WS: utterance_end {greeting_played}
+    Pi->>WS: utterance_end {greeting_played, greeting_clip}
     Note over WS: receive loop spawns a response task<br/>and keeps draining the socket<br/>(so a barge_in still lands)
 
     WS->>STT: transcribe(pcm)
     STT-->>WS: transcript
-    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC
+    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC, and end the turn<br/>if the transcript is only the greeting
     WS-->>Pi: transcript {text}
 
     WS->>VID: identify(pcm)

@@ -143,12 +143,18 @@ async def seed_voices() -> None:
         )
 
 
-async def load_greeting_phrases() -> list[str]:
-    """The enabled wake-word greeting texts, with ``{name}`` resolved to the
-    bot name — the same lines the satellites play on wake. Stamped into
-    ``app.state.greeting_phrases`` so the streaming layer can strip a
-    greeting that bled past the array AEC out of a transcript (see
-    domovoi/greeting_filter.py). Best-effort: a DB hiccup yields []."""
+async def load_greeting_bank() -> tuple[list[str], dict[str, str]]:
+    """The enabled wake-word greetings, with ``{name}`` resolved to the bot
+    name — the same lines the satellites play on wake — as the list of
+    texts and as a map from each rendered clip's file name
+    (``greet_<hash>.mp3``, see canned_sounds._greeting_entries) to its
+    text. Stamped into ``app.state.greeting_phrases`` /
+    ``greeting_clips`` so the streaming layer can strip a greeting that
+    bled past the array AEC out of a transcript, or drop a transcript that
+    is only the greeting — against the exact clip the satellite says it
+    played, when it says (see domovoi/greeting_filter.py). Best-effort: a
+    DB hiccup yields ([], {})."""
+    from domovoi.canned_sounds import _greeting_entries
     from domovoi.db.repositories import ClientGreetingsRepository
 
     try:
@@ -156,9 +162,11 @@ async def load_greeting_phrases() -> list[str]:
             rows = await ClientGreetingsRepository(s).all_enabled()
     except Exception as e:
         log.warning("could not load greeting phrases for transcript filtering: %s", e)
-        return []
+        return [], {}
     name = settings.bot_name
-    return [text.replace("{name}", name) for text, _ in rows]
+    phrases = [text.replace("{name}", name) for text, _ in rows]
+    clips = {mp3: text for mp3, _sidecar, text in _greeting_entries(list(rows))}
+    return phrases, clips
 
 
 def _register_core_reapply_hooks() -> None:
@@ -245,7 +253,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Enabled greeting texts, for stripping a bled-in wake greeting out of
     # transcripts (greeting_filter). Refreshed by the regenerate endpoint
     # when the bank is edited.
-    app.state.greeting_phrases = await load_greeting_phrases()
+    app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
 
     # §12 startup-hook milestone: the boot DB work above (voice seed +
     # greeting load) has run, so plugin hooks with after="core.db_ready"
@@ -2477,7 +2485,7 @@ async def _run_sounds_regenerate() -> None:
         await regenerate_canned_sounds()
         # The greeting bank may have changed — refresh the cached phrases used
         # to strip a bled-in greeting from transcripts.
-        app.state.greeting_phrases = await load_greeting_phrases()
+        app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
         notified: list[str] = []
         for sess in list(app.state.active_sessions.values()):
             try:

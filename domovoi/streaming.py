@@ -48,11 +48,16 @@ Client → Server
                            special-case the trigger — it just buffers as usual
                            and the recording-mode branch in utterance_end
                            diverts the audio).
-  text  utterance_end      {"type":"utterance_end","greeting_played":bool}
+  text  utterance_end      {"type":"utterance_end","greeting_played":bool,
+                            "greeting_clip":str}
                            — `greeting_played` (optional) marks turns where
                            the Pi played a wake greeting concurrent with
                            capture, so the server strips a greeting that bled
-                           past the AEC out of the transcript.
+                           past the AEC out of the transcript, and drops a
+                           turn that is nothing but the greeting.
+                           `greeting_clip` (optional) names the clip that
+                           played (greet_<hash>.mp3) so only that line is
+                           matched; absent, the whole greeting bank is.
   text  barge_in           {"type":"barge_in"} — sent during TTS playback
   text  noisy_capture      {"type":"noisy_capture"} — Pi-side noise-gate auto-tune
                            detected an unusably-loud capture and bailed.
@@ -1359,12 +1364,16 @@ class StreamSession:
                 return
             # The Pi flags turns where it played a wake greeting concurrent
             # with capture; if so we strip a bled-in greeting (past the AEC)
-            # from the transcript before routing.
+            # from the transcript before routing, or drop a turn that is
+            # nothing but the greeting. A satellite that knows which clip it
+            # played names it (`greeting_clip`), so only that line is matched.
             greeting_played = bool(ctrl.get("greeting_played"))
+            greeting_clip = ctrl.get("greeting_clip")
             self._response_task = asyncio.create_task(
                 self._process_utterance(
                     pcm, greeting_played=greeting_played, trigger=trigger,
                     received_at=received_at,
+                    greeting_clip=greeting_clip if isinstance(greeting_clip, str) else None,
                 )
             )
             return
@@ -1550,6 +1559,19 @@ class StreamSession:
                 "expect_followup": False,
             })
 
+    def _greeting_candidates(self, clip: str | None) -> tuple[list[str], bool]:
+        """The greeting lines a greeting-played transcript is checked
+        against, and whether that is the one line known to have played.
+        A satellite that names its clip (``greeting_clip``, the rendered
+        file ``greet_<hash>.mp3``) gets exactly that clip's text; an older
+        satellite, or a clip this server's bank doesn't know, gets the
+        whole enabled bank as before."""
+        state = self.ws.app.state
+        text = (getattr(state, "greeting_clips", None) or {}).get(clip) if clip else None
+        if text:
+            return [text], True
+        return list(getattr(state, "greeting_phrases", None) or []), False
+
     async def _speak_system_line(self, text: str, *, matched_handler: str) -> bool:
         """Speak a fixed line that isn't an intent's answer (the
         noisy-capture apology, the STT-unavailable notice): response_start,
@@ -1601,6 +1623,7 @@ class StreamSession:
         greeting_played: bool = False,
         trigger: str | None = None,
         received_at: float | None = None,
+        greeting_clip: str | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -1624,13 +1647,39 @@ class StreamSession:
             # mean." → greeting + command). Strip a known leading greeting so
             # only the real command routes.
             if greeting_played:
-                from domovoi.greeting_filter import strip_leading_greeting
-                phrases = getattr(self.ws.app.state, "greeting_phrases", [])
+                from domovoi.greeting_filter import (
+                    is_greeting_only,
+                    strip_leading_greeting,
+                )
+                phrases, played = self._greeting_candidates(greeting_clip)
                 if phrases:
                     cleaned = strip_leading_greeting(transcript, phrases)
                     if cleaned != transcript:
                         log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
                         transcript = cleaned
+                    # Nothing BUT the greeting: the capture closed on the
+                    # pause after it, before the user said anything (office
+                    # row #187: "Back so soon?" came back as "Back so soon."
+                    # and was answered as a command). Domovoi's own words are
+                    # never a command — end the turn the way the blank guard
+                    # below does: no speech, no DB row, mic released.
+                    if is_greeting_only(transcript, phrases, played=played):
+                        log.warning(
+                            "greeting echo: dropping %s turn in room=%s — the "
+                            "transcript %r is only the wake greeting%s coming "
+                            "back through the mic. If this repeats, the array's "
+                            "echo cancellation is letting the greeting through: "
+                            "check [music] alsa_device, or turn the wake "
+                            "greeting off for this room.",
+                            trigger, self.room_id, transcript,
+                            f" ({greeting_clip})" if greeting_clip else "",
+                        )
+                        await self._safe_send_text({
+                            "type": "response_end",
+                            "interrupted": True,
+                            "expect_followup": False,
+                        })
+                        return
 
             # Self-echo guard. A barge-triggered capture opens WHILE the
             # speaker is still playing and carries the frames that tripped
@@ -1686,8 +1735,10 @@ class StreamSession:
             # Seen on hardware: every conversation_log row for the room
             # had user_text "" and the same reply. End the turn with no
             # speech and no DB row; interrupted=True releases the Pi's mic
-            # immediately (see the self-echo drop above for why).
-            if not transcript.strip():
+            # immediately (see the self-echo drop above for why). A
+            # transcript of punctuation alone (office row #114 was ".") is
+            # just as empty.
+            if not any(ch.isalnum() for ch in transcript):
                 log.warning(
                     "blank capture in room=%s (trigger=%s, %.1fs of audio): "
                     "nothing transcribed, not routing. If this repeats after "

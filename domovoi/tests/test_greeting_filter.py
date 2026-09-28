@@ -8,7 +8,9 @@ real command that merely starts with greeting-like words.
 
 from __future__ import annotations
 
-from domovoi.greeting_filter import strip_leading_greeting
+import pytest
+
+from domovoi.greeting_filter import is_greeting_only, strip_leading_greeting
 
 _BANK = ["Hey!", "Hi there.", "What's up?", "Go ahead.", "Domovoi here."]
 
@@ -132,3 +134,102 @@ def test_lookalike_command_keeps_its_verb():
     assert strip_leading_greeting(s, bank) == s
     # Same guard, two-word greeting: no fuzzy path at all.
     assert strip_leading_greeting("I'm already, play jazz", _FUZZY_BANK) == "I'm already, play jazz"
+
+
+# ─── is_greeting_only: the satellite hearing nothing but its own greeting ───
+#
+# Office row #187 (2026-09-28): the greeting "Back so soon?" bled past the
+# AEC, the capture closed on the pause after it, and "Back so soon." was
+# answered as a command. The bank below is the shipped V001 seed, read from
+# the migration so a new greeting is covered the day it lands.
+
+
+def _v001_bank() -> list[str]:
+    import re
+    from pathlib import Path
+
+    sql = (
+        Path(__file__).resolve().parents[1] / "db" / "migrations" / "V001__baseline.sql"
+    ).read_text(encoding="utf-8")
+    block = sql[sql.index("INSERT INTO client_greetings"):]
+    block = block[: block.index(";\n") + 1]
+    texts = re.findall(r"\('((?:[^']|'')*)',\s*'(?:generic|funny)'\)", block)
+    return [t.replace("''", "'").replace("{name}", "Domovoi") for t in texts]
+
+
+_V001 = _v001_bank()
+
+
+def test_the_bank_fixture_is_the_real_seed():
+    assert "Back so soon?" in _V001 and "I'm listening." in _V001
+    assert len(_V001) > 40
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "Back so soon.",            # #187, verbatim
+        "Back so soon?",
+        "back so soon",
+        "  BACK  so soon!  ",
+        "Backsosoon.",              # words merged
+        "Uh, back so soon?",        # hesitation around it
+        "Back so soon? Um.",
+        "I'm listening.",           # #169 ("Nice to meet you, Listening.")
+        "I am listening.",          # contraction written out
+        "I’m listening.",           # curly apostrophe
+        "I‘m listening.",           # the other curly one
+        "Howdy.",                   # #175 isn't in V001; see the bank test below
+        "Hello.",                   # #168
+        "Hey.",                     # #45
+        "Big boob, how can I help?",   # "Beep boop. How can I help?" as Whisper heard it
+        "Domovoi, reporting for duty.",
+    ],
+)
+def test_greeting_only_transcripts_are_recognised(transcript):
+    bank = _V001 + ["Howdy!"]
+    assert is_greeting_only(transcript, bank)
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "Tell me a joke.",                          # #188, the user's real request
+        "Back so soon? Tell me a joke.",            # greeting + command (strip's job)
+        "What time is it?",
+        "What's going on here?",                    # a greeting plus a real word
+        "How's it going with the timer?",
+        "Hello, what's the weather?",
+        "Play some jazz.",
+        "Make it quiet, please.",                   # look-alike of "Make it quick."
+        "I'm already home.",
+        "",
+        "...",
+    ],
+)
+def test_commands_are_not_greeting_only(transcript):
+    assert not is_greeting_only(transcript, _V001)
+
+
+def test_a_short_greeting_needs_the_played_clip_to_match_loosely():
+    # Against the whole bank a one-word greeting must match exactly...
+    assert not is_greeting_only("I'm listenin.", _V001)
+    assert not is_greeting_only("Hallo.", _V001)
+    # ...but when the satellite names the clip that played, a close
+    # mistranscription of that one line is recognised.
+    assert is_greeting_only("I'm listenin.", ["I'm listening."], played=True)
+    assert is_greeting_only("Hallo.", ["Hello!"], played=True)
+    assert not is_greeting_only("Hi.", ["Hey!"], played=True)
+    assert not is_greeting_only("Yes.", ["Yeah?"], played=True)
+
+
+def test_only_the_played_greeting_counts_when_it_is_known():
+    # The caller passes just the clip that played; another bank line is a
+    # person talking.
+    assert not is_greeting_only("Hello.", ["Back so soon?"], played=True)
+    assert is_greeting_only("Back so soon.", ["Back so soon?"], played=True)
+
+
+def test_the_strip_still_preserves_a_greeting_only_turn():
+    # Unchanged contract: the strip leaves it, the new check drops it.
+    assert strip_leading_greeting("Back so soon.", _V001) == "Back so soon."

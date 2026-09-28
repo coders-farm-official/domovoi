@@ -32,6 +32,11 @@ exactly or not at all.
 
 Whatever the match, the clause-boundary rule still gates the strip: the
 greeting must end at punctuation and real content must follow.
+
+A transcript that is *only* the greeting is the other half of the same
+bleed: the capture closed on the pause after the greeting, before the user
+spoke. :func:`is_greeting_only` recognises it so the streaming layer can
+drop the turn instead of routing Domovoi's own words as a command.
 """
 
 from __future__ import annotations
@@ -59,12 +64,43 @@ FUZZY_MIN_RATIO = 0.75
 FUZZY_MIN_MATCHED_WORDS = 3
 
 
+# Every apostrophe Whisper or a greeting bank might spell a contraction
+# with: straight, curly (right and left), modifier letter, backtick, acute.
+_APOSTROPHES = str.maketrans("", "", "'’‘ʼ`´")
+
+
 def _norm(text: str) -> str:
     """Lowercase, collapse to alnum words. Apostrophes are deleted (so
-    "what's" → "whats", one token) while other punctuation becomes a word
-    boundary."""
-    lowered = text.lower().replace("'", "").replace("’", "")
+    "what's" → "whats", one token) while other punctuation — quotes of any
+    kind included — becomes a word boundary."""
+    lowered = text.lower().translate(_APOSTROPHES)
     return " ".join(_NON_ALNUM.sub(" ", lowered).split())
+
+
+# Whisper writes a contraction out in full as often as not ("I am
+# listening." for the greeting "I'm listening."); fold the common ones to
+# the contracted spelling, which is how _norm leaves the greeting.
+_EXPANSIONS = (
+    (re.compile(r"\bi am\b"), "im"),
+    (re.compile(r"\byou are\b"), "youre"),
+    (re.compile(r"\bwhat is\b"), "whats"),
+    (re.compile(r"\bit is\b"), "its"),
+    (re.compile(r"\bthat is\b"), "thats"),
+    (re.compile(r"\bhere is\b"), "heres"),
+    (re.compile(r"\bwho is\b"), "whos"),
+    (re.compile(r"\blet us\b"), "lets"),
+    (re.compile(r"\bi will\b"), "ill"),
+    (re.compile(r"\bdo not\b"), "dont"),
+    (re.compile(r"\bcan ?not\b"), "cant"),
+)
+
+
+def _canon(text: str) -> str:
+    """:func:`_norm`, with written-out contractions folded."""
+    n = _norm(text)
+    for pattern, contracted in _EXPANSIONS:
+        n = pattern.sub(contracted, n)
+    return n
 
 
 # Punctuation that marks a break after the greeting. A bled-in greeting is
@@ -154,3 +190,82 @@ def strip_leading_greeting(
 
     remainder = " ".join(orig_tokens[best_k:]).strip()
     return remainder or transcript
+
+
+# How close a transcript must be to the one greeting that is known to have
+# played (the satellite names its clip) to count as that greeting, compared
+# with the spaces taken out. Looser than FUZZY_MIN_RATIO because there is a
+# single candidate rather than a whole bank.
+KNOWN_GREETING_MIN_RATIO = 0.8
+
+# Hesitation noises Whisper may put around a bled-in greeting ("Uh, back so
+# soon?"). Only these may pad a greeting-only match; any other extra word
+# makes it a sentence of the user's ("What's going on here?").
+_FILLER = frozenset((
+    "uh", "um", "umm", "uhm", "er", "erm", "ah", "oh", "hmm", "hm", "mm", "mhm",
+))
+
+
+def _unpadded(words: list[str]) -> list[str]:
+    start, end = 0, len(words)
+    while start < end and words[start] in _FILLER:
+        start += 1
+    while end > start and words[end - 1] in _FILLER:
+        end -= 1
+    return words[start:end]
+
+
+def is_greeting_only(transcript: str, greeting_phrases, *, played: bool = False) -> bool:
+    """Whether ``transcript`` is nothing but one of ``greeting_phrases`` —
+    the satellite hearing its own wake greeting, not a command.
+
+    Office row #187 on 2026-09-28: the greeting "Back so soon?" bled past
+    the array's AEC, the capture ended on the pause after it, and Whisper's
+    "Back so soon." was routed to the LLM as if the user had said it.
+    :func:`strip_leading_greeting` deliberately leaves such a turn alone
+    (there is no content after the greeting to keep); this is the check
+    that lets the caller drop it.
+
+    Tolerant the way a bled-in greeting is mistranscribed: case,
+    punctuation, whitespace, any style of apostrophe or quote, written-out
+    contractions ("I am listening."), words merged or split ("Hey there" /
+    "Heythere"), hesitation noises around it ("Uh, back so soon?").
+    Greetings of ``FUZZY_MIN_MATCHED_WORDS`` or more words also match
+    fuzzily under the same rule as the leading strip, with a word fewer
+    allowed but never one more. ``played=True`` says ``greeting_phrases``
+    is the single greeting known to have played this turn, which allows a
+    close match for a short greeting as well
+    (``KNOWN_GREETING_MIN_RATIO``); against the whole bank a short
+    greeting must match exactly, because "Hello." and "Yes?" are also
+    things a person says.
+    """
+    words = _canon(transcript).split()
+    if not words:
+        return False
+    forms = {" ".join(words)}
+    unpadded = _unpadded(words)
+    if unpadded:
+        forms.add(" ".join(unpadded))
+    for phrase in greeting_phrases:
+        p = _canon(phrase)
+        if not p:
+            continue
+        p_words = p.split()
+        p_compact = p.replace(" ", "")
+        for t in forms:
+            t_words = t.split()
+            if t == p or t.replace(" ", "") == p_compact:
+                return True
+            if not len(p_words) - 1 <= len(t_words) <= len(p_words):
+                continue
+            if len(p_words) >= FUZZY_MIN_MATCHED_WORDS:
+                shared = _matched_words(t, p)
+                if (
+                    _similarity(t, p) >= FUZZY_MIN_RATIO
+                    and shared >= FUZZY_MIN_MATCHED_WORDS
+                    and shared * 2 >= len(p_words)
+                ):
+                    return True
+            elif played and _similarity(t.replace(" ", ""), p_compact) >= KNOWN_GREETING_MIN_RATIO:
+                return True
+    return False

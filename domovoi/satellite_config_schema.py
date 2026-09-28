@@ -125,6 +125,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "a plain one.",
         "float", min=0.0, max=1.0,
     ),
+    FieldSpec(
+        "greeting.reply_wait", "Wait for you after the greeting", "Greeting",
+        "When the mic hears part of the wake greeting (echo cancellation "
+        "isn't perfect), how long the satellite waits for you to start "
+        "talking after the greeting before it sends what it heard. Raise it "
+        "if pausing after the greeting still cuts you off. Default 2.5 s.",
+        "float", min=0.5, max=10.0, unit="sec",
+    ),
 
     # ─── Playback ──────────────────────────────────────────────────────
     FieldSpec(

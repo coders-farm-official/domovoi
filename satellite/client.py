@@ -67,6 +67,10 @@ SAMPLE_RATE = 16_000
 FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)  # 480
 FRAME_BYTES = FRAME_SAMPLES * 2  # int16 = 2 bytes/sample
+# After the wake greeting's player exits, how many more mic frames still
+# belong to it: USB/DAC latency plus the room's reverb (~300 ms). See the
+# greeting-aware endpointing in `_stream_capture`.
+_GREETING_TAIL_FRAMES = 300 // FRAME_MS
 
 # Log format, shared by the stderr handler (journald picks that up) and by
 # the in-memory ring the dashboard reads, so a line looks identical whether
@@ -409,6 +413,7 @@ class Config:
     output_mixer_control: str | None
     greeting_enabled: bool
     greeting_funny_chance: float
+    greeting_reply_wait: float
     sounds_sync_enabled: bool
     voice_name: str | None
     device: DeviceProfile
@@ -586,6 +591,9 @@ class Config:
             # out of the concurrent capture — disable on a board without AEC.
             greeting_enabled=bool(greeting.get("enabled", True)),
             greeting_funny_chance=float(greeting.get("funny_chance", 0.2)),
+            # How long a wake capture waits for the user after a greeting the
+            # mic partly heard (see `_stream_capture`).
+            greeting_reply_wait=float(greeting.get("reply_wait", 2.5)),
             # Pull rendered sound clips (greetings/canned) from the
             # server on connect instead of relying on a manual rsync.
             sounds_sync_enabled=bool(sounds.get("sync_enabled", True)),
@@ -960,6 +968,10 @@ class Satellite:
         # past the AEC out of the transcript. Set when a greeting plays,
         # reset when reported (and at the start of each wake decision).
         self._greeting_played_this_turn = False
+        # The clip that played (its file name, greet_<hash>.mp3), sent with
+        # the flag so the server matches the transcript against that one
+        # line rather than the whole greeting bank.
+        self._greeting_clip_name: str | None = None
 
         # State-indicator LEDs. Backend depends on the device profile:
         # APA102 over SPI on the ReSpeaker HAT, or the WS2812 ring driven
@@ -1618,10 +1630,18 @@ class Satellite:
                 # Mark the turn so the server strips a greeting that
                 # bleeds past the AEC out of the transcript.
                 self._greeting_played_this_turn = True
+                self._greeting_clip_name = clip.name
                 log.info("greeting: %s", clip.name)
             except FileNotFoundError:
                 log.debug("mpg123 not installed; skipping greeting")
                 self._greeting_proc = None
+
+    def _greeting_playing(self) -> bool:
+        """Whether this turn's wake greeting is still coming out of the
+        speaker (its mpg123 hasn't exited)."""
+        with self._greeting_lock:
+            proc = self._greeting_proc
+        return proc is not None and proc.poll() is None
 
     def _stop_greeting(self) -> None:
         with self._greeting_lock:
@@ -2301,6 +2321,7 @@ class Satellite:
             "listen.followup_pre_speech_timeout": c.followup_pre_speech_timeout,
             "greeting.enabled": c.greeting_enabled,
             "greeting.funny_chance": c.greeting_funny_chance,
+            "greeting.reply_wait": c.greeting_reply_wait,
             "sounds.sync_enabled": c.sounds_sync_enabled,
             "playback.tts_prebuffer_sec": c.tts_prebuffer_sec,
             "playback.gain": c.tts_playback_gain,
@@ -3239,6 +3260,30 @@ class Satellite:
         pre_speech_silent = 0
         sent = 0
 
+        # Greeting-aware endpointing. On a wake turn the greeting clip is
+        # still playing while this capture runs (see `_wait_for_wake`). The
+        # array's AEC should keep it out of the mic; what gets past it trips
+        # VAD like speech, and the capture used to end `silence_timeout`
+        # after the greeting — on the pause a person leaves after "Back so
+        # soon?" — holding nothing but the greeting, while the real request
+        # went into a closed mic (office satellite, 2026-09-28). So while the
+        # greeting plays, plus a short tail for the speaker and the room,
+        # frames still stream (speech over the greeting reaches the server,
+        # which strips the greeting off the front) but don't count toward
+        # endpointing. If the mic heard voice in that window, the user then
+        # gets `greeting_reply_wait` seconds to start, or carry on, talking
+        # before the capture is sent as it is — the server drops one that is
+        # only the greeting. If it heard nothing there, the capture runs
+        # exactly as it always has.
+        in_greeting = self._greeting_played_this_turn and self._greeting_playing()
+        greeting_tail_left: int | None = None
+        heard_in_greeting = 0
+        awaiting_reply = 0
+        reply_limit = (
+            max(1, int(self.cfg.greeting_reply_wait * 1000 / FRAME_MS))
+            if in_greeting else 0
+        )
+
         # Per-frame loudness — used after the loop for noisy-capture
         # detection and for the stats log so we can debug "why did
         # this capture take 15 seconds" without a packet capture.
@@ -3273,6 +3318,15 @@ class Satellite:
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
+            if in_greeting:
+                if greeting_tail_left is None and not self._greeting_playing():
+                    greeting_tail_left = _GREETING_TAIL_FRAMES
+                if greeting_tail_left is not None:
+                    greeting_tail_left -= 1
+                    in_greeting = greeting_tail_left >= 0
+                if in_greeting:
+                    heard_in_greeting += int(is_speech)
+                    continue
             if is_speech:
                 speaking = True
                 silent_frames = 0
@@ -3282,6 +3336,14 @@ class Satellite:
                 silent_frames += 1
                 if silent_frames >= silence_limit:
                     exit_reason = "vad_silence_after_speech"
+                    break
+            elif heard_in_greeting:
+                # Voice during the greeting, none since: either the greeting
+                # bled in or the user said it all over the greeting. Wait
+                # for more, then send what there is either way.
+                awaiting_reply += 1
+                if awaiting_reply >= reply_limit:
+                    exit_reason = "no_speech_after_greeting"
                     break
             elif pre_speech_limit is not None:
                 # Follow-up flow: counting up *before* any speech ever
@@ -3323,7 +3385,11 @@ class Satellite:
                 int(self.cfg.max_record_seconds), stats,
             )
         else:
-            log.info("capture ended (%s): %s", exit_reason, stats)
+            log.info(
+                "capture ended (%s): %s%s", exit_reason, stats,
+                f", {heard_in_greeting} voiced frames under the greeting"
+                if heard_in_greeting else "",
+            )
 
         # Noisy-capture detection: only fire when the audio is genuinely
         # saturated (clipping-adjacent), not whenever speech happens to
@@ -3358,12 +3424,18 @@ class Satellite:
                     return self._emit_text({"type": "noisy_capture"})
 
         self._leds.set_state("thinking")
-        delivered = self._emit_text({
+        end: dict[str, Any] = {
             "type": "utterance_end",
             "greeting_played": self._greeting_played_this_turn,
-        })
+        }
+        if self._greeting_played_this_turn and self._greeting_clip_name:
+            # Which line played, so the server matches just that one. A
+            # server that predates the field ignores it.
+            end["greeting_clip"] = self._greeting_clip_name
+        delivered = self._emit_text(end)
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False
+        self._greeting_clip_name = None
         if not delivered:
             log.info(
                 "capture ended with no session up; the utterance was dropped "

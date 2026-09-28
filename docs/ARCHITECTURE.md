@@ -101,7 +101,13 @@ prose:
 2. **STT.** The core transcribes the buffered utterance with Whisper
    (faster-whisper on CUDA or CPU; deterministic stub under `USE_STUBS=true`). If the
    Pi flagged `greeting_played`, a wake greeting that bled past the mic
-   array's echo cancellation is stripped from the transcript. Whisper loads
+   array's echo cancellation is stripped from the transcript, and a
+   transcript that is nothing but the greeting ends the turn unrouted (the
+   Pi names the clip it played, `greeting_clip`, so only that line
+   matches). The Pi, for its part, doesn't let the greeting end its own
+   capture: frames under it still stream but don't count toward
+   endpointing, and after a greeting the mic partly heard it waits
+   `greeting.reply_wait` seconds for the user. Whisper loads
    once at boot and a failed load is never fatal: the core drops to
    `whisper_cpu_fallback_model` on cpu/int8, and failing that runs without
    STT — a turn then gets a spoken "can't understand speech" notice and is

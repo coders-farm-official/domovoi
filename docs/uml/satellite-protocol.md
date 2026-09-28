@@ -39,7 +39,7 @@ sequenceDiagram
     Note over Pi: wake word fires
     Pi->>S: utterance_start {trigger:"wake_word"}
     Pi->>S: binary PCM …
-    Pi->>S: utterance_end {greeting_played}
+    Pi->>S: utterance_end {greeting_played, greeting_clip}
     S-->>Pi: transcript {text}
     S-->>Pi: response_start {text, matched_handler, matched_path,<br/>session_id, online, audio_sample_rate}
     S-->>Pi: binary PCM (TTS) …
@@ -52,7 +52,7 @@ sequenceDiagram
 |---|---|---|
 | `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. |
 | `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. |
-| `utterance_end` | `greeting_played` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC. |
+| `utterance_end` | `greeting_played`, `greeting_clip` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC, and to drop a turn whose transcript is nothing but that greeting. `greeting_clip` (optional, sent with `greeting_played`) names the clip that played (`greet_<hash>.mp3`), so the server matches only that line; without it the whole enabled greeting bank is used. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
 | `noisy_capture` | — | The Pi's noise-gate auto-tune found the capture unusably loud and bailed. The server answers with a stock apology TTS instead of transcribing. |
 | `wifi_status` | `rx_mbits`, `tx_mbits`, `ssid` | Periodic link-rate self-report (60 s default), cached per room for the "how's your wifi?" diagnostic. |

@@ -21,7 +21,7 @@ _EXPECTED_KEYS = {
     "listen.vad_aggressiveness", "listen.silence_timeout",
     "listen.max_record_seconds", "listen.followup_pre_speech_timeout",
     "noise_gate.dbfs", "noise_gate.auto_calibrate",
-    "greeting.enabled", "greeting.funny_chance",
+    "greeting.enabled", "greeting.funny_chance", "greeting.reply_wait",
     "playback.gain", "playback.tts_prebuffer_sec",
     "sounds.sync_enabled", "log.level",
     "mic.enabled",
