@@ -23,6 +23,7 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
+from domovoi.turn_timings import timings_for_row
 from domovoi.uncertainty import VOLATILE_CATEGORIES, categorize_question
 
 log = logging.getLogger(__name__)
@@ -123,7 +124,13 @@ async def _persist_turn(
     An unregistered value raises exactly where the CHECK used to abort.
     """
     registered_values.require("matched_path", matched_path)
-    await IntentLogRepository(session).log(
+    # A voice turn's stage timings (speech-to-text, voice identification,
+    # the capture length) go in with the row, in this same transaction;
+    # the stages after routing are merged into it by id once the reply is
+    # playing (domovoi/turn_timings.py). `latency_ms` stays what it always
+    # was: route() alone.
+    timings_doc = await timings_for_row(session, ctx.timings)
+    row_id = await IntentLogRepository(session).log(
         room_id=ctx.room_id,
         transcript=intent.transcript,
         matched_handler=matched_handler,
@@ -132,7 +139,10 @@ async def _persist_turn(
         latency_ms=latency_ms,
         person_id=ctx.person_id,
         presence_tier=ctx.presence_tier,
+        timings=timings_doc,
     )
+    if timings_doc is not None:
+        ctx.timings.intents_log_id = row_id
     await ConversationLogRepository(session).record_turn(
         session_id=session_id,
         room_id=ctx.room_id,
@@ -243,6 +253,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # trailing punctuation alongside the lowercase/strip pass so handlers
     # don't each have to defend against it.
     transcript = intent.transcript.lower().strip().rstrip(".,!?")
+    # latency_ms clock: route() alone. Speech-to-text has already happened
+    # and text-to-speech hasn't — a voice turn's other stages are in
+    # intents_log.timings (domovoi/turn_timings.py).
     t0 = time.monotonic()
 
     session_repo = SessionRepository(session)

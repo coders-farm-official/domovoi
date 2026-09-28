@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
+import json
 import logging
 import secrets
 
@@ -181,29 +183,42 @@ class IntentLogRepository:
         latency_ms: int | None,
         person_id: int | None = None,
         presence_tier: str | None = None,
-    ) -> None:
-        await self.s.execute(
+        timings: dict[str, Any] | None = None,
+    ) -> int:
+        """Write one row and return its id.
+
+        ``timings`` is a voice turn's stage document (domovoi/turn_timings.py).
+        The column is named only when a document is given, and callers get
+        one from ``turn_timings.timings_for_row``, which answers None while
+        V015 is missing — so a database that hasn't had the migration still
+        takes every row."""
+        cols = [
+            "room_id", "transcript", "matched_handler", "matched_path",
+            "online", "latency_ms", "person_id", "presence_tier",
+        ]
+        params: dict[str, Any] = {
+            "room_id": room_id,
+            "transcript": transcript,
+            "matched_handler": matched_handler,
+            "matched_path": matched_path,
+            "online": online,
+            "latency_ms": latency_ms,
+            "person_id": person_id,
+            "presence_tier": presence_tier,
+        }
+        values = [f":{c}" for c in cols]
+        if timings is not None:
+            cols.append("timings")
+            values.append("CAST(:timings AS jsonb)")
+            params["timings"] = json.dumps(timings)
+        row = await self.s.execute(
             text(
-                """
-                INSERT INTO intents_log
-                    (room_id, transcript, matched_handler, matched_path,
-                     online, latency_ms, person_id, presence_tier)
-                VALUES
-                    (:room_id, :transcript, :matched_handler, :matched_path,
-                     :online, :latency_ms, :person_id, :presence_tier)
-                """
+                f"INSERT INTO intents_log ({', '.join(cols)}) "
+                f"VALUES ({', '.join(values)}) RETURNING id"
             ),
-            {
-                "room_id": room_id,
-                "transcript": transcript,
-                "matched_handler": matched_handler,
-                "matched_path": matched_path,
-                "online": online,
-                "latency_ms": latency_ms,
-                "person_id": person_id,
-                "presence_tier": presence_tier,
-            },
+            params,
         )
+        return int(row.scalar_one())
 
 
 class ConversationLogRepository:

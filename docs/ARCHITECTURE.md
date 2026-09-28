@@ -144,6 +144,15 @@ row (routing decision, latency, presence), one `conversation_log` row (full
 user/assistant text), and an append to the session's `recent_turns`. This is
 centralized and non-optional — see [Invariants](#9-invariants).
 
+A turn spoken to a satellite also carries a per-stage stopwatch
+(`domovoi/turn_timings.py`, on `Context.timings`): capture length,
+speech-to-text, voice identification and the Whisper that ran are written
+in that same `intents_log` insert (`timings`, V015); the routing
+transaction, the first reply audio and the total from `utterance_end` are
+merged into the row by id once the reply is playing, off the latency path.
+`latency_ms` stays the router's share alone. `GET /v1/stats/latency`
+summarises the stages, numbers only.
+
 ---
 
 ## 3. Handler priority bands

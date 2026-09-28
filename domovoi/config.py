@@ -296,6 +296,13 @@ class Settings(BaseSettings):
     # core still boots — without speech recognition — and says why on the
     # dashboard's Models page instead of never starting.
     whisper_cpu_fallback_model: str = "small.en"
+    # CPU threads Whisper transcribes with whenever it runs on cpu (the
+    # configured model on whisper_device=cpu, or the cpu fallback above).
+    # 0 = auto: one per PHYSICAL core. faster-whisper's own default is 4
+    # whatever the machine, which left half of an 8-core server idle while
+    # a person waited for every transcript. A number pins it (and, being
+    # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
+    whisper_cpu_threads: int = 0
 
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on

@@ -10338,6 +10338,74 @@
         }
       }
     },
+    "/api/stats/latency": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get Latency",
+        "description": "Proxy \u2192 core ``GET /v1/stats/latency``: per-stage p50/p95/max and\ncounts over recent voice turns, plus the Whisper settings. ``since``\nis parsed here, so a malformed value is this process's 422 rather than\nsomething forwarded; 502 when the core doesn't answer.",
+        "operationId": "get_latency_api_stats_latency_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601 start of the window (no offset = UTC). Default: the last 7 days.",
+              "title": "Since"
+            },
+            "description": "ISO 8601 start of the window (no offset = UTC). Default: the last 7 days."
+          },
+          {
+            "name": "room",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Room"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundle": {
       "get": {
         "summary": "Bundle",

@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, AsyncIterator, Literal
 from urllib.parse import quote
 
@@ -54,7 +55,7 @@ from domovoi.connectivity import ConnectivityProbe  # noqa: E402
 from domovoi.db.session import session_scope  # noqa: E402
 from domovoi.handlers import HANDLERS  # noqa: E402
 from domovoi.lifecycle import install_signal_handlers, signal_shutdown  # noqa: E402
-from domovoi.models import MAX_CONFIG_CHANGES  # noqa: E402
+from domovoi.models import MAX_CONFIG_CHANGES, MAX_ROOM_ID_CHARS  # noqa: E402
 from domovoi.models import (  # noqa: E402
     ConnectivityState,
     Context,
@@ -698,6 +699,58 @@ async def server_time() -> dict[str, Any]:
     from domovoi.host_time import server_time_document
 
     return server_time_document()
+
+
+@app.get("/v1/stats/latency")
+async def stats_latency(
+    since: datetime | None = Query(
+        None,
+        description=(
+            "ISO 8601 start of the window (no offset = UTC). Default: the "
+            "last 7 days."
+        ),
+    ),
+    room: str | None = Query(None, max_length=MAX_ROOM_ID_CHARS),
+) -> dict[str, Any]:
+    """Where recent voice turns spent their time, per stage — numbers only.
+
+    Per-stage ``{count, p50, p95, max}`` in milliseconds over the most
+    recent 1000 timed turns at or after ``since`` (optionally one room):
+    capture length, speech-to-text, voice identification, routing, the
+    first reply audio, and the total from end of speech to that audio.
+    Plus how the turns routed (``paths``), the Whisper settings those
+    turns ran on (``whisper_seen``), and what is transcribing now
+    (``whisper``). See domovoi/turn_timings.py.
+
+    Open, like ``/v1/health``: it reads ``intents_log.timings`` (V015),
+    which holds no text and no identity, and returns counts and
+    milliseconds — no transcript, no person, no session. How often a room
+    speaks is already an open read (a room's session list); this adds how
+    long the machine took. docs/SECURITY_PRIVACY.md says so.
+
+    ``503`` when the database is unreachable or V015 hasn't been applied.
+    """
+    from domovoi.clients.whisper import whisper_runtime
+    from domovoi.turn_timings import has_timings_column, latency_summary
+
+    try:
+        async with session_scope() as s:
+            if not await has_timings_column(s):
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "intents_log.timings is missing: run the database "
+                        "migrations (V015); turns are timed from a minute "
+                        "after that, no restart needed"
+                    ),
+                )
+            doc = await latency_summary(s, since=since, room=room)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"db unreachable: {e}") from e
+    doc["whisper"] = whisper_runtime()
+    return doc
 
 
 _EXAMPLE_PHRASE_RE = re.compile(r"[Ee]xamples?:\s*(.+)$")

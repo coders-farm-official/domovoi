@@ -22,13 +22,14 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_device` | `cuda` | **`cpu`** |
 | `whisper_compute_type` | `auto` (runs `float16`) | `auto` (runs **`int8`**) — or `int8` explicitly |
 | `whisper_model` | `large-v3` | **`small.en`**, or `medium` if you need the accuracy |
+| `whisper_cpu_threads` | `0` (one per physical core; ignored on `cuda`) | `0` — unchanged |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
 All of these are dashboard settings — gear → **Advanced** for the Whisper
-three, **Models** for the Ollama three. The Whisper settings are
+ones, **Models** for the Ollama three. The Whisper settings are
 restart-tier (the model loads once at boot). The Ollama model settings are
 hot — they take effect on the next turn with no restart, which makes them
 cheap to experiment with. Try a model, say something, try another.
@@ -83,6 +84,23 @@ mistranscribe rather than switch.
 > what else the box is doing all move them. Measure yours rather than
 > trusting the table: see [Measuring turn latency](#measuring-turn-latency)
 > below.
+
+### `whisper_cpu_threads = 0`: every core
+
+faster-whisper on its own runs 4 CPU threads, whatever the machine has.
+On an 8-core server that leaves half the cores idle while you wait for
+every transcript, and the encoder — most of a transcription's time — is
+exactly the work that spreads across cores. `whisper_cpu_threads` (gear →
+**Advanced** → Speech-to-text, restart tier) defaults to `0`, which means
+one thread per **physical** core; hyperthreads add little to dense matrix
+work. Set a number to pin it, for example to leave cores free for Ollama
+while it answers. A non-zero value also overrides `OMP_NUM_THREADS`. The
+setting is ignored on `cuda`. The boot log says what was used:
+
+```bash
+journalctl -u domovoi-core | grep "loading Whisper"
+# loading Whisper model=small.en device=cpu compute=int8 cpu_threads=8
+```
 
 ### `qwen2.5:7b` instead of `qwen2.5:14b`
 
@@ -241,19 +259,56 @@ models *stay* loaded, which is what [Memory budget](#memory-budget) is
 about. A first question that takes most of a minute after a quiet
 afternoon is that, not STT.
 
-**Per-turn latency is not logged.** It goes to the database — one row per
-routed turn in `intents_log`, where `latency_ms` covers the whole turn
-(STT → routing → handler), not STT in isolation:
+**Per-turn latency, stage by stage.** Every spoken turn logs one line,
+with no transcript in it:
 
 ```bash
-docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, matched_handler, matched_path, latency_ms, transcript FROM intents_log ORDER BY at DESC LIMIT 10;"
+journalctl -u domovoi-core | grep 'turn timings'
+# turn timings room=kitchen trigger=wake_word path=fast capture_audio_ms=2130
+#   stt_ms=640 identify_ms=41 route_ms=22 tts_first_ms=95 total_ms=830
+#   whisper=small.en/cpu/int8/8t
 ```
 
-`matched_path` is the useful column next to it: it tells you whether a
-turn took a regex fast path or went through the language models. Compare
-the two and you can see exactly what the LLM costs on your hardware —
-which is the number that should drive your model choices, not the table
-above.
+| Stage | What it measures |
+|---|---|
+| `capture_audio_ms` | how much audio the satellite sent (the length of the capture) |
+| `stt_ms` | the Whisper call — the number this page is mostly about |
+| `identify_ms` | voice identification (which household member spoke) |
+| `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
+| `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
+| `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
+
+`total_ms` starts when the satellite decides you have stopped talking,
+which is `listen.silence_timeout` (1.2 s by default) after your last word;
+that wait happens on the satellite and is not in any of these numbers.
+
+The same stages are stored on each turn's `intents_log` row
+(`timings`, a JSON column; migration V015), and the dashboard's **Models**
+page shows the recent medians under speech-to-text. For the whole
+breakdown, per stage p50 / p95 / max:
+
+```bash
+curl -s http://localhost:6370/v1/stats/latency | python3 -m json.tool
+curl -s "http://localhost:6370/v1/stats/latency?since=2026-09-28T18:00:00Z&room=kitchen"
+```
+
+Pass `since` as the time of your last restart when you are comparing
+Whisper settings, so the numbers are all from the settings now running
+(`whisper_seen` in the answer lists the settings the window covers).
+
+`intents_log.latency_ms` is **not** the whole turn. It is the router's
+share only: its clock starts after speech-to-text has finished and stops
+before any reply audio exists. It is still the useful number next to
+`matched_path`, which tells you whether a turn took a regex fast path or
+went through the language models:
+
+```bash
+docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, matched_path, latency_ms, timings FROM intents_log ORDER BY at DESC LIMIT 10;"
+```
+
+Compare the two paths and you can see exactly what the LLM costs on your
+hardware — which is the number that should drive your model choices, not
+the table above.
 
 ---
 

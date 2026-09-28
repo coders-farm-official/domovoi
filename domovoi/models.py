@@ -87,6 +87,15 @@ class Context(BaseModel):
     # async boundary is handled cleanly. None when called via direct
     # /v1/intent (no streaming context).
     app: Any = None
+    # The turn's stage stopwatch (domovoi.turn_timings.TurnTimings) on a
+    # voice turn from a satellite; None everywhere else. The streaming
+    # layer fills in speech-to-text and voice identification before
+    # routing; router._persist_turn writes those with the turn's
+    # intents_log row and leaves the row id on it, so the stages after
+    # routing can be added to the same row once the reply is playing.
+    # Typed Any (like `app`) so pydantic carries the object as-is: model_copy
+    # is shallow, and every copy the router makes must share this one.
+    timings: Any = None
 
 
 class Response(BaseModel):
