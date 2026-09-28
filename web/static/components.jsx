@@ -378,9 +378,10 @@ const useToast = () => {
    * just happened to the surface the operator is looking at, so it has to
    * clear whatever that surface is — the same argument that raised
    * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
-   * phone's tab strip (it is 0 on a desktop). */
+   * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
+   * docked player while one shows (styles.css, html.mp-docked). */
   const node = items.length > 0 && (
-    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
+    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
                   gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (
@@ -580,8 +581,8 @@ const PluginNavIcon = ({ src }) => src
 /* One nav row's classes. `primary` keeps the row in the phone strip;
  * `brand-link` hides it in the desktop sidebar, where the brand row is
  * that link; `more-active` lights the home tab on a phone while a page
- * that lives on Home's "everything" grid is open, the way the app's
- * More tab does (styles.css only honours it at 760px and below). */
+ * that lives on Home's "everything" grid is open, the way the Android
+ * app's home tab does (styles.css only honours it at 760px and below). */
 const navItemClass = (it, route, primaryRoutes) => [
   'nav-item',
   route === it.route ? 'active' : '',

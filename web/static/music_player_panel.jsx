@@ -1,7 +1,10 @@
 /* Expanded "now playing" view — the Music page's big-player surface, bound
  * to the same app-level PlaybackContext the docked mini-player uses. Adds
  * the visualizer, the 10-band EQ, the sleep timer, the cast target, and the
- * offline-pin control. Rendered by music.jsx as its "Player" tab.
+ * offline-pin control. Rendered by music.jsx as its "Player" tab. The
+ * np-* classes are its phone layout (styles.css): cover above the title,
+ * wrapping rows. The phone's own expanded player is PlayerSheet in
+ * player.jsx, opened from the docked bar.
  *
  * Loaded via Babel; uses React.* hooks (shared-scope rule — see player.jsx).
  */
@@ -62,7 +65,7 @@ const EqPanel = ({ p }) => {
           <input type="checkbox" checked={p.eqEnabled} onChange={(e) => p.setEqEnabled(e.target.checked)}/>
           equalizer
         </label>
-        <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+        <div className="np-eq-presets" style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
           {Object.keys(presets).map((name) => (
             <button key={name} onClick={() => applyPreset(name)}
                     style={{ font: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-full)',
@@ -248,7 +251,7 @@ const NowPlayingPanel = () => {
   const remote = p.target.kind === 'room';
   return (
     <div style={{ padding: 0 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 20, padding: 20, alignItems: 'center' }}>
+      <div className="np-head">
         <CoverTile item={it} size={220} radius="var(--r-md)"/>
         <div style={{ minWidth: 0 }}>
           {remote && <Pill tone="live" live>casting to {p.target.roomId}</Pill>}
@@ -267,7 +270,7 @@ const NowPlayingPanel = () => {
           </div>
 
           {/* transport */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="np-transport" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <IconButton name="skip-back" onClick={p.prev}/>
             <button className="btn btn-primary btn-icon" onClick={p.toggle} style={{ width: 44, height: 44, borderRadius: '50%' }}>
               <Icon name={p.status === 'playing' ? 'pause' : 'play'} size={20}/>

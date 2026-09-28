@@ -283,6 +283,14 @@
         return () => clearTimeout(t);
       });
 
+      // A new page starts at its top. .main is the one scroller every page
+      // shares, so a tab tapped from a page scrolled halfway down used to
+      // open halfway down too (Music scrolled 600px -> Home at 865px).
+      const mainRef = React.useRef(null);
+      React.useLayoutEffect(() => {
+        if (mainRef.current) mainRef.current.scrollTop = 0;
+      }, [route]);
+
       const counts = useSidebarCounts();
       const manifest = window.DomovoiPluginManifest || { plugins: [] };
       // Plugin nav badges, polled ONCE for the sidebar (the phone strip is
@@ -319,7 +327,7 @@
           <div className="app" data-screen-label={`Domovoi · ${shownRoute}`}>
             <Sidebar route={shownRoute} setRoute={setRoute} counts={counts} manifest={manifest} badges={badges}/>
             <Topbar route={shownRoute} setRoute={setRoute} theme={theme} setTheme={setTheme}/>
-            <main className="main">
+            <main className="main" ref={mainRef}>
               {/* `counts` and `badges` are the ONE useSidebarCounts and
                   usePluginBadges results, handed down so Home's
                   "everything" grid can badge its tiles without repeating
@@ -328,7 +336,7 @@
             </main>
             <AuthModalHost/>
             {pluginsStale && (
-              <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + 24px)', right: 24, zIndex: 80,
+              <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', right: 24, zIndex: 80,
                             background: 'var(--overlay)', border: '1px solid var(--border)',
                             borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md)',
                             padding: '10px 14px', fontSize: 13, display: 'flex',
@@ -388,8 +396,9 @@
       var bar = document.createElement('div');
       bar.id = 'bundle-stale';
       bar.setAttribute('role', 'status');
-      // --dock-bottom: above the phone's tab strip (0 on a desktop).
-      bar.style.cssText = 'position:fixed;left:24px;bottom:calc(var(--dock-bottom, 0px) + 24px);z-index:120;' +
+      // --dock-bottom: above the phone's tab strip (0 on a desktop);
+      // --player-h: above the docked player while one shows.
+      bar.style.cssText = 'position:fixed;left:24px;bottom:calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px);z-index:120;' +
         'max-width:min(420px,calc(100vw - 48px));background:var(--overlay,#222);' +
         'color:var(--fg,#eee);border:1px solid var(--border,#444);' +
         'border-radius:var(--r-md,10px);box-shadow:var(--shadow-md,0 6px 24px rgba(0,0,0,.35));' +

@@ -39,6 +39,7 @@ class Prefs(private val context: Context) {
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
+    private val kSharedScreens = stringPreferencesKey("shared_screens")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -60,6 +61,17 @@ class Prefs(private val context: Context) {
 
     private val _listenerPersonId = MutableStateFlow<String?>(null)
     val listenerPersonId: StateFlow<String?> = _listenerPersonId
+
+    /**
+     * Each server's last answer to "is this install a shared screen?"
+     * (the `shared_screen` on this device's own row), keyed by server URL.
+     * The web keeps the same answer in localStorage so a reload paints the
+     * shared view at once instead of flashing personal content while the
+     * registration is in flight; this is that, per server. A server with no
+     * entry has not answered yet — see net/SharedScreen.kt.
+     */
+    private val _sharedScreens = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val sharedScreens: StateFlow<Map<String, Boolean>> = _sharedScreens
 
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
@@ -87,6 +99,7 @@ class Prefs(private val context: Context) {
             _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
+            _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
@@ -148,11 +161,30 @@ class Prefs(private val context: Context) {
         setKnownServers(kept + KnownServer(clean, name ?: existing))
     }
 
-    /** Forget a server completely: its entry, its trust and its token. */
+    /** Forget a server completely: its entry, its trust, its token and
+     *  whether it called this install a shared screen. */
     fun removeKnownServer(url: String) {
         setKnownServers(_knownServers.value.filter { it.url != url })
         untrustServer(url)
         setDeviceTokenFor(url, null)
+        setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
+    }
+
+    // ── Shared screen ──────────────────────────────────────────────────
+
+    /** Record [url]'s answer; a no-op when it has not changed, because the
+     *  shell re-asks every couple of minutes and the answer rarely moves. */
+    fun setSharedScreen(url: String, shared: Boolean) {
+        val clean = ServerCredentials.normalize(url)
+        if (clean.isBlank() || _sharedScreens.value[clean] == shared) return
+        setSharedAnswers(_sharedScreens.value + (clean to shared))
+    }
+
+    private fun setSharedAnswers(next: Map<String, Boolean>) {
+        _sharedScreens.value = next
+        scope.launch {
+            context.dataStore.edit { it[kSharedScreens] = ServerCredentials.encodeSharedAnswers(next) }
+        }
     }
 
     private fun setKnownServers(list: List<KnownServer>) {

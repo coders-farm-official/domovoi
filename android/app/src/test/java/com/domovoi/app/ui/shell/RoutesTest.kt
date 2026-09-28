@@ -32,19 +32,49 @@ class RoutesTest {
         assertTrue(Route.Images.visibleWith(caps(CAP_STATIONS, CAP_IMAGEGEN)))
     }
 
+    @Test fun appOpensOnHome() {
+        // The web opens (and falls back) on #home; so does the app.
+        assertEquals(Route.Home, StartRoute)
+        assertTrue(StartRoute.visibleWith(Capabilities.EMPTY))
+        assertTrue(StartRoute.visibleOn(Capabilities.EMPTY, shared = true))
+    }
+
     @Test fun navigationTablesCoverEveryDestinationExactlyOnce() {
-        // Compact nav: four primaries + More; everything else lives in the More hub.
-        assertEquals(Route.More, CompactRoutes.last())
-        assertEquals(5, CompactRoutes.size)
-        val reachable = (CompactRoutes + OverflowRoutes).toSet()
-        val expected = Route.entries.toSet()
-        assertEquals(expected, reachable)
-        assertEquals(CompactRoutes.size + OverflowRoutes.size, reachable.size) // no duplicates
-        // Workspace sidebar keeps the web order and excludes chrome-only routes.
+        // Compact nav: the web phone strip, left to right; everything else
+        // lives on Home's "everything" grid.
+        assertEquals(
+            listOf(Route.Home, Route.Music, Route.Satellites, Route.Calendar, Route.Chat),
+            CompactRoutes,
+        )
+        val reachable = (CompactRoutes + EverythingRoutes).toSet()
+        assertEquals(Route.entries.toSet(), reachable)
+        assertEquals(CompactRoutes.size + EverythingRoutes.size, reachable.size) // no duplicates
+        // Settings and the manual have no tab, so the grid must carry them.
+        assertTrue(EverythingRoutes.contains(Route.Settings))
+        assertTrue(EverythingRoutes.contains(Route.Manual))
+        // Workspace sidebar keeps the web order and excludes chrome-only
+        // routes; Home is the drawer's brand row, not a list item.
+        assertFalse(WorkspaceRoutes.contains(Route.Home))
         assertFalse(WorkspaceRoutes.contains(Route.Settings))
         assertFalse(WorkspaceRoutes.contains(Route.Manual))
-        assertFalse(WorkspaceRoutes.contains(Route.More))
         assertEquals(Route.Chat, WorkspaceRoutes.first())
         assertEquals(Route.Files, WorkspaceRoutes.last())
+    }
+
+    @Test fun sharedScreenLeavesPersonalScreensOffEveryLauncher() {
+        // web/static/components.jsx SHARED_SCREEN_HIDDEN: people, chat, files, news.
+        assertEquals(setOf(Route.People, Route.Chat, Route.Files, Route.News), SharedScreenHidden)
+        SharedScreenHidden.forEach {
+            assertTrue(it.visibleOn(Capabilities.EMPTY, shared = false))
+            assertFalse(it.visibleOn(Capabilities.EMPTY, shared = true))
+        }
+        // The bottom bar keeps four tabs on a shared screen.
+        assertEquals(
+            listOf(Route.Home, Route.Music, Route.Satellites, Route.Calendar),
+            CompactRoutes.filter { it.visibleOn(Capabilities.EMPTY, shared = true) },
+        )
+        // Capability gating still applies on top.
+        assertFalse(Route.Stations.visibleOn(Capabilities.EMPTY, shared = false))
+        assertTrue(Route.Stations.visibleOn(caps(CAP_STATIONS), shared = true))
     }
 }
