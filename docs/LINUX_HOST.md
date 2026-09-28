@@ -319,6 +319,25 @@ If the install fails building `webrtcvad`, fall back to `pip install
 > nothing NVIDIA. On a machine that *does* have an NVIDIA GPU, add
 > `pip install -e ".[cuda]"`.
 
+> **The streaming fast lane is opt-in as well.** It is a small second
+> recognizer that follows each command while it is spoken; today it only
+> runs in *shadow* mode, logging what it would have done next to what
+> Whisper heard ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane)).
+> Nothing about it installs unless you ask:
+>
+> ```bash
+> pip install -e ".[fastlane]"
+> python -m domovoi.fast_lane fetch      # optional: the 103 MB model now, not on first enable
+> ```
+>
+> `sherpa-onnx` ships binary wheels for CPython 3.14 on x86_64 and
+> aarch64 (and carries its own onnxruntime), so there is nothing to
+> build. Then set `FASTLANE_MODE=shadow` in `domovoi/.env`, or pick
+> **shadow** under Settings → Speech-to-text → *Fast lane*, which applies
+> without a restart. If the [update unit](#updates-from-the-dashboard)
+> manages this box, add `fastlane` to `DOMOVOI_PIP_EXTRAS` so a venv
+> re-sync keeps it installed.
+
 Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 
 ```bash

@@ -130,6 +130,21 @@ cuda = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",
 ]
+# The streaming fast lane (domovoi/fast_lane.py, fastlane_mode=shadow): a
+# small streaming recognizer that follows each command while it is spoken.
+# Its own extra, not core and not real-clients: it is off by default, and
+# an install without it runs exactly as before (shadow mode then logs once
+# that the lane is unavailable). sherpa-onnx publishes binary wheels for
+# CPython 3.8-3.14 on manylinux x86_64/aarch64, Windows and macOS, and
+# carries its own onnxruntime; 1.13.8 is the first release checked on
+# cp314. The model (a 103 MB download, 137 MB unpacked) arrives on first
+# enable, from a pinned URL checked against a pinned SHA-256.
+#
+#   pip install -e ".[fastlane]"
+fastlane = [
+    "sherpa-onnx>=1.13.8,<2",
+    "numpy>=1.26",
+]
 # VoiceProfileHandler runtime deps. Split into a separate extra because
 # Resemblyzer's `webrtcvad>=2.0.10` pin has no Windows binary wheels and
 # pip would try to build it from source (needs MSVC). We don't use the

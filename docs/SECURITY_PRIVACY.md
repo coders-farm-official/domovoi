@@ -471,7 +471,16 @@ recent voice turns took, per stage: per-stage counts and p50 / p95 / max
 milliseconds, how many turns took each route (`fast`, `qa`, ...), and the
 Whisper settings (model, device, compute type, CPU threads). It reads one
 column, `intents_log.timings`, which the core fills with integers and the
-Whisper settings and never with text, plus the row's route and time. No
+Whisper settings, plus the row's route and time. The one text that column
+can hold is opt-in: while the streaming fast lane runs in shadow mode
+(`fastlane_mode`, off by default), a turn it would have acted on also
+records `fastlane_text`, the closed command it heard ("pause the music"),
+and the fast path it matched: its own hearing of the words whose Whisper
+transcript the row's `transcript` column already holds, kept so a
+disagreement with Whisper can be read later. Its log line on the Domovoi
+server (`journalctl -u domovoi-core | grep fastlane`) names both the
+lane's text and Whisper's transcript for those turns. The summary reads
+the lane's counts and milliseconds and never those two keys. No
 transcript, no reply, no person, no session and no presence tier is read,
 so none can be returned; the `room` filter is an input, echoed back, and
 never a list of rooms. What it does reveal is that turns happened, when
@@ -902,6 +911,7 @@ create outbound traffic:
 |---|---|---|
 | **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box nothing Domovoi says leaves the network. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
+| **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
 | **Podcasts** — the subscribed feeds and the episode files they point at | Only for shows you subscribed to, when the poller runs (off by default) or you press "poll now" | `podcast_feed_poller_enabled = false` (the default); unsubscribe from a show to stop fetching it. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |

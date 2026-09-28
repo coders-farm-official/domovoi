@@ -331,6 +331,34 @@ class Settings(BaseSettings):
     early_commit_hold_a_ms: int = 350
     early_commit_hold_b_ms: int = 650
 
+    # ─── Streaming fast lane (domovoi/fast_lane.py) ─────────────────────
+    # A small streaming recognizer that reads a capture's frames while the
+    # person is still talking and notices a complete closed command
+    # ("pause the music") well before the satellite's silence timeout.
+    # off (the default): nothing loads. shadow: it runs next to Whisper and
+    # only LOGS what it would have done, plus whether Whisper agreed (the
+    # fastlane_* keys on intents_log.timings); routing is untouched. Needs
+    # the `fastlane` extra; the model downloads on first enable into
+    # ~/.domovoi/models/fastlane/. Applies without a restart.
+    fastlane_mode: str = "off"
+    # Which pinned model (fast_lane.MODELS). Takes effect after a restart.
+    fastlane_model: str = "nemo-fastconformer-en-80ms-int8"
+    # CPU threads for the fast lane's ONE worker thread, shared by every
+    # room. Takes effect after a restart.
+    fastlane_cpu_threads: int = 1
+
+    @field_validator("fastlane_mode", mode="before")
+    @classmethod
+    def _fastlane_mode_known(cls, value: object) -> str:
+        """Never fatal, and never on by accident: case and whitespace are
+        forgiven, blank is off, and anything that isn't a mode reads as off
+        (the log says which value was refused)."""
+        text = str(value or "").strip().lower()
+        if text in ("", "off", "shadow"):
+            return text or "off"
+        _log.warning("FASTLANE_MODE=%r is not off or shadow; the fast lane stays off", value)
+        return "off"
+
     # ─── TTS engine router (edge → piper → system) ─────────────────────
     # Preferred engine; the router falls through edge → piper → system on
     # per-engine failure regardless of where it starts.
