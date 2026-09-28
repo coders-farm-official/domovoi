@@ -34,12 +34,18 @@
 #   6. systemctl restart domovoi-db: compose up plus Flyway.
 #   7. Start core and web; both must answer their health endpoint within
 #      DOMOVOI_UPDATE_HEALTH_TIMEOUT seconds.
-#   On any failure in 3-7: stop both again, `git reset --keep` back to the
+#   8. Every plugin that loaded before the update still loads: none that was
+#      enabled and not at load_error in the plugins registry is at load_error
+#      now. The core keeps a failing plugin from taking it down, so its
+#      health endpoint stays green through one.
+#   On any failure in 3-8: stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
 #   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
 #   (the core applies plugin migrations at boot, so step 7 can run them),
-#   restore the <db>_test dump if a plugin ledger there grew, restart, and
-#   record the new SHA as bad_sha so the version panel stops offering it.
+#   restore the <db>_test dump if a plugin ledger there grew, switch back
+#   on every plugin the failed boot's load errors switched off, restart,
+#   check health and plugins again, and record the new SHA as bad_sha so the
+#   version panel stops offering it.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -118,6 +124,7 @@ MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
 LEDGERS_BEFORE=""
 LEDGERS_AFTER=""
+PLUGINS_BEFORE=""
 TEST_LEDGERS_BEFORE=""
 TEST_LEDGERS_AFTER=""
 BACKUP_FILE=""
@@ -454,6 +461,80 @@ ledger_total() {
   printf '%s\n' "$1" | sed '1d' | awk '{ n += $2 } END { print n + 0 }'
 }
 
+# The plugins registry, one "slug|t|status|last_error" line per row (t or f
+# for enabled; last_error on one line and cut short). A single text column,
+# so what psql -tA prints is exactly the value.
+PLUGINS_SQL="SELECT slug || '|' || CASE WHEN enabled THEN 't' ELSE 'f' END || '|' || status || '|' || left(regexp_replace(coalesce(last_error, ''), '[[:space:]]+', ' ', 'g'), 200) FROM plugins ORDER BY slug"
+
+# Followed by the quoted slugs, parenthesised. Only rows a load error
+# switched off; a plugin somebody disabled by hand stays disabled.
+REENABLE_SQL="UPDATE plugins SET enabled = true, updated_at = now() WHERE NOT enabled AND status = 'load_error' AND slug IN"
+
+# The registry after a "plugins" line (the same trick as ledger_snapshot).
+# The core writes each plugin's status into it as it loads the plugin, and
+# it loads them before it starts answering /v1/health (discovery runs inside
+# its startup), so after a passing health check the rows are this boot's.
+# Read through the Postgres container like the migration counts: no admin
+# credential, and nothing that depends on the shape of an HTTP answer.
+plugin_states() {
+  local out
+  out=$(pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$PLUGINS_SQL" 2>/dev/null) || return 1
+  printf 'plugins\n%s' "$out"
+}
+
+# Plugins that loaded before the update (enabled and not at load_error in
+# registry snapshot $1) and are at load_error in snapshot $2. With $3 =
+# errors, one "slug: last_error" line each; with $3 = off, the slugs of
+# those the load error also switched off. Nothing when either snapshot is
+# unknown. A plugin that was already failing or disabled before the update
+# isn't this update's doing, and a plugin new with it had nothing to lose.
+plugins_broken() {
+  [ "${1%%$'\n'*}" = plugins ] && [ "${2%%$'\n'*}" = plugins ] || return 0
+  { printf '%s\n' "$1" | sed '1d; s/^/B|/'; printf '%s\n' "$2" | sed '1d; s/^/A|/'; } \
+    | awk -F'|' -v mode="$3" '
+        $1 == "B" { if ($3 == "t" && $4 != "load_error" && $4 != "uninstalled") up[$2] = 1; next }
+        $1 != "A" || !($2 in up) || $4 != "load_error" { next }
+        mode == "off" { if ($3 == "f") print $2; next }
+        { err = $0; for (i = 0; i < 4; i++) sub(/^[^|]*[|]/, "", err)
+          print $2 (err == "" ? "" : ": " err) }'
+}
+
+# After the health check: every plugin that loaded before the update still
+# loads. The loader keeps plugin failures from taking the core down, so the
+# health endpoints stay green through them; without this a plugin the new
+# code breaks would vanish from the house under an "ok" update.
+check_plugins() {
+  local now broken line list=""
+  if [ "${PLUGINS_BEFORE%%$'\n'*}" != plugins ]; then
+    echo "no pre-update plugin snapshot to compare against; not checked"
+    return 0
+  fi
+  now=$(plugin_states) || { echo "cannot read the plugins registry"; return 1; }
+  broken=$(plugins_broken "$PLUGINS_BEFORE" "$now" errors)
+  if [ -z "$broken" ]; then
+    echo "every plugin that loaded before the update still loads"
+    return 0
+  fi
+  while IFS= read -r line; do list+="${list:+; }$line"; done <<<"$broken"
+  echo "plugins that loaded before the update are at load_error now: $list"
+  return 1
+}
+
+# The loader switches a plugin off when its import, register() or contract
+# check fails (a failed migration catch-up leaves it on), and a boot skips a
+# switched-off plugin. Rolling the code back alone would leave every plugin
+# the new code broke off for good, so switch each one back on (slugs in $@)
+# while the core is stopped, and the previous SHA's boot loads it again.
+reenable_plugins() {
+  local slug in=""
+  for slug in "$@"; do
+    [[ $slug =~ ^[a-z][a-z0-9_]{1,31}$ ]] || { echo "not a plugin slug: $slug"; return 1; }
+    in+="${in:+, }'$slug'"
+  done
+  echo "switching back on what the failed boot switched off: $*"
+  pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$REENABLE_SQL ($in)"
+}
+
 # Does the <db>_test twin exist? Without it there is nothing to back up or
 # restore, and the plugin runtime has nothing to migrate there either.
 resolve_test_db() {
@@ -704,6 +785,7 @@ full_update() {
   MIGRATIONS_BEFORE=$(migration_count || true)
   LEDGERS_BEFORE=$(ledger_snapshot "$PG_DB" || true)
   if [ -n "$TEST_DB" ]; then TEST_LEDGERS_BEFORE=$(ledger_snapshot "$TEST_DB" || true); fi
+  PLUGINS_BEFORE=$(plugin_states || true)
   if [ "$DEPS_CHANGED" = 1 ]; then
     run_step snapshot-venv snapshot_venv || rm -f "$FREEZE_FILE"
   fi
@@ -722,6 +804,7 @@ full_update() {
     SERVICES_STOPPED=0
     run_step health wait_healthy || failed=health
   fi
+  if [ -z "$failed" ]; then run_step plugins check_plugins || failed=plugins; fi
   MIGRATIONS_AFTER=$(migration_count || true)
   LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
 
@@ -743,7 +826,7 @@ rb_failed() {
 }
 
 rollback() {
-  local failed_step=$1 cause=$2 rb="" rb_err=""
+  local failed_step=$1 cause=$2 rb="" rb_err="" now off
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
@@ -773,6 +856,16 @@ rollback() {
         run_step restore-test-db restore_test_db || rb_failed restore-test-db
       fi
     fi
+    # Plugins the failed boot switched off (a restored database has them on
+    # already, and then there are none).
+    if now=$(plugin_states); then
+      off=$(plugins_broken "$PLUGINS_BEFORE" "$now" off)
+      if [ -n "$off" ]; then
+        # Slugs carry no whitespace; one argument each.
+        # shellcheck disable=SC2086
+        run_step reenable-plugins reenable_plugins $off || rb_failed reenable-plugins
+      fi
+    fi
   else
     # The tree could not go back, so neither may the database: old data
     # under new code is worse than new data under new code.
@@ -781,7 +874,12 @@ rollback() {
   run_step rollback-migrate restart_db || rb_failed rollback-migrate
   run_step rollback-start start_services || rb_failed rollback-start
   SERVICES_STOPPED=0
-  run_step rollback-health wait_healthy || rb_failed rollback-health
+  if run_step rollback-health wait_healthy; then
+    # Back on the previous SHA, whatever loaded before the update loads again.
+    run_step rollback-plugins check_plugins || rb_failed rollback-plugins
+  else
+    rb_failed rollback-health
+  fi
 
   BAD_SHA=$HEAD_SHA
   write_atomic "$BAD_FILE" "$HEAD_SHA"$'\n'

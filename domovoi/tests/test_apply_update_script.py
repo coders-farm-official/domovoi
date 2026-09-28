@@ -88,7 +88,7 @@ def _script_sql(name: str) -> str:
     return m.group(1)
 
 
-SQL_NAMES = ("LEDGER_SQL",)
+SQL_NAMES = ("LEDGER_SQL", "PLUGINS_SQL", "REENABLE_SQL")
 
 
 @requires_bash
@@ -147,3 +147,63 @@ async def test_ledger_sql_counts_every_plugin_ledger():
     assert not [r for r in rows if "ZZupd" in r or r.startswith("zzupd")]
     # Every line is what the script's parser accepts.
     assert all(re.fullmatch(r"plugin_[a-z0-9_]+ [0-9]+", r) for r in rows), rows
+
+
+def _plugin_row(slug: str, enabled: bool, status: str, last_error: str | None) -> str:
+    err = "NULL" if last_error is None else "'" + last_error.replace("'", "''") + "'"
+    return (
+        "INSERT INTO plugins (slug, name, version, domovoi_api, enabled, "
+        "install_source, install_dir, manifest, status, last_error) VALUES "
+        f"('{slug}', '{slug}', '1.0.0', '>=1.0', {str(enabled).upper()}, "
+        f"'zip', '/nowhere/{slug}', '{{}}'::jsonb, '{status}', {err})"
+    )
+
+
+_ROWS = [
+    _plugin_row("zzupd_ok", True, "ok", None),
+    _plugin_row("zzupd_broken", False, "load_error",
+                "import failed:\n  No module named 'boom'\t| see above"),
+    _plugin_row("zzupd_stuck", True, "load_error", "V002 failed"),
+    # Switched off by hand, not by a load error.
+    _plugin_row("zzupd_off", False, "ok", None),
+]
+
+
+@requires_db
+async def test_plugins_sql_one_line_per_row():
+    rows = await _in_rolled_back_tx(_ROWS, _script_sql("PLUGINS_SQL"))
+    mine = [r for r in rows if r.startswith("zzupd_")]
+    # Sorted by slug; last_error flattened onto the line, a | inside it kept.
+    assert mine == [
+        "zzupd_broken|f|load_error|import failed: No module named 'boom' | see above",
+        "zzupd_off|f|ok|",
+        "zzupd_ok|t|ok|",
+        "zzupd_stuck|t|load_error|V002 failed",
+    ]
+    assert all("\n" not in r for r in rows)
+
+
+@requires_db
+async def test_plugins_sql_cuts_a_long_error():
+    rows = await _in_rolled_back_tx(
+        [_plugin_row("zzupd_long", True, "load_error", "x" * 5000)],
+        _script_sql("PLUGINS_SQL"),
+    )
+    (line,) = [r for r in rows if r.startswith("zzupd_long|")]
+    assert line == "zzupd_long|t|load_error|" + "x" * 200
+
+
+@requires_db
+async def test_reenable_sql_only_switches_on_load_errors():
+    # What reenable_plugins sends: the constant, then the quoted slugs.
+    reenable = _script_sql("REENABLE_SQL") + " ('zzupd_broken', 'zzupd_off', 'zzupd_ok')"
+    rows = await _in_rolled_back_tx(
+        _ROWS + [reenable],
+        "SELECT slug || '=' || enabled FROM plugins WHERE slug LIKE 'zzupd%' ORDER BY slug",
+    )
+    assert rows == [
+        "zzupd_broken=true",   # a load error switched it off: back on
+        "zzupd_off=false",     # switched off by hand: stays off
+        "zzupd_ok=true",
+        "zzupd_stuck=true",
+    ]

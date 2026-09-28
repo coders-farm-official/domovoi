@@ -499,8 +499,18 @@ instead of bouncing core and web, and each run does this:
 7. `systemctl restart domovoi-db`: compose up plus Flyway.
 8. Start core and web. Both must answer `/v1/health` (core, :6370) and
    `/api/health` (web, :6369) within 120 s.
+9. Every plugin that loaded before the update must still load: none that
+   was enabled and not at `load_error` may be at `load_error` now. The core
+   never lets a failing plugin take it down, so its health check stays
+   green through one, and without this step a plugin the new code breaks
+   would drop out of the house under an `ok` update. The script reads each
+   plugin's status from the `plugins` table through the `domovoi-postgres`
+   container, as it does the migration counts; the core has recorded every
+   plugin's load before it first answers `/v1/health`. A plugin that was
+   already failing, or that you switched off, doesn't count, and neither
+   does one that is new in the update.
 
-If any of 4-8 fails, it rolls back: `git reset --keep` to the previous SHA
+If any of 4-9 fails, it rolls back: `git reset --keep` to the previous SHA
 (never `--hard`), the venv re-synced and every package put back at its
 exact pre-update version, the old MPD image rebuilt, and, if
 `flyway_schema_history` or any plugin's migration ledger
@@ -515,8 +525,14 @@ is restored if a plugin ledger in it grew. The restore goes into a fresh
 database that is then renamed to `domovoi` (or `domovoi_test`); the
 replaced one is kept as `domovoi_failed_<timestamp>` (or
 `domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
-when you're done with it. Then it restarts and health-checks again, and
-records the commit it rolled back as `bad_sha`. The panel stops offering a
+when you're done with it. The loader switches off a plugin whose import,
+`register()` or contract check fails, and a boot skips switched-off
+plugins, so every plugin that loaded before the update and that the new
+code's load errors switched off is switched back on before the previous SHA
+starts (a plugin you switched off yourself stays off). Then it restarts,
+health-checks and checks the plugins again, and records the commit it
+rolled back as `bad_sha`. If a plugin still won't load on the previous SHA,
+the result is `rollback_failed` and names it. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,

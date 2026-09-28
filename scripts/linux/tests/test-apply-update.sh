@@ -14,11 +14,17 @@
 #     domovoi_test twin;
 #   * `systemctl restart domovoi-db.service` is Flyway: it raises the count
 #     to the number of migration files in the checkout and never lowers it;
+#   * the main database also has a registry-<db> file, the plugins table as
+#     "slug|t|status|last_error" lines;
 #   * `systemctl start domovoi-core.service` is the core's boot: every
 #     plugin in the checkout's plugins/ catches its ledger up to its
-#     migration files, in each database that exists (never un-applies);
-#   * pg_dump writes the count and the ledgers into the dump and pg_restore
-#     reads them back;
+#     migration files, in each database that exists (never un-applies), and
+#     every enabled registry row gets this boot's status: ok, or load_error
+#     while plugin-fail-when-head names the plugin and HEAD, switched off
+#     for an import failure and left on (ledger unmoved) for a failed
+#     migration catch-up, the way the loader does it;
+#   * pg_dump writes the count, the ledgers and the registry into the dump
+#     and pg_restore reads them back;
 #   * psql CREATE/DROP/ALTER ... RENAME DATABASE move those files around;
 #   * curl can fail while HEAD is a given SHA (the "new code is broken" case).
 #
@@ -77,10 +83,18 @@ if [ "${1-}" = restart ] && [ "${2-}" = domovoi-db.service ]; then
   if [ "$files" -gt "$cur" ]; then echo "$files" >"$SHIM_STATE/db-domovoi"; fi
 fi
 if [ "${1-}" = start ] && [[ " $* " == *" domovoi-core.service "* ]]; then
-  # The core's boot: plugin migration catch-up, main database then _test.
+  # The core's boot, the loader's way: each plugin's migration catch-up
+  # (main database, then _test), then its load, whose status lands in the
+  # registry. plugin-fail-when-head lines: "<slug> <sha> import|catchup".
+  head=$("$SHIM_REAL_GIT" -C "$SHIM_REPO" rev-parse HEAD)
+  reg=$SHIM_STATE/registry-domovoi
+  fails() { grep -qxF -- "$1 $head $2" "$SHIM_STATE/plugin-fail-when-head" 2>/dev/null; }
   for mig in "$SHIM_REPO"/plugins/*/migrations; do
     [ -d "$mig" ] || continue
-    ledger=plugin_$(basename "$(dirname "$mig")")
+    slug=$(basename "$(dirname "$mig")")
+    ledger=plugin_$slug
+    # Boot skips a switched-off plugin; a failed catch-up applies nothing.
+    if grep -q "^$slug|f|" "$reg" 2>/dev/null || fails "$slug" catchup; then continue; fi
     files=$(ls "$mig"/V*.sql 2>/dev/null | wc -l | tr -d ' ')
     for db in domovoi domovoi_test; do
       [ -f "$SHIM_STATE/db-$db" ] || continue
@@ -92,6 +106,17 @@ if [ "${1-}" = start ] && [[ " $* " == *" domovoi-core.service "* ]]; then
       fi
     done
   done
+  if [ -f "$reg" ]; then
+    while IFS='|' read -r slug enabled status err; do
+      [ -n "$slug" ] || continue
+      if [ "$enabled" = f ]; then echo "$slug|f|$status|$err"
+      elif fails "$slug" import; then echo "$slug|f|load_error|import failed: No module named 'boom'"
+      elif fails "$slug" catchup; then echo "$slug|t|load_error|$slug: V002__played.sql failed | at line 1"
+      else echo "$slug|t|ok|"
+      fi
+    done <"$reg" >"$reg.new"
+    mv "$reg.new" "$reg"
+  fi
 fi
 exit 0
 SH
@@ -133,6 +158,7 @@ if [ -f "$SHIM_STATE/fail-pg_dump" ] || [ -f "$SHIM_STATE/fail-pg_dump-$db" ]; t
 fi
 echo "DOMOVOI-FAKE-DUMP migrations=$(cat "$SHIM_STATE/db-$db")"
 sed 's/^/ledger /' "$SHIM_STATE/ledgers-$db" 2>/dev/null
+sed 's/^/registry /' "$SHIM_STATE/registry-$db" 2>/dev/null
 exit 0
 SH
 
@@ -150,6 +176,7 @@ if [ -n "$db" ]; then
   head=${body%%$'\n'*}
   echo "${head##*migrations=}" >"$SHIM_STATE/db-$db"
   printf '%s\n' "$body" | sed -n 's/^ledger //p' >"$SHIM_STATE/ledgers-$db"
+  printf '%s\n' "$body" | sed -n 's/^registry //p' >"$SHIM_STATE/registry-$db"
 fi
 exit 0
 SH
@@ -167,27 +194,43 @@ while [ $# -gt 0 ]; do
 done
 dbfile() { printf '%s/db-%s' "$SHIM_STATE" "$1"; }
 ledgers() { printf '%s/ledgers-%s' "$SHIM_STATE" "$1"; }
+registry() { printf '%s/registry-%s' "$SHIM_STATE" "$1"; }
 exists() { [ -f "$(dbfile "$1")" ] || { echo "psql: database $1 does not exist" >&2; exit 2; }; }
 case "$sql" in
   "SELECT count(*) FROM flyway_schema_history")
     exists "$db"; cat "$(dbfile "$db")" ;;
   *query_to_xml*schema_history*)
     exists "$db"; cat "$(ledgers "$db")" 2>/dev/null ;;
+  *" FROM plugins ORDER BY slug")
+    exists "$db"; cat "$(registry "$db")" 2>/dev/null ;;
+  "UPDATE plugins SET enabled = true"*" AND slug IN ("*")")
+    exists "$db"
+    list=${sql##*slug IN (}; list=${list%)}; list=${list//\'/}; list=${list//,/ }
+    f=$(registry "$db") n=0
+    while IFS='|' read -r slug enabled status err; do
+      if [ "$enabled" = f ] && [ "$status" = load_error ] && [[ " $list " == *" $slug "* ]]; then
+        enabled=t; n=$((n + 1))
+      fi
+      echo "$slug|$enabled|$status|$err"
+    done <"$f" >"$f.new"
+    mv "$f.new" "$f"
+    echo "UPDATE $n" ;;
   "SELECT 1 FROM pg_database WHERE datname = '"*"'")
     name=${sql#*datname = \'}; name=${name%\'}
     if [ -f "$(dbfile "$name")" ]; then echo 1; fi ;;
   CREATE\ DATABASE*)
     name=$(printf '%s' "$sql" | sed 's/^CREATE DATABASE "\([^"]*\)".*/\1/')
-    echo 0 >"$(dbfile "$name")"; : >"$(ledgers "$name")" ;;
+    echo 0 >"$(dbfile "$name")"; : >"$(ledgers "$name")"; : >"$(registry "$name")" ;;
   DROP\ DATABASE*)
     name=$(printf '%s' "$sql" | sed 's/^DROP DATABASE IF EXISTS "\([^"]*\)".*/\1/')
-    rm -f "$(dbfile "$name")" "$(ledgers "$name")" ;;
+    rm -f "$(dbfile "$name")" "$(ledgers "$name")" "$(registry "$name")" ;;
   ALTER\ DATABASE*)
     from=$(printf '%s' "$sql" | sed 's/^ALTER DATABASE "\([^"]*\)" RENAME TO "\([^"]*\)"$/\1/')
     to=$(printf '%s' "$sql" | sed 's/^ALTER DATABASE "\([^"]*\)" RENAME TO "\([^"]*\)"$/\2/')
     [ -f "$(dbfile "$from")" ] && [ ! -f "$(dbfile "$to")" ] || { echo "psql: rename failed" >&2; exit 1; }
     mv "$(dbfile "$from")" "$(dbfile "$to")"
-    if [ -f "$(ledgers "$from")" ]; then mv "$(ledgers "$from")" "$(ledgers "$to")"; fi ;;
+    if [ -f "$(ledgers "$from")" ]; then mv "$(ledgers "$from")" "$(ledgers "$to")"; fi
+    if [ -f "$(registry "$from")" ]; then mv "$(registry "$from")" "$(registry "$to")"; fi ;;
   SELECT\ pg_terminate_backend*) ;;
   *) echo "psql: unexpected SQL: $sql" >&2; exit 1 ;;
 esac
@@ -282,6 +325,7 @@ new_case() {
   printf 'domovoi-postgres\ndomovoi-mpd-kitchen\ndomovoi-mpd-office\n' >"$STATE/containers"
   echo 1 >"$STATE/db-domovoi"
   echo "plugin_radio 1" >"$STATE/ledgers-domovoi"
+  echo "radio|t|ok|" >"$STATE/registry-domovoi"
   # The test twin compose creates at initdb: no Flyway run there, but the
   # plugin runtime migrates it too.
   echo 0 >"$STATE/db-domovoi_test"
@@ -339,6 +383,7 @@ again_after() {  # again_after A B: some call matching B comes after the first m
   [ -n "$a" ] && [ -n "$b" ] && [ "$b" -gt "$a" ]
 }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
+step_is() { grep -qF "{\"name\": \"$1\", \"status\": \"$2\"" "$RESULT"; }  # step_is NAME STATUS
 file_is() { [ -f "$1" ] && eq "$(tr -d '[:space:]' <"$1")" "$2"; }
 
 valid_json() {
@@ -623,6 +668,95 @@ case_plugin_migration_kept_when_healthy() {
   end_case
 }
 
+case_plugin_switched_off_by_load_error_rolls_back() {
+  new_case plugin_switched_off_by_load_error_rolls_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$REPO/plugins/radio/radio"
+  printf 'import boom\n' >"$REPO/plugins/radio/radio/__init__.py"
+  local sha_b; sha_b=$(commit_all "B: radio imports a missing module")
+  # Core and web come up fine on B; only the plugin fails, and the loader
+  # switches it off.
+  echo "radio $sha_b import" >"$STATE/plugin-fail-when-head"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "health passed on B" step_is health ok
+  check "then the plugin check failed" step_is plugins failed
+  check "error names the step" eq "$(field error | grep -c 'failed at plugins')" 1
+  check "error names the plugin and its error" \
+    eq "$(field error | grep -c "radio: import failed: No module named 'boom'")" 1
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "switched back on" step_is reenable-plugins ok
+  check "only the rows a load error switched off" \
+    called "slug IN ('radio')"
+  check "switched on with the core stopped" before "reset --keep" "UPDATE plugins SET enabled = true"
+  check "before the previous SHA boots" again_after "UPDATE plugins SET enabled = true" "systemctl start domovoi-core.service"
+  check "loads again on A" file_is "$STATE/registry-domovoi" "radio|t|ok|"
+  check "plugins re-checked after the rollback" step_is rollback-plugins ok
+  check "nothing grew, nothing restored" eq "$(field db_restored)" false
+  check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
+  check "applied_sha stays A" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_enabled_plugin_at_load_error_rolls_back() {
+  new_case enabled_plugin_at_load_error_rolls_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'ALTER TABLE stations ADD COLUMN played_at timestamptz;\n' >"$REPO/plugins/radio/migrations/V002__played.sql"
+  local sha_b; sha_b=$(commit_all "B: plugin migration that fails")
+  # The catch-up fails: the plugin stays switched on, at load_error.
+  echo "radio $sha_b catchup" >"$STATE/plugin-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "failed at plugins" eq "$(field error | grep -c 'failed at plugins')" 1
+  check "the error keeps a | in last_error" eq "$(field error | grep -c 'V002__played.sql failed | at line 1')" 1
+  check "still on, so nothing to switch on" not_called "UPDATE plugins"
+  check "nothing applied, nothing restored" eq "$(field db_restored)" false
+  check "test twin not restored either" eq "$(field test_db_restored)" false
+  check "loads again on A" file_is "$STATE/registry-domovoi" "radio|t|ok|"
+  check "plugins re-checked after the rollback" step_is rollback-plugins ok
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  end_case
+}
+
+case_plugin_broken_before_does_not_block() {
+  new_case plugin_broken_before_does_not_block
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  # radio was already failing on A and still fails on B; sleep was switched
+  # off by hand. Neither is this update's doing.
+  printf 'radio|t|load_error|V002 failed before\nsleep|f|ok|\n' >"$STATE/registry-domovoi"
+  printf 'radio %s catchup\nradio %s catchup\n' "$SHA_A" "$sha_b" >"$STATE/plugin-fail-when-head"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "plugin check passed" step_is plugins ok
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  check "the disabled plugin stays off" eq "$(grep -c '^sleep|f|' "$STATE/registry-domovoi")" 1
+  check "nothing switched on" not_called "UPDATE plugins"
+  end_case
+}
+
+case_rollback_cannot_bring_a_plugin_back() {
+  new_case rollback_cannot_bring_a_plugin_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  # Loaded before the update, but fails on B and then on A as well.
+  printf 'radio %s import\nradio %s import\n' "$sha_b" "$SHA_A" >"$STATE/plugin-fail-when-head"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rollback_failed" eq "$(field status)" '"rollback_failed"'
+  check "names the rollback's plugin check" \
+    eq "$(field error | grep -c 'the rollback then failed at rollback-plugins: rollback-plugins failed')" 1
+  check "it did switch the plugin back on first" step_is reenable-plugins ok
+  check "rollback health itself passed" step_is rollback-health ok
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "applied_sha not moved" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
 case_dirty_tree_refused() {
   new_case dirty_tree_refused
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -856,6 +990,10 @@ case_plugin_migration_kept_when_healthy
 case_test_twin_restored_on_its_own
 case_no_test_twin
 case_test_twin_backup_failure_aborts
+case_plugin_switched_off_by_load_error_rolls_back
+case_enabled_plugin_at_load_error_rolls_back
+case_plugin_broken_before_does_not_block
+case_rollback_cannot_bring_a_plugin_back
 case_dirty_tree_refused
 case_untracked_files_do_not_block
 case_backup_failure_aborts
