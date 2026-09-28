@@ -452,6 +452,25 @@ class Settings(BaseSettings):
     # scripts/wake_word/README.md for the operator-supplied command.
     wake_word_train_command: str = ""
 
+    # ─── Command recordings for tuning (opt-in per room) ───────────────
+    # Nothing is recorded unless an admin turns it on for a room (V016's
+    # command_capture_rooms; the Satellites drawer). Then each wake-word or
+    # follow-up command from that room is kept as a 16 kHz WAV plus a JSON
+    # sidecar under <command_captures_dir>/<room>/, to evaluate end-of-turn
+    # detection against real speech (design notes 2026-09-28). Server-private
+    # like wake_clips_dir: no web file route serves it, and the core refuses
+    # to write into a directory the dashboard or a satellite can fetch from.
+    command_captures_dir: str = str(Path.home() / ".domovoi" / "captures")
+    # How long a recording is kept. The owner's 14 days is also the ceiling:
+    # a longer value is clamped to it, a shorter one is honoured.
+    command_capture_retention_days: int = 14
+    # Disk cap for every room's recordings together, in MB; the oldest go
+    # first once it is exceeded. One command is about 32 KB per second.
+    command_capture_max_mb: int = 500
+    # How often the core's pruner deletes expired recordings, enforces the
+    # cap and removes anything left for a room that is no longer opted in.
+    command_capture_pruner_interval_sec: float = 3600.0
+
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current
     # track / volume independent across rooms. Containers are spawned on

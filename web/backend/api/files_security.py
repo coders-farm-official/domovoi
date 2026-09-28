@@ -221,6 +221,15 @@ def safe_join(root: Path, rel: str | None) -> Path:
         target.relative_to(root)
     except ValueError:
         raise HTTPException(status_code=400, detail="path escapes library root")
+    # A library rooted ABOVE the config dir (a plugin that declares the home
+    # directory, say) must still never reach into it. ``validate_root``
+    # keeps the config dir from BEING a root, and the listings hide the
+    # ``.domovoi`` entry, but a path typed straight into a download went
+    # through: ``.domovoi/device-token.txt``, a wake-word clip, an opt-in
+    # command recording. Only the media dirs that legitimately live there
+    # (audiobooks, podcasts, the plugin data sandbox) pass.
+    if _is_sensitive(target, _allowed_under_config()):
+        raise HTTPException(status_code=404, detail="not found")
     return target
 
 

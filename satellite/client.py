@@ -3361,6 +3361,17 @@ class Satellite:
         delivered = self._emit_text({
             "type": "utterance_end",
             "greeting_played": self._greeting_played_this_turn,
+            # Why this capture ended and its frame counts. Numbers only; a
+            # core keeps them solely in a room an admin opted in to command
+            # recording (end-of-turn tuning), and an older core reads
+            # greeting_played alone. New FIELDS on an existing frame are
+            # safe both ways — unlike a new frame type, which an old core
+            # answers with `error`.
+            "end_reason": exit_reason,
+            "frames": sent,
+            "voiced_frames": voiced_count,
+            "trailing_silent_frames": silent_frames,
+            "silence_limit_frames": silence_limit,
         })
         # One-shot: only this turn's transcript should be greeting-filtered.
         self._greeting_played_this_turn = False
