@@ -106,12 +106,15 @@ class _Player:
     (a wait before the last one times out, as a real one does while the
     clip plays), and the player has then exited — or, ``hangs``, keeps
     going until it is killed. ``backlog`` is the mic queue's size at each
-    wait: how much the satellite let pile up."""
+    wait: how much the satellite let pile up. ``status`` is its exit status
+    when it ends on its own (a real one exits 1 when, say, the ALSA device
+    is busy)."""
 
     def __init__(self, argv, *, mic: _Mic, events: list, frames: int, hangs: bool,
-                 calls: int = 1) -> None:
+                 calls: int = 1, status: int = 0) -> None:
         self.argv, self.mic, self.events = list(argv), mic, events
         self.frames, self.hangs, self.calls = frames, hangs, calls
+        self.status = status
         self.returncode = None
         self.killed = False
         self.backlog: list[int] = []
@@ -128,7 +131,7 @@ class _Player:
             time.sleep(timeout or 0)
             raise subprocess.TimeoutExpired(self.argv, timeout)
         if self.returncode is None:
-            self.returncode = -9 if self.killed else 0
+            self.returncode = -9 if self.killed else self.status
             self.events.append(("exited", self.argv[0]))
         return self.returncode
 
@@ -182,6 +185,7 @@ def _sat(
     features: frozenset[str] = frozenset(),
     missing: bool = False,
     calls: int = 1,
+    status: int = 0,
 ):
     monkeypatch.setattr(client, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
     loop = asyncio.new_event_loop()
@@ -214,6 +218,7 @@ def _sat(
             raise FileNotFoundError(argv[0])
         player = _Player(
             argv, mic=sat.raw_q, events=events, frames=frames, hangs=hangs, calls=calls,
+            status=status,
         )
         sat.players.append(player)
         return player
@@ -406,6 +411,79 @@ def test_another_thread_can_cut_the_acknowledgement_short(monkeypatch):
     assert time.monotonic() - t0 < 5.0
     assert sat.players[0].killed
     assert audio.count("user") == 10
+
+
+def test_a_mode_that_starts_before_the_player_is_registered_still_stops_it(monkeypatch):
+    """The receiver starting a drop-in (or chat, or a wake recording) calls
+    `_stop_ack`, which cannot see a player the mic thread has spawned but
+    not yet registered. The wait itself watches for the mode too: the
+    player is killed at once, no tail is waited out, and the wake reports
+    nothing — its capture never happens (the mic thread's outer loop
+    switches to the mode)."""
+    monkeypatch.setattr(client, "_ACK_GREETING_CAP_SEC", 30.0)
+    sat, loop = _sat(monkeypatch, "greeting", _feed(), hangs=True)
+    spawn = client.subprocess.Popen
+
+    def popen_then_dropin(argv, **kwargs):
+        player = spawn(argv, **kwargs)
+        sat.dropin_active.set()          # lands before `_ack_proc = proc`
+        return player
+
+    monkeypatch.setattr(client.subprocess, "Popen", popen_then_dropin)
+    t0 = time.monotonic()
+    try:
+        assert sat._wait_for_wake(_Oww()) is True
+    finally:
+        loop.close()
+    assert time.monotonic() - t0 < 5.0
+    assert sat.players[0].killed
+    assert ("read", "tail") not in sat.events
+    assert (sat._greeting_played_this_turn, sat._greeting_clip_name,
+            sat._ack_before_capture) == (False, None, False)
+    assert sat._ack_proc is None
+
+
+def test_a_player_that_fails_on_its_own_is_logged_and_listening_goes_on(
+    monkeypatch, caplog,
+):
+    """mpg123 exiting 1 at once (a busy ALSA device) used to look like a
+    greeting that "played 20 ms". It says so now, and the wake carries on:
+    drained, the tail dropped, the capture opened."""
+    sat, loop = _sat(monkeypatch, "greeting", _feed(), frames=0, status=1)
+    with caplog.at_level(logging.INFO, logger="satellite"):
+        audio, controls = _wake_then_capture(sat, loop)
+    assert "wake ack: mpg123 exited with status 1" in caplog.text
+    assert DEVICE in caplog.text
+    assert audio == ["user"] * 10 + ["silence"] * SILENCE_LIMIT
+    assert controls[-1]["ack_before_capture"] is True
+
+
+def test_a_killed_player_is_not_reported_as_a_failure(monkeypatch, caplog):
+    monkeypatch.setattr(client, "_ACK_GREETING_CAP_SEC", 0.2)
+    sat, loop = _sat(monkeypatch, "greeting", _feed(), hangs=True)
+    with caplog.at_level(logging.INFO, logger="satellite"):
+        _wake_then_capture(sat, loop)
+    assert "exited with status" not in caplog.text
+
+
+def test_an_error_in_the_acknowledgement_never_costs_the_capture(monkeypatch, caplog):
+    """Whatever breaks inside the acknowledgement (here the greeting bank's
+    directory), the wake still gets its capture: an exception left to
+    propagate would end the mic thread, and the satellite would stay online
+    without ever hearing another word."""
+    sat, loop = _sat(monkeypatch, "greeting", _feed())
+
+    def broken_bank():
+        raise OSError(5, "Input/output error")
+
+    sat._pick_greeting = broken_bank
+    with caplog.at_level(logging.ERROR, logger="satellite"):
+        audio, controls = _wake_then_capture(sat, loop)
+    assert "wake ack failed; listening without it" in caplog.text
+    assert audio[0] == "tail"            # listening at once, as "none" does
+    assert audio.count("user") == 10
+    assert controls[-1]["greeting_played"] is False
+    assert "ack_before_capture" not in controls[-1]
 
 
 # ─── what the capture tells the core ──────────────────────────────────────

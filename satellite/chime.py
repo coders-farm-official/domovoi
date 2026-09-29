@@ -3,10 +3,10 @@
 `[wake] ack_mode = "chime"` plays this instead of a spoken greeting (see
 `Satellite._acknowledge_wake`). It is synthesized here rather than shipped
 as an audio file for two reasons: the code-sync channel that upgrades a
-satellite carries source files only (`CODE_EXT_ALLOW` in client.py — clips
-ride `/v1/sounds`), so a bundled WAV would never reach a Pi that was
-upgraded from the dashboard; and a few lines of arithmetic are their own
-licence. Nothing here needs the Domovoi server, so the chime works offline
+satellite carries source files only (`_SAT_CODE_EXT_ALLOW` in
+domovoi/main.py — clips ride `/v1/sounds`), so a bundled WAV would never
+reach a Pi that was upgraded from the dashboard; and a few lines of
+arithmetic are their own licence. Nothing here needs the Domovoi server, so the chime works offline
 and with `[sounds] sync_enabled = false`.
 
 Two plucked notes a fifth apart (A5 then E6), each a sine with a little

@@ -15,7 +15,8 @@
 /* Greetings tab                                                */
 /* ============================================================ */
 /*
- * Edits the short lines a satellite plays the instant the wake word fires.
+ * Edits the short lines a satellite says when it hears the wake word,
+ * before it listens (its `[wake] ack_mode` "greeting", the default).
  * Every mutation pings the server to re-render the clips and push
  * them live to connected satellites, so a change is audible within seconds
  * — no restart. `{name}` is replaced with the bot's name at render time.
@@ -2292,7 +2293,7 @@ const SETTINGS_TABS = [
 
 const SETTINGS_SUB = {
   about: 'What Domovoi is — and a link to the user manual.',
-  greetings: 'Lines a satellite plays the instant the wake word fires.',
+  greetings: 'Lines a satellite says when it hears the wake word, before it listens.',
   voices: 'The TTS voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
   recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',

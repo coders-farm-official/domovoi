@@ -1,7 +1,8 @@
 """Greetings API — the wake-word greeting bank (client_greetings).
 
-These are the short lines a satellite plays the instant the wake word
-fires. The Domovoi server renders each *enabled* row to an MP3 in the
+These are the short lines a satellite says when it hears the wake word,
+before it listens (`[wake] ack_mode = "greeting"`, the default). The
+Domovoi server renders each *enabled* row to an MP3 in the
 configured TTS voice; the satellites sync the clips. On any mutation here
 we ping the Domovoi server's ``/v1/admin/sounds/regenerate`` so the change
 re-renders and pushes live to connected satellites — best-effort, so a DB

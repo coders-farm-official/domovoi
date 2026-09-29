@@ -1744,7 +1744,22 @@ class Satellite:
         played = self._play_ack(argv, cap)
         if played is None:
             return
-        played_ms, cut, under = played
+        played_ms, cut, under, status = played
+        if self.shutdown_event.is_set() or self._ack_superseded():
+            # Shutting down, or a drop-in, chat or wake recording took over
+            # while it played: this wake's capture never happens, so there
+            # is no tail to wait out and nothing to report.
+            log.info("wake ack: %s stopped after %d ms; no capture follows", what, played_ms)
+            return
+        if status is not None and status > 0 and not cut:
+            # The player gave up on its own (a busy or missing ALSA device,
+            # an unreadable clip) — the person may have heard nothing.
+            # Listening goes ahead as usual; this says why it was silent.
+            log.warning(
+                "wake ack: %s exited with status %d after %d ms, so the %s "
+                "may not have been heard; check [music] alsa_device (%r)",
+                argv[0], status, played_ms, what, device,
+            )
         under += self._drain_mic()
         tail = self._discard_mic_frames(_ACK_TAIL_FRAMES)
         if clip is not None:
@@ -1756,6 +1771,18 @@ class Satellite:
             "tail; listening %d ms after the wake word",
             what, played_ms, f" (cut at the {cap:.1f} s cap)" if cut else "",
             under, tail, int((time.monotonic() - woke_at) * 1000),
+        )
+
+    def _ack_superseded(self) -> bool:
+        """Whether a mode that owns the mic and the speaker — a drop-in, a
+        chat or a wake recording — has begun since the wake word. The
+        receiver that starts one also stops the player (`_stop_ack`); this
+        covers a start that lands before the player is registered, which
+        `_stop_ack` cannot see."""
+        return (
+            self.dropin_active.is_set()
+            or self.chat_active.is_set()
+            or self.wake_recording.is_set()
         )
 
     def _ack_fields(self) -> dict[str, Any]:
@@ -1779,12 +1806,16 @@ class Satellite:
             fields["ack_before_capture"] = True
         return fields
 
-    def _play_ack(self, argv: list[str], cap_sec: float) -> tuple[int, bool, int] | None:
+    def _play_ack(
+        self, argv: list[str], cap_sec: float,
+    ) -> tuple[int, bool, int, int | None] | None:
         """Run one acknowledgement player and wait for it: at most
-        ``cap_sec``, after which it is killed. Returns (milliseconds it ran,
-        whether it was cut short, mic frames dropped while it ran), or None
-        when the player could not start (not installed), in which case
-        nothing played.
+        ``cap_sec``, after which it is killed — and no longer once shutdown
+        begins or a drop-in, chat or wake recording takes over. Returns
+        (milliseconds it ran, whether it was cut at the cap, mic frames
+        dropped while it ran, the player's exit status — negative when a
+        signal ended it, None if it would not die), or None when the player
+        could not start (not installed), in which case nothing played.
 
         The mic queue is drained while it waits, not only after: the queue
         holds ~2 s and a long greeting runs longer, and a full queue drops
@@ -1817,8 +1848,8 @@ class Satellite:
                 except subprocess.TimeoutExpired:
                     pass
                 dropped += self._drain_mic()
-                if self.shutdown_event.is_set() or time.monotonic() - t0 >= cap_sec:
-                    cut = True
+                cut = time.monotonic() - t0 >= cap_sec
+                if cut or self.shutdown_event.is_set() or self._ack_superseded():
                     proc.kill()
                     try:
                         proc.wait(timeout=1.0)
@@ -1829,7 +1860,7 @@ class Satellite:
             with self._ack_lock:
                 if self._ack_proc is proc:
                     self._ack_proc = None
-        return int((time.monotonic() - t0) * 1000), cut, dropped
+        return int((time.monotonic() - t0) * 1000), cut, dropped, proc.returncode
 
     def _discard_mic_frames(self, n: int) -> int:
         """Drop the next ``n`` mic frames as they arrive — the tail of an
@@ -3421,7 +3452,19 @@ class Satellite:
                     # holds only what was said after it. Done after
                     # _stop_music so its player doesn't race the music one
                     # for the output device.
-                    self._acknowledge_wake(music_was_playing, woke_at)
+                    try:
+                        self._acknowledge_wake(music_was_playing, woke_at)
+                    except Exception:
+                        # Best-effort, like the sound itself: whatever went
+                        # wrong in it, the wake still gets its capture. Left
+                        # to propagate, it would end the mic thread — a
+                        # satellite that stays online and never hears
+                        # another word.
+                        log.exception("wake ack failed; listening without it")
+                        self._stop_ack()
+                        self._greeting_played_this_turn = False
+                        self._greeting_clip_name = None
+                        self._ack_before_capture = False
                     if self.shutdown_event.is_set():
                         return False
                     oww.reset()
