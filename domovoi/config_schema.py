@@ -69,6 +69,10 @@ class FieldSpec:
     min: float | None = None
     max: float | None = None
     choices: list[str] | None = None
+    # choice fields: what the dashboard shows for each value, when the raw
+    # value isn't words a person would pick ("greeting" → "Spoken greeting,
+    # then listen"). The value stored and validated is still the choice.
+    choice_labels: dict[str, str] | None = None
     unit: str | None = None
     pattern: str | None = None      # str fields: full-match regex the value must satisfy
     pattern_help: str | None = None  # the user-facing "expected ..." when it doesn't

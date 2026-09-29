@@ -138,18 +138,20 @@ class DeviceProfile:
     # on-chip AEC of its echo reference and makes barge-in misfire on the
     # satellite's own voice.
     audio_device_match: str = ""
-    # ALSA device for the mpg123 paths — music, the wake greeting, and the
-    # canned network-issues clip. SEPARATE from `audio_device_match` because
-    # those go out through mpg123/ALSA, not PortAudio, and so are named
-    # differently and read from a different config key ([music] alsa_device).
+    # ALSA device for the mpg123/aplay paths — music, the wake greeting or
+    # chime, and the canned network-issues clip. SEPARATE from
+    # `audio_device_match` because those go out through ALSA directly, not
+    # PortAudio, and so are named differently and read from a different
+    # config key ([music] alsa_device).
     #
     # It matters for the same reason: audio the array never plays is audio
-    # its AEC cannot cancel. `_play_greeting` overlaps command capture on the
-    # explicit promise that "the chip's AEC keeps it out of the mic" — a
-    # promise that is only true if the clip actually leaves through the chip.
-    # Empty means the profile has nothing to pin and the [music] default
-    # stands. Provisioning writes this, so a prepared card does not depend on
-    # anyone remembering PROVISIONING §F.
+    # its AEC cannot cancel, and music is played while the satellite listens
+    # for its wake word — through another device, the wake word has to be
+    # heard over the music instead of with it cancelled. (The wake
+    # acknowledgement no longer leans on the AEC: it finishes before the
+    # capture opens.) Empty means the profile has nothing to pin and the
+    # [music] default stands. Provisioning writes this, so a prepared card
+    # does not depend on anyone remembering PROVISIONING §F.
     provisioned_music_alsa_device: str = ""
 
 

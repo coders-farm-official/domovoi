@@ -987,9 +987,9 @@ def apply_provision(
     # And the mpg123 side. PROVISIONING §F documents all THREE keys, but this
     # function used to write only the two above — so every prepared card
     # shipped with music, the wake greeting and the canned clips leaving
-    # through the ALSA default while TTS went through the array. The greeting
-    # overlaps command capture on the promise that the chip's AEC keeps it out
-    # of the mic; that promise only holds if the clip goes through the chip.
+    # through the ALSA default while TTS went through the array. The chip's
+    # AEC can only cancel what it plays — music above all, which is on while
+    # the satellite listens for its wake word.
     music_dev = _music_alsa_device(payload["device_profile"])
     if music_dev:
         changes["music.alsa_device"] = music_dev

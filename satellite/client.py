@@ -46,6 +46,7 @@ from websockets.exceptions import ConnectionClosed
 
 from satellite import (
     _volume,
+    chime,
     code_sync,
     config_writer,
     devices,
@@ -67,10 +68,25 @@ SAMPLE_RATE = 16_000
 FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)  # 480
 FRAME_BYTES = FRAME_SAMPLES * 2  # int16 = 2 bytes/sample
-# After the wake greeting's player exits, how many more mic frames still
-# belong to it: USB/DAC latency plus the room's reverb (~300 ms). See the
-# greeting-aware endpointing in `_stream_capture`.
-_GREETING_TAIL_FRAMES = 300 // FRAME_MS
+# How the satellite acknowledges its wake word ([wake] ack_mode), before it
+# starts listening for the command — see `_acknowledge_wake`:
+#   greeting — a spoken line from the greeting bank, played to the end
+#   chime    — a short two-note chime (satellite/chime.py)
+#   none     — the LED alone; listening starts at once
+ACK_MODES = ("greeting", "chime", "none")
+# Longest an acknowledgement may hold the mic closed. The shipped bank's
+# clips run 0.3-4.1 s as rendered (median 1.0 s for the Piper voices, 1.8 s
+# for the Edge ones, which carry ~0.85 s of trailing silence); a player
+# that is still going at the cap is killed and listening starts anyway.
+_ACK_GREETING_CAP_SEC = 4.0
+_ACK_CHIME_CAP_SEC = 1.5
+# After the acknowledgement's player exits, how many more mic frames still
+# belong to it: the output path's latency plus the room's reverb. Dropped
+# unheard, like everything the mic took in while the sound played.
+_ACK_TAIL_FRAMES = 210 // FRAME_MS
+# Where the chime is written (satellite/chime.py makes it); under the sound
+# cache dir, beside the synced clips. sound_sync prunes only .mp3 files.
+CHIME_FILE = "chime.wav"
 
 # Silent frames after speech at which a capture tells the core it has
 # paused (`speech_pause`, 240 ms), so the core can start transcribing while
@@ -110,7 +126,7 @@ CANNED_NETWORK_ISSUES_MP3 = Path(__file__).resolve().parent / "sounds" / "networ
 # Wake-word greeting clips bundled in the satellite/ tree (greet_*.mp3 /
 # greet_funny_*.mp3). The live copies are synced from the server into
 # SOUNDS_CACHE_DIR (see sound_sync); this bundled dir is the offline/first-run
-# fallback. Played the instant the wake word fires; see _play_greeting.
+# fallback. Played when the wake word fires; see _acknowledge_wake.
 GREETINGS_DIR = Path(__file__).resolve().parent / "sounds" / "greetings"
 
 # Server-synced sound cache (greetings + canned clips), mirrored over
@@ -379,6 +395,8 @@ class Config:
     wake_word: str
     wake_threshold: float
     wake_word_model_path: Path | None
+    # How the wake word is acknowledged before listening: one of ACK_MODES.
+    wake_ack_mode: str
     input_device: int | None
     output_device: int | None
     vad_aggressiveness: int
@@ -418,9 +436,7 @@ class Config:
     kiosk_watch_interval_sec: float
     output_mixer_card: str
     output_mixer_control: str | None
-    greeting_enabled: bool
     greeting_funny_chance: float
-    greeting_reply_wait: float
     sounds_sync_enabled: bool
     voice_name: str | None
     device: DeviceProfile
@@ -438,7 +454,14 @@ class Config:
     @classmethod
     def load(cls, path: Path) -> "Config":
         with open(path, "rb") as f:
-            d = tomllib.load(f)
+            return cls.from_toml(tomllib.load(f))
+
+    @classmethod
+    def from_toml(cls, d: dict[str, Any]) -> "Config":
+        """A Config from a parsed config.toml. Raises ValueError on a value
+        this satellite does not know (a typo'd profile, sat_type, display
+        mode or ack_mode) — `load` at startup, and `_apply_config_changes`
+        before it writes a dashboard edit."""
         sat = d.get("satellite", {})
         wake = d.get("wake", {})
         audio = d.get("audio", {})
@@ -485,6 +508,20 @@ class Config:
                 f"unknown [display] power_method {power_method!r}. "
                 "Valid values: auto, wlopm, xset, backlight, none."
             )
+        # The wake acknowledgement. A config written before [wake] ack_mode
+        # existed keeps what its [greeting] enabled switch chose: a spoken
+        # greeting (the default) or nothing. The one change such a satellite
+        # sees is that the greeting now plays BEFORE it listens rather than
+        # over the command. A typo fails loud, like sat_type.
+        ack_mode = wake.get("ack_mode")
+        if ack_mode is None or ack_mode == "":
+            ack_mode = "greeting" if bool(greeting.get("enabled", True)) else "none"
+        ack_mode = str(ack_mode)
+        if ack_mode not in ACK_MODES:
+            raise ValueError(
+                f"unknown [wake] ack_mode {ack_mode!r}. "
+                f"Valid values: {', '.join(ACK_MODES)}."
+            )
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -494,6 +531,7 @@ class Config:
             wake_word=str(wake.get("wake_word", "hey_jarvis")),
             wake_threshold=float(wake.get("threshold", 0.5)),
             wake_word_model_path=Path(wake_model).expanduser() if wake_model else None,
+            wake_ack_mode=ack_mode,
             input_device=audio.get("input_device"),
             output_device=audio.get("output_device"),
             vad_aggressiveness=int(listen.get("vad_aggressiveness", 2)),
@@ -559,8 +597,9 @@ class Config:
             # max. >1.0 boosts it, hard-clipped to avoid distortion. 1.0 =
             # unchanged. The same factor is applied (via mpg123 --scale) to
             # the locally-played greeting + canned clips, which are rendered
-            # by the same (quiet) TTS engines, so they match the voice level.
-            # Music (mpg123) is unaffected — MPD's MP3s are already hot.
+            # by the same (quiet) TTS engines, so they match the voice level,
+            # and to the wake chime's samples (satellite/chime.py). Music
+            # (mpg123) is unaffected — MPD's MP3s are already hot.
             tts_playback_gain=float(playback.get("gain", 1.0)),
             # Music prepare/resume handshake: how long mpg123 buffers
             # MPD's always-on silence stream before we tell the
@@ -597,14 +636,12 @@ class Config:
                 if audio.get("output_mixer_control")
                 else profile.output_mixer_control
             ),
-            # Instant wake-word greeting (a random pre-rendered clip played
-            # locally on wake). Relies on the chip's AEC to keep the greeting
-            # out of the concurrent capture — disable on a board without AEC.
-            greeting_enabled=bool(greeting.get("enabled", True)),
+            # How often the wake greeting (ack_mode "greeting") is one of the
+            # funny lines. [greeting] enabled is read above, only to derive
+            # ack_mode for a config that predates it; [greeting] reply_wait,
+            # which belonged to a greeting played over the capture, is no
+            # longer read.
             greeting_funny_chance=float(greeting.get("funny_chance", 0.2)),
-            # How long a wake capture waits for the user after a greeting the
-            # mic partly heard (see `_stream_capture`).
-            greeting_reply_wait=float(greeting.get("reply_wait", 2.5)),
             # Pull rendered sound clips (greetings/canned) from the
             # server on connect instead of relying on a manual rsync.
             sounds_sync_enabled=bool(sounds.get("sync_enabled", True)),
@@ -973,21 +1010,23 @@ class Satellite:
         self._music_lock = threading.Lock()
         self._music_url: str | None = None
 
-        # mpg123 subprocess for the instant wake-word greeting. Spawned on
-        # wake (non-blocking, so it overlaps the command capture — the chip's
-        # AEC keeps it out of the mic), stopped when the command-response TTS
-        # starts and at the next wake.
-        self._greeting_proc: subprocess.Popen | None = None
-        self._greeting_lock = threading.Lock()
-        # Whether a wake greeting played for the in-flight turn. Sent on
-        # utterance_end so the server can strip a greeting that bled
-        # past the AEC out of the transcript. Set when a greeting plays,
-        # reset when reported (and at the start of each wake decision).
+        # The player (mpg123 for a greeting, aplay for the chime) of the wake
+        # acknowledgement. The mic thread waits on it before listening (see
+        # `_acknowledge_wake`); it is held here so `_stop_ack` can cut it
+        # short from another thread — a drop-in, chat or wake recording
+        # that starts, or shutdown.
+        self._ack_proc: subprocess.Popen | None = None
+        self._ack_lock = threading.Lock()
+        # Whether a wake greeting played for the in-flight turn, and which
+        # clip (its file name, greet_<hash>.mp3). Sent on utterance_end and
+        # speech_pause with `ack_before_capture`, which tells the server the
+        # greeting finished before the capture opened. Set when a greeting
+        # plays, reset when reported (and at the start of each wake).
         self._greeting_played_this_turn = False
-        # The clip that played (its file name, greet_<hash>.mp3), sent with
-        # the flag so the server matches the transcript against that one
-        # line rather than the whole greeting bank.
         self._greeting_clip_name: str | None = None
+        # Whether an acknowledgement (greeting or chime) played before the
+        # in-flight capture, with everything the mic heard under it dropped.
+        self._ack_before_capture = False
 
         # The core's early commit: set by an `end_capture` for the capture
         # in progress, checked by `_stream_capture` before every frame, and
@@ -1355,12 +1394,16 @@ class Satellite:
                 pass
             self._input_stream = None
 
-    def _drain_mic(self) -> None:
+    def _drain_mic(self) -> int:
+        """Drop every mic frame queued so far; returns how many."""
+        dropped = 0
         try:
             while True:
                 self.raw_q.get_nowait()
+                dropped += 1
         except queue.Empty:
             pass
+        return dropped
 
     # ── Sender bridge (thread → asyncio) ──────────────────────────────
 
@@ -1592,9 +1635,10 @@ class Satellite:
 
     def _is_music_playing(self) -> bool:
         """True if a music mpg123 subprocess is currently running. Checked at
-        wake time (before _stop_music) so we can skip the wake greeting while
-        music is playing — go straight to listening rather than briefly
-        talking over / abruptly interrupting the music with a greeting clip."""
+        wake time (before _stop_music) so a spoken wake greeting can be
+        skipped while music is playing — straight to listening rather than
+        abruptly following the music with a greeting clip (see
+        `_acknowledge_wake`)."""
         with self._music_lock:
             return self._music_proc is not None and self._music_proc.poll() is None
 
@@ -1620,7 +1664,7 @@ class Satellite:
         self._music_proc = None
         self._music_url = None
 
-    # ── Wake-word greeting ─────────────────────────────────────────────
+    # ── Wake-word greeting clips ───────────────────────────────────────
 
     def _pick_greeting(self) -> Path | None:
         """Choose a random greeting clip, weighting the funny ones by
@@ -1637,48 +1681,180 @@ class Satellite:
             pool = generic or funny
         return random.choice(pool) if pool else None
 
-    def _play_greeting(self) -> None:
-        """Play a random greeting through the array, non-blocking, so it
-        overlaps the command capture (the chip's AEC keeps it out of the
-        mic). Best-effort: disabled, empty bank, or mpg123 missing → skip."""
-        if not self.cfg.greeting_enabled:
+    # ── Wake acknowledgement ──────────────────────────────────────────
+    #
+    # When the wake word fires the satellite says so — a spoken greeting, a
+    # chime, or the LED alone ([wake] ack_mode) — and only THEN listens. The
+    # sound plays to its end while the mic thread waits, and everything the
+    # mic took in meanwhile, plus a short tail for the output path and the
+    # room, is dropped unheard. Nothing said over the acknowledgement is
+    # kept, by design. The greeting used to play over the capture, trusting
+    # the XVF3800's echo cancellation to keep it out of the command; what got
+    # through made the satellite answer its own greeting (office satellite,
+    # 2026-09-28: "Back so soon?" routed as a command). Listening after the
+    # acknowledgement removes the cause instead of filtering the symptom.
+
+    def _acknowledge_wake(self, music_was_playing: bool, woke_at: float) -> None:
+        """Acknowledge the wake word the way `cfg.wake_ack_mode` says, and
+        return once the capture may start. Blocking: a greeting or chime
+        plays to its end (or its cap), then the mic frames it overlapped and
+        `_ACK_TAIL_FRAMES` more are dropped. Sets the turn's greeting fields
+        and `_ack_before_capture` for the capture that follows.
+
+        When music was playing (checked before `_stop_music`), a spoken
+        greeting is skipped — a line on top of just-stopped music is an
+        abrupt interruption, so the LED alone says "listening". The chime
+        still plays: it is the short "I stopped the music to listen" cue a
+        person expects, and it is over before they have begun to speak.
+
+        Best-effort throughout: an empty bank, a missing player or an
+        unwritable chime file means listening at once, as "none" does."""
+        mode = self.cfg.wake_ack_mode
+        self._greeting_played_this_turn = False
+        self._greeting_clip_name = None
+        self._ack_before_capture = False
+        if mode == "none":
             return
-        clip = self._pick_greeting()
-        if clip is None:
+        if mode == "greeting" and music_was_playing:
+            log.info("wake ack: greeting skipped (music was playing); listening at once")
             return
-        self._stop_greeting()  # never stack two greetings
-        with self._greeting_lock:
+        device = self.cfg.music_alsa_device
+        clip: Path | None = None
+        if mode == "greeting":
+            clip = self._pick_greeting()
+            if clip is None:
+                log.info("wake ack: no greeting clips here yet; listening at once")
+                return
+            argv = [
+                "mpg123", "-q",
+                *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
+                "-o", "alsa", "-a", device, str(clip),
+            ]
+            cap, what = _ACK_GREETING_CAP_SEC, clip.name
+        else:
             try:
-                self._greeting_proc = subprocess.Popen(
-                    [
-                        "mpg123", "-q",
-                        *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
-                        "-o", "alsa", "-a", self.cfg.music_alsa_device, str(clip),
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                # Mark the turn so the server strips a greeting that
-                # bleeds past the AEC out of the transcript.
-                self._greeting_played_this_turn = True
-                self._greeting_clip_name = clip.name
-                log.info("greeting: %s", clip.name)
-            except FileNotFoundError:
-                log.debug("mpg123 not installed; skipping greeting")
-                self._greeting_proc = None
+                # The gain goes into the samples: aplay has no --scale, and
+                # this is the same factor mpg123 applies to the greetings.
+                path = chime.ensure(SOUNDS_CACHE_DIR / CHIME_FILE, self.cfg.tts_playback_gain)
+            except OSError as e:
+                log.warning("wake ack: could not write the chime (%s); listening at once", e)
+                return
+            argv = ["aplay", "-q", "-D", device, str(path)]
+            cap, what = _ACK_CHIME_CAP_SEC, "chime"
+        played = self._play_ack(argv, cap)
+        if played is None:
+            return
+        played_ms, cut, under = played
+        under += self._drain_mic()
+        tail = self._discard_mic_frames(_ACK_TAIL_FRAMES)
+        if clip is not None:
+            self._greeting_played_this_turn = True
+            self._greeting_clip_name = clip.name
+        self._ack_before_capture = True
+        log.info(
+            "wake ack: %s played %d ms%s; dropped %d mic frames under it + %d "
+            "tail; listening %d ms after the wake word",
+            what, played_ms, f" (cut at the {cap:.1f} s cap)" if cut else "",
+            under, tail, int((time.monotonic() - woke_at) * 1000),
+        )
 
-    def _greeting_playing(self) -> bool:
-        """Whether this turn's wake greeting is still coming out of the
-        speaker (its mpg123 hasn't exited)."""
-        with self._greeting_lock:
-            proc = self._greeting_proc
-        return proc is not None and proc.poll() is None
+    def _ack_fields(self) -> dict[str, Any]:
+        """What a capture tells the core about the wake acknowledgement
+        before it, on its `speech_pause` hints and its `utterance_end`.
 
-    def _stop_greeting(self) -> None:
-        with self._greeting_lock:
-            proc = self._greeting_proc
-            self._greeting_proc = None
+        `greeting_played` / `greeting_clip` say a spoken greeting played and
+        which line: every core screens a greeting-played transcript for it.
+        `ack_before_capture` (only when true) says that acknowledgement
+        finished before the capture opened, with what the mic heard under
+        it dropped — so the capture cannot hold the whole greeting, and a
+        core that knows the field still strips a greeting copy off the front
+        (the safety net for an echo tail) but never drops a transcript for
+        being nothing but the greeting: "Yes." after the greeting "Yes?" is
+        the person answering. A core that predates the field screens as it
+        always has; both fields are optional and ignored when unknown."""
+        fields: dict[str, Any] = {"greeting_played": self._greeting_played_this_turn}
+        if self._greeting_played_this_turn and self._greeting_clip_name:
+            fields["greeting_clip"] = self._greeting_clip_name
+        if self._ack_before_capture:
+            fields["ack_before_capture"] = True
+        return fields
+
+    def _play_ack(self, argv: list[str], cap_sec: float) -> tuple[int, bool, int] | None:
+        """Run one acknowledgement player and wait for it: at most
+        ``cap_sec``, after which it is killed. Returns (milliseconds it ran,
+        whether it was cut short, mic frames dropped while it ran), or None
+        when the player could not start (not installed), in which case
+        nothing played.
+
+        The mic queue is drained while it waits, not only after: the queue
+        holds ~2 s and a long greeting runs longer, and a full queue drops
+        frames with a "wake-word predict is falling behind" warning that
+        would be false here."""
+        self._stop_ack()  # never two at once
+        t0 = time.monotonic()
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as e:
+            log.warning(
+                "wake ack: could not run %s (%s); listening without the "
+                "acknowledgement", argv[0], e,
+            )
+            return None
+        with self._ack_lock:
+            self._ack_proc = proc
+        cut = False
+        dropped = 0
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=0.05)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                dropped += self._drain_mic()
+                if self.shutdown_event.is_set() or time.monotonic() - t0 >= cap_sec:
+                    cut = True
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    break
+        finally:
+            with self._ack_lock:
+                if self._ack_proc is proc:
+                    self._ack_proc = None
+        return int((time.monotonic() - t0) * 1000), cut, dropped
+
+    def _discard_mic_frames(self, n: int) -> int:
+        """Drop the next ``n`` mic frames as they arrive — the tail of an
+        acknowledgement. Bounded, so a mic that has stopped delivering can't
+        hold the wake here: it gives up after ``n`` frames' worth of time
+        plus half a second. Returns how many it dropped."""
+        deadline = time.monotonic() + n * FRAME_MS / 1000 + 0.5
+        dropped = 0
+        while dropped < n and not self.shutdown_event.is_set():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                self.raw_q.get(timeout=min(0.1, left))
+            except queue.Empty:
+                continue
+            dropped += 1
+        return dropped
+
+    def _stop_ack(self) -> None:
+        """Cut a wake acknowledgement short, from any thread. The mic
+        thread waiting on it (`_play_ack`) then carries on at once."""
+        with self._ack_lock:
+            proc = self._ack_proc
+            self._ack_proc = None
         if proc is not None and proc.poll() is None:
             try:
                 proc.terminate()
@@ -2341,6 +2517,7 @@ class Satellite:
         c = self.cfg
         return {
             "wake.threshold": c.wake_threshold,
+            "wake.ack_mode": c.wake_ack_mode,
             "barge_in.enabled": c.barge_in,
             "barge_in.min_speech_ms": c.barge_in_min_speech_ms,
             "barge_in.require_wake_word": c.barge_in_require_wake_word,
@@ -2352,9 +2529,7 @@ class Satellite:
             "listen.max_record_seconds": c.max_record_seconds,
             "listen.followup_pre_speech_timeout": c.followup_pre_speech_timeout,
             "listen.early_commit": c.early_commit,
-            "greeting.enabled": c.greeting_enabled,
             "greeting.funny_chance": c.greeting_funny_chance,
-            "greeting.reply_wait": c.greeting_reply_wait,
             "sounds.sync_enabled": c.sounds_sync_enabled,
             "playback.tts_prebuffer_sec": c.tts_prebuffer_sec,
             "playback.gain": c.tts_playback_gain,
@@ -2437,10 +2612,13 @@ class Satellite:
 
     def _apply_config_changes(self, changes: dict[str, Any]) -> None:
         """Merge web-edited config into ~/.domovoi/config.toml (preserving
-        comments), then restart to apply. Validates the merged file parses
-        BEFORE writing and keeps a .bak, so a bad edit can't brick the Pi —
-        if it won't parse we abort with nothing written; if it parses but is
-        semantically wrong, the .bak is the SSH-side manual escape."""
+        comments), then restart to apply. Validates the merged file BEFORE
+        writing — it must parse, and load as this satellite's Config — and
+        keeps a .bak, so a bad edit can't brick the Pi: a value this code
+        refuses at startup (say, a wake.ack_mode a newer server offers that
+        this satellite doesn't have) is refused here, with nothing written,
+        rather than written and then crash-looping the service. Anything
+        wrong past that, the .bak is the SSH-side manual escape."""
         try:
             original = CONFIG_PATH.read_text(encoding="utf-8")
         except OSError as e:
@@ -2448,10 +2626,10 @@ class Satellite:
             return
         merged = config_writer.apply_changes(original, changes)
         try:
-            tomllib.loads(merged)
+            Config.from_toml(tomllib.loads(merged))
         except Exception as e:
             log.error(
-                "set_config: merged config doesn't parse (%s); aborting, "
+                "set_config: merged config doesn't load (%s); aborting, "
                 "nothing written", e,
             )
             return
@@ -3112,10 +3290,9 @@ class Satellite:
         seasonal HVAC, evening TV, etc.
         """
         self._drain_mic()
-        # Safety: stop any greeting still playing from the previous turn (the
-        # common stop is at response_start; this covers turns that ended
-        # without one, e.g. a follow-up timeout).
-        self._stop_greeting()
+        # Safety: the acknowledgement is waited out before every capture, so
+        # nothing should still be playing; a player that is, is stopped.
+        self._stop_ack()
         oww.reset()
         log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
@@ -3177,6 +3354,7 @@ class Satellite:
                     log.warning("wake-word predict failed: %s", e)
                     continue
                 if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                    woke_at = time.monotonic()
                     log.info("wake word detected")
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
@@ -3229,24 +3407,23 @@ class Satellite:
                     # is a no-op when state is already "listening".
                     self._leds.set_state("listening")
                     # Note whether music was playing BEFORE stopping it — if
-                    # so we skip the wake greeting and go straight to
-                    # listening (a greeting clip on top of just-stopped music
-                    # is an abrupt interruption).
+                    # so a spoken greeting is skipped (a line on top of
+                    # just-stopped music is an abrupt interruption).
                     music_was_playing = self._is_music_playing()
                     # Kill any running music so the mic captures the user's
                     # next command cleanly (Pi OS Lite has no software mixer
                     # — music + mic on the same card = garbled transcript).
                     self._stop_music()
                     self._drain_mic()
-                    # Instant greeting — plays through the array (and thus the
-                    # AEC reference) while capture proceeds, so it acknowledges
-                    # the wake word without delaying or contaminating capture.
-                    # Done after _stop_music so its mpg123 doesn't race the
-                    # music one for the output device. Skipped when music was
-                    # playing — straight to listening is less jarring.
-                    self._greeting_played_this_turn = False
-                    if not music_was_playing:
-                        self._play_greeting()
+                    # Acknowledge ([wake] ack_mode), then listen: the
+                    # greeting or chime plays to its end and what the mic
+                    # heard under it is dropped, so the capture that follows
+                    # holds only what was said after it. Done after
+                    # _stop_music so its player doesn't race the music one
+                    # for the output device.
+                    self._acknowledge_wake(music_was_playing, woke_at)
+                    if self.shutdown_event.is_set():
+                        return False
                     oww.reset()
                     return True
         return False
@@ -3315,30 +3492,13 @@ class Satellite:
         )
         pre_speech_silent = 0
         sent = 0
-
-        # Greeting-aware endpointing. On a wake turn the greeting clip is
-        # still playing while this capture runs (see `_wait_for_wake`). The
-        # array's AEC should keep it out of the mic; what gets past it trips
-        # VAD like speech, and the capture used to end `silence_timeout`
-        # after the greeting — on the pause a person leaves after "Back so
-        # soon?" — holding nothing but the greeting, while the real request
-        # went into a closed mic (office satellite, 2026-09-28). So while the
-        # greeting plays, plus a short tail for the speaker and the room,
-        # frames still stream (speech over the greeting reaches the server,
-        # which strips the greeting off the front) but don't count toward
-        # endpointing. If the mic heard voice in that window, the user then
-        # gets `greeting_reply_wait` seconds to start, or carry on, talking
-        # before the capture is sent as it is — the server drops one that is
-        # only the greeting. If it heard nothing there, the capture runs
-        # exactly as it always has.
-        in_greeting = self._greeting_played_this_turn and self._greeting_playing()
-        greeting_tail_left: int | None = None
-        heard_in_greeting = 0
-        awaiting_reply = 0
-        reply_limit = (
-            max(1, int(self.cfg.greeting_reply_wait * 1000 / FRAME_MS))
-            if in_greeting else 0
-        )
+        # What this turn's wake acknowledgement tells the core, taken once:
+        # only this capture reports it, however it ends (a follow-up or a
+        # barge-in capture after it had no acknowledgement of its own).
+        ack = self._ack_fields()
+        self._greeting_played_this_turn = False
+        self._greeting_clip_name = None
+        self._ack_before_capture = False
 
         # Per-frame loudness — used after the loop for noisy-capture
         # detection and for the stats log so we can debug "why did
@@ -3387,23 +3547,6 @@ class Satellite:
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
-            if in_greeting:
-                if greeting_tail_left is None and not self._greeting_playing():
-                    greeting_tail_left = _GREETING_TAIL_FRAMES
-                if greeting_tail_left is not None:
-                    greeting_tail_left -= 1
-                    in_greeting = greeting_tail_left >= 0
-                if in_greeting:
-                    # Streamed, but not counted: `speaking`, the last voiced
-                    # frame and the silence run are all about what comes
-                    # after the greeting — so no `speech_pause` is ever
-                    # reported on the greeting's own words, and the core
-                    # never starts transcribing (or ends the capture on) a
-                    # copy that holds nothing else.
-                    heard_in_greeting += int(is_speech)
-                    self._emit_audio(frame)
-                    sent += 1
-                    continue
             if is_speech and pause_reported:
                 # BEFORE this frame's audio: the core counts every frame
                 # that reaches it while a reported pause stands as silence
@@ -3430,28 +3573,17 @@ class Satellite:
                     # Once per silence run: `frame` is what the core has
                     # buffered when this arrives (one ordered queue).
                     pause_reported = True
-                    hint: dict[str, Any] = {
+                    # As in utterance_end: the core screens the copy it may
+                    # end the capture on the way the turn will screen it.
+                    self._emit_text({
                         "type": "speech_pause",
                         "utt": utt,
                         "frame": sent,
                         "last_voiced_frame": last_voiced,
-                        "greeting_played": self._greeting_played_this_turn,
-                    }
-                    if self._greeting_played_this_turn and self._greeting_clip_name:
-                        # As in utterance_end: the core screens the copy it
-                        # may end the capture on for this one line.
-                        hint["greeting_clip"] = self._greeting_clip_name
-                    self._emit_text(hint)
+                        **ack,
+                    })
                 if silent_frames >= silence_limit:
                     exit_reason = "vad_silence_after_speech"
-                    break
-            elif heard_in_greeting:
-                # Voice during the greeting, none since: either the greeting
-                # bled in or the user said it all over the greeting. Wait
-                # for more, then send what there is either way.
-                awaiting_reply += 1
-                if awaiting_reply >= reply_limit:
-                    exit_reason = "no_speech_after_greeting"
                     break
             elif pre_speech_limit is not None:
                 # Follow-up flow: counting up *before* any speech ever
@@ -3493,11 +3625,7 @@ class Satellite:
                 int(self.cfg.max_record_seconds), stats,
             )
         else:
-            log.info(
-                "capture ended (%s): %s%s", exit_reason, stats,
-                f", {heard_in_greeting} voiced frames under the greeting"
-                if heard_in_greeting else "",
-            )
+            log.info("capture ended (%s): %s", exit_reason, stats)
 
         # Noisy-capture detection: only fire when the audio is genuinely
         # saturated (clipping-adjacent), not whenever speech happens to
@@ -3533,39 +3661,27 @@ class Satellite:
                     return self._emit_text({"type": "noisy_capture"})
 
         self._leds.set_state("thinking")
-        end: dict[str, Any] = {
+        delivered = self._emit_text({
             "type": "utterance_end",
-            "greeting_played": self._greeting_played_this_turn,
-            # Exact frame accounting for the core: with these it knows
-            # whether a transcript it started at a pause covers every
-            # voiced frame. The same numbers (why the capture ended, and
-            # its voiced / trailing-silent / silence-limit frame counts)
-            # go into an opted-in room's command recording (end-of-turn
-            # tuning). An older core reads greeting_played alone. New
-            # FIELDS on an existing frame are safe both ways — unlike a new
-            # frame type, which an old core answers with `error`.
+            # greeting_played / greeting_clip / ack_before_capture: see
+            # `_ack_fields`. Exact frame accounting for the core: with the
+            # rest it knows whether a transcript it started at a pause
+            # covers every voiced frame. The same numbers (why the capture
+            # ended, and its voiced / trailing-silent / silence-limit frame
+            # counts) go into an opted-in room's command recording
+            # (end-of-turn tuning). An older core reads greeting_played
+            # alone. New FIELDS on an existing frame are safe both ways —
+            # unlike a new frame type, which an old core answers with
+            # `error`.
+            **ack,
             "utt": utt,
             "frames": sent,
             "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
             "exit_reason": exit_reason,
             "voiced_frames": voiced_count,
-            # A capture that waited out `greeting_reply_wait` ended on that
-            # silent run, not on silence after speech.
-            "trailing_silent_frames": (
-                awaiting_reply if exit_reason == "no_speech_after_greeting" else silent_frames
-            ),
-            "silence_limit_frames": (
-                reply_limit if exit_reason == "no_speech_after_greeting" else silence_limit
-            ),
-        }
-        if self._greeting_played_this_turn and self._greeting_clip_name:
-            # Which line played, so the server matches just that one. A
-            # server that predates the field ignores it.
-            end["greeting_clip"] = self._greeting_clip_name
-        delivered = self._emit_text(end)
-        # One-shot: only this turn's transcript should be greeting-filtered.
-        self._greeting_played_this_turn = False
-        self._greeting_clip_name = None
+            "trailing_silent_frames": silent_frames,
+            "silence_limit_frames": silence_limit,
+        })
         if not delivered:
             log.info(
                 "capture ended with no session up; the utterance was dropped "
@@ -3713,9 +3829,9 @@ class Satellite:
             self._emit_text({"type": "dropin_end"})
             return
         log.info("drop-in started with %r (inbound rate=%d Hz)", peer, rate)
-        # The call owns the output device — stop music + any wake greeting.
+        # The call owns the output device — stop music + any wake acknowledgement.
         self._stop_music()
-        self._stop_greeting()
+        self._stop_ack()
         # Inbound relay PCM is 16 kHz, NOT the last TTS rate. Pin it so the
         # playback thread doesn't pitch it wrong, and disarm the TTS
         # prebuffer (relay audio plays through immediately).
@@ -3759,7 +3875,8 @@ class Satellite:
         chat mode.
 
         Runs on the asyncio receiver thread; it only flips the `chat_active`
-        Event + stops music/greeting (the call owns the output device). The mic
+        Event + stops music and any wake acknowledgement (the call owns the
+        output device). The mic
         thread, which watches `chat_active` in its outer loop, runs the actual
         turn loop in `_chat_loop`. This mirrors `_enter_dropin` exactly — same
         receiver→mic hand-off — but for an STT→Letta→TTS conversation rather
@@ -3789,10 +3906,10 @@ class Satellite:
             self._emit_text({"type": "chat_end", "reason": "no_aec"})
             return
         log.info("conversational chat mode started")
-        # The conversation owns the output device — stop any music + the wake
-        # greeting so the first turn captures clean speech.
+        # The conversation owns the output device — stop any music + a wake
+        # acknowledgement so the first turn captures clean speech.
         self._stop_music()
-        self._stop_greeting()
+        self._stop_ack()
         # Arm the mode. The mic thread switches into `_chat_loop` on its next
         # outer-loop tick (and `_wait_for_wake` bails immediately if it's idle
         # there). The normal turn machinery inside `_chat_loop` manages
@@ -4085,9 +4202,9 @@ class Satellite:
             self._wake_rec_params["target_count"],
             self._wake_rec_params["clip_seconds"],
         )
-        # Stop music / greeting so the clips capture clean speech, then arm.
+        # Stop music / any acknowledgement so the clips capture clean speech, then arm.
         self._stop_music()
-        self._stop_greeting()
+        self._stop_ack()
         self.wake_recording.set()
 
     def _wake_recording_loop(self) -> None:
@@ -4317,6 +4434,12 @@ class Satellite:
                 or self.chat_active.is_set()
                 or self.wake_recording.is_set()
             ):
+                # A mode that began during the acknowledgement takes over;
+                # this wake's capture never happens, so neither does its
+                # report of the acknowledgement.
+                self._greeting_played_this_turn = False
+                self._greeting_clip_name = None
+                self._ack_before_capture = False
                 continue
             if not woke:
                 return
@@ -4561,11 +4684,11 @@ class Satellite:
         elif t == "response_start":
             self.audio_sample_rate = int(payload.get("audio_sample_rate") or 16_000)
             # TTS is about to play — kill music (and any still-playing wake
-            # greeting) so they don't compete on the output device. Music
+            # acknowledgement) so they don't compete on the output device. Music
             # will only resume if the server sends a fresh music_start
             # after the response.
             self._stop_music()
-            self._stop_greeting()
+            self._stop_ack()
             self.playback_active.set()
             # Mark the device as "in use" the instant the response starts,
             # not when the playback thread eventually opens the stream
@@ -5224,12 +5347,11 @@ class Satellite:
                 self.cfg.device.name,
             )
         # The same failure by the OTHER door. TTS rides PortAudio
-        # ([audio] output_device); music, the wake greeting and the canned
-        # clips ride mpg123/ALSA ([music] alsa_device). Pinning only the
-        # first leaves every clip leaving through a device the array never
-        # sees — so its AEC has no reference for them, and `_play_greeting`
-        # overlaps command capture on a promise ("the chip's AEC keeps it
-        # out of the mic") that is not true as configured.
+        # ([audio] output_device); music, the wake greeting or chime and the
+        # canned clips ride ALSA directly ([music] alsa_device). Pinning only
+        # the first leaves all of those leaving through a device the array
+        # never sees — so its AEC has no reference for them, and the wake
+        # word has to be heard over music the chip could have cancelled.
         # getattr, not attribute access: an upgrade syncs client.py and
         # devices.py as separate files, so a sync interrupted between them
         # would boot new client code against an old profile lacking this
@@ -5242,11 +5364,10 @@ class Satellite:
             log.warning(
                 "device profile %r plays music and local clips through the "
                 "array for on-chip AEC, but [music] alsa_device is %r, not "
-                "%r. The wake greeting overlaps command capture assuming the "
-                "AEC cancels it — through another device it cannot, and the "
-                "greeting bleeds into the transcript. Set [music] "
-                "alsa_device (PROVISIONING §F); get the card name from "
-                "`arecord -L`.",
+                "%r. Through another device the chip cannot cancel the "
+                "music, and the wake word has to be heard over it. Set "
+                "[music] alsa_device (PROVISIONING §F); get the card name "
+                "from `arecord -L`.",
                 self.cfg.device.name, self.cfg.music_alsa_device, want_music_dev,
             )
 
@@ -5344,7 +5465,7 @@ class Satellite:
         finally:
             self.shutdown_event.set()
             self._stop_music()
-            self._stop_greeting()
+            self._stop_ack()
             self._stop_mic()
             if self._mic_thread is not None:
                 self._mic_thread.join(timeout=2.0)

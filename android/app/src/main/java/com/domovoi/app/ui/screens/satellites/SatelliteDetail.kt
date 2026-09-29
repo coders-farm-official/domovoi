@@ -199,6 +199,7 @@ internal fun SatDropdown(
     placeholder: String,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    labelOf: (String) -> String = { it },
     onSelect: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -209,7 +210,7 @@ internal fun SatDropdown(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
-                value?.takeIf { it.isNotBlank() } ?: placeholder,
+                value?.takeIf { it.isNotBlank() }?.let(labelOf) ?: placeholder,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -223,7 +224,7 @@ internal fun SatDropdown(
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { opt ->
                 DropdownMenuItem(
-                    text = { Text(opt, style = MaterialTheme.typography.bodySmall) },
+                    text = { Text(labelOf(opt), style = MaterialTheme.typography.bodySmall) },
                     onClick = {
                         onSelect(opt)
                         open = false

@@ -39,7 +39,7 @@ Per room:
 | Connection | GPIO (seats on the header) | USB — plug and play, no overlay, no soldering |
 | Setup effort | More: device-tree overlay, card pinning, mixer tuning | Less: enumerates as a USB sound card |
 | Echo cancellation (AEC) | **None** | **On-chip**, plus 60 dB AGC, beamforming, noise suppression, direction-of-arrival |
-| What AEC unlocks | — | The **spoken wake greeting** (Domovoi acknowledges while still listening) and **chat mode** (multi-turn conversation with an open mic) — both refuse to run on a HAT because the mic would hear the speaker |
+| What AEC unlocks | — | **Chat mode** (multi-turn conversation with an open mic — refused on a HAT because the mic would hear the speaker), reliable talk-over barge-in, and hearing the wake word over music. (The spoken wake greeting no longer needs it: it plays before the satellite listens, on either board.) |
 | Barge-in | Works, but echo-sensitive (tunable; can be restricted to wake-word-only) | Reliable plain-VAD barge-in |
 | LEDs | 3× APA102 (solid state colors) | 12× WS2812 ring (DoA dot points at your voice, animated states) |
 | Speaker plugs into | the HAT's 3.5 mm jack | **the array's own jack** (mandatory — it's the AEC echo reference); output is mono line-level, so budget a mono→stereo adapter for stereo speaker pairs and expect to set a software make-up gain |
@@ -298,8 +298,8 @@ it's the real reference. The map:
 |---|---|
 | `[device]` | The mic-board **profile** (`respeaker_2mic_hat` / `xvf3800_usb`). The profile sets sane per-board defaults for audio, gain, noise gate, barge-in, LEDs, and music below; anything you set explicitly still wins. |
 | `[satellite]` | `room_id` and the server WebSocket URL (`ws://…:6370`). |
-| `[wake]` | Wake word + detection threshold. Overridden at runtime by the `~/.domovoi/wake` sidecar once you push a custom model (below). |
-| `[greeting]` | The instant spoken acknowledgment when the wake word fires. Needs AEC — set `enabled = false` on a HAT. |
+| `[wake]` | Wake word + detection threshold (overridden at runtime by the `~/.domovoi/wake` sidecar once you push a custom model, below), and `ack_mode`: how the satellite acknowledges the wake word before it listens — `greeting`, `chime` or `none` ([below](#the-wake-acknowledgement)). |
+| `[greeting]` | The spoken greeting's funny-line chance. Its `enabled` switch is read only while `[wake] ack_mode` is unset (older configs). |
 | `[chat]` | Documentation-only: chat mode is entirely server-gated, and the satellite refuses it on a non-AEC board. |
 | `[sounds]` | Auto-sync of rendered sound clips (greetings, the offline apology) from the server. |
 | `[voice]` | Which registered server voice this room speaks in — usually you change this by voice ("switch to Ryan") and the choice persists in the `~/.domovoi/voice` sidecar. |
@@ -312,6 +312,47 @@ Most settings can also be edited from the dashboard: **Satellites → (your
 room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
 preserving your comments, keeping a `.bak` — and restarts the satellite to
 apply (that's what the self-restart sudoers entry is for).
+
+### The wake acknowledgement
+
+When the wake word fires, the LED turns to "listening" at once, and the
+satellite acknowledges it the way `[wake] ack_mode` says — per satellite,
+also on the dashboard as **Wake acknowledgement** in its Wake word settings:
+
+| Mode | What you hear | Added before listening starts |
+|---|---|---|
+| `greeting` (default) | A short spoken line from the greeting bank ("Yes?", "What's up?") in the room's voice | The clip's length plus 0.2 s: about **1.2 s** with a Piper voice (1.7 s for the longer lines), about **2 s** with an Edge voice |
+| `chime` | A 0.24 s two-note chime, made on the satellite | About **0.5 s** |
+| `none` | Nothing — the LED alone | Nothing |
+
+The greeting or chime plays **to the end first**, then the satellite drops
+everything its mic heard meanwhile (plus 0.2 s for the room to go quiet)
+and starts listening. So **wait for it** — anything said over it is not
+heard. That is the point: the satellite cannot hear, and answer, its own
+greeting, and it needs no echo cancellation for it, so the greeting works
+on a HAT as well as on the XVF3800. A player still going after 4 s (1.5 s
+for the chime) is stopped and listening starts anyway.
+
+Measured on the shipped greeting bank as rendered (2,184 clips, 28 voices):
+Piper clips run a median 1.0 s (90th percentile 1.5 s); Edge clips a median
+1.8 s (90th percentile 2.3 s), of which about 0.85 s is silence at the end of
+the clip. The longest, a funny line in an Edge voice, is 4.1 s; the cap
+stops it inside that trailing silence. If the wait matters in a room,
+`chime` keeps an audible acknowledgement at under half the cost.
+
+When music was playing, the spoken greeting is skipped — the music stopping
+and the LED say "listening" — and the capture starts at once. The chime
+still plays: it is short, and over before anyone has started to talk.
+Follow-up turns (the bot asked a question), barge-in, chat mode and drop-in
+calls never play an acknowledgement.
+
+A config written before `ack_mode` existed keeps what `[greeting] enabled`
+chose — `true` is `greeting`, `false` is `none` — so upgrading changes only
+*when* the greeting plays. Each wake logs the timing:
+
+```
+wake ack: greet_121aac55.mp3 played 1106 ms; dropped 36 mic frames under it + 7 tail; listening 1331 ms after the wake word
+```
 
 ### How a command's capture ends
 

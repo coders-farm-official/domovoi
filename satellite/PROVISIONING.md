@@ -378,7 +378,7 @@ server ready: protocol=0.1 bot=Domovoi
 listening for wake word 'hey_jarvis' in room '<room>'
 ```
 
-If you see all three, the Pi is provisioned. Hit Ctrl+C — the autostart wiring (systemd unit) is set up in step 9 below.
+If you see all three, the Pi is provisioned. Say the wake word once: the LED turns to listening, the satellite acknowledges it (a spoken greeting by default — `[wake] ack_mode` picks greeting, chime or none), and only once that has finished does it listen, logging for example `wake ack: greet_121aac55.mp3 played 1106 ms; … listening 1331 ms after the wake word`. Wait for the greeting before you speak; anything said over it is not heard, by design. Hit Ctrl+C — the autostart wiring (systemd unit) is set up in step 9 below.
 
 If you see the WebSocket connect immediately drop, or never see `server ready`, the Domovoi server isn't reachable from the Pi — check the server's firewall (port 6370 inbound from LAN) and `ping <server-ip-or-hostname>` from the Pi.
 
@@ -707,7 +707,7 @@ output_device = "reSpeaker XVF3800"    # MUST be the array (AEC reference)
 alsa_device = "plughw:CARD=Array,DEV=0"   # name-based; `Array` from `arecord -L`
 ```
 
-**Portal-onboarded units write all three of these automatically** — `apply_provision` pins `[audio] input_device`, `[audio] output_device` AND `[music] alsa_device` from the device profile. You only set them by hand on a card you built manually. Until 2026-09-10 it wrote only the two `[audio]` keys, so prepared cards shipped with TTS going through the array while music, the wake greeting and the canned clips went out the ALSA default — audio the chip never plays is audio its AEC cannot cancel, and the greeting overlaps command capture on exactly that assumption. If you have a satellite provisioned before then, check `[music] alsa_device`: `default` means it never got pinned.
+**Portal-onboarded units write all three of these automatically** — `apply_provision` pins `[audio] input_device`, `[audio] output_device` AND `[music] alsa_device` from the device profile. You only set them by hand on a card you built manually. Until 2026-09-10 it wrote only the two `[audio]` keys, so prepared cards shipped with TTS going through the array while music, the wake greeting and the canned clips went out the ALSA default — audio the chip never plays is audio its AEC cannot cancel (the greeting then overlapped command capture on exactly that assumption; music still needs it, since the wake word is listened for over the music). If you have a satellite provisioned before then, check `[music] alsa_device`: `default` means it never got pinned.
 
 Selecting the profile auto-disables the ALSA mic-gain tune and the software noise-gate auto-calibration (the chip does both on-chip) and keeps barge-in on normal VAD (on-chip AEC cancels the echo) — you don't set those by hand.
 

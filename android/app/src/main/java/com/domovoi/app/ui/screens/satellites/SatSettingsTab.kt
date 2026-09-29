@@ -317,6 +317,7 @@ private fun ConfigFieldRow(
                 options = f.choices ?: emptyList(),
                 placeholder = "choose…",
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                labelOf = { f.choice_labels?.get(it) ?: it },
                 onSelect = { onChange(JsonPrimitive(it)) },
             )
             "int", "float" -> NumberEditor(f, value, onChange)

@@ -8,10 +8,13 @@ Whisper heard "Back so soon." and row #187 routed Domovoi's own line to the
 LLM as if the user had said it. The user's real request, "Tell me a joke.",
 went into a closed mic and had to be asked again (#188).
 
-The satellite now reports which clip played (``greeting_clip``) and keeps
-listening past the greeting (satellite/tests/test_greeting_endpointing.py);
-the core drops a turn that is nothing but a greeting whenever
-``greeting_played`` was set. Driven through ``_process_utterance`` with a
+The satellite now reports which clip played (``greeting_clip``); the core
+drops a turn that is nothing but a greeting whenever ``greeting_played``
+was set — unless the satellite also says the greeting finished before the
+capture opened (``ack_before_capture``: the satellite plays its wake
+acknowledgement first and only then listens, satellite/tests/
+test_wake_ack.py), when the capture cannot be the greeting alone and only
+the leading strip still runs. Driven through ``_process_utterance`` with a
 fake socket and a scripted Whisper; the router must not be reached.
 """
 
@@ -308,3 +311,75 @@ async def test_the_stripped_timer_command_routes_to_the_timer(db_session) -> Non
     await db_session.commit()
     assert response.matched_handler == "timer"
     assert response.matched_path == "fast"
+
+
+# ─── a greeting played BEFORE the capture (ack_before_capture) ────────────
+#
+# A current satellite plays the greeting to its end, drops what its mic
+# heard under it, and only then opens the capture — and says so. Such a
+# capture cannot hold the whole greeting, so nothing in it is dropped for
+# sounding like one; the leading strip stays as the safety net for an echo
+# tail that outlasted the satellite's drain.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "heard,clip_text",
+    [
+        # "Yes?" played and finished; the person said "yes" (a parked
+        # question) — before, this was dropped as the greeting heard back.
+        ("Yes.", "Yes?"),
+        ("Back so soon.", "Back so soon?"),
+        ("Hello.", "Hello!"),
+        ("Yes.", None),
+    ],
+    ids=["yes-after-yes", "the-line-itself", "hello", "whole-bank"],
+)
+async def test_a_greeting_before_the_capture_never_drops_the_turn(
+    monkeypatch, routed, heard, clip_text,
+) -> None:
+    clip = next(mp3 for mp3, text in _CLIPS.items() if text == clip_text) if clip_text else None
+    ws = await _turn(
+        monkeypatch, heard, greeting_played=True, trigger="wake_word",
+        greeting_clip=clip, ack_before_capture=True,
+    )
+    assert routed == [heard]
+    assert not _dropped(ws)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "heard,reaches",
+    [
+        ("Back so soon? Tell me a joke.", "Tell me a joke."),
+        ("Back so soon? Yes.", "Yes."),
+        # No clause break: a sentence that starts like the greeting keeps
+        # every word.
+        ("Back so soon set a timer for five minutes", "Back so soon set a timer for five minutes"),
+    ],
+)
+async def test_the_strip_stays_as_the_safety_net(monkeypatch, routed, heard, reaches) -> None:
+    await _turn(
+        monkeypatch, heard, greeting_played=True, trigger="wake_word",
+        greeting_clip=_BACK_SO_SOON, ack_before_capture=True,
+    )
+    assert routed == [reaches]
+
+
+@pytest.mark.asyncio
+async def test_utterance_end_hands_ack_before_capture_to_the_turn(monkeypatch) -> None:
+    """Only a real ``true`` counts; an older satellite sends nothing and
+    gets the screen it always had."""
+    calls: list[dict] = []
+
+    async def _capture(self, pcm, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(StreamSession, "_process_utterance", _capture)
+    sess = StreamSession(_FakeWS(), "office")  # type: ignore[arg-type]
+    base = {"type": "utterance_end", "greeting_played": True, "greeting_clip": _BACK_SO_SOON}
+    for extra in ({"ack_before_capture": True}, {}, {"ack_before_capture": "true"}):
+        await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+        await sess._on_control({**base, **extra})
+        await sess._response_task
+    assert [c["ack_before_capture"] for c in calls] == [True, False, False]

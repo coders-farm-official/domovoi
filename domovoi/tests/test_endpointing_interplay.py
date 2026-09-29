@@ -7,27 +7,29 @@ Two lines of work changed the same voice turn at the same time:
   the capture itself (`end_capture`) when the copy is a whole command;
 * the voice-answer fixes (test_greeting_echo.py, test_llm_cold_start.py,
   test_voice_qa_answers.py): a turn that is only Domovoi's own wake
-  greeting is dropped, the satellite waits past the greeting and names the
-  clip it played, a cold model is announced before it loads, and QA
-  answers are the model's plain text.
+  greeting is dropped, the satellite names the clip it played (and now
+  plays it before it listens: satellite/tests/test_wake_ack.py), a cold
+  model is announced before it loads, and QA answers are the model's plain
+  text.
 
 Each rule below is where the two meet:
 
 1. A greeting-only transcript never early-commits, and a speculative copy
-   of it is never used as a command (it is dropped like any other).
-2. The satellite's wait past the greeting and its endpoint reports share
-   `utterance_end` (greeting_played + greeting_clip beside utt / frames /
-   last_voiced_frame / exit_reason), and the greeting's own words never
-   start a pause — so never a copy of the greeting alone (the satellite
-   half is satellite/tests/test_greeting_endpointing.py; the whole loop
-   against the core is at the bottom here).
+   of it is never used as a command (it is dropped like any other) —
+   unless the satellite says the greeting finished before the capture
+   opened (`ack_before_capture`), when it cannot be the greeting alone.
+2. The satellite's report of the greeting and its endpoint reports share
+   `utterance_end` and `speech_pause` (greeting_played + greeting_clip +
+   ack_before_capture beside utt / frames / last_voiced_frame /
+   exit_reason); the whole loop against the core is at the bottom here.
 3. The cold-start notice opens the one response after an early commit or a
    reused copy just as after a whole-capture decode.
 4. Plain-text QA answers the routed turn whether its transcript came from
    the copy or from the whole capture.
 5. An opted-in room's command recording keeps the reason the capture
    really ended: server_endpoint for an early commit, no_speech_after_
-   greeting for a capture that waited out the greeting reply wait.
+   greeting for an older satellite's capture that waited out its greeting
+   reply wait.
 6. The turn's timings keep every stage and flag of both.
 
 Driven through the real `/v1/stream` socket with the stubs of
@@ -40,7 +42,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import threading
 import time
 import types
 import wave
@@ -354,12 +355,13 @@ class _FakeWS:
         ({"frames": 60, "last_voiced_frame": 19, "exit_reason": "vad_silence_after_speech",
           "voiced_frames": 20, "trailing_silent_frames": 40, "silence_limit_frames": 40},
          40 * 30),
-        # Only under the greeting: the reply wait ran out, nothing to claim.
+        # An older satellite (greeting over the capture): only under the
+        # greeting, the reply wait ran out, nothing to claim.
         ({"frames": 60, "last_voiced_frame": None, "exit_reason": "no_speech_after_greeting",
           "voiced_frames": 0, "trailing_silent_frames": 49, "silence_limit_frames": 49},
          None),
     ],
-    ids=["speech-after", "reply-wait"],
+    ids=["speech-after", "older-satellite-reply-wait"],
 )
 async def test_utterance_end_hands_the_clip_and_the_endpoint_to_the_turn(
     monkeypatch, fields, silence_ms,
@@ -406,8 +408,9 @@ def _kept(monkeypatch) -> list:
     ids=["command-under-the-greeting", "greeting-only"],
 )
 def test_a_capture_that_waited_past_the_greeting(pipeline, monkeypatch, heard, routed) -> None:
-    """Everything was said under the greeting; the satellite waited out
-    its reply wait and sent the lot with no last voiced frame. No pause
+    """An older satellite, which plays the greeting over its capture:
+    everything was said under the greeting; it waited out its reply wait
+    and sent the lot with no last voiced frame. No pause
     was reported, so there is no copy: the whole capture is transcribed,
     the greeting stripped off (or the turn dropped), and the recording
     says the capture ended on the reply wait."""
@@ -650,50 +653,85 @@ def test_plain_text_qa_answers_the_turn_either_way(pipeline, monkeypatch, reused
 
 
 # ─── 1 + 2 + 5, the real satellite loop against the real core ─────────────
+#
+# The satellite plays its wake acknowledgement to the end BEFORE it listens,
+# and drops what the mic heard under it (satellite/tests/test_wake_ack.py
+# drives that half). What reaches the capture is the state
+# `_acknowledge_wake` leaves — the clip that played, and that it came first
+# — and a mic that holds only what was said after it.
 
 
-class _Greeting:
-    """mpg123 stand-in: playing until the capture has taken ``frames``."""
-
-    def __init__(self, sat, frames: int) -> None:
-        self.sat, self.frames = sat, frames
-
-    def poll(self):
-        return None if self.sat.raw_q.taken <= self.frames else 0
-
-
-def _greeting_satellite(monkeypatch, ready: dict, *, frames: int, early_commit: bool):
+def _acked_satellite(monkeypatch, ready: dict, *, clip: str, early_commit: bool):
+    """A satellite whose wake greeting ``clip`` has just finished playing."""
     sat = _satellite(monkeypatch, ready, early_commit=early_commit)
-    sat.cfg.greeting_reply_wait = 2.5
-    sat._greeting_lock = threading.Lock()
     sat._greeting_played_this_turn = True
-    sat._greeting_clip_name = BACK_CLIP
-    sat._greeting_proc = _Greeting(sat, frames)
+    sat._greeting_clip_name = clip
+    sat._ack_before_capture = True
     return sat
 
 
-def test_the_real_loop_pauses_after_the_greeting_not_on_it(pipeline, monkeypatch) -> None:
-    """Bleed, a gap, then the person: the satellite's one pause is the
-    person's, its copy holds the greeting and the command, and the core
-    reuses it with the greeting stripped off."""
-    whisper = pipeline["whisper"] = _WatchedWhisper("Back so soon? Pause the music.")
+def test_the_real_loop_after_the_greeting_hears_only_the_person(pipeline, monkeypatch) -> None:
+    """The greeting played first: the capture is the command, its one pause
+    is the person's, both hints say which greeting played and that it came
+    first, and the core reuses the copy as the turn."""
+    whisper = pipeline["whisper"] = _WatchedWhisper("Pause the music.")
     with TestClient(app) as tc, tc.websocket_connect("/v1/stream/kitchen") as ws:
         _bank()
         probe = _satellite(monkeypatch, {"type": "ready", "features": []}, early_commit=False)
         ready = sat_hello(ws, probe)
-        sat = _greeting_satellite(monkeypatch, ready, frames=40, early_commit=False)
-        emitted = sat_capture(sat, [SAT_LOUD] * 33 + [SAT_QUIET] * 20 + [SAT_LOUD] * 20
-                              + [SAT_QUIET] * 60)
+        sat = _acked_satellite(monkeypatch, ready, clip=BACK_CLIP, early_commit=False)
+        emitted = sat_capture(sat, [SAT_LOUD] * 20 + [SAT_QUIET] * 60)
         texts = [d for k, d in emitted if k == "text"]
         assert [d["type"] for d in texts] == ["utterance_start", "speech_pause", "utterance_end"]
         pause, end = texts[1], texts[2]
-        assert pause["last_voiced_frame"] == 72 and pause["greeting_clip"] == BACK_CLIP
-        assert end["greeting_clip"] == BACK_CLIP and end["last_voiced_frame"] == 72
+        for hint in (pause, end):
+            assert (hint["greeting_played"], hint["greeting_clip"], hint["ack_before_capture"]) == (
+                True, BACK_CLIP, True,
+            )
+        assert pause["last_voiced_frame"] == 19 and end["last_voiced_frame"] == 19
         _replay(ws, emitted)
         assert _finish_turn(ws) == "Pause the music."
-    assert whisper.calls == [(72 + 1 + 8) * 960], "one decode: the copy at the person's pause"
+    assert whisper.calls == [(19 + 1 + 8) * 960], "one decode: the copy at the person's pause"
     (said, doc), = pipeline["routed"]
     assert said == "Pause the music." and doc["stt_reused"] is True
+
+
+def test_the_real_loop_the_persons_yes_after_the_greeting_yes_is_answered(
+    pipeline, monkeypatch,
+) -> None:
+    """The greeting "Yes?" played and finished, then the person said "yes"
+    (a question was parked). A capture that played the greeting over itself
+    could hold the greeting alone, so a lone "Yes." was dropped as Domovoi
+    heard back; this one cannot, and the core routes the person's answer."""
+    whisper = pipeline["whisper"] = _WatchedWhisper("Yes.")
+    with TestClient(app) as tc, tc.websocket_connect("/v1/stream/kitchen") as ws:
+        _bank()
+        probe = _satellite(monkeypatch, {"type": "ready", "features": []}, early_commit=False)
+        ready = sat_hello(ws, probe)
+        sat = _acked_satellite(monkeypatch, ready, clip=YES_CLIP, early_commit=False)
+        emitted = sat_capture(sat, [SAT_LOUD] * 10 + [SAT_QUIET] * 60)
+        end = [d for k, d in emitted if k == "text"][-1]
+        assert (end["greeting_clip"], end["ack_before_capture"]) == (YES_CLIP, True)
+        _replay(ws, emitted)
+        assert _finish_turn(ws) == "Yes."
+    assert len(whisper.calls) == 1
+    (said, _doc), = pipeline["routed"]
+    assert said == "Yes."
+
+
+def test_the_same_yes_from_an_older_satellite_is_still_dropped(pipeline) -> None:
+    """The safety net stays for a satellite that played the greeting over
+    its capture: no `ack_before_capture`, so "Yes." after "Yes?" is the
+    greeting heard back, and the turn ends unrouted."""
+    pipeline["whisper"] = _WatchedWhisper("Yes.")
+    with TestClient(app) as tc, tc.websocket_connect("/v1/stream/kitchen") as ws:
+        _bank()
+        _hello(ws, capture_control=False)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 40)
+        ws.send_text(_end(1, frames=50, last=9, clip=YES_CLIP))
+        assert _dropped(_read_turn(ws))
+    assert pipeline["routed"] == []
 
 
 # The `ready` of a core from before early endpointing — 8cb568d, the one the
@@ -704,48 +742,74 @@ _OLDER_READY = {
 }
 
 
-@pytest.mark.parametrize(
-    "feed,greeting_frames",
-    [
-        ([SAT_LOUD] * 30 + [SAT_QUIET] * 60, None),
-        ([SAT_LOUD] * 33 + [SAT_QUIET] * 20 + [SAT_LOUD] * 20 + [SAT_QUIET] * 60, 40),
-        ([SAT_LOUD] * 33 + [SAT_QUIET] * 200, 40),
-        ([SAT_LOUD] * 38 + [SAT_QUIET] * 200, 40),
-    ],
-    ids=["no-greeting", "bleed-then-command", "bleed-only", "command-under-greeting"],
-)
-def test_the_merged_loop_sends_an_older_core_nothing_new(monkeypatch, feed, greeting_frames) -> None:
+@pytest.mark.parametrize("acked", [False, True], ids=["no-greeting", "greeting-before-capture"])
+def test_the_merged_loop_sends_an_older_core_nothing_new(monkeypatch, acked) -> None:
     """Satellite code is served from the core's checkout, so a satellite
     upgraded after a pull but before the core restarts runs this loop
     against the older core, which answers any message type it doesn't know
-    with `error` — the end of the turn on a Pi. Whatever the greeting did,
-    the capture sends that core only utterance_start, its audio and
-    utterance_end (whose new fields an older core ignores)."""
-    if greeting_frames is None:
-        sat = _satellite(monkeypatch, _OLDER_READY, early_commit=True)
+    with `error` — the end of the turn on a Pi. With or without a greeting
+    before it, the capture sends that core only utterance_start, its audio
+    and utterance_end (whose new fields an older core ignores)."""
+    if acked:
+        sat = _acked_satellite(monkeypatch, _OLDER_READY, clip=BACK_CLIP, early_commit=True)
     else:
-        sat = _greeting_satellite(
-            monkeypatch, _OLDER_READY, frames=greeting_frames, early_commit=True,
-        )
+        sat = _satellite(monkeypatch, _OLDER_READY, early_commit=True)
     assert sat._core_features == frozenset()
-    emitted = sat_capture(sat, feed)
+    emitted = sat_capture(sat, [SAT_LOUD] * 30 + [SAT_QUIET] * 60)
     texts = [d for k, d in emitted if k == "text"]
     assert [d["type"] for d in texts] == ["utterance_start", "utterance_end"]
     assert sum(1 for k, _ in emitted if k == "bytes") == texts[-1]["frames"]
+    assert texts[-1]["greeting_played"] is acked
+    assert texts[-1].get("ack_before_capture") is (True if acked else None)
 
 
-def test_the_real_loop_sends_a_bleed_alone_and_the_core_drops_it(pipeline, monkeypatch) -> None:
-    kept = _kept(monkeypatch)
-    whisper = pipeline["whisper"] = _WatchedWhisper("Back so soon.")
-    with TestClient(app) as tc, tc.websocket_connect("/v1/stream/kitchen") as ws:
-        _bank()
-        probe = _satellite(monkeypatch, {"type": "ready", "features": []}, early_commit=True)
-        ready = sat_hello(ws, probe)
-        sat = _greeting_satellite(monkeypatch, ready, frames=40, early_commit=True)
-        emitted = sat_capture(sat, [SAT_LOUD] * 33 + [SAT_QUIET] * 200)
-        texts = [d for k, d in emitted if k == "text"]
-        assert [d["type"] for d in texts] == ["utterance_start", "utterance_end"]
-        assert texts[-1]["exit_reason"] == "no_speech_after_greeting"
-        _replay(ws, emitted)
-        assert _dropped(_read_turn(ws))
-    assert len(whisper.calls) == 1 and pipeline["routed"] == [] and kept == []
+# ─── the greeting played before the capture: the commit check ─────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "clip,heard,expected",
+    [
+        # The greeting "Yes?" finished before the capture opened: a "Yes."
+        # in it is the person answering the parked question, and commits.
+        (YES_CLIP, "Yes.", ("B", 650)),
+        (None, "Yes.", ("B", 650)),
+        # The strip still runs — the safety net for an echo tail.
+        (BACK_CLIP, "Back so soon? Pause the music.", ("A", 350)),
+        (YES_CLIP, "Yes? Yes.", ("B", 650)),
+    ],
+    ids=["yes-clip", "yes-bank", "strip-then-command", "strip-then-yes"],
+)
+async def test_a_greeting_before_the_capture_never_holds_a_commit_back(
+    monkeypatch, clip, heard, expected,
+) -> None:
+    sess = _decision_session(monkeypatch)
+    sess._hint_greeting = True
+    sess._hint_greeting_clip = clip
+    sess._hint_ack_before = True
+    spec = _Speculation(serial=0, frames=20)
+    assert sess._commit_decision(spec, _Heard(text=heard, stt_ms=1, whisper=None)) == expected
+
+
+@pytest.mark.asyncio
+async def test_the_pause_hint_carries_ack_before_capture_for_its_utterance_only(monkeypatch) -> None:
+    sess = _decision_session(monkeypatch)
+    sess._speech_hints = True
+    sess.utterance_active = True
+    sess._utt_frames = 18
+    monkeypatch.setattr(sess, "_on_pause", lambda: None)
+    monkeypatch.setattr(sess, "_maybe_commit", lambda: None)
+
+    def hint(**extra) -> bool:
+        sess._on_speech_hint("speech_pause", {
+            "type": "speech_pause", "frame": 18, "last_voiced_frame": 9,
+            "greeting_played": True, "greeting_clip": YES_CLIP, **extra,
+        })
+        return sess._hint_ack_before
+
+    assert hint(ack_before_capture=True) is True
+    assert hint() is False                            # an older satellite
+    assert hint(ack_before_capture="true") is False   # only a real true counts
+    hint(ack_before_capture=True)
+    sess._reset_utterance_tracking("wake_word")
+    assert sess._hint_ack_before is False

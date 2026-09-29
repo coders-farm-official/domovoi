@@ -1,11 +1,16 @@
 """Strip a satellite's own wake-word greeting out of a transcript.
 
-The satellite plays a short greeting clip ("Hi there.", "What's up?") the
-instant the wake word fires, overlapping command capture — the array's AEC
-is supposed to keep it out of the mic, but it isn't perfect, so the greeting
-sometimes bleeds in and Whisper transcribes it as a prefix:
+An older satellite plays a short greeting clip ("Hi there.", "What's up?")
+the instant the wake word fires, overlapping command capture — the array's
+AEC is supposed to keep it out of the mic, but it isn't perfect, so the
+greeting sometimes bleeds in and Whisper transcribes it as a prefix:
 
     "Hi there. Say something mean."   ← greeting + the actual command
+
+A current satellite plays the greeting to the end BEFORE it listens and
+drops what the mic heard under it (``ack_before_capture``), so this module
+is its safety net rather than its fix: the strip still runs on its turns,
+and the greeting-only drop does not (see ``StreamSession._screen_greeting``).
 
 When the satellite reports it played a greeting this turn
 (``greeting_played`` on ``utterance_end``), the core runs the

@@ -106,7 +106,8 @@ def _sample_entry() -> tuple[str, str, str]:
 
 
 # Wake-word greetings — short acknowledgments the satellite plays the
-# instant the wake word fires (see satellite/client.py `_play_greeting`).
+# moment the wake word fires, before it listens (see satellite/client.py
+# `_acknowledge_wake`, `[wake] ack_mode = "greeting"`).
 # The bank lives in the `client_greetings` table; each enabled row renders
 # to greetings/greet_<hash>.mp3 (generic) or greet_funny_<hash>.mp3 (the
 # prefix is how the Pi weights selection). `{name}` is the configured bot

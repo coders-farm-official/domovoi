@@ -117,26 +117,39 @@ wake_word = "hey_jarvis"
 # Detection threshold (0–1). Lower = more sensitive, more false positives.
 threshold = 0.5
 
+# How the satellite acknowledges its wake word before it listens for your
+# command:
+#   "greeting" — a short spoken line from the greeting bank ("Yes?", "What's
+#                up?") in this room's voice, synced from the server (see
+#                [greeting] and [sounds]). The default.
+#   "chime"    — a short two-note chime (0.24 s), made on the satellite.
+#   "none"     — no sound, the LED alone; listening starts at once.
+# The greeting or chime plays to the END first, then the satellite listens —
+# anything said while it plays is not heard, by design, so wait for it. That
+# puts the clip's length in front of every command: about 1 s with a Piper
+# voice (1.5 s for the longer lines), about 1.8 s with an Edge voice (whose
+# clips end in ~0.85 s of silence), plus 0.2 s for the room to go quiet. The
+# chime costs about half a second; "none" costs nothing.
+# When music was playing, the spoken greeting is skipped (the music stopping
+# and the LED say "listening"); the chime still plays.
+# Unset: taken from [greeting] enabled below — true means "greeting", false
+# means "none" — so a config from before this setting keeps its behaviour.
+# Also editable from the dashboard (Satellites → this satellite → Settings).
+# ack_mode = "greeting"
+
 [greeting]
-# Instant spoken acknowledgment the moment the wake word fires — a random
-# pre-rendered clip from a bank of generic + occasional funny lines (rendered
-# in your TTS voice by domovoi/canned_sounds.py into sounds/greetings/
-# and rsynced here). It plays through the array WHILE the mic captures your
-# command: the XVF3800's on-chip AEC removes the greeting from the mic, so you
-# can talk over it or wait — either way the greeting finishes and your command
-# is captured cleanly.
+# The spoken wake greeting (ack_mode "greeting" in [wake] above): a random
+# pre-rendered clip from a bank of generic + occasional funny lines, rendered
+# in your TTS voice by domovoi/canned_sounds.py and synced here. It plays
+# BEFORE the satellite listens, so it needs no echo cancellation: it works on
+# a HAT as well as on the XVF3800.
 #
-# Requires AEC. On a HAT (no AEC) the greeting would bleed into the capture
-# and garble the transcript, so set enabled = false on a HAT satellite.
+# `enabled` is read only while [wake] ack_mode is unset (a config from before
+# it): true means ack_mode "greeting", false means "none". Set ack_mode
+# instead.
 enabled = true
 # Probability (0–1) a wake greeting is a funny one rather than a plain one.
 funny_chance = 0.2
-# When the mic does hear some of the greeting (AEC isn't perfect), the
-# capture ignores it for endpointing and then waits this many seconds for
-# you to start talking before it sends what it has — so pausing after
-# "Back so soon?" no longer ends the capture on the greeting alone. The
-# server drops a capture that is only the greeting.
-reply_wait = 2.5
 
 [chat]
 # Conversational chat mode (Feature #8) has NO satellite-side config knob —

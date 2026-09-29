@@ -26,6 +26,7 @@ sequenceDiagram
     participant TTS as TTS chain<br/>edge → piper → system
 
     Note over Pi: wake word detected<br/>(openWakeWord, on-Pi)
+    Note over Pi: acknowledge ([wake] ack_mode): the greeting<br/>or chime plays to the end, the mic audio<br/>under it is dropped, then listen
     Pi->>WS: utterance_start {trigger:"wake_word", utt}
     Pi->>WS: binary PCM (16 kHz mono int16, streamed)
     Note over WS: first ~240 ms pause after speech<br/>(speech_pause, or judged from the frames)
@@ -33,7 +34,7 @@ sequenceDiagram
     WS->>VID: embed(copy so far) — alongside, no side effects
     Pi->>WS: binary PCM (the rest of the silence timeout)
     STT-->>WS: transcript (held)
-    Pi->>WS: utterance_end {greeting_played, greeting_clip,<br/>frames, last_voiced_frame}
+    Pi->>WS: utterance_end {greeting_played, greeting_clip,<br/>ack_before_capture, frames, last_voiced_frame}
     Note over WS: receive loop spawns a response task<br/>and keeps draining the socket<br/>(so a barge_in still lands)
 
     opt satellite declared capture_control, transcript is a<br/>whole closed command, silent for the tier's hold
@@ -45,7 +46,7 @@ sequenceDiagram
         WS->>STT: transcribe(pcm) — after any decode in flight
         STT-->>WS: transcript
     end
-    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC, and end the turn<br/>if the transcript is only the greeting
+    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC; from an older Pi (no<br/>ack_before_capture), end the turn if the<br/>transcript is only the greeting
     WS-->>Pi: transcript {text}
 
     WS->>VID: identify(pcm) — match only, when the held copy's embedding is used

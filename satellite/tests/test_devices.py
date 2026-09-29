@@ -225,18 +225,19 @@ def test_config_unknown_profile_raises(tmp_path):
 
 def test_config_greeting_defaults(tmp_path):
     cfg = _load_config(tmp_path, '[satellite]\nroom_id = "x"\n')
-    assert cfg.greeting_enabled is True
+    assert cfg.wake_ack_mode == "greeting"
     assert cfg.greeting_funny_chance == 0.2
-    assert cfg.greeting_reply_wait == 2.5
 
 
 def test_config_greeting_override(tmp_path):
     cfg = _load_config(
         tmp_path, "[greeting]\nenabled = false\nfunny_chance = 0.5\nreply_wait = 4\n"
     )
-    assert cfg.greeting_enabled is False
+    # A config from before [wake] ack_mode: the greeting switch picks the
+    # mode, and the retired reply_wait is read by nothing (and harmless).
+    assert cfg.wake_ack_mode == "none"
     assert cfg.greeting_funny_chance == 0.5
-    assert cfg.greeting_reply_wait == 4.0
+    assert not hasattr(cfg, "greeting_reply_wait")
 
 
 def test_config_sounds_sync_default_and_override(tmp_path):

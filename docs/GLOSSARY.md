@@ -8,7 +8,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Admin session** — the 30-day bearer token you get by logging in with the admin password. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
 
-**AEC (acoustic echo cancellation)** — removing the satellite's own speaker output from its microphone signal. The XVF3800 array does this on-chip, which is what makes talking over the greeting, reliable *barge-in*, and open-mic *chat mode* possible; the 2-mic HAT has no AEC.
+**AEC (acoustic echo cancellation)** — removing the satellite's own speaker output from its microphone signal. The XVF3800 array does this on-chip, which is what makes reliable *barge-in* and open-mic *chat mode* possible; the 2-mic HAT has no AEC. (The wake greeting does not need it: the satellite plays it before it listens — see *wake acknowledgement*.)
 
 **Band** — see *priority band*.
 
@@ -101,6 +101,8 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 **VAD (voice activity detection)** — the classifier that decides which audio frames contain speech. The satellite uses it to find the end of your utterance and to detect *barge-in* during playback.
 
 **Voice profile** — a locally stored voice embedding tied to a person, enrolled by introduction ("I'm Sarah") and matched on every utterance so Domovoi knows who's talking. Powers per-person memory and personalization; "forget me" deletes it.
+
+**Wake acknowledgement** — what a satellite does when it hears the *wake word*, before it listens for the command: a spoken greeting from the greeting bank (the default), a short chime, or the light alone (`[wake] ack_mode`, per satellite, also in the dashboard's satellite Settings). The sound plays to its end and the mic audio under it is dropped, so the satellite cannot hear — and answer — its own greeting.
 
 **Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Wake Words tab, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
 

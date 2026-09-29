@@ -91,6 +91,8 @@ def make_sat(*, loop=None):
     sat.raw_q = queue.Queue()
     sat.shutdown_event = threading.Event()
     sat._greeting_played_this_turn = False
+    sat._greeting_clip_name = None
+    sat._ack_before_capture = False
     sat._end_capture = threading.Event()
     sat._capture_lock = threading.Lock()
     return sat

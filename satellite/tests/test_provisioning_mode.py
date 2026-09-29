@@ -147,9 +147,11 @@ def test_an_aec_board_gets_all_three_audio_keys_pinned(home, monkeypatch):
     prepared card shipped with TTS going through the array while music, the
     wake greeting and the canned clips left via the ALSA default — audio the
     chip never sees, and therefore audio its AEC cannot cancel. The greeting
-    overlaps command capture on the explicit promise that the AEC keeps it
-    out of the mic, so that promise was silently false on every shipped unit.
-    PROVISIONING §F documents all three; only two were written.
+    then overlapped command capture on the explicit promise that the AEC
+    kept it out of the mic, so that promise was silently false on every
+    shipped unit (and music still needs it: the wake word is listened for
+    over the music). PROVISIONING §F documents all three; only two were
+    written.
     """
     backend = FakeBackend()
     _install_provision_on_first_read(

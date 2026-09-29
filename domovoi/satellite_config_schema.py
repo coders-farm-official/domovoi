@@ -33,6 +33,24 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Default 0.5 — raise toward 0.6–0.7 if it wakes on background noise.",
         "float", min=0.0, max=1.0,
     ),
+    FieldSpec(
+        "wake.ack_mode", "Wake acknowledgement", "Wake word",
+        "What the satellite does when it hears the wake word, before it "
+        "listens for your command. A spoken greeting (\"Yes?\") or a short "
+        "chime plays to the end first, and anything said over it is not "
+        "heard — so it cannot answer its own greeting. The greeting adds "
+        "its length before listening starts (about 1 s with a Piper voice, "
+        "about 1.8 s with an Edge voice); the chime about half a second; "
+        "light only, nothing. The greeting is skipped when music was "
+        "playing; the chime is not. Works on every board — no echo "
+        "cancellation needed.",
+        "choice", choices=["greeting", "chime", "none"],
+        choice_labels={
+            "greeting": "Spoken greeting, then listen",
+            "chime": "Short chime, then listen",
+            "none": "Light only, listen right away",
+        },
+    ),
 
     # ─── Barge-in (interrupting the bot) ───────────────────────────────
     FieldSpec(
@@ -123,26 +141,15 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Greeting ──────────────────────────────────────────────────────
-    FieldSpec(
-        "greeting.enabled", "Wake greeting", "Greeting",
-        "Play a short spoken acknowledgment the instant the wake word fires. "
-        "Needs hardware AEC — on by default for the XVF3800; turn OFF on a "
-        "HAT or it bleeds into the capture and garbles the transcript.",
-        "bool",
-    ),
+    # [greeting] enabled is no longer offered: `wake.ack_mode` replaced it
+    # (the Pi reads it only to derive ack_mode for a config that predates
+    # it). [greeting] reply_wait went with the greeting played over the
+    # capture, which it existed for.
     FieldSpec(
         "greeting.funny_chance", "Funny-greeting chance", "Greeting",
-        "Probability (0–1) that a wake greeting is a funny line rather than "
-        "a plain one.",
+        "When the wake acknowledgement is the spoken greeting: the "
+        "probability (0–1) that it is a funny line rather than a plain one.",
         "float", min=0.0, max=1.0,
-    ),
-    FieldSpec(
-        "greeting.reply_wait", "Wait for you after the greeting", "Greeting",
-        "When the mic hears part of the wake greeting (echo cancellation "
-        "isn't perfect), how long the satellite waits for you to start "
-        "talking after the greeting before it sends what it heard. Raise it "
-        "if pausing after the greeting still cuts you off. Default 2.5 s.",
-        "float", min=0.5, max=10.0, unit="sec",
     ),
 
     # ─── Playback ──────────────────────────────────────────────────────

@@ -2000,6 +2000,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
             "name": spec.name, "label": spec.label, "group": spec.group,
             "section": spec.section, "tier": spec.tier, "type": spec.type,
             "min": spec.min, "max": spec.max, "choices": spec.choices,
+            "choice_labels": spec.choice_labels,
             "unit": spec.unit, "help": spec.help,
             "value": reported.get(spec.name),
         }

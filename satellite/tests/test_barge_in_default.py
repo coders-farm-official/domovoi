@@ -82,5 +82,5 @@ def test_a_config_without_those_keys_gets_them_on_every_board(tmp_path):
 
 
 def test_the_fallback_is_spelled_false_in_the_loader():
-    src = inspect.getsource(client.Config.load)
+    src = inspect.getsource(client.Config.from_toml)
     assert 'barge.get("enabled", False)' in src

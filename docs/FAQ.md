@@ -66,7 +66,7 @@ The install-time trust screen for any *third-party* plugin lists that plugin's o
 
 - Raspberry Pi Zero 2 W (or a Pi 4) with either:
   - **ReSpeaker 2-Mics Pi HAT** (V1 or V2.0 — they use different codecs, check yours), or
-  - **ReSpeaker XVF3800 USB 4-Mic Array** — the nicer option: on-chip echo cancellation, gain control, and beamforming. Required for the talk-over-the-greeting flow and open-mic chat mode.
+  - **ReSpeaker XVF3800 USB 4-Mic Array** — the nicer option: on-chip echo cancellation, gain control, and beamforming. Required for open-mic chat mode, and it makes talk-over barge-in reliable. (The spoken wake greeting works on either board: it plays before the satellite listens.)
 - Powered speaker on the 3.5 mm jack, microSD card, decent power supply.
 
 Full parts list and step-by-step setup: [Satellite Hardware](SATELLITE_HARDWARE.md) and the provisioning checklist in `satellite/PROVISIONING.md`.

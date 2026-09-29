@@ -4,6 +4,69 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-29 — The satellite acknowledges the wake word, then listens
+
+### Do this once, after upgrading
+
+**Upgrade each satellite** (Satellites → the satellite → Overview → **Upgrade satellite**). The
+change is in the satellite's own code, so a satellite that hasn't been
+upgraded keeps doing what it did — the greeting over the capture, with the
+core's greeting-echo filter behind it as before. Its Settings tab shows the
+new **Wake acknowledgement** as "(not set)", and it would ignore a value
+saved there: upgrade first, then choose.
+
+Nothing else. An upgraded satellite keeps what its `[greeting] enabled`
+chose — on means the spoken greeting, off means the light only — until you
+pick a mode.
+
+### What changes for the people in the house
+
+* **Wait for the greeting.** The spoken greeting ("Yes?", "What's up?")
+  now plays to its end *before* the satellite listens, and whatever is said
+  over it is not heard — by design: the satellite can no longer hear, and
+  answer, its own greeting (office, 2026-09-28: "Back so soon?" routed as
+  a command). It puts the clip's length in front of every command: about
+  1.2 s with a Piper voice, about 2 s with an Edge voice, whose clips end
+  in ~0.85 s of silence (measured on the shipped bank, 2,184 clips).
+* **Three choices per satellite**, on the dashboard as **Wake
+  acknowledgement** under Wake word, or `[wake] ack_mode` in the Pi's
+  `config.toml`: *Spoken greeting, then listen* (the default), *Short
+  chime, then listen* (about 0.5 s), *Light only, listen right away*.
+* The spoken greeting now works on a **2-Mics HAT** too — it no longer
+  needs echo cancellation. A HAT satellite that had it switched off keeps
+  it off until you choose otherwise.
+* When music was playing, the spoken greeting is still skipped; the chime
+  plays.
+
+### What changed
+
+* Satellite: `[wake] ack_mode = "greeting" | "chime" | "none"`. The player
+  (mpg123 for a greeting, `aplay` for the chime — both through
+  `[music] alsa_device`, both scaled by `[playback] gain`) is waited out
+  with a 4 s cap (1.5 s for the chime), then the mic frames it overlapped
+  and a 210 ms tail are dropped. Each wake logs `wake ack: <clip> played N
+  ms; … listening N ms after the wake word`. The chime is synthesized on
+  the Pi (`satellite/chime.py`) — nothing to sync. `aplay` is in
+  `alsa-utils`, which the provisioning steps already install.
+* Satellite: `[greeting] reply_wait` and the endpointing that ignored
+  frames under a playing greeting are gone with the overlap they existed
+  for; a current satellite never sends `exit_reason:
+  "no_speech_after_greeting"`. `[greeting] enabled` is read only while
+  `ack_mode` is unset. The dashboard drops both fields.
+* Satellite: a dashboard save the satellite could not start with (a value
+  its code doesn't know) is refused before anything is written, instead of
+  being written and crash-looping the service.
+* Protocol: `utterance_end` and `speech_pause` gain an optional
+  `ack_before_capture: true`, sent with `greeting_played` / `greeting_clip`
+  when the acknowledgement finished before the capture opened. For such a
+  turn the core still strips a leading greeting copy, but never drops the
+  turn as greeting-only — "Yes." after the greeting "Yes?" is the person
+  answering. Turns from older satellites are screened exactly as before.
+  New fields on existing frames: safe with an older core either way.
+* `GET /v1/admin/satellite/{room_id}/config` (and its `/api/satellites/…`
+  proxy): each field gains `choice_labels` (null unless set). The
+  dashboard and the Android app show the labels.
+
 ## 2026-09-25 — Restart can apply an update, and undo it
 
 ### Do this once, after upgrading (Linux, optional)

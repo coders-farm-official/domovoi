@@ -847,10 +847,19 @@ const ConfigField = ({ f, value, onChange }) => {
   if (f.type === 'bool')
     input = <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)}
                    style={{ width: 16, height: 16, cursor: 'pointer' }}/>;
-  else if (f.type === 'choice')
-    input = <select value={value ?? ''} onChange={e => onChange(e.target.value)} style={{ ..._cfgInput, minWidth: 150 }}>
-      {(f.choices || []).map(c => <option key={c} value={c}>{c}</option>)}
+  else if (f.type === 'choice') {
+    // choice_labels: words for a value that isn't any ("greeting" → "Spoken
+    // greeting, then listen"). A value that is none of the choices shows as
+    // itself — or "(not set)" when there is none, e.g. a satellite too old
+    // to report the setting — rather than silently as the first choice.
+    const choices = f.choices || [];
+    const labels = f.choice_labels || {};
+    const known = choices.includes(value);
+    input = <select value={known ? value : ''} onChange={e => onChange(e.target.value)} style={{ ..._cfgInput, minWidth: 150 }}>
+      {!known && <option value="" disabled>{value == null || value === '' ? '(not set)' : String(value)}</option>}
+      {choices.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}
     </select>;
+  }
   else if (f.type === 'int' || f.type === 'float')
     input = <input type="number" value={value ?? ''} min={f.min ?? undefined} max={f.max ?? undefined}
                    step={f.type === 'int' ? 1 : 'any'}

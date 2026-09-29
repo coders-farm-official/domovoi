@@ -118,6 +118,9 @@ data class SatConfigField(
     val min: Double? = null,
     val max: Double? = null,
     val choices: List<String>? = null,
+    // What to show for each choice when the raw value isn't words a person
+    // would pick ("greeting" -> "Spoken greeting, then listen"). Optional.
+    val choice_labels: Map<String, String>? = null,
     val unit: String? = null,
     val help: String? = null,
     val value: JsonElement? = null,

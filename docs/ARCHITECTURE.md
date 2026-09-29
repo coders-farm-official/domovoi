@@ -95,20 +95,21 @@ prose:
 1. **The Pi owns wake.** Wake-word detection (openWakeWord, default
    `hey_jarvis`; custom wake words such as "Hey Domovoi" are trained
    in-product), VAD, noise gate, and barge-in detection all run on the
-   satellite. Captured audio streams to the core as 16 kHz mono int16 PCM
-   between `utterance_start` / `utterance_end` frames on
-   `WS /v1/stream/{room_id}`.
+   satellite. On a wake it acknowledges first — a spoken greeting, a chime
+   or the LED alone (`[wake] ack_mode`, per satellite) — plays that to the
+   end, drops what its mic heard meanwhile, and only then listens.
+   Captured audio streams to the core as 16 kHz mono int16 PCM between
+   `utterance_start` / `utterance_end` frames on `WS /v1/stream/{room_id}`.
 2. **STT.** The core transcribes the buffered utterance with Whisper
    (faster-whisper on CUDA or CPU; deterministic stub under `USE_STUBS=true`). If the
    Pi flagged `greeting_played`, a wake greeting that bled past the mic
-   array's echo cancellation is stripped from the transcript, and a
-   transcript that is nothing but the greeting ends the turn unrouted (the
-   Pi names the clip it played, `greeting_clip`, so only that line
-   matches). The Pi, for its part, doesn't let the greeting end its own
-   capture: frames under it still stream but don't count toward
-   endpointing (so they never start a `speech_pause` either), and after a
-   greeting the mic partly heard it waits `greeting.reply_wait` seconds
-   for the user (exit reason `no_speech_after_greeting`). Whisper loads
+   array's echo cancellation is stripped from the transcript (the Pi names
+   the clip it played, `greeting_clip`, so only that line matches), and a
+   transcript that is nothing but the greeting ends the turn unrouted. A
+   current Pi plays the greeting before it opens the capture and says so
+   (`ack_before_capture`): such a capture cannot be the greeting alone — a
+   "Yes." in it is the person answering — so only the strip applies, as a
+   safety net. Whisper loads
    once at boot and a failed load is never fatal: the core drops to
    `whisper_cpu_fallback_model` on cpu/int8, and failing that runs without
    STT — a turn then gets a spoken "can't understand speech" notice and is
@@ -139,8 +140,8 @@ prose:
    (`domovoi/early_commit.py`; `early_commit_enabled`,
    `early_commit_tier_b`, and `[listen] early_commit` per satellite). On a
    greeting turn the copy is screened for the greeting exactly as the turn
-   will be (the Pi names the clip in `speech_pause` too): a copy that is
-   only the greeting never commits.
+   will be (the Pi names the clip in `speech_pause` too): from an older Pi,
+   a copy that is only the greeting never commits.
    Anything said after the hold is lost, so the tiers are checked in CI
    against a corpus of real commands for a shorter prefix that is a
    different command (`domovoi/tests/test_early_commit.py`).

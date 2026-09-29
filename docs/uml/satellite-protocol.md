@@ -37,12 +37,13 @@ sequenceDiagram
     end
 
     Note over Pi: wake word fires
+    Note over Pi: acknowledge ([wake] ack_mode): greeting or chime<br/>plays to the end, mic audio under it dropped
     Pi->>S: utterance_start {trigger:"wake_word", utt}
     Pi->>S: binary PCM …
     Pi->>S: speech_pause {utt, frame, last_voiced_frame} (features only)
     Note over S: copy the buffer, start Whisper + voice embedding on it
     Pi->>S: binary PCM (the rest of the silence) …
-    Pi->>S: utterance_end {greeting_played, greeting_clip, utt, frames,<br/>last_voiced_frame, exit_reason, voiced_frames, ...}
+    Pi->>S: utterance_end {greeting_played, greeting_clip, ack_before_capture,<br/>utt, frames, last_voiced_frame, exit_reason, voiced_frames, ...}
     Note over S: last voiced frame inside the copy → use its transcript,<br/>otherwise transcribe the whole buffer
     S-->>Pi: transcript {text}
     S-->>Pi: response_start {text, matched_handler, matched_path,<br/>session_id, online, audio_sample_rate}
@@ -56,8 +57,8 @@ sequenceDiagram
 |---|---|---|
 | `hello` | `room_id`, `wake_word`, `synced_sha`, `supports_full_duplex`, `pairing_token`, `sat_type?`, `mic_enabled?` | **Must be the first frame.** The server creates and sends nothing for the room — no MPD provisioning, no `active_sessions` entry, no `ready` — until a `hello` has passed the pairing check; a socket that sends no `hello` within `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s), or sends any other frame first (`error{reason:"hello_required"}`), is closed with code 1008 and leaves no room behind. `supports_full_duplex` reports on-chip AEC (XVF3800 true, 2-Mic HAT false) — the server refuses drop-ins for rooms that can't capture while playing. `synced_sha` is the code-version label from the Pi's last satellite-code sync, used to flag out-of-date satellites on the dashboard. `pairing_token` (optional) is the Pi's per-device WS-auth secret (`~/.domovoi/pairing_token`); the server stores only its sha256 and binds the room to it **trust-on-first-use** — see [Pairing (WS auth)](#pairing-ws-auth) below. `sat_type` (optional, `"voice"`\|`"video"`, default voice) declares the satellite kind; when explicitly present it's also persisted to the `satellites` table so offline rooms keep their type. `mic_enabled` (optional, default true) reports whether the voice-input stack runs — false on mic-less video builds; the server then refuses wake-recording/drop-in/chat for the room. `speech_pause` (optional, default false) says this client reports its own pauses (`speech_pause` / `speech_resume`) and each capture's last voiced frame whenever `ready.features` lists `"speech_pause"`; the server then uses those instead of judging pauses from the audio. `capture_control` (optional, default false) says this client stops a capture on `end_capture` — only then is it ever ended early ([Early commit](#early-commit)); a Pi sends its `[listen] early_commit` setting here. |
 | `utterance_start` | `trigger: "wake_word" \| "barge_in" \| "push_to_talk" \| "followup" \| "wake_clip"`, `utt?` | Begins an utterance; cancels any in-flight response. `wake_clip` marks a wake-word **training clip** (dashboard-initiated recording mode): the following PCM is saved as a positive clip WAV, never transcribed or routed. `utt` (optional) is the client's own number for this capture, increasing per connection; the capture's hints and its `utterance_end` repeat it, so a message about an older capture is recognisably stale. |
-| `utterance_end` | `greeting_played`, `greeting_clip?`, `utt?`, `frames?`, `last_voiced_frame?`, `exit_reason?`, `voiced_frames?`, `trailing_silent_frames?`, `silence_limit_frames?` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC, and to drop a turn whose transcript is nothing but that greeting. `greeting_clip` (optional, sent with `greeting_played`) names the clip that played (`greet_<hash>.mp3`), so the server matches only that line; without it the whole enabled greeting bank is used. `frames` (30 ms frames this capture sent), `last_voiced_frame` (0-based index of the last one the Pi's detector called speech) and `exit_reason` (`vad_silence_after_speech` \| `no_speech_after_greeting` \| `max_record_seconds` \| `shutdown` \| `server_endpoint`) let the server tell exactly whether a transcript it started at a pause covers everything said (see [Speculative transcription](#speculative-transcription)). Frames heard while the wake greeting plays (and ~300 ms after) are streamed but not counted as speech: `no_speech_after_greeting` is a capture that heard voice only under the greeting and then waited out `[greeting] reply_wait`, and its `last_voiced_frame` is null. `voiced_frames`, `trailing_silent_frames` (the silent run it ended on) and `silence_limit_frames` (the run that ends one — the reply wait's, for `no_speech_after_greeting`) complete the counts. Numbers only; with the reason, the core keeps them solely in the sidecar of an **opted-in room's command recording** (see SECURITY_PRIVACY.md). An older server ignores them all: they are new fields on an existing frame, which is safe both ways. A new frame TYPE would not be: an older core answers an unknown type with `error`, which the satellite treats as the end of the turn. |
-| `speech_pause` | `utt`, `frame`, `last_voiced_frame`, `greeting_played`, `greeting_clip?` | **Only when `ready.features` lists `"speech_pause"`.** The capture has had 8 silent frames (240 ms) after speech: `frame` is how many frames it has sent, `last_voiced_frame` the last voiced one. Once per silence run. The server may start transcribing. `greeting_played` / `greeting_clip` as in `utterance_end`: the early-commit check screens the copy for the greeting the way the turn will. Never sent for the greeting's own words — they are not counted as speech. |
+| `utterance_end` | `greeting_played`, `greeting_clip?`, `ack_before_capture?`, `utt?`, `frames?`, `last_voiced_frame?`, `exit_reason?`, `voiced_frames?`, `trailing_silent_frames?`, `silence_limit_frames?` | Ends the utterance; the server transcribes and routes (or saves the clip). `greeting_played` tells the server to strip a wake greeting that bled past the AEC, and to drop a turn whose transcript is nothing but that greeting. `greeting_clip` (optional, sent with `greeting_played`) names the clip that played (`greet_<hash>.mp3`), so the server matches only that line; without it the whole enabled greeting bank is used. `ack_before_capture` (optional, sent only as `true`) says the wake acknowledgement — greeting or chime — played to its end BEFORE this capture opened, and the Pi dropped what its mic heard meanwhile (see [The wake acknowledgement](#the-wake-acknowledgement)): the server still strips a leading greeting copy (the safety net for an echo tail) but never drops the turn as greeting-only, since such a capture cannot hold the whole greeting. `frames` (30 ms frames this capture sent), `last_voiced_frame` (0-based index of the last one the Pi's detector called speech) and `exit_reason` (`vad_silence_after_speech` \| `max_record_seconds` \| `shutdown` \| `server_endpoint`) let the server tell exactly whether a transcript it started at a pause covers everything said (see [Speculative transcription](#speculative-transcription)). An older satellite, which plays the greeting over its capture, may also send `no_speech_after_greeting`: a capture that heard voice only under the greeting and then waited out its `[greeting] reply_wait`, with a null `last_voiced_frame`. `voiced_frames`, `trailing_silent_frames` (the silent run it ended on) and `silence_limit_frames` (the run that ends one) complete the counts. Numbers only; with the reason, the core keeps them solely in the sidecar of an **opted-in room's command recording** (see SECURITY_PRIVACY.md). An older server ignores them all: they are new fields on an existing frame, which is safe both ways. A new frame TYPE would not be: an older core answers an unknown type with `error`, which the satellite treats as the end of the turn. |
+| `speech_pause` | `utt`, `frame`, `last_voiced_frame`, `greeting_played`, `greeting_clip?`, `ack_before_capture?` | **Only when `ready.features` lists `"speech_pause"`.** The capture has had 8 silent frames (240 ms) after speech: `frame` is how many frames it has sent, `last_voiced_frame` the last voiced one. Once per silence run. The server may start transcribing. `greeting_played` / `greeting_clip` / `ack_before_capture` as in `utterance_end`: the early-commit check screens the copy for the greeting the way the turn will. |
 | `speech_resume` | `utt`, `frame` | **Only when `ready.features` lists `"speech_pause"`.** Speech came back after a reported pause. Sent *before* the audio of the frame that resumed it (`frame` is the frames sent before it), so every frame the server receives while a pause stands is one the Pi called silence — the early-commit hold is counted on exactly that. |
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
 | `noisy_capture` | — | The Pi's noise-gate auto-tune found the capture unusably loud and bailed. The server answers with a stock apology TTS instead of transcribing. |
@@ -187,7 +188,9 @@ All of these must hold:
    ending on a word no command ends on (`domovoi/early_commit.py`). Not in
    chat mode. On a turn that played the wake greeting the copy is first
    screened for it exactly as the turn will be (`greeting_clip` from the
-   `speech_pause`): a copy that is nothing but the greeting never commits.
+   `speech_pause`): a copy that is nothing but the greeting never commits —
+   unless the `speech_pause` also says `ack_before_capture`, when the copy
+   cannot be the greeting alone (below).
 4. The Pi's last voiced frame is inside the transcribed copy, and it has
    been silent since for the hold: tier A `early_commit_hold_a_ms` (350 ms;
    closed phrases — pause, stop the music, volume up/down, next song, timer
@@ -208,6 +211,38 @@ satellite's `[listen] early_commit=false` stops it for that room. The
 server logs every early commit, and a warning when the late
 `utterance_end` shows speech came after it (`post_commit_voiced_ms` on the
 turn's timing row).
+
+## The wake acknowledgement
+
+A satellite acknowledges its wake word BEFORE it opens the capture, the
+way its `[wake] ack_mode` says: `greeting` (a clip from the greeting bank,
+the default), `chime` (a 0.24 s chime made on the Pi) or `none` (the LED
+alone). The player runs to its end — mpg123 or aplay, capped at 4 s and
+1.5 s — while the Pi drops every mic frame it takes in, then drops 210 ms
+more for the output path and the room, and only then sends
+`utterance_start` and the capture. Nothing said over the acknowledgement
+reaches the server. When music was playing the greeting is skipped (the
+chime is not); follow-up, barge-in, chat, drop-in and wake-clip captures
+never have one.
+
+What the capture reports about it, on `speech_pause` and `utterance_end`:
+
+| Acknowledgement | `greeting_played` | `greeting_clip` | `ack_before_capture` |
+|---|---|---|---|
+| spoken greeting | `true` | the clip | `true` |
+| chime | `false` | — | `true` |
+| none, or skipped (music, no clips, no player) | `false` | — | — |
+| an older satellite's greeting, played over the capture | `true` | the clip | — |
+
+The server strips a leading greeting copy from any `greeting_played`
+transcript — for a greeting that played first, that is the safety net for
+an echo tail that outlasted the drain, and its clause-boundary rule keeps
+it off a sentence that merely begins like a greeting. It drops a turn that
+is nothing but the greeting, and holds back an early commit on such a
+copy, only when `ack_before_capture` is absent: a capture that opened
+after the greeting cannot be the greeting alone, and a "Yes." in it is the
+person answering. An older server ignores `ack_before_capture` and screens
+the way it always did.
 
 ## Drop-in (open-mic relay) lifecycle
 

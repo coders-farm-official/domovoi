@@ -210,7 +210,7 @@ def make_sat(
     sat._load_wake_model = load_wake_model
     sat._arm_upgrade_watchdog = lambda: None
     sat._stop_music = lambda: None
-    sat._stop_greeting = lambda: None
+    sat._stop_ack = lambda: None
     sat._sync_time_with_server = lambda: None
     sat._playback_thread_run = lambda: sat.shutdown_event.wait(5.0)
 

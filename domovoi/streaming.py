@@ -66,23 +66,31 @@ Client → Server
                            and the recording-mode branch in utterance_end
                            diverts the audio).
   text  utterance_end      {"type":"utterance_end","greeting_played":bool,
-                            "greeting_clip":str,"utt":N,
+                            "greeting_clip":str,"ack_before_capture":true,"utt":N,
                             "frames":N,"last_voiced_frame":N|null,"exit_reason":...,
                             "voiced_frames":N,"trailing_silent_frames":N,
                             "silence_limit_frames":N}
                            — `greeting_played` (optional) marks turns where
-                           the Pi played a wake greeting concurrent with
-                           capture, so the server strips a greeting that bled
-                           past the AEC out of the transcript, and drops a
-                           turn that is nothing but the greeting.
-                           `greeting_clip` (optional) names the clip that
-                           played (greet_<hash>.mp3) so only that line is
-                           matched; absent, the whole greeting bank is.
+                           the Pi played a wake greeting, so the server
+                           strips a greeting that bled past the AEC out of
+                           the transcript, and drops a turn that is nothing
+                           but the greeting. `greeting_clip` (optional) names
+                           the clip that played (greet_<hash>.mp3) so only
+                           that line is matched; absent, the whole greeting
+                           bank is. `ack_before_capture` (optional, sent only
+                           as true) says the wake acknowledgement — greeting
+                           or chime — finished BEFORE this capture opened and
+                           the mic audio under it was dropped: the strip
+                           still runs, the greeting-only drop does not (such
+                           a capture cannot be the greeting alone). Absent —
+                           an older satellite, which played the greeting over
+                           the capture — both run.
                            `frames` (the 30 ms frames this capture sent),
                            `last_voiced_frame` (0-based index of the last one
                            its detector called speech) and `exit_reason`
-                           ("vad_silence_after_speech", "no_speech_after_greeting",
-                           "max_record_seconds", "shutdown", "server_endpoint")
+                           ("vad_silence_after_speech", "max_record_seconds",
+                           "shutdown", "server_endpoint"; an older satellite
+                           may send "no_speech_after_greeting")
                            are optional too:
                            with them the server knows exactly whether a
                            speculative transcript covers everything said (see
@@ -93,14 +101,16 @@ Client → Server
                            command recording (domovoi/command_captures.py). An
                            older core reads greeting_played alone.
   text  speech_pause       {"type":"speech_pause","utt":N,"frame":N,"last_voiced_frame":N,
-                            "greeting_played":bool,"greeting_clip":str}
+                            "greeting_played":bool,"greeting_clip":str,
+                            "ack_before_capture":true}
                            — ONLY when `ready.features` lists "speech_pause".
                            The capture has just had 8 silent frames (240 ms)
                            after speech: `frame` is the frames sent so far,
                            `last_voiced_frame` the last voiced one. Once per
                            silence run. The server may start transcribing.
-                           `greeting_played` / `greeting_clip` as in
-                           `utterance_end`, for the early-commit check.
+                           `greeting_played` / `greeting_clip` /
+                           `ack_before_capture` as in `utterance_end`, for
+                           the early-commit check.
   text  speech_resume      {"type":"speech_resume","utt":N,"frame":N}
                            — ONLY when `ready.features` lists "speech_pause".
                            Speech came back after a `speech_pause`. Sent
@@ -350,7 +360,8 @@ the router's own dry run, a parked yes/no answer included), and only once
 the satellite's own detector has heard no speech for the tier's hold since
 the last voiced frame — which must be inside the transcribed copy. On a
 greeting-played turn the copy is screened for the wake greeting exactly as
-the turn will be: one that is nothing but the greeting never commits. Tier A
+the turn will be: one that is nothing but the greeting never commits (unless
+the greeting played before the capture, `ack_before_capture`). Tier A
 (closed phrases) holds `early_commit_hold_a_ms` (350), tier B (a duration,
 a number, a clock question, any one-word command) `early_commit_hold_b_ms`
 (650). A `noisy_capture` for a committed capture is ignored; the
@@ -1012,10 +1023,13 @@ class StreamSession:
         self._commit_on = False
         self._commit_ctx_task: asyncio.Task[tuple[Any, bool] | None] | None = None
         # greeting_played as the satellite's latest `speech_pause` said it,
-        # and the clip it named (greeting_clip) — the early-commit check
-        # screens the copy for the greeting the way the turn will.
+        # the clip it named (greeting_clip) and whether that greeting
+        # finished before the capture opened (ack_before_capture) — the
+        # early-commit check screens the copy for the greeting the way the
+        # turn will.
         self._hint_greeting = False
         self._hint_greeting_clip: str | None = None
+        self._hint_ack_before = False
         # The capture ended early, until its late `utterance_end`.
         self._committed: _Committed | None = None
         # The streaming fast lane's view of the capture in flight
@@ -1285,6 +1299,7 @@ class StreamSession:
         self._committed = None
         self._hint_greeting = False
         self._hint_greeting_clip = None
+        self._hint_ack_before = False
         self._commit_on = self._early_commit_possible(trigger)
         self._commit_ctx_task = (
             asyncio.create_task(
@@ -1453,6 +1468,7 @@ class StreamSession:
         self._hint_greeting = bool(ctrl.get("greeting_played"))
         clip = ctrl.get("greeting_clip")
         self._hint_greeting_clip = clip if self._hint_greeting and isinstance(clip, str) else None
+        self._hint_ack_before = ctrl.get("ack_before_capture") is True
         self._on_pause()
         self._maybe_commit()
 
@@ -1556,6 +1572,7 @@ class StreamSession:
                     # judged afresh.
                     text, greeting_only = self._screen_greeting(
                         text, self._hint_greeting_clip,
+                        before_capture=self._hint_ack_before,
                     )
                 ec = None if greeting_only else early_commit_for(text, pending=context[0])
                 if ec is not None:
@@ -1649,6 +1666,7 @@ class StreamSession:
                 trigger=trigger,
                 received_at=received_at,
                 greeting_clip=self._hint_greeting_clip,
+                ack_before_capture=self._hint_ack_before,
                 reuse=spec,
                 speculations=speculations,
                 endpoint_silence_ms=silence_ms,
@@ -2132,13 +2150,16 @@ class StreamSession:
             self._spec_history = []
             self._spec_on = False
             self._pause_detector = None
-            # The Pi flags turns where it played a wake greeting concurrent
-            # with capture; if so we strip a bled-in greeting (past the AEC)
-            # from the transcript before routing, or drop a turn that is
-            # nothing but the greeting. A satellite that knows which clip it
-            # played names it (`greeting_clip`), so only that line is matched.
+            # The Pi flags turns where it played a wake greeting; if so we
+            # strip a bled-in greeting (past the AEC) from the transcript
+            # before routing, or drop a turn that is nothing but the
+            # greeting. A satellite that knows which clip it played names it
+            # (`greeting_clip`), so only that line is matched. One that
+            # played it BEFORE the capture opened says so
+            # (`ack_before_capture`): the strip still runs, the drop doesn't.
             greeting_played = bool(ctrl.get("greeting_played"))
             greeting_clip = ctrl.get("greeting_clip")
+            ack_before_capture = ctrl.get("ack_before_capture") is True
             # Why the capture ended, its frame counts and whether the room
             # was in a call at any point of it — for an opted-in room's
             # command recording (domovoi/command_captures.py). Old
@@ -2149,6 +2170,7 @@ class StreamSession:
                     pcm, greeting_played=greeting_played, trigger=trigger,
                     received_at=received_at,
                     greeting_clip=greeting_clip if isinstance(greeting_clip, str) else None,
+                    ack_before_capture=ack_before_capture,
                     reuse=reuse,
                     speculations=speculations,
                     endpoint_silence_ms=endpoint_silence_ms,
@@ -2363,7 +2385,9 @@ class StreamSession:
             return [text], True
         return list(getattr(state, "greeting_phrases", None) or []), False
 
-    def _screen_greeting(self, transcript: str, clip: str | None) -> tuple[str, bool]:
+    def _screen_greeting(
+        self, transcript: str, clip: str | None, *, before_capture: bool = False,
+    ) -> tuple[str, bool]:
         """A greeting-played transcript with a bled-in wake greeting
         stripped off its front, and whether it is nothing BUT that greeting
         (``greeting_filter.is_greeting_only``) — Domovoi's own words, never
@@ -2376,7 +2400,16 @@ class StreamSession:
         alone. The greeting plays once: when it has been found at the front
         and stripped, what follows it was said after it — by the person —
         even if those words are also a greeting line ("Yes? Yes." is the
-        greeting "Yes?" and then a "yes" answering a parked question)."""
+        greeting "Yes?" and then a "yes" answering a parked question).
+
+        ``before_capture`` (the satellite's ``ack_before_capture``): the
+        greeting finished before the capture opened, and the satellite
+        dropped what its mic heard under it. Such a capture cannot hold the
+        whole greeting, so it is never "only the greeting" — "Yes." after
+        the greeting "Yes?" is the person answering. The strip still runs:
+        it is the safety net for an echo tail that outlasted the satellite's
+        drain, and its clause-boundary rule keeps it off a sentence that
+        merely begins like a greeting."""
         from domovoi.greeting_filter import is_greeting_only, strip_leading_greeting
 
         phrases, played = self._greeting_candidates(clip)
@@ -2385,6 +2418,8 @@ class StreamSession:
         cleaned = strip_leading_greeting(transcript, phrases)
         if cleaned != transcript:
             return cleaned, False
+        if before_capture:
+            return transcript, False
         return transcript, is_greeting_only(transcript, phrases, played=played)
 
     async def _speak_system_line(self, text: str, *, matched_handler: str) -> bool:
@@ -2479,6 +2514,7 @@ class StreamSession:
         trigger: str | None,
         audio_bytes: int,
         greeting_clip: str | None = None,
+        ack_before_capture: bool = False,
     ) -> str | None:
         """The clean half of transcription: strip a bled-in greeting and a
         barge-in's own echo, and end a turn with nothing in it — or with
@@ -2487,9 +2523,13 @@ class StreamSession:
         # If the Pi played a wake greeting this turn, the array's AEC may
         # have let it bleed into the capture ("Hi there. Say something
         # mean." → greeting + command). Strip a known leading greeting so
-        # only the real command routes.
+        # only the real command routes. A greeting played before the capture
+        # opened (`ack_before_capture`) can't be all there is: see
+        # `_screen_greeting`.
         if greeting_played:
-            cleaned, greeting_only = self._screen_greeting(transcript, greeting_clip)
+            cleaned, greeting_only = self._screen_greeting(
+                transcript, greeting_clip, before_capture=ack_before_capture,
+            )
             if cleaned != transcript:
                 log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
                 transcript = cleaned
@@ -2506,10 +2546,10 @@ class StreamSession:
                 log.warning(
                     "greeting echo: dropping %s turn in room=%s — the "
                     "transcript %r is only the wake greeting%s coming "
-                    "back through the mic. If this repeats, the array's "
-                    "echo cancellation is letting the greeting through: "
-                    "check [music] alsa_device, or turn the wake "
-                    "greeting off for this room.",
+                    "back through the mic. This satellite plays its "
+                    "greeting over the capture: upgrade it (a current "
+                    "satellite plays the greeting before it listens), or "
+                    "check [music] alsa_device.",
                     trigger, self.room_id, transcript,
                     f" ({greeting_clip})" if greeting_clip else "",
                 )
@@ -2601,6 +2641,7 @@ class StreamSession:
         trigger: str | None = None,
         received_at: float | None = None,
         greeting_clip: str | None = None,
+        ack_before_capture: bool = False,
         reuse: _Speculation | None = None,
         speculations: list[_Speculation] | None = None,
         endpoint_silence_ms: int | None = None,
@@ -2636,6 +2677,7 @@ class StreamSession:
             transcript = await self._clean_transcript(
                 heard.text, greeting_played=greeting_played, trigger=trigger,
                 audio_bytes=len(pcm_bytes), greeting_clip=greeting_clip,
+                ack_before_capture=ack_before_capture,
             )
             if transcript is None:
                 return
