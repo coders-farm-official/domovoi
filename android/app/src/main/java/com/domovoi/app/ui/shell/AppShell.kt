@@ -169,6 +169,15 @@ private fun ShellContent() {
     BackHandler(enabled = backStack.isNotEmpty()) {
         route = backStack.removeAt(backStack.lastIndex)
     }
+    // A screen asked for from outside the UI: a timer or reminder alert's
+    // tap lands on Home, where the timers and their "done" lines are.
+    val pendingRoute by app.pendingRoute.collectAsState()
+    LaunchedEffect(pendingRoute) {
+        if (pendingRoute == "home") {
+            navigate(Route.Home)
+            app.pendingRoute.value = null
+        }
+    }
 
     // Capability manifest — fetched at connect, refreshed when the WS
     // comes (back) up. Absence of the endpoint ⇒ EMPTY ⇒ gated screens

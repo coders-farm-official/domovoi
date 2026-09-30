@@ -81,12 +81,45 @@ internal data class HomeTimer(
     val is_reminder: Boolean = false,
 )
 
+/** Where a fire was announced, and how it went (only what Home reads). */
+@Serializable
+internal data class HomeFireDelivery(
+    val room_id: String? = null,
+    // pending | sending | spoken | interrupted | failed | offline | busy_timeout | cancelled
+    val outcome: String? = null,
+)
+
+/** A timer or reminder that went off, from the server's fire ledger — only
+ *  the fields Home needs. `room_id` is where it was set (null: no room). */
+@Serializable
+internal data class HomeFire(
+    val id: Long = 0,
+    val timer_id: Long = 0,
+    val kind: String? = null,
+    val is_reminder: Boolean = false,
+    val label: String? = null,
+    val message: String? = null,
+    val masked: Boolean = false,
+    val room_id: String? = null,
+    val created_at: String? = null,
+    val due_at: String? = null,
+    val fired_at: String? = null,
+    val heard_in: List<String> = emptyList(),
+    // "heard in garage, kitchen · still announcing" — the server's words, no speech.
+    val summary: String? = null,
+    val deliveries: List<HomeFireDelivery> = emptyList(),
+)
+
 /** GET /api/timers: every timer in the house, soonest first, plus the
- *  server's clock — the one that decides when a timer fires. */
+ *  server's clock — the one that decides when a timer fires — and the
+ *  fires of the last ten minutes. `fires` is null from a server without
+ *  the fire ledger (older, or V017 not applied): Home then falls back to
+ *  guessing from rows that vanish ([TimerBook]). */
 @Serializable
 internal data class HomeTimerList(
     val server_now: String? = null,
     val timers: List<HomeTimer> = emptyList(),
+    val fires: List<HomeFire>? = null,
 )
 
 @Serializable
@@ -275,7 +308,14 @@ internal fun elapsedFraction(t: HomeTimer, nowMs: Long): Float {
 internal fun serverOffsetMs(serverNow: String?, receivedAtMs: Long): Long =
     isoMs(serverNow)?.let { it - receivedAtMs } ?: 0L
 
-internal data class DoneTimer(val timer: HomeTimer, val doneAtMs: Long)
+/** A "done · kitchen" line: what fired, when, and — from the fire ledger —
+ *  where it was heard ([summary]) and the dot's tone. */
+internal data class DoneTimer(
+    val timer: HomeTimer,
+    val doneAtMs: Long,
+    val summary: String? = null,
+    val tone: Tone = Tone.Ok,
+)
 
 internal data class TimerView(val active: List<HomeTimer>, val done: List<DoneTimer>)
 
@@ -325,6 +365,45 @@ internal class TimerBook {
             .sortedByDescending { it.doneAtMs }
         return TimerView(active, doneList)
     }
+}
+
+/** A fire as the timer it was, for the title rules ([timerTitle]). */
+internal fun fireAsTimer(f: HomeFire): HomeTimer = HomeTimer(
+    id = f.timer_id,
+    expires_at = f.due_at,
+    created_at = f.created_at,
+    label = f.label,
+    message = f.message,
+    room_id = f.room_id,
+    is_reminder = f.is_reminder || f.kind == "reminder",
+)
+
+/** Heard somewhere: ok. Still announcing: warn. Heard nowhere: err. */
+internal fun fireTone(f: HomeFire): Tone = when {
+    f.heard_in.isNotEmpty() -> Tone.Ok
+    f.deliveries.any { it.outcome == "pending" || it.outcome == "sending" } -> Tone.Warn
+    else -> Tone.Err
+}
+
+/** The done lines, from the fire ledger alone: every fire younger than
+ *  [HOME_DONE_MS] on the server's clock ([nowMs]), newest first. A timer
+ *  that merely vanished (cancelled anywhere) draws nothing. */
+internal fun fireDoneLines(fires: List<HomeFire>, nowMs: Long): List<DoneTimer> =
+    fires.mapNotNull { f -> isoMs(f.fired_at)?.let { f to it } }
+        .filter { (_, at) -> nowMs - at < HOME_DONE_MS }
+        .sortedByDescending { (_, at) -> at }
+        .map { (f, at) -> DoneTimer(fireAsTimer(f), at, f.summary?.takeIf { it.isNotEmpty() }, fireTone(f)) }
+
+/**
+ * Home's timers: the running ones, and the done lines — from the server's
+ * fire ledger when the read carries one (`fires` present), else from
+ * [TimerBook]'s watching rows vanish, exactly as before the ledger existed.
+ */
+internal fun homeTimerView(list: HomeTimerList?, book: TimerBook, nowMs: Long): TimerView {
+    val rows = list?.timers.orEmpty()
+    val legacy = book.view(rows, nowMs)
+    val fires = list?.fires ?: return legacy
+    return TimerView(legacy.active, fireDoneLines(fires, nowMs))
 }
 
 /** Seconds to the soonest running timer in each room — the rooms' chips. */

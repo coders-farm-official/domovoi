@@ -3,6 +3,7 @@ package com.domovoi.app.ui.screens.home
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -85,7 +86,9 @@ private val TWO_COLUMN_MIN = 800.dp
 /** ...and timers beside today (not stacked) from this one. */
 private val SIDE_BY_SIDE_MIN = 1000.dp
 
-private val TIMER_EVENTS = setOf("timers.changed")
+// A fire changes the timers (one is gone) and the done lines (where it was
+// heard), so both pushes re-read GET /api/timers.
+private val TIMER_EVENTS = setOf("timers.changed", "timer_fires.changed")
 private val PLUGIN_EVENTS = setOf("plugins.changed")
 private val ACQ_EVENTS = setOf("acquisitions.changed")
 private val CAL_EVENTS = setOf("calendar.events.changed")
@@ -220,7 +223,19 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val offset = remember(timers.data) { serverOffsetMs(timers.data?.server_now, timersAt) }
     remember(timers.data) { book.observe(timerList, System.currentTimeMillis() + offset) }
     val serverNow = nowMs + offset
-    val tv = book.view(timerList, serverNow)
+    // Done lines from the server's fire ledger; from the book on an older server.
+    val tv = homeTimerView(timers.data, book, serverNow)
+
+    // Timer alerts need notifications on for this app; while they're off,
+    // the timers card says so once (until "not now").
+    var alertsOn by remember { mutableStateOf(app.alerts.canPost()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { alertsOn = app.alerts.canPost() }
+    val alertsHintDismissed by app.alerts.hintDismissed.collectAsState()
+    val openNotificationSettings: () -> Unit = {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        if (runCatching { context.startActivity(intent) }.isFailure) toast("couldn't open the notification settings")
+    }
 
     val onlineRooms = rooms.filter { it.online }.map { it.room_id }.toSet()
     val playingCount = if (coreDown) 0 else rooms.count { roomRank(it) == 0 }
@@ -386,6 +401,9 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         HomeTimers(
             view = tv, nowMs = serverNow, shared = shared, compact = compact,
             onlineRooms = onlineRooms, cancelling = cancelling.keys, onCancel = onCancel,
+            alertsOff = !alertsOn && !alertsHintDismissed,
+            onTurnOnAlerts = openNotificationSettings,
+            onNotNow = { app.alerts.dismissHint() },
         )
     }
     val roomsSec: @Composable () -> Unit = {
