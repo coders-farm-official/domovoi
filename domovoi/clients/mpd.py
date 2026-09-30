@@ -60,6 +60,11 @@ class MPDClient(Protocol):
     async def queue_remove(self, song_ids: list[int]) -> list[int]: ...
     async def queue_move(self, song_id: int, to_position: int) -> bool: ...
     async def queue_clear(self) -> None: ...
+    # Start a STOPPED daemon's existing queue from its first song, paused
+    # on it — the state every `prepare_*` leaves, so the music_ready
+    # handshake applies. `resume()` (`pause 0`) does nothing on a stopped
+    # MPD. False when the queue is empty.
+    async def start_paused(self) -> bool: ...
     async def pause(self) -> None: ...
     async def resume(self) -> None: ...
     async def stop(self) -> None: ...
@@ -196,6 +201,13 @@ class MPDStubClient:
         self._queue = []
         self._state = "stop"
         self._song = None
+
+    async def start_paused(self) -> bool:
+        if not self._queue:
+            return False
+        self._song = self._queue[0]
+        self._state = "pause"
+        return True
 
     async def pause(self) -> None:
         if self._state == "play":
@@ -619,6 +631,19 @@ class RealMPDClient:
     async def queue_clear(self) -> None:
         async with self._connect() as c:
             await c.clear()
+
+    async def start_paused(self) -> bool:
+        """Start the existing queue from position 0 and pause on it at once
+        — `prepare_tracks` without the clear. For a room that was stopped:
+        `pause 0` on a stopped MPD is a no-op, so resuming there starts
+        nothing."""
+        async with self._connect() as c:
+            status = await c.status()
+            if int(status.get("playlistlength") or 0) == 0:
+                return False
+            await c.play(0)
+            await c.pause(1)
+        return True
 
     async def pause(self) -> None:
         async with self._connect() as c:

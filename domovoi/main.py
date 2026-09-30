@@ -3181,8 +3181,12 @@ async def admin_music_queue_add(
     started = False
     if was_empty and state_before == "stop":
         try:
-            await mpd.resume()
-            started = True
+            # Paused on the first added track, as every start path leaves
+            # MPD: the music_start below opens the stream and the satellite's
+            # music_ready unpauses it. (This used to call `resume`, which is
+            # `pause 0` — a no-op on a stopped MPD, so the room stayed silent
+            # while the call reported started.)
+            started = await mpd.start_paused()
         except Exception as e:  # noqa: BLE001 — the tracks ARE queued
             log.warning("admin queue add: start failed: %s", e)
 

@@ -519,3 +519,64 @@ def test_music_failed_leaves_a_room_that_moved_on_alone(monkeypatch, playing_roo
             _failed_then_flush(ws, "http://test.local:8051")
         assert playing_room._state == "play"
 
+
+# ─── adding to an idle room's queue starts it ──────────────────────────────
+
+
+async def test_queue_add_to_an_idle_room_leaves_mpd_paused_on_the_first_track(monkeypatch) -> None:
+    """POST /v1/admin/music/queue/{room}/add to a stopped, empty room says
+    `started` and sends music_start. It used to "start" with `resume` —
+    `pause 0`, a no-op on a stopped MPD (measured on 0.23.12) — so MPD never
+    played and the satellite was sent to a stream with nothing behind it.
+    Now it lands paused on the first added track, like every other start,
+    and the music_ready handshake unpauses it."""
+    from contextlib import asynccontextmanager
+
+    from domovoi import main as main_module
+    from domovoi.handlers.shared import play_history
+
+    class _Rows:
+        def all(self):
+            return [(7, "Radiohead/Creep.mp3", "Creep", "Radiohead")]
+
+    class _Db:
+        async def execute(self, *args, **kwargs):
+            return _Rows()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield _Db()
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(main_module, "session_scope", fake_scope)
+    monkeypatch.setattr(main_module, "_log_queue_edit", nothing)
+    monkeypatch.setattr(play_history, "record_media_play", nothing)
+    stub = MPDStubClient()
+    monkeypatch.setitem(mpd_module._clients, ROOM, stub)
+    monkeypatch.setattr(mpd_module, "mpd_stream_url_for", lambda room: "http://test.local:8051")
+    sess = FakeSession()
+    monkeypatch.setattr(app.state, "active_sessions", {ROOM: sess}, raising=False)
+    monkeypatch.setattr(app.state, "resumable_music", {}, raising=False)
+    monkeypatch.setattr(app.state, "current_playlist", {}, raising=False)
+    monkeypatch.setattr(app.state, "pending_music_start", {}, raising=False)
+
+    result = await main_module.admin_music_queue_add(
+        ROOM, main_module._AdminQueueAddBody(track_ids=[7]),
+    )
+    try:
+        assert result["started"] is True
+        assert await stub.state() == "pause"
+        assert (await stub.current_song())["title"] == "Creep"
+        assert [p["type"] for p, _ in sess.sent] == ["music_start"]
+        assert ROOM in app.state.pending_music_start
+    finally:
+        for entry in app.state.pending_music_start.values():
+            entry["task"].cancel()
+
+
+async def test_start_paused_on_an_empty_queue_starts_nothing() -> None:
+    stub = MPDStubClient()
+    assert await stub.start_paused() is False
+    assert await stub.state() == "stop"
