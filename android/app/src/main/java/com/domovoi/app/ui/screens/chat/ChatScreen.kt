@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -64,8 +66,10 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
+import com.domovoi.app.ui.components.MarkdownText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -384,6 +388,27 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     LaunchedEffect(transcript.size) {
         if (transcript.isNotEmpty()) listState.animateScrollToItem(transcript.size - 1)
     }
+    // Follow a streaming reply down as it grows — the size trigger above only
+    // fires when a message is ADDED, and the reply grows inside one item.
+    // A reader who drags up to re-read something is left alone; landing back
+    // at the bottom (or sending) picks the follow up again.
+    var following by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        launch {
+            listState.interactionSource.interactions.collect {
+                if (it is DragInteraction.Start) following = false
+            }
+        }
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { !it }
+            .collect { if (!listState.canScrollForward) following = true }
+    }
+    val tail = transcript.lastOrNull()
+    LaunchedEffect(tail) {
+        if (tail == null || tail.role == "user") return@LaunchedEffect
+        snapshotFlow { tail.content.length to tail.error }
+            .collect { if (following && tail.pending) listState.scrollBy(FOLLOW_STEP_PX) }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -428,6 +453,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         draft = ""
         attachments.clear()
         sending = true
+        following = true
         transcript.add(LiveMessage("user", content, images))
         val live = LiveMessage("assistant", "", pending = true)
         transcript.add(live)
@@ -602,11 +628,16 @@ private fun MessageBubble(m: LiveMessage) {
                 .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
         ) {
             Column {
-                Text(
-                    m.content + if (m.pending) " ▍" else "",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Domovoi.colors.fg,
-                )
+                val cursor = if (m.pending) " ▍" else ""
+                if (isUser) {
+                    Text(
+                        m.content + cursor,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Domovoi.colors.fg,
+                    )
+                } else {
+                    MarkdownText(m.content, trailing = cursor)
+                }
                 m.error?.let {
                     Text(
                         it,
@@ -627,3 +658,7 @@ private fun MessageBubble(m: LiveMessage) {
         }
     }
 }
+
+/** One follow step: more than any reply grows between two deltas, so a
+ *  scrollBy of it always lands on the list's end (scrolling clamps there). */
+private const val FOLLOW_STEP_PX = 100_000f
