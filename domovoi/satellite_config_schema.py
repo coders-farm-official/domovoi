@@ -123,6 +123,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "mid-command. Needs early commit on for the whole server too.",
         "bool",
     ),
+    FieldSpec(
+        "listen.speech_pause_ms", "Pause that starts transcribing",
+        "Listening",
+        "How long a silence after speech (ms) makes the satellite tell the "
+        "server you have paused, so it starts transcribing while the "
+        "end-of-speech silence is still counting down. Default 240. Lower "
+        "starts the transcript sooner, but also on the gaps between words, "
+        "which costs the server a transcript it throws away. Whole 30 ms "
+        "steps.",
+        "int", section="advanced", min=90, max=600, unit="ms",
+    ),
 
     # ─── Noise gate ────────────────────────────────────────────────────
     FieldSpec(

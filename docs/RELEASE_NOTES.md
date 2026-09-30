@@ -4,6 +4,45 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-30 — Short commands start their transcript on time
+
+### Do this once, after upgrading
+
+**Upgrade each satellite** (Satellites → the satellite → Overview →
+**Upgrade satellite**). The fix is in the satellite's own code.
+
+### What changes for the people in the house
+
+* After the wake greeting a satellite starts listening about 1-1.5 s
+  sooner on a Pi Zero 2 W. It used to spend that long resetting its wake
+  model between the greeting and the capture, with whatever you had
+  already started saying queued behind it; a short command ("stop", "what
+  time is it") then reached the server in a burst, and its early
+  transcript started 0.3-0.4 s late (garage and office: every capture of
+  1.95 s or less). A long command was unaffected.
+
+### What changed
+
+* Satellite: the wake model's reset reuses the noise features the model
+  computed when it loaded instead of recomputing them (41 speech-embedding
+  windows, about 24 wake-word predictions' worth of CPU, on every reset —
+  after the greeting, at the start of each reply with wake-word barge-in,
+  and at the start of every wait for the wake word). The model ends up in
+  the same state.
+* Protocol: `utterance_start` gains `backlog_ms` and `wake_ms`;
+  `speech_pause`, `speech_resume` and `utterance_end` gain `sat_ms` and
+  `backlog_ms` — the satellite's own clock. New fields on existing frames:
+  safe with an older core either way.
+* `GET /v1/stats/latency` gains `capture_timing`: when each turn's frames,
+  its pause and its early transcript happened against the pace it was
+  spoken at, and whose delay it was (satellite, network or server). Numbers
+  only, like the rest of the answer. Rows from before this release have
+  none. See [CPU_HOST.md](CPU_HOST.md#when-the-early-transcript-starts-late).
+* Satellite: `[listen] speech_pause_ms` (240 by default, unchanged) sets
+  how long a pause must be before the server starts transcribing; the
+  dashboard shows it as **Pause that starts transcribing** under the
+  advanced Listening settings.
+
 ## 2026-09-29 — The satellite acknowledges the wake word, then listens
 
 ### Do this once, after upgrading

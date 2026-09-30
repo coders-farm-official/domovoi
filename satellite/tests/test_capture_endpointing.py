@@ -103,8 +103,17 @@ def capture(sat, loop, frames: list[bytes], prefix: list[bytes] | None = None) -
     return out
 
 
+# The capture clock's fields (`_capture_clock`, `_begin_utterance`): numbers
+# that depend on when the test ran. satellite/tests/test_capture_clock.py
+# pins them; here they are set aside so the rest can be compared exactly.
+CLOCK_FIELDS = ("sat_ms", "backlog_ms", "wake_ms")
+
+
 def texts(out: list) -> list[dict]:
-    return [m for m in out if m != "audio"]
+    return [
+        {k: v for k, v in m.items() if k not in CLOCK_FIELDS}
+        for m in out if m != "audio"
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +134,8 @@ def test_a_pause_is_reported_once_with_the_frames_it_is_about() -> None:
     assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1}
     # The hint sits in the stream right after the 8th silent frame, so the
     # core holds exactly `frame` frames when it reads it.
-    assert out.index(pause) == 1 + 5 + 8
+    at = next(i for i, m in enumerate(out) if m != "audio" and m["type"] == "speech_pause")
+    assert at == 1 + 5 + 8
     assert pause == {
         "type": "speech_pause", "utt": 1, "frame": 13,
         "last_voiced_frame": 4, "greeting_played": False,

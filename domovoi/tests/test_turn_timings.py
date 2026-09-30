@@ -403,7 +403,13 @@ async def test_a_turn_records_every_stage_in_two_writes(db_free_turn, caplog) ->
 
     # Write 1 — with the row: the stages known before routing.
     ins = db_free_turn["inserted"]
-    assert set(ins) == {"capture_audio_ms", "stt_ms", "stt_wait_ms", "identify_ms", "whisper"}
+    assert set(ins) == {
+        "capture_audio_ms", "stt_ms", "stt_wait_ms", "identify_ms", "whisper",
+        # Its own decode waited for nothing: no other call of this room's
+        # was running (turn_timings.CAPTURE_TIMING_KEYS).
+        "stt_decode_wait_ms",
+    }
+    assert ins["stt_decode_wait_ms"] == 0
     assert ins["capture_audio_ms"] == 1500
     assert ins["stt_ms"] >= 120 - SLACK_MS
     # Nothing speculative ran, so the wait was the call itself.
@@ -935,7 +941,10 @@ def test_a_live_stream_turn_records_its_timings(monkeypatch) -> None:
 
         (row_id, doc, latency_ms), = asyncio.run(_row())
         doc = json.loads(doc) if isinstance(doc, str) else doc
-        assert set(doc) == (set(STAGES) - unknowable) | {"whisper"}
+        # Plus the capture clock this socket can give without a clock of
+        # its own and without pauses (turn_timings.CAPTURE_TIMING_KEYS).
+        clock = {"frame_lag_first_ms", "frame_lag_max_ms", "end_rx_lag_ms", "stt_decode_wait_ms"}
+        assert set(doc) == (set(STAGES) - unknowable) | {"whisper"} | clock
         assert doc["capture_audio_ms"] == 1000
         assert doc["stt_ms"] >= 150 - SLACK_MS
         assert doc["identify_ms"] >= 40 - SLACK_MS
