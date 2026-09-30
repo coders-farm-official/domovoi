@@ -34,6 +34,10 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``timers`` — every running timer and reminder in the house (the rows
   ``GET /api/timers`` lists, without its ``server_now``); fires when one
   is set, cancelled (by voice or from any dashboard) or goes off
+* ``timer_fires`` — the timers and reminders that went off in the last
+  hour (V017 fire history, newest first, at most 20) with where each was
+  announced; fires when one goes off and as each room's announcement
+  lands. Unmasked, like ``timers``: this socket is device tier
 
 Snapshot diffs are coarse: we emit the full new value rather than a
 field-level patch. The frontend rerenders on receipt; payloads are
@@ -70,7 +74,7 @@ from sqlalchemy import text
 
 from domovoi.config import settings as core_settings
 
-from web.backend import satellite_adoption
+from web.backend import satellite_adoption, timer_fires
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     fetch_admin_snapshot,
@@ -157,6 +161,13 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # fires it from both cancel routes. Home's timers section rides the
     # resulting `timers.changed` event.
     "timers_changed": "timers",
+    # Timer fire history (V017). The core fires `timer_fires_changed` on
+    # every ledger write — a timer going off, each room's announcement
+    # being claimed / spoken / given up on, an acknowledgement, the fire
+    # settling. The dashboard's alert stack and Home's "done" lines ride
+    # the resulting `timer_fires.changed` event; Android's live
+    # notifications too.
+    "timer_fires_changed": "timer_fires",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -812,6 +823,34 @@ async def _snapshot_timers() -> list[dict[str, Any]]:
         ]
 
 
+# The fires `timer_fires.changed` carries: the last hour, newest first.
+TIMER_FIRES_PUSH_WINDOW_SEC = 3600
+TIMER_FIRES_PUSH_MAX = 20
+
+
+async def _snapshot_timer_fires() -> list[dict[str, Any]]:
+    """What went off in the last hour and where it was heard — the Fire
+    objects ``GET /api/timers/fires`` serves, UNMASKED (the socket is
+    device tier, like ``timers``). Nothing in it moves on its own, so the
+    diff stays quiet between ledger writes; a fire only drops out when it
+    ages past the hour. ``[]`` when V017 is missing."""
+    async with session_scope() as s:
+        fires = await timer_fires.recent_fires(
+            s, window_sec=TIMER_FIRES_PUSH_WINDOW_SEC, limit=TIMER_FIRES_PUSH_MAX
+        )
+    return [_fire_json(f) for f in fires or []]
+
+
+def _fire_json(fire: dict[str, Any]) -> dict[str, Any]:
+    out = {k: _isoformat(v) if isinstance(v, datetime) else v for k, v in fire.items()}
+    out["deliveries"] = [
+        {k: _isoformat(v) if isinstance(v, datetime) else v for k, v in d.items()}
+        for d in fire.get("deliveries") or []
+    ]
+    out["heard_in"] = list(fire.get("heard_in") or [])
+    return out
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -832,6 +871,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     "model_jobs":        _snapshot_model_jobs,
     "news":              _snapshot_news,
     "timers":            _snapshot_timers,
+    "timer_fires":       _snapshot_timer_fires,
     # USB satellite adoption: pending gadget volumes on the server's USB
     # ports (web/backend/satellite_adoption.py — TTL-cached scan, [] when
     # the feature is off). Plug/unplug/status flips push

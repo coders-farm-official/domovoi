@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domovoi.models import MAX_CONFIG_CHANGES
 
@@ -394,6 +394,12 @@ class Satellite(BaseModel):
     # The recordings themselves are admin-only (/api/captures).
     capture_commands: bool = False
     capture_since: datetime | None = None
+    # The per-satellite setting "Only reminders for this device" (V017
+    # timer_own_only_rooms): true = this room announces only the timers
+    # and reminders set on it; false (the default) = every room's, named
+    # by the room they came from. Open like the rest of the row: it says
+    # how a room behaves, not what anybody said. False when V017 is missing.
+    timers_own_only: bool = False
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────
@@ -417,6 +423,50 @@ class Timer(BaseModel):
     message: str | None = None  # non-null = reminder
     room_id: str | None = None  # null = set somewhere with no room
     is_reminder: bool = False
+    # True when this reminder's words (``message`` and ``label``) were held
+    # back because the caller holds no household credential (rule M1,
+    # docs/SECURITY_PRIVACY.md). Never true for a plain timer.
+    masked: bool = False
+
+
+class TimerFireDelivery(BaseModel):
+    """One room's announcement of a fire. ``detail`` is a reason code
+    (``offline``, ``capturing``, ``forced_over:followup``, ``tts_failed``,
+    ``acknowledged:kitchen`` ...), never speech."""
+
+    room_id: str
+    is_origin: bool = False
+    outcome: str  # pending | sending | spoken | interrupted | failed | offline | busy_timeout | cancelled
+    detail: str | None = None
+    finished_at: datetime | None = None
+
+
+class TimerFire(BaseModel):
+    """A timer or reminder that went off (V017 ``timer_fires``), and where
+    it was announced. ``room_id`` is the room it was SET in (null = set
+    with no room). ``deliveries`` lists the origin room first, then the
+    other rooms A→Z; ``heard_in`` is the rooms that heard it, same order.
+    ``summary`` is computed by the server ("heard in garage, kitchen ·
+    still announcing") and shown verbatim. The words the core spoke are
+    never part of this shape."""
+
+    id: int
+    timer_id: int
+    kind: Literal["timer", "reminder"]
+    is_reminder: bool = False
+    label: str | None = None
+    message: str | None = None
+    masked: bool = False
+    room_id: str | None = None
+    created_at: datetime | None = None
+    due_at: datetime
+    fired_at: datetime
+    settled_at: datetime | None = None
+    acked_at: datetime | None = None
+    acked_by: str | None = None
+    heard_in: list[str] = Field(default_factory=list)
+    summary: str = ""
+    deliveries: list[TimerFireDelivery] = Field(default_factory=list)
 
 
 class TimerList(BaseModel):
@@ -424,10 +474,40 @@ class TimerList(BaseModel):
 
     ``server_now`` is the database clock at the moment of the read — the
     clock that decides when a timer fires — so a page counts down against
-    the server rather than a phone whose clock is minutes off."""
+    the server rather than a phone whose clock is minutes off.
+
+    ``fires`` is what went off in the last 10 minutes (newest first, at
+    most 20) — the source of Home's "done · kitchen" lines. ``null`` means
+    the server keeps no fire history (V017 missing): a client falls back to
+    its own behaviour. ``[]`` means nothing fired lately."""
 
     server_now: datetime
     timers: list[Timer]
+    fires: list[TimerFire] | None = None
+
+
+class TimerFireList(BaseModel):
+    """``GET /api/timers/fires``: fire history plus the database clock."""
+
+    server_now: datetime
+    fires: list[TimerFire]
+
+
+class TimerAnnouncements(BaseModel):
+    """A room's "Only reminders for this device" setting. ``since`` is
+    when it was turned on (null while off)."""
+
+    room_id: str
+    own_only: bool = False
+    since: datetime | None = None
+
+
+class TimerAnnouncementsUpdate(BaseModel):
+    """``PUT /api/satellites/{room_id}/timer-announcements`` body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    own_only: bool = Field(..., strict=True)
 
 
 # ─── Calendar ─────────────────────────────────────────────────────────────

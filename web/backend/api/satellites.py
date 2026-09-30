@@ -16,6 +16,13 @@ Sessions / conversations / notes / timers are pure DB reads scoped by
 ``room_id``. The announce endpoints stub out at 501 since they need
 the Domovoi server's ``app.state.active_sessions`` to do TTS fanout.
 
+Timers: every open timer read holds back a REMINDER's words (``message``
+and ``label``) from a caller with no household credential — rule M1, see
+``_READS_REMINDER_TEXT`` — and says so with ``masked``. Timer fire
+history (V017, :mod:`web.backend.timer_fires`) is served beside them, and
+each room's "Only reminders for this device" flag is read (open) and
+written (device tier) here.
+
 A room's conversations and voice notes are what the household SAID, so
 reading them takes a paired device (``require_device_read``, owner
 decision 2026-09-26) — like the log pull, which carries the same speech
@@ -45,7 +52,8 @@ from domovoi.db.repositories import notify_timers_changed
 
 from satellite import provisioning_protocol as proto
 
-from web.backend import satellite_adoption
+from web.backend import satellite_adoption, timer_fires
+from web.backend.api import captures as captures_api
 from web.backend.api.music import _now_playing_for
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -73,6 +81,10 @@ from web.backend.schemas import (
     SatellitePairing,
     Session,
     Timer,
+    TimerAnnouncements,
+    TimerAnnouncementsUpdate,
+    TimerFire,
+    TimerFireList,
     TimerList,
     VoiceNote,
     VolumeRequest,
@@ -99,7 +111,11 @@ async def list_satellites() -> list[Satellite]:
     pairings = await _list_pairings()
     meta = await _list_satellite_meta()
     captures = await command_captures.opted_in_rooms_or_empty()
-    return [await _satellite_for(r, snapshot, pairings, meta, captures) for r in rooms]
+    own_only = await _own_only_rooms_or_empty()
+    return [
+        await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only)
+        for r in rooms
+    ]
 
 
 # ─── USB adoption (declared BEFORE /{room_id} so "pending" is never
@@ -354,7 +370,8 @@ async def get_satellite(room_id: str) -> Satellite:
     pairings = await _list_pairings()
     meta = await _list_satellite_meta()
     captures = await command_captures.opted_in_rooms_or_empty()
-    return await _satellite_for(match, snapshot, pairings, meta, captures)
+    own_only = await _own_only_rooms_or_empty()
+    return await _satellite_for(match, snapshot, pairings, meta, captures, own_only=own_only)
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -542,13 +559,17 @@ def _timer_from_row(r: Any) -> Timer:
 
 
 @router.get("/{room_id}/timers", response_model=list[Timer])
-async def list_timers(room_id: str) -> list[Timer]:
+async def list_timers(room_id: str, request: Request) -> list[Timer]:
     """Active timers and reminders for this room.
 
     A reminder is a timer with ``message IS NOT NULL`` — the
     distinction matters because reminders speak the message on fire,
     bare timers just chime. Surfaced via the ``is_reminder`` flag so
     the UI can render them differently.
+
+    Open, with rule M1 (``_READS_REMINDER_TEXT``): a caller holding no
+    household credential gets every reminder with ``message`` and
+    ``label`` null and ``masked`` true.
     """
     async with session_scope() as s:
         rows = await s.execute(
@@ -562,7 +583,9 @@ async def list_timers(room_id: str) -> list[Timer]:
             ),
             {"room_id": room_id},
         )
-        return [_timer_from_row(r) for r in rows.all()]
+        timers = [_timer_from_row(r) for r in rows.all()]
+    timers, _ = await _apply_m1(request, timers, None)
+    return timers
 
 
 @router.delete(
@@ -591,32 +614,70 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
         )
 
 
-# What a caller must pass (check_device_request) to read the TEXT of a
-# reminder set with no room: the household token, an admin Bearer or
-# cookie session, or the pre-setup grace — what the timers push itself
-# goes to.
-_READS_ROOMLESS_REMINDER_TEXT = ("ok", "admin", "pre-setup", "cookie-only")
+# Rule M1. What a caller must pass (check_device_request) to read the
+# WORDS of a reminder — any reminder, whatever room it was set in — on an
+# open timer read: the household token, an admin Bearer or cookie session,
+# or the pre-setup grace (the tiers the /ws/state push itself goes to). A
+# reminder's words are household speech. Anyone else still gets the row —
+# countdown, room, kind, and for a fire where it was heard — with
+# ``message`` and ``label`` null (a reminder's label is its message) and
+# ``masked`` true, so Home keeps working on an unpaired kitchen tablet. A
+# plain timer's label ("pasta") is not masked. (Until 2026-09-30 only the
+# reminders set with NO room were masked.)
+_READS_REMINDER_TEXT = ("ok", "admin", "pre-setup", "cookie-only")
+
+# How far back GET /api/timers reaches into the fire history, and how many.
+_TIMERS_FIRES_WINDOW_SEC = 600
+_TIMERS_FIRES_MAX = 20
+
+_V017_MISSING_FIRES = "timer fire history needs database migration V017 — run Flyway"
+_V017_MISSING_FLAG = "timer announcements need database migration V017 — run Flyway"
+
+
+def _mask_timer(t: Timer) -> Timer:
+    if not t.is_reminder:
+        return t
+    return t.model_copy(update={"message": None, "label": None, "masked": True})
+
+
+async def _apply_m1(
+    request: Request, timers: list[Timer], fires: list[dict[str, Any]] | None
+) -> tuple[list[Timer], list[dict[str, Any]] | None]:
+    """Mask every reminder (timer rows and fires alike) unless the caller
+    may read the words. The caller is classified only when the answer
+    holds a reminder, so an ordinary read charges no token backoff."""
+    if not any(t.is_reminder for t in timers) and not any(
+        f.get("is_reminder") for f in (fires or [])
+    ):
+        return timers, fires
+    if await check_device_request(request) in _READS_REMINDER_TEXT:
+        return timers, fires
+    return (
+        [_mask_timer(t) for t in timers],
+        None if fires is None else [timer_fires.mask_fire(f) for f in fires],
+    )
 
 
 @timers_router.get("", response_model=TimerList)
 async def list_all_timers(request: Request) -> TimerList:
     """Every running timer and reminder in the house, soonest first —
-    rows with no room included — plus the database clock.
+    rows with no room included — plus the database clock, plus what went
+    off in the last 10 minutes.
 
     Open, like the per-room read above: household state. The dashboard's
     Home page counts these down, so the answer carries ``server_now`` (the
-    clock ``pop_expired`` fires against) and each row its ``created_at``.
-    Changes push on the ``timers`` realtime channel.
+    clock the core fires against) and each row its ``created_at``.
+    Changes push on the ``timers`` realtime channel; a fire's progress
+    from room to room on ``timer_fires``.
 
-    One thing is held back from a caller with no household credential: the
-    words of a reminder set with NO room. Those come from a device-tier
-    voice turn with no room (the app, the dashboard's chat), and no open
-    route listed them before this one; the per-room read has always
-    answered a room's reminders to the LAN, so those stay as they were.
-    Such a row still counts down, ``is_reminder`` true, with ``message``
-    and ``label`` null (a reminder's label is its message). The caller is
-    classified only when such a row exists, so the read charges no token
-    backoff the rest of the time."""
+    ``fires`` (newest first, at most 20) is where Home's "done · kitchen"
+    lines come from: a row that vanished was cancelled unless the ledger
+    says it fired. ``null`` when the server keeps no fire history (V017
+    not applied) — a client then falls back to its own behaviour.
+
+    Rule M1 (``_READS_REMINDER_TEXT``): without a household credential,
+    every reminder — timer rows and fires alike — answers with ``message``
+    and ``label`` null and ``masked`` true."""
     async with session_scope() as s:
         server_now = (await s.execute(text("SELECT now()"))).scalar_one()
         rows = await s.execute(
@@ -629,14 +690,49 @@ async def list_all_timers(request: Request) -> TimerList:
             )
         )
         timers = [_timer_from_row(r) for r in rows.all()]
-    if any(t.room_id is None and t.is_reminder for t in timers):
-        if await check_device_request(request) not in _READS_ROOMLESS_REMINDER_TEXT:
-            timers = [
-                t.model_copy(update={"message": None, "label": None})
-                if t.room_id is None and t.is_reminder else t
-                for t in timers
-            ]
-    return TimerList(server_now=server_now, timers=timers)
+        fires = await timer_fires.recent_fires(
+            s, window_sec=_TIMERS_FIRES_WINDOW_SEC, limit=_TIMERS_FIRES_MAX
+        )
+    timers, fires = await _apply_m1(request, timers, fires)
+    return TimerList(
+        server_now=server_now,
+        timers=timers,
+        fires=None if fires is None else [TimerFire(**f) for f in fires],
+    )
+
+
+@timers_router.get(
+    "/fires",
+    response_model=TimerFireList,
+    responses={503: {"description": "V017 not applied: this server keeps no fire history"}},
+)
+async def list_timer_fires(
+    request: Request,
+    since_id: int | None = Query(default=None, ge=0),
+    room_id: str | None = Query(default=None, max_length=120),
+    timer_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> TimerFireList:
+    """Timers and reminders that went off (kept 7 days), and where each
+    was announced.
+
+    * ``since_id`` — only fires with a larger id, OLDEST first: how a
+      client that was away catches up. Without it, newest first.
+    * ``room_id`` — the room the timer or reminder was SET in.
+    * ``timer_id`` — the fire of one timer (the phone's alarm confirm).
+
+    Open, with rule M1. 503 — not an empty list — when the server keeps
+    no fire history (V017 missing), so a client can tell "unknown" from
+    "none"."""
+    async with session_scope() as s:
+        server_now = (await s.execute(text("SELECT now()"))).scalar_one()
+        fires = await timer_fires.recent_fires(
+            s, since_id=since_id, origin_room_id=room_id, timer_id=timer_id, limit=limit
+        )
+    if fires is None:
+        raise HTTPException(status_code=503, detail=_V017_MISSING_FIRES)
+    _, fires = await _apply_m1(request, [], fires)
+    return TimerFireList(server_now=server_now, fires=[TimerFire(**f) for f in fires or []])
 
 
 @timers_router.delete(
@@ -655,6 +751,65 @@ async def cancel_any_timer(timer_id: int) -> None:
             await notify_timers_changed(s, "cancelled")
     if (result.rowcount or 0) == 0:
         raise HTTPException(status_code=404, detail=f"timer {timer_id} not found")
+
+
+# ─── "Only reminders for this device" (per room, V017) ─────────────────
+
+
+_ROOM_MAX = 120
+
+
+def _check_room_id(room_id: str) -> None:
+    if not room_id or len(room_id) > _ROOM_MAX:
+        raise HTTPException(status_code=422, detail="room_id must be 1-120 characters")
+
+
+@router.get("/{room_id}/timer-announcements", response_model=TimerAnnouncements)
+async def get_timer_announcements(room_id: str) -> TimerAnnouncements:
+    """Whether this room announces only the timers and reminders set on it
+    (``own_only`` true) or every room's (false, the default), and since
+    when. Open, like ``capture_commands``: anyone in the house may see how
+    a room behaves. 404 for a room this server has never known. Reads as
+    off when V017 is missing."""
+    _check_room_id(room_id)
+    async with session_scope() as s:
+        if not await captures_api._room_known(s, room_id):
+            raise HTTPException(status_code=404, detail=f"unknown room {room_id!r}")
+        rooms = await timer_fires.own_only_rooms(s)
+    return TimerAnnouncements(room_id=room_id, own_only=room_id in rooms, since=rooms.get(room_id))
+
+
+@router.put(
+    "/{room_id}/timer-announcements",
+    response_model=TimerAnnouncements,
+    responses={503: {"description": "V017 not applied"}},
+    # Device tier, like the room's other household preferences (volume,
+    # room label, announce, timer cancel). It only changes what a room
+    # SAYS: on, the room says less, and the default already speaks every
+    # room's timers everywhere. So it is neither a privacy control (the
+    # security-tier command recordings) nor device configuration (the
+    # admin-tier satellite config). And the Android app, which holds only
+    # the household token, carries the same switch.
+    dependencies=[Depends(require_device)],
+)
+async def set_timer_announcements(
+    room_id: str, body: TimerAnnouncementsUpdate
+) -> TimerAnnouncements:
+    """Turn "Only reminders for this device" on or off for this room.
+    Idempotent: turning it on again keeps the original ``since``. Written
+    straight to the shared database; the core reads it each time a timer
+    or reminder goes off. Works for an offline room. 404 unknown room,
+    422 bad room id or body, 503 when V017 is missing."""
+    _check_room_id(room_id)
+    try:
+        async with session_scope() as s:
+            if not await captures_api._room_known(s, room_id):
+                raise HTTPException(status_code=404, detail=f"unknown room {room_id!r}")
+            since = await timer_fires.set_own_only(s, room_id, body.own_only)
+    except timer_fires.LedgerMissing:
+        raise HTTPException(status_code=503, detail=_V017_MISSING_FLAG)
+    log.info("timer announcements: room %s own_only=%s", room_id, body.own_only)
+    return TimerAnnouncements(room_id=room_id, own_only=body.own_only, since=since)
 
 
 # ─── Action endpoints (proxied to domovoi admin) ──────────────────────
@@ -1003,12 +1158,26 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
         return {}
 
 
+async def _own_only_rooms_or_empty() -> dict[str, Any]:
+    """For display only (each roster row's ``timers_own_only``): the rooms
+    whose "Only reminders for this device" is on. {} on any failure — the
+    roster must not fail over a flag."""
+    try:
+        async with session_scope() as s:
+            return await timer_fires.own_only_rooms(s)
+    except Exception as e:  # noqa: BLE001
+        log.debug("timer announcements: flag list unavailable: %s", e)
+        return {}
+
+
 async def _satellite_for(
     room: dict[str, Any],
     snapshot: dict[str, Any],
     pairings: dict[str, dict[str, Any]] | None = None,
     meta: dict[str, dict[str, Any]] | None = None,
     captures: dict[str, Any] | None = None,
+    *,
+    own_only: dict[str, Any] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
@@ -1113,6 +1282,8 @@ async def _satellite_for(
         # since when — never what it recorded.
         capture_commands=room_id in (captures or {}),
         capture_since=(captures or {}).get(room_id),
+        # "Only reminders for this device" (V017): what this room announces.
+        timers_own_only=room_id in (own_only or {}),
     )
 
 

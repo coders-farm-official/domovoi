@@ -84,6 +84,8 @@ DEVICE_TIER = [
     ("POST", "/api/satellites/{room_id}/announce"),
     ("POST", "/api/satellites/announce-all"),
     ("POST", "/api/satellites/{room_id}/volume"),
+    # "Only reminders for this device": it only makes a room say less
+    ("PUT", "/api/satellites/{room_id}/timer-announcements"),
     # calendar
     ("POST", "/api/calendar/events"),
     ("PATCH", "/api/calendar/events/{event_id}"),

@@ -413,11 +413,14 @@ const useToast = () => {
    * clear whatever that surface is — the same argument that raised
    * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
    * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
-   * docked player while one shows (styles.css, html.mp-docked). */
+   * docked player while one shows (styles.css, html.mp-docked). 111, one
+   * above the timer alert cards (TimerFireAlerts, 110), which share that
+   * bottom edge on a phone and stay until dismissed: the answer to a press
+   * must never sit under them. */
   const node = items.length > 0 && (
     <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
-                  gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
+                  gap: 8, zIndex: 111, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (
         <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
              style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
@@ -1350,6 +1353,243 @@ const WriteBlockedNotice = ({ reason, children }) => {
   );
 };
 
+/* ---- A timer or reminder went off: the dashboard's alert ----------
+ * The owner missed a garage timer because he was not in the garage, and
+ * the dashboard only listed timers. Now every room announces every
+ * room's timers (the core), and an open dashboard says so too: a card
+ * per fire, bottom right, that STAYS until someone dismisses it — the
+ * point is the person who was not in the room, so it is not the 12 s
+ * toast. Rendered once, by the App shell in index.html.
+ *
+ * Sources: the `timer_fires.changed` push (the fires of the last hour,
+ * unmasked — the socket is device tier) and a catch-up read of
+ * GET /api/timers/fires on mount and whenever the socket comes back, so
+ * a fire that went off while this tab slept still shows.
+ *
+ * The last fire this browser has seen is remembered, so a reload does
+ * not replay the day: a first visit alerts only what fired in the last
+ * 2 minutes, a catch-up only the last 10, and a card hides on its own 30
+ * minutes after the fire. Dismissals are per device (no server state).
+ *
+ * A reminder's words stay off a shared screen (the kitchen tablet an
+ * admin marked), and off any browser the server masked them for (no
+ * household credential). A plain timer's label ("pasta") shows.
+ *
+ * No browser notification, no sound: a plain-http LAN page is not a
+ * secure context, and Web Push would need a third party.
+ *
+ * Every top-level name here starts with TimerFire / TIMER_FIRE_ (one
+ * Babel scope for every script). */
+const TIMER_FIRE_SEEN_KEY = 'domovoi-timer-fire-seen';
+const TIMER_FIRE_DISMISSED_KEY = 'domovoi-timer-fire-dismissed';
+const TIMER_FIRE_FIRST_LOAD_MS = 2 * 60 * 1000;    // a first visit alerts only this recent
+const TIMER_FIRE_CATCHUP_MS = 10 * 60 * 1000;      // a catch-up alerts only this recent
+const TIMER_FIRE_HIDE_MS = 30 * 60 * 1000;         // a card hides this long after the fire
+const TIMER_FIRE_VISIBLE = 3;
+const TIMER_FIRE_DISMISSED_KEEP = 50;
+const TIMER_FIRE_PAGE = 50;
+const TIMER_FIRE_PAGES = 5;                        // catch-up pages per (re)connect
+const TIMER_FIRE_EVENTS = ['timer_fires.changed', '_status'];
+
+/* localStorage, every access guarded: a private window, blocked site data
+ * or a full quota must never take the shell down. */
+const TimerFireStore = {
+  seen() {
+    try {
+      const raw = localStorage.getItem(TIMER_FIRE_SEEN_KEY);
+      if (raw == null) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    } catch { return null; }
+  },
+  setSeen(n) {
+    try { localStorage.setItem(TIMER_FIRE_SEEN_KEY, String(n)); } catch { /* not kept */ }
+  },
+  dismissed() {
+    try {
+      const list = JSON.parse(localStorage.getItem(TIMER_FIRE_DISMISSED_KEY) || '[]');
+      return Array.isArray(list) ? list.filter((x) => Number.isFinite(x)) : [];
+    } catch { return []; }
+  },
+  // Add one id (the last 50 are kept) and return the new list; `fallback`
+  // is what this page already knew, for when storage cannot be read.
+  dismiss(id, fallback) {
+    const stored = TimerFireStore.dismissed();
+    const base = stored.length ? stored : (fallback || []);
+    const next = base.filter((x) => x !== id).concat([id]).slice(-TIMER_FIRE_DISMISSED_KEEP);
+    try { localStorage.setItem(TIMER_FIRE_DISMISSED_KEY, JSON.stringify(next)); } catch { /* not kept */ }
+    return next;
+  },
+};
+
+const TimerFireTitle = (f) => `${f.is_reminder ? 'Reminder' : 'Timer done'} · ${f.room_id || 'no room'}`;
+
+/* The card's body line, or null. A reminder's words, unless this is a
+ * shared screen or the server masked them; a timer's label, or its
+ * length the way Home names an unlabelled timer. */
+const TimerFireBody = (f, shared) => {
+  if (f.is_reminder) return (shared || f.masked) ? null : (f.message || 'reminder');
+  if (f.label) return f.label;
+  const total = (Date.parse(f.due_at) - Date.parse(f.created_at)) / 1000;
+  if (!(total > 0)) return 'timer';
+  return total < 90 ? `${Math.round(total)}s timer` : `${Math.round(total / 60)} min timer`;
+};
+
+// Heard somewhere → ok; still on its way → warn; heard nowhere → err.
+const TimerFireTone = (f) => {
+  if ((f.heard_in || []).length) return 'ok';
+  if ((f.deliveries || []).some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  return 'err';
+};
+
+const TimerFireClock = (iso) => (window.fmtClock
+  ? window.fmtClock(iso)
+  : new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+
+const TimerFireCard = ({ f, shared, onDismiss }) => {
+  const body = TimerFireBody(f, shared);
+  const openHome = () => { try { window.location.hash = 'home'; } catch { /* no location */ } };
+  const when = TimerFireClock(f.fired_at);
+  return (
+    <div className="timer-fire-card" data-fire={f.id}
+         style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                  boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: '10px 8px 10px 14px',
+                  display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--fg)' }}>
+      <span style={{ paddingTop: 4 }}><StatusDot tone={TimerFireTone(f)}/></span>
+      <div className="timer-fire-open" role="link" tabIndex={0} title="open home" onClick={openHome}
+           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openHome(); } }}
+           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+        <div className="timer-fire-title" style={{ fontWeight: 600 }}>{TimerFireTitle(f)}</div>
+        {body != null && (
+          <div className="timer-fire-body" style={{ overflowWrap: 'anywhere', marginTop: 2 }}>{body}</div>
+        )}
+        <div className="timer-fire-meta mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          {f.summary ? `${f.summary} · ${when}` : when}
+        </div>
+      </div>
+      <IconButton name="x" title="dismiss" aria-label="dismiss" onClick={onDismiss}/>
+    </div>
+  );
+};
+
+const TimerFireAlerts = () => {
+  const shared = useSharedScreen();
+  // Every fire that alerted on this page load, by id (a later push for the
+  // same id replaces it, which is how its summary updates in place).
+  const [alerts, setAlerts] = React.useState(() => new Map());
+  const [dismissed, setDismissed] = React.useState(() => TimerFireStore.dismissed());
+  // The highest fire id this browser has taken in (null: never, on this
+  // server). A ref for the logic, state so it is stored after the render.
+  const seenRef = React.useRef(TimerFireStore.seen());
+  const [seen, setSeen] = React.useState(seenRef.current);
+  React.useEffect(() => { if (seen != null) TimerFireStore.setSeen(seen); }, [seen]);
+  const offsetRef = React.useRef(0);                 // server clock − this clock, ms
+  const serverNow = () => Date.now() + offsetRef.current;
+  const [, bump] = React.useReducer((n) => n + 1, 0);
+
+  /* Take in a batch of fires. Only a fire newer than the last one seen
+   * alerts, and with `windowMs` only one that young (server clock). With
+   * nothing seen yet (a first visit), every fire older than 2 minutes is
+   * taken as seen instead. A fire already on screen is updated either way. */
+  const ingest = (fires, nowMs, windowMs) => {
+    const list = (Array.isArray(fires) ? fires : []).filter((f) => f && Number.isFinite(f.id));
+    const age = (f) => nowMs - Date.parse(f.fired_at);
+    let base = seenRef.current;
+    let win = windowMs;
+    if (base == null) {
+      base = list.filter((f) => !(age(f) <= TIMER_FIRE_FIRST_LOAD_MS))
+        .reduce((m, f) => Math.max(m, f.id), 0);
+      win = win == null ? TIMER_FIRE_FIRST_LOAD_MS : Math.min(win, TIMER_FIRE_FIRST_LOAD_MS);
+    }
+    const fresh = new Set(list.filter((f) => f.id > base && (win == null || age(f) <= win)).map((f) => f.id));
+    if (list.length) {
+      setAlerts((cur) => {
+        let next = null;
+        for (const f of list) {
+          if (!fresh.has(f.id) && !cur.has(f.id)) continue;
+          if (!next) next = new Map(cur);
+          next.set(f.id, f);
+        }
+        return next || cur;
+      });
+    }
+    const top = list.reduce((m, f) => Math.max(m, f.id), base);
+    seenRef.current = top;
+    setSeen(top);
+  };
+
+  const busyRef = React.useRef(false);
+  const againRef = React.useRef(false);
+  const catchUp = async () => {
+    if (busyRef.current) { againRef.current = true; return; }
+    busyRef.current = true;
+    try {
+      for (let page = 0; page < TIMER_FIRE_PAGES; page += 1) {
+        const from = seenRef.current;
+        // A first visit reads the newest page; afterwards, everything
+        // past the last fire seen, oldest first.
+        const path = from == null
+          ? `/api/timers/fires?limit=${TIMER_FIRE_PAGE}`
+          : `/api/timers/fires?since_id=${from}&limit=${TIMER_FIRE_PAGE}`;
+        const r = await apiGet(path, { quiet: true });
+        if (!r || !Array.isArray(r.fires)) break;
+        const at = Date.parse(r.server_now);
+        if (Number.isFinite(at)) offsetRef.current = at - Date.now();
+        ingest(r.fires, serverNow(), TIMER_FIRE_CATCHUP_MS);
+        if (from == null || r.fires.length < TIMER_FIRE_PAGE) break;
+      }
+    } catch {
+      // Quiet on purpose: 503 without the fire history (V017), 404 on an
+      // older server, or the network away. The next reconnect asks again.
+    } finally {
+      busyRef.current = false;
+      if (againRef.current) { againRef.current = false; catchUp(); }
+    }
+  };
+
+  React.useEffect(() => { catchUp(); }, []);
+  useStateEvents(TIMER_FIRE_EVENTS, (ev) => {
+    if (ev.type === '_status') { if (ev.connected) catchUp(); return; }
+    if (Array.isArray(ev.data)) ingest(ev.data, serverNow(), null);
+  });
+
+  const hidden = new Set(dismissed);
+  const now = serverNow();
+  const shown = [...alerts.values()]
+    .filter((f) => !hidden.has(f.id) && now - Date.parse(f.fired_at) < TIMER_FIRE_HIDE_MS)
+    .sort((a, b) => b.id - a.id);
+  // A card hides by itself 30 minutes on: look again now and then.
+  const anyShown = shown.length > 0;
+  React.useEffect(() => {
+    if (!anyShown) return undefined;
+    const t = setInterval(bump, 30 * 1000);
+    return () => clearInterval(t);
+  }, [anyShown]);
+  if (!anyShown) return null;
+
+  const dismiss = (id) => setDismissed((cur) => TimerFireStore.dismiss(id, cur));
+  const more = shown.length - TIMER_FIRE_VISIBLE;
+  /* z-index 110 and the lifted bottom: the toast's rules (useToast) — above
+   * every overlay, clear of the phone's tab strip and the docked player. */
+  return (
+    <div className="timer-fire-alerts" role="alert"
+         style={{ position: 'fixed', right: 16, bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)',
+                  zIndex: 110, width: 'min(340px, calc(100vw - 32px))',
+                  display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {shown.slice(0, TIMER_FIRE_VISIBLE).map((f) => (
+        <TimerFireCard key={f.id} f={f} shared={shared} onDismiss={() => dismiss(f.id)}/>
+      ))}
+      {more > 0 && (
+        <div className="timer-fire-more mono"
+             style={{ alignSelf: 'flex-end', fontSize: 11, color: 'var(--fg-muted)', background: 'var(--overlay)',
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '2px 8px' }}>
+          +{more} more
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
@@ -1359,4 +1599,5 @@ Object.assign(window, {
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn,
+  TimerFireAlerts,
 });

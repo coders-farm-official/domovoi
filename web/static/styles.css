@@ -1046,11 +1046,14 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .home-bar { position: absolute; left: 16px; right: 16px; bottom: 4px; height: 2px; border-radius: 1px; background: var(--sunken); overflow: hidden; }
 .home-bar > span { display: block; height: 100%; background: var(--brand); }
 .home-timer-done {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
   min-height: 40px; padding: 8px 16px;
   border-top: 1px solid var(--border-soft); font-size: 13px;
 }
 .home-timer-done:first-child { border-top: none; }
+.home-timer-done .meta { color: var(--fg-muted); }
+/* "heard in garage, kitchen · still announcing": where it was announced. */
+.home-timer-heard { font-size: 12px; }
 
 /* rooms: tiles on a desktop, rows on a phone. min(): a column narrower
    than one tile gets one full-width tile instead of an overflowing one. */
