@@ -8,9 +8,11 @@ notifications.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator, Protocol
+from urllib.parse import urlsplit
 
 from domovoi import lan_address
 from domovoi.config import settings
@@ -71,6 +73,10 @@ class MPDClient(Protocol):
     async def seek_cur(self, delta_sec: float) -> None: ...
     async def seek_to(self, position_sec: float) -> None: ...
     async def elapsed_sec(self) -> float | None: ...
+    # Open the http stream output of a PAUSED daemon without playing
+    # anything: `pause 0` then `pause 1`. Returns the state MPD was in
+    # (only "pause" is touched). See `ensure_stream_serving`.
+    async def prime_stream_output(self) -> str: ...
 
 
 class MPDStubClient:
@@ -240,6 +246,10 @@ class MPDStubClient:
         if self._song is not None:
             self._song["_elapsed"] = max(0.0, position_sec)
 
+    async def prime_stream_output(self) -> str:
+        # No stream to open; report the state the way the real one does.
+        return self._state
+
     async def elapsed_sec(self) -> float | None:
         if self._state == "stop" or self._song is None:
             return None
@@ -290,7 +300,9 @@ class RealMPDClient:
         satellite's mpg123 can connect and prime its buffer against the
         always-on silence stream before the song actually plays.
         Resume happens via the streaming layer once the Pi sends
-        `music_ready`. See the prepare_* docstrings.
+        `music_ready`. See the prepare_* docstrings — and
+        `ensure_stream_serving`, because on a daemon that has not played
+        since it started there is no silence stream to connect to yet.
         """
         try:
             results = await c.search(*search_args)
@@ -417,6 +429,13 @@ class RealMPDClient:
         emitting silence frames (always_on=yes), which mpg123 reads
         into its ALSA pre-roll. When resume fires, song frames flow
         into an already-primed buffer — no startup underrun.
+
+        always_on only KEEPS the output open once it has been opened, and
+        MPD opens it only when the player is unpaused. A daemon that has
+        not played since it started therefore has no stream at all after
+        this (play + an immediate pause lands before the output opens): the
+        port refuses. The streaming layer calls `ensure_stream_serving`
+        before every music_start for exactly that reason.
         """
         async with self._connect() as c:
             search_args: list[str] = []
@@ -677,6 +696,34 @@ class RealMPDClient:
         async with self._connect() as c:
             await c.seekcur(f"{max(0.0, position_sec):.0f}")
 
+    async def prime_stream_output(self) -> str:
+        """Open the httpd output of a paused daemon, leaving it paused.
+
+        MPD opens its outputs only when the player is unpaused with a
+        decoded audio format, and ``always_on`` only keeps the httpd
+        output open after that first open. So after a fresh start (or a
+        restart that restored "pause"), a prepared-paused queue has NO
+        stream: the port refuses, or accepts and closes at once. ``pause
+        0`` opens it — synchronously, once the decoder has started — and
+        the ``pause 1`` straight after, on the same connection, puts the
+        player back where it was; the output stays open and streams
+        silence, and the song has not advanced (measured on MPD 0.23.12:
+        elapsed stays 0.000, the port serves within a few ms).
+
+        Only a paused daemon is touched: "play" opens the output by
+        itself once its decoder starts, and "stop" has nothing to open.
+        While the decoder is still starting (a slow stream URL) the pair
+        is harmless and opens nothing; the caller probes and tries again.
+        Returns the state MPD was in.
+        """
+        async with self._connect() as c:
+            status = await c.status()
+            state = status.get("state", "stop")
+            if state == "pause":
+                await c.pause(0)
+                await c.pause(1)
+        return state if state in ("play", "pause", "stop") else "stop"
+
     async def elapsed_sec(self) -> float | None:
         """Current playback offset in seconds (MPD ``status.elapsed``), or
         None when stopped / unavailable. Read for position-save."""
@@ -803,3 +850,155 @@ def mpd_stream_url_for(room_id: str | None) -> str | None:
         return None
     _, http = _room_ports[key]
     return f"{lan_address.mpd_http_base().rstrip('/')}:{http}"
+
+
+# ─── Is the room's stream actually serving? ─────────────────────────────────
+#
+# A music_start tells the satellite to connect mpg123 to the room's stream
+# right now, and mpg123 does not wait: refused or closed, it exits within a
+# few hundred ms. So the stream has to be serving BEFORE the frame goes out.
+# It usually is — always_on keeps MPD's httpd output open once it has been
+# opened — but not on a daemon that has not played since it started: every
+# start path leaves MPD paused (prepare_*), and a pause that lands before the
+# output opens leaves no stream at all (office satellite, 2026-09-30: the
+# first cast after the MPD daemons restarted was refused, and nothing
+# retried). `ensure_stream_serving` is the check, and the fix when it fails.
+
+_STREAM_PROBE_REQUEST = (
+    b"GET / HTTP/1.0\r\nHost: domovoi\r\nUser-Agent: domovoi-stream-probe\r\n\r\n"
+)
+
+
+async def probe_stream(host: str, port: int, *, timeout: float = 0.5) -> bool:
+    """True only when an HTTP request to ``host:port`` gets a ``200`` status line.
+
+    A TCP connect proves nothing here. From the core's host the published
+    stream port is Docker's port proxy, which accepts the connection even
+    while MPD inside the container is not listening, then closes it with
+    no bytes; and a daemon restored paused accepts and closes before any
+    header. Both read as an empty line, not a 200. A serving output answers
+    with its headers at once (and then streams, which the probe does not
+    wait for).
+    """
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout
+        )
+    except (OSError, asyncio.TimeoutError):
+        return False
+    try:
+        writer.write(_STREAM_PROBE_REQUEST)
+        await writer.drain()
+        line = await asyncio.wait_for(reader.readline(), timeout)
+    except (OSError, asyncio.TimeoutError, ValueError):
+        return False
+    finally:
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+    parts = line.split()
+    return len(parts) >= 2 and parts[0].startswith(b"HTTP/") and parts[1] == b"200"
+
+
+def _stream_target(room_id: str | None, stream_url: str | None) -> tuple[str, int] | None:
+    """Which room's daemon serves the stream the satellite will be sent to,
+    and on which port: the port in ``stream_url`` (the one mpg123 will
+    dial), matched to the provisioned room that owns it. ``None`` for a URL
+    no room here serves — then there is nothing to check or open."""
+    key = _resolve_room(room_id)
+    if key is None:
+        return None
+    port: int | None = None
+    if stream_url:
+        try:
+            port = urlsplit(stream_url).port
+        except ValueError:
+            port = None
+    own_port = _room_ports[key][1]
+    if port is None or port == own_port:
+        return key, own_port
+    for room, (_ctrl, http) in _room_ports.items():
+        if http == port:
+            return room, port
+    return None
+
+
+async def ensure_stream_serving(
+    room_id: str | None,
+    stream_url: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> bool:
+    """Make sure the room's MPD stream is serving before a satellite is sent
+    to it. Returns True once a probe got ``200``, False when it could not be
+    made to within ``timeout`` (default ``music_stream_ready_timeout_sec``).
+
+    The common case costs one local HTTP request: the output is open and the
+    first probe answers. Otherwise the paused daemon is primed
+    (``prime_stream_output``) and probed again, with a short backoff, until
+    it serves or the bound runs out — a slow stream URL can take a second or
+    two before its decoder starts and the output can open. It gives up at
+    once when priming cannot help: MPD stopped (nothing to play) or its
+    control port unreachable.
+
+    False is not a veto. The caller sends music_start anyway: the satellite
+    retries a refused stream for a few seconds, and the music_ready
+    fallback resumes MPD, which opens the output. Probes go to the control
+    host (loopback: the stream port is published on every interface), so
+    no DNS or LAN address is involved.
+    """
+    if settings.use_stubs:
+        return True
+    target = _stream_target(room_id, stream_url)
+    if target is None:
+        return False
+    key, port = target
+    host = settings.mpd_host
+    if await probe_stream(host, port):
+        return True
+
+    budget = settings.music_stream_ready_timeout_sec if timeout is None else timeout
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    deadline = began + max(0.0, budget)
+    client = get_mpd_client_for(key)
+    delay = 0.05
+    primes = 0
+    state = "?"
+    while True:
+        try:
+            # Shielded: `pause 0` without its `pause 1` would leave the song
+            # playing to nobody. A turn that cancels this wait (a wake, a
+            # barge-in) must not be able to split the pair.
+            state = await asyncio.shield(client.prime_stream_output())
+        except Exception as e:  # noqa: BLE001 — best-effort, see docstring
+            log.warning(
+                "music stream: room=%s MPD unreachable while opening its "
+                "stream on :%d: %s", key, port, e,
+            )
+            return False
+        primes += 1
+        if state == "stop":
+            log.warning(
+                "music stream: room=%s stream on :%d is not serving and MPD "
+                "is stopped; nothing to open", key, port,
+            )
+            return False
+        if await probe_stream(host, port):
+            log.info(
+                "music stream: room=%s stream on :%d was not serving; opened "
+                "it (MPD %s, %d prime(s), %.0f ms)",
+                key, port, state, primes, (loop.time() - began) * 1000,
+            )
+            return True
+        now = loop.time()
+        if now >= deadline:
+            log.warning(
+                "music stream: room=%s stream on :%d still not serving after "
+                "%.1f s (MPD %s, %d prime(s)); the satellite will retry and "
+                "the music_ready fallback resumes MPD",
+                key, port, now - began, state, primes,
+            )
+            return False
+        await asyncio.sleep(min(delay, deadline - now))
+        delay = min(delay * 2, 0.25)

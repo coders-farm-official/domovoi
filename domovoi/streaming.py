@@ -162,6 +162,20 @@ Client → Server
                            don't send this still get music — the server
                            falls back to an unconditional resume after
                            `music_prepare_fallback_sec`.
+  text  music_failed       {"type":"music_failed","stream_url":...,
+                            "reason":"<mpg123's last stderr line>",
+                            "attempts":N}
+                           — ONLY when `ready.features` lists
+                           "music_failed". The Pi's stream player was
+                           refused or dropped and it has stopped retrying
+                           (it retries a refused stream for ~8 s); its
+                           music LEDs are off again. Sent only for the
+                           music it is still meant to be playing — a
+                           music_stop, a newer music_start, a wake or a
+                           response supersedes the attempt silently. The
+                           server pauses MPD (so it doesn't play on to
+                           nobody) unless a newer music_start's handshake
+                           is pending or the room has moved on.
   text  dropin_end         {"type":"dropin_end"} — Pi asks to end the
                            active drop-in call (a hardware button or a
                            client-detected hang-up). The spoken "hang up"
@@ -190,7 +204,7 @@ Client → Server
 
 Server → Client
   text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000,
-                            "features":["speech_pause","end_capture"]}
+                            "features":["speech_pause","end_capture","music_failed"]}
                            — sent only AFTER the client's hello was accepted
                            (and the room's MPD daemon provisioned). A socket
                            that never says hello never receives it.
@@ -488,7 +502,7 @@ MAX_UTTERANCE_BYTES = 60 * PCM_INPUT_SAMPLE_RATE * 2  # 60s of int16 PCM
 # What this server understands beyond protocol 0.1, listed in `ready`. A
 # satellite sends a new message type only when it is listed here (see the
 # `ready` entry in the module docstring for why).
-CORE_FEATURES: tuple[str, ...] = ("speech_pause", "end_capture")
+CORE_FEATURES: tuple[str, ...] = ("speech_pause", "end_capture", "music_failed")
 
 # The turns a server may end early: a command after the wake word, or the
 # answer to a question it just asked. Never a chat turn (Letta, long
@@ -686,6 +700,77 @@ async def schedule_music_resume_fallback(app: Any, room_id: str, url: str) -> No
         _fallback_resume(), name=f"music-fallback-{room_id}"
     )
     pending[room_id] = {"url": url, "task": task}
+
+
+async def send_music_start(
+    app: Any, session: Any, room_id: str, url: str
+) -> None:
+    """Tell a satellite to start streaming ``url``: the ONE way every
+    music_start leaves the core (a voice turn's start, the auto-resume after
+    a turn, an intercom tail, a drop-in restore, every admin/dashboard cast).
+
+    Three steps, in this order:
+
+    1. Make sure the room's stream is serving (``ensure_stream_serving``).
+       The satellite's mpg123 connects the moment the frame arrives and gives
+       up at once on a refused port, and a room whose MPD has not played
+       since its daemon started has no stream open after a paused prepare —
+       office, 2026-09-30: the first cast after the daemons restarted played
+       to nobody. One local request when the stream is already up; bounded
+       by ``music_stream_ready_timeout_sec`` otherwise. Never blocks the
+       frame: the satellite retries, and the fallback below resumes MPD.
+    2. Send the frame.
+    3. Arm the music_ready handshake (``schedule_music_resume_fallback``).
+    """
+    from domovoi.clients.mpd import ensure_stream_serving
+
+    try:
+        await ensure_stream_serving(room_id, url)
+    except Exception as e:  # noqa: BLE001 — a check must never cost the start
+        log.warning("music stream: readiness check failed for room=%s: %s", room_id, e)
+    await session._safe_send_text({"type": "music_start", "stream_url": url})
+    await schedule_music_resume_fallback(app, room_id, url)
+
+
+async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> None:
+    """Handle a ``music_failed`` frame: the satellite could not play the
+    stream and has stopped trying (its music LEDs are off again).
+
+    Without it the core cannot tell a playing room from a silent one: the
+    music_ready fallback has usually unpaused MPD by then, so the room plays
+    on to nobody and the dashboard reads "playing". So MPD is paused — which
+    also keeps the place in the song for the next start (a turn's
+    auto-resume re-sends music_start from ``resumable_music``, which is left
+    alone).
+
+    Only when the report is about what the room is still meant to be
+    playing, and no newer start is in flight: a pending handshake means the
+    core has already sent another music_start, whose own music_ready or
+    fallback decides; a stopped room (no resumable entry) or another stream
+    has moved on. The satellite reports only a failure no newer start has
+    superseded, and the socket is ordered, so this cannot pause a start that
+    came after it.
+    """
+    url = str(ctrl.get("stream_url") or "")
+    reason = str(ctrl.get("reason") or "")[:300]
+    attempts = ctrl.get("attempts")
+    log.warning(
+        "music: satellite in room=%s could not play %s (%s attempt(s)): %s",
+        room_id, url or "?", attempts if attempts is not None else "?", reason or "?",
+    )
+    pending: dict[str, dict[str, Any]] = app.state.pending_music_start
+    if room_id in pending:
+        return
+    resumable: dict[str, str] = app.state.resumable_music
+    if not url or resumable.get(room_id) != url:
+        return
+    from domovoi.clients.mpd import get_mpd_client_for
+
+    try:
+        await get_mpd_client_for(room_id).pause()
+        log.info("music: paused MPD for room=%s; nobody is listening to it", room_id)
+    except Exception as e:  # noqa: BLE001 — best-effort, like resume
+        log.warning("music: pause after music_failed failed for room=%s: %s", room_id, e)
 
 
 async def consume_music_ready(app: Any, room_id: str) -> None:
@@ -2188,6 +2273,11 @@ class StreamSession:
             # resume MPD now.
             await consume_music_ready(self.ws.app, self.room_id)
             return
+        if t == "music_failed":
+            # The Pi's stream player was refused (or dropped) and it has
+            # stopped retrying. Sent only because `ready.features` lists it.
+            await consume_music_failed(self.ws.app, self.room_id, ctrl)
+            return
         if t == "wifi_status":
             # Periodic self-report from the Pi's WiFiWatcher (~every
             # poll, default 60 s). Cached by room_id so WifiHandler's
@@ -3102,15 +3192,12 @@ class StreamSession:
             suppress_music_start = bool(getattr(response, "expect_followup", False))
             if response.music_action == "start" and response.music_stream_url:
                 if not suppress_music_start:
-                    await self._safe_send_text({
-                        "type": "music_start",
-                        "stream_url": response.music_stream_url,
-                    })
-                    # Handlers prepared MPD paused; arm the music_ready
-                    # handshake so MPD resumes once the Pi's mpg123 has
-                    # primed against the always-on silence stream.
-                    await schedule_music_resume_fallback(
-                        self.ws.app, self.room_id, response.music_stream_url,
+                    # Handlers prepared MPD paused; the helper makes sure the
+                    # stream is serving, sends music_start and arms the
+                    # music_ready handshake so MPD resumes once the Pi's
+                    # mpg123 has primed against the always-on silence stream.
+                    await send_music_start(
+                        self.ws.app, self, self.room_id, response.music_stream_url,
                     )
                 else:
                     # No music_start to the satellite means no music_ready
@@ -3142,17 +3229,13 @@ class StreamSession:
                     if stale_task is not None and not stale_task.done():
                         stale_task.cancel()
             elif self.room_id in resumable and not suppress_music_start:
-                await self._safe_send_text({
-                    "type": "music_start",
-                    "stream_url": resumable[self.room_id],
-                })
                 # Auto-resume after a non-music turn (e.g. "what time is
                 # it" between songs). MPD may be paused (carried over
                 # from a prior expect_followup turn that left it queued)
                 # or playing — `mpd.resume()` is a no-op in the latter
                 # case, so re-running the handshake is safe.
-                await schedule_music_resume_fallback(
-                    self.ws.app, self.room_id, resumable[self.room_id],
+                await send_music_start(
+                    self.ws.app, self, self.room_id, resumable[self.room_id],
                 )
 
         # Intercom fan-out — synthesize the announcement once and inject
@@ -3901,12 +3984,8 @@ class StreamSession:
         # Resume music if this room had something playing.
         resumable: dict[str, str] = self.ws.app.state.resumable_music
         if self.room_id in resumable:
-            await self._safe_send_text({
-                "type": "music_start",
-                "stream_url": resumable[self.room_id],
-            })
-            await schedule_music_resume_fallback(
-                self.ws.app, self.room_id, resumable[self.room_id],
+            await send_music_start(
+                self.ws.app, self, self.room_id, resumable[self.room_id],
             )
 
     async def _safe_send_text(self, payload: dict[str, Any]) -> None:
@@ -4413,10 +4492,7 @@ class StreamSession:
         resumable: dict[str, str] = self.ws.app.state.resumable_music
         url = resumable.get(target.room_id)
         if url:
-            await target._safe_send_text(
-                {"type": "music_start", "stream_url": url}
-            )
-            await schedule_music_resume_fallback(self.ws.app, target.room_id, url)
+            await send_music_start(self.ws.app, target, target.room_id, url)
 
     async def prompt_dropin(self, text: str) -> None:
         """Confirm-mode invite to the target. Like ``announce()`` but (a)
