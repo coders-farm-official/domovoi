@@ -27,8 +27,13 @@ const val EXTRA_ROUTE = "com.domovoi.app.extra.ROUTE"
  *
  * Privacy: the channel and every notification are VISIBILITY_PRIVATE with a
  * public version that says only the kind and the room ("Reminder · garage").
- * That is all a locked phone shows. On a shared screen (the kitchen tablet)
- * the private version is the public one too: no words even unlocked.
+ * Android shows that public version on the lock screen only when the phone
+ * is set to hide sensitive notification content (Settings > Notifications >
+ * lock screen / "Sensitive notifications" off). The AOSP default shows the
+ * full private notification there, a reminder's words included, and no API
+ * forces the public one while the user allows sensitive content. On a
+ * shared screen (the kitchen tablet) the private version is the public one
+ * too: no words anywhere, locked or not.
  */
 class TimerNotifier(context: Context, private val prefs: Prefs) : AlertSink {
     private val ctx = context.applicationContext

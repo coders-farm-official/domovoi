@@ -173,6 +173,7 @@ class FakeRoom:
         self.failures: list[Exception] = []
         self.heard: list[tuple[float, str]] = []
         self.calls = 0
+        self.kwargs: list[dict] = []
 
     def busy(self, reason: str, hard: bool, until: float) -> "FakeRoom":
         self.blocks.append((until, reason, hard))
@@ -188,8 +189,9 @@ class FakeRoom:
                 return (reason, hard)
         return None
 
-    async def announce(self, text: str) -> None:
+    async def announce(self, text: str, **kwargs) -> None:
         self.calls += 1
+        self.kwargs.append(kwargs)
         block = self.announce_block(self.clock())
         assert block is None or not block[1], f"{self.room_id} spoke while {block}"
         if self.failures:
@@ -853,8 +855,12 @@ class _WS:
 
 
 def _real_app() -> SimpleNamespace:
+    # What a StreamSession reads on announce() and on an utterance_start.
     return SimpleNamespace(state=SimpleNamespace(
         active_sessions={}, satellite_voice={}, resumable_music={},
+        wifi_status={}, satellite_volume={}, satellite_config={},
+        greeting_phrases=[], current_playlist={},
+        probe=SimpleNamespace(online=True),
     ))
 
 
@@ -940,6 +946,7 @@ async def test_boot_race_real_sessions_connecting_after_the_first_tick(stub_tts)
     for room in ("garage", "kitchen"):
         ws = _WS(app)
         sess = StreamSession(ws, room)  # type: ignore[arg-type]
+        sess.token_authenticated = True      # a paired satellite
         app.state.active_sessions[room] = sess
         d.on_room_connected(room)
         sockets[room] = ws
@@ -956,6 +963,558 @@ async def test_boot_race_real_sessions_connecting_after_the_first_tick(stub_tts)
     await asyncio.sleep(0.2)
     assert ws.frames == []
     await d.shutdown()
+
+
+# ─── Review fixes 2026-09-30 (DB-free) ───────────────────────────────────
+#
+# What the review of wf/int-0930 found, each pinned where it was fixed:
+# the timer's own announce() call defers to a capture that began during the
+# claim; a silent TTS is a TTS failure; TTS attempts are counted per fire
+# and room across reconnects; the busy caps count from when a task was
+# queued; a failed ledger write is retried instead of ending the delivery;
+# the pop's room snapshot, the sweep and the room-connected check no longer
+# race; a restart's resume is retried; a socket with no pairing token hears
+# only its own room.
+
+
+@pytest.mark.asyncio
+async def test_the_coordinator_asks_announce_to_defer_to_a_capture() -> None:
+    h = House("garage")
+    await h.fire(due(1))
+    await h.idle()
+    assert h.room("garage").kwargs == [{"defer_to_capture": True}]
+
+
+@pytest.mark.asyncio
+async def test_a_capture_refusal_waits_uncounted_and_then_speaks() -> None:
+    h = House("garage")
+    h.room("garage").fail_next(
+        AnnounceNotStarted("room garage capturing, announce deferred", reason="capturing"),
+    )
+    await h.fire(due(1))
+    await h.idle()
+    assert h.room("garage").texts == ["Your 10 minute timer is done."]
+    assert h.ledger.row(-1, "garage")["attempts"] == 1
+
+
+class _DropAfterFirstTTSFailure(FakeRoom):
+    """A room whose first announcement fails in TTS and whose Wi-Fi drops
+    right after (the next task starts on reconnect)."""
+
+    def __init__(self, room_id, clock, house) -> None:
+        super().__init__(room_id, clock)
+        self.house = house
+
+    async def announce(self, text: str, **kwargs) -> None:
+        self.calls += 1
+        del self.house.sessions[self.room_id]
+        raise AnnounceNotStarted("tts down", reason="tts_failed")
+
+
+@pytest.mark.asyncio
+async def test_tts_attempts_are_counted_across_a_reconnect() -> None:
+    """R7: at most 3 attempts in all. The count used to live in the task,
+    so a reconnect started it again and a room with a dead TTS engine
+    could be tried forever."""
+    h = House()
+    h.sessions["garage"] = _DropAfterFirstTTSFailure("garage", h.clock, h)
+    await h.fire(due(1))
+    await h.idle()
+    assert "garage" not in h.sessions
+    assert h.outcome(-1, "garage")[0] == "pending"
+    garage = h.connect("garage")
+    garage.fail_next(*[AnnounceNotStarted("tts down", reason="tts_failed") for _ in range(2)])
+    await h.idle()
+    assert garage.calls == 2
+    assert h.outcome(-1, "garage") == ("failed", "tts_failed")
+    assert garage.heard == []
+
+
+@pytest.mark.asyncio
+async def test_each_queued_fires_caps_count_from_when_it_was_queued() -> None:
+    """Behind a long call a room gives up on every queued fire at the cap
+    (R3: "from when this room's task began waiting"), not at N x 300 s."""
+    h = House("garage")
+    h.room("garage").busy("in_call", True, until=T0 + 10_000_000)
+    await h.fire(due(1, "garage"), due(2, "garage"))
+    await h.advance(305, step=1.0)
+    await h.idle()
+    assert h.outcome(-1, "garage") == ("busy_timeout", "in_call")
+    assert h.outcome(-2, "garage") == ("busy_timeout", "in_call")
+
+
+@pytest.mark.asyncio
+async def test_the_soft_window_also_counts_from_the_queue() -> None:
+    h = House("garage")
+    # The first fire plays at once; the second waits for it and then for a
+    # follow-up hold that would run past its 45 s soft window.
+    h.room("garage").busy("followup", False, until=T0 + 1000)
+    await h.fire(due(1, "garage", label="eggs"), due(2, "garage", label="tea"))
+    await h.advance(46.0)
+    await h.idle()
+    assert h.outcome(-1, "garage") == ("spoken", "forced_over:followup")
+    assert h.outcome(-2, "garage") == ("spoken", "forced_over:followup")
+
+
+class _FlakyLedger(Ledger):
+    """Each named method raises ConnectionError the first ``n`` times."""
+
+    def __init__(self, **fail) -> None:
+        super().__init__()
+        self.fail = dict(fail)
+
+    def _maybe(self, name: str) -> None:
+        if self.fail.get(name, 0) > 0:
+            self.fail[name] -= 1
+            raise ConnectionError(f"db blip in {name}")
+
+    async def note_detail(self, fire_id, room_id, detail):
+        self._maybe("note_detail")
+        return await super().note_detail(fire_id, room_id, detail)
+
+    async def claim(self, fire_id, room_id):
+        self._maybe("claim")
+        return await super().claim(fire_id, room_id)
+
+    async def finish(self, fire_id, room_id, outcome, detail, spoken_text=None):
+        self._maybe("finish")
+        return await super().finish(fire_id, room_id, outcome, detail, spoken_text)
+
+    async def release(self, fire_id, room_id, detail, *, count_attempt):
+        self._maybe("release")
+        return await super().release(fire_id, room_id, detail, count_attempt=count_attempt)
+
+    async def unsettled(self):
+        self._maybe("unsettled")
+        return await super().unsettled()
+
+
+def _flaky_house(*rooms, **fail) -> House:
+    h = House(*rooms)
+    h.ledger = _FlakyLedger(**fail)
+    h.d._ledger = None
+    h.d._ledger_factory = lambda: h.ledger
+    return h
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wait_reason_write_never_ends_the_delivery() -> None:
+    h = _flaky_house("garage", note_detail=1)
+    h.room("garage").busy("responding", True, until=T0 + 3)
+    await h.fire(due(1, "garage"))
+    await h.advance(10)
+    await h.idle()
+    assert h.room("garage").texts == ["Your 10 minute timer is done."]
+    assert h.outcome(-1, "garage") == ("spoken", None)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_claim_is_tried_again() -> None:
+    h = _flaky_house("garage", claim=2)
+    await h.fire(due(1, "garage"))
+    await h.advance(3.0)
+    await h.idle()
+    assert h.room("garage").texts == ["Your 10 minute timer is done."]
+    assert h.sleeps.count(td.LEDGER_RETRY_SEC) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_outcome_write_is_tried_again_so_spoken_is_not_lost() -> None:
+    h = _flaky_house("garage", finish=1)
+    await h.fire(due(1, "garage"))
+    await h.advance(2.0)
+    await h.idle()
+    assert h.outcome(-1, "garage") == ("spoken", None)
+    assert h.room("garage").calls == 1           # retried the write, not the speech
+
+
+@pytest.mark.asyncio
+async def test_a_failed_release_is_tried_again() -> None:
+    h = _flaky_house("garage", release=1)
+    h.room("garage").fail_next(
+        AnnounceNotStarted("room garage mid-response, announce skipped", reason="responding"),
+    )
+    await h.fire(due(1, "garage"))
+    await h.advance(3.0)
+    await h.idle()
+    assert h.outcome(-1, "garage") == ("spoken", None)
+
+
+@pytest.mark.asyncio
+async def test_a_claim_that_keeps_failing_gives_up_when_the_room_goes() -> None:
+    h = _flaky_house("garage", claim=10_000)
+    await h.fire(due(1, "garage"))
+    await h.advance(2.0)
+    del h.sessions["garage"]
+    await h.advance(2.0)
+    await h.idle()
+    assert h.outcome(-1, "garage")[0] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_resume_is_tried_again_on_the_next_tick(caplog) -> None:
+    h = _flaky_house(unsettled=1)
+    h.d._accepting_since = None
+    _seed_unsettled(h.ledger, -50, age_sec=120, rows={"kitchen": "pending"})
+    with caplog.at_level(logging.WARNING, logger="domovoi.timer_delivery"):
+        await h.d.tick()
+    assert any("resuming announcements" in m for m in caplog.messages)
+    assert -50 not in h.d._fires
+    await h.d.tick()
+    assert -50 in h.d._fires
+    h.d.set_accepting()
+    kitchen = h.connect("kitchen")
+    await h.idle()
+    assert kitchen.texts == ["From the garage: Your 10 minute timer went off 2 minutes ago."]
+
+
+class _ConnectsDuringPop(Ledger):
+    """The kitchen's satellite gets `ready` while the pop transaction runs,
+    between the targets of the first fire and the second: its own
+    room-connected check found no fire yet."""
+
+    def __init__(self, house) -> None:
+        super().__init__()
+        self.house = house
+
+    async def pop_due(self, targets_for):
+        calls = {"n": 0}
+
+        def wrapped(origin, own_only):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                self.house.sessions["kitchen"] = FakeRoom("kitchen", self.house.clock)
+                self.house.d.on_room_connected("kitchen")
+            return targets_for(origin, own_only)
+
+        return await super().pop_due(wrapped)
+
+
+@pytest.mark.asyncio
+async def test_a_room_connecting_during_a_multi_fire_pop_gets_every_fire() -> None:
+    h = House("garage")
+    h.ledger = _ConnectsDuringPop(h)
+    h.d._ledger = None
+    h.d._ledger_factory = lambda: h.ledger
+    await h.fire(due(1, "garage", label="eggs"), due(2, "garage", label="tea"))
+    await h.idle()
+    # Both, whichever first (the one it joined late comes second).
+    assert sorted(h.room("kitchen").texts) == ["From the garage: Your eggs timer is done.",
+                                               "From the garage: Your tea timer is done."]
+
+
+class _SlowRows(Ledger):
+    """rows() parks until released: a room-connected check in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hold: asyncio.Event | None = None
+        self.parked = asyncio.Event()
+
+    async def rows(self, fire_id):
+        if self.hold is not None:
+            self.parked.set()
+            await self.hold.wait()
+        return await super().rows(fire_id)
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_waits_for_a_room_being_added_before_settling() -> None:
+    """A room that reconnects inside the grace window is never recorded
+    offline, nor the fire settled, while its check is still reading the
+    ledger; and it is not announced after the fire settled."""
+    h = House()
+    h.ledger = _SlowRows()
+    h.d._ledger = None
+    h.d._ledger_factory = lambda: h.ledger
+    await h.fire(due(1, "garage"))
+    assert h.outcome(-1, "garage") == ("pending", "offline")
+
+    await h.advance(119.0)
+    h.ledger.hold = asyncio.Event()
+    garage = h.connect("garage")                 # just inside the window
+    await asyncio.wait_for(h.ledger.parked.wait(), 2)
+    await h.advance(5.0)                         # the deadline passes meanwhile
+    await h.sweep()
+    assert h.settled == []
+    assert h.outcome(-1, "garage") == ("pending", "offline")
+
+    h.ledger.hold.set()
+    h.ledger.hold = None
+    await h.idle()
+    assert garage.texts == ["Your 10 minute timer went off 2 minutes ago."]
+    await h.sweep()
+    assert h.settled and h.settled[0]["outcomes"] == {"garage": "spoken"}
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_finds_the_fire_settled_starts_nothing() -> None:
+    h = House()
+    h.ledger = _SlowRows()
+    h.d._ledger = None
+    h.d._ledger_factory = lambda: h.ledger
+    await h.fire(due(1, "garage"))
+    h.ledger.hold = asyncio.Event()
+    garage = h.connect("garage")
+    await asyncio.wait_for(h.ledger.parked.wait(), 2)
+    # Settled some other way meanwhile (a restart's resume of an old fire).
+    h.d._fires.pop(-1)
+    h.ledger.hold.set()
+    h.ledger.hold = None
+    await h.idle()
+    assert garage.heard == []
+
+
+def _unpaired(room: str, clock: FakeClock) -> FakeRoom:
+    r = FakeRoom(room, clock)
+    r.token_authenticated = False   # type: ignore[attr-defined]
+    return r
+
+
+@pytest.mark.asyncio
+async def test_a_socket_with_no_pairing_token_hears_only_its_own_rooms(caplog) -> None:
+    """Security review 2026-09-30: with strict pairing off any LAN client
+    can open /v1/stream/<new name> with no token and was a house-wide
+    target, receiving every room's reminder words (response_start.text),
+    reminders set with no room included."""
+    h = House("garage")
+    h.sessions["spy"] = _unpaired("spy", h.clock)
+    with caplog.at_level(logging.WARNING, logger="domovoi.timer_delivery"):
+        await h.fire(
+            due(1, "garage", label="biopsy", message="pick up the biopsy results"),
+            due(2, None, label="pill", message="take the pill"),
+            due(3, "spy", label="eggs"),
+        )
+        await h.idle()
+    assert h.room("spy").texts == ["Your eggs timer is done."]
+    assert h.room("garage").texts == [
+        "Reminder: pick up the biopsy results", "Reminder: take the pill",
+        "From the spy: Your eggs timer is done."]
+    assert "spy" not in h.ledger._rows[-1] and "spy" not in h.ledger._rows[-2]
+    warned = [m for m in caplog.messages if "has no pairing token" in m]
+    assert warned == [
+        "room spy has no pairing token; it announces only its own timers and reminders "
+        "(pair it, or turn on SATELLITE_PAIRING_STRICT)"]
+    # Reminder words never reach the journal through this line.
+    assert all("biopsy" not in m and "pill" not in m for m in warned)
+
+
+@pytest.mark.asyncio
+async def test_an_unpaired_late_joiner_gets_no_other_rooms_fire() -> None:
+    h = House("garage")
+    await h.fire(due(1, "garage", label="call mom", message="call mom"))
+    await h.idle()
+    h.sessions["spy"] = _unpaired("spy", h.clock)
+    h.d.on_room_connected("spy")
+    await h.idle()
+    assert h.room("spy").heard == []
+    assert "spy" not in h.ledger._rows[-1]
+
+
+@pytest.mark.asyncio
+async def test_an_unpaired_origin_still_announces_its_own_after_a_reconnect() -> None:
+    h = House()
+    await h.fire(due(1, "garage"))
+    h.sessions["garage"] = _unpaired("garage", h.clock)
+    h.d.on_room_connected("garage")
+    await h.idle()
+    assert h.room("garage").texts == ["Your 10 minute timer is done."]
+
+
+# ─── Real StreamSessions: the review's repros (DB-free) ──────────────────
+
+
+class _SlowClaimLedger(Ledger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_claim = asyncio.Event()
+        self.release_claim = asyncio.Event()
+
+    async def claim(self, fire_id, room_id):
+        self.in_claim.set()
+        await self.release_claim.wait()     # a database round trip
+        return await super().claim(fire_id, room_id)
+
+
+@pytest.mark.asyncio
+async def test_a_capture_that_begins_during_the_claim_is_not_talked_over(stub_tts) -> None:
+    """R3/R4: never talk over an active capture. The claim is a round trip;
+    an utterance_start in that gap found no announce lock and no task, and
+    the announcement went out into the capture — its response_end then
+    released the satellite's wait for the real reply."""
+    from domovoi.streaming import StreamSession
+
+    app = _real_app()
+    ws = _WS(app)
+    sess = StreamSession(ws, "kitchen")  # type: ignore[arg-type]
+    app.state.active_sessions["kitchen"] = sess
+    ledger = _SlowClaimLedger()
+    ledger.due.append(due(1, "kitchen"))
+    d = TimerDelivery(app, lambda: ledger, poll_sec=0.01, wall=lambda: BASE)
+    d.set_accepting()
+    await d.tick()
+    await asyncio.wait_for(ledger.in_claim.wait(), 2)
+    await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+    await sess._on_audio(b"\x00" * 640)
+    ledger.release_claim.set()
+    await _until(lambda: ledger.row(-1, "kitchen")["detail"] == "capturing"
+                 and ledger.row(-1, "kitchen")["outcome"] == "pending")
+    await asyncio.sleep(0.1)
+    assert ws.spoken() == []
+    assert ledger.row(-1, "kitchen")["attempts"] == 0      # not counted
+
+    # The capture ends (a follow-up that timed out): the room takes it now.
+    sess.utterance_active = False
+    await _until(lambda: ledger.row(-1, "kitchen")["outcome"] == "spoken")
+    assert ws.spoken() == ["Your 10 minute timer is done."]
+    await d.shutdown()
+
+
+class _SilentTTS:
+    async def synthesize(self, text, *, engine=None, voice=None):
+        return _wav(b"")           # RealTTSClient when every engine failed
+
+
+@pytest.mark.asyncio
+async def test_a_silent_tts_is_a_tts_failure_never_heard(monkeypatch) -> None:
+    from domovoi import streaming
+    from domovoi.streaming import StreamSession
+
+    async def _voice(_name):
+        return (None, None)
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: _SilentTTS())
+    monkeypatch.setattr(streaming, "resolve_voice", _voice)
+
+    async def _fast(_dt):
+        await asyncio.sleep(0)
+
+    app = _real_app()
+    ws = _WS(app)
+    app.state.active_sessions["garage"] = StreamSession(ws, "garage")  # type: ignore[arg-type]
+    ledger = Ledger()
+    ledger.due.append(due(1, "garage"))
+    d = TimerDelivery(app, lambda: ledger, sleep=_fast, wall=lambda: BASE)
+    d.set_accepting()
+    await d.tick()
+    await _until(lambda: ledger.row(-1, "garage")["outcome"] != "pending"
+                 and ledger.row(-1, "garage")["outcome"] != "sending")
+    assert (ledger.row(-1, "garage")["outcome"], ledger.row(-1, "garage")["detail"]) == (
+        "failed", "tts_failed")
+    assert ws.frames == []
+    await d.shutdown()
+
+
+class _FakePairings:
+    """SatellitePairingRepository stand-in: ``rows`` maps room to hash."""
+
+    rows: dict[str, str] = {}
+
+    def __init__(self, _s) -> None:
+        pass
+
+    async def get_pairing(self, room_id):
+        h = self.rows.get(room_id)
+        return None if h is None else (h,)
+
+    async def pair(self, room_id, token_hash):
+        self.rows[room_id] = token_hash
+
+    async def touch_last_seen(self, room_id):
+        return None
+
+
+@pytest.fixture
+def fake_pairing(monkeypatch):
+    from domovoi import streaming
+
+    @asynccontextmanager
+    async def _scope():
+        yield SimpleNamespace()
+
+    monkeypatch.setattr(_FakePairings, "rows", {})
+    monkeypatch.setattr(streaming, "session_scope", _scope)
+    monkeypatch.setattr(streaming, "SatellitePairingRepository", _FakePairings)
+    monkeypatch.setattr(settings, "satellite_pairing_strict", False)
+    return _FakePairings
+
+
+@pytest.mark.asyncio
+async def test_a_tokenless_stream_hears_no_other_rooms_reminder(stub_tts, fake_pairing) -> None:
+    """The security review's repro, end to end: a tokenless hello (case 5,
+    strict pairing off) is accepted but never hears another room's fire or
+    a roomless one; a token-paired satellite does."""
+    from domovoi.admin_auth import token_sha256
+    from domovoi.streaming import StreamSession
+
+    app = _real_app()
+    spy_ws = _WS(app)
+    spy = StreamSession(spy_ws, "spy")  # type: ignore[arg-type]
+    assert await spy._validate_pairing({"type": "hello", "room_id": "spy"}) is True
+    assert spy.token_authenticated is False
+    app.state.active_sessions["spy"] = spy
+
+    fake_pairing.rows["kitchen"] = token_sha256("kitchen-token")
+    kitchen_ws = _WS(app)
+    kitchen = StreamSession(kitchen_ws, "kitchen")  # type: ignore[arg-type]
+    assert await kitchen._validate_pairing(
+        {"type": "hello", "room_id": "kitchen", "pairing_token": "kitchen-token"}) is True
+    assert kitchen.token_authenticated is True
+    app.state.active_sessions["kitchen"] = kitchen
+
+    garage_ws = _WS(app)
+    app.state.active_sessions["garage"] = StreamSession(garage_ws, "garage")  # type: ignore[arg-type]
+
+    ledger = Ledger()
+    d = TimerDelivery(app, lambda: ledger, poll_sec=0.01, wall=lambda: BASE)
+    d.set_accepting()
+    ledger.due.append(due(1, "garage", label="biopsy", message="pick up the biopsy results"))
+    ledger.due.append(due(2, None, label="pill", message="take the pill"))
+    await d.tick()
+    await _until(lambda: len(kitchen_ws.spoken()) == 2)
+    await asyncio.sleep(0.1)
+    assert kitchen_ws.spoken() == ["Reminder from the garage: pick up the biopsy results",
+                                   "Reminder: take the pill"]
+    assert spy_ws.spoken() == []
+
+    # A tokenless late joiner inside the grace window: nothing either.
+    late_ws = _WS(app)
+    late = StreamSession(late_ws, "spy-late")  # type: ignore[arg-type]
+    assert await late._validate_pairing({"type": "hello", "room_id": "spy-late"}) is True
+    app.state.active_sessions["spy-late"] = late
+    d.on_room_connected("spy-late")
+    await asyncio.sleep(0.2)
+    assert late_ws.spoken() == []
+    await d.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_a_first_pairing_with_a_token_is_token_authenticated(fake_pairing) -> None:
+    from domovoi.streaming import StreamSession
+
+    app = _real_app()
+    sess = StreamSession(_WS(app), "attic")  # type: ignore[arg-type]
+    assert await sess._validate_pairing(
+        {"type": "hello", "room_id": "attic", "pairing_token": "attic-token"}) is True
+    assert sess.token_authenticated is True
+
+
+@pytest.mark.asyncio
+async def test_a_pairing_check_that_cannot_run_is_not_token_authenticated(monkeypatch) -> None:
+    from domovoi import streaming
+    from domovoi.streaming import StreamSession
+
+    @asynccontextmanager
+    async def _down():
+        raise ConnectionError("database down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(streaming, "session_scope", _down)
+    monkeypatch.setattr(settings, "satellite_pairing_strict", False)
+    sess = StreamSession(_WS(_real_app()), "garage")  # type: ignore[arg-type]
+    assert await sess._validate_pairing(
+        {"type": "hello", "room_id": "garage", "pairing_token": "t"}) is True
+    assert sess.token_authenticated is False
 
 
 # ─── DB tier: the V017 ledger ────────────────────────────────────────────
@@ -1137,7 +1696,9 @@ async def test_boot_race_through_the_real_ledger(v017, stub_tts) -> None:
     socks = {}
     for room in ("garage", "kitchen"):
         ws = _WS(app)
-        app.state.active_sessions[room] = StreamSession(ws, room)  # type: ignore[arg-type]
+        sess = StreamSession(ws, room)  # type: ignore[arg-type]
+        sess.token_authenticated = True      # a paired satellite
+        app.state.active_sessions[room] = sess
         d.on_room_connected(room)
         socks[room] = ws
 
@@ -1207,3 +1768,71 @@ async def test_retiring_a_room_without_v017_is_quiet(monkeypatch, caplog) -> Non
     with caplog.at_level(logging.WARNING):
         await core_main._forget_timer_scope("attic")
     assert not [r for r in caplog.records if "timer scope" in r.getMessage()]
+
+
+# ─── DB tier: acknowledged means done (2026-09-30 review) ───────────────
+
+
+def _house_on_real_ledger(*rooms):
+    clock = FakeClock()
+    sessions = {r: FakeRoom(r, clock) for r in rooms}
+    app = SimpleNamespace(state=SimpleNamespace(active_sessions=sessions))
+
+    async def _sleep(_dt):
+        await asyncio.sleep(0)
+
+    d = TimerDelivery(app, FireLedger, clock=clock, sleep=_sleep, events=EventBus())
+    d.set_accepting()
+    return d, sessions, clock
+
+
+async def _drain(d, n: int = 300) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0.01)
+        if not d._tasks and not d._aux:
+            return
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_room_that_joins_after_the_acknowledgement_never_hears_it(v017) -> None:
+    """The review's repro: the garage says "stop the timer"; the office,
+    back from a Wi-Fi drop inside the grace window (or any room after a
+    core restart), used to get a fresh row and announce it anyway."""
+    from domovoi.db.session import session_scope
+    from domovoi.timer_delivery import ack_recent_fire
+
+    d, sessions, clock = _house_on_real_ledger("garage", "kitchen")
+    await _add_timer(room="garage")
+    assert await d.tick() == 1
+    await _drain(d)
+    assert sessions["garage"].texts and sessions["kitchen"].texts
+    async with session_scope() as s:
+        assert await ack_recent_fire(s, "garage") is not None
+    sessions["office"] = FakeRoom("office", clock)
+    d.on_room_connected("office")
+    await _drain(d)
+    assert sessions["office"].heard == []
+    assert await _q("SELECT room_id FROM timer_fire_deliveries WHERE room_id = 'office'") == []
+    await d.shutdown()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_ledger_refuses_a_late_row_after_an_acknowledgement(v017) -> None:
+    ledger = FireLedger()
+    await _add_timer(room="garage")
+    [(rec, _)] = await ledger.pop_due(_targets({"garage", "kitchen"}))
+    fid = rec.fire_id
+    await _q("UPDATE timer_fires SET acked_at = now(), acked_by = 'garage' RETURNING 1")
+    # A late joiner is not added; the origin's own row always could be.
+    assert await ledger.add_target(fid, "office", False) is False
+    # A row that slipped in before the ack is cancelled when claimed, not spoken.
+    await _q("INSERT INTO timer_fire_deliveries (fire_id, room_id) VALUES (:f, 'den') RETURNING 1",
+             f=fid)
+    assert await ledger.claim(fid, "den") is False
+    assert [tuple(r) for r in await _q(
+        "SELECT outcome, detail FROM timer_fire_deliveries WHERE fire_id = :f AND room_id = 'den'",
+        f=fid)] == [("cancelled", "acknowledged:garage")]
+    # The origin still announces its own (owner rule 2).
+    assert await ledger.claim(fid, "garage") is True

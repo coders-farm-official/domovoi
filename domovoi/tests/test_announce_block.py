@@ -357,3 +357,149 @@ def test_the_room_connected_hook_runs_after_ready(monkeypatch) -> None:
             assert sess._connected_at > 0
             assert sess.announce_block()[0] == "connecting"
     assert seen == ["garage"]
+
+
+# ─── Review fixes 2026-09-30 ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_deferring_caller_is_refused_while_the_room_captures(tts) -> None:
+    """announce(defer_to_capture=True), the timer delivery's call: a capture
+    that began after the caller's own check (the claim is a database round
+    trip) makes it step aside, uncounted, with nothing sent."""
+    sess, ws = _session()
+    await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+    await sess._on_audio(b"\x00" * 640)
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await sess.announce("Your pasta timer is done.", defer_to_capture=True)
+    assert exc.value.reason == "capturing"
+    assert ws.frames == []
+    assert not sess._announce_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_a_deferring_caller_is_refused_in_a_call_or_a_recording(tts) -> None:
+    sess, ws = _session()
+    sess.dropin_peer = object()  # type: ignore[assignment]
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await sess.announce("Reminder: call mom", defer_to_capture=True)
+    assert exc.value.reason == "in_call"
+    sess.dropin_peer = None
+    sess.wake_recording = object()  # type: ignore[assignment]
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await sess.announce("Reminder: call mom", defer_to_capture=True)
+    assert exc.value.reason == "recording"
+    sess.wake_recording = None
+    assert ws.frames == []
+
+
+@pytest.mark.asyncio
+async def test_a_capture_that_begins_while_it_synthesizes_refuses_a_deferring_caller(tts) -> None:
+    """The second check, after the first sentence: an utterance_start that
+    came while another announcement held the lock had its cut flag cleared
+    by that one's `finally`, so only the live state tells."""
+    sess, ws = _session()
+    tts.gate = asyncio.Event()
+    task = asyncio.create_task(sess.announce("Reminder: call mom", defer_to_capture=True))
+    await asyncio.sleep(0.05)
+    sess.utterance_active = True
+    sess._last_audio_at = time.monotonic()
+    sess._announce_cut = False          # as another announcement's finally leaves it
+    tts.gate.set()
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await asyncio.wait_for(task, 2)
+    assert exc.value.reason == "capturing"
+    assert ws.frames == []
+
+
+@pytest.mark.asyncio
+async def test_intercom_and_the_other_callers_keep_todays_behaviour(tts) -> None:
+    sess, ws = _session()
+    await sess._on_control({"type": "utterance_start", "trigger": "wake_word"})
+    await sess._on_audio(b"\x00" * 640)
+    await sess.announce("Dinner is ready.")
+    assert [f["text"] for f in ws.texts("response_start")] == ["Dinner is ready."]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_first_sentence_is_a_tts_failure(monkeypatch) -> None:
+    """RealTTSClient answers an EMPTY WAV when every engine failed. That
+    used to go out as response_start, no audio, response_end — and count
+    as heard."""
+    class _Silent:
+        async def synthesize(self, text, *, engine=None, voice=None):
+            return _wav(b"")
+
+    async def _voice(_name):
+        return (None, None)
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: _Silent())
+    monkeypatch.setattr(streaming, "resolve_voice", _voice)
+    sess, ws = _session()
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await sess.announce("Reminder: call mom")
+    assert exc.value.reason == "tts_failed"
+    assert ws.frames == []
+
+
+@pytest.mark.asyncio
+async def test_a_hello_without_the_announcement_fix_is_warned_once(monkeypatch, caplog) -> None:
+    """A satellite from before 06f486b plays silence for any announcement
+    after a reconnect, while the core records it spoken: say so once per
+    connection, so the journal explains a "heard in" nobody heard."""
+    import logging
+
+    async def _accept(self, ctrl):
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
+    old, ws_old = _session("garage")
+    ws_old.app.state.satellite_full_duplex = {}
+    ws_old.app.state.satellite_synced_sha = {}
+    ws_old.app.state.satellite_sat_type = {}
+    ws_old.app.state.satellite_mic_enabled = {}
+    new, ws_new = _session("kitchen")
+    for name in ("satellite_full_duplex", "satellite_synced_sha", "satellite_sat_type",
+                 "satellite_mic_enabled"):
+        setattr(ws_new.app.state, name, {})
+    with caplog.at_level(logging.WARNING, logger="domovoi.streaming"):
+        await old._on_control({"type": "hello", "room_id": "garage"})
+        await new._on_control({"type": "hello", "room_id": "kitchen",
+                               "announce_after_session_end": True})
+    warned = [m for m in caplog.messages if "without the announcement fix" in m]
+    assert warned == [
+        "room garage runs satellite code without the announcement fix: timer and "
+        "reminder announcements after a reconnect will be silent until garage is upgraded"]
+
+
+def test_a_reconnect_is_connecting_before_its_ready_goes_out(monkeypatch) -> None:
+    """The session is registered (and a timer delivery can see it) before
+    the one it replaces is closed and before `ready`: that whole handshake
+    counts as `connecting`, never as an idle room."""
+    from fastapi.testclient import TestClient
+
+    from domovoi.main import app
+
+    async def _accept(self, ctrl):
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
+    seen: list[object] = []
+    real_close = StreamSession._close_quietly
+
+    async def _close(self, code):
+        new = app.state.active_sessions.get(self.room_id)
+        if new is not None and new is not self:
+            seen.append(new.announce_block())
+        await real_close(self, code)
+
+    monkeypatch.setattr(StreamSession, "_close_quietly", _close)
+    hello = json.dumps({"type": "hello", "room_id": "garage"})
+    with TestClient(app) as client:
+        with client.websocket_connect("/v1/stream/garage") as first:
+            first.send_text(hello)
+            assert first.receive_json()["type"] == "ready"
+            with client.websocket_connect("/v1/stream/garage") as second:
+                second.send_text(hello)
+                assert second.receive_json()["type"] == "ready"
+    assert seen and seen[0] == ("connecting", False)

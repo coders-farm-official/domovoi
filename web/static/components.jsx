@@ -413,10 +413,10 @@ const useToast = () => {
    * clear whatever that surface is — the same argument that raised
    * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
    * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
-   * docked player while one shows (styles.css, html.mp-docked). 111, one
-   * above the timer alert cards (TimerFireAlerts, 110), which share that
-   * bottom edge on a phone and stay until dismissed: the answer to a press
-   * must never sit under them. */
+   * docked player while one shows (styles.css, html.mp-docked). Above the
+   * timer alert cards (TimerFireAlerts, 85), which share that bottom edge
+   * on a phone and stay until dismissed: the answer to a press must never
+   * sit under them. */
   const node = items.length > 0 && (
     <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
@@ -1363,13 +1363,25 @@ const WriteBlockedNotice = ({ reason, children }) => {
  *
  * Sources: the `timer_fires.changed` push (the fires of the last hour,
  * unmasked — the socket is device tier) and a catch-up read of
- * GET /api/timers/fires on mount and whenever the socket comes back, so
- * a fire that went off while this tab slept still shows.
+ * GET /api/timers/fires on mount, whenever the socket comes back, and
+ * every 30 s while it is down (an unpaired tablet's socket is refused
+ * for good; the read is open), so a fire that went off while this tab
+ * slept still shows.
  *
- * The last fire this browser has seen is remembered, so a reload does
- * not replay the day: a first visit alerts only what fired in the last
- * 2 minutes, a catch-up only the last 10, and a card hides on its own 30
- * minutes after the fire. Dismissals are per device (no server state).
+ * The last fire this browser has seen is remembered (its id and when it
+ * went off), so a reload does not replay the day: a first visit alerts
+ * only what fired in the last 2 minutes, a catch-up only the last 10, and
+ * a card hides on its own 30 minutes after the fire. Dismissals are per
+ * device (no server state). When the server's history is BEHIND what was
+ * remembered — a rebuilt or restored database, a reinstall on the same
+ * address — the browser starts over as on a first visit (and forgets its
+ * dismissals) instead of silently skipping every new fire up to the old id.
+ *
+ * On a phone (760px and below) only the newest card shows, with "+N
+ * more" to open the rest and "dismiss all"; the stack sits under the
+ * dialogs (z-index 85: over the full-screen editors at 80, under the
+ * confirm dialogs at 90 and the modals at 100), so it never covers the
+ * buttons of a dialog someone is using.
  *
  * A reminder's words stay off a shared screen (the kitchen tablet an
  * admin marked), and off any browser the server masked them for (no
@@ -1390,20 +1402,33 @@ const TIMER_FIRE_DISMISSED_KEEP = 50;
 const TIMER_FIRE_PAGE = 50;
 const TIMER_FIRE_PAGES = 5;                        // catch-up pages per (re)connect
 const TIMER_FIRE_EVENTS = ['timer_fires.changed', '_status'];
+const TIMER_FIRE_POLL_MS = 30 * 1000;              // catch-up while the socket is down
+const TIMER_FIRE_PHONE = '(max-width: 760px)';
 
 /* localStorage, every access guarded: a private window, blocked site data
  * or a full quota must never take the shell down. */
 const TimerFireStore = {
+  // The last fire taken in, `{ id, at }` (`at`: its fired_at; null for a
+  // plain id stored before that was kept), or null: never, on this origin.
   seen() {
     try {
       const raw = localStorage.getItem(TIMER_FIRE_SEEN_KEY);
       if (raw == null) return null;
-      const n = Number(raw);
-      return Number.isFinite(n) && n >= 0 ? n : null;
+      let v = null;
+      try { v = JSON.parse(raw); } catch { v = null; }
+      if (typeof v === 'number') v = { id: v, at: null };
+      if (!v || typeof v !== 'object') return null;
+      const id = Number(v.id);
+      if (!Number.isFinite(id) || id < 0) return null;
+      return { id, at: typeof v.at === 'string' ? v.at : null };
     } catch { return null; }
   },
-  setSeen(n) {
-    try { localStorage.setItem(TIMER_FIRE_SEEN_KEY, String(n)); } catch { /* not kept */ }
+  setSeen(v) {
+    try { localStorage.setItem(TIMER_FIRE_SEEN_KEY, JSON.stringify(v)); } catch { /* not kept */ }
+  },
+  forgetDismissed() {
+    try { localStorage.removeItem(TIMER_FIRE_DISMISSED_KEY); } catch { /* not kept */ }
+    return [];
   },
   dismissed() {
     try {
@@ -1414,12 +1439,35 @@ const TimerFireStore = {
   // Add one id (the last 50 are kept) and return the new list; `fallback`
   // is what this page already knew, for when storage cannot be read.
   dismiss(id, fallback) {
+    return TimerFireStore.dismissAll([id], fallback);
+  },
+  dismissAll(ids, fallback) {
     const stored = TimerFireStore.dismissed();
     const base = stored.length ? stored : (fallback || []);
-    const next = base.filter((x) => x !== id).concat([id]).slice(-TIMER_FIRE_DISMISSED_KEEP);
+    const next = base.filter((x) => !ids.includes(x)).concat(ids).slice(-TIMER_FIRE_DISMISSED_KEEP);
     try { localStorage.setItem(TIMER_FIRE_DISMISSED_KEY, JSON.stringify(next)); } catch { /* not kept */ }
     return next;
   },
+};
+
+// true at 760px and below (the phone layout), false above; false when the
+// browser can't say.
+const TimerFireUsePhone = () => {
+  const mq = React.useMemo(() => {
+    try { return typeof window.matchMedia === 'function' ? window.matchMedia(TIMER_FIRE_PHONE) : null; } catch { return null; }
+  }, []);
+  const [phone, setPhone] = React.useState(() => !!(mq && mq.matches));
+  React.useEffect(() => {
+    if (!mq) return undefined;
+    const on = () => setPhone(!!mq.matches);
+    if (mq.addEventListener) mq.addEventListener('change', on);
+    else if (mq.addListener) mq.addListener(on);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', on);
+      else if (mq.removeListener) mq.removeListener(on);
+    };
+  }, [mq]);
+  return phone;
 };
 
 const TimerFireTitle = (f) => `${f.is_reminder ? 'Reminder' : 'Timer done'} · ${f.room_id || 'no room'}`;
@@ -1474,18 +1522,34 @@ const TimerFireCard = ({ f, shared, onDismiss }) => {
 
 const TimerFireAlerts = () => {
   const shared = useSharedScreen();
+  const phone = TimerFireUsePhone();
+  // On a phone the stack shows the newest card only, until "+N more".
+  const [expanded, setExpanded] = React.useState(false);
   // Every fire that alerted on this page load, by id (a later push for the
   // same id replaces it, which is how its summary updates in place).
   const [alerts, setAlerts] = React.useState(() => new Map());
   const [dismissed, setDismissed] = React.useState(() => TimerFireStore.dismissed());
-  // The highest fire id this browser has taken in (null: never, on this
-  // server). A ref for the logic, state so it is stored after the render.
+  // The last fire this browser has taken in, `{ id, at }` (null: never, on
+  // this origin). A ref for the logic, state so it is stored after the render.
   const seenRef = React.useRef(TimerFireStore.seen());
   const [seen, setSeen] = React.useState(seenRef.current);
   React.useEffect(() => { if (seen != null) TimerFireStore.setSeen(seen); }, [seen]);
   const offsetRef = React.useRef(0);                 // server clock − this clock, ms
   const serverNow = () => Date.now() + offsetRef.current;
   const [, bump] = React.useReducer((n) => n + 1, 0);
+  const [live, setLive] = React.useState(() => {
+    try { return typeof stateBus !== 'undefined' && !!stateBus.connected; } catch { return false; }
+  });
+
+  /* The server's fire history is not the one this browser remembers (the
+   * database was rebuilt or restored, or another install answers on this
+   * address): its ids started again, so every new fire up to the old id
+   * would be skipped. Start over as a first visit, dismissals included. */
+  const startOver = () => {
+    seenRef.current = null;
+    setAlerts(new Map());
+    setDismissed(TimerFireStore.forgetDismissed());
+  };
 
   /* Take in a batch of fires. Only a fire newer than the last one seen
    * alerts, and with `windowMs` only one that young (server clock). With
@@ -1494,7 +1558,13 @@ const TimerFireAlerts = () => {
   const ingest = (fires, nowMs, windowMs) => {
     const list = (Array.isArray(fires) ? fires : []).filter((f) => f && Number.isFinite(f.id));
     const age = (f) => nowMs - Date.parse(f.fired_at);
-    let base = seenRef.current;
+    const was = seenRef.current;
+    if (was && was.at && list.some((f) => f.id <= was.id && Date.parse(f.fired_at) > Date.parse(was.at))) {
+      // A fire at or below the remembered id went off AFTER the remembered
+      // one: the ids started again.
+      startOver();
+    }
+    let base = seenRef.current == null ? null : seenRef.current.id;
     let win = windowMs;
     if (base == null) {
       base = list.filter((f) => !(age(f) <= TIMER_FIRE_FIRST_LOAD_MS))
@@ -1513,7 +1583,12 @@ const TimerFireAlerts = () => {
         return next || cur;
       });
     }
-    const top = list.reduce((m, f) => Math.max(m, f.id), base);
+    const topFire = list.reduce((m, f) => (m == null || f.id > m.id ? f : m), null);
+    const byId = new Map(list.map((f) => [f.id, f]));
+    let top;
+    if (topFire && topFire.id >= base) top = { id: topFire.id, at: topFire.fired_at || null };
+    else if (seenRef.current && seenRef.current.id === base) top = seenRef.current;
+    else top = { id: base, at: byId.has(base) ? (byId.get(base).fired_at || null) : null };
     seenRef.current = top;
     setSeen(top);
   };
@@ -1525,7 +1600,7 @@ const TimerFireAlerts = () => {
     busyRef.current = true;
     try {
       for (let page = 0; page < TIMER_FIRE_PAGES; page += 1) {
-        const from = seenRef.current;
+        const from = seenRef.current == null ? null : seenRef.current.id;
         // A first visit reads the newest page; afterwards, everything
         // past the last fire seen, oldest first.
         const path = from == null
@@ -1535,6 +1610,16 @@ const TimerFireAlerts = () => {
         if (!r || !Array.isArray(r.fires)) break;
         const at = Date.parse(r.server_now);
         if (Number.isFinite(at)) offsetRef.current = at - Date.now();
+        if (from != null && page === 0 && r.fires.length === 0) {
+          // Nothing past the last fire seen. If the newest fire the server
+          // has is BEHIND it (or it has none at all), this browser
+          // remembers another history: read the newest page as a first visit.
+          const top = await apiGet('/api/timers/fires?limit=1', { quiet: true });
+          if (!top || !Array.isArray(top.fires)) break;
+          const newest = top.fires[0];
+          if (newest ? newest.id < from : from > 0) { startOver(); continue; }
+          break;
+        }
         ingest(r.fires, serverNow(), TIMER_FIRE_CATCHUP_MS);
         if (from == null || r.fires.length < TIMER_FIRE_PAGE) break;
       }
@@ -1549,9 +1634,23 @@ const TimerFireAlerts = () => {
 
   React.useEffect(() => { catchUp(); }, []);
   useStateEvents(TIMER_FIRE_EVENTS, (ev) => {
-    if (ev.type === '_status') { if (ev.connected) catchUp(); return; }
+    if (ev.type === '_status') { setLive(!!ev.connected); if (ev.connected) catchUp(); return; }
     if (Array.isArray(ev.data)) ingest(ev.data, serverNow(), null);
   });
+  // No pushes while the socket is down — for good on an unpaired tablet,
+  // whose /ws/state is refused: read the (open) history every 30 s
+  // instead, as Home does for its timers. Skipped while the tab is hidden.
+  const catchUpRef = React.useRef(catchUp);
+  catchUpRef.current = catchUp;
+  React.useEffect(() => {
+    if (live) return undefined;
+    const t = setInterval(() => {
+      let away = false;
+      try { away = typeof document !== 'undefined' && !!document.hidden; } catch { away = false; }
+      if (!away) catchUpRef.current();
+    }, TIMER_FIRE_POLL_MS);
+    return () => clearInterval(t);
+  }, [live]);
 
   const hidden = new Set(dismissed);
   const now = serverNow();
@@ -1568,22 +1667,41 @@ const TimerFireAlerts = () => {
   if (!anyShown) return null;
 
   const dismiss = (id) => setDismissed((cur) => TimerFireStore.dismiss(id, cur));
-  const more = shown.length - TIMER_FIRE_VISIBLE;
-  /* z-index 110 and the lifted bottom: the toast's rules (useToast) — above
-   * every overlay, clear of the phone's tab strip and the docked player. */
+  const dismissAll = () => {
+    const ids = shown.map((f) => f.id);
+    setDismissed((cur) => TimerFireStore.dismissAll(ids, cur));
+    setExpanded(false);
+  };
+  const visible = phone && !expanded ? 1 : TIMER_FIRE_VISIBLE;
+  const more = shown.length - visible;
+  const chip = { fontSize: 11, color: 'var(--fg-muted)', background: 'var(--overlay)',
+                 border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '2px 8px' };
+  /* The toast's lifted bottom (useToast) — clear of the phone's tab strip
+   * and the docked player. z-index 85: over the full-screen editors (80),
+   * under the confirm dialogs (90), the modals (100) and the toast (111),
+   * so a card that stays never covers a dialog's buttons or a toast. */
   return (
     <div className="timer-fire-alerts" role="alert"
          style={{ position: 'fixed', right: 16, bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)',
-                  zIndex: 110, width: 'min(340px, calc(100vw - 32px))',
+                  zIndex: 85, width: 'min(340px, calc(100vw - 32px))',
                   display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {shown.slice(0, TIMER_FIRE_VISIBLE).map((f) => (
+      {shown.slice(0, visible).map((f) => (
         <TimerFireCard key={f.id} f={f} shared={shared} onDismiss={() => dismiss(f.id)}/>
       ))}
-      {more > 0 && (
-        <div className="timer-fire-more mono"
-             style={{ alignSelf: 'flex-end', fontSize: 11, color: 'var(--fg-muted)', background: 'var(--overlay)',
-                      border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '2px 8px' }}>
-          +{more} more
+      {shown.length > 1 && (
+        <div className="timer-fire-foot" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+          {phone && expanded && (
+            <button type="button" className="btn btn-ghost timer-fire-fewer mono" style={chip}
+                    onClick={() => setExpanded(false)}>fewer</button>
+          )}
+          {more > 0 && (phone ? (
+            <button type="button" className="btn btn-ghost timer-fire-more mono" style={chip}
+                    aria-label={`show ${more} more`} onClick={() => setExpanded(true)}>+{more} more</button>
+          ) : (
+            <div className="timer-fire-more mono" style={chip}>+{more} more</div>
+          ))}
+          <button type="button" className="btn btn-ghost timer-fire-dismiss-all mono" style={chip}
+                  onClick={dismissAll}>dismiss all</button>
         </div>
       )}
     </div>

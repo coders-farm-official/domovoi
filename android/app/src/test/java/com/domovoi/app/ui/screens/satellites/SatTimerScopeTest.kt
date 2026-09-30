@@ -70,6 +70,20 @@ class SatTimerScopeTest {
         }
     }
 
+    @Test fun aMaskedReminderReadsWordsHiddenLikeTheWeb() {
+        val rows = DomovoiJson.parseToJsonElement(
+            """[{"id":7,"is_reminder":true,"label":null,"message":null,"masked":true},
+                {"id":8,"is_reminder":true,"label":"call mom","message":"call mom"},
+                {"id":9,"is_reminder":false,"label":"pasta"},
+                {"id":10,"is_reminder":false}]""",
+        ).decode<List<SatTimer>>()
+        assertEquals(
+            listOf("reminder (words hidden)", "call mom", "pasta", "—"),
+            rows.map { satTimerLabel(it) },
+        )
+        assertFalse("absent from an older server = not masked", rows[1].masked)
+    }
+
     @Test fun theWordsAreTheWebsWords() {
         assertEquals("Only reminders for this device", TIMER_SCOPE_LABEL)
         assertEquals(

@@ -90,8 +90,9 @@ data class AlertTimerList(
 
 internal fun isoMs(iso: String?): Long? = parseInstant(iso)?.toEpochMilli()
 
-/** "Reminder · garage", "Timer done · garage", "… · no room". The only
- *  thing a lock screen (and a shared screen) ever shows. */
+/** "Reminder · garage", "Timer done · garage", "… · no room". All a shared
+ *  screen ever shows, and all a lock screen shows when the phone is set to
+ *  hide sensitive notification content (TimerNotifier). */
 fun fireTitle(kind: String?, roomId: String?): String {
     val room = roomId?.takeIf { it.isNotEmpty() } ?: "no room"
     return if (kind == "reminder") "Reminder · $room" else "Timer done · $room"

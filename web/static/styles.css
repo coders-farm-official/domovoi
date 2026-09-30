@@ -1183,4 +1183,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .home .card-head .home-link { margin-block: -12px; }
   .home-sheet-bg { align-items: flex-end; }
   .home-sheet { border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  /* ...and on the timer alert cards (components.jsx TimerFireAlerts) and the
+     satellite drawer's "Only reminders for this device" switch. */
+  .timer-fire-card .btn-icon { width: 44px; height: 44px; }
+  .timer-fire-foot .btn { min-height: 44px; }
+  .sat-timer-scope { min-height: 44px; }
+  .sat-timer-scope input[type="checkbox"] { width: 20px; height: 20px; }
 }

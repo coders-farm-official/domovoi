@@ -1302,7 +1302,9 @@ delivery problems -- branch on the returned list. Announcements to one
 room play one at a time (yours waits for a timer or an intercom broadcast
 already playing there), and a wake word or barge-in in that room cuts
 yours off: that room is then reported as not reached and the reason is
-logged. It stays best-effort. Don't spam it: an
+logged. So is a room where the text-to-speech engines produced no audio
+at all (it used to count as reached with nothing heard). It stays
+best-effort. Don't spam it: an
 announcement interrupts the household; reserve it for things a person
 asked for or needs to know now.
 

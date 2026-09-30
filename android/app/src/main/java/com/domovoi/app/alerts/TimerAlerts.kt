@@ -101,6 +101,13 @@ class TimerAlerts(
             }
         }
         scope.launch {
+            // A cold start is the one time the stored mirror can disagree
+            // with AlarmManager: a force-stop (Settings, several OEMs' swipe
+            // away, a revoked exact-alarm grant on 31-32) cancels every
+            // alarm the app set and leaves the mirror listing them, and the
+            // sync below only arms timers that are new or moved. Re-arm
+            // what is stored first (idempotent: FLAG_UPDATE_CURRENT).
+            safely("timer mirror re-arm") { engine.rearm() }
             safely("timer catch-up") { engine.catchUp() }
             safely("timer mirror sync") { engine.syncMirror() }
         }

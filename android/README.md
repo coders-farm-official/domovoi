@@ -138,15 +138,24 @@ leaves the home network):
   a reboot or an app update.
 - The two paths post one timer once (a small dedupe book keyed by
   server and timer id), into the same notification.
-- **Privacy:** a locked phone shows only the kind and the room
-  ("Reminder · garage"); a shared screen never shows the words; the
-  mirror keeps a reminder's words only in app-private storage and its
-  alarms carry ids only.
+- **Privacy:** a shared screen never shows the words, locked or not. On
+  any other phone the lock screen shows only the kind and the room
+  ("Reminder · garage") **when the phone is set to hide sensitive
+  notification content** (Settings > Notifications > notifications on
+  lock screen, or "Sensitive notifications" off on a Pixel); Android's
+  default shows the whole notification there, a reminder's words
+  included, and an app cannot force otherwise. The mirror keeps a
+  reminder's words only in app-private storage, excluded from cloud
+  backup and from device-to-device transfer, and its alarms carry ids
+  only.
 - With notifications off for the app, nothing posts and nothing is
   armed; Home's timers card says "Timer alerts are off on this phone"
   with a way to turn them on.
 - Tapping an alert opens Home. The satellite detail's **Only reminders
   for this device** switch sets which rooms speak other rooms' timers.
+- A phone that force-stops the app (Settings > Force stop, some
+  makers' swipe-away) loses every alarm it had set; the next start re-arms
+  the ones still ahead before it syncs.
 - **Limit (no foreground service, by design):** Android freezes a
   backgrounded app and, from Android 15, blocks its network a few
   seconds after it leaves the screen (`blocked=APP_BACKGROUND` in

@@ -50,6 +50,10 @@ object AlertsApi {
 
     fun fireForTimerPath(timerId: Long): String = "/api/timers/fires?timer_id=$timerId&limit=1"
 
+    /** The newest fire the server has: a catch-up that found nothing past
+     *  the remembered id checks the server is not BEHIND it. */
+    const val NEWEST_FIRE_PATH = "/api/timers/fires?limit=1"
+
     const val TIMERS_PATH = "/api/timers"
 
     suspend fun fires(api: ApiClient, path: String): TimerFireList = api.get(path).decode()
@@ -111,7 +115,14 @@ class AlertEngine(
     }
 
     private suspend fun process(key: String, fires: List<TimerFire>, serverNowMs: Long) {
-        val seen = store.seen(key)
+        var seen = store.seen(key)
+        if (historyRestarted(fires, seen, isoMs(store.seenAt(key)))) {
+            // A fire at or below the remembered id went off after the
+            // remembered one: the server's ids started again.
+            log("timer fire history started again on this server; starting over")
+            store.startOver(key)
+            seen = null
+        }
         val plan = planFires(fires, seen, serverNowMs, CATCH_UP_WINDOW_MS)
         if (sink.canPost()) {
             val shared = sink.shared()
@@ -127,7 +138,7 @@ class AlertEngine(
                 }
             }
         }
-        if (plan.seen != seen) store.setSeen(key, plan.seen)
+        if (plan.seen != seen || plan.seenAt != null) store.setSeen(key, plan.seen, plan.seenAt)
     }
 
     /** A `timer_fires.changed` push: the fires of the last hour. */
@@ -149,7 +160,7 @@ class AlertEngine(
         val key = activeKey() ?: return
         fireLock.withLock {
             var seen = store.seen(key)
-            repeat(CATCH_UP_PAGES) {
+            repeat(CATCH_UP_PAGES) { page ->
                 val received = clock()
                 val list = try {
                     AlertsApi.fires(api, AlertsApi.firesSincePath(seen))
@@ -161,6 +172,28 @@ class AlertEngine(
                 }
                 if (activeKey() != key) return
                 noteClock(list.server_now, received)
+                val remembered = seen
+                if (remembered != null && page == 0 && list.fires.isEmpty()) {
+                    // Nothing past the remembered fire. If the server's
+                    // newest is BEHIND it, this phone remembers another
+                    // history (a rebuilt database on the same address):
+                    // read the newest page as a first run instead of
+                    // skipping every new fire up to the old id.
+                    val top = try {
+                        AlertsApi.fires(api, AlertsApi.NEWEST_FIRE_PATH)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        log("timer catch-up check skipped: ${e.message}")
+                        return
+                    }
+                    if (activeKey() != key) return
+                    if (!historyBehind(top.fires.firstOrNull(), remembered)) return
+                    log("timer fire history is behind this phone's; starting over")
+                    store.startOver(key)
+                    seen = null
+                    return@repeat
+                }
                 process(key, list.fires, isoMs(list.server_now) ?: (received + serverOffsetMs))
                 val next = store.seen(key)
                 if (seen == null || list.fires.size < AlertsApi.FIRES_PAGE || next == seen) return

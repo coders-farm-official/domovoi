@@ -1002,3 +1002,89 @@ async def test_list_reads_a_task_and_a_no_task_reminder(db_session) -> None:
     )
     assert "You have 2 reminders." in response.text
     assert ": your 5 minute reminder. After that: call mom." in response.text
+
+
+# ─── "cancel that reminder" right after one was announced (2026-09-30) ───
+#
+# Every room announces every room's reminders now. After the kitchen hears
+# "Reminder from the garage: call mom", "cancel that reminder" there means
+# "I heard it" — it used to delete every reminder the kitchen had.
+
+
+@pytest.fixture
+async def v017_session(db_session):
+    from domovoi.tests.timer_fires_testkit import apply_v017
+
+    await apply_v017()
+    yield db_session
+    await db_session.rollback()
+    await apply_v017()
+
+
+async def _announced_here(s, *, room: str, kind: str, ago_sec: float = 5.0) -> int:
+    """A garage fire of ``kind`` announced in ``room`` ``ago_sec`` seconds ago."""
+    fid = (await s.execute(text(
+        "INSERT INTO timer_fires (timer_id, kind, message, origin_room_id, created_at, due_at, "
+        "base_text) VALUES (98, :kind, :message, 'garage', now() - interval '11 minutes', "
+        "now() - interval '1 minute', 'Reminder: call mom') RETURNING id"
+    ), {"kind": kind, "message": "call mom" if kind == "reminder" else None})).scalar_one()
+    await s.execute(text(
+        "INSERT INTO timer_fire_deliveries (fire_id, room_id, is_origin, outcome, started_at, "
+        "finished_at) VALUES (:f, :r, false, 'spoken', now() - make_interval(secs => :a + 3), "
+        "now() - make_interval(secs => :a))"
+    ), {"f": fid, "r": room, "a": float(ago_sec)})
+    await s.commit()
+    return int(fid)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_cancel_that_reminder_right_after_hearing_one_acknowledges_it(v017_session) -> None:
+    s = v017_session
+    await TimerRepository(s).create(
+        expires_at=utcnow() + timedelta(minutes=30), label="take out the trash",
+        message="take out the trash", room_id="kitchen")
+    await s.commit()
+    fid = await _announced_here(s, room="kitchen", kind="reminder")
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+
+    reply = await ReminderHandler()._cancel_from_match(
+        _CANCEL_RE.match("cancel that reminder"), ctx, s)
+    await s.commit()
+    assert reply.text == "Okay."
+    assert (await s.execute(text("SELECT message FROM timers"))).scalars().all() == [
+        "take out the trash"]
+    assert (await s.execute(text(
+        "SELECT acked_by FROM timer_fires WHERE id = :f"), {"f": fid})).scalar_one() == "kitchen"
+
+    # The tool's cancel with no message is the same "I heard it".
+    reply = await ReminderHandler().execute_from_tool({"action": "cancel"}, ctx, s)
+    await s.commit()
+    assert reply.text == "Okay."
+    assert (await s.execute(text("SELECT count(*) FROM timers"))).scalar_one() == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_named_reminder_cancel_or_a_timer_fire_is_a_normal_cancel(v017_session) -> None:
+    s = v017_session
+    repo = TimerRepository(s)
+    await repo.create(expires_at=utcnow() + timedelta(minutes=30), label="call mom",
+                      message="call mom", room_id="kitchen")
+    await repo.create(expires_at=utcnow() + timedelta(minutes=30), label="trash",
+                      message="trash", room_id="kitchen")
+    await s.commit()
+    await _announced_here(s, room="kitchen", kind="timer")      # a TIMER went off here
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+
+    # A label names a reminder: never an acknowledgement.
+    reply = await ReminderHandler()._cancel_from_match(
+        _CANCEL_RE.match("cancel my reminder to call mom"), ctx, s)
+    await s.commit()
+    assert reply.text == "Cancelled the reminder."
+    # A timer that went off is not a reminder that went off.
+    reply = await ReminderHandler()._cancel_from_match(
+        _CANCEL_RE.match("cancel that reminder"), ctx, s)
+    await s.commit()
+    assert reply.text == "Cancelled the reminder."
+    assert (await s.execute(text("SELECT count(*) FROM timers"))).scalar_one() == 0

@@ -96,7 +96,20 @@ data class SatTimer(
     val label: String? = null,
     val message: String? = null,
     val expires_at: String? = null,
+    // Rule M1: the server held a reminder's words back (label and message
+    // null) because this phone presented no household token. Absent from
+    // an older server.
+    val masked: Boolean = false,
 )
+
+/** What the web's Timers tab says for a reminder whose words were held back. */
+const val SAT_TIMER_WORDS_HIDDEN = "reminder (words hidden)"
+
+/** A running timer's name in the Timers tab: its label, a reminder's
+ *  words, or [SAT_TIMER_WORDS_HIDDEN] when the server masked them. */
+fun satTimerLabel(t: SatTimer): String =
+    if (t.masked) SAT_TIMER_WORDS_HIDDEN
+    else t.label ?: (if (t.is_reminder) t.message else null) ?: "—"
 
 @Serializable
 data class SatPlayed(

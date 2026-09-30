@@ -206,6 +206,77 @@ class AlertEngineTest {
         assertEquals(1, loud().size)
     }
 
+    // ---- another history on the same address ------------------------------------------
+
+    @Test fun aHistoryBehindTheRememberedIdStartsOverAsAFirstRun() = runBlocking {
+        // This phone remembers fire 100 of a database that was since rebuilt;
+        // the new one is at fire 5, and timer 17 was posted from the old one.
+        store.setSeen(key, 100, iso(nowMs - 60 * 60_000))
+        assertTrue(store.markAlerted(key, 17, nowMs - 60 * 60_000))
+        answer("/api/timers/fires?since_id=100&limit=50", """{"server_now":"${iso(nowMs)}","fires":[]}""")
+        answer("/api/timers/fires?limit=1", """{"server_now":"${iso(nowMs)}","fires":[${fireJson(5, 17, nowMs - 30_000)}]}""")
+        answer(
+            "/api/timers/fires?limit=50",
+            """{"server_now":"${iso(nowMs)}","fires":[${fireJson(5, 17, nowMs - 30_000)},${fireJson(4, 16, nowMs - 5 * 60_000)}]}""",
+        )
+        engine.catchUp()
+        assertEquals(
+            listOf("/api/timers/fires?since_id=100&limit=50", "/api/timers/fires?limit=1", "/api/timers/fires?limit=50"),
+            paths.toList(),
+        )
+        // A first run: the 30 s old fire posts (its timer id collides with
+        // the old history's 17, whose "already posted" entry is forgotten).
+        assertEquals(listOf(17L), loud().map { it.content.timerId })
+        assertEquals(5L, store.seen(key))
+        assertEquals(iso(nowMs - 30_000), store.seenAt(key))
+    }
+
+    @Test fun anEmptyHistoryBehindTheRememberedIdStartsOverToo() = runBlocking {
+        store.setSeen(key, 100, iso(nowMs - 60 * 60_000))
+        answer("/api/timers/fires?since_id=100&limit=50", """{"server_now":"${iso(nowMs)}","fires":[]}""")
+        answer("/api/timers/fires?limit=1", """{"server_now":"${iso(nowMs)}","fires":[]}""")
+        answer("/api/timers/fires?limit=50", """{"server_now":"${iso(nowMs)}","fires":[]}""")
+        engine.catchUp()
+        assertEquals(0L, store.seen(key))
+    }
+
+    @Test fun aConsistentHistoryIsLeftAlone() = runBlocking {
+        store.setSeen(key, 7, iso(nowMs - 60_000))
+        answer("/api/timers/fires?since_id=7&limit=50", """{"server_now":"${iso(nowMs)}","fires":[]}""")
+        answer("/api/timers/fires?limit=1", """{"server_now":"${iso(nowMs)}","fires":[${fireJson(7, 21, nowMs - 60_000)}]}""")
+        engine.catchUp()
+        assertEquals(listOf("/api/timers/fires?since_id=7&limit=50", "/api/timers/fires?limit=1"), paths.toList())
+        assertEquals(7L, store.seen(key))
+    }
+
+    @Test fun aPushThatWentOffAfterTheRememberedFireStartsOver() = runBlocking {
+        push(fireJson(40, 15, nowMs - 60_000))
+        assertEquals(40L, store.seen(key))
+        // The database was rebuilt under a running app: fire 3 is newer than 40.
+        nowMs += 120_000
+        push(fireJson(3, 15, nowMs - 5_000))
+        assertEquals(listOf(15L, 15L), loud().map { it.content.timerId })
+        assertEquals(3L, store.seen(key))
+        // An old fire pushed again (a summary update) starts nothing over.
+        push(fireJson(2, 14, nowMs - 60 * 60_000))
+        assertEquals(3L, store.seen(key))
+        assertEquals(2, loud().size)
+    }
+
+    @Test fun historyRulesArePure() {
+        fun f(id: Long, at: Long) = DomovoiJson.decodeFromString(TimerFire.serializer(), fireJson(id, id, at))
+        assertFalse(historyRestarted(listOf(f(3, nowMs)), null, nowMs - 1))
+        assertFalse(historyRestarted(listOf(f(3, nowMs)), 40, null))
+        assertFalse(historyRestarted(listOf(f(41, nowMs)), 40, nowMs - 1))
+        assertFalse(historyRestarted(listOf(f(40, nowMs - 1)), 40, nowMs - 1))
+        assertTrue(historyRestarted(listOf(f(3, nowMs)), 40, nowMs - 1))
+        assertTrue(historyBehind(null, 5))
+        assertFalse(historyBehind(null, 0))
+        assertTrue(historyBehind(f(4, nowMs), 5))
+        assertFalse(historyBehind(f(5, nowMs), 5))
+        assertEquals(listOf("b|1|5"), forgetServer(listOf("a|1|5", "b|1|5", "a|2|6"), "a"))
+    }
+
     // ---- notifications off ------------------------------------------------------------
 
     @Test fun withNotificationsOffNothingPostsAndNothingStaysArmed() = runBlocking {
@@ -261,6 +332,32 @@ class AlertEngineTest {
         engine.syncMirror()
         assertEquals(key, store.mirror().serverKey)
         assertEquals(nowMs + 900_000, alarms.armed.getValue(1).trigger_at_ms)
+    }
+
+    /** A force-stop cancels every alarm the app set and leaves the stored
+     *  mirror listing them; the sync alone would arm only new or moved
+     *  timers. A cold start re-arms first (TimerAlerts.start). */
+    @Test fun aForceStopsLostAlarmsAreReArmedAtTheNextStart() = runBlocking {
+        answer("/api/timers", timersJson(nowMs, 1L to nowMs + 600_000, 2L to nowMs + 1_200_000))
+        engine.syncMirror()
+        assertEquals(setOf(1L, 2L), alarms.armed.keys)
+        alarms.armed.clear()                 // Settings > Force stop
+        engine.syncMirror()
+        assertEquals("the sync alone arms nothing it thinks is armed", emptySet<Long>(), alarms.armed.keys)
+        engine.rearm()
+        engine.syncMirror()
+        assertEquals(setOf(1L, 2L), alarms.armed.keys)
+    }
+
+    @Test fun theStartReArmsBeforeItSyncs() {
+        val src = listOf(
+            File("src/main/java/com/domovoi/app/alerts/TimerAlerts.kt"),
+            File("app/src/main/java/com/domovoi/app/alerts/TimerAlerts.kt"),
+        ).first { it.isFile }.readText()
+        val start = src.substring(src.indexOf("fun start()"), src.indexOf("fun onAppResumed()"))
+        val rearm = start.indexOf("engine.rearm()")
+        assertTrue("start() re-arms the stored mirror", rearm >= 0)
+        assertTrue(rearm < start.lastIndexOf("engine.syncMirror()"))
     }
 
     @Test fun aRebootReArmsOnlyWhatIsStillAhead() = runBlocking {

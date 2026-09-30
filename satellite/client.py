@@ -5198,6 +5198,12 @@ class Satellite:
                     # ever ended early; [listen] early_commit=false opts
                     # this room out.
                     "capture_control": self.cfg.early_commit,
+                    # A response_start ends whatever stop_playback was
+                    # stopping (see _handle_text_frame), so an announcement
+                    # after a reconnect or a failed turn plays. The core
+                    # warns in its journal for a satellite that does not
+                    # say so: it records such announcements as spoken.
+                    "announce_after_session_end": True,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if

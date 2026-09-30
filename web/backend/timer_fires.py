@@ -192,7 +192,9 @@ def fire_summary(fire: dict[str, Any]) -> str:
     * ``heard in garage, kitchen`` (+ `` · still announcing`` while a room
       is still waiting its turn)
     * ``announcing…`` — nobody has heard it yet, somebody is about to
-    * ``no satellite was online`` — nothing to announce it in
+    * ``not announced in any room`` — no room was going to announce it:
+      none was online, or every online room has "Only reminders for this
+      device" on (a reminder set with no room)
     * ``not heard in any room`` (+ `` (garage offline)`` when the origin
       room never came back)
     * any of those + `` · stopped in kitchen`` once acknowledged
@@ -205,7 +207,7 @@ def fire_summary(fire: dict[str, Any]) -> str:
     elif pending:
         s = "announcing…"
     elif not deliveries:
-        s = "no satellite was online"
+        s = "not announced in any room"
     else:
         origin = next((d for d in deliveries if d.get("is_origin")), None)
         s = "not heard in any room"

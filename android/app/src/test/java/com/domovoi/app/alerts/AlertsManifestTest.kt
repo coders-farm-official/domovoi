@@ -75,4 +75,34 @@ class AlertsManifestTest {
         val icon = moduleFile("src/main/res/drawable/ic_stat_timer.xml").readText()
         assertTrue(icon.contains("<vector"))
     }
+
+    private fun xml(rel: String): Document =
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(moduleFile(rel))
+
+    private fun excludedDomains(doc: Document, section: String): Set<String> {
+        val parts = doc.getElementsByTagName(section)
+        assertEquals("one <$section>", 1, parts.length)
+        val ex = (parts.item(0) as Element).getElementsByTagName("exclude")
+        return (0 until ex.length).map { (ex.item(it) as Element).getAttribute("domain") }.toSet()
+    }
+
+    /** From API 31 allowBackup=false stops cloud backup but NOT a
+     *  device-to-device transfer, which would copy the household token and
+     *  the alerts' DataStore (a reminder's words) to a new phone. */
+    @Test fun noDomainGoesToACloudBackupOrADeviceTransfer() {
+        val app = elements("application").single()
+        assertEquals("@xml/data_extraction_rules", app.attr("dataExtractionRules"))
+        assertEquals("@xml/backup_rules", app.attr("fullBackupContent"))
+        val every = setOf(
+            "root", "file", "database", "sharedpref", "external",
+            "device_root", "device_file", "device_database", "device_sharedpref",
+        )
+        val rules = xml("src/main/res/xml/data_extraction_rules.xml")
+        assertEquals(every, excludedDomains(rules, "cloud-backup"))
+        assertEquals(every, excludedDomains(rules, "device-transfer"))
+        assertEquals(0, rules.getElementsByTagName("include").length)
+        val legacy = xml("src/main/res/xml/backup_rules.xml")
+        assertTrue(excludedDomains(legacy, "full-backup-content")
+            .containsAll(setOf("root", "file", "database", "sharedpref", "external")))
+    }
 }

@@ -39,6 +39,17 @@ The pieces:
   NOTHING, and only an announcement that never reached the satellite
   (``AnnounceNotStarted``) goes back to pending.
 
+* **Acknowledged means done.** "Stop the timer" right after one went off
+  (:func:`ack_recent_fire`) stamps the fire: no room that joins later is
+  added, and no other room's waiting announcement starts — except the
+  origin's own, which only the origin room can stop (owner rule: "the
+  origin room always announces its own").
+
+* **Only a paired satellite hears the house.** A socket the core accepted
+  with no pairing token (strict pairing off) announces the timers set in
+  its own room and nothing else: a device on the LAN that names itself a
+  new room must not receive every room's reminder words.
+
 The wording (:func:`fire_line`): the origin room hears today's line ("Your
 10 minute timer is done." / "Reminder: call mom"); every other room hears
 where it came from ("From the garage: Your 10 minute timer is done." /
@@ -56,7 +67,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
@@ -86,10 +97,19 @@ RESUME_WITHIN_SEC = 600.0
 # "Stop the timer" this soon after a fire was spoken in the room
 # acknowledges it instead of cancelling anything.
 ACK_WITHIN_SEC = 30
+# A fire whose announcement is still waiting in this room (or that went off
+# here) counts as "just went off" for this long: a busy room's own
+# announcement can wait minutes while the phone has already rung.
+ACK_PENDING_WITHIN_SEC = 600
 # A first-sentence TTS failure is retried after this long, at most this
-# many attempts in all.
+# many attempts in all (per fire and room, across reconnects).
 TTS_RETRY_SEC = 5.0
 TTS_MAX_ATTEMPTS = 3
+# A ledger write that fails (a database blip) is tried again this often:
+# until the room's hard cap for a claim, and for at least this long for the
+# write that records how a room's announcement ended.
+LEDGER_RETRY_SEC = 1.0
+LEDGER_FINISH_BUDGET_SEC = 30.0
 # While V017 is missing the core looks for it again this often.
 PROBE_RETRY_SEC = 600.0
 # The retention prune runs at most this often.
@@ -114,8 +134,10 @@ TargetRow = tuple[str, bool, "str | None"]
 
 class AnnounceNotStarted(RuntimeError):
     """``StreamSession.announce`` sent nothing to the satellite: the room
-    started a turn (``reason='responding'``) or the first sentence would not
-    synthesize (``reason='tts_failed'``). Safe to try again."""
+    started a turn (``reason='responding'``), started listening or a call
+    (``'capturing'`` / ``'recording'`` / ``'in_call'``, for a caller that
+    defers to a capture), or the first sentence would not synthesize or
+    came out silent (``reason='tts_failed'``). Safe to try again."""
 
     def __init__(self, message: str, *, reason: str) -> None:
         super().__init__(message)
@@ -363,11 +385,17 @@ class FireLedger:
         return changed
 
     async def add_target(self, fire_id: int, room_id: str, is_origin: bool) -> bool:
+        """Add a late joiner. Nothing is added once someone acknowledged
+        the fire: "stop the timer" means nobody else needs to hear it (a
+        satellite back from a Wi-Fi drop, or every room after a restart)."""
         return await self._write(
             fire_id,
             """
             INSERT INTO timer_fire_deliveries (fire_id, room_id, is_origin)
-            VALUES (:f, :r, :o)
+            SELECT CAST(:f AS bigint), CAST(:r AS text), CAST(:o AS boolean)
+             WHERE CAST(:o AS boolean)
+                OR NOT EXISTS (SELECT 1 FROM timer_fires
+                                WHERE id = :f AND acked_at IS NOT NULL)
             ON CONFLICT (fire_id, room_id) DO NOTHING
             RETURNING 1
             """,
@@ -375,16 +403,51 @@ class FireLedger:
         )
 
     async def claim(self, fire_id: int, room_id: str) -> bool:
-        return await self._write(
-            fire_id,
-            """
-            UPDATE timer_fire_deliveries
-               SET outcome = 'sending', started_at = now(), attempts = attempts + 1
-             WHERE fire_id = :f AND room_id = :r AND outcome = 'pending'
-            RETURNING 1
-            """,
-            {"f": fire_id, "r": room_id},
-        )
+        """pending → sending, or False. A room other than the origin whose
+        row is still waiting when the fire has been acknowledged is
+        cancelled instead (it lost a race with the acknowledgement)."""
+        async with session_scope() as s:
+            cancelled = (
+                await s.execute(
+                    text(
+                        """
+                        UPDATE timer_fire_deliveries d
+                           SET outcome = 'cancelled',
+                               detail = 'acknowledged:' || COALESCE(f.acked_by, ''),
+                               finished_at = now()
+                          FROM timer_fires f
+                         WHERE f.id = d.fire_id AND d.fire_id = :f AND d.room_id = :r
+                           AND d.outcome = 'pending' AND NOT d.is_origin
+                           AND f.acked_at IS NOT NULL
+                        RETURNING 1
+                        """
+                    ),
+                    {"f": fire_id, "r": room_id},
+                )
+            ).first() is not None
+            if cancelled:
+                await _notify_fires(s, str(fire_id))
+                return False
+            claimed = (
+                await s.execute(
+                    text(
+                        """
+                        UPDATE timer_fire_deliveries
+                           SET outcome = 'sending', started_at = now(),
+                               attempts = attempts + 1
+                         WHERE fire_id = :f AND room_id = :r AND outcome = 'pending'
+                           AND (is_origin OR NOT EXISTS (
+                                   SELECT 1 FROM timer_fires
+                                    WHERE id = :f AND acked_at IS NOT NULL))
+                        RETURNING 1
+                        """
+                    ),
+                    {"f": fire_id, "r": room_id},
+                )
+            ).first() is not None
+            if claimed:
+                await _notify_fires(s, str(fire_id))
+        return claimed
 
     async def release(
         self, fire_id: int, room_id: str, detail: str, *, count_attempt: bool,
@@ -626,13 +689,30 @@ class MemoryFireLedger:
 
 
 async def ack_recent_fire(
-    session: AsyncSession, room_id: str, within_sec: int = ACK_WITHIN_SEC,
+    session: AsyncSession,
+    room_id: str,
+    within_sec: int = ACK_WITHIN_SEC,
+    *,
+    kind: str | None = None,
 ) -> int | None:
-    """If a fire was spoken in ``room_id`` in the last ``within_sec``
-    seconds and nobody acknowledged it yet, acknowledge it: stamp
-    ``acked_at``/``acked_by``, and cancel its announcements still waiting
-    in other rooms. Returns that fire's id, or None (nothing recent, or
-    V017 missing). Runs on the caller's session and transaction, so the
+    """If a fire (of ``kind``, when given) just went off for ``room_id``,
+    acknowledge it and return its id; else None (nothing recent, or V017
+    missing). "Just went off" is any of:
+
+    * it was announced here (sending, spoken or interrupted) in the last
+      ``within_sec`` seconds;
+    * it was set here and fired in the last ``within_sec`` seconds, however
+      its announcement here went (the phone and the dashboard rang too);
+    * its announcement here is still waiting its turn (a busy room), for a
+      fire under ``ACK_PENDING_WITHIN_SEC`` old that has not settled.
+
+    The first acknowledgement stamps ``acked_at``/``acked_by`` and cancels
+    the announcements still waiting elsewhere — except the origin room's
+    own, which only the origin can stop (owner rule 2: "the origin room
+    always announces its own"). A fire someone already acknowledged is
+    returned again (so a second "stop the timer", here or in another room,
+    deletes nothing either) and this room's own waiting announcement, if
+    any, is cancelled. Runs on the caller's session and transaction, so the
     NOTIFY goes out with the caller's commit.
 
     Why: "stop the timer" said right after the garage's timer was
@@ -648,54 +728,86 @@ async def ack_recent_fire(
     ).scalar()
     if not present:
         return None
+    pending_within = max(
+        float(ACK_PENDING_WITHIN_SEC),
+        float(settings.timer_announce_max_wait_sec) + float(settings.timer_offline_grace_sec),
+    )
     row = (
         await session.execute(
             text(
                 """
-                SELECT f.id
+                SELECT f.id, f.acked_at IS NOT NULL
                   FROM timer_fires f
-                  JOIN timer_fire_deliveries d ON d.fire_id = f.id
-                 WHERE d.room_id = :room
-                   AND d.outcome IN ('sending', 'spoken', 'interrupted')
-                   AND COALESCE(d.finished_at, d.started_at)
-                       >= now() - make_interval(secs => :within)
-                   AND f.acked_at IS NULL
+                  JOIN timer_fire_deliveries d
+                    ON d.fire_id = f.id AND d.room_id = :room
+                 WHERE (CAST(:kind AS text) IS NULL OR f.kind = CAST(:kind AS text))
+                   AND (
+                        (d.outcome IN ('sending', 'spoken', 'interrupted')
+                         AND COALESCE(d.finished_at, d.started_at)
+                             >= now() - make_interval(secs => :within))
+                     OR (d.is_origin
+                         AND f.fired_at >= now() - make_interval(secs => :within))
+                     OR (d.outcome = 'pending' AND f.settled_at IS NULL
+                         AND f.fired_at >= now() - make_interval(secs => :pending_within))
+                   )
                  ORDER BY f.fired_at DESC, f.id DESC
                  LIMIT 1
                 """
             ),
-            {"room": room_id, "within": float(within_sec)},
+            {"room": room_id, "within": float(within_sec), "kind": kind,
+             "pending_within": pending_within},
         )
     ).first()
     if row is None:
         return None
-    fire_id = int(row[0])
-    acked = (
+    fire_id, already = int(row[0]), bool(row[1])
+    detail = f"acknowledged:{room_id}"
+    if not already:
+        acked = (
+            await session.execute(
+                text(
+                    """
+                    UPDATE timer_fires SET acked_at = now(), acked_by = :room
+                     WHERE id = :f AND acked_at IS NULL
+                    RETURNING 1
+                    """
+                ),
+                {"f": fire_id, "room": room_id},
+            )
+        ).first()
+        if acked is not None:
+            await session.execute(
+                text(
+                    """
+                    UPDATE timer_fire_deliveries
+                       SET outcome = 'cancelled', detail = :detail, finished_at = now()
+                     WHERE fire_id = :f AND outcome = 'pending'
+                       AND (NOT is_origin OR room_id = :room)
+                    """
+                ),
+                {"f": fire_id, "detail": detail, "room": room_id},
+            )
+            await _notify_fires(session, str(fire_id))
+            log.info("timer fire %d acknowledged in room=%s", fire_id, room_id)
+            return fire_id
+    # Acknowledged already (here, or in another room a moment ago): nothing
+    # to cancel but this room's own announcement if it is still waiting.
+    mine = (
         await session.execute(
             text(
                 """
-                UPDATE timer_fires SET acked_at = now(), acked_by = :room
-                 WHERE id = :f AND acked_at IS NULL
+                UPDATE timer_fire_deliveries
+                   SET outcome = 'cancelled', detail = :detail, finished_at = now()
+                 WHERE fire_id = :f AND room_id = :room AND outcome = 'pending'
                 RETURNING 1
                 """
             ),
-            {"f": fire_id, "room": room_id},
+            {"f": fire_id, "detail": detail, "room": room_id},
         )
     ).first()
-    if acked is None:
-        return None
-    await session.execute(
-        text(
-            """
-            UPDATE timer_fire_deliveries
-               SET outcome = 'cancelled', detail = :detail, finished_at = now()
-             WHERE fire_id = :f AND outcome = 'pending'
-            """
-        ),
-        {"f": fire_id, "detail": f"acknowledged:{room_id}"},
-    )
-    await _notify_fires(session, str(fire_id))
-    log.info("timer fire %d acknowledged in room=%s", fire_id, room_id)
+    if mine is not None:
+        await _notify_fires(session, str(fire_id))
+    log.info("timer fire %d acknowledged again in room=%s", fire_id, room_id)
     return fire_id
 
 
@@ -708,6 +820,13 @@ class _Fire:
     ledger: Any
     fired_mono: float
     targets: list[str]
+    # First-sentence TTS failures per room, across that room's tasks: a
+    # reconnect starts a new task but never a fresh set of attempts.
+    tts_failures: dict[str, int] = field(default_factory=dict)
+    # Room-connected checks still working on this fire: sweep leaves the
+    # fire alone until they are done, so a room it is adding is never
+    # settled or recorded offline under it.
+    checking: int = 0
 
 
 def _iso(value: datetime) -> str:
@@ -752,7 +871,7 @@ class TimerDelivery:
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._noted: dict[tuple[int, str], str] = {}
         self._aux: set[asyncio.Task[None]] = set()
-        self._snapshot: set[str] = set()
+        self._warned_unpaired: set[str] = set()
         self._last_prune: float | None = None
         self._closed = False
 
@@ -780,6 +899,49 @@ class TimerDelivery:
     def _live(self, key: tuple[int, str]) -> bool:
         task = self._tasks.get(key)
         return task is not None and not task.done()
+
+    def _tracked(self, fire: _Fire) -> bool:
+        """``fire`` has not settled (it is still in ``_fires``)."""
+        return self._fires.get(fire.rec.fire_id) is fire
+
+    def _open(self, fire: _Fire) -> bool:
+        """Whether a room may still join ``fire``: it has not settled and its
+        grace deadline has not passed. A room-connected check asks this
+        before it reads anything; after each await it asks only
+        :meth:`_tracked` — the sweep holds off while the check runs
+        (``_Fire.checking``), so a room that connected inside the window is
+        never refused because the ledger read took past the deadline."""
+        if not self._tracked(fire):
+            return False
+        deadline = self._deadline(fire)
+        return deadline is None or self._clock() < deadline
+
+    def _house_wide(self, room_id: str, sess: Any) -> bool:
+        """Whether this session may announce OTHER rooms' fires. A socket
+        accepted with no pairing token (``StreamSession.token_authenticated``
+        False: strict pairing off, or the pairing check could not run) gets
+        its own room's only — any LAN device can open /v1/stream/<new name>,
+        and every room's reminder words go out in the frames. A session
+        object without the attribute (a test double) counts as paired."""
+        if getattr(sess, "token_authenticated", True) is not False:
+            return True
+        if room_id not in self._warned_unpaired:
+            self._warned_unpaired.add(room_id)
+            log.warning(
+                "room %s has no pairing token; it announces only its own timers "
+                "and reminders (pair it, or turn on SATELLITE_PAIRING_STRICT)",
+                room_id,
+            )
+        return False
+
+    def _may_hear(
+        self, room_id: str, origin: str | None, own_only: set[str], sess: Any,
+    ) -> bool:
+        """R1 plus the pairing rule: the origin always; another room when
+        its "Only reminders for this device" is off and it is paired."""
+        if room_id == origin:
+            return True
+        return is_target(room_id, origin, own_only) and self._house_wide(room_id, sess)
 
     async def ensure_ledger(self) -> Any:
         """The ledger to use: V017 when its tables exist, else the
@@ -819,15 +981,14 @@ class TimerDelivery:
 
     def _targets_for(self, origin: str | None, own_only: set[str]) -> list[TargetRow]:
         """The rooms a fire goes to right now (R1): the origin always
-        (``offline`` when it isn't connected), plus every connected room
-        whose "Only reminders for this device" is off."""
-        online = set(self._sessions().keys())
-        self._snapshot = online
+        (``offline`` when it isn't connected), plus every connected, paired
+        room whose "Only reminders for this device" is off."""
+        sessions = dict(self._sessions())
         out: list[TargetRow] = []
         if origin is not None:
-            out.append((origin, True, None if origin in online else "offline"))
-        for room in sorted(online):
-            if room != origin and is_target(room, origin, own_only):
+            out.append((origin, True, None if origin in sessions else "offline"))
+        for room in sorted(sessions):
+            if room != origin and self._may_hear(room, origin, own_only, sessions[room]):
                 out.append((room, False, None))
         return out
 
@@ -838,26 +999,32 @@ class TimerDelivery:
         sweep. Returns how many fired."""
         ledger = await self.ensure_ledger()
         if not self._resumed:
-            self._resumed = True
             try:
                 await self.resume_unsettled()
+                self._resumed = True
             except Exception as e:  # noqa: BLE001 — never block firing
+                # Tried again next tick: fires from before the restart must
+                # not stay unsettled because the database blinked once.
                 log.warning("timer fires: resuming announcements after a restart failed: %s", e)
         popped = await ledger.pop_due(self._targets_for)
         sessions = self._sessions()
+        new: list[_Fire] = []
         for rec, rows in popped:
             self._log_fired(rec)
             fire = _Fire(rec=rec, ledger=ledger, fired_mono=self._clock(),
                          targets=[r[0] for r in rows])
             self._fires[rec.fire_id] = fire
+            new.append(fire)
             self._emit_fired(fire)
             for room, _is_origin, outcome, _detail in rows:
                 if outcome == "pending" and room in sessions:
                     self._start(fire, room)
-        if popped:
-            # A room that connected while the pop ran missed the snapshot.
-            for room in set(sessions) - self._snapshot:
-                self.on_room_connected(room)
+        # A room that connected while the pop ran (its own room-connected
+        # check found no fire yet) is missing from some fire's targets: look
+        # again. A room left out on purpose (its flag, no pairing) is looked
+        # at and left out again.
+        for room in sorted({r for r in sessions for f in new if r not in f.targets}):
+            self.on_room_connected(room)
         await self.sweep()
         return len(popped)
 
@@ -889,12 +1056,16 @@ class TimerDelivery:
     # ── one room ────────────────────────────────────────────────────────
 
     def _start(self, fire: _Fire, room_id: str) -> bool:
-        """At most one live task per (fire, room)."""
+        """At most one live task per (fire, room). The task's busy caps
+        count from now, not from when it gets the room's turn: a room with
+        three fires queued behind a long call gives up on all three at the
+        cap, not at three times it."""
         key = (fire.rec.fire_id, room_id)
         if self._closed or self._live(key):
             return False
         task = asyncio.create_task(
-            self._deliver(fire, room_id), name=f"timer-fire-{fire.rec.fire_id}-{room_id}",
+            self._deliver(fire, room_id, self._clock()),
+            name=f"timer-fire-{fire.rec.fire_id}-{room_id}",
         )
         self._tasks[key] = task
         task.add_done_callback(lambda t, key=key: self._task_done(key, t))
@@ -908,18 +1079,62 @@ class TimerDelivery:
                         key[0], key[1], task.exception())
 
     async def _note(self, fire: _Fire, room_id: str, reason: str) -> None:
+        """Record why the room is waiting. Informational only: a failed
+        write is logged and tried again on the next change, and never stops
+        the delivery."""
         key = (fire.rec.fire_id, room_id)
         if self._noted.get(key) == reason:
             return
         self._noted[key] = reason
-        await fire.ledger.note_detail(fire.rec.fire_id, room_id, reason)
+        try:
+            await fire.ledger.note_detail(fire.rec.fire_id, room_id, reason)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a database blip
+            self._noted.pop(key, None)
+            log.debug("timer fire %d room=%s: noting %s failed: %s",
+                      fire.rec.fire_id, room_id, reason, e)
+
+    async def _retrying(
+        self, fire: _Fire, room_id: str, what: str, op: Callable[[], Any], *,
+        until: float, needs_room: bool,
+    ) -> Any:
+        """``await op()``, tried again every ``LEDGER_RETRY_SEC`` while it
+        raises, until ``until`` (and, when ``needs_room``, while the room is
+        still connected). One failed write used to end the room's delivery
+        for good, and the sweep then recorded an online room 'offline'."""
+        while True:
+            try:
+                return await op()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — a database blip
+                if self._clock() >= until or (
+                    needs_room and room_id not in self._sessions()
+                ):
+                    raise
+                log.debug("timer fire %d room=%s: %s failed, trying again: %s",
+                          fire.rec.fire_id, room_id, what, e)
+                await self._sleep(LEDGER_RETRY_SEC)
 
     async def _finish(
         self, fire: _Fire, room_id: str, outcome: str, detail: str | None,
-        spoken_text: str | None = None,
+        spoken_text: str | None = None, *, retry_until: float | None = None,
     ) -> None:
         self._noted.pop((fire.rec.fire_id, room_id), None)
-        if await fire.ledger.finish(fire.rec.fire_id, room_id, outcome, detail, spoken_text):
+        fid = fire.rec.fire_id
+
+        async def _op() -> bool:
+            return await fire.ledger.finish(fid, room_id, outcome, detail, spoken_text)
+
+        if retry_until is None:
+            changed = await _op()
+        else:
+            changed = await self._retrying(
+                fire, room_id, "recording the outcome", _op,
+                until=retry_until, needs_room=False,
+            )
+        if changed:
             self._log_outcome(fire, room_id, outcome, detail)
 
     def _log_outcome(self, fire: _Fire, room_id: str, outcome: str, detail: str | None) -> None:
@@ -932,20 +1147,30 @@ class TimerDelivery:
             max(0.0, self._clock() - fire.fired_mono),
         )
 
-    async def _deliver(self, fire: _Fire, room_id: str) -> None:
+    async def _deliver(self, fire: _Fire, room_id: str, queued_at: float) -> None:
         """Wait until the room can take it, claim the room's row, speak.
-        See contract §3.4 and R3/R6/R7."""
+        See contract §3.4 and R3/R6/R7. The per-room lock keeps due order;
+        the caps count from ``queued_at``, when this task began waiting."""
         lock = self._room_locks.setdefault(room_id, asyncio.Lock())
         async with lock:
-            await self._deliver_locked(fire, room_id)
+            await self._deliver_locked(fire, room_id, queued_at)
 
-    async def _deliver_locked(self, fire: _Fire, room_id: str) -> None:
+    async def _deliver_locked(self, fire: _Fire, room_id: str, queued_at: float) -> None:
         rec, ledger = fire.rec, fire.ledger
         fid = rec.fire_id
-        start = self._clock()
-        soft_until = start + float(settings.timer_announce_busy_wait_sec)
-        hard_until = start + float(settings.timer_announce_max_wait_sec)
-        tts_failures = 0
+        soft_until = queued_at + float(settings.timer_announce_busy_wait_sec)
+        hard_until = queued_at + float(settings.timer_announce_max_wait_sec)
+
+        def _end_budget() -> float:
+            return max(hard_until, self._clock() + LEDGER_FINISH_BUDGET_SEC)
+
+        async def _release(detail: str, count_attempt: bool) -> None:
+            await self._retrying(
+                fire, room_id, "releasing the claim",
+                lambda: ledger.release(fid, room_id, detail, count_attempt=count_attempt),
+                until=_end_budget(), needs_room=False,
+            )
+
         try:
             while True:
                 forced: str | None = None
@@ -961,14 +1186,19 @@ class TimerDelivery:
                 if block:
                     reason, hard = block
                     if now >= hard_until:
-                        await self._finish(fire, room_id, "busy_timeout", reason)
+                        await self._finish(fire, room_id, "busy_timeout", reason,
+                                           retry_until=_end_budget())
                         return
                     if hard or now < soft_until:
                         await self._note(fire, room_id, reason)
                         await self._sleep(self.poll_sec)
                         continue
                     forced = reason
-                if not await ledger.claim(fid, room_id):
+                if not await self._retrying(
+                    fire, room_id, "claiming the room",
+                    lambda: ledger.claim(fid, room_id),
+                    until=hard_until, needs_room=True,
+                ):
                     return  # spoken, cancelled or acknowledged elsewhere
                 self._noted.pop((fid, room_id), None)
                 line = fire_line(
@@ -978,41 +1208,51 @@ class TimerDelivery:
                     late_sec=(self._wall() - rec.due_at).total_seconds(),
                 )
                 try:
-                    await sess.announce(line)
+                    # defer_to_capture: a capture, a call or a wake-word
+                    # recording that began after the check above (the claim
+                    # is a database round trip) makes announce() step aside
+                    # instead of talking over it.
+                    await sess.announce(line, defer_to_capture=True)
                 except AnnounceNotStarted as e:
                     if e.reason == "tts_failed":
-                        tts_failures += 1
-                        if tts_failures >= TTS_MAX_ATTEMPTS:
-                            await self._finish(fire, room_id, "failed", "tts_failed")
+                        failures = fire.tts_failures.get(room_id, 0) + 1
+                        fire.tts_failures[room_id] = failures
+                        if failures >= TTS_MAX_ATTEMPTS:
+                            await self._finish(fire, room_id, "failed", "tts_failed",
+                                               retry_until=_end_budget())
                             return
-                        await ledger.release(fid, room_id, "tts_failed", count_attempt=True)
+                        await _release("tts_failed", True)
                         self._noted[(fid, room_id)] = "tts_failed"
                         await self._sleep(TTS_RETRY_SEC)
                         continue
-                    # A turn started between the check and the call: nothing
-                    # was sent, wait for it like any other busy moment.
+                    # A turn or a capture started between the check and the
+                    # call: nothing was sent, wait for it like any other
+                    # busy moment.
                     reason = e.reason if e.reason else "responding"
-                    await ledger.release(fid, room_id, reason, count_attempt=False)
+                    await _release(reason, False)
                     self._noted[(fid, room_id)] = reason
                     await self._sleep(self.poll_sec)
                     continue
                 except AnnounceInterrupted:
-                    await self._finish(fire, room_id, "interrupted", None, line)
+                    await self._finish(fire, room_id, "interrupted", None, line,
+                                       retry_until=_end_budget())
                     return
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:  # noqa: BLE001 — the socket died mid-send
                     log.debug("timer fire %d room=%s: announce failed: %s", fid, room_id, e)
-                    await self._finish(fire, room_id, "failed", "send_failed", line)
+                    await self._finish(fire, room_id, "failed", "send_failed", line,
+                                       retry_until=_end_budget())
                     return
                 await self._finish(
                     fire, room_id, "spoken",
                     f"forced_over:{forced}" if forced else None, line,
+                    retry_until=_end_budget(),
                 )
                 return
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001 — a ledger write failed
+        except Exception as e:  # noqa: BLE001 — a ledger write kept failing
             log.warning("timer fire %d room=%s: delivery stopped: %s", fid, room_id, e)
 
     # ── reconnects, deadlines, restarts ─────────────────────────────────
@@ -1034,31 +1274,56 @@ class TimerDelivery:
 
     async def _room_connected(self, room_id: str) -> None:
         own_only: dict[int, set[str]] = {}
-        for fire in list(self._fires.values()):
-            deadline = self._deadline(fire)
-            if deadline is not None and self._clock() >= deadline:
-                continue
-            fid = fire.rec.fire_id
-            if self._live((fid, room_id)):
-                continue
-            try:
-                rows = await fire.ledger.rows(fid)
-                row = next((r for r in rows if r[0] == room_id), None)
-                if row is not None:
-                    if row[2] == "pending":
-                        self._start(fire, room_id)
-                    continue
-                key = id(fire.ledger)
-                if key not in own_only:
-                    own_only[key] = await fire.ledger.own_only_rooms()
-                if not is_target(room_id, fire.rec.origin_room_id, own_only[key]):
-                    continue
-                if await fire.ledger.add_target(
-                    fid, room_id, room_id == fire.rec.origin_room_id,
-                ):
-                    self._start(fire, room_id)
-            except Exception as e:  # noqa: BLE001
-                log.warning("timer fire %d: adding room=%s failed: %s", fid, room_id, e)
+        todo = list(self._fires.values())
+        # Hold every fire this check looks at: sweep leaves a fire alone
+        # while a room is being added to it, so it is never settled (or the
+        # room's fresh row recorded offline) between the check and the start.
+        for fire in todo:
+            fire.checking += 1
+        try:
+            while todo:
+                fire = todo.pop(0)
+                try:
+                    await self._connect_fire(fire, room_id, own_only)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("timer fire %d: adding room=%s failed: %s",
+                                fire.rec.fire_id, room_id, e)
+                finally:
+                    fire.checking -= 1
+        finally:
+            for fire in todo:
+                fire.checking -= 1
+
+    async def _connect_fire(
+        self, fire: _Fire, room_id: str, own_only: dict[int, set[str]],
+    ) -> None:
+        fid = fire.rec.fire_id
+        if not self._open(fire) or self._live((fid, room_id)):
+            return
+        rows = await fire.ledger.rows(fid)
+        row = next((r for r in rows if r[0] == room_id), None)
+        sess = self._sessions().get(room_id)
+        if row is not None:
+            # Its row is waiting (it dropped while it waited, or the core
+            # restarted): pick it up again — never another room's fire for
+            # a socket that came back without a pairing token.
+            if (
+                row[2] == "pending"
+                and (row[1] or self._house_wide(room_id, sess))
+                and self._tracked(fire)
+            ):
+                self._start(fire, room_id)
+            return
+        key = id(fire.ledger)
+        if key not in own_only:
+            own_only[key] = await fire.ledger.own_only_rooms()
+        if not self._may_hear(room_id, fire.rec.origin_room_id, own_only[key], sess):
+            return
+        if not self._tracked(fire):
+            return
+        if await fire.ledger.add_target(fid, room_id, room_id == fire.rec.origin_room_id):
+            if self._tracked(fire):
+                self._start(fire, room_id)
 
     async def sweep(self) -> None:
         """Apply the grace deadlines (R5), settle what is finished, and
@@ -1067,6 +1332,10 @@ class TimerDelivery:
         for fire in list(self._fires.values()):
             deadline = self._deadline(fire)
             if deadline is None or now < deadline:
+                continue
+            if fire.checking:
+                continue  # a room is being added right now: next sweep
+            if self._fires.get(fire.rec.fire_id) is not fire:
                 continue
             fid = fire.rec.fire_id
             try:

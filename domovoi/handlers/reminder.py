@@ -695,7 +695,24 @@ class ReminderHandler(Handler):
         # 1. label given → DELETE WHERE label LIKE :phrase% AND room_id = X
         #    AND message IS NOT NULL. Substring match because Whisper's
         #    transcript rarely matches the original label exactly.
-        # 2. no label → DELETE all reminders in this room.
+        # 2. no label → DELETE all reminders in this room — unless a
+        #    reminder just went off here: every room announces every room's
+        #    reminders now, and "cancel that reminder" right after hearing
+        #    "Reminder from the garage: call mom" means "I heard it", not
+        #    "delete this room's own reminders". Acknowledge that fire (the
+        #    timer handler does the same for "stop the timer") and delete
+        #    nothing.
+        if not label_phrase and ctx.room_id is not None:
+            from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
+
+            if await ack_recent_fire(
+                session, ctx.room_id, within_sec=ACK_WITHIN_SEC, kind="reminder",
+            ) is not None:
+                return Response(
+                    text="Okay.",
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
         if label_phrase:
             result = await session.execute(
                 text(

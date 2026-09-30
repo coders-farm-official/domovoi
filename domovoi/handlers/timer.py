@@ -58,6 +58,16 @@ def _elsewhere_hint(label: str, rooms: list[str]) -> str:
     )
 
 
+def _tool_true(raw: object) -> bool:
+    """A tool call's boolean, strictly: ``True`` or the string "true". The
+    Ollama route hands arguments over unconverted and small models quote
+    booleans, so ``bool("false")`` — True — made a room's "cancel the timer"
+    delete every plain timer in the house."""
+    if raw is True:
+        return True
+    return isinstance(raw, str) and raw.strip().lower() == "true"
+
+
 def _format_duration(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds} second{'s' if seconds != 1 else ''}"
@@ -156,7 +166,7 @@ class TimerHandler(Handler):
             label = label.strip() if isinstance(label, str) else None
             return await self._cancel(
                 label=label or None,
-                everywhere=bool(args.get("everywhere")),
+                everywhere=_tool_true(args.get("everywhere")),
                 ctx=ctx,
                 session=session,
             )
@@ -238,13 +248,18 @@ class TimerHandler(Handler):
     ) -> Response:
         # "Stop the timer" right after one went off in this room means "I
         # heard it": acknowledge that fire (which also stops it being
-        # announced in rooms still waiting their turn) and cancel nothing.
-        # Otherwise a kitchen "stop the timer" after the garage's timer was
-        # announced there deleted the kitchen's own running timer.
+        # announced in rooms still waiting their turn) and cancel nothing —
+        # also when another room, or this one, acknowledged it a moment
+        # ago. Otherwise a kitchen "stop the timer" after the garage's timer
+        # was announced there deleted the kitchen's own running timer. Only
+        # a TIMER that went off counts: after a reminder, "cancel the
+        # timer" still cancels this room's timer.
         if label is None and not everywhere and ctx.room_id is not None:
             from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
 
-            if await ack_recent_fire(session, ctx.room_id, within_sec=ACK_WITHIN_SEC) is not None:
+            if await ack_recent_fire(
+                session, ctx.room_id, within_sec=ACK_WITHIN_SEC, kind="timer",
+            ) is not None:
                 return Response(
                     text="Okay.", session_id=ctx.session_id, matched_handler=self.name,
                 )

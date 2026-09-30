@@ -25,6 +25,10 @@ import kotlinx.serialization.json.Json
 //                   phone has posted, so the live path and the alarm path
 //                   post one timer once between them
 //   fires_seen      {serverKey: the highest fire id this phone has processed}
+//   fires_seen_at   {serverKey: when that fire went off}, so a history whose
+//                   ids started again (a rebuilt or restored database, a
+//                   reinstall on the same address) is noticed and not
+//                   silently skipped up to the old id
 //   mirror          the local alarm mirror: which timers have an alarm set,
 //                   and the words to show when one rings (TimerAlarmMirror)
 //   hint_dismissed  Home's "Timer alerts are off on this phone" said "not now"
@@ -46,6 +50,7 @@ internal const val CATCH_UP_WINDOW_MS = 30 * 60 * 1000L
 
 private val alertedSerializer = ListSerializer(String.serializer())
 private val seenSerializer = MapSerializer(String.serializer(), Long.serializer())
+private val seenAtSerializer = MapSerializer(String.serializer(), String.serializer())
 
 /** Never throws: a corrupt or absent blob is an empty book. */
 internal fun decodeAlerted(raw: String?): List<String> =
@@ -74,8 +79,37 @@ internal fun decodeSeen(raw: String?): Map<String, Long> =
 
 internal fun encodeSeen(seen: Map<String, Long>): String = Json.encodeToString(seenSerializer, seen)
 
-/** What to post from a batch of fires, and the seen id afterwards. */
-internal data class FirePlan(val post: List<TimerFire>, val seen: Long)
+internal fun decodeSeenAt(raw: String?): Map<String, String> =
+    runCatching { Json.decodeFromString(seenAtSerializer, raw ?: "{}") }.getOrDefault(emptyMap())
+
+internal fun encodeSeenAt(seenAt: Map<String, String>): String = Json.encodeToString(seenAtSerializer, seenAt)
+
+/** The alerted book without [serverKey]'s entries: its timer ids started
+ *  again with its fire history, so an old entry would hush a new timer. */
+internal fun forgetServer(entries: List<String>, serverKey: String): List<String> =
+    entries.filterNot { it.startsWith("$serverKey|") }
+
+/**
+ * Whether this batch shows the server's fire history started again: a fire
+ * at or below the remembered id [seen] went off AFTER the remembered one
+ * ([seenAtMs]). Ids only grow within one history.
+ */
+internal fun historyRestarted(fires: List<TimerFire>, seen: Long?, seenAtMs: Long?): Boolean {
+    if (seen == null || seenAtMs == null) return false
+    return fires.any { f -> f.id <= seen && (isoMs(f.fired_at)?.let { it > seenAtMs } == true) }
+}
+
+/**
+ * A catch-up past [seen] found nothing: whether the server's newest fire
+ * ([newest], null when it has none) is BEHIND what this phone remembers,
+ * i.e. another history answers on the same address.
+ */
+internal fun historyBehind(newest: TimerFire?, seen: Long): Boolean =
+    if (newest == null) seen > 0 else newest.id < seen
+
+/** What to post from a batch of fires, and the seen id (and when that fire
+ *  went off, when the batch says) afterwards. */
+internal data class FirePlan(val post: List<TimerFire>, val seen: Long, val seenAt: String? = null)
 
 /**
  * Which of [fires] to post, given the highest id already processed for
@@ -94,15 +128,18 @@ internal data class FirePlan(val post: List<TimerFire>, val seen: Long)
 internal fun planFires(fires: List<TimerFire>, seen: Long?, serverNowMs: Long, maxAgeMs: Long): FirePlan {
     fun age(f: TimerFire): Long? = isoMs(f.fired_at)?.let { serverNowMs - it }
     val maxId = fires.maxOfOrNull { it.id } ?: 0L
+    fun atOf(id: Long): String? = fires.firstOrNull { it.id == id }?.fired_at
     if (seen == null) {
         val base = fires.filter { f -> age(f).let { it == null || it > FIRST_RUN_WINDOW_MS } }
             .maxOfOrNull { it.id } ?: 0L
         val post = fires.filter { f -> f.id > base && age(f).let { it != null && it <= FIRST_RUN_WINDOW_MS } }
-        return FirePlan(post.sortedBy { it.id }, maxOf(base, maxId))
+        val next = maxOf(base, maxId)
+        return FirePlan(post.sortedBy { it.id }, next, atOf(next))
     }
     val fresh = fires.filter { it.id > seen }
     val post = fresh.filter { f -> age(f).let { it != null && it <= maxAgeMs } }
-    return FirePlan(post.sortedBy { it.id }, maxOf(seen, maxId))
+    val next = maxOf(seen, maxId)
+    return FirePlan(post.sortedBy { it.id }, next, atOf(next))
 }
 
 /** The `alerts` DataStore: one file, app-private, beside the app's own. */
@@ -113,6 +150,7 @@ class AlertStore(private val ds: DataStore<Preferences>) {
 
     private val kAlerted = stringPreferencesKey("alerted")
     private val kSeen = stringPreferencesKey("fires_seen")
+    private val kSeenAt = stringPreferencesKey("fires_seen_at")
     private val kMirror = stringPreferencesKey("mirror")
     private val kHint = booleanPreferencesKey("hint_dismissed")
 
@@ -137,8 +175,39 @@ class AlertStore(private val ds: DataStore<Preferences>) {
 
     suspend fun seen(serverKey: String): Long? = decodeSeen(ds.data.first()[kSeen])[serverKey]
 
-    suspend fun setSeen(serverKey: String, id: Long) {
-        ds.edit { p -> p[kSeen] = encodeSeen(decodeSeen(p[kSeen]) + (serverKey to id)) }
+    /** When the fire [seen] names went off (null: not known, e.g. stored
+     *  by an earlier build). */
+    suspend fun seenAt(serverKey: String): String? = decodeSeenAt(ds.data.first()[kSeenAt])[serverKey]
+
+    /** Record [id] as processed. [at] (its fired_at) replaces the stored
+     *  time when given; an id that moved without one drops it. */
+    suspend fun setSeen(serverKey: String, id: Long, at: String? = null) {
+        ds.edit { p ->
+            val ids = decodeSeen(p[kSeen])
+            val before = ids[serverKey]
+            p[kSeen] = encodeSeen(ids + (serverKey to id))
+            val times = decodeSeenAt(p[kSeenAt])
+            p[kSeenAt] = encodeSeenAt(
+                when {
+                    at != null -> times + (serverKey to at)
+                    before != id -> times - serverKey
+                    else -> times
+                },
+            )
+        }
+    }
+
+    /** The server's fire history started again: forget where this phone
+     *  was in it, and which of its timers were posted (their ids restart
+     *  too), so the next read is a first run. */
+    suspend fun startOver(serverKey: String) {
+        markLock.withLock {
+            ds.edit { p ->
+                p[kSeen] = encodeSeen(decodeSeen(p[kSeen]) - serverKey)
+                p[kSeenAt] = encodeSeenAt(decodeSeenAt(p[kSeenAt]) - serverKey)
+                p[kAlerted] = encodeAlerted(forgetServer(decodeAlerted(p[kAlerted]), serverKey))
+            }
+        }
     }
 
     suspend fun mirror(): MirrorBook = decodeMirror(ds.data.first()[kMirror])

@@ -49,6 +49,13 @@ Client → Server
                            does the server ever end a capture early — for any
                            other client the reply would play into a capture
                            that is still open.
+                           `announce_after_session_end` (optional, default
+                           false) says a `response_start` ends whatever
+                           `stop_playback` was stopping, so an announcement
+                           after a reconnect plays (satellite 06f486b). The
+                           server logs a WARNING per connection without it:
+                           it cannot hear that such a satellite played
+                           silence and records the announcement as spoken.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
                             "utt":N}
                            — `utt` (optional): the satellite's own number for
@@ -950,6 +957,12 @@ class StreamSession:
         # (V002) — the receive loop breaks so a rejected impostor's socket
         # tears down promptly after the error frame + close.
         self._pairing_refused = False
+        # Whether the hello's pairing check matched (or claimed) this room
+        # with a token. False for a socket accepted with none (strict
+        # pairing off, or the check could not run): such a socket announces
+        # only its own room's timers and reminders (timer_delivery.py), since
+        # any LAN device can open /v1/stream/<a new room name>.
+        self.token_authenticated = False
         self._response_task: asyncio.Task[None] | None = None
         # ── Out-of-turn announcements (announce(), announce_block) ────
         # `_playout_until`: monotonic estimate of when the audio already
@@ -1111,6 +1124,11 @@ class StreamSession:
         # eviction, but it's still useful for ops to see "kitchen
         # reconnected" in the log rather than silently swapping.
         existing = self.ws.app.state.active_sessions.get(self.room_id)
+        # Registered from here on, so a timer delivery can see this session
+        # before `ready` goes out: count the handshake as `connecting` too,
+        # never as an idle room an announcement may start in. Set again
+        # when `ready` is sent.
+        self._connected_at = time.monotonic()
         self.ws.app.state.active_sessions[self.room_id] = self
         if existing is not None and existing is not self:
             log.info(
@@ -1945,6 +1963,10 @@ class StreamSession:
                                         token to bind to, so a tokenless
                                         hello is refused rather than parked.
 
+        Only cases 1 (paired) and 2 set ``token_authenticated``; a socket
+        accepted by case 5, or by the lenient fallback when the check itself
+        fails, announces only its own room's timers and reminders.
+
         On a REFUSE we send a text ``error`` frame ({reason:"pairing_rejected"})
         and provision/relay NOTHING — the caller closes the socket.
         """
@@ -2001,10 +2023,12 @@ class StreamSession:
                             "pairing: room=%s paired (trust-on-first-use)",
                             self.room_id,
                         )
+                        self.token_authenticated = True
                         return True
                     if secrets.compare_digest(row[0], token_hash):
                         # Case 2 — token matches the paired hash.
                         await repo.touch_last_seen(self.room_id)
+                        self.token_authenticated = True
                         return True
                     # Case 3 — a token, but the WRONG one.
                     return await _reject("pairing_token mismatch (possible impostor)")
@@ -2021,6 +2045,8 @@ class StreamSession:
                     return await _reject(
                         "no pairing_token and strict pairing is enabled"
                     )
+                # Accepted, but not token-authenticated: it hears only its
+                # own room's timers and reminders.
                 log.info(
                     "pairing: room=%s connected without a token "
                     "(older/unpaired; strict pairing off)",
@@ -2122,6 +2148,18 @@ class StreamSession:
             # (see the module docstring).
             self._speech_hints = bool(ctrl.get("speech_pause", False))
             self._capture_control = bool(ctrl.get("capture_control", False))
+            # A satellite from before 06f486b drops the audio of every
+            # announcement after a reconnect (its stop_playback latch stays
+            # set) while the core records it as spoken — and a reconnect is
+            # exactly when a timer's grace delivery lands. Its hello lacks
+            # this flag; say so once per connection, next to the release
+            # note's "Upgrade each satellite".
+            if not ctrl.get("announce_after_session_end"):
+                log.warning(
+                    "room %s runs satellite code without the announcement fix: "
+                    "timer and reminder announcements after a reconnect will be "
+                    "silent until %s is upgraded", self.room_id, self.room_id,
+                )
             # Persist the type for offline dashboard display — but ONLY when
             # the frame carried it explicitly, so an old client that omits
             # the field never resets an adoption-preseeded row to 'voice'.
@@ -3920,7 +3958,31 @@ class StreamSession:
             return ("settling", False)
         return None
 
-    async def announce(self, text: str) -> None:
+    def _capture_block(self, now: float | None = None) -> str | None:
+        """The part of ``announce_block`` an announcement already under way
+        re-checks: the room is listening (a live capture), in a call, or
+        recording wake-word clips. None when it is none of those."""
+        if now is None:
+            now = time.monotonic()
+        if self.dropin_peer is not None:
+            return "in_call"
+        if self.wake_recording is not None:
+            return "recording"
+        if self.utterance_active and now - self._last_audio_at < ANNOUNCE_CAPTURE_FRESH_SEC:
+            return "capturing"
+        return None
+
+    def _refuse_during_capture(self) -> None:
+        """announce(defer_to_capture=True): nothing has been sent yet, and
+        the room is listening, in a call or recording — step aside."""
+        reason = self._capture_block()
+        if reason is not None:
+            log.info("intercom: room=%s %s, deferring announce", self.room_id, reason)
+            raise AnnounceNotStarted(
+                f"room {self.room_id} {reason}, announce deferred", reason=reason,
+            )
+
+    async def announce(self, text: str, *, defer_to_capture: bool = False) -> None:
         """Inject a TTS-synthesized announcement into this Pi's stream.
 
         Reuses the normal response wire format (response_start →
@@ -3945,6 +4007,21 @@ class StreamSession:
         capture or a barge-in cancels, exactly as it cancels a reply; the
         satellite then gets an interrupted ``response_end`` and this raises
         ``AnnounceInterrupted`` (it had started playing: counts as heard).
+
+        ``defer_to_capture`` (the timer delivery passes it): also refuse,
+        with ``AnnounceNotStarted(reason='capturing'|'in_call'|'recording')``,
+        when the room is listening, in a call or recording wake-word clips —
+        checked on entry and again once the first sentence is synthesized,
+        right before the first frame. The caller checked ``announce_block``
+        first, but a capture can begin in the gap (a database round trip),
+        and an announcement's ``response_end`` then releases the
+        satellite's wait for the real reply. Intercom, the admin announce
+        and ``sdk.speech`` keep today's behaviour.
+
+        A first sentence that synthesizes to no audio at all (every TTS
+        engine down: the client returns an empty WAV) raises
+        ``AnnounceNotStarted(reason='tts_failed')`` instead of sending a
+        silent response and reporting it delivered.
 
         After the announcement plays, if the room had music recorded for
         auto-resume, we emit a music_start so the Pi respawns mpg123 —
@@ -3972,6 +4049,8 @@ class StreamSession:
                     f"room {self.room_id} mid-response, announce skipped",
                     reason="responding",
                 )
+            if defer_to_capture:
+                self._refuse_during_capture()
 
             tts = get_tts_client()
             sentences = _split_sentences(text) or [text]
@@ -3989,6 +4068,17 @@ class StreamSession:
                     f"room {self.room_id}: announcement TTS failed: {e}",
                     reason="tts_failed",
                 ) from e
+            if not first_pcm:
+                # RealTTSClient answers an empty WAV when every engine
+                # failed. Sending it would be a silent "announcement" the
+                # caller counts as heard.
+                log.warning("intercom: TTS produced no audio for room=%s", self.room_id)
+                raise AnnounceNotStarted(
+                    f"room {self.room_id}: announcement TTS produced no audio",
+                    reason="tts_failed",
+                )
+            if defer_to_capture:
+                self._refuse_during_capture()
             # A capture that began while the first sentence synthesized would
             # have cut the announcement off anyway, and nothing has been sent
             # yet: step aside rather than talk over it.

@@ -15,7 +15,9 @@ right after the announce block. What these tests pin:
   ``reportMutationFailure`` with the box left as it was;
 * it works for an offline room (no admin check, no online check);
 * the Timers tab: a reminder the server masked (no household credential)
-  reads ``reminder (words hidden)``, and the "recently fired here" list.
+  reads ``reminder (words hidden)``, and the "recently fired here" list;
+  on a shared screen a reminder's words show in neither (``reminder``);
+* the switch is a 44px target on a phone.
 
 Driven by domovoi/tests/jsx_interact_harness.js (the dashboard's own
 Babel, a small stateful React); the page's calls are scripted.
@@ -158,6 +160,25 @@ SCENARIOS = {
                   ".map((e) => e.text);"
                   " return { cells, fired, hooks: h.hookCalls };",
     },
+    # A shared screen (the kitchen tablet) holding the household token: the
+    # server sends the words, the screen keeps them to itself.
+    "timers_tab_shared": {
+        "files": FILES, "component": "RoomTimersBody",
+        "props": {"room": "kitchen"}, "fnProps": ["fire"],
+        "setup": SETUP + "DeviceIdentity = { sharedScreen: () => true };",
+        "api": {
+            "GET /api/satellites/kitchen/timers": [_OPEN_REMINDER_ROW, _TIMER_ROW],
+            "GET /api/timers/fires": {"server_now": _now_iso(), "fires": [
+                _fire(4, kind="reminder", is_reminder=True, label="call mom", message="call mom"),
+                _fire(3),
+            ]},
+        },
+        "script": "h.render(); await h.settle(); h.rerender();"
+                  " const cells = h.findAll({ type: 'td' }).map((e) => e.text.trim()).filter(Boolean);"
+                  " const fired = h.findAll((e) => String(e.props.className || '').includes('sat-timer-fired-row'))"
+                  ".map((e) => e.text);"
+                  " return { cells, fired, texts: h.text() };",
+    },
     "timers_tab_empty": {
         "files": FILES, "component": "RoomTimersBody",
         "props": {"room": "kitchen"}, "fnProps": ["fire"], "setup": SETUP,
@@ -267,3 +288,24 @@ def test_the_timers_tab_lists_what_fired_here_lately(driven) -> None:
     assert driven["timers_tab_empty"]["fired"] and "no active timers or reminders" in driven[
         "timers_tab_empty"]["texts"]
     assert "recently fired here" not in driven["timers_tab_no_history"]["texts"]
+
+
+def test_a_shared_screen_shows_no_reminder_words_in_the_timers_tab(driven) -> None:
+    """Home and the alert cards keep a reminder's words off a shared screen;
+    the drawer's Timers tab and its "recently fired here" list do too."""
+    out = driven["timers_tab_shared"]
+    assert "call mom" not in " ".join(out["texts"])
+    assert "reminder" in out["cells"] and "pasta" in out["cells"]
+    first, second = out["fired"]
+    assert first.endswith(" · reminder · heard in kitchen")
+    assert second.endswith(" · pasta timer · heard in kitchen")
+
+
+def test_the_switch_is_a_44px_target_on_a_phone() -> None:
+    sats = (REPO_ROOT / "web" / "static" / "satellites.jsx").read_text(encoding="utf-8")
+    block = sats[sats.index("const SatTimerScopeControl"):sats.index("const OverviewBody")]
+    assert 'className="sat-timer-scope"' in block
+    css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    assert ".sat-timer-scope { min-height: 44px; }" in css
+    before = css[:css.index(".sat-timer-scope {")]
+    assert before.rfind("@media (max-width: 760px)") == before.rfind("@media")

@@ -46,7 +46,7 @@ class _FakeSession:
         self.explode = explode
         self.announced: list[str] = []
 
-    async def announce(self, text: str) -> None:
+    async def announce(self, text: str, **_kwargs) -> None:
         if self.explode is not None:
             exc, self.explode = self.explode, None
             raise exc

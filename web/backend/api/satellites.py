@@ -708,9 +708,11 @@ async def list_all_timers(request: Request) -> TimerList:
 )
 async def list_timer_fires(
     request: Request,
-    since_id: int | None = Query(default=None, ge=0),
+    # The bounds are the columns' own (timer_fires.id BIGINT, timer_id
+    # INTEGER): a larger number is a 422, never a 500 out of the driver.
+    since_id: int | None = Query(default=None, ge=0, le=2**63 - 1),
     room_id: str | None = Query(default=None, max_length=120),
-    timer_id: int | None = Query(default=None),
+    timer_id: int | None = Query(default=None, ge=0, le=2**31 - 1),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> TimerFireList:
     """Timers and reminders that went off (kept 7 days), and where each

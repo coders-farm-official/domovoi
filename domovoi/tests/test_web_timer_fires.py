@@ -403,13 +403,28 @@ async def test_the_history_passes_its_filters_through(claimed, seam) -> None:
 
 
 @pytest.mark.parametrize("query", ["limit=0", "limit=201", "since_id=-1", "room_id=" + "r" * 121,
-                                   "timer_id=x"])
+                                   "timer_id=x", "timer_id=-1",
+                                   # Past the columns' own range (timer_id INTEGER,
+                                   # id BIGINT): a 422, not a 500 out of the driver
+                                   # that any LAN caller could provoke.
+                                   "timer_id=3000000000", "timer_id=2147483648",
+                                   "since_id=9223372036854775808",
+                                   "since_id=99999999999999999999"])
 @pytest.mark.asyncio
 async def test_the_history_refuses_bad_bounds(claimed, seam, query) -> None:
     async with _anon() as c:
         r = await c.get(f"/api/timers/fires?{query}")
     assert r.status_code == 422, r.text
     assert seam["recent"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_history_takes_the_largest_ids_the_columns_hold(claimed, seam) -> None:
+    async with _anon() as c:
+        a = await c.get(f"/api/timers/fires?timer_id={2**31 - 1}")
+        b = await c.get(f"/api/timers/fires?since_id={2**63 - 1}")
+    assert a.status_code == 200, a.text
+    assert b.status_code == 200, b.text
 
 
 @pytest.mark.asyncio
@@ -440,7 +455,9 @@ async def test_the_timer_list_reads_ten_minutes_of_fires(claimed, seam) -> None:
       _delivery("kitchen", "sending")], None, "heard in garage, office · still announcing"),
     ([_delivery("garage", "pending", origin=True), _delivery("kitchen", "sending")], None,
      "announcing…"),
-    ([], None, "no satellite was online"),
+    # No room was going to announce it: none online, or every online room
+    # announces only its own (a reminder set with no room).
+    ([], None, "not announced in any room"),
     ([_delivery("garage", "offline", origin=True), _delivery("kitchen", "busy_timeout")], None,
      "not heard in any room (garage offline)"),
     ([_delivery("garage", "failed", origin=True), _delivery("kitchen", "offline")], None,

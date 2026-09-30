@@ -196,3 +196,15 @@ def test_a_reply_after_a_barge_in_plays():
     sat.stop_playback.set()
     receive(sat, _announcement("Here is your answer."))
     assert queued_audio(sat) == [(RATE, CHUNK)] * N_CHUNKS
+
+
+def test_the_hello_says_it_has_the_announcement_fix() -> None:
+    """The core cannot hear whether an announcement played. A satellite
+    without the fix above plays silence after every reconnect while the
+    core records it spoken; this flag lets the core say so in its journal
+    for the rooms that still need the upgrade."""
+    import inspect
+
+    src = inspect.getsource(client.Satellite._run_session)
+    hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
+    assert '"announce_after_session_end": True' in hello

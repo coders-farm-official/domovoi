@@ -478,7 +478,8 @@ const SatTimerScopeControl = ({ s, fire, refresh }) => {
   return (
     <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
       <div className="label" style={{ marginBottom: 6 }}>timers &amp; reminders</div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+      {/* .sat-timer-scope: a 44px target on a phone (styles.css). */}
+      <label className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
                       cursor: busy ? 'default' : 'pointer' }}>
         <input type="checkbox" checked={on} disabled={busy} onChange={onChange}/>
         Only reminders for this device
@@ -936,8 +937,13 @@ const RoomNotesBody = ({ room }) => {
 const SatTimerWordsHidden = 'reminder (words hidden)';
 
 // What a fired timer or reminder is called in the "recently fired" list.
-const SatTimerFireTitle = (f) => {
-  if (f.is_reminder) return f.masked ? SatTimerWordsHidden : (f.message || 'reminder');
+// A reminder's words stay off a shared screen (the kitchen tablet), as on
+// Home and the alert cards.
+const SatTimerFireTitle = (f, shared) => {
+  if (f.is_reminder) {
+    if (shared) return 'reminder';
+    return f.masked ? SatTimerWordsHidden : (f.message || 'reminder');
+  }
   if (f.label) return `${f.label} timer`;
   const total = (Date.parse(f.due_at) - Date.parse(f.created_at)) / 1000;
   if (!(total > 0)) return 'timer';
@@ -947,6 +953,7 @@ const SatTimerFireTitle = (f) => {
 /* What went off that was SET in this room lately (fire history, V017),
  * and where it was heard. Nothing when the server keeps no history. */
 const SatTimerFiredList = ({ room }) => {
+  const shared = useSharedScreen();
   const { data } = useApiObject(`/api/timers/fires?room_id=${encodeURIComponent(room)}&limit=10`,
                                 { eventTypes: ['timer_fires.changed'], quiet: true });
   const fires = (data && Array.isArray(data.fires)) ? data.fires : [];
@@ -957,14 +964,23 @@ const SatTimerFiredList = ({ room }) => {
       {fires.map((f) => (
         <div key={f.id} className="sat-timer-fired-row mono" data-fire={f.id}
              style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '3px 0', overflowWrap: 'anywhere' }}>
-          {`fired ${relTime(f.fired_at)} · ${SatTimerFireTitle(f)} · ${f.summary || ''}`}
+          {`fired ${relTime(f.fired_at)} · ${SatTimerFireTitle(f, shared)} · ${f.summary || ''}`}
         </div>
       ))}
     </div>
   );
 };
 
+// A running timer's label cell. A reminder's label holds its words, so on
+// a shared screen it reads "reminder", like everywhere else there.
+const SatTimerRowLabel = (t, shared) => {
+  if (t.masked) return SatTimerWordsHidden;
+  if (t.is_reminder && shared) return 'reminder';
+  return t.label || (t.is_reminder ? t.message : '—');
+};
+
 const RoomTimersBody = ({ room, fire }) => {
+  const shared = useSharedScreen();
   const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`);
   // Tick state so the remaining-time column counts down between fetches.
   const [, setTick] = React.useState(0);
@@ -1006,7 +1022,7 @@ const RoomTimersBody = ({ room, fire }) => {
             <tr key={t.id}>
               <td><Pill tone={kind === 'timer' ? 'live' : 'idle'}>{kind}</Pill></td>
               <td style={{ fontWeight: 500 }}>
-                {t.masked ? SatTimerWordsHidden : (t.label || (t.is_reminder ? t.message : '—'))}
+                {SatTimerRowLabel(t, shared)}
               </td>
               <td className="mono">{relTime(t.expires_at)}</td>
               <td className="num mono" style={{ color: remaining != null && remaining < 600 ? 'var(--warn)' : 'var(--fg)' }}>
