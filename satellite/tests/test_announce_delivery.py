@@ -112,6 +112,8 @@ def receiver_sat(*, prebuffer_sec: float = 0.0):
     sat._music_proc = None
     sat._ack_lock = threading.Lock()
     sat._ack_proc = None
+    # Counted on every response_start (Satellite.__init__ sets it).
+    sat._response_starts = 0
     return sat
 
 
