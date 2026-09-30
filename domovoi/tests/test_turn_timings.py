@@ -876,7 +876,7 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
     body = r.json()
     assert set(body) == {"since", "room", "limit", "turns", "stages", "paths",
                          "whisper_seen", "whisper", "speculative", "early_commit",
-                         "stt_window"}
+                         "stt_window", "capture_timing"}
     assert body["speculative"] == {"turns": 0, "reused": 0, "decodes": 0}
     assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
     assert body["turns"] == 6 and body["room"] is None and body["limit"] == 1000
