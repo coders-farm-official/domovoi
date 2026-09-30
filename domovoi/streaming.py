@@ -2746,6 +2746,7 @@ class StreamSession:
                 app=self.ws.app,
                 timings=timings,
                 speak_interim=interim.say,
+                stream_qa=True,
             )
             intent = Intent(
                 transcript=transcript,
@@ -2792,181 +2793,33 @@ class StreamSession:
             stage_t0 = time.perf_counter()
             async with session_scope() as s:
                 response = await route(intent, ctx, s)
-                # Third-party intro hybrid hook. Two mutually-exclusive
-                # paths run in the same transaction as routing so the
-                # post-state is consistent:
-                #   * unknown voice + active expectation → buffer this
-                #     turn into the expectation's candidate clusters.
-                #   * introducer voice + buffered clusters → maybe
-                #     append "By the way, was that <name>?" to the
-                #     response and park pending_confirmation.
-                # The hooks no-op cleanly when no expectation is parked.
-                from domovoi.handlers.voice_profile import (
-                    buffer_unknown_voice_turn,
-                    maybe_inject_third_party_ask,
-                )
-                ctx_with_session = ctx.model_copy(
-                    update={"session_id": response.session_id}
-                )
-                if (
-                    person_id is None
-                    and ident is not None
-                    and ident.embedding is not None
-                    # Respect the opt-out: a denylisted ("never save my voice")
-                    # speaker must not be buffered into a third-party enrollment
-                    # cluster, or someone else's introduction could re-enroll
-                    # them without consent.
-                    and not ident.denylisted
-                ):
-                    await buffer_unknown_voice_turn(
-                        s,
-                        session_id=response.session_id,
-                        transcript=transcript,
-                        embedding=ident.embedding,
+                streamed = getattr(response, "qa_stream", None) is not None
+                if not streamed:
+                    # A streamed answer is recorded once it has been said
+                    # (_speak_streamed_answer); these hooks run with it.
+                    await self._voice_profile_hooks(
+                        s, response=response, ctx=ctx, ident=ident,
+                        person_id=person_id, transcript=transcript,
                         audio_seconds=audio_seconds,
                     )
-                elif person_id is not None:
-                    injected = await maybe_inject_third_party_ask(
-                        s,
-                        ctx=ctx_with_session,
-                        response=response,
-                    )
-                    if injected:
-                        # The conversation_log row for this turn was
-                        # written by route() with the *pre-injection*
-                        # text. Update it so the audit trail matches
-                        # what the user actually hears. Targets the
-                        # most recent row for this session — safe
-                        # because we're inside the same transaction
-                        # and no concurrent turn can interleave.
-                        from sqlalchemy import text as sql_text
-                        await s.execute(
-                            sql_text(
-                                """
-                                UPDATE conversation_log
-                                SET assistant_text = :t
-                                WHERE id = (
-                                    SELECT id FROM conversation_log
-                                    WHERE session_id = :sid
-                                    ORDER BY id DESC
-                                    LIMIT 1
-                                )
-                                """
-                            ),
-                            {"t": response.text, "sid": str(response.session_id)},
-                        )
-            # The whole routing transaction, commit included.
-            timings.stage("route_ms", stage_t0)
             self.session_id = response.session_id
 
-            tts_t0 = time.perf_counter()
-            tts = get_tts_client()
-            sentences = _split_sentences(response.text) or [response.text or ""]
-
-            # Resolve which voice to synthesize this turn in. A per-response
-            # override (VoiceHandler sampling / switching) wins; otherwise
-            # the room's reported voice; otherwise the registry default.
-            # (None, None) → the TTS client's construct-time globals.
-            override = getattr(response, "voice_override", None)
-            synth_engine, synth_voice = await resolve_voice(override or satellite_voice)
-
-            # Synthesize the first sentence so we know the sample rate before
-            # emitting response_start. Subsequent sentences inherit it.
-            first_pcm, sr = _wav_to_pcm(
-                await tts.synthesize(sentences[0], engine=synth_engine, voice=synth_voice)
-            )
-
-            # Master output-volume change (MusicHandler), applied BEFORE the
-            # response audio so the spoken confirmation ("Volume up to 80
-            # percent.") is itself heard at the new level. The satellite
-            # drives its hardware mixer, which scales both TTS and music.
-            if response.satellite_volume is not None:
-                await self._safe_send_text({
-                    "type": "set_volume",
-                    "level": max(0, min(100, int(response.satellite_volume))),
-                })
-
-            if interim.started:
-                # An interim line (the cold-start notice) already opened
-                # this turn's response: the reply carries on in it, at the
-                # rate the Pi is already playing, with no second
-                # response_start. The self-echo guard hears both.
-                if sr != interim.sample_rate:
-                    first_pcm = _resample_pcm(first_pcm, sr, interim.sample_rate)
-                    sr = interim.sample_rate
-                self._last_spoken_text = f"{interim.text} {response.text}"
-            else:
-                await self._safe_send_text({
-                    "type": "response_start",
-                    "text": response.text,
-                    "matched_handler": response.matched_handler,
-                    "matched_path": response.matched_path,
-                    "session_id": str(response.session_id) if response.session_id else None,
-                    "online": response.online,
-                    "audio_sample_rate": sr,
-                })
-
-            async def _synth(s: str) -> tuple[bytes, int]:
-                # Keep each sentence's OWN sample rate — the engine fallback
-                # chain can render a later sentence with a different engine
-                # (and rate) than the first, so the caller must reconcile it
-                # against the response's announced rate rather than assume
-                # uniformity.
-                pcm, s_sr = _wav_to_pcm(
-                    await tts.synthesize(s, engine=synth_engine, voice=synth_voice)
+            if streamed:
+                # A Q&A answer: its first sentence is spoken while the model
+                # is still writing the rest. route_ms ends at that sentence.
+                response = await self._speak_streamed_answer(
+                    response, ctx=ctx, ident=ident, person_id=person_id,
+                    transcript=transcript, audio_seconds=audio_seconds,
+                    timings=timings, stage_t0=stage_t0, interim=interim,
+                    satellite_voice=satellite_voice,
                 )
-                return pcm, s_sr
-
-            # Pipeline sentence synthesis so the Pi never sees a gap in
-            # the WS audio stream. The naive serial pattern
-            # (`for s: synth → stream`) blocks for 100-500 ms per
-            # sentence between sends, which drains the Pi's playback
-            # queue and produces an audible click between sentences.
-            # Instead, kick off the next synthesis as a background task
-            # before we start streaming the current one — by the time
-            # the current chunks are sent, the next one's PCM is
-            # usually already done.
-            next_task: asyncio.Task[tuple[bytes, int]] | None = (
-                asyncio.create_task(_synth(sentences[1]))
-                if len(sentences) > 1
-                else None
-            )
-            try:
-                for chunk in _iter_chunks(first_pcm):
-                    await self.ws.send_bytes(chunk)
-                    # First call only: tts_first_ms + total_ms.
-                    timings.first_audio(tts_t0)
-
-                for i, _ in enumerate(sentences[1:], start=1):
-                    assert next_task is not None
-                    pcm, pcm_sr = await next_task
-                    next_task = (
-                        asyncio.create_task(_synth(sentences[i + 1]))
-                        if i + 1 < len(sentences)
-                        else None
-                    )
-                    # Reconcile against the rate the Pi is playing at (the
-                    # first sentence's). A mismatch means this sentence hit a
-                    # different engine via the fallback chain; resample so its
-                    # audio doesn't play too fast/slow (garbled response tail).
-                    if pcm_sr != sr:
-                        log.warning(
-                            "TTS sentence %d rate %d != response rate %d; "
-                            "resampling (engine fallback mid-response?)",
-                            i, pcm_sr, sr,
-                        )
-                        pcm = _resample_pcm(pcm, pcm_sr, sr)
-                    for chunk in _iter_chunks(pcm):
-                        await self.ws.send_bytes(chunk)
-                        # A first sentence that rendered to no audio at all.
-                        timings.first_audio(tts_t0)
-            finally:
-                # Cancel any in-flight synth on early exit (barge-in,
-                # WS drop, exception) so we don't leak a background
-                # task waiting on edge-tts to return audio nobody will
-                # ever play.
-                if next_task is not None and not next_task.done():
-                    next_task.cancel()
+            else:
+                # The whole routing transaction, commit included.
+                timings.stage("route_ms", stage_t0)
+                await self._speak_response(
+                    response, timings=timings, interim=interim,
+                    satellite_voice=satellite_voice,
+                )
         except asyncio.CancelledError:
             interrupted = True
         except Exception as e:
@@ -3201,6 +3054,351 @@ class StreamSession:
             await asyncio.shield(timing_write)
         if capture_write is not None:
             await asyncio.shield(capture_write)
+
+    async def _voice_profile_hooks(
+        self,
+        s: Any,
+        *,
+        response: Any,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+    ) -> None:
+        """The voice-profile hooks that run in the transaction that records
+        a turn: after route() for a whole reply, after the answer has been
+        said for a streamed one (the conversation_log row they may rewrite
+        exists only then)."""
+        # Third-party intro hybrid hook. Two mutually-exclusive
+        # paths run in the same transaction as routing so the
+        # post-state is consistent:
+        #   * unknown voice + active expectation → buffer this
+        #     turn into the expectation's candidate clusters.
+        #   * introducer voice + buffered clusters → maybe
+        #     append "By the way, was that <name>?" to the
+        #     response and park pending_confirmation.
+        # The hooks no-op cleanly when no expectation is parked.
+        from domovoi.handlers.voice_profile import (
+            buffer_unknown_voice_turn,
+            maybe_inject_third_party_ask,
+        )
+        ctx_with_session = ctx.model_copy(
+            update={"session_id": response.session_id}
+        )
+        if (
+            person_id is None
+            and ident is not None
+            and ident.embedding is not None
+            # Respect the opt-out: a denylisted ("never save my voice")
+            # speaker must not be buffered into a third-party enrollment
+            # cluster, or someone else's introduction could re-enroll
+            # them without consent.
+            and not ident.denylisted
+        ):
+            await buffer_unknown_voice_turn(
+                s,
+                session_id=response.session_id,
+                transcript=transcript,
+                embedding=ident.embedding,
+                audio_seconds=audio_seconds,
+            )
+        elif person_id is not None:
+            injected = await maybe_inject_third_party_ask(
+                s,
+                ctx=ctx_with_session,
+                response=response,
+            )
+            if injected:
+                # The conversation_log row for this turn was
+                # written by route() with the *pre-injection*
+                # text. Update it so the audit trail matches
+                # what the user actually hears. Targets the
+                # most recent row for this session — safe
+                # because we're inside the same transaction
+                # and no concurrent turn can interleave.
+                from sqlalchemy import text as sql_text
+                await s.execute(
+                    sql_text(
+                        """
+                        UPDATE conversation_log
+                        SET assistant_text = :t
+                        WHERE id = (
+                            SELECT id FROM conversation_log
+                            WHERE session_id = :sid
+                            ORDER BY id DESC
+                            LIMIT 1
+                        )
+                        """
+                    ),
+                    {"t": response.text, "sid": str(response.session_id)},
+                )
+
+    async def _speak_response(
+        self,
+        response: Any,
+        *,
+        timings: TurnTimings,
+        interim: "_InterimSpeech",
+        satellite_voice: str | None,
+    ) -> None:
+        """Speak a routed response whose text is complete: synthesize the
+        first sentence, open the response, stream it, and synthesize each
+        next sentence while the one before it is sent."""
+        tts_t0 = time.perf_counter()
+        tts = get_tts_client()
+        sentences = _split_sentences(response.text) or [response.text or ""]
+
+        # Resolve which voice to synthesize this turn in. A per-response
+        # override (VoiceHandler sampling / switching) wins; otherwise
+        # the room's reported voice; otherwise the registry default.
+        # (None, None) → the TTS client's construct-time globals.
+        override = getattr(response, "voice_override", None)
+        synth_engine, synth_voice = await resolve_voice(override or satellite_voice)
+
+        # Synthesize the first sentence so we know the sample rate before
+        # emitting response_start. Subsequent sentences inherit it.
+        first_pcm, sr = _wav_to_pcm(
+            await tts.synthesize(sentences[0], engine=synth_engine, voice=synth_voice)
+        )
+
+        # Master output-volume change (MusicHandler), applied BEFORE the
+        # response audio so the spoken confirmation ("Volume up to 80
+        # percent.") is itself heard at the new level. The satellite
+        # drives its hardware mixer, which scales both TTS and music.
+        if response.satellite_volume is not None:
+            await self._safe_send_text({
+                "type": "set_volume",
+                "level": max(0, min(100, int(response.satellite_volume))),
+            })
+
+        if interim.started:
+            # An interim line (the cold-start notice) already opened
+            # this turn's response: the reply carries on in it, at the
+            # rate the Pi is already playing, with no second
+            # response_start. The self-echo guard hears both.
+            if sr != interim.sample_rate:
+                first_pcm = _resample_pcm(first_pcm, sr, interim.sample_rate)
+                sr = interim.sample_rate
+            self._last_spoken_text = f"{interim.text} {response.text}"
+        else:
+            await self._safe_send_text({
+                "type": "response_start",
+                "text": response.text,
+                "matched_handler": response.matched_handler,
+                "matched_path": response.matched_path,
+                "session_id": str(response.session_id) if response.session_id else None,
+                "online": response.online,
+                "audio_sample_rate": sr,
+            })
+
+        async def _synth(s: str) -> tuple[bytes, int]:
+            # Keep each sentence's OWN sample rate — the engine fallback
+            # chain can render a later sentence with a different engine
+            # (and rate) than the first, so the caller must reconcile it
+            # against the response's announced rate rather than assume
+            # uniformity.
+            pcm, s_sr = _wav_to_pcm(
+                await tts.synthesize(s, engine=synth_engine, voice=synth_voice)
+            )
+            return pcm, s_sr
+
+        # Pipeline sentence synthesis so the Pi never sees a gap in
+        # the WS audio stream. The naive serial pattern
+        # (`for s: synth → stream`) blocks for 100-500 ms per
+        # sentence between sends, which drains the Pi's playback
+        # queue and produces an audible click between sentences.
+        # Instead, kick off the next synthesis as a background task
+        # before we start streaming the current one — by the time
+        # the current chunks are sent, the next one's PCM is
+        # usually already done.
+        next_task: asyncio.Task[tuple[bytes, int]] | None = (
+            asyncio.create_task(_synth(sentences[1]))
+            if len(sentences) > 1
+            else None
+        )
+        try:
+            for chunk in _iter_chunks(first_pcm):
+                await self.ws.send_bytes(chunk)
+                # First call only: tts_first_ms + total_ms.
+                timings.first_audio(tts_t0)
+
+            for i, _ in enumerate(sentences[1:], start=1):
+                assert next_task is not None
+                pcm, pcm_sr = await next_task
+                next_task = (
+                    asyncio.create_task(_synth(sentences[i + 1]))
+                    if i + 1 < len(sentences)
+                    else None
+                )
+                # Reconcile against the rate the Pi is playing at (the
+                # first sentence's). A mismatch means this sentence hit a
+                # different engine via the fallback chain; resample so its
+                # audio doesn't play too fast/slow (garbled response tail).
+                if pcm_sr != sr:
+                    log.warning(
+                        "TTS sentence %d rate %d != response rate %d; "
+                        "resampling (engine fallback mid-response?)",
+                        i, pcm_sr, sr,
+                    )
+                    pcm = _resample_pcm(pcm, pcm_sr, sr)
+                for chunk in _iter_chunks(pcm):
+                    await self.ws.send_bytes(chunk)
+                    # A first sentence that rendered to no audio at all.
+                    timings.first_audio(tts_t0)
+        finally:
+            # Cancel any in-flight synth on early exit (barge-in,
+            # WS drop, exception) so we don't leak a background
+            # task waiting on edge-tts to return audio nobody will
+            # ever play.
+            if next_task is not None and not next_task.done():
+                next_task.cancel()
+
+    async def _speak_streamed_answer(
+        self,
+        routed: Any,
+        *,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+        timings: TurnTimings,
+        stage_t0: float,
+        interim: "_InterimSpeech",
+        satellite_voice: str | None,
+    ) -> Any:
+        """Speak a Q&A answer while the model is still writing it
+        (``routed.qa_stream``, domovoi/spoken_answer.py): each sentence is
+        synthesized and sent as soon as it is complete, so the first one
+        plays while the rest is generated. On a CPU host that is the
+        difference between ~0.5 s and the whole reply (0.7-6 s on
+        llama3.2:3b) before the first word.
+
+        When the answer has been said, the turn is recorded — the full
+        text, the online-check or memory offer appended and parked, the
+        voice-profile hooks — and whatever that added is spoken last. A
+        barge-in (or a failure) mid-answer stops the model and still
+        records what was said. Returns the turn's final response.
+
+        ``route_ms`` runs to the first sentence (the routing plus the time
+        the model took to write it); ``tts_first_ms`` from there to its
+        audio on the socket."""
+        streamed = routed.qa_stream
+        tts: Any = None
+        engine: str | None = None
+        voice: str | None = None
+        # An interim line (the cold-start notice) already opened the
+        # response: carry on in it, at its rate.
+        rate: int | None = interim.sample_rate if interim.started else None
+        said: list[str] = [interim.text] if interim.started else []
+        tts_t0: float | None = None
+        recording: asyncio.Task[tuple[Any, str]] | None = None
+
+        def first_sentence_ready() -> None:
+            nonlocal tts_t0
+            if tts_t0 is None:
+                timings.stage("route_ms", stage_t0)
+                tts_t0 = time.perf_counter()
+
+        async def speak(sentence: str) -> None:
+            nonlocal rate
+            pcm, s_sr = _wav_to_pcm(
+                await tts.synthesize(sentence, engine=engine, voice=voice)
+            )
+            if rate is None:
+                rate = s_sr
+                await self._safe_send_text({
+                    "type": "response_start",
+                    "text": sentence,
+                    "matched_handler": routed.matched_handler,
+                    "matched_path": routed.matched_path,
+                    "session_id": str(routed.session_id) if routed.session_id else None,
+                    "online": routed.online,
+                    "audio_sample_rate": s_sr,
+                })
+            elif s_sr != rate:
+                pcm = _resample_pcm(pcm, s_sr, rate)
+            said.append(sentence)
+            # What a barge-triggered capture may hear back
+            # (self_echo_filter): everything said so far, not just the
+            # sentence that opened the response.
+            self._last_spoken_text = " ".join(said)
+            for chunk in _iter_chunks(pcm):
+                await self.ws.send_bytes(chunk)
+                timings.first_audio(tts_t0)
+
+        async def record() -> tuple[Any, str]:
+            # The turn's records, in a task of its own awaited through
+            # asyncio.shield: a barge-in's cancel — or the next
+            # utterance_start's, right behind it — must not abort the
+            # transaction and lose the turn. Started once, whichever way
+            # the answer ends.
+            nonlocal recording
+            if recording is None:
+                recording = asyncio.create_task(
+                    self._finish_streamed_answer(
+                        streamed, ctx=ctx, ident=ident, person_id=person_id,
+                        transcript=transcript, audio_seconds=audio_seconds,
+                    ),
+                    name=f"qa-answer-record:{self.room_id}",
+                )
+                _TIMING_WRITES.add(recording)
+                recording.add_done_callback(_TIMING_WRITES.discard)
+            return await asyncio.shield(recording)
+
+        sentences = streamed.answer.sentences()
+        try:
+            tts = get_tts_client()
+            engine, voice = await resolve_voice(satellite_voice)
+            async for sentence in sentences:
+                first_sentence_ready()
+                await speak(sentence)
+            final, rest = await record()
+            # Nothing was said (no answer at all): the router's fixed line
+            # is the whole reply. Else: the offer, the third-party ask.
+            first_sentence_ready()
+            for sentence in _split_sentences(rest):
+                await speak(sentence)
+            return final
+        except BaseException:
+            # A barge-in cancelled the turn, or TTS / the socket failed:
+            # stop the model, make sure what was said is recorded, then let
+            # the turn end the way it would have.
+            try:
+                await sentences.aclose()
+                final, _rest = await record()
+                routed.text = final.text
+                routed.matched_path = final.matched_path
+            except BaseException as e:  # noqa: BLE001 — never mask the original
+                log.warning(
+                    "stream %s: recording an interrupted answer failed: %r", self.room_id, e,
+                )
+            raise
+
+    async def _finish_streamed_answer(
+        self,
+        streamed: Any,
+        *,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+    ) -> tuple[Any, str]:
+        """The router's end of a streamed answer (offers, persistence) and
+        the voice-profile hooks, in one transaction. Returns the final
+        response and the text still to be said after the answer."""
+        async with session_scope() as s:
+            response, rest = await streamed.finish(s)
+            before = response.text
+            await self._voice_profile_hooks(
+                s, response=response, ctx=ctx, ident=ident, person_id=person_id,
+                transcript=transcript, audio_seconds=audio_seconds,
+            )
+            if response.text != before and response.text.startswith(before):
+                rest = f"{rest} {response.text[len(before):].strip()}".strip()
+        return response, rest
 
     def _keep_capture(
         self,

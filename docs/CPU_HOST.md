@@ -360,7 +360,8 @@ the core ended early.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops
-before any reply audio exists. It is still the useful number next to
+before any reply audio exists (for a spoken Q&A answer, at its first
+sentence: the rest is written while that one plays). It is still the useful number next to
 `matched_path`, which tells you whether a turn took a regex fast path or
 went through the language models:
 

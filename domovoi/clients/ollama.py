@@ -654,6 +654,13 @@ class OllamaClient(Protocol):
         profile_prefix: str | None = None,
     ) -> QAWithUncertainty: ...
 
+    def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]: ...
+
     async def extract_search_subject(
         self,
         transcript: str,
@@ -709,6 +716,17 @@ class OllamaStubClient:
             needs_verification=False,
             candidate_claim="",
         )
+
+    async def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]:
+        # The same text qa_with_uncertainty answers, in two pieces.
+        prefix_tag = f" [profile: {profile_prefix}]" if profile_prefix else ""
+        yield "(stub qa) I heard: "
+        yield f"{transcript}{prefix_tag}"
 
     async def extract_search_subject(
         self,
@@ -1272,6 +1290,12 @@ class RealOllamaClient:
             stream = await self._chat(
                 model=self._qa_model, messages=messages, stream=True, **self._qa_extras()
             )
+            if not hasattr(stream, "__aiter__"):
+                # A client that answered in one piece after all.
+                content = self._chunk_content(stream)
+                if content:
+                    yield content
+                return
             try:
                 async for chunk in stream:
                     content = self._chunk_content(chunk)
@@ -1372,6 +1396,20 @@ class RealOllamaClient:
         elif problem is not None:
             text = ""
         return QAWithUncertainty(answer=text, needs_verification=False)
+
+    def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]:
+        """The spoken answer as it is written: :meth:`stream_qa` with the
+        prompt :meth:`qa_with_uncertainty` uses. The checks that turn a
+        stream into speakable sentences (retry on nothing usable, never a
+        cut tail) are domovoi.spoken_answer's."""
+        return self.stream_qa(
+            transcript, system_prompt=voice_qa_system_prompt(profile_prefix), history=history,
+        )
 
     # ── cold starts: what's loaded, a long-timeout twin, the warm-up ─────
 
