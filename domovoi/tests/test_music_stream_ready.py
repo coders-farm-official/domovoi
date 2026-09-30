@@ -26,6 +26,9 @@ room's stream port, a fake for its control connection):
   the handshake is armed after it; every music_start in the core goes
   through it (a source scan), and the voice turn, the auto-resume and the
   admin cast path all reach it;
+* a voice start records the room in `resumable_music` BEFORE it waits on
+  the stream, so a wake word that cancels the turn in that wait leaves the
+  room resumable; a voice stop drops it BEFORE its music_stop goes out;
 * `music_failed` (the satellite gave up): listed in `ready.features`;
   pauses MPD when the room is still meant to be playing that stream and no
   newer start is pending, and leaves it alone otherwise.
@@ -36,6 +39,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -510,6 +514,82 @@ def test_the_auto_resume_after_a_turn_checks_the_stream(monkeypatch, spy_ensure)
                 _turn(ws)
                 assert ws.receive_json() == {"type": "music_start", "stream_url": url}
                 assert spy_ensure == [(ROOM, url)]
+        finally:
+            app.state.resumable_music.clear()
+
+
+def test_a_wake_during_the_stream_wait_still_leaves_the_room_resumable(monkeypatch) -> None:
+    """A voice "play" is very often a room's first play since its MPD daemon
+    started — exactly when send_music_start waits (up to 3 s) to open the
+    stream — and a wake word in that wait cancels the turn. The room must
+    still be recorded as playing that stream, or MPD sits paused on the new
+    song and the next turn has nothing to auto-resume."""
+    url = "http://test.local:8051"
+    entered, cancelled = threading.Event(), threading.Event()
+
+    async def slow(room_id, stream_url=None, *, timeout=None):
+        entered.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return True
+
+    monkeypatch.setattr(mpd_module, "ensure_stream_serving", slow)
+    _patch_pipeline(
+        monkeypatch, whisper=_FakeWhisper("play creep"), tts=_FakeTTS(),
+        response=Response(text="Playing creep.", matched_handler="music",
+                          matched_path="fast", online=True,
+                          music_action="start", music_stream_url=url),
+    )
+    with TestClient(app) as client:
+        app.state.resumable_music.clear()
+        app.state.pending_music_start.clear()
+        try:
+            with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
+                _hello(ws, ROOM)
+                _turn(ws)
+                assert entered.wait(5)             # waiting on the stream
+                ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
+                assert cancelled.wait(5)           # the wake cancelled the turn
+                assert app.state.resumable_music.get(ROOM) == url
+                assert ROOM not in app.state.pending_music_start
+        finally:
+            app.state.resumable_music.clear()
+
+
+def test_a_stop_turn_drops_the_resume_intent_before_its_music_stop(monkeypatch) -> None:
+    """An announcement's music restart runs on its own and checks
+    `resumable_music` last thing before its music_start; it must not still
+    find the room there while the music_stop is on its way. (Popped after
+    the send, a turn cancelled during it also kept the room resumable
+    after the person said stop.)"""
+    url = "http://test.local:8051"
+    seen: list[dict[str, str]] = []
+    real_send = StreamSession._safe_send_text
+
+    async def spy(self, payload):
+        if payload.get("type") == "music_stop":
+            seen.append(dict(self.ws.app.state.resumable_music))
+        await real_send(self, payload)
+
+    monkeypatch.setattr(StreamSession, "_safe_send_text", spy)
+    _patch_pipeline(
+        monkeypatch, whisper=_FakeWhisper("stop the music"), tts=_FakeTTS(),
+        response=Response(text="Stopped.", matched_handler="music",
+                          matched_path="fast", online=True, music_action="stop"),
+    )
+    with TestClient(app) as client:
+        app.state.resumable_music.clear()
+        app.state.pending_music_start.clear()
+        app.state.resumable_music[ROOM] = url
+        try:
+            with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
+                _hello(ws, ROOM)
+                _turn(ws)
+                assert ws.receive_json() == {"type": "music_stop"}
+            assert seen == [{}]
         finally:
             app.state.resumable_music.clear()
 
