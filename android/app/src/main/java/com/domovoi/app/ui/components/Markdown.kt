@@ -1,6 +1,9 @@
 package com.domovoi.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,8 +42,8 @@ import com.domovoi.app.ui.theme.MonoFamily
 /*
  * A small Markdown renderer for assistant replies — the subset a chat model
  * actually writes: headings, paragraphs, bullet and numbered lists, block
- * quotes, fenced code, rules, and inline bold / italic / code / links.
- * No HTML, no tables, no images. Parsing is pure Kotlin (unit-tested on the
+ * quotes, fenced code, rules, tables, and inline bold / italic / code /
+ * links. No HTML and no images (yet). Parsing is pure Kotlin (unit-tested on the
  * JVM); [MarkdownText] only draws the result.
  *
  * It is rendered on every streamed delta, so it must tolerate half-written
@@ -56,13 +59,31 @@ internal sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
     data class Code(val text: String) : MdBlock
     data object Rule : MdBlock
+    /** A GitHub-style table; every row is padded or cut to the header's width. */
+    data class Table(val header: List<String>, val align: List<MdAlign>, val rows: List<List<String>>) : MdBlock
 }
+
+internal enum class MdAlign { Start, Center, End }
 
 private val HEADING = Regex("""^(#{1,6})\s+(.*?)\s*#*\s*$""")
 private val BULLET = Regex("""^(\s*)[-*+]\s+(.*)$""")
 private val NUMBERED = Regex("""^(\s*)(\d{1,3})[.)]\s+(.*)$""")
 private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
 private val FENCE = Regex("""^\s*(```|~~~)""")
+private val TABLE_SEP = Regex("""^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$""")
+
+/** The cells of one table row: outer pipes dropped, `\|` kept as a pipe. */
+internal fun tableCells(line: String): List<String> {
+    var t = line.trim()
+    if (t.startsWith("|")) t = t.substring(1)
+    if (t.endsWith("|") && !t.endsWith("\\|")) t = t.dropLast(1)
+    return t.replace("\\|", "\u0000").split('|').map { it.replace('\u0000', '|').trim() }
+}
+
+/** A header row followed by a `|---|:--:|` separator row. A lone `---` is a rule, not a table. */
+private fun isTableStart(lines: List<String>, i: Int): Boolean =
+    i + 1 < lines.size && lines[i].contains('|') &&
+        lines[i + 1].contains('|') && TABLE_SEP.matches(lines[i + 1])
 
 internal fun parseMarkdown(src: String): List<MdBlock> {
     val out = mutableListOf<MdBlock>()
@@ -86,6 +107,26 @@ internal fun parseMarkdown(src: String): List<MdBlock> {
                 out += MdBlock.Code(body.joinToString("\n"))
             }
             line.isBlank() -> flush()
+            isTableStart(lines, i) -> {
+                flush()
+                val header = tableCells(line)
+                val align = tableCells(lines[i + 1]).map {
+                    when {
+                        it.startsWith(":") && it.endsWith(":") -> MdAlign.Center
+                        it.endsWith(":") -> MdAlign.End
+                        else -> MdAlign.Start
+                    }
+                }
+                val width = header.size
+                val rows = mutableListOf<List<String>>()
+                i += 2
+                while (i < lines.size && lines[i].isNotBlank() && lines[i].contains('|')) {
+                    val cells = tableCells(lines[i++])
+                    rows += List(width) { cells.getOrElse(it) { "" } }
+                }
+                out += MdBlock.Table(header, List(width) { align.getOrElse(it) { MdAlign.Start } }, rows)
+                continue
+            }
             RULE.matches(line) -> { flush(); out += MdBlock.Rule }
             HEADING.matches(line) -> {
                 flush()
@@ -276,8 +317,54 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, trailing: String =
                     )
                 }
                 MdBlock.Rule -> Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+                is MdBlock.Table -> MarkdownTable(b, inline, tail)
             }
         }
         if (blocks.isEmpty() && trailing.isNotEmpty()) Text(trailing, style = body, color = colors.fg)
+    }
+}
+
+/**
+ * Laid out column by column so each column is as wide as its widest cell.
+ * Cells do not wrap — every cell is one line tall, which keeps the rows
+ * level across columns — and a table wider than the bubble scrolls sideways.
+ */
+@Composable
+private fun MarkdownTable(t: MdBlock.Table, inline: (String) -> AnnotatedString, trailing: String) {
+    val colors = Domovoi.colors
+    val body = MaterialTheme.typography.bodySmall
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier.border(1.dp, colors.border, shape).clip(shape)
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            t.header.forEachIndexed { c, head ->
+                if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
+                Column(Modifier.width(IntrinsicSize.Max)) {
+                    val cells = listOf(head) + t.rows.map { it[c] }
+                    cells.forEachIndexed { r, cell ->
+                        if (r > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+                        val last = r == cells.lastIndex && c == t.header.lastIndex
+                        Text(
+                            inline(cell + if (last) trailing else ""),
+                            style = body,
+                            fontWeight = if (r == 0) FontWeight.SemiBold else null,
+                            color = colors.fg,
+                            softWrap = false,
+                            maxLines = 1,
+                            textAlign = when (t.align[c]) {
+                                MdAlign.Start -> TextAlign.Start
+                                MdAlign.Center -> TextAlign.Center
+                                MdAlign.End -> TextAlign.End
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                                .background(if (r == 0) colors.sunken else Color.Transparent)
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }

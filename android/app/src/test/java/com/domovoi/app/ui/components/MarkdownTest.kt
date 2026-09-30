@@ -67,4 +67,41 @@ class MarkdownTest {
         assertEquals(listOf(MdSpan("2 * 3 * 4")), parseInline("2 * 3 * 4"))
         assertEquals(listOf(MdSpan("*not*")), parseInline("\\*not\\*"))
     }
+
+    @Test fun tablesWithAlignmentAndRaggedRows() {
+        val md = """
+            Here:
+
+            | food | ok? | kcal |
+            |:-----|:---:|-----:|
+            | cooked chicken | yes | 165 |
+            | raw chicken | no |
+            | a \| b | x | 1 | extra |
+
+            after
+        """.trimIndent()
+        assertEquals(
+            listOf(
+                MdBlock.Paragraph("Here:"),
+                MdBlock.Table(
+                    header = listOf("food", "ok?", "kcal"),
+                    align = listOf(MdAlign.Start, MdAlign.Center, MdAlign.End),
+                    rows = listOf(
+                        listOf("cooked chicken", "yes", "165"),
+                        listOf("raw chicken", "no", ""),
+                        listOf("a | b", "x", "1"),
+                    ),
+                ),
+                MdBlock.Paragraph("after"),
+            ),
+            parseMarkdown(md),
+        )
+    }
+
+    @Test fun aHeaderRowStillStreamingIsNotATableYet() {
+        // No separator row has arrived: it is text until one does.
+        assertEquals(listOf(MdBlock.Paragraph("| a | b |")), parseMarkdown("| a | b |"))
+        // Pipes in prose, and a lone rule, are not tables either.
+        assertEquals(listOf(MdBlock.Paragraph("x | y"), MdBlock.Rule), parseMarkdown("x | y\n\n---"))
+    }
 }
