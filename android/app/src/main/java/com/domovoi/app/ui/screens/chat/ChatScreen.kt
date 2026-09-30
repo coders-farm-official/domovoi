@@ -4,6 +4,17 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
+import java.time.Instant
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -111,6 +122,7 @@ private data class MessageRow(
     val images: List<ImageRef>? = null,
     val model: String? = null,
     val error: String? = null,
+    val created_at: String? = null,
 )
 
 @Serializable
@@ -138,13 +150,30 @@ private class LiveMessage(
     val role: String,
     content: String,
     val images: List<ImageRef> = emptyList(),
-    val model: String? = null,
+    model: String? = null,
     error: String? = null,
     pending: Boolean = false,
+    id: Long? = null,
+    createdAt: String? = null,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
     var pending by mutableStateOf(pending)
+    var model by mutableStateOf(model)
+    var id by mutableStateOf(id)
+    var createdAt by mutableStateOf(createdAt)
+    /** Measured on this phone while a reply streams (details dialog only). */
+    var sentAtMs: Long? = null
+    var firstWordsAtMs: Long? = null
+    var doneAtMs: Long? = null
+
+    fun facts(threadId: Long) = MessageFacts(
+        id = id, threadId = threadId, role = role, content = content,
+        createdAt = createdAt, model = model, error = error,
+        imageNames = images.map { it.name },
+        firstWordsMs = sentAtMs?.let { s -> firstWordsAtMs?.let { it - s } },
+        totalMs = sentAtMs?.let { s -> doneAtMs?.let { it - s } },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +187,7 @@ private suspend fun sendStreaming(
     images: List<ImageRef>,
     onDelta: (String) -> Unit,
     onError: (String) -> Unit,
+    onDone: (MessageRow) -> Unit = {},
 ) = withContext(Dispatchers.IO) {
     val body = buildJsonObject {
         put("content", content)
@@ -196,6 +226,10 @@ private suspend fun sendStreaming(
                             }
                             "error" -> payload["detail"]?.jsonPrimitive?.content?.let {
                                 withContext(Dispatchers.Main) { onError(it) }
+                            }
+                            // The persisted row: its id, timestamp and model.
+                            "done" -> payload.decode<MessageRow>().let {
+                                withContext(Dispatchers.Main) { onDone(it) }
                             }
                         }
                     }
@@ -329,7 +363,12 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         }.onSuccess { rows ->
             transcript.clear()
             rows.forEach {
-                transcript.add(LiveMessage(it.role, it.content, it.images.orEmpty(), it.model, it.error))
+                transcript.add(
+                    LiveMessage(
+                        it.role, it.content, it.images.orEmpty(), it.model, it.error,
+                        id = it.id.takeIf { id -> id > 0 }, createdAt = it.created_at,
+                    ),
+                )
             }
         }
     }
@@ -454,17 +493,30 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         attachments.clear()
         sending = true
         following = true
-        transcript.add(LiveMessage("user", content, images))
+        // Stamped now; the server's own row (with its id) is not sent back
+        // for the user turn, and the two clocks agree to the second on a LAN.
+        transcript.add(LiveMessage("user", content, images, createdAt = Instant.now().toString()))
         val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
         transcript.add(live)
         scope.launch {
             runCatching {
                 sendStreaming(
                     app, thread.id, content, images,
-                    onDelta = { live.content += it },
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
                     onError = { live.error = it },
+                    onDone = { row ->
+                        live.id = row.id.takeIf { it > 0 }
+                        live.createdAt = row.created_at
+                        live.model = row.model ?: live.model
+                    },
                 )
             }.onFailure { live.error = it.message ?: "send failed" }
+            live.doneAtMs = System.currentTimeMillis()
+            if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
             sending = false
         }
@@ -479,7 +531,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(transcript) { m -> MessageBubble(m) }
+            items(transcript) { m -> MessageBubble(m, thread.id) }
         }
 
         if (attachments.isNotEmpty()) {
@@ -595,10 +647,20 @@ private fun ChatPaneGutter() {
     Spacer(Modifier.height(if (keyboardCrowdsTheWindow()) 2.dp else 16.dp))
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: LiveMessage) {
+private fun MessageBubble(m: LiveMessage, threadId: Long) {
     val app = LocalApp.current
+    val toast = LocalToast.current
+    val clipboard = LocalClipboardManager.current
+    val haptics = LocalHapticFeedback.current
     val isUser = m.role == "user"
+    var menu by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
+    val copy = {
+        clipboard.setText(AnnotatedString(m.content))
+        toast("copied")
+    }
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
@@ -617,45 +679,85 @@ private fun MessageBubble(m: LiveMessage) {
                 }
             }
         }
-        Box(
-            Modifier.widthIn(max = 480.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(if (isUser) Domovoi.colors.card else Domovoi.colors.canvas)
-                .then(
-                    if (isUser) Modifier.border(1.dp, Domovoi.colors.border, RoundedCornerShape(10.dp))
-                    else Modifier,
-                )
-                .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
-        ) {
-            Column {
-                val cursor = if (m.pending) " ▍" else ""
-                if (isUser) {
-                    Text(
-                        m.content + cursor,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Domovoi.colors.fg,
+        // Long-press: copy / details. The menu anchors to the bubble.
+        Box {
+            Box(
+                Modifier.widthIn(max = 480.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (isUser) Domovoi.colors.card else Domovoi.colors.canvas)
+                    .then(
+                        if (isUser) Modifier.border(1.dp, Domovoi.colors.border, RoundedCornerShape(10.dp))
+                        else Modifier,
                     )
-                } else {
-                    MarkdownText(m.content, trailing = cursor)
-                }
-                m.error?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                        color = Domovoi.colors.err,
-                        modifier = Modifier.padding(top = 4.dp),
+                    .combinedClickable(
+                        onClickLabel = null,
+                        onLongClickLabel = "message actions",
+                        onClick = {},
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            menu = true
+                        },
                     )
-                }
-                if (!isUser && m.model != null && !m.pending) {
-                    Text(
-                        m.model,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                        color = Domovoi.colors.fgFaint,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
+            ) {
+                Column {
+                    val cursor = if (m.pending) " ▍" else ""
+                    if (isUser) {
+                        Text(
+                            m.content + cursor,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Domovoi.colors.fg,
+                        )
+                    } else {
+                        MarkdownText(m.content, trailing = cursor)
+                    }
+                    m.error?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                            color = Domovoi.colors.err,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
             }
+            DropdownMenu(
+                expanded = menu,
+                onDismissRequest = { menu = false },
+                containerColor = Domovoi.colors.raised,
+            ) {
+                DropdownMenuItem(
+                    text = { Text("copy") },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    enabled = m.content.isNotEmpty(),
+                    onClick = { menu = false; copy() },
+                )
+                DropdownMenuItem(
+                    text = { Text("details") },
+                    leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                    onClick = { menu = false; details = true },
+                )
+            }
         }
+        // Stamp line: when, and (for a reply) which model answered.
+        val stamp = chatStamp(m.createdAt)
+        val model = m.model.takeIf { !isUser && !m.pending }
+        val line = listOfNotNull(stamp, model).joinToString(" · ")
+        if (line.isNotEmpty()) {
+            Text(
+                line,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                color = Domovoi.colors.fgFaint,
+                modifier = Modifier.padding(top = 3.dp, start = if (isUser) 0.dp else 2.dp, end = if (isUser) 2.dp else 0.dp),
+            )
+        }
+    }
+    if (details) {
+        MessageDetailsDialog(
+            facts = m.facts(threadId),
+            onCopy = { copy(); details = false },
+            onDismiss = { details = false },
+        )
     }
 }
 
