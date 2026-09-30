@@ -17,7 +17,8 @@ the stream check replaced by a timed stand-in):
   the music still comes back once its stream is ready;
 * the restart runs after `announce` returned, so it checks the room last
   thing before its music_start and sends nothing when the room was
-  stopped, a turn started there, or a later announcement took over;
+  stopped, a turn started there, another announcement's frames are going
+  out there, or a later announcement took over;
 * it is bounded, and a failure in it is logged, never raised.
 """
 
@@ -202,6 +203,24 @@ async def test_a_turn_or_call_that_started_meanwhile_owns_the_music(house, meanw
     call's end restores it."""
     await _announce_then(house, meanwhile)
     assert "music_start" not in house.frames("office")
+
+
+async def test_another_announcements_frames_hold_the_restart_back(house) -> None:
+    """Two timers due at once in a room with music: the first announcement's
+    restart finds the second one's frames going out (its `_announce_task`,
+    wf/int-0930) and sends nothing, rather than a music_start the satellite
+    would start mpg123 on over that announcement. The second one's own
+    restart, when its frames are done, brings the music back."""
+    frames_going_out: asyncio.Future = asyncio.get_running_loop().create_future()
+    await _announce_then(house, lambda s: setattr(s, "_announce_task", frames_going_out))
+    assert "music_start" not in house.frames("office")
+
+    sess = house.app.state.active_sessions["office"]
+    frames_going_out.set_result(None)
+    sess._announce_task = None
+    sess._restart_music_after_announce(URL["office"])
+    assert await restarts_done() == [None]
+    assert house.frames("office")[-1] == "music_start"
 
 
 async def test_a_replaced_socket_gets_no_music_start(house) -> None:
