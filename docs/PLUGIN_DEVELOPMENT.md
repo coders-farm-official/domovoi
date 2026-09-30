@@ -798,8 +798,10 @@ class Handler(ABC):
   offers the tool as before; a false negative silently drops a real command
   to the QA fallthrough. Core examples: `double_check` (needs a verification
   word), `news` (needs a news word), `calculator` and `library` (both withheld
-  on who/why/where questions with no digit / no library cue — the shared regex
-  lives in `handlers/shared/tool_gate.py`). Check the effect with
+  on who/why/where questions with no digit / no library cue), `reminder` and
+  `timer` (both withheld on talk about a timer or reminder, "my reminder
+  didn't go off") — the shared regexes live in `handlers/shared/tool_gate.py`.
+  Check the effect with
   `scripts/eval_routing.py`.
 * **Tool arguments**: describe every parameter in `tool_schema` — a small
   tool model files a number under the best-named field it is shown, so an

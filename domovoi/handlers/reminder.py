@@ -8,14 +8,17 @@ the same way it fires plain timers, through the originating room's
 
 Three usage shapes:
 
-1. Create. "remind me to <thing> in <duration>" is the most common; also
-   "remind me in <duration> (to <thing>)", "set a reminder for <duration>
-   (to <thing>)", "reminder in <duration> <thing>", "set a reminder to
-   <thing> in <duration>" and "set a <duration> reminder (to <thing>)".
+1. Create. "remind me to <task> in <duration>" is the most common; also
+   "remind me in <duration> (to <task>)", "set a reminder for <duration>
+   (to <task>)", "reminder in <duration> <task>", "set a reminder to
+   <task> in <duration>", "set a <duration> reminder (to <task>)", and a
+   task named in front of the word: "laundry reminder in 5 minutes",
+   "set an oven reminder for 10 minutes", "a 5 minute pizza reminder".
 2. "what (are my) reminders" / "list reminders" — list pending reminders
    in the current room.
-3. "cancel (my|the) reminder (about|for|to) <thing>" — cancel by label
-   match, or all reminders in the room when no label given.
+3. "cancel (my|the) reminder (about|for|to) <thing>", "cancel the laundry
+   reminder", "cancel the 10 minute reminder" — cancel by label match, or
+   all reminders in the room when no label given.
 
 A reminder with NO task ("set a reminder for 10 minutes") is still a
 reminder: it is stored with an EMPTY message (``message = ''``, so
@@ -27,6 +30,25 @@ before this, "set a reminder for 10 minutes" had no fast path, the tool
 model copied the whole transcript into ``message``, and a reminder fired
 as "Reminder: Better reminder for 10 minutes" (a live garage row,
 2026-09-30, Whisper having heard "set a" as "better").
+
+What the create grammar keeps and drops:
+
+* The words in front of "reminder" are a verb only when they are one of a
+  closed list of verbs, heard or misheard ("set", "make", "give me",
+  "i want" — and "better", "said", "sit" for a mumbled "set a"). Any other
+  word there is the task: "laundry reminder in 5 minutes" is a reminder
+  about laundry, not a reminder with the task thrown away.
+* A statement about a reminder is not a new one. "my / the / that / your
+  reminder ..." creates only after a verb ("set my reminder for 10
+  minutes"), a task never starts with an auxiliary or a negation ("... for
+  10 minutes didn't go off", "... was useless"), and the tool model is
+  offered neither this handler's tool nor the timer's for those shapes
+  (``offers_tool``, ``shared/tool_gate.TIMER_STATEMENT_RE``), so "you have
+  a reminder in 10 minutes" cannot become a reminder or a timer through it.
+* Politeness is never part of the task, wherever it was said ("remind me
+  in 10 minutes, please, to call mom"), and a task that is only a
+  connector ("set a reminder for 10 minutes to..." cut off at a pause) is
+  no task.
 
 Absolute-time reminders ("remind me at 5pm") are deferred — they need a
 real natural-language datetime parser, which isn't worth bolting on
@@ -47,11 +69,121 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import TimerRepository, notify_timers_changed, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
+from domovoi.handlers.shared.number_words import (
+    DURATION_PATTERN,
+    NUMBER_WORDS,
+    parse_duration_seconds,
+)
+from domovoi.handlers.shared.tool_gate import STATEMENT_VERBS, TIMER_STATEMENT_RE
 from domovoi.handlers.timer import _format_duration, duration_adjective
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
+
+
+def _words(*groups: str) -> str:
+    """An alternation of whole words / phrases, longest first so a phrase
+    is never cut short by its own first word."""
+    items = sorted({w for g in groups for w in g.split("|") if w}, key=len, reverse=True)
+    return "(?:" + "|".join(re.escape(w) for w in items) + ")"
+
+
+# A whole token: not followed by more of a word ("that" but not "that's").
+_END = r"(?![a-z'-])"
+
+# ─── The words around "reminder" ─────────────────────────────────────────
+
+# Politeness, wherever it lands between the parts: "set a reminder please
+# for 10 minutes", "remind me in 10 minutes, please, to call mom".
+_POLITE_WORD = r"(?:please|thanks|thank you)"
+_POLITE = rf"(?:,? {_POLITE_WORD}{_END},?)?"
+
+# The verbs that can front "reminder", heard or misheard. A CLOSED list:
+# a word that is not on it is the task ("laundry reminder"), not a verb to
+# drop. "better", "said", "sit", "sat", "sent", "bet" are what Whisper
+# makes of a mumbled "set a" (the live row was "Better reminder for 10
+# minutes").
+_SET_VERBS = (
+    "set|set up|setup|sets|setting|sit|sat|said|say|sent|bet|better|"
+    "get|give|make|add|create|schedule|start|put|"
+    "i need|i want|i'd like|i would like|we need|we want|"
+    "let's|let's set|let's have|let's make|lets|lets set|"
+    "can i get|can i have|could i get|could i have|may i have"
+)
+_SET_VERB = _words(_SET_VERBS)
+# Articles that can front "reminder" on their own ("a reminder for 10
+# minutes", "another reminder in 5 minutes").
+_BARE_DETS = "a|an|another|one more|one"
+# ... and the ones that need a verb in front: "set my reminder for 10
+# minutes" is a command, "my reminder for 10 minutes didn't go off" is not.
+_VERB_DETS = _BARE_DETS + "|the|my|our|that|this|me a|us a|me an|us an"
+_LEAD = (
+    rf"(?:(?:just|now|go ahead and) )?"
+    rf"(?:{_SET_VERB} (?:(?:me|us) )?(?:{_words(_VERB_DETS)} )?"
+    rf"|(?:{_words(_BARE_DETS)} )?)"
+)
+# Adjectives that say nothing about what to remind: "a quick reminder".
+_MODIFIERS = "quick|little|short|new|simple|brief|small|friendly|gentle|single"
+_MODIFIER = rf"(?:{_words(_MODIFIERS)} )?"
+
+# Words that are never (the start of) a task named in front of "reminder":
+# the verbs and articles above, pronouns, auxiliaries and negations (the
+# statement shapes), cancelling / asking / changing, prepositions, numbers
+# and units (the duration paths), and the reminder words themselves.
+_NOT_A_TOPIC_WORDS = (
+    _SET_VERBS + "|" + _VERB_DETS + "|" + _MODIFIERS + "|"
+    "your|his|her|their|its|these|those|you|i|we|he|she|they|it|me|us|them|"
+    "there|here|i'm|i've|i'd|you've|you're|we've|it's|that's|there's|what's|"
+    "whats|where's|who's|"
+    "am|is|isn't|isnt|are|aren't|was|wasn't|wasnt|were|weren't|be|been|being|"
+    "do|does|doesn't|doesnt|did|didn't|didnt|don't|dont|has|hasn't|have|"
+    "haven't|had|hadn't|will|won't|wont|would|wouldn't|shall|should|"
+    "shouldn't|can|can't|cannot|could|couldn't|may|might|must|never|not|no|"
+    "any|some|all|every|each|both|next|last|first|other|"
+    "cancel|cancelled|stop|delete|remove|clear|end|kill|dismiss|silence|mute|"
+    "skip|pause|snooze|forget|undo|change|move|edit|update|reset|extend|push|"
+    "postpone|delay|turn|switch|list|show|read|tell|check|find|what|which|"
+    "when|where|who|why|how|without|"
+    # an existing reminder, or doing it again: "next reminder in 10
+    # minutes", "repeat reminder in 10 minutes"
+    "repeat|again|resend|reschedule|restart|renew|redo|previous|earlier|"
+    "later|old|older|recent|upcoming|pending|current|existing|active|same|"
+    "missed|original|"
+    "for|in|to|about|at|on|of|and|or|but|so|with|from|by|if|then|than|as|"
+    "after|before|until|like|"
+    "reminder|reminders|remind|timer|timers|alarm|alarms|ping|nudge|"
+    "please|thanks|thank|hey|okay|ok|yeah|yes|um|uh|er|"
+    "today|tonight|tomorrow|half|second|seconds|minute|minutes|hour|hours|"
+    "day|days|week|weeks|" + "|".join(NUMBER_WORDS)
+)
+_TOPIC_WORD = rf"(?!{_words(_NOT_A_TOPIC_WORDS)}{_END})[a-z][a-z'-]*"
+# One to three words named in front of "reminder": "laundry", "call mom",
+# "mom's birthday".
+_TOPIC = rf"(?P<topic>{_TOPIC_WORD}(?: {_TOPIC_WORD}){{0,2}})"
+
+_FROM_NOW = r"(?: from now)?"
+# "a reminder for me in 10 minutes": whom it is for, not what.
+_FOR_ME = r"(?: for (?:me|us))?"
+# Between "reminder" and its duration: "reminder for 10 minutes",
+# "reminder in 10 minutes", "reminder, 10 minutes".
+_BEFORE_DURATION = r",? (?:(?:for|in) )?"
+
+# A task with no connector in front never starts like a statement ("...
+# for 10 minutes didn't go off", "... that was useless"), nor with the
+# "and" of a longer duration ("10 minutes and 30 seconds" is all duration).
+_NOT_A_TASK_START = _words(
+    STATEMENT_VERBS,
+    "that|that's|it|it's|which|and|but|or|because|nevermind|ago|later|earlier|back",
+)
+# After the duration: an optional "to" / "about" / "for" / "that", then the
+# task. "reminder in 5 minutes take the laundry out" has no connector, and
+# Whisper may end a sentence before it ("remind me in 10 minutes. call mom").
+_TASK_AFTER = (
+    rf"(?:[,.…]* (?:(?P<connector>to|about|for|that) )?"
+    rf"(?!{_NOT_A_TASK_START}{_END})(?P<message>.+))?"
+)
+
+# ─── The create grammars ─────────────────────────────────────────────────
 
 # "remind me to call mom in 10 minutes"
 # "remind me to take the trash out in an hour"
@@ -64,123 +196,221 @@ log = logging.getLogger(__name__)
 # "remind me to check in on grandma in ten minutes" still yields the
 # message "check in on grandma".
 _CREATE_RE = re.compile(
-    rf"^remind me to (?P<message>.+?) in (?P<duration>{DURATION_PATTERN})$"
+    rf"^remind me{_POLITE} to (?P<message>.+?) in (?P<duration>{DURATION_PATTERN})$"
 )
 
-# The other create shapes. None of them keeps the words in front of the
-# task: whatever verb Whisper heard ("set", "make", "new" — or "better",
-# "said", "sit" for a mumbled "set a") is dropped with the article, and the
-# task is only what follows the duration or a "to"/"about"/"that".
-#
-# Words that make "… reminder for 10 minutes" something other than a new
-# reminder: cancelling, changing or asking about one. The LLM tool router
-# still gets those; the create paths never do.
-_NOT_A_CREATE_WORD = (
-    r"(?:cancel|cancelled|stop|delete|remove|clear|end|kill|dismiss|silence|"
-    r"mute|skip|pause|snooze|forget|undo|change|move|edit|update|reset|extend|"
-    r"push|postpone|delay|turn|switch|list|show|read|tell|check|find|what|"
-    r"what's|whats|which|when|where|where's|who|why|how|is|are|was|were|do|"
-    r"does|did|any|no|not|don't|dont|never|without)"
+# "remind me about the laundry in 5 minutes" / "remind me that the oven is
+# on in 10 minutes"
+_CREATE_ABOUT_RE = re.compile(
+    rf"^remind me{_POLITE} (?P<connector>about|that) (?P<message>.+?)"
+    rf" in (?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}$"
 )
-# Up to two words ahead of "reminder" (the verb, heard or misheard).
-_LEAD = rf"(?:(?!{_NOT_A_CREATE_WORD}\b)[a-z']+ ){{0,2}}"
-_ARTICLE = r"(?:(?:a|an|the|my|another|one|me a|us a) )?"
-_FROM_NOW = r"(?: from now)?"
-# "a reminder for me in 10 minutes": whom it is for, not what.
-_FOR_ME = r"(?: for (?:me|us))?"
-# After the duration: an optional "to" / "about" / "for" / "that", then the
-# task. "reminder in 5 minutes take the laundry out" has no connector.
-_TASK_AFTER = r"(?:,? (?:(?P<connector>to|about|for|that) )?(?P<message>.+))?"
 
 # "remind me in 10 minutes" / "remind me in an hour to call mom" /
 # "ping me in ten minutes"
 _CREATE_IN_RE = re.compile(
-    rf"^(?:remind|ping|nudge) me in (?P<duration>{DURATION_PATTERN})"
-    rf"{_FROM_NOW}{_TASK_AFTER}$"
+    rf"^(?:remind|ping|nudge) me{_POLITE} in (?P<duration>{DURATION_PATTERN})"
+    rf"{_FROM_NOW}{_POLITE}{_TASK_AFTER}$"
 )
 
 # "set a reminder for 10 minutes" / "better reminder for 10 minutes" /
 # "set a reminder for 10 minutes to call mom" / "reminder in 5 minutes take
 # the laundry out" / "a reminder for ten minutes"
 _CREATE_NOUN_RE = re.compile(
-    rf"^{_LEAD}{_ARTICLE}reminder{_FOR_ME} (?:(?:for|in) )?"
-    rf"(?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_TASK_AFTER}$"
+    rf"^{_LEAD}{_MODIFIER}reminder{_FOR_ME}{_POLITE}{_BEFORE_DURATION}"
+    rf"(?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}{_TASK_AFTER}$"
+)
+
+# "laundry reminder in 5 minutes" / "set an oven reminder for 10 minutes" /
+# "pizza reminder, 10 minutes" — the task named in front of "reminder".
+# Nothing may follow the duration but politeness: "laundry reminder in 5
+# minutes to move it to the dryer" is one task said in two halves, which
+# the tool model joins better than a regex would, so it goes there.
+_CREATE_TOPIC_RE = re.compile(
+    rf"^{_LEAD}{_MODIFIER}{_TOPIC} reminder{_FOR_ME}{_POLITE}{_BEFORE_DURATION}"
+    rf"(?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}$"
 )
 
 # "set a reminder to call mom in 10 minutes" / "a reminder about the
 # pasta in half an hour" — the task first, the duration last.
 _CREATE_NOUN_TASK_FIRST_RE = re.compile(
-    rf"^{_LEAD}{_ARTICLE}reminder{_FOR_ME} (?P<connector>to|about|for|that) "
-    rf"(?P<message>.+?) in (?P<duration>{DURATION_PATTERN}){_FROM_NOW}$"
+    rf"^{_LEAD}{_MODIFIER}reminder{_FOR_ME}{_POLITE} (?P<connector>to|about|for|that) "
+    rf"(?P<message>.+?) in (?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}$"
 )
 
 # "set a 10 minute reminder" / "a five minute reminder to check the oven"
 _CREATE_DURATION_FIRST_RE = re.compile(
-    rf"^{_LEAD}{_ARTICLE}(?P<duration>{DURATION_PATTERN}) reminder{_TASK_AFTER}$"
+    rf"^{_LEAD}{_MODIFIER}(?P<duration>{DURATION_PATTERN}) reminder{_FOR_ME}"
+    rf"{_POLITE}{_TASK_AFTER}$"
+)
+
+# "set a 10 minute laundry reminder" / "a five minute pizza reminder"
+_CREATE_DURATION_TOPIC_RE = re.compile(
+    rf"^{_LEAD}{_MODIFIER}(?P<duration>{DURATION_PATTERN}) {_TOPIC} reminder"
+    rf"{_FOR_ME}{_POLITE}$"
 )
 
 # Every create grammar, in the order the fast paths try them.
 _CREATE_PATTERNS = (
-    _CREATE_RE, _CREATE_IN_RE, _CREATE_NOUN_RE, _CREATE_NOUN_TASK_FIRST_RE,
-    _CREATE_DURATION_FIRST_RE,
+    _CREATE_RE, _CREATE_ABOUT_RE, _CREATE_IN_RE, _CREATE_NOUN_RE,
+    _CREATE_TOPIC_RE, _CREATE_NOUN_TASK_FIRST_RE, _CREATE_DURATION_FIRST_RE,
+    _CREATE_DURATION_TOPIC_RE,
 )
+
+# ─── The tool-call ``message`` ───────────────────────────────────────────
 
 # A tool-call ``message`` that is only the command, not a task: "Reminder
 # set for 10 minutes." (the tool model writing its own reply), "reminder",
 # "10 minute reminder", "10 minutes". Checked after the create grammars.
 _COMMAND_ECHO_RE = re.compile(
-    rf"^(?:{_LEAD}{_ARTICLE}(?:(?:{DURATION_PATTERN}) )?"
+    rf"^(?:{_LEAD}{_MODIFIER}(?:(?:{DURATION_PATTERN}) )?"
     rf"(?:reminder|remind me|ping me|ping|nudge me|nudge)"
-    rf"(?: (?:is |was )?set)?(?: (?:for|in) (?:{DURATION_PATTERN}))?{_FROM_NOW}"
+    rf"(?: (?:is |was |has been )?set)?{_FOR_ME}"
+    rf"(?:{_BEFORE_DURATION}(?:{DURATION_PATTERN}))?{_FROM_NOW}"
     rf"|(?:{DURATION_PATTERN}){_FROM_NOW})$"
 )
+# "Medication reminder", "set the oven reminder", "Call mom reminder": the
+# task named in front, as on the fast path.
+_TOOL_TOPIC_RE = re.compile(rf"^{_LEAD}{_MODIFIER}{_TOPIC} reminder{_FOR_ME}$")
+# "Reminder to call mom", "remind me to take my pills": the task after.
+_TOOL_TASK_RE = re.compile(
+    rf"^(?:{_LEAD}{_MODIFIER}reminder{_FOR_ME}|remind me)"
+    rf" (?P<connector>to|about|for|that) (?P<message>.+)$"
+)
+# "I set a reminder for 10 minutes" / "I'll set a reminder ..." — a
+# subject in front of a copied command.
+_TOOL_SUBJECT_RE = re.compile(r"^(?:i|we|you)(?:'ve|'ll|'d| have| will| just)* (?=[a-z])")
+# "Reminder: call mom" — the model's own heading on the task.
+_TOOL_HEADING_RE = re.compile(r"^reminder\s*[:\-–—]\s*", re.IGNORECASE)
+
+# ─── Cleaning a task ─────────────────────────────────────────────────────
+
+_LEAD_POLITE_RE = re.compile(
+    r"^(?:please|kindly|um|uh|er|erm|hmm)(?:\s*[,.…]+\s*|\s+)", re.IGNORECASE
+)
+_TAIL_POLITE_RE = re.compile(r"(?:^|,?\s+)(?:please|thanks|thank you)$", re.IGNORECASE)
+_MID_POLITE_RE = re.compile(r"\s*,\s*(?:please|thanks|thank you)\s*,\s*", re.IGNORECASE)
+_LEAD_CONNECTOR_RE = re.compile(
+    r"^(to|about|that|for)(?:\s*[,.…]+\s*|\s+)", re.IGNORECASE
+)
+# A task that is only these is no task: "set a reminder for 10 minutes
+# to..." cut off at a pause, or "remind me about it in 10 minutes", which
+# would fire as "Reminder: it".
+_DANGLING = frozenset({
+    "to", "about", "that", "for", "and", "so", "then", "the", "a", "an",
+    "um", "uh", "er", "erm", "hmm", "it", "this", "them", "something",
+})
+# The connector of a task named in front of "reminder": "laundry reminder
+# in 5 minutes" → "Your laundry reminder is set for 5 minutes." ("I'll
+# remind you about call mom" is what "about" would make of "call mom
+# reminder").
+_TOPIC_CONNECTOR = "topic"
+# "... a reminder for me in 10 minutes" is whom it is for, not a task.
+_WHOM = frozenset({"me", "us", "myself", "ourselves"})
+_END_PUNCT = ".,;:!?… "
 
 # A spoken unit's plural, for the cancel match (see _cancel).
 _UNIT_PLURAL_RE = re.compile(r"\b(second|minute|hour)s\b")
 
-# Politeness after the task is not part of it: "… to call mom please".
-_POLITE_TAIL_RE = re.compile(r"(?:^|,?\s+)(?:please|thanks|thank you)$")
 
-
-def _clean_task(raw: str | None) -> str | None:
-    """The task as it should be stored and spoken, or None for no task."""
+def _clean_task(
+    raw: str | None, connector: str | None = None
+) -> tuple[str | None, str | None]:
+    """The task as it should be stored and spoken (None for no task), and
+    the connector that introduced it ("to" / "about" / "for" / "that")."""
     if raw is None:
-        return None
-    task = raw.strip().strip(",").strip()
+        return None, connector
+    task = raw.strip()
     while True:
-        trimmed = _POLITE_TAIL_RE.sub("", task).strip().strip(",").strip()
-        if trimmed == task:
+        before = task
+        task = task.strip(_END_PUNCT).lstrip(",;: ")
+        task = _MID_POLITE_RE.sub(", ", task)
+        task = _LEAD_POLITE_RE.sub("", task)
+        task = _TAIL_POLITE_RE.sub("", task)
+        if connector is None:
+            # "please, to call mom" once the politeness is gone
+            m = _LEAD_CONNECTOR_RE.match(task)
+            if m and task[m.end():].strip(_END_PUNCT):
+                connector = m.group(1).lower()
+                task = task[m.end():]
+        if task == before:
             break
-        task = trimmed
-    # "… reminder for me in 10 minutes" is whom it is for, not a task.
-    if task.lower() in ("me", "us", "myself", "ourselves"):
-        return None
-    return task or None
+    low = task.lower()
+    if not task or low in _DANGLING or low in _WHOM:
+        return None, connector
+    return task, connector
+
+
+def _task_of(m: re.Match[str], source: str | None = None) -> tuple[str | None, str | None]:
+    """The task and its connector from a create-grammar match. A task
+    named in front of "reminder" ("laundry reminder") has the connector
+    ``"topic"``: it reads back as "Your laundry reminder ...". ``source``
+    is the text the match was made on before lower-casing, so a tool
+    call's "Medication" keeps its capital."""
+    gd = m.groupdict()
+
+    def span(name: str) -> str | None:
+        value = gd.get(name)
+        if value is None or source is None or len(source) < m.end(name):
+            return value
+        return source[m.start(name):m.end(name)]
+
+    if gd.get("topic"):
+        task, _ = _clean_task(span("topic"), _TOPIC_CONNECTOR)
+        return task, _TOPIC_CONNECTOR
+    return _clean_task(span("message"), gd.get("connector"))
 
 
 def _task_from_tool_message(raw: object) -> tuple[str | None, str]:
-    """The task in a tool-call ``message``, and the word the reply puts in
-    front of it ("to" / "about" / "that").
+    """The task in a tool-call ``message``, and the connector the reply
+    reads it with ("to" / "about" / "for" / "that", or "topic" for a task
+    named in front of "reminder").
 
     The tool model is told to pass only the task, but with no task spoken
     it copies the transcript ("Better reminder for 10 minutes") or writes
     its own reply ("Reminder set for 10 minutes.") instead. Either one is
     parsed with the fast-path grammars, so a command's words never become
-    what a reminder says when it fires."""
+    what a reminder says when it fires — and a task named in front of the
+    word ("Medication reminder") is kept as the task, not dropped with
+    the command."""
     if not isinstance(raw, str) or not raw.strip():
         return None, "to"
-    text_ = raw.strip()
-    norm = text_.lower().rstrip(".,!?").strip()
-    for pattern in _CREATE_PATTERNS:
-        m = pattern.match(norm)
-        if m:
-            return (
-                _clean_task(m.group("message")),
-                m.groupdict().get("connector") or "to",
-            )
-    if _COMMAND_ECHO_RE.match(norm):
-        return None, "to"
-    return _clean_task(text_.rstrip(".!?")), "to"
+    text_ = _TOOL_HEADING_RE.sub("", raw.strip()).strip()
+    source = text_.rstrip(_END_PUNCT)
+    norm = source.lower()
+    if len(norm) != len(source):
+        source = norm  # a case fold that changed length: spans would drift
+    # The transcript copied whole, subject and all: "I set a reminder for
+    # ten minutes" (qwen3:8b, 2026-09-30) is the command with no task, not
+    # a task. Tried after the text as given, so "I want a reminder ..."
+    # still reads with its own verb.
+    unsubjected = _TOOL_SUBJECT_RE.sub("", norm)
+    candidates = [(norm, source)]
+    if unsubjected != norm:
+        candidates.append((unsubjected, source[len(source) - len(unsubjected):]))
+    for text_norm, text_source in candidates:
+        for pattern in (*_CREATE_PATTERNS, _TOOL_TOPIC_RE, _TOOL_TASK_RE):
+            m = pattern.match(text_norm)
+            if m:
+                task, connector = _task_of(m, text_source)
+                return task, connector or "to"
+        if _COMMAND_ECHO_RE.match(text_norm):
+            return None, "to"
+    task, connector = _clean_task(text_)
+    return task, connector or "to"
+
+
+def _cancel_phrase_from_tool(raw: object) -> str | None:
+    """The label to cancel by from a tool call's ``message``: "Laundry
+    reminder" cancels the reminder labelled "laundry"; nothing cancels
+    every reminder in the room, as before."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    source = raw.strip().rstrip(_END_PUNCT)
+    m = _TOOL_TOPIC_RE.match(source.lower())
+    if m and len(source) == len(source.lower()):
+        return source[m.start("topic"):m.end("topic")]
+    return source
 
 
 def _connector_for_reply(connector: str | None) -> str:
@@ -201,8 +431,13 @@ _LIST_RE = re.compile(
 )
 
 # "cancel my reminder to call mom" / "cancel the reminder for taking the trash"
+# / "cancel the laundry reminder" / "cancel the 10 minute reminder" — the
+# last two are how the create paths name what they set, and without them
+# the tool model cancelled every reminder in the room (qwen3:8b,
+# 2026-09-30: "cancel the laundry reminder" → cancel with no message).
 _CANCEL_RE = re.compile(
-    r"^cancel (?:my |the |that )?reminder(?:s)?"
+    r"^cancel (?:my |the |that )?"
+    rf"(?:(?P<duration>{DURATION_PATTERN}) |{_TOPIC} )?reminder(?:s)?"
     r"(?: (?:to|about|for|named|called) (?P<label>.+))?$"
 )
 
@@ -256,11 +491,22 @@ class ReminderHandler(Handler):
             # ("set a reminder for 10 minutes") and a pause can come before
             # "… to call mom". Committing there would lose the task, which
             # is the one thing a reminder is for.
+            FastPath(_CREATE_ABOUT_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_IN_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_NOUN_RE, ReminderHandler._create_from_match),
+            FastPath(_CREATE_TOPIC_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_NOUN_TASK_FIRST_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_DURATION_FIRST_RE, ReminderHandler._create_from_match),
+            FastPath(_CREATE_DURATION_TOPIC_RE, ReminderHandler._create_from_match),
         ]
+
+    def offers_tool(self, transcript: str) -> bool:
+        # A statement about a reminder ("my reminder for 10 minutes didn't
+        # go off", "you have a reminder in 10 minutes") asks for no
+        # reminder action, and qwen3:8b made new reminders out of some of
+        # them when shown this tool (see TIMER_STATEMENT_RE; the timer
+        # withholds its tool on the same shapes). Every command keeps it.
+        return not TIMER_STATEMENT_RE.match(transcript)
 
     async def execute(
         self, intent: Intent, ctx: Context, session: AsyncSession
@@ -294,7 +540,9 @@ class ReminderHandler(Handler):
         if action == "list":
             return await self._list(ctx, session)
         if action == "cancel":
-            return await self._cancel(args.get("message"), ctx, session)
+            return await self._cancel(
+                _cancel_phrase_from_tool(args.get("message")), ctx, session
+            )
         return Response(
             text=f"I don't know how to {action} a reminder.",
             session_id=ctx.session_id,
@@ -305,8 +553,7 @@ class ReminderHandler(Handler):
     async def _create_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
-        message = _clean_task(m.group("message"))
-        connector = m.groupdict().get("connector")
+        message, connector = _task_of(m)
         duration_sec = parse_duration_seconds(m.group("duration"))
         if not duration_sec:
             # "in 0 minutes" fits the grammar but means nothing — same
@@ -329,7 +576,15 @@ class ReminderHandler(Handler):
     async def _cancel_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
-        label_phrase = m.groupdict().get("label")
+        gd = m.groupdict()
+        label_phrase = gd.get("label") or gd.get("topic")
+        if not label_phrase and gd.get("duration"):
+            # "the ten minute reminder" is the one labelled "10 minute
+            # reminder" (a reminder set with no task).
+            seconds = parse_duration_seconds(gd["duration"])
+            label_phrase = (
+                f"{duration_adjective(seconds)} reminder" if seconds else gd["duration"]
+            )
         if label_phrase:
             label_phrase = label_phrase.strip()
         return await self._cancel(label_phrase, ctx, session)
@@ -357,7 +612,12 @@ class ReminderHandler(Handler):
             # can match without a separate column. Trimmed at 100 chars to
             # keep labels searchable; the full message stays in `message`.
             label = task[:100]
-            reply = f"I'll remind you {_connector_for_reply(connector)} {task} in {spoken}."
+            if connector == _TOPIC_CONNECTOR:
+                reply = f"Your {task} reminder is set for {spoken}."
+            else:
+                reply = (
+                    f"I'll remind you {_connector_for_reply(connector)} {task} in {spoken}."
+                )
         else:
             # No task: an empty message (still a reminder — message IS NOT
             # NULL) and a label that says what it is on every screen that

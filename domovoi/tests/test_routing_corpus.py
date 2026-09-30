@@ -40,7 +40,7 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news", "library"}
+GATED = {"calculator", "double_check", "news", "library", "reminder", "timer"}
 
 
 def _normalize(utterance: str) -> str:

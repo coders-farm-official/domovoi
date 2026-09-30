@@ -361,7 +361,7 @@ async def test_cancel_no_match_returns_helpful_text(db_session) -> None:
 # reminder for 10 minutes in 10 minutes." and the fired line "Reminder:
 # Better reminder for 10 minutes". These run the real router plan and the
 # real handler method; only the INSERT is captured, so none of them can
-# hide behind requires_db.
+# hide behind requires_db. The fired line is the watcher's own.
 
 class _CapturingTimers:
     """Stands in for TimerRepository: records what create() was given."""
@@ -397,69 +397,164 @@ async def _say(transcript: str):
     return await plan.fast_path.method(plan.handler, plan.match, ctx, None)
 
 
+def _fired(row: dict) -> str:
+    """What the TimerWatcher says when this row goes off."""
+    from domovoi.workers.timer_watcher import _reminder_text
+
+    duration = round((row["expires_at"] - row["created_at"]).total_seconds())
+    return _reminder_text(row["message"], duration)
+
+
 _NO_TASK = ""
-# (Whisper transcript, stored message, stored label, seconds, spoken reply)
-_SPOKEN_CREATE_CASES: list[tuple[str, str, str, int, str]] = [
-    ("Set a reminder for 10 minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
+_NO_TASK_10 = ("", "10 minute reminder", 600, "I'll remind you in 10 minutes.",
+               "Here's your 10 minute reminder.")
+
+
+def _task(message: str, seconds: int, reply: str) -> tuple:
+    """A reminder with a task: label = message, fires "Reminder: <task>"."""
+    return (message, message, seconds, reply, f"Reminder: {message}")
+
+
+# (Whisper transcript, stored message, stored label, seconds, spoken reply,
+#  fired line)
+_SPOKEN_CREATE_CASES: list[tuple] = [
+    # ── no task: the command words are never the message ──
+    ("Set a reminder for 10 minutes.", *_NO_TASK_10),
     # the live row: a mumbled "set a" heard as "better"
-    ("Better reminder for 10 minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
+    ("Better reminder for 10 minutes.", *_NO_TASK_10),
     ("Said a reminder for five minutes.", _NO_TASK, "5 minute reminder", 300,
-     "I'll remind you in 5 minutes."),
-    ("Set reminder for ten minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
-    ("A reminder for 10 minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
-    ("Remind me in 10 minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
-    ("Set a 10 minute reminder.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
-    ("Set a reminder for 10 minutes please.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
-    ("Set a reminder for 10 minutes from now.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
+     "I'll remind you in 5 minutes.", "Here's your 5 minute reminder."),
+    ("Set reminder for ten minutes.", *_NO_TASK_10),
+    ("A reminder for 10 minutes.", *_NO_TASK_10),
+    ("Reminder for 10 minutes.", *_NO_TASK_10),
+    ("Reminder 10 minutes.", *_NO_TASK_10),
+    ("Remind me in 10 minutes.", *_NO_TASK_10),
+    ("Set a 10 minute reminder.", *_NO_TASK_10),
+    ("Set a reminder for 10 minutes from now.", *_NO_TASK_10),
+    ("Set a quick reminder for 10 minutes.", *_NO_TASK_10),
+    ("Set the reminder for 10 minutes.", *_NO_TASK_10),
+    ("Set my reminder for 10 minutes.", *_NO_TASK_10),
+    ("Hey, set a reminder for 10 minutes.", *_NO_TASK_10),
+    ("Can you set a reminder for 10 minutes?", *_NO_TASK_10),
+    ("Please set me a reminder for 10 minutes.", *_NO_TASK_10),
+    ("Could you please set up a reminder for 10 minutes?", *_NO_TASK_10),
+    ("Give me a reminder in 10 minutes.", *_NO_TASK_10),
+    ("Just a reminder for 10 minutes.", *_NO_TASK_10),
+    ("Another reminder in 10 minutes.", *_NO_TASK_10),
+    ("Ping me in ten minutes.", *_NO_TASK_10),
     ("Please set a reminder for 1 hour and 30 minutes.", _NO_TASK,
      "1 hour and 30 minute reminder", 5400,
-     "I'll remind you in 1 hour and 30 minutes."),
-    # with a task: only the task is kept
-    ("Remind me to check the oven in 10 minutes.", "check the oven", "check the oven",
-     600, "I'll remind you to check the oven in 10 minutes."),
-    ("Set a reminder for 10 minutes to call mom.", "call mom", "call mom", 600,
-     "I'll remind you to call mom in 10 minutes."),
-    ("Reminder in 5 minutes take the laundry out.", "take the laundry out",
-     "take the laundry out", 300,
-     "I'll remind you to take the laundry out in 5 minutes."),
-    ("Remind me in 10 minutes to call mom.", "call mom", "call mom", 600,
-     "I'll remind you to call mom in 10 minutes."),
-    ("Set a reminder to call mom in 10 minutes.", "call mom", "call mom", 600,
-     "I'll remind you to call mom in 10 minutes."),
-    ("Better reminder for 10 minutes to call mom.", "call mom", "call mom", 600,
-     "I'll remind you to call mom in 10 minutes."),
-    ("Set a ten minute reminder to check the oven.", "check the oven",
-     "check the oven", 600, "I'll remind you to check the oven in 10 minutes."),
-    ("Remind me in an hour and a half to leave.", "leave", "leave", 5400,
-     "I'll remind you to leave in 1 hour and 30 minutes."),
-    ("Set a reminder for 10 minutes for the pasta.", "the pasta", "the pasta", 600,
-     "I'll remind you about the pasta in 10 minutes."),
-    ("Remind me in 10 minutes that the oven is on.", "the oven is on",
-     "the oven is on", 600, "I'll remind you that the oven is on in 10 minutes."),
+     "I'll remind you in 1 hour and 30 minutes.",
+     "Here's your 1 hour and 30 minute reminder."),
     # "for me" is whom it is for, not the task ("I'll remind you about me")
-    ("Could you set a reminder for me in 10 minutes?", _NO_TASK, "10 minute reminder",
-     600, "I'll remind you in 10 minutes."),
-    ("Set a reminder for me to call mom in 10 minutes.", "call mom", "call mom", 600,
-     "I'll remind you to call mom in 10 minutes."),
-    ("Ping me in ten minutes.", _NO_TASK, "10 minute reminder", 600,
-     "I'll remind you in 10 minutes."),
+    ("Could you set a reminder for me in 10 minutes?", *_NO_TASK_10),
+    ("Set a reminder for me in 10 minutes.", *_NO_TASK_10),
+    # a dangling connector (cut off at a pause) or a pronoun is no task:
+    # "I'll remind you to to in 10 minutes." / "Reminder: to"
+    ("Set a reminder for 10 minutes to...", *_NO_TASK_10),
+    ("Set a reminder for 10 minutes to.", *_NO_TASK_10),
+    ("Remind me in 10 minutes to", *_NO_TASK_10),
+    ("Set a reminder for 10 minutes to, um", *_NO_TASK_10),
+    ("Remind me about it in 10 minutes.", *_NO_TASK_10),
+    # politeness is never the task, wherever it is said
+    ("Set a reminder for 10 minutes please.", *_NO_TASK_10),
+    ("Set a reminder please for 10 minutes.", *_NO_TASK_10),
+    ("Remind me in 10 minutes, please.", *_NO_TASK_10),
+    # ── a task after the duration or a connector: only the task is kept ──
+    ("Remind me to check the oven in 10 minutes.",
+     *_task("check the oven", 600, "I'll remind you to check the oven in 10 minutes.")),
+    ("Set a reminder for 10 minutes to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Reminder in 5 minutes take the laundry out.",
+     *_task("take the laundry out", 300,
+            "I'll remind you to take the laundry out in 5 minutes.")),
+    ("Remind me in 10 minutes to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Set a reminder to call mom in 10 minutes.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Better reminder for 10 minutes to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Set a ten minute reminder to check the oven.",
+     *_task("check the oven", 600, "I'll remind you to check the oven in 10 minutes.")),
+    ("Remind me in an hour and a half to leave.",
+     *_task("leave", 5400, "I'll remind you to leave in 1 hour and 30 minutes.")),
+    ("Set a reminder for 10 minutes for the pasta.",
+     *_task("the pasta", 600, "I'll remind you about the pasta in 10 minutes.")),
+    ("Remind me in 10 minutes about the pasta.",
+     *_task("the pasta", 600, "I'll remind you about the pasta in 10 minutes.")),
+    ("Remind me about the laundry in 5 minutes.",
+     *_task("the laundry", 300, "I'll remind you about the laundry in 5 minutes.")),
+    ("Remind me in 10 minutes that the oven is on.",
+     *_task("the oven is on", 600, "I'll remind you that the oven is on in 10 minutes.")),
+    ("Set a reminder for 10 minutes that the pizza is ready.",
+     *_task("the pizza is ready", 600,
+            "I'll remind you that the pizza is ready in 10 minutes.")),
+    ("Set a reminder for 10 minutes, to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Set a reminder for me to call mom in 10 minutes.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("I want a reminder in 10 minutes to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("One more reminder in 10 minutes to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("New reminder for 10 minutes call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    # politeness between the parts is dropped, the task kept
+    ("Remind me in 10 minutes, please, to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Remind me in 10 minutes please to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Remind me, please, to call mom in 10 minutes.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Remind me to please call mom in 10 minutes.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Set a reminder for 10 minutes to call mom please.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    # a sentence break, an ellipsis or a filler before the task
+    ("Remind me in ten minutes. Call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Remind me in 10 minutes to... call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    ("Set a reminder for ten minutes, um, to call mom.",
+     *_task("call mom", 600, "I'll remind you to call mom in 10 minutes.")),
+    # ... but a "please" inside the task is the task's
+    ("Remind me to say please to grandma in 10 minutes.",
+     *_task("say please to grandma", 600,
+            "I'll remind you to say please to grandma in 10 minutes.")),
+    # ── a task named in FRONT of "reminder" is the task, not a verb ──
+    ("Laundry reminder in 5 minutes.",
+     *_task("laundry", 300, "Your laundry reminder is set for 5 minutes.")),
+    ("Oven reminder for 10 minutes.",
+     *_task("oven", 600, "Your oven reminder is set for 10 minutes.")),
+    ("Set oven reminder for 10 minutes.",
+     *_task("oven", 600, "Your oven reminder is set for 10 minutes.")),
+    ("Medication reminder in 30 minutes.",
+     *_task("medication", 1800, "Your medication reminder is set for 30 minutes.")),
+    ("A laundry reminder in 5 minutes.",
+     *_task("laundry", 300, "Your laundry reminder is set for 5 minutes.")),
+    ("Set a laundry reminder for 5 minutes please.",
+     *_task("laundry", 300, "Your laundry reminder is set for 5 minutes.")),
+    ("Pizza reminder, 10 minutes.",
+     *_task("pizza", 600, "Your pizza reminder is set for 10 minutes.")),
+    ("Call mom reminder in 10 minutes.",
+     *_task("call mom", 600, "Your call mom reminder is set for 10 minutes.")),
+    ("Mom's birthday reminder in an hour.",
+     *_task("mom's birthday", 3600, "Your mom's birthday reminder is set for 1 hour.")),
+    ("Set a 10 minute laundry reminder.",
+     *_task("laundry", 600, "Your laundry reminder is set for 10 minutes.")),
+    ("Test reminder in 10 seconds.",
+     *_task("test", 10, "Your test reminder is set for 10 seconds.")),
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("transcript", "message", "label", "seconds", "reply"), _SPOKEN_CREATE_CASES
+    ("transcript", "message", "label", "seconds", "reply", "fired"),
+    _SPOKEN_CREATE_CASES,
+    ids=[c[0] for c in _SPOKEN_CREATE_CASES],
 )
 async def test_spoken_reminder_stores_only_the_task(
-    captured_timers, transcript, message, label, seconds, reply
+    captured_timers, transcript, message, label, seconds, reply, fired
 ) -> None:
     response = await _say(transcript)
 
@@ -474,30 +569,66 @@ async def test_spoken_reminder_stores_only_the_task(
     assert row["room_id"] == "garage"
     # One instant for both ends, so the fired line's duration is exact.
     assert row["expires_at"] - row["created_at"] == timedelta(seconds=seconds)
+    assert _fired(row) == fired
 
 
-@pytest.mark.parametrize(
-    "transcript",
-    [
-        # asking about, cancelling or changing a reminder is not a new one
-        "cancel the reminder for 10 minutes",
-        "stop the reminder for 10 minutes",
-        "delete the reminder for 10 minutes",
-        "snooze the reminder for 10 minutes",
-        "turn off the reminder in 10 minutes",
-        "what's my reminder for 10 minutes",
-        "is there a reminder in 10 minutes",
-        "i don't need a reminder for 10 minutes",
-        # still the timer's
-        "set a timer for 10 minutes",
-        "timer for 5 minutes called eggs",
-        # no duration: not a fast path at all
-        "remind me to call mom",
-        "set a reminder",
-        # a clock time is not a duration (absolute reminders are deferred)
-        "remind me at 6 pm to feed the dog",
-    ],
-)
+# Talking ABOUT a reminder, cancelling or changing one, or a shape the
+# grammar leaves to the tool model: never a new reminder on a fast path.
+_NOT_A_CREATE = [
+    # complaints and statements (all were creates at 7fa80b9: "I'll remind
+    # you to did not go off in 10 minutes.")
+    "My reminder for 10 minutes didn't go off.",
+    "My reminder for 10 minutes did not go off.",
+    "That reminder for 10 minutes was useless.",
+    "That reminder was useless.",
+    "You have a reminder in 10 minutes.",
+    "I have a reminder in 10 minutes.",
+    "The reminder in 10 minutes is for the oven.",
+    "Your reminder in 10 minutes.",
+    "Why didn't my reminder for 10 minutes go off?",
+    "Set a reminder for 10 minutes that was useless.",
+    "Set a reminder for 10 minutes didn't go off.",
+    "Remind me in 10 minutes because my last reminder didn't go off.",
+    # asking about, cancelling or changing a reminder is not a new one
+    "cancel the reminder for 10 minutes",
+    "stop the reminder for 10 minutes",
+    "delete the reminder for 10 minutes",
+    "snooze the reminder for 10 minutes",
+    "turn off the reminder in 10 minutes",
+    "extend the reminder for 10 minutes",
+    "bump the reminder for 10 minutes",
+    "move the reminder for 10 minutes to 20 minutes",
+    "what's my reminder for 10 minutes",
+    "is there a reminder in 10 minutes",
+    "did i set a reminder for 10 minutes",
+    "i don't need a reminder for 10 minutes",
+    # an existing reminder, or one again, named in front
+    "Next reminder in 10 minutes.",
+    "Upcoming reminder in 10 minutes.",
+    "Repeat reminder in 10 minutes.",
+    "Snooze reminder for 10 minutes.",
+    # a past time is not a new reminder's task ("Reminder: ago")
+    "Set a reminder 10 minutes ago.",
+    # a task in front AND after is one task said in two halves: the tool
+    # model joins it ("Move the laundry to the dryer")
+    "Laundry reminder in 5 minutes to move it to the dryer.",
+    # an article inside the named task is past what the grammar keeps
+    "Water the plants reminder in 10 minutes.",
+    # still the timer's
+    "set a timer for 10 minutes",
+    "timer for 5 minutes called eggs",
+    # no duration: not a fast path at all
+    "remind me to call mom",
+    "set a reminder",
+    "set reminders for 10 minutes",
+    # a clock time is not a duration (absolute reminders are deferred)
+    "remind me at 6 pm to feed the dog",
+    "set a reminder for 5 pm",
+    "set a reminder for tomorrow at 9",
+]
+
+
+@pytest.mark.parametrize("transcript", _NOT_A_CREATE)
 def test_the_create_paths_do_not_poach(transcript: str) -> None:
     from domovoi.router import plan_route
 
@@ -507,6 +638,127 @@ def test_the_create_paths_do_not_poach(transcript: str) -> None:
         and plan.handler.name == "reminder"
         and plan.fast_path.method is ReminderHandler._create_from_match
     ), f"{transcript!r} became a new reminder"
+
+
+# The tool model is not offered the reminder tool for talk ABOUT a
+# reminder: qwen3:8b (2026-09-30) made "You have a reminder in 10 minutes."
+# a no-task reminder and "The reminder in 10 minutes is for the oven." a
+# reminder "oven" when it was — nor the timer's, which it reached for next
+# (a 10 minute "oven reminder" timer).
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "My reminder for 10 minutes didn't go off.",
+        "my reminder didn't go off",
+        "That reminder was useless.",
+        "that reminder for 10 minutes was useless",
+        "You have a reminder in 10 minutes.",
+        "you've got a reminder at noon",
+        "I have a reminder in 10 minutes.",
+        "The reminder in 10 minutes is for the oven.",
+        "the reminder never went off",
+        "Why didn't my reminder go off?",
+        "where did my reminders go",
+        "I set a reminder for 10 minutes and it never went off.",
+        "i set a reminder and it did not go off",
+    ],
+)
+def test_statements_about_a_reminder_are_not_offered_the_tool(transcript: str) -> None:
+    from domovoi.router import normalize_transcript, offered_tool_schemas, strip_leading_filler
+
+    norm = strip_leading_filler(normalize_transcript(transcript))
+    offered = [s["name"] for s in offered_tool_schemas(norm)]
+    assert "reminder" not in offered
+    assert "timer" not in offered
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        # the commands that reach the tool model keep the tool
+        "remind me to call mom at five",
+        "remind me at 6 pm to feed the dog",
+        "set a reminder for 5 pm",
+        "laundry reminder in 5 minutes to move it to the dryer",
+        "i need a reminder at noon",
+        "i want a reminder tomorrow morning",
+        "can i have a reminder at six",
+        "i have to leave at five, set a reminder",
+        "i set a reminder for ten minutes",  # also "hi, set a reminder ..."
+        "what reminders do i have tomorrow",
+        "cancel the laundry reminder",
+        "change my reminder to 10 minutes",
+        "snooze the reminder for 10 minutes",
+        "the reminder should say call mom",
+    ],
+)
+def test_reminder_commands_keep_the_tool(transcript: str) -> None:
+    from domovoi.router import normalize_transcript, offered_tool_schemas, strip_leading_filler
+
+    norm = strip_leading_filler(normalize_transcript(transcript))
+    assert "reminder" in [s["name"] for s in offered_tool_schemas(norm)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("transcript", "label_phrase"),
+    [
+        ("Cancel my reminder to call mom.", "call mom"),
+        ("Cancel the reminder for the oven.", "the oven"),
+        ("Cancel the reminder for 10 minutes.", "10 minutes"),
+        ("Cancel my reminders.", None),
+        ("Cancel the reminder.", None),
+        # what the create paths name: a task in front of "reminder", and a
+        # no-task reminder's "10 minute reminder" label
+        ("Cancel the laundry reminder.", "laundry"),
+        ("Cancel my medication reminder.", "medication"),
+        ("Cancel the ten minute reminder.", "10 minute reminder"),
+        ("Cancel the 5 minute reminder.", "5 minute reminder"),
+    ],
+)
+async def test_cancel_names_the_reminder(monkeypatch, transcript, label_phrase) -> None:
+    from domovoi.router import plan_route
+
+    seen: list = []
+
+    async def fake_cancel(self, phrase, ctx, session):
+        seen.append(phrase)
+        return None
+
+    monkeypatch.setattr(ReminderHandler, "_cancel", fake_cancel)
+    plan = plan_route(transcript)
+    assert plan is not None and plan.fast_path.method is ReminderHandler._cancel_from_match
+    ctx = Context(session_id=None, room_id="garage", online=True)
+    await plan.fast_path.method(plan.handler, plan.match, ctx, None)
+    assert seen == [label_phrase]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "label_phrase"),
+    [
+        ("Laundry reminder", "Laundry"),
+        ("laundry", "laundry"),
+        ("10 minute reminder", "10 minute reminder"),
+        ("call mom.", "call mom"),
+        ("", None),
+        (None, None),
+    ],
+)
+async def test_tool_cancel_names_the_reminder(monkeypatch, message, label_phrase) -> None:
+    seen: list = []
+
+    async def fake_cancel(self, phrase, ctx, session):
+        seen.append(phrase)
+        return None
+
+    monkeypatch.setattr(ReminderHandler, "_cancel", fake_cancel)
+    ctx = Context(session_id=None, room_id="garage", online=True)
+    args = {"action": "cancel"}
+    if message is not None:
+        args["message"] = message
+    await ReminderHandler().execute_from_tool(args, ctx, None)  # type: ignore[arg-type]
+    assert seen == [label_phrase]
 
 
 def test_cancel_by_duration_still_reaches_cancel() -> None:
@@ -524,15 +776,20 @@ def test_new_create_paths_never_commit_early() -> None:
     from domovoi.early_commit import early_commit_for
 
     for text_ in ("set a reminder for 10 minutes", "better reminder for 10 minutes",
-                  "remind me in 10 minutes", "set a 10 minute reminder"):
+                  "remind me in 10 minutes", "set a 10 minute reminder",
+                  "laundry reminder in 5 minutes", "remind me about the laundry in 5 minutes",
+                  "set a 10 minute laundry reminder"):
         assert early_commit_for(text_) is None, text_
 
 
-# What the tool model actually passed at 7f5d2cd (qwen3:8b, temperature 0,
-# this checkout's prompt and schemas) for phrasings with no fast path then.
+# What the tool model passes as ``message`` (qwen3:8b, temperature 0, this
+# checkout's prompt and schemas, 2026-09-30) and what gets stored.
 _TOOL_CASES: list[tuple[object, int, str, str, str]] = [
     # (tool message, duration_sec, stored message, stored label, reply)
+    # ── the command copied or paraphrased: no task ──
     ("Better reminder for 10 minutes", 600, _NO_TASK, "10 minute reminder",
+     "I'll remind you in 10 minutes."),
+    ("Better reminder", 600, _NO_TASK, "10 minute reminder",
      "I'll remind you in 10 minutes."),
     ("Reminder set for 10 minutes.", 600, _NO_TASK, "10 minute reminder",
      "I'll remind you in 10 minutes."),
@@ -544,25 +801,68 @@ _TOOL_CASES: list[tuple[object, int, str, str, str]] = [
      "I'll remind you in 5 minutes."),
     ("10 minute reminder", 600, _NO_TASK, "10 minute reminder",
      "I'll remind you in 10 minutes."),
+    ("10 minutes", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
+    ("Set reminder", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
     ("Reminder", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
     ("Ping", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
+    # a dangling connector is no task ("I'll remind you to to in 10 minutes.")
+    ("to...", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
     # no message at all used to answer "What should I remind you about?"
     # and set nothing: nothing hears the answer to that question
     ("", 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
     (None, 600, _NO_TASK, "10 minute reminder", "I'll remind you in 10 minutes."),
-    # a real task is kept as the model wrote it (terminal stop dropped)
+    # ── a real task is kept as the model wrote it (terminal stop dropped) ──
     ("Call mom", 600, "Call mom", "Call mom", "I'll remind you to Call mom in 10 minutes."),
     ("Take the laundry out.", 300, "Take the laundry out", "Take the laundry out",
      "I'll remind you to Take the laundry out in 5 minutes."),
-    # the whole command passed as the message: only its task survives
+    ("Take your medication", 1800, "Take your medication", "Take your medication",
+     "I'll remind you to Take your medication in 30 minutes."),
+    ("run a ping", 600, "run a ping", "run a ping",
+     "I'll remind you to run a ping in 10 minutes."),
+    ("Check the reminder app", 600, "Check the reminder app", "Check the reminder app",
+     "I'll remind you to Check the reminder app in 10 minutes."),
+    # ... with the model's heading, politeness and connector dropped
+    ("Reminder: call mom", 600, "call mom", "call mom",
+     "I'll remind you to call mom in 10 minutes."),
+    ("Please, to call mom", 600, "call mom", "call mom",
+     "I'll remind you to call mom in 10 minutes."),
+    ("please call mom", 600, "call mom", "call mom",
+     "I'll remind you to call mom in 10 minutes."),
+    ("Reminder to call mom", 600, "call mom", "call mom",
+     "I'll remind you to call mom in 10 minutes."),
+    ("remind me to take my pills", 600, "take my pills", "take my pills",
+     "I'll remind you to take my pills in 10 minutes."),
+    # ── a task named in front of "reminder" is the task, in the model's case ──
+    ("Medication reminder", 1800, "Medication", "Medication",
+     "Your Medication reminder is set for 30 minutes."),
+    ("Water reminder", 600, "Water", "Water", "Your Water reminder is set for 10 minutes."),
+    ("doctor reminder", 600, "doctor", "doctor", "Your doctor reminder is set for 10 minutes."),
+    ("email reminder", 600, "email", "email", "Your email reminder is set for 10 minutes."),
+    ("Call mom reminder", 600, "Call mom", "Call mom",
+     "Your Call mom reminder is set for 10 minutes."),
+    ("set the oven reminder", 600, "oven", "oven", "Your oven reminder is set for 10 minutes."),
+    # ── the whole command passed as the message: only its task survives ──
     ("Set a reminder for 10 minutes to call mom", 600, "call mom", "call mom",
      "I'll remind you to call mom in 10 minutes."),
+    ("Laundry reminder in 5 minutes", 300, "Laundry", "Laundry",
+     "Your Laundry reminder is set for 5 minutes."),
+    # ... subject and all (qwen3:8b for "I set a reminder for ten minutes.")
+    ("I set a reminder for ten minutes", 600, _NO_TASK, "10 minute reminder",
+     "I'll remind you in 10 minutes."),
+    ("I'll set a reminder for 10 minutes to call mom.", 600, "call mom", "call mom",
+     "I'll remind you to call mom in 10 minutes."),
+    # ... but a subject in front of a real task stays (the model's words)
+    ("I need to call mom", 600, "I need to call mom", "I need to call mom",
+     "I'll remind you to I need to call mom in 10 minutes."),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("message", "duration", "stored", "label", "reply"), _TOOL_CASES)
-async def test_tool_call_message_that_is_the_command_is_no_task(
+@pytest.mark.parametrize(
+    ("message", "duration", "stored", "label", "reply"), _TOOL_CASES,
+    ids=[repr(c[0]) for c in _TOOL_CASES],
+)
+async def test_tool_call_message_keeps_only_the_task(
     captured_timers, message, duration, stored, label, reply
 ) -> None:
     ctx = Context(session_id=None, room_id="garage", online=True)
@@ -639,6 +939,41 @@ async def test_no_task_reminder_round_trip(db_session) -> None:
     assert cancelled.text == "Cancelled the reminder."
     left = (await db_session.execute(text("SELECT count(*) FROM timers"))).scalar_one()
     assert left == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_named_reminder_round_trip(db_session) -> None:
+    """"laundry reminder in 5 minutes" keeps "laundry"; "cancel the laundry
+    reminder" cancels that one and leaves the no-task one, which "cancel
+    the ten minute reminder" then finds."""
+    from domovoi.router import plan_route
+
+    handler = ReminderHandler()
+    ctx = Context(session_id=None, room_id="garage", online=True)
+    for said in ("Laundry reminder in 5 minutes.", "Set a reminder for ten minutes."):
+        plan = plan_route(said)
+        await plan.fast_path.method(handler, plan.match, ctx, db_session)
+    await db_session.commit()
+    rows = (
+        await db_session.execute(
+            text("SELECT label, message FROM timers ORDER BY expires_at")
+        )
+    ).all()
+    assert [tuple(r) for r in rows] == [("laundry", "laundry"), ("10 minute reminder", "")]
+
+    plan = plan_route("Cancel the laundry reminder.")
+    response = await plan.fast_path.method(handler, plan.match, ctx, db_session)
+    await db_session.commit()
+    assert response.text == "Cancelled the reminder."
+    left = (await db_session.execute(text("SELECT label FROM timers"))).scalars().all()
+    assert left == ["10 minute reminder"]
+
+    plan = plan_route("Cancel the ten minute reminder.")
+    response = await plan.fast_path.method(handler, plan.match, ctx, db_session)
+    await db_session.commit()
+    assert response.text == "Cancelled the reminder."
+    assert (await db_session.execute(text("SELECT count(*) FROM timers"))).scalar_one() == 0
 
 
 @requires_db
