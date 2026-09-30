@@ -292,6 +292,58 @@ def test_reminder_and_timer_withhold_only_where_the_router_never_looks(utterance
     assert {"reminder", "timer"} <= set(ungated)
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        # said right after a timer or reminder went off (every room hears it)
+        "The timer is going off, stop it.",
+        "The kitchen timer is done, stop it.",
+        "My timer is going off.",
+        "The timer is done.",
+        "the timer's done",
+        "That reminder was for the oven, stop it.",
+        "the reminder went off, turn it off",
+        # a command inside talk about a timer
+        "why don't you set a timer for ten minutes",
+        "I have a timer going, how long is left",
+        "you have a timer for the pasta, cancel it",
+        "i've got a timer going, set another one for five minutes",
+        # and the plain commands, as before
+        "Stop the alarm.",
+        "Turn off the timer.",
+    ],
+)
+def test_a_timer_command_inside_talk_about_a_timer_reaches_the_router(utterance: str) -> None:
+    """The statement gate is for statements only (review 2026-09-30): an
+    imperative to stop or cancel, a how-long question, a timer going off
+    right now, a command after the statement, or "why don't you ..." makes
+    the turn a routed one, offered the timer and reminder tools — whose
+    cancels acknowledge a fire that just went off in the room. Sent to Q&A
+    with no tools, nothing was acknowledged and nothing stopped."""
+    normalized = _normalize(utterance)
+    assert not answers_without_tools(normalized)
+    offered = _offered(utterance)
+    assert "timer" in offered and "reminder" in offered
+    assert offered == _offered("")
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "my reminder for ten minutes didn't go off",
+        "you have a reminder in ten minutes",
+        "the reminder in ten minutes is for the oven",
+        "i set a reminder for 10 minutes and it never went off",
+        "that reminder was useless",
+        "why is the timer beeping",
+        "why don't my reminders work",
+        "who didn't hear the reminder",
+    ],
+)
+def test_statements_about_a_timer_still_go_straight_to_qa(utterance: str) -> None:
+    assert answers_without_tools(_normalize(utterance))
+
+
 def test_tools_offered_only_on_request_are_appended_after_the_usual_ones() -> None:
     """double_check and news are offered only when asked for; they go after
     calculator and library (on offer unless ruled out), so asking for one

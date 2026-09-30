@@ -20,6 +20,7 @@ from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
+from domovoi.music_pause import note_paused_by_person
 
 # Session-context keys for the external-streaming seam. A registered
 # streaming-search provider's plays are stamped here so smart-skip can
@@ -996,6 +997,14 @@ class MusicHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        # A person's pause holds until a person resumes, stops or starts
+        # something: the music_ready handshake that follows every
+        # music_start (a turn's auto-resume, an announcement's restart)
+        # leaves this room's MPD paused meanwhile (domovoi/music_pause.py).
+        if action == "pause":
+            note_paused_by_person(ctx.app, ctx.room_id, True)
+        elif action in ("resume", "stop"):
+            note_paused_by_person(ctx.app, ctx.room_id, False)
         # "stop" tears down the Pi's music subprocess; pause/resume keep the
         # HTTP stream open (MPD just stops sending audio frames during pause)
         # so no Pi-side state change needed.

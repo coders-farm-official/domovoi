@@ -417,14 +417,32 @@ def _round_ms(v: float) -> int:
     return int(math.floor(v + 0.5))
 
 
-def _stage_value(doc: dict[str, Any], stage: str) -> float | None:
-    v = doc.get(stage)
-    # bool is an int subclass; a stage is never one.
+# No timing is anywhere near this (ms: about 31 years). A row's numbers come
+# partly from satellites, and an int too big for a float (JSON allows
+# 10**400) made math.isfinite raise: one such row took down the whole
+# latency summary.
+_TIMING_MAX = 1e12
+
+
+def _timing_number(v: Any) -> float | None:
+    """``v`` as a float when it is a sane timing number, else None."""
+    # bool is an int subclass; a timing is never one.
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    if not math.isfinite(v) or v < 0:
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
         return None
-    return float(v)
+    if not math.isfinite(f) or abs(f) > _TIMING_MAX:
+        return None
+    return f
+
+
+def _stage_value(doc: dict[str, Any], stage: str) -> float | None:
+    f = _timing_number(doc.get(stage))
+    if f is None or f < 0:
+        return None
+    return f
 
 
 def _whisper_key(doc: dict[str, Any]) -> tuple[Any, ...] | None:
@@ -441,10 +459,7 @@ def _whisper_key(doc: dict[str, Any]) -> tuple[Any, ...] | None:
 def _capture_value(doc: dict[str, Any], key: str) -> float | None:
     if key not in _SIGNED_CAPTURE_KEYS:
         return _stage_value(doc, key)
-    v = doc.get(key)
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
-        return None
-    return float(v)
+    return _timing_number(doc.get(key))
 
 
 def _spread(vals: list[float]) -> dict[str, Any]:

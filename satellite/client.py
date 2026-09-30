@@ -848,6 +848,19 @@ def _capture_stats_str(
 
 # ─── Music: one mpg123 run, and when to try it again ──────────────────────
 
+# What a music_start's stream_url may be: an http(s) URL with no whitespace
+# or control characters. It goes into mpg123's argv as-is.
+_STREAM_URL_RE = re.compile(r"https?://[^\s\x00-\x1f\x7f]+", re.IGNORECASE)
+
+
+def _is_stream_url(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= 2048
+        and _STREAM_URL_RE.fullmatch(value) is not None
+    )
+
+
 @dataclass
 class _MusicRun:
     """One mpg123 process playing one stream URL.
@@ -1080,6 +1093,16 @@ class Satellite:
         # capture notes this count to tell its own reply from the last one
         # (`_reply_may_be_playing`).
         self._response_starts = 0
+        # The count above when the current capture began (`_begin_utterance`)
+        # and whether that capture's utterance_end is still to go
+        # (`_turn_capturing`). A `response_end` that arrives while it is,
+        # with no `response_start` since, ends something from before this
+        # turn — an announcement still draining when the wake word came, or
+        # the one or the reply the new capture cut off (the core sends that
+        # one's interrupted end AFTER the utterance_start) — and must not
+        # release this turn's wait for its own reply.
+        self._turn_mark = 0
+        self._turn_capturing = False
         # Pre-buffer state. While `_prebuffer_active` is True, the
         # receiver accumulates binary audio frames in `_prebuffer_buffer`
         # instead of pushing them to playback_q — gives the playback
@@ -1611,6 +1634,14 @@ class Satellite:
         that doesn't know them ignores them."""
         self._utt_seq += 1
         self._utt_started = time.monotonic()
+        # Whatever was playing before this capture is not its reply: mark
+        # where this turn's replies start (see `_turn_mark`), then drop a
+        # release still deferred until that audio drains (close_stream) — in
+        # that order, so a response_end the receiver handles meanwhile is
+        # either seen as stale or has its deferred release dropped here.
+        self._turn_mark = getattr(self, "_response_starts", 0)
+        self._turn_capturing = trigger != "wake_clip"
+        self._post_playback_state = None
         msg: dict[str, Any] = {
             "type": "utterance_start", "trigger": trigger, "utt": self._utt_seq,
             "backlog_ms": self._mic_backlog_ms(),
@@ -1849,6 +1880,12 @@ class Satellite:
         """Start one mpg123 run against ``url`` and its watcher. Caller
         holds `_music_lock`. False (and no music state left behind) when
         mpg123 cannot be spawned."""
+        if not _is_stream_url(url):
+            log.error("music: refusing to start %r (not an http(s) URL)", str(url)[:120])
+            self._music_proc = None
+            self._music_url = None
+            self._music_run = None
+            return False
         if attempt == 1:
             log.info("starting music: %s (alsa=%s)", url, self.cfg.music_alsa_device)
         else:
@@ -3965,6 +4002,7 @@ class Satellite:
         try:
             return self._capture(prefix_frames, pre_speech_timeout_sec)
         finally:
+            self._turn_capturing = False
             with self._capture_lock:
                 self._capture_utt = None
 
@@ -4224,12 +4262,16 @@ class Satellite:
                     )
                     self._maybe_recalibrate(capture_dbfs)
                     self._leds.set_state("error")
+                    self._turn_capturing = False
                     # Successful exit, just via the noisy path — unless the
                     # frame went nowhere, in which case the apology TTS the
                     # caller would wait for is not coming either.
                     return self._emit_text({"type": "noisy_capture"})
 
         self._leds.set_state("thinking")
+        # From here a response_end with no response_start is this turn's
+        # (the core ends a blank capture that way).
+        self._turn_capturing = False
         delivered = self._emit_text({
             "type": "utterance_end",
             # greeting_played / greeting_clip / ack_before_capture: see
@@ -5331,6 +5373,21 @@ class Satellite:
             # tries to wait on a stream that hasn't even started playing.
             if self._prebuffer_active:
                 self._flush_prebuffer()
+            if (
+                getattr(self, "_turn_capturing", False)
+                and getattr(self, "_response_starts", 0) == getattr(self, "_turn_mark", 0)
+            ):
+                # The end of something from before the capture now open (see
+                # `_turn_mark`): "hey jarvis, stop the timer" said over the
+                # timer's announcement. Its audio is over; this turn's wait
+                # for its own reply — its barge-in, its follow-up — is not.
+                self.playback_active.clear()
+                log.info(
+                    "response_end for a response from before this capture "
+                    "(interrupted=%s); still waiting for this turn's reply",
+                    bool(payload.get("interrupted")),
+                )
+                return
             # Set expect_followup BEFORE response_done so the mic thread
             # always observes both flags consistently — without this
             # ordering, the mic could wake on response_done, check
@@ -5405,7 +5462,23 @@ class Satellite:
                 log.debug("response ended (interrupted)")
         elif t == "music_start":
             stream_url = payload.get("stream_url")
-            if stream_url:
+            if stream_url and not _is_stream_url(stream_url):
+                # Only an http(s) URL goes into mpg123's argv: a value that
+                # starts with "-" is read as an option (-w <file> writes the
+                # decoded audio to a path). Nothing the core sends looks
+                # like that; a rogue or tampered-with core could.
+                log.warning(
+                    "music_start: refusing stream_url %r (not an http(s) URL)",
+                    str(stream_url)[:120],
+                )
+                if "music_failed" in self._core_features:
+                    self._emit_text({
+                        "type": "music_failed",
+                        "stream_url": str(stream_url)[:300],
+                        "reason": "bad_url",
+                        "attempts": 0,
+                    })
+            elif stream_url:
                 # Defer to a worker thread so we can wait for any in-flight
                 # TTS playback to drain (see _start_music_when_idle) without
                 # blocking the asyncio receiver loop. The server emits
@@ -5671,6 +5744,9 @@ class Satellite:
             utt = payload.get("utt")
             with self._capture_lock:
                 if utt is not None and utt == self._capture_utt:
+                    # The core has this turn from here: a response_end with
+                    # no response_start (a turn it drops) is this turn's.
+                    self._turn_capturing = False
                     self._end_capture.set()
                     return
             log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)

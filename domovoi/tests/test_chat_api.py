@@ -144,6 +144,21 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
         assert reply["stats"] == st and reply["device_id"] is None
 
 
+@requires_db
+@pytest.mark.parametrize("bad", ["../../etc", "a b", "<img src=x>", "x"])
+def test_a_malformed_device_id_is_not_kept(stub_stream, bad):
+    """Security review 2026-09-30: the id is self-asserted (like queue
+    provenance) and was stored as sent; now only a well-formed one is kept,
+    as every other route that reads a device id does."""
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "hello", "device_id": bad})
+        assert r.status_code == 200
+        user = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"][0]
+        assert user["role"] == "user" and user["device_id"] is None
+
+
 def test_reply_stats_leave_out_what_is_unknown() -> None:
     """A failed stream reports nothing from Ollama: only the server's own
     figures remain, and no speed is invented from missing durations."""

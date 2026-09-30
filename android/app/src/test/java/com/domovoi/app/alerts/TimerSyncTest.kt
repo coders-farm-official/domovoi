@@ -25,6 +25,7 @@ class TimerSyncTest {
     private var elapsedNow = 5_000_000L
     private var server = true
     private var notifications = true
+    private var lan = true
     private var mode = ChainMode.EXACT
 
     /** The mirrored timer alarms (wall clock). */
@@ -70,6 +71,7 @@ class TimerSyncTest {
         alarm = FakeAlarm(),
         hasServer = { server },
         canPost = { notifications },
+        onLan = { lan },
         mirrorTimes = { mirror },
         wall = { wallNow },
         elapsed = { elapsedNow },
@@ -227,6 +229,26 @@ class TimerSyncTest {
         // syncMirror with notifications off cancels every mirrored alarm and
         // asks nothing (AlertEngineTest.withNotificationsOffNothingPosts...).
         assertEquals(listOf(lead, "syncMirror"), events.toList())
+    }
+
+    /** Security review 2026-09-30: the tick sends the household token, as
+     *  plain http to a private address; off Wi-Fi (mobile data, or a
+     *  foreign network reusing the home subnet) it asks nothing. */
+    @Test fun offWifiATickAsksNothingAndKeepsTheChain() = runBlocking {
+        lan = false
+        val s = sync()
+        assertEquals(TickResult.OFF_LAN, s.onTick())
+        assertEquals(listOf(lead), events.toList())
+
+        events.clear()
+        assertEquals(TickResult.OFF_LAN, s.onStart())
+        assertEquals("a start off Wi-Fi re-arms the mirror, asks nothing",
+            listOf(lead, "rearm"), events.toList())
+
+        events.clear()
+        lan = true
+        assertEquals(TickResult.SYNCED, s.onTick())
+        assertEquals(listOf(lead, "catchUp", "syncMirror"), events.toList())
     }
 
     // ---- the start, and a tick right after it --------------------------------------

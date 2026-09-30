@@ -74,7 +74,7 @@ from domovoi.handlers.shared.number_words import (
     NUMBER_WORDS,
     parse_duration_seconds,
 )
-from domovoi.handlers.shared.tool_gate import STATEMENT_VERBS, TIMER_STATEMENT_RE
+from domovoi.handlers.shared.tool_gate import STATEMENT_VERBS, is_timer_statement
 from domovoi.handlers.timer import _format_duration, duration_adjective
 from domovoi.models import Context, Intent, Response
 
@@ -506,7 +506,7 @@ class ReminderHandler(Handler):
         # reminder action, and qwen3:8b made new reminders out of some of
         # them when shown this tool (see TIMER_STATEMENT_RE; the timer
         # withholds its tool on the same shapes). Every command keeps it.
-        return not TIMER_STATEMENT_RE.match(transcript)
+        return not is_timer_statement(transcript)
 
     async def execute(
         self, intent: Intent, ctx: Context, session: AsyncSession

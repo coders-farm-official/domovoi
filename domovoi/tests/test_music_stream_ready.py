@@ -664,6 +664,30 @@ def test_music_failed_pauses_a_room_that_plays_to_nobody(monkeypatch, playing_ro
     assert "could not play" in caplog.text
 
 
+def test_music_failed_logs_what_the_satellite_said_bounded_and_quoted(
+    monkeypatch, playing_room, caplog,
+) -> None:
+    """Security review 2026-09-30: the satellite's stream_url was logged in
+    full and with %s, so a newline in it could forge a journal line (the
+    owner's greps key on lines like "timer fired"), and any length went in."""
+    _patch_pipeline(monkeypatch, whisper=_FakeWhisper())
+    forged = "http://x\nINFO domovoi.workers.timer_watcher: timer fired: fake" + "A" * 5000
+    with TestClient(app) as client:
+        app.state.resumable_music.clear()
+        app.state.pending_music_start.pop(ROOM, None)
+        with client.websocket_connect(f"/v1/stream/{ROOM}") as ws:
+            _hello(ws, ROOM)
+            ws.send_text(json.dumps({
+                "type": "music_failed", "stream_url": forged,
+                "reason": "gone\ntimer fired: x", "attempts": "many",
+            }))
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert ws.receive_json() == {"type": "pong"}
+    (line,) = [r.getMessage() for r in caplog.records if "could not play" in r.getMessage()]
+    assert "\n" not in line and len(line) < 1000
+    assert "(? attempt(s))" in line
+
+
 def test_music_failed_leaves_a_newer_start_alone(monkeypatch, playing_room) -> None:
     url = "http://test.local:8051"
     _patch_pipeline(monkeypatch, whisper=_FakeWhisper())

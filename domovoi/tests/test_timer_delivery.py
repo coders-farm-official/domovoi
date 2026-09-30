@@ -1287,10 +1287,12 @@ async def test_a_socket_with_no_pairing_token_hears_only_its_own_rooms(caplog) -
         )
         await h.idle()
     assert h.room("spy").texts == ["Your eggs timer is done."]
+    # Nor does it speak to the house (security review 2026-09-30, second
+    # round): what is set in a tokenless room is announced there only.
     assert h.room("garage").texts == [
-        "Reminder: pick up the biopsy results", "Reminder: take the pill",
-        "From the spy: Your eggs timer is done."]
+        "Reminder: pick up the biopsy results", "Reminder: take the pill"]
     assert "spy" not in h.ledger._rows[-1] and "spy" not in h.ledger._rows[-2]
+    assert set(h.ledger._rows[-3]) == {"spy"}
     warned = [m for m in caplog.messages if "has no pairing token" in m]
     assert warned == [
         "room spy has no pairing token; it announces only its own timers and reminders "
@@ -1463,7 +1465,9 @@ async def test_a_tokenless_stream_hears_no_other_rooms_reminder(stub_tts, fake_p
     app.state.active_sessions["kitchen"] = kitchen
 
     garage_ws = _WS(app)
-    app.state.active_sessions["garage"] = StreamSession(garage_ws, "garage")  # type: ignore[arg-type]
+    garage = StreamSession(garage_ws, "garage")  # type: ignore[arg-type]
+    garage.token_authenticated = True        # a paired satellite
+    app.state.active_sessions["garage"] = garage
 
     ledger = Ledger()
     d = TimerDelivery(app, lambda: ledger, poll_sec=0.01, wall=lambda: BASE)
@@ -1486,6 +1490,31 @@ async def test_a_tokenless_stream_hears_no_other_rooms_reminder(stub_tts, fake_p
     await asyncio.sleep(0.2)
     assert late_ws.spoken() == []
     await d.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_a_tokenless_rooms_own_fires_stay_in_that_room() -> None:
+    """The origin side of the pairing rule: a timer or reminder set in a
+    room whose socket has no pairing token (strict pairing off) is
+    announced there only, and a paired room that connects inside the grace
+    window is not added to it. A paired room's fire still reaches every
+    other paired room (and still skips the tokenless one)."""
+    h = House("kitchen")
+    h.sessions["spy"] = _unpaired("spy", h.clock)
+    await h.fire(due(1, "spy", label="eggs", message="the spy's words"))
+    await h.idle()
+    assert h.room("spy").texts == ["Reminder: the spy's words"]
+    assert h.room("kitchen").texts == []
+    assert set(h.ledger._rows[-1]) == {"spy"}
+    late = h.connect("office")                   # paired, inside the window
+    await h.idle()
+    assert late.texts == []
+    assert set(h.ledger._rows[-1]) == {"spy"}
+    # A paired room's fire still goes everywhere it should.
+    await h.fire(due(2, "kitchen", label="pasta"))
+    await h.idle()
+    assert late.texts == ["From the kitchen: Your pasta timer is done."]
+    assert h.room("spy").texts == ["Reminder: the spy's words"]
 
 
 @pytest.mark.asyncio

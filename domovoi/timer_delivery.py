@@ -48,7 +48,9 @@ The pieces:
 * **Only a paired satellite hears the house.** A socket the core accepted
   with no pairing token (strict pairing off) announces the timers set in
   its own room and nothing else: a device on the LAN that names itself a
-  new room must not receive every room's reminder words.
+  new room must not receive every room's reminder words. Nor does such a
+  room speak to the house: a timer or reminder set there is announced
+  there only.
 
 The wording (:func:`fire_line`): the origin room hears today's line ("Your
 10 minute timer is done." / "Reminder: call mom"); every other room hears
@@ -827,6 +829,9 @@ class _Fire:
     # fire alone until they are done, so a room it is adding is never
     # settled or recorded offline under it.
     checking: int = 0
+    # Set in a room whose socket has no pairing token (see `_house_wide`):
+    # its fires stay in that room, and no room joins them later.
+    origin_only: bool = False
 
 
 def _iso(value: datetime) -> str:
@@ -869,6 +874,11 @@ class TimerDelivery:
         # (due order within a tick): the next one then waits out the
         # previous one's playback like any other busy moment.
         self._room_locks: dict[str, asyncio.Lock] = {}
+        # (fire, room) deliveries whose announcement is still to come: from
+        # the task's start until its announce() is over for good (spoken,
+        # cut off, failed) or the task ends. A music restart after another
+        # announcement in that room waits for them (`announcing_to`).
+        self._coming: set[tuple[int, str]] = set()
         self._noted: dict[tuple[int, str], str] = {}
         self._aux: set[asyncio.Task[None]] = set()
         self._warned_unpaired: set[str] = set()
@@ -943,6 +953,23 @@ class TimerDelivery:
             return True
         return is_target(room_id, origin, own_only) and self._house_wide(room_id, sess)
 
+    def _origin_only(self, origin: str | None) -> bool:
+        """Whether a fire set in ``origin`` stays there: the room is
+        connected right now on a socket with no pairing token. (An origin
+        that is not connected is judged by the pairing rule above only.)"""
+        if origin is None:
+            return False
+        sess = self._sessions().get(origin)
+        return sess is not None and not self._house_wide(origin, sess)
+
+    def announcing_to(self, room_id: str) -> bool:
+        """Whether a fire's announcement is still to come in ``room_id``:
+        a delivery task there is waiting for the room (its lock, a busy
+        moment) or about to speak. ``StreamSession`` asks before it
+        restarts the room's music after an announcement, so two timers
+        due together do not restart it in between."""
+        return any(key[1] == room_id for key in self._coming)
+
     async def ensure_ledger(self) -> Any:
         """The ledger to use: V018 when its tables exist, else the
         in-memory one (one warning, a fresh look every 10 minutes)."""
@@ -987,6 +1014,8 @@ class TimerDelivery:
         out: list[TargetRow] = []
         if origin is not None:
             out.append((origin, True, None if origin in sessions else "offline"))
+        if self._origin_only(origin):
+            return out
         for room in sorted(sessions):
             if room != origin and self._may_hear(room, origin, own_only, sessions[room]):
                 out.append((room, False, None))
@@ -1012,7 +1041,8 @@ class TimerDelivery:
         for rec, rows in popped:
             self._log_fired(rec)
             fire = _Fire(rec=rec, ledger=ledger, fired_mono=self._clock(),
-                         targets=[r[0] for r in rows])
+                         targets=[r[0] for r in rows],
+                         origin_only=self._origin_only(rec.origin_room_id))
             self._fires[rec.fire_id] = fire
             new.append(fire)
             self._emit_fired(fire)
@@ -1023,7 +1053,9 @@ class TimerDelivery:
         # check found no fire yet) is missing from some fire's targets: look
         # again. A room left out on purpose (its flag, no pairing) is looked
         # at and left out again.
-        for room in sorted({r for r in sessions for f in new if r not in f.targets}):
+        for room in sorted({
+            r for r in sessions for f in new if r not in f.targets and not f.origin_only
+        }):
             self.on_room_connected(room)
         await self.sweep()
         return len(popped)
@@ -1068,12 +1100,14 @@ class TimerDelivery:
             name=f"timer-fire-{fire.rec.fire_id}-{room_id}",
         )
         self._tasks[key] = task
+        self._coming.add(key)
         task.add_done_callback(lambda t, key=key: self._task_done(key, t))
         return True
 
     def _task_done(self, key: tuple[int, str], task: asyncio.Task[None]) -> None:
         if self._tasks.get(key) is task:
             self._tasks.pop(key, None)
+            self._coming.discard(key)
         if not task.cancelled() and task.exception() is not None:
             log.warning("timer fire %d room=%s: delivery task failed: %s",
                         key[0], key[1], task.exception())
@@ -1218,6 +1252,7 @@ class TimerDelivery:
                         failures = fire.tts_failures.get(room_id, 0) + 1
                         fire.tts_failures[room_id] = failures
                         if failures >= TTS_MAX_ATTEMPTS:
+                            self._coming.discard((fid, room_id))
                             await self._finish(fire, room_id, "failed", "tts_failed",
                                                retry_until=_end_budget())
                             return
@@ -1234,16 +1269,21 @@ class TimerDelivery:
                     await self._sleep(self.poll_sec)
                     continue
                 except AnnounceInterrupted:
+                    self._coming.discard((fid, room_id))
                     await self._finish(fire, room_id, "interrupted", None, line,
                                        retry_until=_end_budget())
                     return
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:  # noqa: BLE001 — the socket died mid-send
+                    self._coming.discard((fid, room_id))
                     log.debug("timer fire %d room=%s: announce failed: %s", fid, room_id, e)
                     await self._finish(fire, room_id, "failed", "send_failed", line,
                                        retry_until=_end_budget())
                     return
+                # Spoken: no longer to come here, before the ledger write
+                # below yields (this announcement's music restart runs then).
+                self._coming.discard((fid, room_id))
                 await self._finish(
                     fire, room_id, "spoken",
                     f"forced_over:{forced}" if forced else None, line,
@@ -1299,6 +1339,8 @@ class TimerDelivery:
     ) -> None:
         fid = fire.rec.fire_id
         if not self._open(fire) or self._live((fid, room_id)):
+            return
+        if fire.origin_only and room_id != fire.rec.origin_room_id:
             return
         rows = await fire.ledger.rows(fid)
         row = next((r for r in rows if r[0] == room_id), None)
@@ -1400,7 +1442,8 @@ class TimerDelivery:
             if rec.fire_id in self._fires:
                 continue
             fire = _Fire(rec=rec, ledger=ledger, fired_mono=self._clock(),
-                         targets=[r[0] for r in rows])
+                         targets=[r[0] for r in rows],
+                         origin_only=self._origin_only(rec.origin_room_id))
             recent = (now_wall - rec.fired_at).total_seconds() <= RESUME_WITHIN_SEC
             for room, _is_origin, outcome, _detail in rows:
                 if outcome == "sending":
@@ -1427,4 +1470,5 @@ class TimerDelivery:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        self._coming.clear()
         self._aux.clear()

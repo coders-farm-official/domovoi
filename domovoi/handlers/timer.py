@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
-from domovoi.handlers.shared.tool_gate import TIMER_STATEMENT_RE
+from domovoi.handlers.shared.tool_gate import is_timer_statement
 from domovoi.models import Context, Intent, Response
 
 # The duration grammar lives in handlers/shared/number_words: digits,
@@ -132,7 +132,7 @@ class TimerHandler(Handler):
         # reminder in 10 minutes is for the oven") is no timer command. The
         # reminder handler withholds its tool on the same shapes, and with
         # only that one withheld qwen3:8b (2026-09-30) set a timer instead.
-        return not TIMER_STATEMENT_RE.match(transcript)
+        return not is_timer_statement(transcript)
 
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
         # execute() is normally reached via fast paths or tool-call —

@@ -75,6 +75,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 //
 // No foreground service and no permanent notification.
 //
+// Only on Wi-Fi or Ethernet ([TimerSync.onLan], Discovery.onLan): the
+// requests carry the household token, usually as plain http to a private
+// address (192.168.x.y). On mobile data, or on a network away from home
+// that reuses the home subnet, whoever answers at that address would
+// collect the token every 15 minutes with nobody looking. Off Wi-Fi the
+// tick asks nothing and the chain goes on; the mirrored timer alarms ring
+// regardless.
+//
 // Each tick asks for the next one FIRST, so a sync that fails, times out
 // or crashes never ends the chain. A force-stop cancels it with every other
 // alarm; the next start of the app begins it again. A reboot or an app
@@ -188,6 +196,9 @@ enum class TickResult {
     /** The server did not answer (off the home network, down, refused). */
     UNREACHABLE,
 
+    /** Not on Wi-Fi or Ethernet: nothing asked (the chain goes on). */
+    OFF_LAN,
+
     /** Ran out of [SYNC_BUDGET_MS]. */
     TIMED_OUT,
 
@@ -203,6 +214,8 @@ class TimerSync(
     private val alarm: SyncAlarm,
     private val hasServer: () -> Boolean,
     private val canPost: () -> Boolean,
+    /** The phone is on Wi-Fi or Ethernet (see the top of this file). */
+    private val onLan: () -> Boolean = { true },
     /** When the mirrored timer alarms ring (wall-clock ms). */
     private val mirrorTimes: suspend () -> List<Long>,
     private val wall: () -> Long,
@@ -310,6 +323,14 @@ class TimerSync(
      */
     suspend fun onStart(): TickResult {
         arm(SyncReason.START)
+        if (!onLan()) {
+            // A start is often the tick's own (its alarm started the
+            // process): the same rule. Re-arming needs no network.
+            lock.withLock { step("re-arm") { work.rearm(); true } }
+            reguard()
+            log("background sync: not on Wi-Fi or Ethernet, nothing asked")
+            return TickResult.OFF_LAN
+        }
         val result = sync(rearmFirst = true, skipIfFresh = false)
         reguard()
         return result
@@ -326,6 +347,7 @@ class TimerSync(
             step("mirror sync") { work.syncMirror() }
             return TickResult.NOTIFICATIONS_OFF
         }
+        if (!onLan()) return TickResult.OFF_LAN
         val result = withTimeoutOrNull(budgetMs) { sync(rearmFirst = false, skipIfFresh = true) } ?: TickResult.TIMED_OUT
         reguard()
         return result

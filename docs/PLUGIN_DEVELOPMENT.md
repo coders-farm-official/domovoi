@@ -800,16 +800,18 @@ class Handler(ABC):
   word), `news` (needs a news word), `calculator` and `library` (withheld only
   from a plain who/why/where question about the world, which never reaches the
   router anyway — the shared check lives in `handlers/shared/tool_gate.py`),
-  `reminder` and `timer` (both withheld on talk about a timer or reminder,
-  "my reminder didn't go off", `tool_gate.TIMER_STATEMENT_RE`, which the
-  router sends straight to Q&A too).
+  `reminder` and `timer` (both withheld on talk about a timer or reminder
+  that asks for nothing, "my reminder didn't go off",
+  `tool_gate.is_timer_statement` — never on one that also stops, cancels,
+  asks how long is left or says one is going off, `TIMER_ACTION_RE` — which
+  the router sends straight to Q&A too).
   Every gate that flips changes the router's tool list, and the next ordinary
   turn re-reads everything after the change (11-15 s on a CPU host), so
   withhold only where your tool is actually picked wrongly. Check the effect
   with `scripts/eval_routing.py --live-tools <core url>`. The router keeps gated
   tools at the end of its list (Ollama caches the list's prefix): one that
   `offers_tool("")` says True for goes with the usually-offered group, one
-  that says False is appended only when asked for. Two kinds of utterance
+  that says False is appended only when asked for. Three kinds of utterance
   never reach the tool model at all, so no tool — yours included — is
   offered for them: a plain who/why/where question about the world, a
   request for a joke, a fact, a story or an explanation, and talk about a

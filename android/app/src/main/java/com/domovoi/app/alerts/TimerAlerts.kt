@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.StateBus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +65,7 @@ class TimerAlerts(
         alarm = AndroidSyncAlarm(ctx),
         hasServer = { prefs.serverUrl.value.isNotBlank() },
         canPost = { notifier.canPost() },
+        onLan = { Discovery.onLan(ctx) },
         mirrorTimes = { store.mirror().alarms.map { it.trigger_at_ms } },
         wall = System::currentTimeMillis,
         elapsed = SystemClock::elapsedRealtime,

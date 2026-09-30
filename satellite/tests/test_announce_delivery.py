@@ -24,6 +24,13 @@ Pinned here, through the real `_receiver_loop` and `_handle_text_frame`:
   acknowledgement and plays;
 * the barge-in drop still works: late audio of a reply that was talked over,
   with no new `response_start`, is still discarded.
+
+And the turn a wake word opens over an announcement ("hey jarvis, stop the
+timer" while the timer is being announced — a daily path since every timer
+is announced in every room) waits for its OWN reply: the announcement's
+end, whether still to be released when its audio drains or sent late and
+interrupted by the core after that capture's utterance_start, no longer
+ends that wait (which cost the reply its barge-in and its follow-up).
 """
 
 from __future__ import annotations
@@ -31,10 +38,11 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import types
 
 import pytest
 
-from satellite.tests.test_send_queue_lifecycle import client, make_sat
+from satellite.tests.test_send_queue_lifecycle import FakeVad, client, fill_mic, make_sat
 
 RATE = 22_050
 CHUNK = bytes(4096)          # one binary frame of TTS PCM from the core
@@ -114,6 +122,12 @@ def receiver_sat(*, prebuffer_sec: float = 0.0):
     sat._ack_proc = None
     # Counted on every response_start (Satellite.__init__ sets it).
     sat._response_starts = 0
+    sat._turn_mark = 0
+    sat._turn_capturing = False
+    # `_begin_utterance`
+    sat._utt_seq = 0
+    sat._utt_started = None
+    sat._woke_at = None
     return sat
 
 
@@ -210,3 +224,122 @@ def test_the_hello_says_it_has_the_announcement_fix() -> None:
     src = inspect.getsource(client.Satellite._run_session)
     hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
     assert '"announce_after_session_end": True' in hello
+
+
+# ─── a wake word over an announcement ─────────────────────────────────────
+
+
+def _end(*, interrupted: bool = False, expect_followup: bool = False) -> str:
+    return json.dumps({
+        "type": "response_end", "interrupted": interrupted, "expect_followup": expect_followup,
+    })
+
+
+def _reply(text: str, *, expect_followup: bool = False) -> list:
+    """A reply with no audio of its own (released at once, no drain)."""
+    return [
+        json.dumps({"type": "response_start", "text": text, "matched_handler": "timer",
+                    "matched_path": "fast", "session_id": None, "online": True,
+                    "audio_sample_rate": RATE}),
+        _end(expect_followup=expect_followup),
+    ]
+
+
+def _wake(sat, trigger: str = "wake_word") -> None:
+    """The mic thread opens a capture, as `_mic_thread_run` does."""
+    sat._begin_utterance(trigger)
+    sat.response_done.clear()
+    sat.playback_active.clear()
+    sat.stop_playback.clear()
+    sat.expect_followup.clear()
+
+
+def _speak_and_stop(sat, monkeypatch) -> None:
+    """The person speaks and stops: the capture runs to its utterance_end."""
+    monkeypatch.setattr(client, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
+    fill_mic(sat)
+    sat._stream_capture([])
+
+
+def test_an_announcement_cut_by_the_wake_word_does_not_end_the_new_turns_wait(monkeypatch):
+    """The review's repro: the timer's announcement is cut mid-send by a wake
+    word; the core sends its interrupted response_end AFTER that capture's
+    utterance_start. It used to set response_done during the capture, so the
+    wait for the reply to "stop the timer" returned at once: no barge-in on
+    the reply, and a reply that asked a question never opened its
+    follow-up."""
+    sat = receiver_sat()
+    receive(sat, _announcement("From the garage: Your 10 minute timer is done.")[:-1])
+    _wake(sat)
+    receive(sat, [_end(interrupted=True)])
+    assert not sat.response_done.is_set()
+    _speak_and_stop(sat, monkeypatch)
+    assert not sat.response_done.is_set()
+
+    receive(sat, _reply("Which timer?", expect_followup=True))
+    assert sat.response_done.is_set()
+    assert sat.expect_followup.is_set()
+
+
+def test_an_announcement_still_draining_does_not_end_the_new_turns_wait(monkeypatch):
+    """The announcement's whole response arrived; its release waits for its
+    audio to drain (close_stream). A wake word before then: the capture
+    drops that release, so the drain ends nothing of this turn's."""
+    sat = receiver_sat()
+    receive(sat, _announcement())
+    assert sat._post_playback_state == "idle"
+    assert not sat.response_done.is_set()
+    _wake(sat)
+    assert sat._post_playback_state is None
+    _speak_and_stop(sat, monkeypatch)
+    assert not sat.response_done.is_set()
+    receive(sat, _reply("Okay."))
+    assert sat.response_done.is_set()
+
+
+def test_a_late_whole_end_of_an_announcement_is_not_the_turns_either():
+    """The announcement's response_end (not interrupted: its frames had all
+    gone) arrives after the capture began: neither released now nor
+    deferred to its drain, and its expect_followup (none here) is not
+    taken as this turn's."""
+    sat = receiver_sat()
+    receive(sat, _announcement()[:-1])
+    _wake(sat)
+    receive(sat, [_end(expect_followup=True)])
+    assert not sat.response_done.is_set()
+    assert sat._post_playback_state is None
+    assert not sat.expect_followup.is_set()
+
+
+def test_the_barged_replys_interrupted_end_does_not_end_the_barge_capture():
+    """The same race after a barge-in: the core cancels the reply the person
+    talked over and sends its interrupted end during the barge capture."""
+    sat = receiver_sat()
+    receive(sat, _announcement("It is ten past three.")[:3])
+    _wake(sat, "barge_in")
+    receive(sat, [_end(interrupted=True)])
+    assert not sat.response_done.is_set()
+
+
+def test_a_blank_capture_is_still_ended_by_a_bare_response_end(monkeypatch):
+    """The core ends a capture it heard nothing in with a response_end and
+    no response_start: once the capture's utterance_end has gone, that is
+    this turn's end."""
+    sat = receiver_sat()
+    _wake(sat)
+    _speak_and_stop(sat, monkeypatch)
+    receive(sat, [_end(interrupted=True)])
+    assert sat.response_done.is_set()
+
+
+def test_a_bare_end_after_the_core_ended_the_capture_is_the_turns():
+    """An early commit (`end_capture` for this capture): the satellite may
+    still be listening on, but the core has the turn — a bare response_end
+    (a turn it dropped) ends this wait."""
+    sat = receiver_sat()
+    _wake(sat)
+    sat._capture_utt = sat._utt_seq             # `_stream_capture` is running
+    receive(sat, [json.dumps({"type": "end_capture", "utt": sat._utt_seq})])
+    assert sat._end_capture.is_set()
+    receive(sat, [_end(interrupted=True)])
+    assert sat.response_done.is_set()

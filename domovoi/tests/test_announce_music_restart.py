@@ -17,9 +17,16 @@ the stream check replaced by a timed stand-in):
   the music still comes back once its stream is ready;
 * the restart runs after `announce` returned, so it checks the room last
   thing before its music_start and sends nothing when the room was
-  stopped, a turn started there, another announcement's frames are going
-  out there, or a later announcement took over;
+  stopped, a turn started there, or a later announcement took over;
+* another announcement already on its way to the room (queued on its lock
+  or still synthesizing) plays first: the music comes back once, after
+  the last one — or after the first, when the next one gives up silent;
+* a capture whose audio stopped arriving (a follow-up nobody answered: no
+  utterance_end ever comes) does not hold the music back;
 * it is bounded, and a failure in it is logged, never raised.
+
+Two timers due together, a person's pause and a drop-in prompt: see
+test_announce_music_interplay.py.
 """
 
 from __future__ import annotations
@@ -184,7 +191,9 @@ async def test_a_room_stopped_while_its_stream_was_readied_gets_no_music_start(h
 
 
 def _capture(sess) -> None:
+    # A live capture: its audio is still arriving.
     sess.utterance_active = True
+    sess._last_audio_at = time.monotonic()
 
 
 def _reply(sess) -> None:
@@ -205,22 +214,104 @@ async def test_a_turn_or_call_that_started_meanwhile_owns_the_music(house, meanw
     assert "music_start" not in house.frames("office")
 
 
-async def test_another_announcements_frames_hold_the_restart_back(house) -> None:
-    """Two timers due at once in a room with music: the first announcement's
-    restart finds the second one's frames going out (its `_announce_task`,
-    wf/int-0930) and sends nothing, rather than a music_start the satellite
-    would start mpg123 on over that announcement. The second one's own
-    restart, when its frames are done, brings the music back."""
-    frames_going_out: asyncio.Future = asyncio.get_running_loop().create_future()
-    await _announce_then(house, lambda s: setattr(s, "_announce_task", frames_going_out))
-    assert "music_start" not in house.frames("office")
+class _SlowAfterFirstTTS(_FakeTTS):
+    """The first synth is instant; every later one takes ``delay`` s, or
+    fails when ``fail`` is set (an engine that went down)."""
 
-    sess = house.app.state.active_sessions["office"]
-    frames_going_out.set_result(None)
-    sess._announce_task = None
-    sess._restart_music_after_announce(URL["office"])
-    assert await restarts_done() == [None]
-    assert house.frames("office")[-1] == "music_start"
+    def __init__(self, delay: float, *, fail: bool = False) -> None:
+        super().__init__()
+        self.calls = 0
+        self.delay = delay
+        self.fail = fail
+
+    async def synthesize(self, text, *, engine=None, voice=None):
+        self.calls += 1
+        if self.calls > 1:
+            await asyncio.sleep(self.delay)
+            if self.fail:
+                raise RuntimeError("tts engine down")
+        return await super().synthesize(text, engine=engine, voice=voice)
+
+
+async def test_two_announcements_at_once_restart_the_music_once_at_the_end(
+    house, monkeypatch,
+) -> None:
+    """Two real announce() calls in one room with music: the second holds
+    the room's lock while its first sentence synthesizes, after the first
+    one's frames are done. The first one's restart waits for it rather than
+    send a music_start the second one's response_start would kill at once;
+    the second one's own restart brings the music back."""
+    tts = _SlowAfterFirstTTS(0.4)
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: tts)
+    sess = house.room("office", music=True)
+    house.stream_wait["office"] = 0.05
+
+    await asyncio.gather(
+        sess.announce("Your 5 minute timer is done."),
+        sess.announce("Reminder: check the oven."),
+    )
+    await restarts_done()
+    assert house.frames("office") == [
+        "response_start", "response_end",
+        "response_start", "response_end",
+        "music_start",
+    ]
+
+
+async def test_a_queued_announcement_that_gives_up_lets_the_music_come_back(
+    house, monkeypatch,
+) -> None:
+    """The second announcement's first sentence will not synthesize
+    (AnnounceNotStarted, nothing sent): the first one's restart, which
+    waited for it, still brings the music back."""
+    tts = _SlowAfterFirstTTS(0.2, fail=True)
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: tts)
+    sess = house.room("office", music=True)
+    results = await asyncio.gather(
+        sess.announce("Your 5 minute timer is done."),
+        sess.announce("Reminder: check the oven."),
+        return_exceptions=True,
+    )
+    assert results[0] is None
+    assert isinstance(results[1], streaming.AnnounceNotStarted)
+    assert results[1].reason == "tts_failed"
+    await restarts_done()
+    assert house.frames("office") == ["response_start", "response_end", "music_start"]
+
+
+async def test_an_announcement_that_starts_while_the_stream_is_readied_is_waited_for(
+    house,
+) -> None:
+    """The restart found the room free, went to ready its stream, and
+    another announcement began meanwhile: nothing goes out in between, and
+    the music comes back after that one."""
+    sess = house.room("office", music=True)
+    house.stream_wait["office"] = 0.3
+    await sess.announce("The laundry is done.")
+    await asyncio.sleep(0.05)                  # the restart is waiting on the stream
+    await sess.announce("And the dryer.")
+    await restarts_done()
+    assert house.frames("office") == [
+        "response_start", "response_end",
+        "response_start", "response_end",
+        "music_start",
+    ]
+
+
+async def test_a_capture_that_went_quiet_does_not_hold_the_music_back(house) -> None:
+    """A follow-up capture nobody answered ends on the satellite with no
+    utterance_end, so `utterance_active` stays set until the next wake
+    word. Its audio stopped long ago: an announcement there still gets its
+    music back (it used to stay off for good, MPD playing to nobody)."""
+    sess = house.room("office", music=True)
+    house.app.state.satellite_config = {}                 # read on utterance_start
+    await sess._on_control({"type": "utterance_start", "trigger": "followup", "utt": 7})
+    assert sess.utterance_active
+    sess._last_audio_at = time.monotonic() - 30          # it went quiet
+    assert sess.announce_block() is None
+    await sess.announce("From the kitchen: Your 10 minute timer is done.")
+    await restarts_done()
+    assert house.frames("office") == ["response_start", "response_end", "music_start"]
 
 
 async def test_a_replaced_socket_gets_no_music_start(house) -> None:

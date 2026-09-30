@@ -37,7 +37,9 @@ Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
 answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
-install that sent it; reads join ``devices`` for its current name.
+install that sent it — self-asserted, like queue provenance, and kept only
+when it is a well-formed id (``devices.valid_device_id``) — and reads join
+``devices`` for its current name.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ from sqlalchemy import text
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
+from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -348,7 +351,8 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         core_settings.ollama_vision_model if has_images else core_settings.ollama_model
     )
     model_role = "override" if override else ("vision" if has_images else "chat")
-    device_id = (body.device_id or "").strip() or None
+    # Well-formed or nothing, as every other route that reads a device id.
+    device_id = valid_device_id(body.device_id)
 
     async with session_scope() as s:
         exists = (

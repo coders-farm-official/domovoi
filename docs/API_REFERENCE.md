@@ -1044,7 +1044,7 @@ upload — is **Device** tier.
 | `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
 | `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
 | `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time). |
-| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). `SendBody.device_id` (optional) records the sending install. |
+| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
 | `GET /api/chat/models` | Open | Installed Ollama models + configured default/vision models for the composer. |

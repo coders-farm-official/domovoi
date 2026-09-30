@@ -487,6 +487,51 @@ def test_a_watch_report_that_is_not_one_is_ignored(commit_on, watch) -> None:
     assert "post_commit_resume_ms" not in timings.stages
 
 
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"frames": 10 ** 400, "last_voiced_frame": 19},
+        {"last_voiced_frame": 10 ** 400},
+        {"last_voiced_frame": -5},
+        {"frames": 3_600_000},                           # an hour of frames is 120,000
+    ],
+)
+def test_a_late_end_with_frame_counts_no_capture_has_records_nothing(commit_on, counts) -> None:
+    """Security review 2026-09-30: `frames` / `last_voiced_frame` went into
+    the turn's timings unbounded, and a number no float holds (JSON allows
+    10**400) made the open latency summary raise for everyone. Out of range,
+    nothing is recorded."""
+    commit_on["whisper"] = _WatchedWhisper("Set a timer for 10 minutes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _commit_a_timer(ws)
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            "voiced_after_end_ms": 150, "listened_after_end_ms": 150,
+            **counts,
+        }))
+        _barrier(ws)
+    (timings,) = commit_on["timings"]
+    for key in ("post_commit_voiced_ms", "post_commit_listened_ms", "post_commit_resume_ms"):
+        assert key not in timings.stages
+
+
+def test_the_summary_survives_a_row_with_a_number_no_float_holds() -> None:
+    """One such row (written before the bound, or by anything else) must
+    not take down GET /v1/stats/latency: it is skipped, the rest counts."""
+    from domovoi.turn_timings import summarize
+
+    rows = [
+        ({"stt_ms": 700, "early_commit": "B", "post_commit_voiced_ms": 10 ** 400,
+          "post_commit_listened_ms": 10 ** 400, "total_ms": 10 ** 400}, "fast"),
+        ({"stt_ms": 10 ** 13, "total_ms": 1200}, "fast"),
+        ({"stt_ms": 700, "total_ms": 1000}, "fast"),
+    ]
+    s = summarize(rows)
+    assert s["early_commit"]["turns"] == 1
+
+
 def test_the_late_stages_reach_the_row_after_its_post_route_write(commit_on, monkeypatch) -> None:
     """A satellite that listens on sends its utterance_end up to its silence
     timeout after the server stopped listening — often after the turn's

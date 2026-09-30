@@ -354,6 +354,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # In-memory by design: server restart wipes it, which lines
     # up with the user's mental model since restart kills music too.
     app.state.resumable_music = {}
+    # Rooms whose music a person paused (domovoi/music_pause.py): the
+    # music_ready handshake leaves their MPD paused.
+    app.state.music_paused_by_person = set()
 
     # room_id → {"url": str, "task": asyncio.Task} for the music_ready
     # handshake. Populated when the streaming layer sends `music_start`
@@ -2721,6 +2724,7 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
     connected — a later reconnect (or the next response turn) will pull
     from there and auto-resume.
     """
+    from domovoi.music_pause import note_paused_by_person
     from domovoi.streaming import _resume_mpd_for_room, send_music_start
 
     sessions: dict[str, Any] = app.state.active_sessions
@@ -2729,6 +2733,8 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
     sess = sessions.get(room_id)
     if response.music_action == "start" and response.music_stream_url:
         resumable[room_id] = response.music_stream_url
+        # Something new was asked for: a pause from before no longer holds.
+        note_paused_by_person(app, room_id, False)
         # No now-playing stamp clear on start: matched_handler can't be
         # trusted here — "play creep" routes through MusicHandler,
         # which may delegate to a streaming provider that overwrites
@@ -2756,6 +2762,7 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
             await _resume_mpd_for_room(room_id)
     elif response.music_action == "stop":
         resumable.pop(room_id, None)
+        note_paused_by_person(app, room_id, False)
         # Generic stamp pop (design §4.7) — no provider-specific
         # state dicts to clear.
         NOW_PLAYING.clear(room_id)

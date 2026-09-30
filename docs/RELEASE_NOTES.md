@@ -4,6 +4,62 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-30 — Upgrading to this release, in order
+
+The five 2026-09-30 entries below each say what they need. Done in this
+order, on an install whose dashboard **Restart** applies updates (the
+Linux update unit, 2026-09-25 below), nothing is missed and the satellites
+are silent for as short a time as possible.
+
+1. **Pick a quiet moment**: no timer or reminder due in the next ten
+   minutes. One that comes due during the update is announced when the
+   satellites reconnect, and a satellite not yet upgraded plays it as
+   silence while the server records it as spoken.
+2. **Sign in as admin** on the dashboard (upgrading a satellite needs it).
+3. **Turn on strict satellite pairing** if it is off (Settings →
+   Configuration → Advanced → Security → Strict satellite pairing, or
+   `SATELLITE_PAIRING_STRICT=true` in `.env`).
+   It takes effect at the restart in step 5. With it off, any device on
+   the network that brings a token under a new room name is paired on
+   trust and hears every room's reminders, words included.
+4. **Pull the update** (Settings → Configuration → Version → Check for
+   updates → Pull the latest). `GET /v1/admin/version` then shows the new
+   `checkout_sha` and the old `running_sha`.
+5. **Press "Restart to apply changes".** The update run backs up the
+   database, stops the web and the server, **runs Flyway (V017 for the
+   chat, V018 for the timers)**, starts both and checks them; if anything
+   fails it puts the old code and database back. No separate
+   `docker compose run --rm flyway` is needed (running it is harmless).
+   Without the update unit: run Flyway (`docker compose run --rm flyway`
+   from `domovoi/`), then restart the server and the web.
+6. **Check it came back**: `GET /v1/admin/version` shows `running_sha` =
+   `checkout_sha` = the new commit, `restart_required` false, `bad_sha`
+   null and `last_update.status` `ok`, with two more migrations than
+   before. The server's journal (`journalctl -u domovoi-core --since "15
+   min ago"`) shows `Whisper: short-window decoding ready`, and none of:
+   `timer_fires missing — run Flyway (V018)`, `The tool router's prompt is
+   N tokens`, `streams no tool calls (needs 0.9.0)`. `room <x> runs
+   satellite code without the announcement fix` shows once per satellite
+   until the next step.
+7. **Upgrade every satellite, straight away** (Satellites → the satellite →
+   Overview → Upgrade satellite). Until then a satellite plays
+   announcements that reach it after a reconnect as silence, and the
+   satellite halves of this release (early commit, the capture clock,
+   `music_failed`, "stop the timer" said over an announcement keeping the
+   reply's barge-in and follow-up, only an http(s) stream reaching
+   mpg123) are missing.
+8. **Install the new Android app** and allow its notifications ("Timers
+   and reminders"); on Android 12L or older, also allow "Alarms &
+   reminders". A debug build signed with the same key installs as an
+   update; if Android refuses it (a different signature), uninstall,
+   install, and pair the phone again.
+9. **Reload every open dashboard**, the kitchen tablet included.
+10. **Try it**: a one-minute timer in one room (that room hears "Your 1
+    minute timer is done.", every other room "From the …: …"; the
+    dashboard shows the alert card and the phone notifies); "stop the
+    timer" in that room within 30 seconds ("Okay."); an old chat thread
+    opens, a new message sends and shows its details.
+
 ## 2026-09-30 — Short commands decode faster, and answers start sooner
 
 ### Do this once, after upgrading
@@ -183,10 +239,11 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
 
 ### Do this once, after upgrading
 
-1. **Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
-   **V018** — the record of every timer and reminder that goes off and
-   where it was heard, and the new per-satellite setting. The same run
-   applies **V017** first (the chat message details, see "Chat replies
+1. **Run Flyway** for **V018** — the record of every timer and reminder
+   that goes off and where it was heard, and the new per-satellite
+   setting. The dashboard's **Restart** runs it on an install with the
+   update unit; otherwise `docker compose run --rm flyway` from
+   `domovoi/`, before the restart. The same run applies **V017** first (the chat message details, see "Chat replies
    read as formatted text" below). Without V018 the
    Domovoi server logs `timer_fires missing — run Flyway (V018); timers
    still fire but nothing is recorded` once, timers still go off and still
@@ -202,12 +259,15 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
    satellite connects, until it is upgraded.
 3. **Install the new Android app** and allow its notifications (the app
    asks; "Timers and reminders" is its own channel in Android's settings).
-4. **Check `SATELLITE_PAIRING_STRICT`.** If it is off (an install set up before
-   2026-09-22 keeps whatever it had), turn it on (Settings → Security →
-   Strict satellite pairing, or `.env`).
+4. **Check `SATELLITE_PAIRING_STRICT`** — before the restart that applies
+   this release (it takes effect at a restart). If it is off (an install
+   set up before 2026-09-22 keeps whatever it had), turn it on (Settings →
+   Configuration → Advanced → Security → Strict satellite pairing, or
+   `.env`).
    Every satellite now speaks every room's reminders, words included; a
    satellite connected with no pairing token only ever announces its own
-   room's, but with strict pairing off any device on the network that
+   room's (and what is set in its room stays there), but with strict
+   pairing off any device on the network that
    brings a token under a new room name is paired on trust and hears them
    all. Strict pairing makes each new satellite wait for your approval on
    the dashboard.
@@ -338,6 +398,27 @@ away: the new setting is off for every satellite.
   room). Absolute times ("remind me at 6 pm") still go to the language
   model, which guesses a duration.
 * Every announcement pauses and resumes music in the rooms it plays in.
+  Two due together in a room with music play one after the other and the
+  music comes back once, after the second. **Music someone paused stays
+  paused**: an announcement, or a question to the satellite, brings the
+  room's player back but no longer un-pauses the song (it used to, and
+  since every room hears every timer, a kitchen timer un-paused the
+  office). Resume, stop or play something new ends the pause.
+* **A room in chat mode holds timers and reminders back** for the whole
+  conversation: its open microphone counts as listening, which is never
+  talked over. One waits up to 5 minutes, then that room is skipped
+  (`busy_timeout`); the other rooms announce it as usual.
+* **"The timer is going off, stop it"**, "my timer is going off", "the
+  timer is done", "that reminder was for the oven, stop it", "why don't
+  you set a timer for ten minutes", "I have a timer going, how long is
+  left": said about a timer, these still ask for something, and go to the
+  tool router like any command (a stop right after one went off
+  acknowledges it). Only talk that asks for nothing ("my reminder didn't
+  go off") goes straight to the Q&A model.
+* **"Hey jarvis, stop the timer" said over the announcement** (upgraded
+  satellites): the reply can be interrupted and a question it asks is
+  listened for, as with any turn. The announcement's own end used to end
+  the satellite's wait for the reply.
 
 ### What changed
 
@@ -369,7 +450,31 @@ away: the new setting is off for every satellite.
   recording that began after its own busy check.
 * Core: a satellite socket accepted with no pairing token announces only
   its own room's timers and reminders (journal: `room <x> has no pairing
-  token; it announces only its own timers and reminders …`, once).
+  token; it announces only its own timers and reminders …`, once), and a
+  timer or reminder set in such a room is announced there only.
+* Core: a music restart after an announcement waits while another is on
+  its way to the room (queued on the room's lock, still synthesizing, or a
+  timer delivery waiting its turn there), and a capture whose audio has
+  stopped arriving no longer holds it back (a follow-up nobody answered
+  sends no `utterance_end`, and every later announcement in that room used
+  to stop its music for good). The music_ready handshake leaves MPD paused
+  in a room whose music a person paused. A drop-in ring prompt takes the
+  room's announcement lock, so a timer due meanwhile waits for it.
+* Core: a satellite's `utterance_end` frame counts past an hour of audio
+  are ignored, and the latency summary skips a timing no float can hold
+  (one such row made `GET /v1/stats/latency` fail). `music_failed` is
+  logged bounded and quoted.
+* Router: `tool_gate.TIMER_ACTION_RE`. Talk about a timer or reminder
+  that also stops, cancels, asks how long is left, says one is going off,
+  or asks for a new one is not a statement; the timer and reminder tools'
+  gates follow the same rule.
+* Satellite: a `response_end` that arrives during a capture with no
+  `response_start` since it began (an announcement's, or the reply the
+  capture cut off) no longer ends that turn's wait for its own reply, and
+  a release still waiting for earlier audio to drain is dropped when a
+  capture begins. A `music_start` whose `stream_url` is not an http(s)
+  URL is refused (`music_failed` with reason `bad_url` to a current core)
+  and never reaches mpg123's command line.
 * Protocol: the satellite's `hello` gains `announce_after_session_end:
   true`; the core warns once per connection for a satellite without it.
 * Core events (catalog still v1, additive): `core.timer_fired`,
@@ -379,7 +484,10 @@ away: the new setting is off for every satellite.
   `GET /api/timers/fires?since_id=…` (plus `?limit=1` when that finds
   nothing new) then `GET /api/timers`, with the household token — so
   every phone with the app installed makes two or three small reads of
-  the web backend every quarter hour, around the clock. It is an exact
+  the web backend every quarter hour, around the clock — **on Wi-Fi or
+  Ethernet only**: the check sends the household token, usually as plain
+  http, and off Wi-Fi it asks nothing (the timers already on the phone
+  still ring). It is an exact
   alarm under the exact-alarm permissions the timers already hold (only
   an exact alarm gets the network while the phone sleeps), restarted
   after a reboot and after an app update. No new permission.
@@ -446,9 +554,11 @@ can't play.
   plus 2 s. So a broadcast (intercom, `POST /v1/admin/announce`,
   `sdk.speech.announce`, a house-wide timer) reaches every room without
   waiting on one room's stream. The restart sends nothing if the room
-  stopped, a turn or a drop-in started there, another announcement is
-  playing there (two timers due at once: that one restarts the music when
-  it ends), or a later announcement replaced it.
+  stopped, a turn or a drop-in started there, or a later announcement
+  replaced it. While another announcement is on its way to that room
+  (queued, still synthesizing, or a timer waiting its turn there) it
+  waits, and the last one's end brings the music back — see the timers
+  entry above.
 * Core: a voice "play" records the room as playing before it waits on the
   stream, so a wake word during that wait no longer leaves the new song
   paused with nothing to resume. A voice "stop" forgets the room before
@@ -474,9 +584,11 @@ can't play.
 
 ### Do this once, after upgrading
 
-**Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
-**V017** (`chat_messages.stats` and `chat_messages.device_id`; the timers
-entry above needs the same run for V018). The dashboard's and the app's
+**Run Flyway** for **V017** (`chat_messages.stats` and
+`chat_messages.device_id`; the timers entry above needs the same run for
+V018). The dashboard's **Restart** runs it on an install with the update
+unit; otherwise `docker compose run --rm flyway` from `domovoi/`, before
+the restart. The dashboard's and the app's
 chat read and write both columns: without V017 a thread's messages don't
 load and a new message isn't sent. **Install the new Android app** for its
 half.
@@ -507,7 +619,8 @@ half.
 * V017: `chat_messages.stats` (JSONB, assistant rows) and
   `chat_messages.device_id` (TEXT, user rows); `IF NOT EXISTS`.
 * Web: chat messages gain `stats`, `device_id` and `device_name`; a send
-  takes an optional `device_id`. See docs/API_REFERENCE.md.
+  takes an optional `device_id`, kept only when it is a well-formed device
+  id (it is self-asserted, like the queue's). See docs/API_REFERENCE.md.
 * Core: `clients/ollama.chat_stream` takes an optional `stats` dict it
   fills from Ollama's final chunk; existing callers are unchanged.
 * The dashboard's HTML sanitiser no longer escapes an entity it has

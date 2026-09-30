@@ -322,6 +322,48 @@
       "handler": "voice_notes",
       "tags": ["action"],
       "note": "a where-question about the house still reaches the router (not straight to QA)"
+    },
+    {
+      "utterance": "the timer is going off, stop it",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: said right after a fire; the statement gate sent it to QA with no tools, so nothing acknowledged or stopped the fire"
+    },
+    {
+      "utterance": "the kitchen timer is done, stop it",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: said right after a fire; the statement gate sent it to QA with no tools, so nothing acknowledged or stopped the fire"
+    },
+    {
+      "utterance": "the timer is done",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: said right after a fire; the statement gate sent it to QA with no tools, so nothing acknowledged or stopped the fire"
+    },
+    {
+      "utterance": "that reminder was for the oven, stop it",
+      "handler": "reminder",
+      "tags": ["action", "reminder"],
+      "note": "2026-09-30 review: said right after a fire; the statement gate sent it to QA with no tools, so nothing acknowledged or stopped the fire"
+    },
+    {
+      "utterance": "why don't you set a timer for ten minutes",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: a command inside talk about a timer; the statement gate sent it to QA with no tools"
+    },
+    {
+      "utterance": "i have a timer going, how long is left",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: a command inside talk about a timer; the statement gate sent it to QA with no tools"
+    },
+    {
+      "utterance": "you have a timer for the pasta, cancel it",
+      "handler": "timer",
+      "tags": ["action", "timer"],
+      "note": "2026-09-30 review: a command inside talk about a timer; the statement gate sent it to QA with no tools"
     }
   ]
 }

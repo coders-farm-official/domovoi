@@ -699,3 +699,51 @@ def test_the_connect_grace_outlasts_a_refusal_on_a_pi():
     says, with room for a Pi busy with the wake-word model — and never be
     shorter than the one second `prime_sec = 0` had before it existed."""
     assert client.Satellite.MUSIC_CONNECT_GRACE_SEC >= 1.0
+
+
+# ─── only an http(s) stream URL reaches mpg123 ────────────────────────────
+#
+# The core's stream_url goes into mpg123's argv as-is, and mpg123 reads a
+# value that starts with "-" as an option (-w <file> writes the decoded
+# audio to a path). Nothing the core sends looks like that; a rogue core, or
+# one tampered with on the LAN's plain ws://, could.
+
+
+@pytest.mark.parametrize("bad", ["-w/tmp/owned.wav", "file:///etc/passwd", "http://a b", ""])
+def test_a_music_start_that_is_not_an_http_url_spawns_nothing(monkeypatch, bad):
+    sat = make_sat(monkeypatch, [("plays",)])
+    sat._music_stop_gen = 0
+    music_start(sat, bad)
+    time.sleep(0.05)
+    assert sat.procs == []
+    if bad:
+        assert sat.frames == [{
+            "type": "music_failed", "stream_url": bad, "reason": "bad_url", "attempts": 0,
+        }]
+    else:
+        assert sat.frames == []                 # "missing stream_url", as before
+
+
+def test_an_older_core_hears_nothing_about_a_bad_url(monkeypatch):
+    sat = make_sat(monkeypatch, [("plays",)], features=("speech_pause", "end_capture"))
+    sat._music_stop_gen = 0
+    music_start(sat, "-w/tmp/owned.wav")
+    time.sleep(0.05)
+    assert sat.procs == [] and sat.frames == []
+
+
+def test_the_spawn_itself_refuses_a_url_that_is_not_http(monkeypatch):
+    sat = make_sat(monkeypatch, [("plays",)])
+    sat._music_gen = 0
+    sat._music_stop_gen = 0
+    sat._music_run = None
+    assert sat._start_music("--output=/tmp/x") is None
+    assert sat.procs == [] and sat._music_proc is None
+
+
+def test_an_http_stream_url_still_plays(monkeypatch):
+    sat = make_sat(monkeypatch, [("plays",)])
+    sat._music_stop_gen = 0
+    music_start(sat, "HTTP://192.168.0.117:8051")
+    wait_for(lambda: len(sat.procs) == 1)
+    assert sat.procs[0].argv[-1] == "HTTP://192.168.0.117:8051"

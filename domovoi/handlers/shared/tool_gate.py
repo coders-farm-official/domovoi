@@ -140,11 +140,17 @@ def answers_without_tools(transcript: str) -> bool:
 def is_timer_statement(transcript: str) -> bool:
     """Talk ABOUT a timer or reminder, which asks for no timer or reminder
     action (``TIMER_STATEMENT_RE``): "my reminder for 10 minutes didn't go
-    off", "you have a reminder in 10 minutes". The reminder and timer
-    handlers withhold their tools on it too (``offers_tool``); the router
-    sends it to the Q&A model before any tool list is built, so their
-    withholding never changes a routed turn's list."""
-    return TIMER_STATEMENT_RE.match(transcript) is not None
+    off", "you have a reminder in 10 minutes" — and nothing in it asks for
+    one after all (``TIMER_ACTION_RE``: "..., stop it", "..., how long is
+    left", "my timer is going off", "why don't you set a timer"). The
+    reminder and timer handlers withhold their tools on it too
+    (``offers_tool``); the router sends it to the Q&A model before any tool
+    list is built, so their withholding never changes a routed turn's
+    list."""
+    return (
+        TIMER_STATEMENT_RE.match(transcript) is not None
+        and TIMER_ACTION_RE.search(transcript) is None
+    )
 
 
 # What a statement about a timer or reminder goes on with: "my reminder for
@@ -196,4 +202,32 @@ TIMER_STATEMENT_RE = re.compile(
     r"does not|won't|wont|wasn't|wasnt|failed to)"
     r" (?:[a-z'-]+ )??(?:go(?:es)? off|went off|work|ring|fire|sound|play|remind)"
     r")"
+)
+
+# What makes talk about a timer or reminder a request after all. Since
+# every timer and reminder is announced in every room, what people say
+# right after one goes off is exactly this shape: "the timer is going off,
+# stop it", "my timer is going off", "the timer is done", "that reminder
+# was for the oven, stop it". Sent to the Q&A model with no tools, nothing
+# acknowledged the fire (the timer and reminder cancels do: a stop right
+# after one went off in the room is an acknowledgement) and nothing was
+# stopped. Searched anywhere in the utterance; a false positive only
+# routes a turn the way it went before the statement gate existed.
+TIMER_ACTION_RE = re.compile(
+    r"\b(?:"
+    # an imperative to end it
+    r"stop|cancel|silence|dismiss|snooze|mute|shush|delete|remove"
+    r"|(?:turn|shut|switch) (?:[a-z'-]+ ){0,2}?off|shut up"
+    # asking what is left of it
+    r"|how (?:long|much time|many minutes)|time (?:is )?left"
+    r")\b"
+    # one going off right now: "my timer is going off", "the timer's done"
+    rf"|\b{_TIMER_NOUN}(?:'s| is| are)(?: still)?"
+    r" (?:going off|beeping|ringing|buzzing|sounding|done|finished|up|over)\b"
+    # a command after the statement: "..., set another one for 5 minutes"
+    r"|(?:,|\band|\bso|\bthen|\bplease|\bnow)\s+(?:please\s+)?"
+    r"(?:set|start|add|make|create|put|restart|reset|extend|remind)\b"
+    # the request form: "why don't you set a timer for ten minutes"
+    r"|^why (?:don't|dont|do not|not)(?: you| we)?"
+    r" (?:set|start|make|add|create|put|give|remind|tell|cancel|stop|check)\b"
 )

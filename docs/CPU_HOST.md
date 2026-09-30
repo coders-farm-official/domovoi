@@ -259,7 +259,8 @@ Ollama server's default window: 4096 tokens on most hosts, or whatever
 `OLLAMA_CONTEXT_LENGTH` says in Ollama's unit. The routing prompt is
 about 3,340 tokens with the stock tools (core plus the bundled radio
 plugin) and grows with every plugin that brings a tool: with the five
-sibling plugins that do (jellyfin, kiwix, romm, sleep, ytdlp) it is about
+sibling plugins that do (jellyfin, kiwix, romm, sleep and the
+media-acquisition plugin) it is about
 3,900. The routing call's reply cap (256 tokens, or 1024 where the router
 may reason first — see above) has to fit on top, so with those plugins a
 4096 window is already too small: Ollama cuts the prompt (tools drop out
