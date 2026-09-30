@@ -37,7 +37,7 @@ ENV_EXAMPLE = REPO_ROOT / "domovoi" / ".env.example"
 
 def test_the_address_clients_dial_is_the_address_the_control_port_publishes_on() -> None:
     """The whole finding in one line. ``settings.mpd_host`` is what
-    ``RealMPDClient``, ``_wait_for_tcp`` and the web's ``_read_mpd`` are
+    ``RealMPDClient``, ``_wait_for_mpd`` and the web's ``_read_mpd`` are
     handed; ``_CONTROL_BIND`` is what ``docker run -p`` publishes."""
     assert settings.mpd_host == mpd_provisioner._CONTROL_BIND
 

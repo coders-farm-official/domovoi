@@ -153,6 +153,7 @@ sequenceDiagram
     M->>NP: stamp(room, source, {stream_url, title})
     M-->>S: Response {music_action:"start",<br/>music_stream_url}
     S-->>Pi: response_start + TTS ("Playing …") + response_end
+    S->>MPD: probe the stream (HTTP 200?); if not serving,<br/>pause 0 + pause 1 opens it, probe again (≤ 3 s)
     S-->>Pi: music_start {stream_url}
     Note over S: arms the music_ready fallback timer<br/>(music_prepare_fallback_sec)
     Pi->>Pi: spawn mpg123, prime buffer against<br/>MPD's silence stream
@@ -164,6 +165,16 @@ sequenceDiagram
 
 Around that happy path:
 
+* **The stream must be serving before `music_start`.** MPD opens its
+  http output only when the player is unpaused, and `always_on` only keeps
+  it open after that. A daemon that has not played since it started
+  therefore has no stream after a paused prepare, and the Pi's mpg123 is
+  refused at once. `ensure_stream_serving` (clients/mpd.py) probes for an
+  HTTP 200 — a bare TCP connect is accepted by Docker's port proxy even
+  while MPD refuses — and opens a closed output with `pause 0` + `pause 1`.
+  The Pi also retries a refused stream for ~8 s and, if it gives up, drops
+  its music LEDs and sends `music_failed` (when the core lists it), which
+  pauses MPD instead of letting it play to nobody.
 * **Wake capture kills the Pi's player**, so after a non-music turn ("what
   time is it?" mid-song) the server auto-resends `music_start` from its
   `resumable_music` memory — unless the response carries `expect_followup`,

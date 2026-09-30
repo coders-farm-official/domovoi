@@ -398,6 +398,20 @@ class LEDController:
             self._state = new
             self._changed.set()
 
+    def set_state_if(self, expected: str, new: str) -> None:
+        """Transition to ``new`` only while the current state is ``expected``.
+
+        For the owner of a state taking it back: the music player that put
+        the ring on "music" and then could not play drops it to idle — but
+        not if a wake, a response or a capture has painted over it since.
+        """
+        with self._lock:
+            if self._state != expected or self._state == new:
+                return
+            log.debug("[leds] %s -> %s (if=%s)", self._state, new, expected)
+            self._state = new
+            self._changed.set()
+
     def _current_state(self) -> str:
         with self._lock:
             return self._state

@@ -2721,10 +2721,7 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
     connected — a later reconnect (or the next response turn) will pull
     from there and auto-resume.
     """
-    from domovoi.streaming import (
-        _resume_mpd_for_room,
-        schedule_music_resume_fallback,
-    )
+    from domovoi.streaming import _resume_mpd_for_room, send_music_start
 
     sessions: dict[str, Any] = app.state.active_sessions
     resumable: dict[str, str] = app.state.resumable_music
@@ -2743,15 +2740,13 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
         # entries whose last_file_path doesn't match MPD currentsong
         # once the new track is actually playing.
         if sess is not None:
-            await sess._safe_send_text({
-                "type": "music_start",
-                "stream_url": response.music_stream_url,
-            })
-            # Pair the music_start with the same prepare/resume
-            # handshake the voice path uses so admin "Play in {room}"
-            # clicks don't stutter either.
-            await schedule_music_resume_fallback(
-                app, room_id, response.music_stream_url,
+            # The same helper the voice path uses: the stream is made to
+            # serve first (a cast is very often the first play since the
+            # room's MPD daemon started, which is exactly when it doesn't),
+            # then the music_start, then the prepare/resume handshake so
+            # admin "Play in {room}" clicks don't stutter either.
+            await send_music_start(
+                app, sess, room_id, response.music_stream_url,
             )
         else:
             # No Pi connected to consume the stream. The handler queued
@@ -3244,8 +3239,12 @@ async def admin_music_queue_add(
     started = False
     if was_empty and state_before == "stop":
         try:
-            await mpd.resume()
-            started = True
+            # Paused on the first added track, as every start path leaves
+            # MPD: the music_start below opens the stream and the satellite's
+            # music_ready unpauses it. (This used to call `resume`, which is
+            # `pause 0` — a no-op on a stopped MPD, so the room stayed silent
+            # while the call reported started.)
+            started = await mpd.start_paused()
         except Exception as e:  # noqa: BLE001 — the tracks ARE queued
             log.warning("admin queue add: start failed: %s", e)
 

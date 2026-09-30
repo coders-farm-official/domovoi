@@ -386,6 +386,86 @@ away: the new setting is off for every satellite.
 * Retiring a room (`DELETE /v1/admin/satellites/{room}`) also clears its
   "Only reminders for this device" setting; its timer history stays.
 
+## 2026-09-30 — The first play after a room's music daemon restarts is no longer silent
+
+### Do this once, after upgrading
+
+**Restart the core** so it applies the core fix, then **upgrade each
+satellite** (Satellites → the satellite → Overview → **Upgrade
+satellite**). Either one alone already fixes the silent first play. You
+need both to get the lights and the dashboard right when a stream still
+can't play.
+
+### What changes for the people in the house
+
+* **The first cast or "play …" in a room after its music daemon restarted
+  now plays.** Before, the satellite showed the music lights and stayed
+  silent until the next wake word. The song had started to nobody, about
+  5 s in (office, 2026-09-30).
+* When a stream really can't be reached, an upgraded satellite tries for
+  about 8 s, then **turns the music lights off**. With a current core,
+  that room's music is also paused, so the dashboard no longer says
+  "playing" over a silent room. The next turn tries again from the same
+  place in the song.
+* **Adding to the queue of a quiet room starts it.** It used to report
+  "started" and play nothing.
+
+### What changed
+
+* Core: every `music_start` now goes through one helper,
+  `streaming.send_music_start`. Before sending the frame, the helper checks
+  that the room's stream answers `HTTP 200`. A TCP connect alone isn't
+  enough, because Docker's port proxy accepts it even while MPD refuses.
+  If the stream isn't serving and MPD is paused, the helper opens it with
+  `pause 0` and `pause 1`, which plays nothing and leaves the song at 0:00.
+  It then probes again, for up to `MUSIC_STREAM_READY_TIMEOUT_SEC` (3 s). A
+  stream that's already up costs one local request. MPD opens its output
+  only once it actually plays, and every start leaves MPD paused first. So
+  until now, a daemon that hadn't played since it started had no stream at
+  all when the satellite connected.
+* Satellite: a stream that refuses the connection, or accepts it and
+  closes, is retried with backoff (0.25, 0.5, 1 then 1.5 s) for up to 8 s.
+  A `music_stop`, a newer `music_start`, a wake word or a response cancels
+  the retries. When the satellite gives up, it logs `music: giving up on
+  <url> after N attempt(s): <reason>` and sets its lights from "music" to
+  idle. If the lights are showing something else by then, it leaves them.
+  An exit in the first second always counts as "not up yet", even when
+  `[music] prime_sec` is set lower (`music_ready` still goes out at
+  `prime_sec`).
+* Satellite: a `music_start` that is still waiting for the reply to
+  finish playing (up to 10 s) is dropped when a `music_stop`, a wake word
+  or a barge-in lands first. Before, music could start over the new
+  capture. A newer `music_start` does not drop it; the newer one takes
+  over.
+* Core: an announcement no longer waits for its room's music to restart.
+  The restart runs on its own, bounded by `MUSIC_STREAM_READY_TIMEOUT_SEC`
+  plus 2 s. So a broadcast (intercom, `POST /v1/admin/announce`,
+  `sdk.speech.announce`, a house-wide timer) reaches every room without
+  waiting on one room's stream. The restart sends nothing if the room
+  stopped, a turn or a drop-in started there, another announcement is
+  playing there (two timers due at once: that one restarts the music when
+  it ends), or a later announcement replaced it.
+* Core: a voice "play" records the room as playing before it waits on the
+  stream, so a wake word during that wait no longer leaves the new song
+  paused with nothing to resume. A voice "stop" forgets the room before
+  it sends `music_stop`.
+* Core: the provisioner's wait for a room's MPD control port now reads
+  MPD's `OK MPD` greeting. A bare TCP connect passed at once through
+  Docker's port proxy, even while the daemon wasn't listening yet.
+* Protocol: `ready.features` adds `music_failed`, and a new client → server
+  frame `music_failed {stream_url, reason, attempts}` is sent only to a core
+  that lists it. On that frame the core pauses the room's MPD, unless a
+  newer `music_start` is pending or the room has stopped.
+* Older satellites and cores work with the new ones in both directions. An
+  older satellite gets the core-side fix. An older core gets the
+  satellite's retries: its music_ready fallback opens the stream after
+  about 5 s, and the next retry connects. An older core never receives
+  `music_failed`.
+* `POST /v1/admin/music/queue/{room}/add` to a stopped, empty room now
+  starts the queue paused on the first added track and runs the normal
+  handshake. It used to call `pause 0`, which does nothing on a stopped
+  MPD.
+
 ## 2026-09-29 — The satellite acknowledges the wake word, then listens
 
 ### Do this once, after upgrading

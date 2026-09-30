@@ -681,6 +681,15 @@ class Settings(BaseSettings):
     # the satellite's `music_prime_sec` plus worst-case TTS drain.
     music_prepare_fallback_sec: float = 5.0
 
+    # How long a music_start may wait for the room's MPD stream to serve.
+    # The satellite's mpg123 connects the moment the frame arrives, and a
+    # daemon that has not played since it started has no stream open yet
+    # (see clients/mpd.ensure_stream_serving): the core opens it and probes
+    # until it answers, up to this long, before sending the frame. One
+    # local request when the stream is already up; a slow stream URL can
+    # need a second or two. The frame goes out either way.
+    music_stream_ready_timeout_sec: float = 3.0
+
     # ─── Music library path (provider downloads land here; MPD reads same dir) ──
     # Host path. MPD container mounts this read-only as /music.
     music_dir: str = os.path.expanduser("~/Music")
