@@ -47,6 +47,28 @@ can't play.
   the retries. When the satellite gives up, it logs `music: giving up on
   <url> after N attempt(s): <reason>` and sets its lights from "music" to
   idle. If the lights are showing something else by then, it leaves them.
+  An exit in the first 0.5 s always counts as "not up yet", even when
+  `[music] prime_sec` is set lower (`music_ready` still goes out at
+  `prime_sec`).
+* Satellite: a `music_start` that is still waiting for the reply to
+  finish playing (up to 10 s) is dropped when a `music_stop`, a wake word
+  or a barge-in lands first. Before, music could start over the new
+  capture. A newer `music_start` does not drop it; the newer one takes
+  over.
+* Core: an announcement no longer waits for its room's music to restart.
+  The restart runs on its own, bounded by `MUSIC_STREAM_READY_TIMEOUT_SEC`
+  plus 2 s. So a broadcast (intercom, `POST /v1/admin/announce`,
+  `sdk.speech.announce`, a house-wide timer) reaches every room without
+  waiting on one room's stream. The restart sends nothing if the room
+  stopped, a turn or a drop-in started there, or a later announcement
+  replaced it.
+* Core: a voice "play" records the room as playing before it waits on the
+  stream, so a wake word during that wait no longer leaves the new song
+  paused with nothing to resume. A voice "stop" forgets the room before
+  it sends `music_stop`.
+* Core: the provisioner's wait for a room's MPD control port now reads
+  MPD's `OK MPD` greeting. A bare TCP connect passed at once through
+  Docker's port proxy, even while the daemon wasn't listening yet.
 * Protocol: `ready.features` adds `music_failed`, and a new client → server
   frame `music_failed {stream_url, reason, attempts}` is sent only to a core
   that lists it. On that frame the core pauses the room's MPD, unless a
