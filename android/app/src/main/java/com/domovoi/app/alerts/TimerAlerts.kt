@@ -1,6 +1,7 @@
 package com.domovoi.app.alerts
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
@@ -28,10 +29,14 @@ import kotlinx.coroutines.launch
  *  * The alarm mirror: `timers.changed` (debounced), each connect, start
  *    and a server switch re-read GET /api/timers and arm a local alarm for
  *    every running timer, so the phone rings when the socket is down.
+ *  * The background sync (TimerSync): while the app is off screen, and so
+ *    off the network, an alarm chain wakes it about every 15 minutes to
+ *    catch up and re-mirror the same way, so a timer set by voice meanwhile
+ *    still gets its alarm (or, if it already went off, its notification).
  *
  * Only the ACTIVE server is watched and mirrored. With notifications off
  * for the app or its channel, nothing posts and nothing is armed; coming
- * back to the app re-checks.
+ * back to the app re-checks, and so does the next background tick.
  */
 class TimerAlerts(
     context: Context,
@@ -51,6 +56,18 @@ class TimerAlerts(
         alarms = AndroidAlarms(ctx),
         serverUrl = { prefs.serverUrl.value },
         log = { Log.d(TAG, it) },
+    )
+
+    /** The background sync's alarm chain (TimerSyncReceiver, TimerBootReceiver). */
+    val sync = TimerSync(
+        work = engine,
+        alarm = AndroidSyncAlarm(ctx),
+        hasServer = { prefs.serverUrl.value.isNotBlank() },
+        canPost = { notifier.canPost() },
+        mirrorTimes = { store.mirror().alarms.map { it.trigger_at_ms } },
+        wall = System::currentTimeMillis,
+        elapsed = SystemClock::elapsedRealtime,
+        log = { Log.i(TAG, it) },
     )
 
     /** Home's "Timer alerts are off on this phone" was answered "not now". */
@@ -97,6 +114,8 @@ class TimerAlerts(
                     last = url
                     safely("timer mirror clear") { engine.clearMirror() }
                     requestSync(0)
+                    // No server: no chain. A new one: its first tick in 10-15 min.
+                    safely("background sync arm") { sync.arm(SyncReason.SERVER) }
                 }
             }
         }
@@ -105,11 +124,12 @@ class TimerAlerts(
             // with AlarmManager: a force-stop (Settings, several OEMs' swipe
             // away, a revoked exact-alarm grant on 31-32) cancels every
             // alarm the app set and leaves the mirror listing them, and the
-            // sync below only arms timers that are new or moved. Re-arm
-            // what is stored first (idempotent: FLAG_UPDATE_CURRENT).
-            safely("timer mirror re-arm") { engine.rearm() }
-            safely("timer catch-up") { engine.catchUp() }
-            safely("timer mirror sync") { engine.syncMirror() }
+            // mirror sync only arms timers that are new or moved. So the
+            // start re-arms what is stored first (idempotent:
+            // FLAG_UPDATE_CURRENT), then catches up and re-mirrors — the
+            // same sync a background tick runs — after keeping the
+            // background chain going (TimerSync.onStart).
+            safely("timer start sync") { sync.onStart() }
         }
     }
 
@@ -133,6 +153,9 @@ class TimerAlerts(
         syncJob = scope.launch {
             if (delayMs > 0) delay(delayMs)
             safely("timer mirror sync") { engine.syncMirror() }
+            // A timer armed just now must not share Doze's slot with the
+            // next background tick (API 26-30).
+            safely("background sync guard") { sync.reguard() }
         }
     }
 

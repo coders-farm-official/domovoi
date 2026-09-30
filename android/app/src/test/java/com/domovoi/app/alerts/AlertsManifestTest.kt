@@ -58,6 +58,22 @@ class AlertsManifestTest {
             0, r.getElementsByTagName("intent-filter").length)
     }
 
+    @Test fun theBackgroundSyncReceiverIsNotExported() {
+        val r = elements("receiver").single { it.attr("name") == ".alerts.TimerSyncReceiver" }
+        assertEquals("false", r.attr("exported"))
+        assertEquals("it needs no intent filter: only its own PendingIntent reaches it",
+            0, r.getElementsByTagName("intent-filter").length)
+    }
+
+    /** The background sync runs from an alarm chain, not a service: no
+     *  foreground service type beyond media playback, and no permission a
+     *  data-sync service would need. */
+    @Test fun theBackgroundSyncNeedsNoForegroundService() {
+        val services = elements("service")
+        assertEquals(listOf(".player.PlaybackService"), services.map { it.attr("name") })
+        assertEquals(null, permission("FOREGROUND_SERVICE_DATA_SYNC"))
+    }
+
     @Test fun theBootReceiverIsNotExportedAndHearsBootAndUpdate() {
         val r = elements("receiver").single { it.attr("name") == ".alerts.TimerBootReceiver" }
         assertEquals("false", r.attr("exported"))

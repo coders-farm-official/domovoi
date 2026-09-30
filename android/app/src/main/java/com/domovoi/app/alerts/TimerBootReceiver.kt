@@ -9,8 +9,10 @@ import kotlinx.coroutines.launch
 
 /**
  * Boot and app update clear every alarm; this re-arms the mirror's future
- * ones. Not exported: BOOT_COMPLETED and MY_PACKAGE_REPLACED are protected
- * system broadcasts, which reach a non-exported receiver.
+ * ones and restarts the background sync's chain, its first tick within a
+ * couple of minutes (TimerSync.onBoot). Not exported: BOOT_COMPLETED and
+ * MY_PACKAGE_REPLACED are protected system broadcasts, which reach a
+ * non-exported receiver.
  */
 class TimerBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,7 +22,7 @@ class TimerBootReceiver : BroadcastReceiver() {
         val pending = goAsync()
         receiverScope.launch {
             try {
-                app.container.alerts.engine.rearm()
+                app.container.alerts.sync.onBoot()
             } catch (e: Exception) {
                 Log.w("TimerBootReceiver", "re-arming timer alarms failed: ${e.message}")
             } finally {

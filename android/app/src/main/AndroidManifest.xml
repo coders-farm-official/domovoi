@@ -30,7 +30,10 @@
          SCHEDULE_EXACT_ALARM on API 31-32 (user-revocable; inexact without
          it) and USE_EXACT_ALARM from API 33 (granted at install; fine for
          this sideloaded app, a restriction for a future Play listing).
-         RECEIVE_BOOT_COMPLETED re-arms them after a reboot. -->
+         RECEIVE_BOOT_COMPLETED re-arms them after a reboot. The background
+         sync's tick (alerts/TimerSync.kt) is an exact alarm under the same
+         permissions: only an exact allow-while-idle alarm gets the network
+         in Doze. -->
     <uses-permission
         android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />
@@ -68,11 +71,14 @@
             </intent-filter>
         </activity>
 
-        <!-- Not exported: only this app's own immutable PendingIntents (the
-             alarm) and protected system broadcasts (boot, app update) reach
-             them. -->
+        <!-- Not exported: only this app's own immutable PendingIntents (a
+             timer's alarm, the background sync's tick) and protected system
+             broadcasts (boot, app update) reach them. -->
         <receiver
             android:name=".alerts.TimerAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".alerts.TimerSyncReceiver"
             android:exported="false" />
         <receiver
             android:name=".alerts.TimerBootReceiver"

@@ -103,21 +103,33 @@ away: the new setting is off for every satellite.
   only the newest card shows, with "+N more" and "dismiss all", and the
   cards sit under any open dialog. A tablet whose live connection is
   refused (an unpaired one) checks every 30 seconds instead.
-* **The phone notifies — while the Domovoi app is open.** Android freezes
-  a backgrounded app and cuts its network, so the phone only learns about
-  a timer while the app is open (or the next time it is opened). It then
-  posts a notification when the timer goes off, and sets a local alarm so
-  that timer still rings on the phone later with the app closed or away
-  from home (marked "couldn't reach Domovoi to confirm" when it can't ask
-  the server; one cancelled meanwhile still rings there). **A timer set by
-  voice while the app is closed does not ring on the phone** unless the
-  app was opened after it was set; it shows (if under 30 minutes old) the
-  next time the app is opened. The satellites announce it either way.
-  This falls short of "the Android app notifies too" for the phone in
-  your pocket; closing that gap needs a background service or push
-  notifications, which this release does not add. After a force-stop
-  (Settings → Force stop, or some phones' swipe-away), the next start of
-  the app re-arms the alarms it still knows.
+* **The phone notifies: at once while the Domovoi app is open, within
+  about 15 minutes when it isn't.** Android freezes an app that is off
+  screen and cuts its network, so the app can't listen live in the
+  background. What the phone does:
+  - **App open (on screen):** it hears of every timer and reminder the
+    moment it is set in any room, and notifies the moment one goes off.
+  - **App in the background or closed:** about every 15 minutes it wakes
+    for a few seconds and asks Domovoi what changed. It sets a local alarm
+    for every running timer and reminder it finds, drops the alarms of
+    ones cancelled since, and notifies about any that went off since it
+    last asked (if under 30 minutes ago), showing the time it went off.
+    No permanent notification, no background service.
+  - So **a timer set by voice while the phone is in your pocket rings on
+    the phone on time if it is due after the phone's next check**; one
+    due sooner than that shows up at the check, late. The satellites
+    announce it either way.
+  - A local alarm rings at its time even with the app closed or the phone
+    away from home (marked "couldn't reach Domovoi to confirm" when it
+    can't ask the server; a timer cancelled while the phone couldn't hear
+    of it still rings there).
+  - The checks keep going while the phone sleeps (Doze). What stops
+    them: the app's battery usage set to **Restricted** (neither the
+    checks nor the alarms run in the background) and **Force stop** (both
+    stop until the app is next opened). On Android 12 with the app's
+    "Alarms & reminders" access turned off, the checks pause while the
+    phone sleeps and run in its periodic wake-ups. A reboot or an app
+    update starts them again within a couple of minutes.
 * **The phone's lock screen shows a reminder's words** unless the phone is
   set to hide sensitive notification content (Settings → Notifications →
   notifications on lock screen; "Sensitive notifications" off on a
@@ -182,6 +194,15 @@ away: the new setting is off for every satellite.
   true`; the core warns once per connection for a satellite without it.
 * Core events (catalog still v1, additive): `core.timer_fired`,
   `core.timer_fire_settled`. NOTIFY channel `timer_fires_changed`.
+* Android: a background sync (`alerts/TimerSync.kt`), a self-rescheduling
+  alarm about every 15 minutes, not a service. Each check is
+  `GET /api/timers/fires?since_id=…` (plus `?limit=1` when that finds
+  nothing new) then `GET /api/timers`, with the household token — so
+  every phone with the app installed makes two or three small reads of
+  the web backend every quarter hour, around the clock. It is an exact
+  alarm under the exact-alarm permissions the timers already hold (only
+  an exact alarm gets the network while the phone sleeps), restarted
+  after a reboot and after an app update. No new permission.
 * Web: `GET /api/timers` gains `fires` (null without V017); new
   `GET /api/timers/fires`, `GET`/`PUT /api/satellites/{room}/timer-announcements`
   (PUT is device tier); satellite rows gain `timers_own_only`; realtime

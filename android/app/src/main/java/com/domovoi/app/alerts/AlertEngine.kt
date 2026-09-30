@@ -75,7 +75,7 @@ class AlertEngine(
     private val serverUrl: () -> String,
     private val clock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
-) {
+) : SyncWork {
     /** One batch of fires at a time: a push and a catch-up must not both
      *  read the same seen id and post the same fire. */
     private val fireLock = Mutex()
@@ -154,11 +154,11 @@ class AlertEngine(
     /**
      * On connect and at start: whatever fired while this phone wasn't
      * listening. A 404 (an older server) or 503 (no fire ledger yet) means
-     * there is nothing to catch up from.
+     * there is nothing to catch up from. True when the server answered.
      */
-    suspend fun catchUp() {
-        val key = activeKey() ?: return
-        fireLock.withLock {
+    override suspend fun catchUp(): Boolean {
+        val key = activeKey() ?: return false
+        return fireLock.withLock catchUp@{
             var seen = store.seen(key)
             repeat(CATCH_UP_PAGES) { page ->
                 val received = clock()
@@ -168,9 +168,9 @@ class AlertEngine(
                     throw e
                 } catch (e: Exception) {
                     log("timer catch-up skipped: ${e.message}")
-                    return
+                    return@catchUp false
                 }
-                if (activeKey() != key) return
+                if (activeKey() != key) return@catchUp false
                 noteClock(list.server_now, received)
                 val remembered = seen
                 if (remembered != null && page == 0 && list.fires.isEmpty()) {
@@ -185,10 +185,10 @@ class AlertEngine(
                         throw e
                     } catch (e: Exception) {
                         log("timer catch-up check skipped: ${e.message}")
-                        return
+                        return@catchUp false
                     }
-                    if (activeKey() != key) return
-                    if (!historyBehind(top.fires.firstOrNull(), remembered)) return
+                    if (activeKey() != key) return@catchUp false
+                    if (!historyBehind(top.fires.firstOrNull(), remembered)) return@catchUp true
                     log("timer fire history is behind this phone's; starting over")
                     store.startOver(key)
                     seen = null
@@ -196,9 +196,10 @@ class AlertEngine(
                 }
                 process(key, list.fires, isoMs(list.server_now) ?: (received + serverOffsetMs))
                 val next = store.seen(key)
-                if (seen == null || list.fires.size < AlertsApi.FIRES_PAGE || next == seen) return
+                if (seen == null || list.fires.size < AlertsApi.FIRES_PAGE || next == seen) return@catchUp true
                 seen = next
             }
+            true
         }
     }
 
@@ -206,16 +207,17 @@ class AlertEngine(
      * Bring the alarm mirror in line with a fresh GET /api/timers: arm new
      * and moved timers, disarm the ones that fired or were cancelled. Kept as
      * it is when the server can't be asked. With notifications off, nothing
-     * stays armed.
+     * stays armed. True when the mirror is in line with the server (or,
+     * with notifications off, disarmed); false when the server couldn't say.
      */
-    suspend fun syncMirror() {
-        mirrorLock.withLock {
+    override suspend fun syncMirror(): Boolean {
+        return mirrorLock.withLock syncMirror@{
             val key = activeKey()
             val stored = store.mirror()
             if (key == null || !sink.canPost()) {
                 stored.alarms.forEach { alarms.cancel(it.timer_id) }
                 if (stored.alarms.isNotEmpty() || stored.serverKey != key) store.setMirror(MirrorBook(key))
-                return
+                return@syncMirror key != null
             }
             val received = clock()
             val list = try {
@@ -224,9 +226,9 @@ class AlertEngine(
                 throw e
             } catch (e: Exception) {
                 log("timer mirror sync skipped: ${e.message}")
-                return
+                return@syncMirror false
             }
-            if (activeKey() != key) return
+            if (activeKey() != key) return@syncMirror false
             noteClock(list.server_now, received)
             val desired = desiredAlarms(list, received)
             val current = if (stored.serverKey == key) {
@@ -240,6 +242,7 @@ class AlertEngine(
             r.toCancel.forEach { alarms.cancel(it) }
             r.toSchedule.forEach { alarms.schedule(key, it) }
             store.setMirror(MirrorBook(key, desired))
+            true
         }
     }
 
@@ -253,7 +256,7 @@ class AlertEngine(
 
     /** After a reboot or an app update: re-arm what is still ahead. Past
      *  ones are dropped; the next connect's catch-up posts the real fires. */
-    suspend fun rearm() {
+    override suspend fun rearm() {
         mirrorLock.withLock {
             val book = store.mirror()
             val key = book.serverKey ?: return

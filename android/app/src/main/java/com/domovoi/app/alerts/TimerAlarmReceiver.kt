@@ -81,6 +81,9 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         receiverScope.launch {
             try {
                 app.container.alerts.engine.onAlarm(timerId, serverKey)
+                // A re-armed alarm (the server's clock moved) must not share
+                // Doze's slot with the next background tick (API 26-30).
+                app.container.alerts.sync.reguard()
             } catch (e: Exception) {
                 Log.w(TAG, "timer alarm $timerId failed: ${e.message}")
             } finally {
