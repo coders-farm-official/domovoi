@@ -155,7 +155,19 @@ defaults.
   ```
 
   Use the container's Gradle if it matches the wrapper version
-  (`/opt/gradle-<ver>/bin/gradle`), else `./gradlew`.
+  (`/opt/gradle-<ver>/bin/gradle`), else `./gradlew`. If Maven Central
+  answers Gradle with `429 Too Many Requests`, put Google's mirror first
+  with a container-only init script (not a repo change):
+
+  ```groovy
+  // ~/.gradle/init.d/central-mirror.gradle
+  settingsEvaluated { s ->
+      [s.pluginManagement.repositories, s.dependencyResolutionManagement.repositories].each { repos ->
+          def r = repos.maven { name = 'CentralMirror'; url = 'https://maven-central.storage-download.googleapis.com/maven2/' }
+          repos.remove(r); repos.add(0, r)
+      }
+  }
+  ```
 
 ## Where to read more
 
