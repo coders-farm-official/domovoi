@@ -147,6 +147,15 @@ leaves the home network):
   with a way to turn them on.
 - Tapping an alert opens Home. The satellite detail's **Only reminders
   for this device** switch sets which rooms speak other rooms' timers.
+- **Limit (no foreground service, by design):** Android freezes a
+  backgrounded app and, from Android 15, blocks its network a few
+  seconds after it leaves the screen (`blocked=APP_BACKGROUND` in
+  `dumpsys netpolicy`). So the live path only runs while the app is
+  open, and the alarm mirror only knows the timers that existed the last
+  time the app was open or resumed. A timer set by voice while the app
+  sits in the background reaches the phone only when the app is next
+  opened (the catch-up posts it if it fired under 30 minutes ago). A
+  ringing alarm is allowed the network for its confirm step.
 
 ## Capability gating (plugins)
 
