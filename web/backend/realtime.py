@@ -37,7 +37,9 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``timer_fires`` — the timers and reminders that went off in the last
   hour (V017 fire history, newest first, at most 20) with where each was
   announced; fires when one goes off and as each room's announcement
-  lands. Unmasked, like ``timers``: this socket is device tier
+  lands. Unmasked and whole, like ``timers``: this socket admits exactly
+  the tier that reads the whole ledger over HTTP (rule F1,
+  ``web.backend.api.satellites._READS_FIRE_LEDGER``)
 
 Snapshot diffs are coarse: we emit the full new value rather than a
 field-level patch. The frontend rerenders on receipt; payloads are
@@ -830,10 +832,12 @@ TIMER_FIRES_PUSH_MAX = 20
 
 async def _snapshot_timer_fires() -> list[dict[str, Any]]:
     """What went off in the last hour and where it was heard — the Fire
-    objects ``GET /api/timers/fires`` serves, UNMASKED (the socket is
-    device tier, like ``timers``). Nothing in it moves on its own, so the
-    diff stays quiet between ledger writes; a fire only drops out when it
-    ages past the hour. ``[]`` when V017 is missing."""
+    objects ``GET /api/timers/fires`` serves a household credential,
+    UNMASKED and whole (the socket admits exactly that tier — rule F1 —
+    like ``timers``; a caller with no credential never gets this socket
+    and reads the cut-down open view over HTTP). Nothing in it moves on
+    its own, so the diff stays quiet between ledger writes; a fire only
+    drops out when it ages past the hour. ``[]`` when V017 is missing."""
     async with session_scope() as s:
         fires = await timer_fires.recent_fires(
             s, window_sec=TIMER_FIRES_PUSH_WINDOW_SEC, limit=TIMER_FIRES_PUSH_MAX

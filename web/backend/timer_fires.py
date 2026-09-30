@@ -20,6 +20,13 @@ can go on using its session after asking.
 
 What is never read here: ``base_text`` and ``spoken_text``, the words the
 core spoke. They stay in the database (see docs/SECURITY_PRIVACY.md).
+
+Who gets how much is the routes' call; the two views are built here:
+:func:`recent_fires` answers the whole ledger (the device tier — the
+household token, an admin Bearer, the dashboard cookie, the pre-setup
+grace — and the ``/ws/state`` push), and :func:`open_fire` cuts one fire
+down to what a caller with no household credential may read, within
+:data:`OPEN_WINDOW_SEC`.
 """
 
 from __future__ import annotations
@@ -223,10 +230,52 @@ def mask_fire(fire: dict[str, Any]) -> dict[str, Any]:
     words (``message``, and ``label``, which holds the same words) are
     held back and ``masked`` says so. Countdown times, rooms, kinds and
     delivery outcomes stay. A plain timer's label ("pasta") is not
-    masked. Returns a copy."""
+    masked. Returns a copy. (What such a caller actually receives is
+    :func:`open_fire`, which starts here.)"""
     out = dict(fire)
     if out.get("is_reminder"):
         out.update(message=None, label=None, masked=True)
+    return out
+
+
+# ─── what an open read carries (no household credential) ─────────────────
+
+# How far back a caller with no household credential reaches into the
+# history: the last 10 minutes — the window GET /api/timers already
+# carries as ``fires`` for Home's "done · kitchen" lines, and the one the
+# dashboard's alert catch-up alerts within. The whole retained history
+# (``timer_fire_retention_days``, default 7) is for the device tier.
+OPEN_WINDOW_SEC = 600
+
+
+def open_fire(fire: dict[str, Any]) -> dict[str, Any]:
+    """A fire as an OPEN read carries it — to a caller with no household
+    credential (rule F1, docs/SECURITY_PRIVACY.md): exactly what Home's
+    done line and the dashboard's alert card draw, and nothing else.
+
+    * Kept: the ids, the kind, the room it was SET in, when it was set,
+      due and went off (all of which the running row already showed
+      openly), ``heard_in`` and ``summary`` — "heard in garage, kitchen",
+      "announcing…" — and a plain timer's label ("pasta"), which the
+      running row served openly until the moment it fired.
+    * Rule M1: a reminder's words (``message``, ``label``) held back,
+      ``masked`` true.
+    * Held back: who stopped it and when (``acked_by``, ``acked_at``: a
+      log of which room somebody spoke in) — also dropped from the
+      ``summary``'s `` · stopped in kitchen``; each room's outcome, reason
+      code and finish time (``deliveries`` is ``[]``: ``interrupted``
+      means someone started talking there, ``busy_timeout`` that a room
+      was in a call, and a pending row's reason is live — ``in_call``,
+      ``recording``, ``capturing``); and ``settled_at``.
+
+    Returns a copy, and cutting a cut fire changes nothing."""
+    out = mask_fire(fire)
+    if fire.get("acked_by"):
+        # The same line, without its " · stopped in <room>" (the ledger's
+        # deliveries are still on ``fire`` here).
+        out["summary"] = fire_summary({**fire, "acked_by": None})
+    out.update(acked_at=None, acked_by=None, settled_at=None, deliveries=[])
+    out["heard_in"] = list(fire.get("heard_in") or [])
     return out
 
 

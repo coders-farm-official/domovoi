@@ -487,11 +487,24 @@ _FIRE_HOUSE = house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [],
 SCENARIOS["timer_fires_lines"] = scenario(
     _FIRE_HOUSE, _DONE_DOTS + "return { snap: w.__snap(h), dots: w.__doneDots() };", ls=PAIRED_LS)
 SCENARIOS["timer_fires_shared"] = scenario(_FIRE_HOUSE, SNAP, ls=SHARED_LS)
-# No household credential: the server masked the reminder (rule M1).
+# No household credential: the server masked the reminder (rule M1) and
+# cut every fire down to what Home draws (rule F1) — no per-room rows, no
+# who-stopped-it. The summary is what says one is still on its way.
+def _open(f: dict) -> dict:
+    cut = {**f, "deliveries": [], "acked_at": None, "acked_by": None, "settled_at": None}
+    if f["is_reminder"]:
+        cut.update(message=None, label=None, masked=True)
+    return cut
+
+
 SCENARIOS["timer_fires_masked"] = scenario(
     house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
-        {**_F_ON_ITS_WAY, "message": None, "label": None, "masked": True}]}}),
+        _open(_F_ON_ITS_WAY)]}}),
     SNAP)
+SCENARIOS["timer_fires_open"] = scenario(
+    house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
+        _open(f) for f in (_F_HEARD, _F_ON_ITS_WAY, _F_NOWHERE, _F_OLD)]}}),
+    _DONE_DOTS + "return { snap: w.__snap(h), dots: w.__doneDots() };")
 # An older server (or V017 not applied): `fires` null or absent — a row
 # that vanished past its time still draws no line.
 SCENARIOS["timer_fires_null"] = scenario(
@@ -1170,6 +1183,19 @@ def test_a_shared_screen_hides_the_reminder_words_in_the_done_line(driven) -> No
 
 def test_a_masked_reminder_reads_reminder(driven) -> None:
     assert driven["timer_fires_masked"]["done"] == ["done · officereminderannouncing…"]
+
+
+def test_an_unpaired_screen_s_cut_down_fires_draw_the_same_lines(driven) -> None:
+    """Rule F1: no per-room rows reach a browser with no household
+    credential. Its done lines read as on a paired screen (less a
+    reminder's words), and the dots still say heard / on its way / nowhere."""
+    out = driven["timer_fires_open"]
+    assert out["snap"]["done"] == [
+        "done · kitchenteaheard in kitchen",
+        "done · officereminderannouncing…",
+        "done · garage5 min timernot heard in any room (garage offline)",
+    ]
+    assert out["dots"] == ["var(--ok)", "var(--warn)", "var(--err)"]
 
 
 def test_no_fire_history_draws_no_done_line(driven) -> None:

@@ -10,9 +10,19 @@ What the web serves, and to whom:
   ``message`` and ``label`` null and ``masked`` true — whatever room it was
   set in (until now only reminders set with NO room were held back). The
   household token, an admin Bearer, the dashboard cookie and the pre-setup
-  grace read the words. Countdown times, rooms, kinds and delivery
-  outcomes stay open, and a plain timer's label ("pasta") is not masked.
-* **Fire history** (V017) — ``GET /api/timers/fires`` (open, M1):
+  grace read the words. Countdown times, rooms and kinds stay open, and a
+  plain timer's label ("pasta") is not masked.
+* **Rule F1** — the fire ledger is 7 days of when every timer went off,
+  each room's outcome and reason code, and which room said "stop the
+  timer" and when. The same household credentials read it whole (and the
+  ``/ws/state`` socket, which admits exactly them, pushes it). Anyone else
+  — no credential, a stale token, a throttled source — reads the last 10
+  minutes only (``window_sec: 600``), each fire cut to what Home's done
+  line and the alert card draw: ids, kind, origin room, times,
+  ``heard_in`` and ``summary`` (without `` · stopped in …``), a plain
+  timer's label; ``deliveries`` ``[]``, ``acked_at`` / ``acked_by`` /
+  ``settled_at`` null.
+* **Fire history** (V017) — ``GET /api/timers/fires`` (open, M1 + F1):
   ``since_id`` catches up oldest first, ``room_id`` is the room it was
   SET in, ``timer_id`` finds one timer's fire, ``limit`` 1–200. 503 — not
   an empty list — when V017 is missing, so a client can tell "unknown"
@@ -315,10 +325,11 @@ async def test_no_credential_reads_every_reminder_masked(claimed, seam) -> None:
     assert timers[3]["label"] == "pasta" and timers[3]["masked"] is False
     fires = _by_id(body["fires"])
     assert fires[12]["message"] is None and fires[12]["label"] is None and fires[12]["masked"] is True
-    # Where it was heard is not speech: it stays.
+    # Where it was heard is not speech: Home's line stays. Each room's own
+    # row (outcome, reason code, finish time) is held back (rule F1).
     assert fires[12]["summary"] == "heard in garage · still announcing"
     assert fires[12]["heard_in"] == ["garage"]
-    assert [d["outcome"] for d in fires[12]["deliveries"]] == ["spoken", "pending"]
+    assert fires[12]["deliveries"] == []
     assert fires[11]["label"] == "pasta" and fires[11]["masked"] is False
 
 
@@ -368,15 +379,280 @@ async def test_the_per_room_read_and_the_history_are_masked_the_same_way(claimed
 
 
 @pytest.mark.asyncio
-async def test_a_read_with_no_reminder_classifies_nobody(claimed, seam) -> None:
-    seam["fires"] = [dict(FIRES[1])]
+async def test_a_read_that_answers_everyone_alike_classifies_nobody(
+    monkeypatch, claimed, seam
+) -> None:
+    """A wrong token costs backoff, so an open timer read classifies the
+    caller only when its answer depends on who asks."""
+    # Plain timers only, nothing went off: nobody.
+    session = _RouteSession([_timer_row(3, label="pasta", room_id="kitchen")])
+
+    @asynccontextmanager
+    async def plain_scope():
+        yield session
+
+    monkeypatch.setattr(sat_api, "session_scope", plain_scope)
+    seam["fires"] = []
     async with _anon() as c:
         await c.get("/api/satellites/kitchen/timers")
-        await c.get("/api/timers/fires?room_id=kitchen")
+        await c.get("/api/timers")
     assert seam["classified"] == 0
+    # A fire in it: cut down for this caller or not (rule F1).
+    seam["fires"] = [dict(FIRES[1])]
     async with _anon() as c:
-        await c.get("/api/timers")          # the garage reminder is in this one
+        await c.get("/api/timers")
     assert seam["classified"] == 1
+    # A reminder in it: masked for this caller or not (rule M1).
+    session.rows = TIMER_ROWS
+    seam["fires"] = []
+    async with _anon() as c:
+        await c.get("/api/satellites/garage/timers")
+    assert seam["classified"] == 2
+
+
+@pytest.mark.asyncio
+async def test_the_history_always_asks_who_is_reading(claimed, seam) -> None:
+    """How far back GET /api/timers/fires reaches depends on the caller
+    (rule F1), even when the answer is empty — so it always classifies, and
+    a presented token always goes through the backoff."""
+    seam["fires"] = []
+    async with _anon() as c:
+        assert (await c.get("/api/timers/fires")).json()["window_sec"] == 600
+        await c.get("/api/timers/fires?room_id=kitchen")
+    assert seam["classified"] == 2
+
+
+# ─── F1: who reads the whole fire ledger ─────────────────────────────────
+
+# A pasta timer that went off in the kitchen: heard there and in the
+# office (where somebody started talking over it), still waiting in the
+# garage (a live call), and stopped from the office. Everything rule F1
+# holds back from an open read is set on it.
+_WHOLE = timer_fires.fire_from_row(
+    {"id": 21, "timer_id": 121, "label": "pasta", "message": None, "room_id": "kitchen",
+     "created_at": T0 - timedelta(minutes=12), "due_at": T0 - timedelta(minutes=2),
+     "fired_at": T0 - timedelta(minutes=2), "settled_at": T0 - timedelta(seconds=10),
+     "acked_at": T0 - timedelta(seconds=50), "acked_by": "office"},
+    [_delivery("kitchen", "spoken", origin=True), _delivery("office", "interrupted"),
+     _delivery("garage", "pending", detail="in_call"),
+     _delivery("attic", "busy_timeout", detail="recording")],
+)
+# A garage reminder nobody has heard yet.
+_ON_ITS_WAY = timer_fires.fire_from_row(
+    {"id": 22, "timer_id": 122, "label": "call mom", "message": "call mom", "room_id": "garage",
+     "created_at": T0 - timedelta(minutes=5), "due_at": T0 - timedelta(seconds=20),
+     "fired_at": T0 - timedelta(seconds=20), "settled_at": None, "acked_at": None,
+     "acked_by": None},
+    [_delivery("garage", "pending", origin=True, detail="capturing")],
+)
+
+# What an open read carries of each field, for the two fires above. `same`
+# = exactly the ledger's value; anything else is the value it must read.
+_SAME = object()
+_OPEN_FIELDS: dict[str, tuple[Any, Any]] = {
+    # field: (pasta timer, garage reminder)
+    "id": (_SAME, _SAME),
+    "timer_id": (_SAME, _SAME),
+    "kind": (_SAME, _SAME),
+    "is_reminder": (_SAME, _SAME),
+    "room_id": (_SAME, _SAME),
+    "created_at": (_SAME, _SAME),
+    "due_at": (_SAME, _SAME),
+    "fired_at": (_SAME, _SAME),
+    "heard_in": (_SAME, _SAME),
+    # A plain timer's label was served openly while it ran; a reminder's
+    # label holds its words (rule M1).
+    "label": (_SAME, None),
+    "message": (_SAME, None),
+    "masked": (_SAME, True),
+    # Home's line stays, less who stopped it.
+    "summary": ("heard in kitchen, office · still announcing", _SAME),
+    "deliveries": ([], []),
+    "acked_at": (None, None),
+    "acked_by": (None, None),
+    "settled_at": (None, None),
+}
+_WHOLE_JSON = {
+    "summary": "heard in kitchen, office · still announcing · stopped in office",
+    "acked_by": "office",
+    "delivery_rows": [("kitchen", "spoken", None), ("attic", "busy_timeout", "recording"),
+                      ("garage", "pending", "in_call"), ("office", "interrupted", None)],
+}
+
+# Every DeviceCheckResult, and whether it reads the whole ledger.
+_TIERS = {
+    "token": True, "bearer": True, "cookie": True, "pre-setup": True,
+    "anon": False, "stale-token": False, "throttled": False,
+}
+
+
+def _tier_client(monkeypatch, who: str) -> AsyncClient:
+    """A client presenting ``who``'s credential, on an install set up for it."""
+    install_fake_db(monkeypatch, admin=who != "pre-setup", sessions={ADMIN_TOKEN},
+                    device_token=DEVICE_TOKEN)
+    if who == "token":
+        return _client({HEADER: DEVICE_TOKEN})
+    if who == "bearer":
+        return _client(bearer(ADMIN_TOKEN))
+    if who == "cookie":
+        return _client(cookies={COOKIE: ADMIN_TOKEN})
+    if who == "stale-token":
+        return _client({HEADER: "not-the-token"})
+    if who == "throttled":
+        # Ten charged failures: a wait of minutes, however slow this run is.
+        for _ in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 10):
+            admin_auth.DEVICE_TOKEN_BACKOFF.record_failure("127.0.0.1")
+        # The right token, from a source that guessed too often: not looked at.
+        return _client({HEADER: DEVICE_TOKEN})
+    return _client()
+
+
+async def _both_reads(monkeypatch, seam, who: str) -> tuple[dict, dict]:
+    seam["fires"] = [dict(_WHOLE), dict(_ON_ITS_WAY)]
+    async with _tier_client(monkeypatch, who) as c:
+        hist = await c.get("/api/timers/fires")
+        listed = await c.get("/api/timers")
+    assert hist.status_code == 200 and listed.status_code == 200
+    return hist.json(), listed.json()
+
+
+@pytest.mark.parametrize("who", sorted(_TIERS))
+@pytest.mark.asyncio
+async def test_the_history_reaches_back_by_tier(monkeypatch, seam, who) -> None:
+    """The whole kept history to a household credential; the last 10
+    minutes to anyone else — asked of the database, and said in the
+    answer (``window_sec``) so a client never reads an empty window as an
+    empty history."""
+    hist, _ = await _both_reads(monkeypatch, seam, who)
+    window = None if _TIERS[who] else 600
+    assert seam["recent"][0]["window_sec"] == window
+    assert hist["window_sec"] == window
+    # GET /api/timers reads its own 10 minutes whoever asks.
+    assert seam["recent"][1] == {"window_sec": 600, "limit": 20}
+
+
+@pytest.mark.parametrize("who", sorted(_TIERS))
+@pytest.mark.asyncio
+async def test_each_tier_reads_the_whole_fire_or_the_cut_down_one(monkeypatch, seam, who) -> None:
+    hist, listed = await _both_reads(monkeypatch, seam, who)
+    for fires in (hist["fires"], listed["fires"]):
+        pasta, reminder = _by_id(fires)[21], _by_id(fires)[22]
+        if _TIERS[who]:
+            assert pasta["summary"] == _WHOLE_JSON["summary"]
+            assert pasta["acked_by"] == "office" and pasta["acked_at"] and pasta["settled_at"]
+            assert [(d["room_id"], d["outcome"], d["detail"]) for d in pasta["deliveries"]] == (
+                _WHOLE_JSON["delivery_rows"])
+            assert reminder["message"] == "call mom" and reminder["masked"] is False
+            assert reminder["deliveries"][0]["detail"] == "capturing"
+        else:
+            assert pasta["deliveries"] == [] and reminder["deliveries"] == []
+            assert pasta["acked_by"] is None and pasta["acked_at"] is None
+            assert pasta["settled_at"] is None
+            assert "stopped" not in pasta["summary"] and "office" in pasta["heard_in"]
+            assert reminder["message"] is None and reminder["masked"] is True
+
+
+@pytest.mark.parametrize("field", sorted(_OPEN_FIELDS))
+@pytest.mark.asyncio
+async def test_every_field_an_open_read_carries(monkeypatch, seam, field) -> None:
+    """Field by field, what a caller with no household credential reads of a
+    fire — on the history and in GET /api/timers alike — against what the
+    household token reads."""
+    whole, whole_list = await _both_reads(monkeypatch, seam, "token")
+    seam["recent"].clear()
+    cut, cut_list = await _both_reads(monkeypatch, seam, "anon")
+    assert _by_id(cut["fires"]) == _by_id(cut_list["fires"])          # one rule, both reads
+    assert _by_id(whole["fires"]) == _by_id(whole_list["fires"])
+    for fid, expected in zip((21, 22), _OPEN_FIELDS[field]):
+        got = _by_id(cut["fires"])[fid][field]
+        want = _by_id(whole["fires"])[fid][field] if expected is _SAME else expected
+        assert got == want, (fid, field, got, want)
+    # And nothing beyond the Fire shape rides along.
+    assert set(_by_id(cut["fires"])[21]) == set(_OPEN_FIELDS)
+
+
+@pytest.mark.asyncio
+async def test_the_open_read_still_says_where_home_s_line_needs(claimed, seam) -> None:
+    """The summary an unpaired tablet shows is Home's line in every case but
+    the acknowledgement: still announcing, heard nowhere with the origin
+    room offline (the open roster already says which rooms are offline),
+    announced nowhere."""
+    seam["fires"] = [
+        _fire(31, deliveries=[_delivery("garage", "pending", origin=True, detail="responding")]),
+        _fire(32, deliveries=[_delivery("garage", "offline", origin=True)], acked_by="kitchen"),
+        _fire(33, room_id=None, deliveries=[]),
+    ]
+    async with _anon() as c:
+        fires = _by_id((await c.get("/api/timers/fires")).json()["fires"])
+    assert fires[31]["summary"] == "announcing…" and fires[31]["deliveries"] == []
+    assert fires[32]["summary"] == "not heard in any room (garage offline)"
+    assert fires[33]["summary"] == "not announced in any room"
+
+
+@pytest.mark.asyncio
+async def test_a_guessed_token_on_the_history_pays_the_backoff(claimed, seam) -> None:
+    """The answer tells a good token from a bad one (how far back it
+    reaches), so guessing through it costs what guessing anywhere does:
+    after the free attempts, even the right token is not looked at."""
+    seam["fires"] = []                   # an empty answer is charged all the same
+    async with _client({HEADER: "guess"}) as c:
+        for _ in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 1):
+            assert (await c.get("/api/timers/fires")).json()["window_sec"] == 600
+    # Every guess was charged: this source now waits before it may guess again.
+    assert admin_auth.DEVICE_TOKEN_BACKOFF.retry_after("127.0.0.1") > 0
+    admin_auth.DEVICE_TOKEN_BACKOFF.reset()
+    async with _token() as c:
+        assert (await c.get("/api/timers/fires")).json()["window_sec"] is None
+
+
+def test_open_fire_cuts_a_copy_and_leaves_the_ledger_whole() -> None:
+    fire = dict(_WHOLE)
+    cut = timer_fires.open_fire(fire)
+    assert fire == _WHOLE                                          # a copy
+    assert fire["deliveries"] and fire["acked_by"] == "office"
+    assert cut["deliveries"] == [] and cut["acked_by"] is None
+    assert cut["summary"] == "heard in kitchen, office · still announcing"
+    assert timer_fires.open_fire(cut) == cut                       # idempotent
+    reminder = timer_fires.open_fire(dict(_ON_ITS_WAY))
+    assert reminder["message"] is None and reminder["label"] is None and reminder["masked"] is True
+    assert reminder["summary"] == "announcing…"
+
+
+def test_the_open_window_is_the_timer_list_s() -> None:
+    """One slice of the ledger is open: the 10 minutes GET /api/timers
+    carries for Home, which is also as far back as the dashboard's alert
+    catch-up alerts (components.jsx TIMER_FIRE_CATCHUP_MS)."""
+    assert timer_fires.OPEN_WINDOW_SEC == 600
+    assert sat_api._TIMERS_FIRES_WINDOW_SEC == timer_fires.OPEN_WINDOW_SEC
+    comps = (Path(__file__).resolve().parents[2] / "web" / "static" / "components.jsx").read_text(
+        encoding="utf-8")
+    assert "const TIMER_FIRE_CATCHUP_MS = 10 * 60 * 1000;" in comps
+
+
+def test_the_whole_ledger_is_the_reminder_words_tier() -> None:
+    """Rule F1 and rule M1 are one tier: whoever reads a reminder's words
+    reads the whole ledger, and nobody else does."""
+    assert sat_api._READS_FIRE_LEDGER == sat_api._READS_REMINDER_TEXT
+    assert set(sat_api._READS_FIRE_LEDGER) == {"ok", "admin", "pre-setup", "cookie-only"}
+
+
+def test_the_docs_say_who_reads_the_fire_history() -> None:
+    docs = Path(__file__).resolve().parents[2] / "docs"
+    security = (docs / "SECURITY_PRIVACY.md").read_text(encoding="utf-8")
+    who = next(line for line in security.splitlines()
+                if line.startswith("| **Who reads the fire history** (rule F1)"))
+    for phrase in ("7 days", "`/ws/state`", "`window_sec`", "backoff"):
+        assert phrase in who, phrase
+    shows = next(line for line in security.splitlines()
+                 if line.startswith("| **What the open read still shows**"))
+    for phrase in ("only the last 10 minutes", "`deliveries: []`", "`acked_by`", "`in_call`",
+                   "Held back from it"):
+        assert phrase in shows, phrase
+    assert "pages back through the whole 7-day history with no credential" not in security
+    api = (docs / "API_REFERENCE.md").read_text(encoding="utf-8")
+    row = next(line for line in api.splitlines() if line.startswith("| `GET /api/timers/fires`"))
+    assert "Open, M1, F1" in row and "`window_sec: 600`" in row and "`window_sec: null`" in row
+    assert "**Rule F1 — the fire history.**" in api
 
 
 # ─── W3: the fire history route ──────────────────────────────────────────
@@ -384,16 +660,23 @@ async def test_a_read_with_no_reminder_classifies_nobody(claimed, seam) -> None:
 
 @pytest.mark.asyncio
 async def test_the_history_passes_its_filters_through(claimed, seam) -> None:
-    async with _anon() as c:
+    async with _token() as c:
         r = await c.get("/api/timers/fires?since_id=5&room_id=garage&timer_id=17&limit=200")
         assert r.status_code == 200
         body = r.json()
         await c.get("/api/timers/fires")
+    async with _anon() as c:
+        await c.get("/api/timers/fires?since_id=5&room_id=garage&timer_id=17&limit=200")
     assert seam["recent"][0] == {"since_id": 5, "origin_room_id": "garage", "timer_id": 17,
-                                 "limit": 200}
+                                 "limit": 200, "window_sec": None}
     assert seam["recent"][1] == {"since_id": None, "origin_room_id": None, "timer_id": None,
-                                 "limit": 50}
+                                 "limit": 50, "window_sec": None}
+    # No credential: the same filters, held to the last 10 minutes (F1).
+    assert seam["recent"][2] == {"since_id": 5, "origin_room_id": "garage", "timer_id": 17,
+                                 "limit": 200, "window_sec": 600}
     assert body["server_now"].startswith("2026-09-30T15:00:00")
+    assert set(body) == {"server_now", "fires", "window_sec"}
+    assert body["window_sec"] is None
     assert [f["id"] for f in body["fires"]] == [12, 11]
     f = body["fires"][0]
     assert set(f) == {"id", "timer_id", "kind", "is_reminder", "label", "message", "masked",
@@ -816,12 +1099,17 @@ async def _insert_fire(*, message=None, label=None, origin="garage", ago_sec=30,
             {"tid": 17, "kind": "reminder" if message is not None else "timer", "label": label,
              "message": message, "origin": origin, "ago": float(ago_sec), "acked_by": acked_by},
         )).scalar_one()
-        for room, is_origin, outcome in deliveries:
+        for room, is_origin, outcome, *detail in deliveries:
             await conn.execute(text(
                 "INSERT INTO timer_fire_deliveries (fire_id, room_id, is_origin, outcome, detail,"
-                " spoken_text, finished_at) VALUES (:f, :r, :o, :out, NULL, 'SECRET SPOKEN WORDS',"
+                " spoken_text, finished_at) VALUES (:f, :r, :o, :out, :detail, 'SECRET SPOKEN WORDS',"
                 " CASE WHEN :out IN ('pending', 'sending') THEN NULL ELSE now() END)"),
-                {"f": fid, "r": room, "o": is_origin, "out": outcome})
+                {"f": fid, "r": room, "o": is_origin, "out": outcome,
+                 "detail": detail[0] if detail else None})
+        if acked_by is not None:
+            await conn.execute(text(
+                "UPDATE timer_fires SET acked_at = now(), settled_at = now() WHERE id = :f"),
+                {"f": fid})
     return int(fid)
 
 
@@ -890,3 +1178,51 @@ async def test_db_the_routes_end_to_end(_db, ledger) -> None:
     assert roster["garage"]["timers_own_only"] is True and roster["kitchen"]["timers_own_only"] is False
     snap = await realtime._snapshot_timer_fires()
     assert snap[0]["message"] == "call mom"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_db_an_open_read_reaches_back_ten_minutes(_db, ledger) -> None:
+    """Rule F1 against a real database, through the real routes: with no
+    credential, the history is the last 10 minutes only (however it is
+    asked: newest first, since an id, by room, by timer), each fire cut
+    down; the household token reads all of it, whole."""
+    async with web_client() as c:
+        await claim_admin(c)
+    token = await db_device_token()
+    old = await _insert_fire(label="eggs", origin="kitchen", ago_sec=2 * 3600,
+                             deliveries=[("kitchen", True, "spoken"),
+                                         ("garage", False, "interrupted")],
+                             acked_by="garage")
+    new = await _insert_fire(label="pasta", origin="kitchen", ago_sec=60,
+                             deliveries=[("kitchen", True, "spoken"),
+                                         ("garage", False, "pending", "in_call")],
+                             acked_by="kitchen")
+    old_timer = "/api/timers/fires?timer_id=17&room_id=kitchen&since_id=0&limit=200"
+    async with web_client() as anon:
+        newest = (await anon.get("/api/timers/fires")).json()
+        since = (await anon.get("/api/timers/fires?since_id=0")).json()
+        by_room = (await anon.get("/api/timers/fires?room_id=kitchen&limit=200")).json()
+        by_timer = (await anon.get(old_timer)).json()
+        listed = (await anon.get("/api/timers")).json()["fires"]
+    for body in (newest, since, by_room, by_timer):
+        assert body["window_sec"] == 600
+        assert [f["id"] for f in body["fires"]] == [new]
+    for f in (newest["fires"][0], listed[0]):
+        assert f["id"] == new and f["label"] == "pasta"
+        assert f["deliveries"] == [] and f["acked_by"] is None and f["acked_at"] is None
+        assert f["settled_at"] is None
+        assert f["heard_in"] == ["kitchen"]
+        assert f["summary"] == "heard in kitchen · still announcing"
+    async with web_client(headers={HEADER: token}) as c:
+        whole = (await c.get("/api/timers/fires")).json()
+        whole_since = (await c.get("/api/timers/fires?since_id=0")).json()
+    assert whole["window_sec"] is None
+    assert [f["id"] for f in whole["fires"]] == [new, old]
+    assert [f["id"] for f in whole_since["fires"]] == [old, new]
+    top = whole["fires"][0]
+    assert top["acked_by"] == "kitchen" and top["acked_at"] and top["settled_at"]
+    assert [(d["room_id"], d["outcome"], d["detail"]) for d in top["deliveries"]] == [
+        ("kitchen", "spoken", None), ("garage", "pending", "in_call")]
+    assert top["summary"] == "heard in kitchen · still announcing · stopped in kitchen"
+    assert "SECRET SPOKEN WORDS" not in json.dumps([newest, whole, listed])

@@ -45,7 +45,10 @@ moving one is a decision rather than a drive-by. So are the numbers-only
 reads about the machine itself (the speech latency summary), which are
 open by design. The opt-in command recordings (2026-09-28) sit higher than
 the rest of the household's speech: ``require_admin_security_read``, never
-the device tier.
+the device tier. Two open timer reads are tiered INSIDE the handler rather
+than at the gate (``TIERED_INSIDE``, rule F1): the timer fire ledger is
+read whole only by the tier the ``/ws/state`` handshake admits, and cut
+down for anyone else.
 """
 
 from __future__ import annotations
@@ -327,11 +330,14 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
     ("web", "/api/timers"): (
         "every room's rows at once — Home's countdowns (owner decision 2026-09-26) and the last "
         "10 minutes of fires; rule M1 — every reminder, row or fire, answers without its words "
-        "unless the caller passes the device check"
+        "unless the caller passes the device check; rule F1 — without it each fire is cut to "
+        "what Home draws (no per-room outcomes, no who-stopped-it)"
     ),
     ("web", "/api/timers/fires"): (
-        "what went off, where it was heard, who stopped it — rooms, times and outcomes; rule M1 "
-        "masks every reminder's words, and the words spoken are never served"
+        "tiered INSIDE the handler (rule F1, pinned by TIERED_INSIDE below): a household "
+        "credential reads the whole 7-day ledger; anyone else the last 10 minutes only, each "
+        "fire cut to what Home draws, reminder words masked (M1); the words spoken are never "
+        "served"
     ),
     ("web", "/api/satellites/{room_id}/timer-announcements"): (
         "a room's \"Only reminders for this device\" flag — anyone in the house may see how a "
@@ -425,6 +431,75 @@ def test_the_reads_left_open_are_still_open(label, path) -> None:
         admin_auth.require_admin_read, admin_auth.require_admin_mutation,
     }
     assert not gates.intersection(calls), f"{label} GET {path} is gated now"
+
+
+# Open at the gate, tiered inside the handler: the route answers anyone,
+# but HOW MUCH depends on the caller's device check. Rule F1 (2026-09-30):
+# the timer fire ledger (V017) is 7 days of when every timer and reminder
+# went off, each room's outcome and reason code (``in_call``,
+# ``recording``, ``capturing``) and which room said "stop the timer" and
+# when. Read whole only by the tier ``/ws/state`` admits (whose
+# ``timer_fires`` push carries it whole); anyone else reads the last 10
+# minutes, each fire cut to what Home's done line and the alert card
+# draw. Pinned from both sides: the handler's tier here, the behaviour in
+# domovoi/tests/test_web_timer_fires.py (every tier, every field).
+TIERED_INSIDE: dict[tuple[str, str], str] = {
+    ("web", "/api/timers/fires"): "the whole ledger to a household credential, 10 minutes cut down to anyone else",
+    ("web", "/api/timers"): "its `fires` cut down for a caller without a household credential",
+}
+
+# Every result the device check can give, and whether it reads the whole
+# fire ledger. The household token, an admin Bearer, the dashboard cookie
+# and the pre-setup grace do (so the Android app, a paired shared screen and
+# a signed-in dashboard); nothing, a stale token and a throttled source do
+# not.
+_FIRE_LEDGER_BY_RESULT = {
+    "ok": True, "admin": True, "pre-setup": True, "cookie-only": True,
+    "no-auth": False, "invalid": False, "throttled": False,
+}
+
+
+def test_every_device_check_result_is_placed_for_the_fire_ledger() -> None:
+    assert set(_FIRE_LEDGER_BY_RESULT) == set(get_args(admin_auth.DeviceCheckResult))
+
+
+@pytest.mark.parametrize(("label", "path"), sorted(TIERED_INSIDE),
+                         ids=[f"{a} GET {p}" for a, p in sorted(TIERED_INSIDE)])
+def test_the_fire_ledger_reads_are_open_at_the_gate(label, path) -> None:
+    assert TIERED_INSIDE[(label, path)].strip()
+    assert (label, path) in SPEECH_ADJACENT_LEFT_OPEN
+    calls = _get_gates((label, path))
+    gates = {
+        admin_auth.require_device_read, admin_auth.require_device,
+        admin_auth.require_admin_read, admin_auth.require_admin_mutation,
+        admin_auth.require_admin_security_read,
+    }
+    assert not gates.intersection(calls), f"{label} GET {path} is gated now"
+
+
+def test_the_fire_ledger_tier_is_the_state_socket_s(monkeypatch) -> None:
+    """The handler reads whole for exactly the device-check results the
+    ``/ws/state`` handshake admits — so the ``timer_fires`` push never
+    reaches a caller the HTTP read would cut down, and the other way round."""
+    import asyncio
+
+    from web.backend import main as web_main
+    from web.backend.api import satellites as sat_api
+
+    handler = {r: r in sat_api._READS_FIRE_LEDGER for r in _FIRE_LEDGER_BY_RESULT}
+    assert handler == _FIRE_LEDGER_BY_RESULT
+
+    class _Ws:
+        headers: dict[str, str] = {}
+
+    async def admitted(result: str) -> bool:
+        async def check(_conn, *a, **kw):
+            return result
+        monkeypatch.setattr(web_main.admin_auth, "check_device_request", check)
+        return await web_main._authorize_state_socket(_Ws()) is not web_main._REFUSE
+
+    socket = {r: asyncio.run(admitted(r)) for r in _FIRE_LEDGER_BY_RESULT}
+    assert socket == _FIRE_LEDGER_BY_RESULT
 
 
 # Numbers about the machine itself, open BY DESIGN rather than pending a

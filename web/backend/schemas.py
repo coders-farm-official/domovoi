@@ -448,7 +448,12 @@ class TimerFire(BaseModel):
     other rooms A→Z; ``heard_in`` is the rooms that heard it, same order.
     ``summary`` is computed by the server ("heard in garage, kitchen ·
     still announcing") and shown verbatim. The words the core spoke are
-    never part of this shape."""
+    never part of this shape.
+
+    To a caller with no household credential (rule F1) a fire comes cut
+    down: ``deliveries`` ``[]``, ``acked_at`` / ``acked_by`` /
+    ``settled_at`` null, no `` · stopped in …`` in ``summary``, and a
+    reminder's words masked (rule M1)."""
 
     id: int
     timer_id: int
@@ -479,7 +484,9 @@ class TimerList(BaseModel):
     ``fires`` is what went off in the last 10 minutes (newest first, at
     most 20) — the source of Home's "done · kitchen" lines. ``null`` means
     the server keeps no fire history (V017 missing): a client falls back to
-    its own behaviour. ``[]`` means nothing fired lately."""
+    its own behaviour. ``[]`` means nothing fired lately. Without a
+    household credential each fire comes cut down as on
+    ``GET /api/timers/fires`` (rule F1)."""
 
     server_now: datetime
     timers: list[Timer]
@@ -487,10 +494,19 @@ class TimerList(BaseModel):
 
 
 class TimerFireList(BaseModel):
-    """``GET /api/timers/fires``: fire history plus the database clock."""
+    """``GET /api/timers/fires``: fire history plus the database clock.
+
+    ``window_sec`` says how far back this answer could reach: ``null`` —
+    the whole kept history (the caller holds a household credential);
+    a number — only fires from that many seconds back (no credential:
+    600, and each fire cut to what Home draws, rule F1 in
+    docs/SECURITY_PRIVACY.md). It depends only on who asked, never on the
+    data, so an empty windowed answer says nothing about older fires —
+    and a client must not read it as "the history is empty"."""
 
     server_now: datetime
     fires: list[TimerFire]
+    window_sec: int | None = None
 
 
 class TimerAnnouncements(BaseModel):
