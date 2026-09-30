@@ -33,11 +33,12 @@ Two halves:
   seam (:mod:`web.backend.timer_fires`) replaced by fakes; the seam's own
   SQL shape against a recording fake session; the summary rules.
 * DB-BACKED (``requires_db``): the seam against a real database. The V017
-  tables are created by running the migration file itself, like the V016
-  precedent in test_command_captures_api, and truncated around each test —
-  they are NOT in conftest's TABLES_TO_TRUNCATE, so a lane without V017
-  still runs everything else. Skipped when the file is not on this branch
-  (V017 is the core's; it arrives with that branch).
+  tables are created from the migration file itself, statement by
+  statement (``timer_fires_testkit.apply_v017``; the V016 precedent in
+  test_command_captures_api runs its one statement whole), and truncated
+  around each test — they are NOT in conftest's TABLES_TO_TRUNCATE, so a
+  lane without V017 still runs everything else. Skipped when the file is
+  not on this branch (V017 is the core's).
 """
 
 from __future__ import annotations
@@ -751,12 +752,12 @@ async def test_a_change_is_pushed_under_data_once(pushed) -> None:
 async def _v017() -> None:
     if not V017.exists():
         pytest.skip("V017__timer_fires.sql is the core's; it arrives with that branch")
-    from domovoi.db.session import engine
+    # V017 holds several statements and a prepared statement takes one: the
+    # core's testkit runs them one by one (IF NOT EXISTS), then empties the
+    # three tables.
+    from domovoi.tests.timer_fires_testkit import apply_v017
 
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql(V017.read_text(encoding="utf-8"))
-        await conn.execute(text(
-            "TRUNCATE timer_fire_deliveries, timer_fires, timer_own_only_rooms RESTART IDENTITY"))
+    await apply_v017()
 
 
 async def _clear() -> None:
