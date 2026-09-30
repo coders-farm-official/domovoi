@@ -481,7 +481,7 @@ fun SatTimersTab(room: String) {
                     Pill(kind, if (t.is_reminder) Tone.Idle else Tone.Brand)
                     Column(Modifier.weight(1f)) {
                         Text(
-                            t.label ?: (if (t.is_reminder) t.message else null) ?: "—",
+                            satTimerLabel(t),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = Domovoi.colors.fg,

@@ -359,6 +359,9 @@ internal fun HomeTimers(
     onlineRooms: Set<String>,
     cancelling: Set<Long>,
     onCancel: (HomeTimer) -> Unit,
+    alertsOff: Boolean = false,
+    onTurnOnAlerts: () -> Unit = {},
+    onNotNow: () -> Unit = {},
 ) {
     if (!timersShown(view)) return
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -370,6 +373,26 @@ internal fun HomeTimers(
     }
     HomeCard("timers", action = more) {
         var first = true
+        if (alertsOff) {
+            // Notifications are off for this app: nothing will ring here
+            // when one of these goes off, and it's worth saying once.
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StatusDot(Tone.Warn)
+                Text(
+                    "Timer alerts are off on this phone",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.weight(1f),
+                )
+                HomeLink("turn on", onClick = onTurnOnAlerts)
+                HomeLink("not now", onClick = onNotNow)
+            }
+            first = false
+        }
         view.active.forEachIndexed { i, t ->
             if (compact && i >= HOME_PHONE_TIMERS && !expanded) return@forEachIndexed
             if (!first) HorizontalDivider(color = Domovoi.colors.borderSoft)
@@ -384,19 +407,37 @@ internal fun HomeTimers(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StatusDot(Tone.Ok)
-                Text(
-                    "done · ${d.timer.room_id ?: "no room"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Domovoi.colors.fg,
-                )
-                if (!(shared && d.timer.is_reminder)) {
-                    Text(
-                        timerTitle(d.timer, shared),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Domovoi.colors.fgMuted,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                StatusDot(d.tone)
+                Column(Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "done · ${d.timer.room_id ?: "no room"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Domovoi.colors.fg,
+                        )
+                        if (!(shared && d.timer.is_reminder)) {
+                            Text(
+                                timerTitle(d.timer, shared),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Domovoi.colors.fgMuted,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    // Where it was heard (web .home-timer-heard): room ids
+                    // and outcomes, never speech, so a shared screen shows
+                    // it too. On its own line: a phone has no room beside.
+                    d.summary?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgFaint,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }

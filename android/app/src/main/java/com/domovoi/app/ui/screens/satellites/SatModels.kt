@@ -1,8 +1,11 @@
 package com.domovoi.app.ui.screens.satellites
 
+import com.domovoi.app.net.ApiClient
 import com.domovoi.app.ui.components.Tone
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 // ---------------------------------------------------------------------------
 // Wire models for /api/satellites/* — property names mirror the JSON exactly.
@@ -51,6 +54,10 @@ data class Satellite(
     val version: String? = null,
     val full_duplex: Boolean = false,
     val in_call_with: String? = null,
+    // "Only reminders for this device": ON = this room announces only the
+    // timers and reminders set on it. Absent (an older server, or no V017
+    // yet) = OFF, the default for every room.
+    val timers_own_only: Boolean = false,
 ) {
     val online: Boolean get() = status == "online"
 }
@@ -89,7 +96,20 @@ data class SatTimer(
     val label: String? = null,
     val message: String? = null,
     val expires_at: String? = null,
+    // Rule M1: the server held a reminder's words back (label and message
+    // null) because this phone presented no household token. Absent from
+    // an older server.
+    val masked: Boolean = false,
 )
+
+/** What the web's Timers tab says for a reminder whose words were held back. */
+const val SAT_TIMER_WORDS_HIDDEN = "reminder (words hidden)"
+
+/** A running timer's name in the Timers tab: its label, a reminder's
+ *  words, or [SAT_TIMER_WORDS_HIDDEN] when the server masked them. */
+fun satTimerLabel(t: SatTimer): String =
+    if (t.masked) SAT_TIMER_WORDS_HIDDEN
+    else t.label ?: (if (t.is_reminder) t.message else null) ?: "—"
 
 @Serializable
 data class SatPlayed(
@@ -170,3 +190,25 @@ internal fun songTitle(np: SatNowPlaying?): String =
     np?.song?.title
         ?: np?.song?.file?.substringAfterLast('/')
         ?: "unknown"
+
+// ---------------------------------------------------------------------------
+// "Only reminders for this device" (web SatTimerScopeControl). Device tier:
+// it only changes what a room says, and ON makes it say less.
+// ---------------------------------------------------------------------------
+
+internal const val TIMER_SCOPE_LABEL = "Only reminders for this device"
+
+internal const val TIMER_SCOPE_HELP =
+    "Covers timers and reminders. Off: this satellite also announces the ones set in other rooms " +
+        "and says which room they came from. On: it announces only the ones set on this satellite. " +
+        "The room a timer or reminder was set in always announces it."
+
+internal fun timerScopePath(room: String): String = "/api/satellites/$room/timer-announcements"
+
+internal fun timerScopeToast(room: String, on: Boolean): String =
+    if (on) "$room now announces only its own timers and reminders"
+    else "$room now announces timers and reminders from every room"
+
+/** PUT {"own_only": on}; idempotent on the server. */
+internal suspend fun putTimerScope(api: ApiClient, room: String, on: Boolean): JsonElement =
+    api.put(timerScopePath(room), buildJsonObject { put("own_only", on) })

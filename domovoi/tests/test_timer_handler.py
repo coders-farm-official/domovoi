@@ -189,11 +189,17 @@ class _OneTimerRepo:
     def __init__(self, session) -> None:
         pass
 
-    async def cancel_by_label(self, label, room_id) -> int:
+    async def cancel_by_label(self, label, room_id, *, house_wide=False) -> int:
         return 1
+
+    async def label_rooms(self, label):
+        return []
 
     async def next_active(self, room_id):
         return 1, utcnow() + timedelta(minutes=10, seconds=30), self.label
+
+    async def next_for_status(self, room_id):
+        return 1, utcnow() + timedelta(minutes=10, seconds=30), self.label, None
 
 
 @pytest.mark.asyncio
@@ -226,6 +232,89 @@ async def test_unarticled_label_wording_is_unchanged(monkeypatch) -> None:
     assert response.text == "Cancelled the pasta timer."
     response = await handler._status(ctx=ctx, session=None)  # type: ignore[arg-type]
     assert response.text == "10 minutes left on the pasta timer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "message", "expected"),
+    [
+        # a plain timer: unchanged
+        (None, None, "10 minutes left on the timer."),
+        ("the pasta", None, "10 minutes left on the pasta timer."),
+        # a reminder is read as one: set with no task, it used to be "10
+        # minutes left on the 10 minute reminder timer."
+        ("10 minute reminder", "", "10 minutes left on your 10 minute reminder."),
+        ("call mom", "call mom", "10 minutes left on your reminder: call mom."),
+        ("laundry", "laundry", "10 minutes left on your reminder: laundry."),
+    ],
+)
+async def test_status_reads_a_reminder_as_a_reminder(
+    monkeypatch, label, message, expected
+) -> None:
+    class _Repo(_OneTimerRepo):
+        async def next_for_status(self, room_id):
+            return 1, utcnow() + timedelta(minutes=10, seconds=30), label, message
+
+    monkeypatch.setattr(timer_mod, "TimerRepository", _Repo)
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    response = await TimerHandler()._status(ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == expected
+
+
+@pytest.mark.asyncio
+async def test_status_of_a_reminder_about_to_fire(monkeypatch) -> None:
+    class _Repo(_OneTimerRepo):
+        async def next_for_status(self, room_id):
+            return 1, utcnow() - timedelta(seconds=1), "10 minute reminder", ""
+
+    monkeypatch.setattr(timer_mod, "TimerRepository", _Repo)
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    response = await TimerHandler()._status(ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == "That reminder is about to go off."
+
+
+def _offered(transcript: str) -> list[str]:
+    from domovoi.router import normalize_transcript, offered_tool_schemas, strip_leading_filler
+
+    norm = strip_leading_filler(normalize_transcript(transcript))
+    return [s["name"] for s in offered_tool_schemas(norm)]
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        # talk about a timer is no timer command (the reminder shapes are
+        # in test_reminder_handler)
+        "My timer didn't go off.",
+        "The garage timer never went off.",
+        "That timer was useless.",
+        "My timer for 10 minutes did not go off.",
+        "You have a timer running in the kitchen.",
+        "You've set a timer for the pasta already.",
+        "Why didn't the timer go off?",
+    ],
+)
+def test_talk_about_a_timer_is_not_offered_the_timer_tool(transcript: str) -> None:
+    assert "timer" not in _offered(transcript)
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "The pasta timer, how long is left?",
+        "How much time is left on the garage timer?",
+        "Start a timer for the eggs.",
+        "I need a timer for ten minutes.",
+        "Cancel the garage timer.",
+        "Stop the timer for the pasta.",
+        "Put a timer on for the pizza.",
+        "Is the timer still running?",
+        "You set a timer for ten minutes.",
+        "I set a timer for ten minutes.",
+    ],
+)
+def test_timer_commands_keep_the_timer_tool(transcript: str) -> None:
+    assert "timer" in _offered(transcript)
 
 
 @pytest.mark.asyncio
@@ -366,6 +455,35 @@ async def test_status_with_no_timer(db_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_status_prefers_the_timer_and_reads_a_reminder_as_one(db_session) -> None:
+    """"How long left on the timer" answers the room's timer even when a
+    reminder is due sooner, and reads a reminder as a reminder when that
+    is all the room has."""
+    repo = TimerRepository(db_session)
+    now = utcnow()
+    await repo.create(
+        expires_at=now + timedelta(minutes=5), created_at=now,
+        label="10 minute reminder", message="", room_id="garage",
+    )
+    await db_session.commit()
+    handler = TimerHandler()
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    m = _STATUS_RE.match("how much time left on the timer")
+
+    response = await handler._status_from_match(m, ctx, db_session)
+    assert response.text.endswith(" left on your 10 minute reminder."), response.text
+
+    await repo.create(
+        expires_at=now + timedelta(minutes=20), created_at=now,
+        label="pasta", message=None, room_id="garage",
+    )
+    await db_session.commit()
+    response = await handler._status_from_match(m, ctx, db_session)
+    assert response.text.endswith(" left on the pasta timer."), response.text
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_pop_expired_returns_and_deletes(db_session) -> None:
     repo = TimerRepository(db_session)
     # Insert an already-expired timer.
@@ -384,3 +502,451 @@ async def test_pop_expired_returns_and_deletes(db_session) -> None:
 
     fired_again = await repo.pop_expired()
     assert fired_again == []
+
+
+# ─── Cancel scope and "stop the timer" after a fire (2026-09-30) ──────────
+#
+# A plain cancel never deletes a reminder; a labelled cancel stays in the
+# room it was said in unless the person says "everywhere" (or the turn has
+# no room); and "stop the timer" right after one was announced in this room
+# acknowledges it instead of deleting this room's own timers.
+
+
+@pytest.mark.parametrize(
+    ("transcript", "label", "everywhere"),
+    [
+        ("cancel the timer", None, False),
+        ("stop the timer", None, False),
+        ("cancel timer", None, False),
+        ("cancel the timer for pasta", "pasta", False),
+        ("cancel the timer called the pasta", "the pasta", False),
+        ("cancel the timer everywhere", None, True),
+        ("stop the timer in every room", None, True),
+        ("cancel the timer in all rooms", None, True),
+        ("cancel the timer in the whole house", None, True),
+        ("cancel the timer for pasta everywhere", "pasta", True),
+        ("cancel the timer named rice and beans in all rooms", "rice and beans", True),
+    ],
+)
+def test_cancel_regex_everywhere_variants(transcript, label, everywhere) -> None:
+    m = _CANCEL_RE.match(transcript)
+    assert m is not None, transcript
+    assert m.group("label") == label
+    assert (m.group("everywhere") is not None) is everywhere
+    assert m.group(1) == label          # older callers read group 1
+    assert fast_path_winner(transcript) == "timer"
+
+
+def test_tool_schema_offers_everywhere() -> None:
+    props = TimerHandler.tool_schema["parameters"]["properties"]
+    assert props["everywhere"]["type"] == "boolean"
+    assert "explicitly" in props["everywhere"]["description"]
+
+
+def _ctx(room: str | None) -> Context:
+    return Context(session_id=uuid4(), room_id=room, online=True)
+
+
+async def _timer(s, *, room: str | None, label: str | None = None,
+                 message: str | None = None, minutes: int = 10) -> int:
+    return await TimerRepository(s).create(
+        expires_at=utcnow() + timedelta(minutes=minutes), label=label,
+        message=message, room_id=room,
+    )
+
+
+async def _rows(s) -> list[tuple]:
+    from sqlalchemy import text
+
+    res = await s.execute(text(
+        "SELECT room_id, label, message IS NOT NULL FROM timers ORDER BY id"))
+    return [tuple(r) for r in res.all()]
+
+
+@pytest.fixture
+async def v017_session(db_session):
+    from domovoi.tests.timer_fires_testkit import apply_v017
+
+    await apply_v017()
+    yield db_session
+    # End the test's transaction first: the TRUNCATE waits for its locks.
+    await db_session.rollback()
+    await apply_v017()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_stop_the_timer_never_deletes_a_reminder(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="garage", label="call mom", message="call mom")
+    await _timer(s, room="garage")
+    await s.commit()
+
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("garage"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the timer."
+    assert await _rows(s) == [("garage", "call mom", True)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_labelled_cancel_stays_in_its_room_and_says_where_it_is(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="garage", label="pasta")
+    await s.commit()
+
+    m = _CANCEL_RE.match("cancel the timer for pasta")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == (
+        'The pasta timer is in the garage. Say "cancel the timer for pasta '
+        'everywhere" to cancel it from here.'
+    )
+    assert await _rows(s) == [("garage", "pasta", False)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_hint_names_every_room_it_is_in(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="garage", label="the pasta")
+    await _timer(s, room="living-room", label="the pasta")
+    await s.commit()
+    m = _CANCEL_RE.match("cancel the timer for the pasta")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    assert reply.text == (
+        'The pasta timer is in the garage and the living room. Say "cancel the '
+        'timer for the pasta everywhere" to cancel it from here.'
+    )
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_everywhere_cancels_plain_timers_in_every_room_but_no_reminder(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="garage", label="pasta")
+    await _timer(s, room="office", label="pasta")
+    await _timer(s, room="kitchen", label="pasta", message="pasta")
+    await s.commit()
+
+    m = _CANCEL_RE.match("cancel the timer for pasta everywhere")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the pasta timer."
+    assert await _rows(s) == [("kitchen", "pasta", True)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_roomless_labelled_cancel_is_house_wide(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="garage", label="pasta")
+    await _timer(s, room=None, label="pasta")
+    await s.commit()
+    m = _CANCEL_RE.match("cancel the timer for pasta")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx(None), s)
+    await s.commit()
+    assert reply.text == "Cancelled the pasta timer."
+    assert await _rows(s) == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_tool_cancel_is_room_scoped_unless_everywhere(v017_session) -> None:
+    s = v017_session
+    handler = TimerHandler()
+    await _timer(s, room="garage", label="pasta")
+    await _timer(s, room="kitchen", label="pasta")
+    await s.commit()
+
+    reply = await handler.execute_from_tool(
+        {"action": "cancel", "label": "pasta"}, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the pasta timer."
+    assert await _rows(s) == [("garage", "pasta", False)]
+
+    reply = await handler.execute_from_tool(
+        {"action": "cancel", "label": "pasta"}, _ctx("kitchen"), s)
+    assert "is in the garage" in reply.text
+
+    reply = await handler.execute_from_tool(
+        {"action": "cancel", "label": "pasta", "everywhere": True}, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the pasta timer."
+    assert await _rows(s) == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_status_never_calls_a_reminder_a_timer(v017_session) -> None:
+    # next_active is timers only. "How long left on the timer" reads the
+    # room's plain timer first (wf/reminder-parse's next_for_status) and a
+    # lone reminder as a reminder, never as "the call mom timer".
+    s = v017_session
+    await _timer(s, room="kitchen", label="call mom", message="call mom", minutes=2)
+    await s.commit()
+    assert await TimerRepository(s).next_active(room_id="kitchen") is None
+    m = _STATUS_RE.match("how much time left on the timer")
+    reply = await TimerHandler()._status_from_match(m, _ctx("kitchen"), s)
+    assert reply.text.endswith(" left on your reminder: call mom."), reply.text
+    assert "timer" not in reply.text
+
+    await _timer(s, room="kitchen", label="pasta", minutes=20)
+    await s.commit()
+    reply = await TimerHandler()._status_from_match(m, _ctx("kitchen"), s)
+    assert reply.text.endswith(" left on the pasta timer."), reply.text
+
+
+async def _spoken_fire(s, *, spoken_ago_sec: float, kind: str = "timer",
+                       garage: str = "spoken", office: str = "pending") -> int:
+    """A garage timer (or reminder) that went off and was announced in the
+    kitchen ``spoken_ago_sec`` seconds ago; the garage's own announcement
+    ``garage`` (spoken 40 s ago, or still ``pending``), the office's
+    ``office`` (still waiting, by default)."""
+    from sqlalchemy import text
+
+    fid = (await s.execute(text(
+        "INSERT INTO timer_fires (timer_id, kind, message, origin_room_id, created_at, due_at, "
+        "base_text) VALUES (99, :kind, :message, 'garage', now() - interval '11 minutes', "
+        "now() - interval '1 minute', 'Your 10 minute timer is done.') RETURNING id"
+    ), {"kind": kind, "message": "call mom" if kind == "reminder" else None})).scalar_one()
+    for room, origin, outcome, ago in (
+        ("garage", True, garage, 40.0 if garage != "pending" else None),
+        ("kitchen", False, "spoken", spoken_ago_sec),
+        ("office", False, office, None),
+    ):
+        started = f"now() - make_interval(secs => {ago + 3.0})" if ago is not None else "NULL"
+        finished = f"now() - make_interval(secs => {ago})" if ago is not None else "NULL"
+        await s.execute(
+            text(
+                "INSERT INTO timer_fire_deliveries "
+                "(fire_id, room_id, is_origin, outcome, started_at, finished_at) "
+                f"VALUES (:f, :r, :o, :out, {started}, {finished})"
+            ),
+            {"f": fid, "r": room, "o": origin, "out": outcome},
+        )
+    await s.commit()
+    return int(fid)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_stop_the_timer_right_after_a_fire_acknowledges_it(v017_session) -> None:
+    from sqlalchemy import text
+
+    s = v017_session
+    own = await _timer(s, room="kitchen", label="pasta")
+    await s.commit()
+    fid = await _spoken_fire(s, spoken_ago_sec=10)
+
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Okay."
+    # The kitchen's own running timer is untouched.
+    assert [r[0] for r in (await s.execute(text("SELECT id FROM timers"))).all()] == [own]
+    acked = (await s.execute(text(
+        "SELECT acked_at IS NOT NULL, acked_by FROM timer_fires WHERE id = :f"),
+        {"f": fid})).one()
+    assert tuple(acked) == (True, "kitchen")
+    office = (await s.execute(text(
+        "SELECT outcome, detail FROM timer_fire_deliveries "
+        "WHERE fire_id = :f AND room_id = 'office'"), {"f": fid})).one()
+    assert tuple(office) == ("cancelled", "acknowledged:kitchen")
+
+    # Said again (2026-09-30 review): still "I heard it" — the fire is
+    # already acknowledged, and the kitchen's own timer is still not what
+    # was meant. It used to fall through and delete it.
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Okay."
+    assert [r[0] for r in (await s.execute(text("SELECT id FROM timers"))).all()] == [own]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_stop_the_timer_31_seconds_later_is_a_normal_cancel(v017_session) -> None:
+    from sqlalchemy import text
+
+    s = v017_session
+    await _timer(s, room="kitchen", label="pasta")
+    await s.commit()
+    fid = await _spoken_fire(s, spoken_ago_sec=31)
+
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the timer."
+    assert (await s.execute(text("SELECT count(*) FROM timers"))).scalar_one() == 0
+    assert (await s.execute(text(
+        "SELECT acked_by FROM timer_fires WHERE id = :f"), {"f": fid})).scalar_one() is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_fire_heard_only_in_other_rooms_is_not_acknowledged_here(v017_session) -> None:
+    s = v017_session
+    await _timer(s, room="office", label="eggs")
+    await s.commit()
+    # Spoken in garage and kitchen; the office was offline and never will.
+    await _spoken_fire(s, spoken_ago_sec=5, office="offline")
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("office"), s)
+    assert reply.text == "Cancelled the timer."
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_second_room_stopping_it_after_the_first_deletes_nothing(v017_session) -> None:
+    """The review's repro: garage and kitchen both hear the garage timer;
+    the kitchen says "stop the timer", then the garage does. The fire was
+    already acknowledged, and the garage's own running timer is not what
+    it meant. (It fell through to a plain cancel and deleted it.)"""
+    from sqlalchemy import text
+
+    s = v017_session
+    eggs = await _timer(s, room="garage", label="eggs")
+    pasta = await _timer(s, room="kitchen", label="pasta")
+    await s.commit()
+    fid = await _spoken_fire(s, spoken_ago_sec=5)
+    m = _CANCEL_RE.match("stop the timer")
+    assert (await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)).text == "Okay."
+    await s.commit()
+    assert (await TimerHandler()._cancel_from_match(m, _ctx("garage"), s)).text == "Okay."
+    await s.commit()
+    assert sorted(r[0] for r in (await s.execute(text("SELECT id FROM timers"))).all()) == sorted(
+        [eggs, pasta])
+    assert (await s.execute(text(
+        "SELECT acked_by FROM timer_fires WHERE id = :f"), {"f": fid})).scalar_one() == "kitchen"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_stop_the_timer_after_a_reminder_still_cancels_this_rooms_timer(v017_session) -> None:
+    """The acknowledgement is per kind: a REMINDER just announced here does
+    not turn "cancel the timer" into "Okay." with the pasta still running."""
+    from sqlalchemy import text
+
+    s = v017_session
+    await _timer(s, room="kitchen", label="pasta")
+    await s.commit()
+    fid = await _spoken_fire(s, spoken_ago_sec=5, kind="reminder")
+    m = _CANCEL_RE.match("cancel the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)
+    await s.commit()
+    assert reply.text == "Cancelled the timer."
+    assert (await s.execute(text("SELECT count(*) FROM timers"))).scalar_one() == 0
+    assert (await s.execute(text(
+        "SELECT acked_by FROM timer_fires WHERE id = :f"), {"f": fid})).scalar_one() is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_stop_the_timer_while_this_rooms_announcement_still_waits_acks_it(v017_session) -> None:
+    """The office is busy (its announcement still pending) but the phone
+    and the dashboard already rang: "stop the timer" there means that fire.
+    It used to delete the office's own running timer, and the waiting
+    announcement still played afterwards."""
+    from sqlalchemy import text
+
+    s = v017_session
+    eggs = await _timer(s, room="office", label="eggs")
+    await s.commit()
+    fid = await _spoken_fire(s, spoken_ago_sec=5)
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("office"), s)
+    await s.commit()
+    assert reply.text == "Okay."
+    assert [r[0] for r in (await s.execute(text("SELECT id FROM timers"))).all()] == [eggs]
+    office = (await s.execute(text(
+        "SELECT outcome, detail FROM timer_fire_deliveries WHERE fire_id = :f AND room_id = 'office'"),
+        {"f": fid})).one()
+    assert tuple(office) == ("cancelled", "acknowledged:office")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_only_the_origin_stops_its_own_waiting_announcement(v017_session) -> None:
+    """Owner rule 2: "The origin room always announces its own." The
+    kitchen's acknowledgement cancels the office's waiting announcement but
+    not the garage's; the garage's own "stop the timer" does."""
+    from sqlalchemy import text
+
+    s = v017_session
+    fid = await _spoken_fire(s, spoken_ago_sec=5, garage="pending")
+    m = _CANCEL_RE.match("stop the timer")
+    assert (await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)).text == "Okay."
+    await s.commit()
+
+    async def rows():
+        return {r[0]: (r[1], r[2]) for r in (await s.execute(text(
+            "SELECT room_id, outcome, detail FROM timer_fire_deliveries WHERE fire_id = :f"),
+            {"f": fid})).all()}
+
+    got = await rows()
+    assert got["garage"] == ("pending", None)
+    assert got["office"] == ("cancelled", "acknowledged:kitchen")
+
+    assert (await TimerHandler()._cancel_from_match(m, _ctx("garage"), s)).text == "Okay."
+    await s.commit()
+    assert (await rows())["garage"] == ("cancelled", "acknowledged:garage")
+
+
+@pytest.mark.asyncio
+async def test_the_tool_reads_everywhere_strictly(monkeypatch) -> None:
+    """The Ollama route hands tool arguments over unconverted and small
+    models quote booleans: bool("false") is True, which turned a room's
+    "cancel the timer" into DELETE every plain timer in the house."""
+    seen: list[bool] = []
+
+    class _Repo(_OneTimerRepo):
+        async def cancel_by_label(self, label, room_id, *, house_wide=False) -> int:
+            seen.append(house_wide)
+            return 1
+
+    async def _no_ack(session, room_id, within_sec=30, *, kind=None):
+        return None
+
+    from domovoi import timer_delivery
+
+    monkeypatch.setattr(timer_delivery, "ack_recent_fire", _no_ack)
+    monkeypatch.setattr(timer_mod, "TimerRepository", _Repo)
+    handler = TimerHandler()
+    for raw in ("false", "False", "no", "", 0, 1, "1", None, "yes", [], {"x": 1}):
+        await handler.execute_from_tool(
+            {"action": "cancel", "label": "pasta", "everywhere": raw}, _ctx("kitchen"), None)  # type: ignore[arg-type]
+    assert seen == [False] * 11
+    seen.clear()
+    for raw in (True, "true", "TRUE", " true "):
+        await handler.execute_from_tool(
+            {"action": "cancel", "label": "pasta", "everywhere": raw}, _ctx("kitchen"), None)  # type: ignore[arg-type]
+    assert seen == [True] * 4
+
+
+@pytest.mark.asyncio
+async def test_the_acknowledgement_is_asked_only_for_a_plain_room_cancel(monkeypatch) -> None:
+    """ack_recent_fire answers None when V017 is missing (or nothing is
+    recent) and the cancel goes ahead as before. A labelled or house-wide
+    cancel, or a turn with no room, never asks."""
+    from domovoi import timer_delivery
+
+    calls: list[str] = []
+
+    async def _no_ack(session, room_id, within_sec=30, *, kind=None):
+        calls.append(room_id)
+        assert kind == "timer"
+        return None
+
+    monkeypatch.setattr(timer_delivery, "ack_recent_fire", _no_ack)
+    monkeypatch.setattr(timer_mod, "TimerRepository", _OneTimerRepo)
+    m = _CANCEL_RE.match("stop the timer")
+    reply = await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), None)  # type: ignore[arg-type]
+    assert calls == ["kitchen"]
+    assert reply.text == "Cancelled the timer."
+    for transcript, room in (("cancel the timer for pasta", "kitchen"),
+                             ("cancel the timer everywhere", "kitchen"),
+                             ("stop the timer", None)):
+        m = _CANCEL_RE.match(transcript)
+        await TimerHandler()._cancel_from_match(m, _ctx(room), None)  # type: ignore[arg-type]
+    assert calls == ["kitchen"]

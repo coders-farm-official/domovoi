@@ -10,13 +10,19 @@ from sqlalchemy import text
 from domovoi.db.session import SessionLocal, engine
 from domovoi.main import app
 from domovoi.tests.conftest import TABLES_TO_TRUNCATE, requires_db
+from domovoi.tests.timer_fires_testkit import clear_fire_ledger
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def _truncate_between_tests():
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE"))
+    await clear_fire_ledger()
     yield
+    # These tests run the real lifespan: the timer watcher records what it
+    # fires (V017), and an unsettled fire left behind would be resumed —
+    # and announced — by the next lifespan in the run.
+    await clear_fire_ledger()
 
 
 @requires_db

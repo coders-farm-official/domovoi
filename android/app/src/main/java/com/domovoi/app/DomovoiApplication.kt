@@ -3,6 +3,7 @@ package com.domovoi.app
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.domovoi.app.alerts.TimerNotifier
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -10,8 +11,10 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        TimerNotifier.createChannel(this)
         container = AppContainer(this)
         container.bus.start()
+        container.alerts.start()
     }
 
     /**

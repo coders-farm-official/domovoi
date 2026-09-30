@@ -173,11 +173,13 @@ def _db_sync(tmp_path, monkeypatch):
 def web_client(**kw) -> AsyncClient:
     """The web app, spoken to the way a browser speaks to it: every
     write carries ``X-Requested-With`` (WEB-6 refuses one without it).
-    Pass ``headers={}`` to drop it deliberately."""
+    Pass ``headers={}`` to drop it deliberately; any other ``headers``
+    replace it (include it yourself when the client writes)."""
+    headers = kw.pop("headers", {"X-Requested-With": "domovoi-tests"})
     return AsyncClient(
         transport=ASGITransport(app=web_app),
         base_url="http://test",
-        headers={"X-Requested-With": "domovoi-tests"},
+        headers=headers,
         **kw,
     )
 

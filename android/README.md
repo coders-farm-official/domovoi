@@ -16,6 +16,7 @@ administration is the deliberate exception — see *Settings* below.
 | Realtime | One OkHttp WebSocket to `/ws/state`, subscribe-all, exponential-backoff reconnect (1s → 15s) — `net/StateBus.kt` |
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
 | Images | Coil |
+| Alerts | A notification when a timer or reminder goes off anywhere in the house: live over `/ws/state`, plus a local `AlarmManager` mirror for when the socket is down — `alerts/` |
 | Settings | Preferences DataStore (server URL, theme, device id, "listening as" person) — device-local only; server administration hands off to the dashboard |
 
 ## Building
@@ -73,8 +74,9 @@ up in local mode automatically.
 
 ```
 app/src/main/java/com/domovoi/app/
-├── AppContainer.kt        # singleton graph: prefs, api, bus, player
+├── AppContainer.kt        # singleton graph: prefs, api, bus, player, alerts
 ├── net/                   # ApiClient (data.js analog), StateBus (/ws/state), rememberApi hooks
+├── alerts/                # timer/reminder notifications + the local alarm mirror (process-wide)
 ├── data/Prefs.kt          # DataStore-backed settings
 ├── player/                # PlayItem, PlayerController (player.jsx analog), PlaybackService
 └── ui/
@@ -113,6 +115,56 @@ launcher. Presentational, exactly as on the web: the tablet still holds
 the household token (see docs/SECURITY_PRIVACY.md).
 
 Conventions for adding screens: see `CONVENTIONS.md`.
+
+## Timer and reminder alerts
+
+When a timer or reminder goes off in any room, the phone posts a
+notification on the **Timers and reminders** channel (`alerts/`,
+process-wide — not a screen, no foreground service, no FCM; nothing
+leaves the home network):
+
+- **Live:** `timer_fires.changed` on the `/ws/state` socket posts every
+  new fire; each (re)connect catches up from
+  `GET /api/timers/fires?since_id=…` (fires under 30 minutes old; a
+  server's first catch-up only the last 2 minutes).
+- **Alarm mirror:** every running timer and reminder on the active
+  server gets a local alarm at its due time (on the server's clock), so
+  the phone rings with the app closed or off the home network. When it
+  rings it asks the server what happened (within 2 s): a recorded fire
+  posts with where it was heard; a timer cancelled meanwhile stays
+  quiet; no answer posts anyway, "couldn't reach Domovoi to confirm".
+  Exact alarms: always on API 26–30, with `SCHEDULE_EXACT_ALARM` on
+  31–32 (inexact without it), `USE_EXACT_ALARM` from 33. Re-armed after
+  a reboot or an app update.
+- The two paths post one timer once (a small dedupe book keyed by
+  server and timer id), into the same notification.
+- **Privacy:** a shared screen never shows the words, locked or not. On
+  any other phone the lock screen shows only the kind and the room
+  ("Reminder · garage") **when the phone is set to hide sensitive
+  notification content** (Settings > Notifications > notifications on
+  lock screen, or "Sensitive notifications" off on a Pixel); Android's
+  default shows the whole notification there, a reminder's words
+  included, and an app cannot force otherwise. The mirror keeps a
+  reminder's words only in app-private storage, excluded from cloud
+  backup and from device-to-device transfer, and its alarms carry ids
+  only.
+- With notifications off for the app, nothing posts and nothing is
+  armed; Home's timers card says "Timer alerts are off on this phone"
+  with a way to turn them on.
+- Tapping an alert opens Home. The satellite detail's **Only reminders
+  for this device** switch sets which rooms speak other rooms' timers.
+- A phone that force-stops the app (Settings > Force stop, some
+  makers' swipe-away) loses every alarm it had set; the next start re-arms
+  the ones still ahead before it syncs.
+- **Limit (no foreground service, by design):** Android freezes a
+  backgrounded app and, from Android 15, blocks its network a few
+  seconds after it leaves the screen (`blocked=APP_BACKGROUND` in
+  `dumpsys netpolicy`). So the live path only runs while the app is
+  open, and the alarm mirror only knows the timers that existed the last
+  time the app was open or resumed. A timer set by voice while the app
+  sits in the background reaches the phone only when the app is next
+  opened (the catch-up posts it if it fired under 30 minutes ago). A
+  ringing alarm is allowed the network for its confirm step.
 
 ## Capability gating (plugins)
 

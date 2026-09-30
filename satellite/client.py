@@ -4991,6 +4991,22 @@ class Satellite:
             log.info("heard: %s", payload.get("text"))
         elif t == "response_start":
             self.audio_sample_rate = int(payload.get("audio_sample_rate") or 16_000)
+            # A new response: whatever `stop_playback` was stopping is over.
+            # The flag makes this receiver drop binary frames, which is right
+            # for the tail of a reply the person just talked over, and it is
+            # also set when a session ends and on a server `error`. Until
+            # now only the mic thread starting a turn (or the playback
+            # thread taking a chunk off the queue, which this receiver
+            # never put there while the flag was up) cleared it, so after a
+            # reconnect or a failed turn every announcement the core sent
+            # an idle room (a reminder, a timer, an intercom broadcast)
+            # arrived as start + end with its audio dropped, silently,
+            # until somebody said the wake word there. The queue was
+            # drained when the flag went up; drain it again so nothing from
+            # before this response can play in front of it.
+            if self.stop_playback.is_set():
+                self._drain_playback_q()
+                self.stop_playback.clear()
             # TTS is about to play — kill music (and any still-playing wake
             # acknowledgement) so they don't compete on the output device. Music
             # will only resume if the server sends a fresh music_start
@@ -5448,6 +5464,12 @@ class Satellite:
                     # ever ended early; [listen] early_commit=false opts
                     # this room out.
                     "capture_control": self.cfg.early_commit,
+                    # A response_start ends whatever stop_playback was
+                    # stopping (see _handle_text_frame), so an announcement
+                    # after a reconnect or a failed turn plays. The core
+                    # warns in its journal for a satellite that does not
+                    # say so: it records such announcements as spoken.
+                    "announce_after_session_end": True,
                 }))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if

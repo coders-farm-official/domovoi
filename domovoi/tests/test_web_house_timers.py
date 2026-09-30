@@ -8,9 +8,11 @@ section 3):
   each with ``created_at``, plus ``server_now``: the database clock that
   decides when a timer fires, so a phone with a skewed clock still counts
   down right. OPEN, like ``GET /api/satellites/{room}/timers``: household
-  state. Except the words of a reminder set with NO room, which no open
-  route listed before: without a household credential that row reads
-  ``is_reminder`` true with ``message`` and ``label`` null.
+  state. Except a reminder's words (rule M1, 2026-09-30 — until then only
+  a reminder set with NO room was held back): without a household
+  credential every reminder, whatever room it was set in, reads
+  ``is_reminder`` true with ``message`` and ``label`` null and ``masked``
+  true, on both reads. A plain timer's label stays.
 * ``DELETE /api/timers/{id}`` — cancel any timer, room or no room. Device
   tier, like the per-room cancel.
 * a ``timers_changed`` NOTIFY, commit-coupled (it rides the writer's own
@@ -194,8 +196,9 @@ async def test_the_house_list_is_every_timer_soonest_first(_db, db_session) -> N
     # anyone, but its words (the label is the message too) need the
     # household token.
     assert mum["room_id"] is None and mum["is_reminder"] is True
-    assert mum["message"] is None and mum["label"] is None
+    assert mum["message"] is None and mum["label"] is None and mum["masked"] is True
     assert pasta["room_id"] == "kitchen" and pasta["label"] == "pasta" and not pasta["is_reminder"]
+    assert pasta["masked"] is False
     assert office["label"] is None and office["room_id"] == "office"
     # created_at + expires_at give the full length: the pasta timer is 15 min.
     start = datetime.fromisoformat(pasta["created_at"].replace("Z", "+00:00"))
@@ -208,7 +211,8 @@ async def test_the_house_list_is_every_timer_soonest_first(_db, db_session) -> N
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_roomless_reminders_words_need_a_household_credential(_db, db_session) -> None:
+async def test_every_reminders_words_need_a_household_credential(_db, db_session) -> None:
+    """Rule M1: a room's reminder is held back like a room-less one."""
     async with web_client() as c:
         await claim_admin(c)
     token = await db_device_token()
@@ -227,14 +231,22 @@ async def test_a_roomless_reminders_words_need_a_household_credential(_db, db_se
     async with web_client() as anon:
         seen = by_id((await anon.get("/api/timers")).json())
         stale = by_id((await anon.get("/api/timers", headers={HEADER: "not-the-token"})).json())
+        room = (await anon.get("/api/satellites/kitchen/timers")).json()
     async with _paired(token) as paired:
         told = by_id((await paired.get("/api/timers")).json())
+        room_told = (await paired.get("/api/satellites/kitchen/timers")).json()
     assert seen[ids["mum"]]["message"] is None and seen[ids["mum"]]["label"] is None
     assert stale[ids["mum"]]["message"] is None
     assert told[ids["mum"]]["message"] == "call mum" and told[ids["mum"]]["label"] == "call mum"
-    # A room's reminder reads as it always has on the per-room route.
-    assert seen[ids["bins"]]["message"] == "bins out"
-    assert seen[ids["pasta"]]["label"] == "pasta"
+    # A room's reminder is held back the same way, on both reads.
+    assert seen[ids["bins"]]["message"] is None and seen[ids["bins"]]["label"] is None
+    assert seen[ids["bins"]]["masked"] is True and seen[ids["bins"]]["room_id"] == "kitchen"
+    assert told[ids["bins"]]["message"] == "bins out" and told[ids["bins"]]["masked"] is False
+    bins = next(t for t in room if t["id"] == ids["bins"])
+    assert bins["message"] is None and bins["masked"] is True
+    assert next(t for t in room_told if t["id"] == ids["bins"])["message"] == "bins out"
+    # A plain timer's label is not speech.
+    assert seen[ids["pasta"]]["label"] == "pasta" and seen[ids["pasta"]]["masked"] is False
 
 
 @requires_db
@@ -263,7 +275,7 @@ async def test_the_per_room_read_carries_created_at_too(db_session) -> None:
     async with web_client() as c:
         rows = (await c.get("/api/satellites/kitchen/timers")).json()
     assert [t["id"] for t in rows] == [ids["pasta"]]
-    assert rows[0]["created_at"]
+    assert rows[0]["created_at"] and rows[0]["masked"] is False
 
 
 @requires_db

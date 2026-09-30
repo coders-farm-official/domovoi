@@ -501,9 +501,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
     from domovoi.workers.wake_word_trainer import WakeWordTrainer
 
-    # `app` refs: the watcher routes fired reminders through the
-    # originating room's StreamSession.announce; the sweeper prunes
-    # app.state playback dicts; the news fetcher reads the shared probe.
+    # `app` refs: the watcher hands each tick to the house-wide timer
+    # delivery (domovoi/timer_delivery.py), which announces fired timers
+    # and reminders through every eligible room's StreamSession.announce;
+    # the sweeper prunes app.state playback dicts; the news fetcher reads
+    # the shared probe.
+    from domovoi.timer_delivery import TimerDelivery
+
+    app.state.timer_delivery = TimerDelivery(app)
     WORKERS.add_worker(TimerWatcher(app=app), owner="core")
     WORKERS.add_worker(PlaybackStateSweeper(app), owner="core")
     WORKERS.add_worker(MediaPlaysPruner(), owner="core")
@@ -603,6 +608,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     schedule_speech_warm_up("boot")
 
     log.info("domovoi started; bot_name=%s", settings.bot_name)
+    # Satellites can connect from here on: a timer that went off during
+    # startup (or while the server was down) waits for its rooms to
+    # reconnect, and its grace window counts from now.
+    app.state.timer_delivery.set_accepting()
     try:
         yield
     finally:
@@ -619,6 +628,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await WORKERS.stop_owner("core")
         except Exception as e:
             log.warning("core worker shutdown raised: %s", e)
+        # Announcements still in flight stop here; their rows stay
+        # pending/sending and the next boot resumes them.
+        try:
+            await app.state.timer_delivery.shutdown()
+        except Exception as e:
+            log.warning("timer delivery shutdown raised: %s", e)
         # Drop the core registrations so a re-entered lifespan (tests
         # enter it repeatedly in one process) registers a fresh set
         # instead of accumulating duplicates.
@@ -2420,6 +2435,23 @@ async def admin_preseed_satellite_pairing(
     return {"room_id": room_id, "token": token, "rotated": existing is not None}
 
 
+async def _forget_timer_scope(room_id: str) -> None:
+    """Drop a retired room's "Only reminders for this device" row (V017's
+    ``timer_own_only_rooms``). A database without V017 has nothing to
+    forget; any other failure is logged, never fatal to the retirement."""
+    try:
+        async with session_scope() as s:
+            await s.execute(
+                text("DELETE FROM timer_own_only_rooms WHERE room_id = :r"),
+                {"r": room_id},
+            )
+    except Exception as e:  # noqa: BLE001
+        if type(getattr(e, "orig", None)).__name__ != "UndefinedTableError" and not (
+            "timer_own_only_rooms" in str(e) and "does not exist" in str(e)
+        ):
+            log.warning("satellites: could not clear timer scope for %s: %s", room_id, e)
+
+
 @app.delete(
     "/v1/admin/satellites/{room_id}",
     # Security tier: removing a satellite (and, with purge, its pairing and
@@ -2501,6 +2533,9 @@ async def admin_delete_satellite(
     from domovoi import command_captures
 
     removed_captures = await command_captures.forget_room(room_id)
+    # Its "Only reminders for this device" goes too (V017), so a satellite
+    # reusing the name starts with the default. Fired-timer history stays.
+    await _forget_timer_scope(room_id)
 
     log.info(
         "satellites: admin delete room=%s purge=%s (meta=%s pairing=%s "

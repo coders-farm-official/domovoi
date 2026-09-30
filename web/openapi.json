@@ -4156,7 +4156,7 @@
           "satellites"
         ],
         "summary": "List Timers",
-        "description": "Active timers and reminders for this room.\n\nA reminder is a timer with ``message IS NOT NULL`` \u2014 the\ndistinction matters because reminders speak the message on fire,\nbare timers just chime. Surfaced via the ``is_reminder`` flag so\nthe UI can render them differently.",
+        "description": "Active timers and reminders for this room.\n\nA reminder is a timer with ``message IS NOT NULL`` \u2014 the\ndistinction matters because reminders speak the message on fire,\nbare timers just chime. Surfaced via the ``is_reminder`` flag so\nthe UI can render them differently.\n\nOpen, with rule M1 (``_READS_REMINDER_TEXT``): a caller holding no\nhousehold credential gets every reminder with ``message`` and\n``label`` null and ``masked`` true.",
         "operationId": "list_timers_api_satellites__room_id__timers_get",
         "parameters": [
           {
@@ -4227,6 +4227,103 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/timer-announcements": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Timer Announcements",
+        "description": "Whether this room announces only the timers and reminders set on it\n(``own_only`` true) or every room's (false, the default), and since\nwhen. Open, like ``capture_commands``: anyone in the house may see how\na room behaves. 404 for a room this server has never known. Reads as\noff when V017 is missing.",
+        "operationId": "get_timer_announcements_api_satellites__room_id__timer_announcements_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimerAnnouncements"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Set Timer Announcements",
+        "description": "Turn \"Only reminders for this device\" on or off for this room.\nIdempotent: turning it on again keeps the original ``since``. Written\nstraight to the shared database; the core reads it each time a timer\nor reminder goes off. Works for an offline room. 404 unknown room,\n422 bad room id or body, 503 when V017 is missing.",
+        "operationId": "set_timer_announcements_api_satellites__room_id__timer_announcements_put",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimerAnnouncementsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimerAnnouncements"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "V017 not applied"
           },
           "422": {
             "description": "Validation Error",
@@ -4838,7 +4935,7 @@
           "timers"
         ],
         "summary": "List All Timers",
-        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock ``pop_expired`` fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel.\n\nOne thing is held back from a caller with no household credential: the\nwords of a reminder set with NO room. Those come from a device-tier\nvoice turn with no room (the app, the dashboard's chat), and no open\nroute listed them before this one; the per-room read has always\nanswered a room's reminders to the LAN, so those stay as they were.\nSuch a row still counts down, ``is_reminder`` true, with ``message``\nand ``label`` null (a reminder's label is its message). The caller is\nclassified only when such a row exists, so the read charges no token\nbackoff the rest of the time.",
+        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock, plus what went\noff in the last 10 minutes.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock the core fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel; a fire's progress\nfrom room to room on ``timer_fires``.\n\n``fires`` (newest first, at most 20) is where Home's \"done \u00b7 kitchen\"\nlines come from: a row that vanished was cancelled unless the ledger\nsays it fired. ``null`` when the server keeps no fire history (V017\nnot applied) \u2014 a client then falls back to its own behaviour.\n\nRule M1 (``_READS_REMINDER_TEXT``): without a household credential,\nevery reminder \u2014 timer rows and fires alike \u2014 answers with ``message``\nand ``label`` null and ``masked`` true.",
         "operationId": "list_all_timers_api_timers_get",
         "responses": {
           "200": {
@@ -4847,6 +4944,108 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TimerList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/timers/fires": {
+      "get": {
+        "tags": [
+          "timers"
+        ],
+        "summary": "List Timer Fires",
+        "description": "Timers and reminders that went off (kept 7 days), and where each\nwas announced.\n\n* ``since_id`` \u2014 only fires with a larger id, OLDEST first: how a\n  client that was away catches up. Without it, newest first.\n* ``room_id`` \u2014 the room the timer or reminder was SET in.\n* ``timer_id`` \u2014 the fire of one timer (the phone's alarm confirm).\n\nOpen, with rule M1. 503 \u2014 not an empty list \u2014 when the server keeps\nno fire history (V017 missing), so a client can tell \"unknown\" from\n\"none\".",
+        "operationId": "list_timer_fires_api_timers_fires_get",
+        "parameters": [
+          {
+            "name": "since_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9223372036854775807,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since Id"
+            }
+          },
+          {
+            "name": "room_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "timer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2147483647,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timer Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimerFireList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "V017 not applied: this server keeps no fire history"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -14755,6 +14954,11 @@
               }
             ],
             "title": "Capture Since"
+          },
+          "timers_own_only": {
+            "type": "boolean",
+            "title": "Timers Own Only",
+            "default": false
           }
         },
         "type": "object",
@@ -15246,6 +15450,11 @@
             "type": "boolean",
             "title": "Is Reminder",
             "default": false
+          },
+          "masked": {
+            "type": "boolean",
+            "title": "Masked",
+            "default": false
           }
         },
         "type": "object",
@@ -15254,6 +15463,271 @@
           "expires_at"
         ],
         "title": "Timer"
+      },
+      "TimerAnnouncements": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "own_only": {
+            "type": "boolean",
+            "title": "Own Only",
+            "default": false
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "TimerAnnouncements",
+        "description": "A room's \"Only reminders for this device\" setting. ``since`` is\nwhen it was turned on (null while off)."
+      },
+      "TimerAnnouncementsUpdate": {
+        "properties": {
+          "own_only": {
+            "type": "boolean",
+            "title": "Own Only"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "own_only"
+        ],
+        "title": "TimerAnnouncementsUpdate",
+        "description": "``PUT /api/satellites/{room_id}/timer-announcements`` body."
+      },
+      "TimerFire": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "timer_id": {
+            "type": "integer",
+            "title": "Timer Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "timer",
+              "reminder"
+            ],
+            "title": "Kind"
+          },
+          "is_reminder": {
+            "type": "boolean",
+            "title": "Is Reminder",
+            "default": false
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "masked": {
+            "type": "boolean",
+            "title": "Masked",
+            "default": false
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Due At"
+          },
+          "fired_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fired At"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
+          },
+          "acked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acked At"
+          },
+          "acked_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acked By"
+          },
+          "heard_in": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Heard In"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/TimerFireDelivery"
+            },
+            "type": "array",
+            "title": "Deliveries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "timer_id",
+          "kind",
+          "due_at",
+          "fired_at"
+        ],
+        "title": "TimerFire",
+        "description": "A timer or reminder that went off (V017 ``timer_fires``), and where\nit was announced. ``room_id`` is the room it was SET in (null = set\nwith no room). ``deliveries`` lists the origin room first, then the\nother rooms A\u2192Z; ``heard_in`` is the rooms that heard it, same order.\n``summary`` is computed by the server (\"heard in garage, kitchen \u00b7\nstill announcing\") and shown verbatim. The words the core spoke are\nnever part of this shape."
+      },
+      "TimerFireDelivery": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "is_origin": {
+            "type": "boolean",
+            "title": "Is Origin",
+            "default": false
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "outcome"
+        ],
+        "title": "TimerFireDelivery",
+        "description": "One room's announcement of a fire. ``detail`` is a reason code\n(``offline``, ``capturing``, ``forced_over:followup``, ``tts_failed``,\n``acknowledged:kitchen`` ...), never speech."
+      },
+      "TimerFireList": {
+        "properties": {
+          "server_now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Now"
+          },
+          "fires": {
+            "items": {
+              "$ref": "#/components/schemas/TimerFire"
+            },
+            "type": "array",
+            "title": "Fires"
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_now",
+          "fires"
+        ],
+        "title": "TimerFireList",
+        "description": "``GET /api/timers/fires``: fire history plus the database clock."
       },
       "TimerList": {
         "properties": {
@@ -15268,6 +15742,20 @@
             },
             "type": "array",
             "title": "Timers"
+          },
+          "fires": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TimerFire"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fires"
           }
         },
         "type": "object",
@@ -15276,7 +15764,7 @@
           "timers"
         ],
         "title": "TimerList",
-        "description": "Every timer and reminder in the house, soonest first.\n\n``server_now`` is the database clock at the moment of the read \u2014 the\nclock that decides when a timer fires \u2014 so a page counts down against\nthe server rather than a phone whose clock is minutes off."
+        "description": "Every timer and reminder in the house, soonest first.\n\n``server_now`` is the database clock at the moment of the read \u2014 the\nclock that decides when a timer fires \u2014 so a page counts down against\nthe server rather than a phone whose clock is minutes off.\n\n``fires`` is what went off in the last 10 minutes (newest first, at\nmost 20) \u2014 the source of Home's \"done \u00b7 kitchen\" lines. ``null`` means\nthe server keeps no fire history (V017 missing): a client falls back to\nits own behaviour. ``[]`` means nothing fired lately."
       },
       "Track": {
         "properties": {

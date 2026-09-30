@@ -123,3 +123,13 @@ def test_catalog_covers_design_v1() -> None:
         "core.session_connected", "core.session_disconnected",
     ):
         assert name in CORE_EVENTS
+
+
+def test_timer_events_are_additive_to_catalog_v1() -> None:
+    """The house-wide timer delivery (2026-09-30) added two events without
+    removing or renaming any, so the catalog version stays 1."""
+    from domovoi.events import CATALOG_VERSION
+
+    assert "core.timer_fired" in CORE_EVENTS
+    assert "core.timer_fire_settled" in CORE_EVENTS
+    assert CATALOG_VERSION == 1
