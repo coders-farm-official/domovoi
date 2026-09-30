@@ -34,7 +34,7 @@ import threading
 import time
 import tomllib
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -737,6 +737,65 @@ def _capture_stats_str(
         f"frames={sent} ({duration_sec:.1f}s), gate_pass={gate_pass}/{sent}, "
         f"voiced={voiced}/{sent}, gate={gate_dbfs:.1f}, {dist}"
     )
+
+
+# ─── Music: one mpg123 run, and when to try it again ──────────────────────
+
+@dataclass
+class _MusicRun:
+    """One mpg123 process playing one stream URL.
+
+    ``exited`` is set by the watcher thread once the process is reaped,
+    with ``rc`` and the tail of its stderr filled in first. ``supervised``
+    says who reports an exit: True while the thread that started it is
+    still watching for a refused connection (and may retry), False once the
+    stream is playing — an exit after that is the watcher's to report.
+    """
+
+    proc: Any
+    url: str
+    attempt: int
+    started: float
+    exited: threading.Event = field(default_factory=threading.Event)
+    rc: int | None = None
+    stderr_tail: str = ""
+    supervised: bool = True
+
+
+# What mpg123 prints when the stream is not up YET: the port refused (MPD's
+# output not opened since its daemon started), or it accepted and closed
+# before a byte (a daemon restored paused, or Docker's port proxy in front
+# of a container that refused). Worth another try in a moment. Anything
+# else — a bad ALSA device, a 404, a crash — is not.
+_MUSIC_RETRYABLE_MARKERS = (
+    "connection refused",
+    "unable to establish connection",
+    "cannot resolve/connect",
+    "no data at all from network resource",
+    "connection reset",
+)
+_MPG123_PREFIX_RE = re.compile(r"^\[[^\]]*\]\s*(?:error:\s*)?", re.IGNORECASE)
+
+
+def _music_exit_is_retryable(rc: int | None, stderr_tail: str) -> bool:
+    if not rc:
+        return False
+    text = stderr_tail.lower()
+    return any(marker in text for marker in _MUSIC_RETRYABLE_MARKERS)
+
+
+def _music_exit_reason(rc: int | None, stderr_tail: str) -> str:
+    """One line for the log and the core: the line naming the connection
+    failure when there is one (mpg123 prints three for a refused port),
+    else its last line, without the ``[src/file.c:func():NN] error:``
+    prefix."""
+    lines = [ln.strip() for ln in stderr_tail.splitlines() if ln.strip()]
+    for ln in lines:
+        if any(marker in ln.lower() for marker in _MUSIC_RETRYABLE_MARKERS):
+            return _MPG123_PREFIX_RE.sub("", ln)[:200]
+    if lines:
+        return _MPG123_PREFIX_RE.sub("", lines[-1])[:200]
+    return f"mpg123 exited with status {rc}"
 
 
 # ─── Satellite ────────────────────────────────────────────────────────────
@@ -1500,6 +1559,30 @@ class Satellite:
 
     # ── Music streaming ───────────────────────────────────────────────
 
+    # Which request for music is the current one. Bumped by every
+    # music_start that starts (or takes over) a stream, by every stop, and
+    # when a stream is given up on — so a retry, a `music_ready` or a
+    # failure report belonging to an older request can tell it is stale and
+    # step aside. Read and written under `_music_lock`. Class defaults so a
+    # Satellite built field-by-field (the tests) has them too.
+    _music_gen: int = 0
+    # The run `_music_proc` belongs to (exit status, who reports its exit).
+    _music_run: _MusicRun | None = None
+
+    # A stream that refuses the connection is tried again for this long
+    # after the first attempt, then given up on. Sized past the core's
+    # music_ready fallback (5 s): an older core never opens a closed stream
+    # before telling us to connect, but its fallback resume does open it,
+    # and the next try then connects.
+    MUSIC_RETRY_WINDOW_SEC = 8.0
+    # Pause before each retry: the first quickly (the core may be opening
+    # the stream right now), then backing off; the last entry repeats.
+    MUSIC_RETRY_BACKOFF_SEC = (0.25, 0.5, 1.0, 1.5)
+    # How long a new mpg123 must stay up to count as connected when
+    # `[music] prime_sec` is 0 (no music_ready to wait for). A refused
+    # connection exits within a few hundred ms on a Pi.
+    MUSIC_CONNECT_GRACE_SEC = 1.0
+
     def _start_music_when_idle(self, url: str) -> None:
         """Wait until the playback thread releases the ALSA device, then spawn mpg123.
 
@@ -1511,49 +1594,28 @@ class Satellite:
         `playback_q.empty()` alone is not enough: bytes handed to PortAudio
         keep clocking out for seconds after the queue is empty.
 
-        After mpg123 is up, sleeps `music_prime_sec` to let the ALSA
-        devbuffer fill against MPD's always-on silence stream, then
-        emits `music_ready` so the server resumes the paused
-        queue. Song frames arrive at an already-primed pipeline — no
-        first-second underrun stutter.
+        After mpg123 is up, `_supervise_music` waits `music_prime_sec` for
+        the ALSA devbuffer to fill against MPD's always-on silence stream,
+        then emits `music_ready` so the server resumes the paused queue.
+        Song frames arrive at an already-primed pipeline — no first-second
+        underrun stutter. A stream that refuses the connection is retried
+        there too.
         """
         if not self._playback_idle.wait(timeout=10.0):
             log.warning("playback thread didn't release output stream in 10s; skipping music")
             return
         if self.shutdown_event.is_set():
             return
-        self._start_music(url)
-        # Only ack when mpg123 actually came up — if the subprocess
-        # spawn failed (mpg123 not installed, immediate crash) there's
-        # no point unpausing MPD; the server's fallback timer will
-        # resume eventually anyway and the failure logged out of
-        # `_start_music` is the diagnostic signal.
-        with self._music_lock:
-            proc = self._music_proc
-            spawned = proc is not None and proc.poll() is None
-        if not spawned:
+        gen = self._start_music(url)
+        # None: the subprocess could not be spawned at all (mpg123 not
+        # installed) — nothing to supervise, and no point unpausing MPD;
+        # the server's fallback timer resumes it eventually anyway and the
+        # failure logged out of `_start_music` is the diagnostic signal.
+        if gen is None:
             return
-        prime = max(0.0, self.cfg.music_prime_sec)
-        if prime > 0.0:
-            # Interruptible sleep — a stop/disconnect should cancel
-            # the ack so we don't unpause MPD for a session that has
-            # already moved on.
-            if self.shutdown_event.wait(timeout=prime):
-                return
-        # Re-check we still own a live subprocess; a `music_stop`
-        # that arrived during the prime window will have torn it
-        # down. Skipping the ack lets MPD stay paused, which is the
-        # correct steady-state for a room nobody is consuming.
-        with self._music_lock:
-            still_alive = (
-                self._music_proc is not None
-                and self._music_proc is proc
-                and self._music_proc.poll() is None
-            )
-        if still_alive:
-            self._emit_text({"type": "music_ready"})
+        self._supervise_music(url, gen)
 
-    def _start_music(self, url: str) -> None:
+    def _start_music(self, url: str) -> int | None:
         """Spawn mpg123 to consume MPD's HTTP stream and play through the HAT.
 
         mpg123 handles MP3 decode + ALSA output natively — no Python decode
@@ -1562,76 +1624,220 @@ class Satellite:
         it tries to connect to a non-existent JACK server and segfaults.
         `-a` sets the ALSA *device* once the backend is selected.
 
-        Idempotent: a second call with the same URL no-ops; a different URL
-        replaces the running subprocess.
+        Idempotent: a second call with the same URL takes over the running
+        subprocess instead of spawning another; a different URL replaces
+        it. Returns this request's generation (see `_music_gen`), or None
+        when nothing could be spawned.
         """
         with self._music_lock:
             if self._music_proc is not None and self._music_proc.poll() is None:
-                if self._music_url == url:
-                    return  # same stream already playing
+                run = self._music_run
+                if self._music_url == url and run is not None and run.proc is self._music_proc:
+                    # Same stream already playing. This request takes it
+                    # over (a fresh prepare on the server wants its own
+                    # music_ready); a supervisor still running for an older
+                    # request sees the new generation and steps aside.
+                    self._music_gen += 1
+                    run.supervised = True
+                    return self._music_gen
                 self._stop_music_locked()
-            log.info("starting music: %s (alsa=%s)", url, self.cfg.music_alsa_device)
-            try:
-                # Two separate buffers, each guarding against a different
-                # source of stutter:
-                #   `-b 1024`         — 1 MB pre-buffer between network
-                #                       and decoder. ~40 s of MP3 at MPD's
-                #                       192 kbps. Absorbs WiFi blips on the
-                #                       Pi Zero 2 W's 2.4 GHz radio that
-                #                       would otherwise starve the decoder.
-                #   `--devbuffer 1.0` — 1 s buffer between decoder and ALSA
-                #                       hardware. mpg123's default device
-                #                       buffer is tens of ms; on a CPU-
-                #                       constrained Pi any GC pause or
-                #                       wake-word predict spike longer than
-                #                       that drains it and the speakers
-                #                       click/glitch. 1 s is comfortably
-                #                       beyond any realistic Python hiccup
-                #                       and adds imperceptible pause/stop
-                #                       latency for music.
-                self._music_proc = subprocess.Popen(
-                    [
-                        "mpg123", "-q",
-                        "-b", "1024",
-                        "--devbuffer", "1.0",
-                        "-o", "alsa",
-                        "-a", self.cfg.music_alsa_device,
-                        url,
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-                self._music_url = url
-                # Watch the subprocess so we surface mpg123 errors instead of
-                # leaving a silent zombie when something fails (jack default
-                # backend, ALSA device unavailable, stream returns 404, etc.).
-                threading.Thread(
-                    target=self._music_watch,
-                    args=(self._music_proc,),
-                    daemon=True,
-                    name="music-watch",
-                ).start()
-                # Lively "music playing" LED look (rainbow on the XVF ring;
-                # a no-op on backends without a music state). A wake word or
-                # TTS will overwrite this with listening/speaking; the
-                # music_stop frame returns the ring to idle.
-                self._leds.set_state("music")
-            except FileNotFoundError:
-                log.error("mpg123 not installed on this Pi (sudo apt install mpg123)")
-                self._music_proc = None
-                self._music_url = None
+            self._music_gen += 1
+            if not self._spawn_music_locked(url, attempt=1):
+                return None
+            # Lively "music playing" LED look (rainbow on the XVF ring;
+            # a no-op on backends without a music state). A wake word or
+            # TTS will overwrite this with listening/speaking; the
+            # music_stop frame returns the ring to idle, and so does giving
+            # up on a stream that never played (`_give_up_music_locked`).
+            self._leds.set_state("music")
+            return self._music_gen
 
-    def _music_watch(self, proc: subprocess.Popen) -> None:
-        """Reap mpg123 and log its stderr if it exits non-zero."""
+    def _spawn_music_locked(self, url: str, *, attempt: int) -> bool:
+        """Start one mpg123 run against ``url`` and its watcher. Caller
+        holds `_music_lock`. False (and no music state left behind) when
+        mpg123 cannot be spawned."""
+        if attempt == 1:
+            log.info("starting music: %s (alsa=%s)", url, self.cfg.music_alsa_device)
+        else:
+            log.info("retrying music (attempt %d): %s", attempt, url)
+        try:
+            # Two separate buffers, each guarding against a different
+            # source of stutter:
+            #   `-b 1024`         — 1 MB pre-buffer between network
+            #                       and decoder. ~40 s of MP3 at MPD's
+            #                       192 kbps. Absorbs WiFi blips on the
+            #                       Pi Zero 2 W's 2.4 GHz radio that
+            #                       would otherwise starve the decoder.
+            #   `--devbuffer 1.0` — 1 s buffer between decoder and ALSA
+            #                       hardware. mpg123's default device
+            #                       buffer is tens of ms; on a CPU-
+            #                       constrained Pi any GC pause or
+            #                       wake-word predict spike longer than
+            #                       that drains it and the speakers
+            #                       click/glitch. 1 s is comfortably
+            #                       beyond any realistic Python hiccup
+            #                       and adds imperceptible pause/stop
+            #                       latency for music.
+            proc = subprocess.Popen(
+                [
+                    "mpg123", "-q",
+                    "-b", "1024",
+                    "--devbuffer", "1.0",
+                    "-o", "alsa",
+                    "-a", self.cfg.music_alsa_device,
+                    url,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            log.error("mpg123 not installed on this Pi (sudo apt install mpg123)")
+            self._music_proc = None
+            self._music_url = None
+            self._music_run = None
+            return False
+        run = _MusicRun(proc=proc, url=url, attempt=attempt, started=time.monotonic())
+        self._music_proc = proc
+        self._music_url = url
+        self._music_run = run
+        # Watch the subprocess so we surface mpg123 errors instead of
+        # leaving a silent zombie when something fails (jack default
+        # backend, ALSA device unavailable, stream refused, etc.).
+        threading.Thread(
+            target=self._music_watch,
+            args=(run,),
+            daemon=True,
+            name="music-watch",
+        ).start()
+        return True
+
+    def _music_retry_delay(self, attempts: int) -> float:
+        steps = self.MUSIC_RETRY_BACKOFF_SEC
+        return float(steps[min(attempts, len(steps)) - 1])
+
+    def _supervise_music(self, url: str, gen: int) -> None:
+        """See one music request through: ``music_ready`` once its stream
+        plays, a retry when the stream refused, or a failure report when it
+        will not play. Runs on the music-defer thread.
+
+        The stream it was sent to may not be serving yet: a room whose MPD
+        daemon has not played since it started has no stream until the
+        player is unpaused (office, 2026-09-30 — refused at once, no retry,
+        rainbow LEDs over a silent room). A current core opens the stream
+        before it sends music_start; an older core leaves it closed until
+        its music_ready fallback resumes MPD a few seconds later. So a
+        refused connection is tried again with a short backoff for up to
+        `MUSIC_RETRY_WINDOW_SEC`, then given up on (`_give_up_music_locked`).
+
+        Every step re-checks the generation under `_music_lock` first: a
+        music_stop, a newer music_start, a wake, a response or a drop-in all
+        stop the music through `_stop_music` or `_start_music`, which bump
+        it, and this request then leaves quietly — no respawn over the mic
+        or the TTS, no music_ready, no failure report.
+        """
+        began = time.monotonic()
+        prime = max(0.0, self.cfg.music_prime_sec)
+        # With prime 0 the handshake is off (no music_ready), but a refused
+        # stream is still worth a retry.
+        window = prime if prime > 0.0 else self.MUSIC_CONNECT_GRACE_SEC
+        attempts = 1
+        while True:
+            with self._music_lock:
+                if self._music_gen != gen:
+                    return
+                run = self._music_run
+            if run is None:
+                return
+            # Wait out the prime window — or less, if mpg123 exits inside it.
+            run.exited.wait(timeout=window)
+            if self.shutdown_event.is_set():
+                return
+            with self._music_lock:
+                if self._music_gen != gen or self._music_run is not run:
+                    return
+                if not run.exited.is_set():
+                    # Connected and priming against the stream. An exit from
+                    # here on is the watcher's to report.
+                    run.supervised = False
+                    if prime > 0.0:
+                        # Under the lock, so a stop or a newer start (and
+                        # anything it sends) is ordered after this frame.
+                        self._emit_text({"type": "music_ready"})
+                    return
+            reason = _music_exit_reason(run.rc, run.stderr_tail)
+            delay = self._music_retry_delay(attempts)
+            retry = (
+                _music_exit_is_retryable(run.rc, run.stderr_tail)
+                and time.monotonic() + delay - began <= self.MUSIC_RETRY_WINDOW_SEC
+            )
+            if not retry:
+                with self._music_lock:
+                    if self._music_gen == gen and self._music_run is run:
+                        self._give_up_music_locked(run, reason, attempts)
+                return
+            log.info(
+                "music: stream not available yet (%s); retrying in %.2fs", reason, delay,
+            )
+            if self.shutdown_event.wait(timeout=delay):
+                return
+            with self._music_lock:
+                if self._music_gen != gen or self._music_run is not run:
+                    return
+                attempts += 1
+                if not self._spawn_music_locked(url, attempt=attempts):
+                    self._give_up_music_locked(run, "mpg123 could not be started", attempts)
+                    return
+
+    def _give_up_music_locked(self, run: _MusicRun, reason: str, attempts: int) -> None:
+        """This music will not play: say so on the ring and to the server.
+
+        Caller holds `_music_lock` and has checked that ``run`` is still the
+        current request's. Clears the music state (a later music_start for
+        the same URL spawns afresh), takes the ring off "music" — only if it
+        is still showing it — and reports ``music_failed`` when the server's
+        `ready.features` lists it; an older server answers an unknown frame
+        with `error`, so it hears nothing and the log line is the record.
+        Emitted under the lock so no newer request's frames can precede it.
+        """
+        self._music_gen += 1
+        self._music_proc = None
+        self._music_url = None
+        self._music_run = None
+        log.error(
+            "music: giving up on %s after %d attempt(s): %s", run.url, attempts, reason,
+        )
+        self._leds.set_state_if("music", "idle")
+        if "music_failed" in self._core_features:
+            self._emit_text({
+                "type": "music_failed",
+                "stream_url": run.url,
+                "reason": reason,
+                "attempts": attempts,
+            })
+
+    def _music_watch(self, run: _MusicRun) -> None:
+        """Reap one mpg123 run, log its stderr if it exits non-zero, and
+        hand its exit to whoever owns it: the supervisor while it is still
+        watching the connection (it retries or gives up), else — the stream
+        had been playing and nothing asked it to stop — report it here."""
+        proc = run.proc
         try:
             stderr_bytes = proc.stderr.read() if proc.stderr is not None else b""
         except Exception:
             stderr_bytes = b""
         rc = proc.wait()
+        tail = stderr_bytes.decode(errors="replace").strip().splitlines()[-10:]
         if rc != 0:
-            tail = stderr_bytes.decode(errors="replace").strip().splitlines()[-10:]
             log.warning("mpg123 exited rc=%s; stderr tail:\n%s", rc, "\n".join(tail))
+        with self._music_lock:
+            run.rc = rc
+            run.stderr_tail = "\n".join(tail)
+            run.exited.set()
+            if self._music_run is run and not run.supervised:
+                self._give_up_music_locked(
+                    run, _music_exit_reason(rc, run.stderr_tail), run.attempt,
+                )
 
     def _is_music_playing(self) -> bool:
         """True if a music mpg123 subprocess is currently running. Checked at
@@ -1648,6 +1854,10 @@ class Satellite:
 
     def _stop_music_locked(self) -> None:
         # Caller holds self._music_lock.
+        # Whatever was playing (or being retried) is no longer wanted: a
+        # retry, music_ready or failure report still on its way is stale.
+        self._music_gen += 1
+        self._music_run = None
         if self._music_proc is None:
             return
         if self._music_proc.poll() is None:
