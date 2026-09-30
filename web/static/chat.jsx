@@ -124,16 +124,21 @@ const chatDeviceLabel = (m) => {
 const ChatMessageMenu = ({ at, canCopy, onCopy, onDetails, onClose }) => {
   const ref = React.useRef(null);
   React.useEffect(() => {
+    const opened = Date.now();
     const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
     const key = (e) => { if (e.key === 'Escape') onClose(); };
+    // A scroll that lands with the tap itself (the list settling, the
+    // browser bringing the button into view) must not shut the menu it
+    // just opened; a scroll after that means the reader moved on.
+    const scrolled = () => { if (Date.now() - opened > 250) onClose(); };
     document.addEventListener('pointerdown', away, true);
     document.addEventListener('keydown', key);
-    window.addEventListener('scroll', onClose, true);
+    window.addEventListener('scroll', scrolled, true);
     window.addEventListener('resize', onClose);
     return () => {
       document.removeEventListener('pointerdown', away, true);
       document.removeEventListener('keydown', key);
-      window.removeEventListener('scroll', onClose, true);
+      window.removeEventListener('scroll', scrolled, true);
       window.removeEventListener('resize', onClose);
     };
   }, [onClose]);
@@ -330,9 +335,18 @@ const ChatPage = () => {
   }, [threadId]);
   useRetryAfterCredential(messagesRefusal, reloadMessages);
 
+  // On a phone the rail and the conversation can't share the width (the
+  // conversation was left ~140px), so opening a chat hides the rail; the
+  // panel button brings it back.
+  const hideRailOnPhone = () => {
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches) {
+      setRailOpen(false);
+    }
+  };
   const selectThread = (t) => {
     setThreadId(t.id);
     loadMessages(t.id);
+    hideRailOnPhone();
   };
 
   React.useEffect(() => {
@@ -346,6 +360,7 @@ const ChatPage = () => {
       refreshThreads();
       setThreadId(t.id);
       setMessages([]);
+      hideRailOnPhone();
     } catch { fire('could not create chat'); }
   };
 
