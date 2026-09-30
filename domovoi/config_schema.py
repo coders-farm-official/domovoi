@@ -586,8 +586,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "— so it would go to the slower language-model router — the same "
         "audio is decoded again the 30-second way and that text is used. "
         "It catches commands the short window misheard, for about a "
-        "second on those turns; quick commands and general-knowledge "
-        "questions (\"What is the capital of France?\") keep their speed. "
+        "second on those turns; quick commands, general-knowledge "
+        "questions (\"What is the capital of France?\") and requests for a "
+        "joke or a story keep their speed. "
         "Off routes the short-window text as it is.",
         "bool", section="advanced", tier="hot",
     ),

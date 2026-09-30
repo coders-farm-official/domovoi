@@ -137,8 +137,9 @@ prose:
    the 30 s path and that text routed (`whisper_short_window_recheck`) —
    on far-field audio about one command outcome in ten differs between
    the two windows, and hearing these again scored above both.
-   A question about the world (`router.is_question_about_the_world`) is
-   spared: the streamed router gives it up in ~0.7 s.
+   A question about the world (`router.is_question_about_the_world`) and
+   a request for a joke or a story (`router.is_request_for_a_story`) are
+   spared: the streamed router gives those up in ~0.7 s.
    **Early commit:** when that early transcript is a whole closed command,
    the core doesn't wait for the rest of the silence — it sends the
    satellite `end_capture` and answers. Only for satellites that declared

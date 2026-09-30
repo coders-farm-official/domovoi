@@ -345,12 +345,12 @@ class Settings(BaseSettings):
     # decoded again on the 30 s path and that text is routed — it is
     # most often a command the short decode misheard, or one about to
     # spend seconds in the router anyway. Fast-path commands, plain
-    # questions and questions about the world ("What is the capital of
-    # France?") keep the short window's speed. In the same far-field
-    # measurement it scored at or above both windows in every condition
-    # (e.g. 205 against 202 for 30 s alone and 191 for 10 s alone), at a
-    # second decode for 17-34% of command captures. false = route the
-    # short-window text as it is.
+    # questions, questions about the world ("What is the capital of
+    # France?") and requests for a joke or a story keep the short window's
+    # speed. In the same far-field measurement it scored at or above both
+    # windows in every condition (e.g. 205 against 202 for 30 s alone and
+    # 191 for 10 s alone), at a second decode for 16-34% of command
+    # captures. false = route the short-window text as it is.
     whisper_short_window_recheck: bool = True
     # Speculative transcription (early endpointing, part A): start Whisper
     # at the first ~240 ms pause in a satellite's capture instead of after

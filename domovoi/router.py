@@ -325,6 +325,26 @@ def is_question_about_the_world(raw_transcript: str) -> bool:
     return not about_the_house(transcript)
 
 
+# A request for something only the Q&A model makes up, however its article
+# was heard: "Tell me it a joke.", "Tell me the joke." (small.en on two of
+# three TTS voices asking for "a joke"). answers_without_tools wants the
+# article exactly — "tell me the stories" is the news — but for the second
+# hearing the question is only whether another decode could turn it into
+# a command, and none has this shape.
+_QA_REQUEST_LOOSE_RE = re.compile(
+    r"^(?:tell|give|say|share|read)(?: me| us)?\b.*"
+    r"\b(?:jokes?|riddles?|stor(?:y|ies)|poems?|limericks?|puns?|tongue twisters?)\b"
+)
+
+
+def is_request_for_a_story(raw_transcript: str) -> bool:
+    """"Tell me it a joke.", "give us the riddle": a request for a joke, a
+    riddle, a story or a poem, whatever else was heard in it. The second
+    hearing spares it — on the review's far-field corpus that lost nothing
+    — and the router still decides where it goes."""
+    return bool(_QA_REQUEST_LOOSE_RE.match(strip_leading_filler(normalize_transcript(raw_transcript or ""))))
+
+
 async def _persist_turn(
     *,
     session: AsyncSession,

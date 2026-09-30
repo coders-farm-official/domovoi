@@ -17,7 +17,8 @@ Pinned here, DB-free:
   * the Whisper client's 30 s path by name, even for a short capture;
   * a question about the world ("What is the capital of France?") is not
     heard again: streamed, the router gives it up in ~0.7 s, and a second
-    decode would cost more than that for nothing;
+    decode would cost more than that for nothing; nor is a request for a
+    joke or a story however its article was heard ("Tell me it a joke.");
   * the turn: a misheard command is heard again and the 30 s text routed,
     recorded as ``stt_window_s`` 30 + ``stt_rechecked`` + ``stt_recheck_ms``
     with the wait in ``stt_ms`` / ``stt_wait_ms``; a fast-path command, a
@@ -45,7 +46,11 @@ from domovoi.clients.whisper import (
 )
 from domovoi.config import Settings, settings
 from domovoi.main import app
-from domovoi.router import goes_to_the_tool_model, is_question_about_the_world
+from domovoi.router import (
+    goes_to_the_tool_model,
+    is_question_about_the_world,
+    is_request_for_a_story,
+)
 from domovoi.streaming import StreamSession, _Heard
 from domovoi.tests.test_speculative_stt import (  # noqa: F401 - `pipeline` is a fixture
     LOUD,
@@ -119,6 +124,23 @@ def test_a_question_about_the_world_is_not_heard_again(transcript: str) -> None:
 )
 def test_short_or_house_questions_are_still_heard_again(transcript: str) -> None:
     assert not is_question_about_the_world(transcript)
+
+
+@pytest.mark.parametrize(
+    ("transcript", "story"),
+    [
+        ("Tell me it a joke.", True), ("Tell me the joke.", True),   # small.en on TTS "a joke"
+        ("Please tell me a story about dragons.", True), ("Read me a poem.", True),
+        ("Tell me the news.", False), ("Tell the kitchen dinner is ready.", False),
+        ("Stop.", False), ("Lighter.", False),                         # one word: heard again
+    ],
+)
+def test_a_request_for_a_story_is_not_heard_again(transcript: str, story: bool) -> None:
+    """Whatever article was heard, a joke or a story goes to the Q&A model:
+    another decode can't turn it into a command. One-word transcripts are
+    where a second hearing pays most ("Lighter" -> "Louder.", "soft" ->
+    "Stop." on far-field audio), so they are never spared."""
+    assert is_request_for_a_story(transcript) is story
 
 
 # ─── the Whisper client's 30 s path, by name ──────────────────────────────
@@ -253,6 +275,13 @@ def test_a_plain_world_question_keeps_the_short_window(pipeline, recheck_on) -> 
     assert routed == "What is the capital of France?"
     assert [kind for kind, _ in whisper.calls] == ["window"]
     assert doc["stt_window_s"] == SHORT_WINDOW_SEC and "stt_rechecked" not in doc
+
+
+def test_a_misheard_joke_request_keeps_the_short_window(pipeline, recheck_on) -> None:
+    whisper = _TwoWindows("Tell me it a joke.", "should not be asked")
+    routed, doc = _one_turn(pipeline, whisper)
+    assert routed == "Tell me it a joke."
+    assert [kind for kind, _ in whisper.calls] == ["window"]
 
 
 def test_a_thirty_second_first_hearing_is_not_heard_again(pipeline, recheck_on) -> None:

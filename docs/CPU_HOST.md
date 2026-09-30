@@ -117,13 +117,17 @@ world ("What is the capital of France?": ends in a question mark, four
 words or more, nothing about the house, the speaker or the assistant in
 it), which the streamed router gives up on in ~0.7 s: a second decode
 there costs more than the router does, for a question no command was
-misheard as. Measured on the same far-field clips (router-level outcome
+misheard as. So does a request for a joke or a story however its article
+was heard ("Tell me it a joke."). A one-word transcript is always heard
+again: that is where it pays most ("Lighter" → "Louder.", "soft" →
+"Stop."). Measured on the same far-field clips (router-level outcome
 right, of 252): 30 s alone / 10 s alone / 10 s with the second hearing —
 202 / 191 / 205, 206 / 201 / 212 and 165 / 170 / 181 over the three
 conditions, 224 / 222 / 227 on the clean clips. It costs a second decode
-(~0.9 s with `small.en` on the reference server, ~1.2 s on a desktop i9)
-on 17-34% of those command captures, and it can add a wrong fast action:
-1-2 in 252 on degraded audio.
+(~0.9 s with `small.en` on the reference server, ~1.2 s on a desktop i9;
+more when the 30 s path falls back to higher temperatures on a word it
+can't make out) on 16-34% of those command captures, and it can add a
+wrong fast action: 1-2 in 252 on degraded audio.
 
 A longer capture still takes the 30-second path, and so does a short one
 whose result the 10-second decode isn't sure of — no speech in it, or a

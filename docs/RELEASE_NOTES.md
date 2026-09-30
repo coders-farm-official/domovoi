@@ -54,7 +54,7 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   that catches most commands the fast decode misheard. It costs about a
   second on those turns, which were headed for several seconds in the
   router anyway; a general-knowledge question ("What is the capital of
-  France?") is not heard twice.
+  France?") or a request for a joke is not heard twice.
 * A question, a joke or a story starts to be spoken at its first sentence
   while the rest is written, instead of after the whole answer (a first
   sentence of one to three words waits for the next, so it isn't followed
@@ -83,14 +83,15 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   is decoded again on the 30 s path and that text is routed. On the same
   far-field clips it scored at or above both windows in every condition
   (e.g. 205 of 252 against 202 for the 30 s path and 191 for the 10 s
-  one), for a second decode on 17-34% of command captures. Fast-path
+  one), for a second decode on 16-34% of command captures. Fast-path
   commands, yes/no answers, plain questions, questions about the world
-  (a question mark, four words or more, nothing about the house) and early
-  commits are never heard twice.
+  (a question mark, four words or more, nothing about the house), requests
+  for a joke or a story, and early commits are never heard twice.
 * `GET /v1/stats/latency` gains `stt_window` (`{short, full, rechecked}`)
   and `whisper.short_window`; each turn records `stt_window_s` (and, heard
   twice, `stt_rechecked` and `stt_recheck_ms`, with both decodes in
-  `stt_ms`), and the turn log line shows `window=10s`.
+  `stt_ms`), and the turn log line shows `window=10s` (`window=30s/recheck`
+  when heard twice).
 * `early_commit` in the same answer gains `watched`, and `cut_in` now also
   counts a person who spoke again after the capture ended, as reported by
   an upgraded satellite (the next entry). For commits from older
@@ -105,7 +106,9 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   who/why/where question about the house included): withholding them
   changed the router's tool list, and the next turn re-read ~800 tokens
   (11-15 s on a CPU). `double_check` is offered again for doubt said
-  outright ("that can't be right", "check online", "google it").
+  outright ("that can't be right", "check online", "google it"), and a
+  call whose `claim` is only the request itself ("That can't be right.")
+  checks the previous answer instead of searching for those words.
 * The core's warm-up logs a warning when the router's prompt plus its
   reply cap doesn't fit the tool model's context window.
 * For a spoken Q&A answer, `route_ms` and `intents_log.latency_ms` now end

@@ -439,7 +439,12 @@ from domovoi.endpointing import (
 )
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
-from domovoi.router import goes_to_the_tool_model, is_question_about_the_world, route
+from domovoi.router import (
+    goes_to_the_tool_model,
+    is_question_about_the_world,
+    is_request_for_a_story,
+    route,
+)
 from domovoi.turn_timings import (
     TurnTimings,
     merge_post_route,
@@ -3026,7 +3031,9 @@ class StreamSession:
         and so does a question about the world
         (``is_question_about_the_world``: "What is the capital of
         France?"), which the streamed router gives up on in ~0.7 s — a
-        second decode would add more than that for nothing. Not in chat
+        second decode would add more than that for nothing — and a request
+        for a joke or a story however its article was heard
+        (``is_request_for_a_story``: "Tell me it a joke."). Not in chat
         mode either: those turns go to the chat agent, not the router.
 
         Why (2026-09-30 review, small.en on the 333-clip corpus made far-
@@ -3036,7 +3043,7 @@ class StreamSession:
         224 / 222 / 227 on the clean clips; at or above both windows every
         time, for a second decode on 20-34% of captures. This rule scores
         the same as the review's on every condition of that corpus (the
-        world-question skip lost nothing there), hearing 17-34% twice."""
+        two skips lost nothing there), hearing 15-34% twice."""
         return (
             not early_commit
             and not self.conversational_mode
@@ -3044,6 +3051,7 @@ class StreamSession:
             and settings.whisper_short_window_recheck
             and goes_to_the_tool_model(transcript)
             and not is_question_about_the_world(transcript)
+            and not is_request_for_a_story(transcript)
         )
 
     async def _hear_again(
