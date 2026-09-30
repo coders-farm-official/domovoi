@@ -991,8 +991,19 @@ core.library_track_added     core.acquisition_failed      core.plugin_installed
 core.library_track_deleted   core.now_playing_stamped     core.plugin_enabled
 core.entity_deleted          core.now_playing_cleared     core.plugin_disabled
 core.playlist_deleted        core.connectivity_changed    core.plugin_uninstalled
-                                                          core.plugin_upgraded
+core.timer_fired             core.timer_fire_settled      core.plugin_upgraded
 ```
+
+`core.timer_fired` is emitted once when a timer or reminder goes off
+(after it is recorded): `{fire_id, timer_id, kind: "timer"|"reminder",
+label, message, origin_room_id (None = set with no room), due_at, fired_at
+(ISO), text (the origin room's line), targets: [room_id, ...]}`.
+`core.timer_fire_settled` follows once every room it was for has an
+outcome and the late-joiner window has closed: `{fire_id, timer_id, kind,
+origin_room_id, outcomes: {room_id: "spoken"|"interrupted"|"failed"|
+"offline"|"busy_timeout"|"cancelled"}, heard_in: [room_id, ...], acked_by}`.
+Both were added without changing the catalog version. `message` and `text`
+are household speech — treat them like any other transcript.
 
 The bus is in-process, fire-and-forget, per-subscriber exception-isolated:
 **no delivery guarantee, no ordering across events, no replay.** Durability
@@ -1285,7 +1296,11 @@ timers and `/v1/admin/announce`: a Pi mid-response is skipped (its
 in-flight TTS would clip the announcement) and resumable music is
 auto-restored afterwards. `room_id=None` broadcasts to every connected
 room. Returns the room_ids actually reached and never raises on
-delivery problems -- branch on the returned list. Don't spam it: an
+delivery problems -- branch on the returned list. Announcements to one
+room play one at a time (yours waits for a timer or an intercom broadcast
+already playing there), and a wake word or barge-in in that room cuts
+yours off: that room is then reported as not reached and the reason is
+logged. It stays best-effort. Don't spam it: an
 announcement interrupts the household; reserve it for things a person
 asked for or needs to know now.
 

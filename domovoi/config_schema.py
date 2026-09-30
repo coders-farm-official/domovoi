@@ -437,6 +437,34 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", min=0, max=23,
     ),
 
+    # ─── Timers & reminders (house-wide delivery, V017) ────────────────
+    FieldSpec(
+        "timer_offline_grace_sec", "Late-joiner window", "Timers & reminders",
+        "A satellite that connects or reconnects within this long after a timer "
+        "or reminder goes off still announces it. After a Domovoi server restart "
+        "the window starts once the server accepts satellites again.",
+        "float", section="advanced", tier="hot", min=0, max=900, unit="sec",
+    ),
+    FieldSpec(
+        "timer_announce_busy_wait_sec", "Wait for a follow-up", "Timers & reminders",
+        "How long an announcement holds back while a room is expecting a "
+        "follow-up answer or has just finished speaking. Replies and captures "
+        "are always waited out.",
+        "float", section="advanced", tier="hot", min=0, max=300, unit="sec",
+    ),
+    FieldSpec(
+        "timer_announce_max_wait_sec", "Longest wait for a busy room", "Timers & reminders",
+        "A room still busy (in a call, answering, listening) after this long "
+        "skips the announcement; the phone and dashboard still show it.",
+        "float", section="advanced", tier="hot", min=30, max=1800, unit="sec",
+    ),
+    FieldSpec(
+        "timer_fire_retention_days", "Keep timer history", "Timers & reminders",
+        "How long fired timers and reminders, and where they were heard, are "
+        "kept.",
+        "int", section="advanced", tier="hot", min=1, max=90, unit="days",
+    ),
+
     # ─── Workers (restart to apply) ────────────────────────────────────
     FieldSpec(
         "radio_sampler_enabled", "Radio sampler worker", "Workers",

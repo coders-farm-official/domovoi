@@ -419,6 +419,7 @@ from domovoi.endpointing import (
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
 from domovoi.router import route
+from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
 from domovoi.turn_timings import (
     TurnTimings,
     merge_post_route,
@@ -489,6 +490,20 @@ MAX_UTTERANCE_BYTES = 60 * PCM_INPUT_SAMPLE_RATE * 2  # 60s of int16 PCM
 # satellite sends a new message type only when it is listed here (see the
 # `ready` entry in the module docstring for why).
 CORE_FEATURES: tuple[str, ...] = ("speech_pause", "end_capture")
+
+# When a room can take an out-of-turn announcement (a timer or reminder
+# going off elsewhere, domovoi/timer_delivery.py): StreamSession.
+# announce_block. A capture whose last audio frame is older than this is
+# over — a follow-up capture that times out with no speech sends
+# utterance_start but never utterance_end.
+ANNOUNCE_CAPTURE_FRESH_SEC = 1.5
+# Just connected: give the satellite a moment to settle after `ready`.
+ANNOUNCE_CONNECTING_SEC = 3.0
+# The last reply asked a question (expect_followup): hold this long past
+# the estimated end of its playback for the answer to start.
+ANNOUNCE_FOLLOWUP_HOLD_SEC = 9.0
+# A beat after any playback ends before the next announcement starts.
+ANNOUNCE_SETTLE_SEC = 1.0
 
 # The turns a server may end early: a command after the wake word, or the
 # answer to a question it just asked. Never a chat turn (Letta, long
@@ -912,6 +927,7 @@ class _InterimSpeech:
                 await sess.ws.send_bytes(chunk)
             except Exception:
                 return  # Pi went away; the turn's own send path will notice
+            sess._note_audio_sent(len(chunk), sr)
 
 
 class StreamSession:
@@ -935,6 +951,23 @@ class StreamSession:
         # tears down promptly after the error frame + close.
         self._pairing_refused = False
         self._response_task: asyncio.Task[None] | None = None
+        # ── Out-of-turn announcements (announce(), announce_block) ────
+        # `_playout_until`: monotonic estimate of when the audio already
+        # sent to this room stops playing (bytes / rate, see
+        # `_note_audio_sent`). `_followup_hold_until`: a reply that asked a
+        # question holds announcements until its answer can start.
+        # `_connected_at`: when `ready` went out. `_last_audio_at`: the last
+        # mic frame, which tells a live capture from a follow-up capture
+        # that timed out without an utterance_end. One announcement at a
+        # time per room (`_announce_lock`); its frame-sending half runs as
+        # `_announce_task`, which a new capture cancels like a reply.
+        self._playout_until: float = 0.0
+        self._followup_hold_until: float = 0.0
+        self._connected_at: float = 0.0
+        self._last_audio_at: float = 0.0
+        self._announce_lock = asyncio.Lock()
+        self._announce_task: asyncio.Task[None] | None = None
+        self._announce_cut = False
         # ── Two-way drop-in (Feature 4) ──────────────────────────────
         # When paired, `dropin_peer` is the live StreamSession on the
         # other end of the call. While it's set (and no utterance is
@@ -1106,6 +1139,17 @@ class StreamSession:
             "audio_sample_rate_in": PCM_INPUT_SAMPLE_RATE,
             "features": list(CORE_FEATURES),
         })
+        self._connected_at = time.monotonic()
+        # A timer or reminder that went off while this room was away (or
+        # during a core restart) is announced now, if it is still within
+        # its grace window. Non-blocking: it schedules its own work.
+        delivery = getattr(self.ws.app.state, "timer_delivery", None)
+        if delivery is not None:
+            try:
+                delivery.on_room_connected(self.room_id)
+            except Exception as e:  # noqa: BLE001
+                log.debug("timer delivery: room-connected hook failed for %s: %s",
+                          self.room_id, e)
         try:
             while True:
                 msg = await self.ws.receive()
@@ -1212,6 +1256,9 @@ class StreamSession:
                 self.ws.app.state.satellite_display.pop(self.room_id, None)
 
     async def _on_audio(self, data: bytes) -> None:
+        # Before any early return: announce_block reads it to tell a live
+        # capture from one that went quiet without an utterance_end.
+        self._last_audio_at = time.monotonic()
         # ── Drop-in relay (Feature 4) ───────────────────────────────
         # While paired AND not capturing a command utterance, every raw
         # mic frame is forwarded verbatim to the peer room's socket — no
@@ -2087,6 +2134,10 @@ class StreamSession:
         if t == "utterance_start":
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
+            self._cut_announcement()
+            # The question a reply asked is being answered (or talked over).
+            self._followup_hold_until = 0.0
+            self._last_audio_at = time.monotonic()
             self.utterance_active = True
             self.dropped_overflow = False
             self.audio_buf.clear()
@@ -2181,6 +2232,9 @@ class StreamSession:
         if t == "barge_in":
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
+            self._cut_announcement()
+            # The satellite stops playback and drains its queue on a barge.
+            self._playout_until = time.monotonic()
             return
         if t == "music_ready":
             # Pi's mpg123 has primed against MPD's silence stream and
@@ -2459,6 +2513,7 @@ class StreamSession:
                 await self.ws.send_bytes(chunk)
             except Exception:
                 return True  # Pi went away mid-broadcast
+            self._note_audio_sent(len(chunk), sr)
         await self._safe_send_text({
             "type": "response_end",
             "interrupted": False,
@@ -2934,6 +2989,7 @@ class StreamSession:
             try:
                 for chunk in _iter_chunks(first_pcm):
                     await self.ws.send_bytes(chunk)
+                    self._note_audio_sent(len(chunk), sr)
                     # First call only: tts_first_ms + total_ms.
                     timings.first_audio(tts_t0)
 
@@ -2958,6 +3014,7 @@ class StreamSession:
                         pcm = _resample_pcm(pcm, pcm_sr, sr)
                     for chunk in _iter_chunks(pcm):
                         await self.ws.send_bytes(chunk)
+                        self._note_audio_sent(len(chunk), sr)
                         # A first sentence that rendered to no audio at all.
                         timings.first_audio(tts_t0)
             finally:
@@ -3633,6 +3690,7 @@ class StreamSession:
                             started = True
                         for chunk in _iter_chunks(pcm):
                             await self.ws.send_bytes(chunk)
+                            self._note_audio_sent(len(chunk), sr)
             # Flush whatever's left in the buffer (the final, unterminated
             # sentence — Letta often ends without trailing punctuation).
             tail = pending.strip()
@@ -3643,6 +3701,7 @@ class StreamSession:
                     started = True
                 for chunk in _iter_chunks(pcm):
                     await self.ws.send_bytes(chunk)
+                    self._note_audio_sent(len(chunk), sr)
         except asyncio.CancelledError:
             # Barge-in: the user cut us off. Mark interrupted so the
             # response_end below is truthful, then re-raise so the response
@@ -3708,12 +3767,14 @@ class StreamSession:
         try:
             for chunk in _iter_chunks(first_pcm):
                 await self.ws.send_bytes(chunk)
+                self._note_audio_sent(len(chunk), sr)
             for sentence in sentences[1:]:
                 pcm, _sr = _wav_to_pcm(
                     await tts.synthesize(sentence, engine=synth_engine, voice=synth_voice)
                 )
                 for chunk in _iter_chunks(pcm):
                     await self.ws.send_bytes(chunk)
+                    self._note_audio_sent(len(chunk), _sr)
         finally:
             await self._safe_send_text({
                 "type": "response_end",
@@ -3794,6 +3855,71 @@ class StreamSession:
         wake-loop resync, and a dead socket is about to be cleaned up anyway."""
         await self._safe_send_text({"type": "chat_end", "reason": reason})
 
+    # ── Out-of-turn announcements ─────────────────────────────────────────
+
+    def _note_audio_sent(
+        self, nbytes: int, sample_rate: int, *, now: float | None = None,
+    ) -> None:
+        """Push the playout estimate out by the audio just sent to this
+        room's speaker (16-bit mono PCM: 2 bytes a sample). Not called for
+        the drop-in relay, which is a live call on another session."""
+        if nbytes <= 0 or sample_rate <= 0:
+            return
+        if now is None:
+            now = time.monotonic()
+        self._playout_until = max(now, self._playout_until) + nbytes / (2 * sample_rate)
+
+    def _note_response_end(self, frame: dict[str, Any]) -> None:
+        """A response_end just went out. Interrupted: the satellite has
+        dropped what it was playing. Asking a follow-up: hold announcements
+        until the answer can start."""
+        now = time.monotonic()
+        if frame.get("interrupted"):
+            self._playout_until = now
+        if frame.get("expect_followup"):
+            self._followup_hold_until = (
+                max(self._playout_until, now) + ANNOUNCE_FOLLOWUP_HOLD_SEC
+            )
+
+    def _cut_announcement(self) -> None:
+        """A new capture (utterance_start) or a barge-in ends the
+        announcement being sent, exactly as it ends a reply."""
+        if self._announce_lock.locked():
+            # Also while the first sentence is still synthesizing: announce()
+            # then gives up before sending anything.
+            self._announce_cut = True
+        task = self._announce_task
+        if task is not None and not task.done():
+            self._announce_cut = True
+            task.cancel()
+
+    def announce_block(self, now: float | None = None) -> tuple[str, bool] | None:
+        """Why an out-of-turn announcement should wait right now, as
+        ``(reason, hard)``, or None when the room can take one. Hard
+        reasons are always waited out; soft ones only for a while
+        (domovoi/timer_delivery.py). First hit wins, in this order."""
+        if now is None:
+            now = time.monotonic()
+        if self.dropin_peer is not None:
+            return ("in_call", True)
+        if self.wake_recording is not None:
+            return ("recording", True)
+        if self._response_task is not None and not self._response_task.done():
+            return ("responding", True)
+        if self._announce_lock.locked():
+            return ("announcing", True)
+        if now < self._playout_until:
+            return ("playing", True)
+        if self.utterance_active and now - self._last_audio_at < ANNOUNCE_CAPTURE_FRESH_SEC:
+            return ("capturing", True)
+        if now < self._connected_at + ANNOUNCE_CONNECTING_SEC:
+            return ("connecting", False)
+        if now < self._followup_hold_until:
+            return ("followup", False)
+        if now < self._playout_until + ANNOUNCE_SETTLE_SEC:
+            return ("settling", False)
+        return None
+
     async def announce(self, text: str) -> None:
         """Inject a TTS-synthesized announcement into this Pi's stream.
 
@@ -3803,10 +3929,22 @@ class StreamSession:
         the request/response state machine so it can fire while no
         utterance is in flight.
 
-        Skipped (silently — raises a SkipAnnounce so the caller can
-        distinguish "I couldn't" from "I did") if the target Pi is
-        mid-response: queueing audio on top of an in-flight TTS would
-        clip the original.
+        One announcement at a time per room: the whole call holds
+        ``_announce_lock``, so two callers (a timer from the garage and an
+        intercom broadcast, say) play one after the other instead of
+        interleaving their PCM.
+
+        Raises ``AnnounceNotStarted`` — nothing reached the satellite, safe
+        to try again — when the Pi is mid-response (``reason='responding'``,
+        message "room X mid-response, announce skipped": queueing audio on
+        top of an in-flight TTS would clip it) or the first sentence would
+        not synthesize (``reason='tts_failed'``). Both are RuntimeErrors,
+        so callers that catch those keep working.
+
+        The frames go out from an inner task (``_announce_task``) that a new
+        capture or a barge-in cancels, exactly as it cancels a reply; the
+        satellite then gets an interrupted ``response_end`` and this raises
+        ``AnnounceInterrupted`` (it had started playing: counts as heard).
 
         After the announcement plays, if the room had music recorded for
         auto-resume, we emit a music_start so the Pi respawns mpg123 —
@@ -3824,90 +3962,161 @@ class StreamSession:
         ``announced_to`` list. The dead session is also removed from
         ``active_sessions`` so the next broadcast doesn't try again.
         """
-        if self._response_task is not None and not self._response_task.done():
-            log.warning(
-                "intercom: room=%s mid-response, skipping announce", self.room_id
-            )
-            raise RuntimeError(f"room {self.room_id} mid-response, announce skipped")
+        async with self._announce_lock:
+            self._announce_cut = False
+            if self._response_task is not None and not self._response_task.done():
+                log.warning(
+                    "intercom: room=%s mid-response, skipping announce", self.room_id
+                )
+                raise AnnounceNotStarted(
+                    f"room {self.room_id} mid-response, announce skipped",
+                    reason="responding",
+                )
 
+            tts = get_tts_client()
+            sentences = _split_sentences(text) or [text]
+            # Announce in this room's own voice, like its normal responses.
+            a_engine, a_voice = await resolve_voice(
+                self.ws.app.state.satellite_voice.get(self.room_id)
+            )
+            try:
+                first_pcm, sr = _wav_to_pcm(
+                    await tts.synthesize(sentences[0], engine=a_engine, voice=a_voice)
+                )
+            except Exception as e:
+                log.warning("intercom: TTS synth failed for room=%s: %s", self.room_id, e)
+                raise AnnounceNotStarted(
+                    f"room {self.room_id}: announcement TTS failed: {e}",
+                    reason="tts_failed",
+                ) from e
+            # A capture that began while the first sentence synthesized would
+            # have cut the announcement off anyway, and nothing has been sent
+            # yet: step aside rather than talk over it.
+            if self._announce_cut:
+                log.info(
+                    "intercom: room=%s started listening, skipping announce", self.room_id
+                )
+                raise AnnounceNotStarted(
+                    f"room {self.room_id} started listening, announce skipped",
+                    reason="capturing",
+                )
+            # A turn that began while the first sentence synthesized owns
+            # the speaker now.
+            if self._response_task is not None and not self._response_task.done():
+                log.warning(
+                    "intercom: room=%s mid-response, skipping announce", self.room_id
+                )
+                raise AnnounceNotStarted(
+                    f"room {self.room_id} mid-response, announce skipped",
+                    reason="responding",
+                )
+
+            task = asyncio.create_task(
+                self._send_announcement(text, sentences, first_pcm, sr, a_engine, a_voice),
+                name=f"announce-{self.room_id}",
+            )
+            self._announce_task = task
+            try:
+                await task
+            except asyncio.CancelledError:
+                me = asyncio.current_task()
+                cut = self._announce_cut and task.cancelled()
+                # Tell the satellite this response is over (the same frame a
+                # cancelled turn sends) and forget its queued audio.
+                await self._safe_send_text({
+                    "type": "response_end",
+                    "interrupted": True,
+                    "expect_followup": False,
+                })
+                self._playout_until = time.monotonic()
+                if cut and (me is None or not me.cancelling()):
+                    log.info("intercom: room=%s announcement cut off by a capture",
+                             self.room_id)
+                    raise AnnounceInterrupted(
+                        f"room {self.room_id}: announcement interrupted"
+                    ) from None
+                raise
+            except Exception as e:
+                log.warning(
+                    "intercom: WS send failed for room=%s (likely dead "
+                    "connection); evicting from active_sessions and "
+                    "re-raising for caller. cause=%s",
+                    self.room_id, e,
+                )
+                # Evict the dead session so subsequent broadcasts don't
+                # try to send to a corpse. The receiver loop's finally
+                # block also evicts, but if the loop is stuck (e.g.,
+                # awaiting on an already-dead recv()), we may beat it.
+                sessions: dict[str, "StreamSession"] = self.ws.app.state.active_sessions
+                if sessions.get(self.room_id) is self:
+                    sessions.pop(self.room_id, None)
+                raise
+            finally:
+                if self._announce_task is task:
+                    self._announce_task = None
+                self._announce_cut = False
+
+            # Resume music if this room had something playing.
+            resumable: dict[str, str] = self.ws.app.state.resumable_music
+            if self.room_id in resumable:
+                await self._safe_send_text({
+                    "type": "music_start",
+                    "stream_url": resumable[self.room_id],
+                })
+                await schedule_music_resume_fallback(
+                    self.ws.app, self.room_id, resumable[self.room_id],
+                )
+
+    async def _send_announcement(
+        self,
+        text: str,
+        sentences: list[str],
+        first_pcm: bytes,
+        sr: int,
+        a_engine: Any,
+        a_voice: Any,
+    ) -> None:
+        """announce()'s frames: response_start, the audio, response_end.
+        Raw `self.ws.send_*` (not `_safe_send_text`) so any
+        ConnectionClosed / send error propagates to the caller. The
+        `_safe_send_text` helper exists for the normal response path
+        where swallowing makes sense (the response task is already
+        cleaning up); broadcasts don't have that luxury."""
         tts = get_tts_client()
-        sentences = _split_sentences(text) or [text]
-        # Announce in this room's own voice, like its normal responses.
-        a_engine, a_voice = await resolve_voice(
-            self.ws.app.state.satellite_voice.get(self.room_id)
-        )
-        try:
-            first_pcm, sr = _wav_to_pcm(
-                await tts.synthesize(sentences[0], engine=a_engine, voice=a_voice)
-            )
-        except Exception as e:
-            log.warning("intercom: TTS synth failed for room=%s: %s", self.room_id, e)
-            raise
-
-        # Raw `self.ws.send_*` (not `_safe_send_text`) so any
-        # ConnectionClosed / send error propagates to the caller. The
-        # `_safe_send_text` helper exists for the normal response path
-        # where swallowing makes sense (the response task is already
-        # cleaning up); broadcasts don't have that luxury.
-        try:
-            await self.ws.send_text(json.dumps({
-                "type": "response_start",
-                "text": text,
-                "matched_handler": "intercom",
-                "matched_path": "intercom_broadcast",
-                "session_id": None,
-                "online": True,
-                "audio_sample_rate": sr,
-            }))
-            for chunk in _iter_chunks(first_pcm):
+        await self.ws.send_text(json.dumps({
+            "type": "response_start",
+            "text": text,
+            "matched_handler": "intercom",
+            "matched_path": "intercom_broadcast",
+            "session_id": None,
+            "online": True,
+            "audio_sample_rate": sr,
+        }))
+        for chunk in _iter_chunks(first_pcm):
+            await self.ws.send_bytes(chunk)
+            self._note_audio_sent(len(chunk), sr)
+        for sentence in sentences[1:]:
+            try:
+                pcm, _sr = _wav_to_pcm(
+                    await tts.synthesize(sentence, engine=a_engine, voice=a_voice)
+                )
+            except Exception as e:
+                log.warning(
+                    "intercom: TTS synth failed mid-stream for room=%s "
+                    "sentence=%r: %s",
+                    self.room_id, sentence[:60], e,
+                )
+                # First sentence already streamed — let the
+                # already-delivered audio land and stop here.
+                break
+            for chunk in _iter_chunks(pcm):
                 await self.ws.send_bytes(chunk)
-            for sentence in sentences[1:]:
-                try:
-                    pcm, _sr = _wav_to_pcm(
-                        await tts.synthesize(sentence, engine=a_engine, voice=a_voice)
-                    )
-                except Exception as e:
-                    log.warning(
-                        "intercom: TTS synth failed mid-stream for room=%s "
-                        "sentence=%r: %s",
-                        self.room_id, sentence[:60], e,
-                    )
-                    # First sentence already streamed — let the
-                    # already-delivered audio land and stop here.
-                    break
-                for chunk in _iter_chunks(pcm):
-                    await self.ws.send_bytes(chunk)
-            await self.ws.send_text(json.dumps({
-                "type": "response_end",
-                "interrupted": False,
-                "expect_followup": False,
-            }))
-        except Exception as e:
-            log.warning(
-                "intercom: WS send failed for room=%s (likely dead "
-                "connection); evicting from active_sessions and "
-                "re-raising for caller. cause=%s",
-                self.room_id, e,
-            )
-            # Evict the dead session so subsequent broadcasts don't
-            # try to send to a corpse. The receiver loop's finally
-            # block also evicts, but if the loop is stuck (e.g.,
-            # awaiting on an already-dead recv()), we may beat it.
-            sessions: dict[str, "StreamSession"] = self.ws.app.state.active_sessions
-            if sessions.get(self.room_id) is self:
-                sessions.pop(self.room_id, None)
-            raise
-
-        # Resume music if this room had something playing.
-        resumable: dict[str, str] = self.ws.app.state.resumable_music
-        if self.room_id in resumable:
-            await self._safe_send_text({
-                "type": "music_start",
-                "stream_url": resumable[self.room_id],
-            })
-            await schedule_music_resume_fallback(
-                self.ws.app, self.room_id, resumable[self.room_id],
-            )
+                self._note_audio_sent(len(chunk), _sr)
+        await self.ws.send_text(json.dumps({
+            "type": "response_end",
+            "interrupted": False,
+            "expect_followup": False,
+        }))
 
     async def _safe_send_text(self, payload: dict[str, Any]) -> None:
         # Remember the reply we're about to speak, so a barge-triggered
@@ -3922,6 +4131,8 @@ class StreamSession:
         except Exception:
             # Connection may be gone; nothing useful to do.
             pass
+        if payload.get("type") == "response_end":
+            self._note_response_end(payload)
 
     async def notify_sounds_changed(self) -> None:
         """Tell this satellite its sound clips changed (greetings edited +
@@ -4282,6 +4493,11 @@ class StreamSession:
                 await sess.ws.send_bytes(START_CHIME_PCM)
             except Exception as e:
                 log.debug("drop-in: start chime to %s failed: %s", sess.room_id, e)
+            else:
+                # A phone leg (PhoneDropinSession) has no speaker estimate.
+                note = getattr(sess, "_note_audio_sent", None)
+                if note is not None:
+                    note(len(START_CHIME_PCM), PCM_INPUT_SAMPLE_RATE)
 
         log.info(
             "drop-in: %s ↔ %s connected (call_id=%s)",
@@ -4337,6 +4553,11 @@ class StreamSession:
                 await sess.ws.send_bytes(END_CHIME_PCM)
             except Exception as e:
                 log.debug("drop-in: end chime to %s failed: %s", sess.room_id, e)
+            else:
+                # A phone leg (PhoneDropinSession) has no speaker estimate.
+                note = getattr(sess, "_note_audio_sent", None)
+                if note is not None:
+                    note(len(END_CHIME_PCM), PCM_INPUT_SAMPLE_RATE)
 
         for sess in (self, peer):
             try:
@@ -4448,17 +4669,21 @@ class StreamSession:
         }))
         for chunk in _iter_chunks(first_pcm):
             await self.ws.send_bytes(chunk)
+            self._note_audio_sent(len(chunk), sr)
         for sentence in sentences[1:]:
             pcm, _sr = _wav_to_pcm(
                 await tts.synthesize(sentence, engine=p_engine, voice=p_voice)
             )
             for chunk in _iter_chunks(pcm):
                 await self.ws.send_bytes(chunk)
-        await self.ws.send_text(json.dumps({
+                self._note_audio_sent(len(chunk), _sr)
+        end_frame = {
             "type": "response_end",
             "interrupted": False,
             "expect_followup": True,
-        }))
+        }
+        await self.ws.send_text(json.dumps(end_frame))
+        self._note_response_end(end_frame)
 
     async def _prompt_target_for_dropin(self, target: "StreamSession") -> None:
         """Confirm-mode: park a ``pending_confirmation`` in the target's

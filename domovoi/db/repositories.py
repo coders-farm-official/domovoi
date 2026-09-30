@@ -57,6 +57,15 @@ async def _has_utterance_trigger(s: AsyncSession) -> bool:
 # NOTIFY only on COMMIT, so a rolled-back write never announces anything.
 TIMERS_CHANGED_CHANNEL = "timers_changed"
 
+# NOTIFY channel for any write to the V017 fire ledger (timer_fires /
+# timer_fire_deliveries): a timer or reminder going off, each room's
+# announcement starting and ending, an acknowledgement. The web maps it to
+# the `timer_fires` realtime channel. The payload is informational (the
+# fire ids, comma-separated); the listener refetches its snapshot whatever
+# it says. Commit-coupled like `timers_changed`. Written by
+# domovoi/timer_delivery.py.
+TIMER_FIRES_CHANGED_CHANNEL = "timer_fires_changed"
+
 
 async def notify_timers_changed(session: AsyncSession, reason: str) -> None:
     """Queue a ``timers_changed`` NOTIFY on ``session``'s transaction.
@@ -109,29 +118,69 @@ class TimerRepository:
         await notify_timers_changed(self.s, "created")
         return timer_id
 
-    async def cancel_by_label(self, label: str | None, room_id: str | None) -> int:
+    async def cancel_by_label(
+        self, label: str | None, room_id: str | None, *, house_wide: bool = False,
+    ) -> int:
+        """Cancel plain timers — never a reminder (``message IS NULL``
+        always; reminders have their own cancel in ReminderHandler).
+
+        * no label: this room's timers (``room_id`` NULL = the roomless
+          ones), or every timer in the house when ``house_wide``;
+        * a label: that label in this room, or in every room when
+          ``house_wide`` or when the turn has no room (the app and the
+          dashboard chat are house-wide by nature).
+
+        Before 2026-09-30 a plain cancel deleted this room's reminders too,
+        and a labelled one deleted the label in every room."""
         if label is None:
-            result = await self.s.execute(
-                text("DELETE FROM timers WHERE room_id IS NOT DISTINCT FROM :room_id"),
-                {"room_id": room_id},
-            )
+            if house_wide:
+                sql, params = "DELETE FROM timers WHERE message IS NULL", {}
+            else:
+                sql = (
+                    "DELETE FROM timers WHERE room_id IS NOT DISTINCT FROM :room_id "
+                    "AND message IS NULL"
+                )
+                params = {"room_id": room_id}
+        elif house_wide or room_id is None:
+            sql = "DELETE FROM timers WHERE label = :label AND message IS NULL"
+            params = {"label": label}
         else:
-            result = await self.s.execute(
-                text("DELETE FROM timers WHERE label = :label"),
-                {"label": label},
+            sql = (
+                "DELETE FROM timers WHERE label = :label AND message IS NULL "
+                "AND room_id = :room_id"
             )
+            params = {"label": label, "room_id": room_id}
+        result = await self.s.execute(text(sql), params)
         deleted = result.rowcount or 0
         if deleted:
             await notify_timers_changed(self.s, "cancelled")
         return deleted
 
+    async def label_rooms(self, label: str) -> list[str]:
+        """The rooms that have a plain timer with this label, for the "it's
+        in the garage" hint when a room-scoped cancel found nothing."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT DISTINCT room_id FROM timers
+                WHERE label = :label AND message IS NULL AND room_id IS NOT NULL
+                ORDER BY room_id
+                """
+            ),
+            {"label": label},
+        )
+        return [r[0] for r in rows.all()]
+
     async def next_active(self, room_id: str | None) -> tuple[int, datetime, str | None] | None:
+        """The room's next plain timer. Reminders are not timers: "how long
+        left on the timer" never describes one."""
         row = await self.s.execute(
             text(
                 """
                 SELECT id, expires_at, label
                 FROM timers
                 WHERE room_id IS NOT DISTINCT FROM :room_id
+                  AND message IS NULL
                 ORDER BY expires_at ASC
                 LIMIT 1
                 """

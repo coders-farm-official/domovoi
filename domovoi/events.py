@@ -60,6 +60,15 @@ CORE_EVENTS: frozenset[str] = frozenset({
     "core.plugin_disabled",
     "core.plugin_uninstalled",
     "core.plugin_upgraded",
+    # Added 2026-09-30 (additive, so the catalog stays v1). A timer or
+    # reminder went off (domovoi/timer_delivery.py) — once per fire, after
+    # it is recorded: {fire_id, timer_id, kind, label, message,
+    # origin_room_id, due_at, fired_at, text, targets}. And every room it
+    # was for has an outcome and the late-joiner window closed:
+    # {fire_id, timer_id, kind, origin_room_id, outcomes {room: outcome},
+    # heard_in [room...], acked_by}.
+    "core.timer_fired",
+    "core.timer_fire_settled",
 })
 
 _PLUGIN_EVENT_PREFIX = "plugin."
