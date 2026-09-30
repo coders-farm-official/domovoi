@@ -183,6 +183,19 @@ SCENARIOS = {
                    title: !!h.find({ text: 'Warm Stones' }) };
         """,
     },
+    # The library table stacks title / artist / album and leaves added,
+    # via and source to the drawer; the row's info button opens it.
+    "info": {
+        "files": FILES, "component": "MusicPage", "api": PAGE_API,
+        "script": r"""
+          h.render();
+          const headers = h.findAll({ type: 'th' }).map((el) => el.text).filter(Boolean);
+          const albumInRow = !!h.find({ text: 'By The Hearth' });
+          const openBefore = h.text().includes('track · #6');
+          await h.click({ type: 'button', title: 'track details' });
+          return { headers, albumInRow, openBefore, texts: h.text() };
+        """,
+    },
     # A drawer without an editor (no onEdit) shows no pencil — plugin
     # embeds and the old call shape keep working.
     "no_editor": {
@@ -239,3 +252,17 @@ def test_cancel_sends_nothing_and_keeps_the_old_tags(driven):
 
 def test_drawer_without_an_editor_has_no_pencil(driven):
     assert driven["no_editor"]["pencil"] is False
+
+
+def test_library_table_drops_the_detail_columns(driven):
+    r = driven["info"]
+    assert r["headers"] == ["track", "duration"]
+    assert r["albumInRow"] is True           # album stacks under title and artist
+
+
+def test_info_button_opens_the_track_drawer(driven):
+    r = driven["info"]
+    assert r["openBefore"] is False
+    assert "track · #6" in r["texts"]
+    for label in ("added", "added via", "source", "source id", "enriched", "path"):
+        assert label in r["texts"]

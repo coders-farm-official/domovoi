@@ -292,14 +292,27 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrows
           )}
         </div>
 
-        <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8, fontSize: 12 }}>
-          <div className="label">duration</div>      <div className="mono">{fmtDur(track.duration_sec)}</div>
-          <div className="label">source</div>        <div><Pill tone={track.source ? 'live' : 'idle'}>{track.source || 'manual'}</Pill></div>
-          <div className="label">source id</div>     <div className="mono" style={{ color: 'var(--fg-muted)' }}>{track.source_id || '—'}</div>
-          <div className="label">added</div>         <div className="mono">{relTime(track.added_at)}</div>
-          <div className="label">added via</div>     <div><Pill tone={track.added_via === 'voice' ? 'live' : 'idle'}>{track.added_via}</Pill></div>
-          <div className="label">enriched</div>      <div className="mono">{track.enriched_at ? relTime(track.enriched_at) : '—'}</div>
-          <div className="label">path</div>          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', wordBreak: 'break-all' }}>{track.file_path}</div>
+        {/* Label over value, two to a line; the path gets the full width.
+            This is the one place added / via / source show — the library
+            table leaves them out. */}
+        <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '10px 12px', fontSize: 12 }}>
+          {[
+            ['duration',  <div className="mono">{fmtDur(track.duration_sec)}</div>],
+            ['added',     <div className="mono">{relTime(track.added_at)}</div>],
+            ['added via', <div><Pill tone={track.added_via === 'voice' ? 'live' : 'idle'}>{track.added_via || '—'}</Pill></div>],
+            ['source',    <div><Pill tone={track.source ? 'live' : 'idle'}>{track.source || 'manual'}</Pill></div>],
+            ['enriched',  <div className="mono">{track.enriched_at ? relTime(track.enriched_at) : '—'}</div>],
+            ['source id', <div className="mono" style={{ color: 'var(--fg-muted)', wordBreak: 'break-all' }}>{track.source_id || '—'}</div>],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <div className="label" style={{ marginBottom: 2 }}>{label}</div>
+              {value}
+            </div>
+          ))}
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div className="label" style={{ marginBottom: 2 }}>path</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', wordBreak: 'break-all' }}>{track.file_path}</div>
+          </div>
         </div>
 
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }}>
@@ -430,16 +443,12 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                  ? <Button icon="x" onClick={() => { setQ(''); setSource('all'); setFavoritedOnly(false); }}>clear filters</Button>
                  : null}/>
       ) : (
-        <table className="tbl">
+        <table className="tbl lib-tbl">
           <thead><tr>
             <th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} title="select all on this page"/></th>
             <th style={{ width: 40 }}></th>
-            <th>title</th>
-            <th>album</th>
-            <th>added</th>
-            <th>via</th>
-            <th>source</th>
-            <th className="num">duration</th>
+            <th style={{ width: '100%' }}>track</th>
+            <th>duration</th>
             <th className="actions"></th>
           </tr></thead>
           <tbody>
@@ -447,28 +456,30 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
               <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(t)}>
                 <td onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSel(t.id)}/></td>
                 <td onClick={e => e.stopPropagation()}><IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/></td>
-                <td>
+                {/* Title, artist and album stack in one cell so each gets
+                    the full column width. Added / via / source live in
+                    the track drawer (row click or the info button). */}
+                <td style={{ paddingTop: 8, paddingBottom: 8 }}>
                   <div style={{ fontWeight: 500 }}>{t.title || '—'}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{t.artist || '—'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{t.album || '—'}</div>
                 </td>
-                <td style={{ color: 'var(--fg-muted)' }}>{t.album || '—'}</td>
-                <td className="mono">{relTime(t.added_at)}</td>
-                <td><Pill tone={t.added_via === 'voice' ? 'live' : 'idle'}>{t.added_via}</Pill></td>
-                <td><Pill tone={t.source ? 'live' : 'idle'}>{t.source || 'manual'}</Pill></td>
-                <td className="num mono">{fmtDur(t.duration_sec)}</td>
-                <td className="actions" onClick={e => e.stopPropagation()}
-                    style={{ whiteSpace: 'nowrap' }}>
-                  <IconButton name="list-plus" onClick={() => onQueueTrack(t)}
-                              title="add to browser queue"/>
-                  <IconButton name="corner-down-right" onClick={() => onPlayNextTrack(t)}
-                              title="play next in browser"/>
-                  <IconButton name="heart" onClick={() => onToggleFavorite(t)}
-                              style={t.favorited ? { color: 'var(--brand)' } : undefined}
-                              title={t.favorited ? 'unfavorite' : 'favorite'}/>
-                  <IconButton name="plus" onClick={() => onAddToPlaylist(t)}
-                              title="add to playlist…"/>
-                  <IconButton name="download" title="save to this device"
-                              onClick={() => deviceDownload(`/api/music/library/${t.id}/audio?download=1`)}/>
+                <td className="mono">{fmtDur(t.duration_sec)}</td>
+                <td className="actions" onClick={e => e.stopPropagation()}>
+                  <div className="lib-acts">
+                    <IconButton name="list-plus" onClick={() => onQueueTrack(t)}
+                                title="add to browser queue"/>
+                    <IconButton name="corner-down-right" onClick={() => onPlayNextTrack(t)}
+                                title="play next in browser"/>
+                    <IconButton name="heart" onClick={() => onToggleFavorite(t)}
+                                style={t.favorited ? { color: 'var(--brand)' } : undefined}
+                                title={t.favorited ? 'unfavorite' : 'favorite'}/>
+                    <IconButton name="plus" onClick={() => onAddToPlaylist(t)}
+                                title="add to playlist…"/>
+                    <IconButton name="download" title="save to this device"
+                                onClick={() => deviceDownload(`/api/music/library/${t.id}/audio?download=1`)}/>
+                    <IconButton name="info" onClick={() => onSelect(t)} title="track details"/>
+                  </div>
                 </td>
               </tr>
             ))}
