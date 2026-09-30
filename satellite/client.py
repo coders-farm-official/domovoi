@@ -1593,8 +1593,11 @@ class Satellite:
     # refused stream for a connected one: music_ready, then the watcher
     # reporting the exit with no retry. music_ready still goes out at
     # prime_sec; this only decides how long an exit still means "not up
-    # yet, try again".
-    MUSIC_CONNECT_GRACE_SEC = 0.5
+    # yet, try again". A full second, as the window was with prime_sec = 0
+    # before this grace existed: well past that 230 ms, because a Pi busy
+    # with the wake-word model starts mpg123 slower, and a longer grace
+    # costs nothing (a refusal inside it is retried, not reported).
+    MUSIC_CONNECT_GRACE_SEC = 1.0
 
     def _start_music_when_idle(self, url: str, stop_gen: int | None = None) -> None:
         """Wait until the playback thread releases the ALSA device, then spawn mpg123.

@@ -696,5 +696,6 @@ def test_a_refusal_after_a_short_prime_is_retried_not_reported(monkeypatch):
 def test_the_connect_grace_outlasts_a_refusal_on_a_pi():
     """A refused mpg123 exits about 230 ms after it is spawned on a Pi
     (office, 2026-09-30); the grace has to cover that whatever prime_sec
-    says."""
-    assert client.Satellite.MUSIC_CONNECT_GRACE_SEC >= 0.4
+    says, with room for a Pi busy with the wake-word model — and never be
+    shorter than the one second `prime_sec = 0` had before it existed."""
+    assert client.Satellite.MUSIC_CONNECT_GRACE_SEC >= 1.0

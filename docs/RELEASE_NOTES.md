@@ -47,7 +47,7 @@ can't play.
   the retries. When the satellite gives up, it logs `music: giving up on
   <url> after N attempt(s): <reason>` and sets its lights from "music" to
   idle. If the lights are showing something else by then, it leaves them.
-  An exit in the first 0.5 s always counts as "not up yet", even when
+  An exit in the first second always counts as "not up yet", even when
   `[music] prime_sec` is set lower (`music_ready` still goes out at
   `prime_sec`).
 * Satellite: a `music_start` that is still waiting for the reply to
