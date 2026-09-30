@@ -320,9 +320,12 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Conversation & memory ─────────────────────────────────────────
     FieldSpec(
         "session_recent_turns_cap", "Conversation memory", "Conversation",
-        "How many recent back-and-forth turns are fed to the LLM as context. "
-        "Higher = it remembers more of the conversation, at the cost of more "
-        "tokens and a little latency.",
+        "How many recent turns (each question and each answer counts as one) "
+        "are fed to the LLM as context. Past this, the older half is dropped "
+        "in one go, so a conversation carries between half this and this "
+        "many — cutting in halves lets the model reuse its cached reading of "
+        "the conversation between cuts. Higher = it remembers more of the "
+        "conversation, at the cost of more tokens and a little latency.",
         "int", min=2, max=50, unit="turns",
     ),
     FieldSpec(

@@ -23,6 +23,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path
+from domovoi.handlers.shared.tool_gate import answers_without_tools
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.turn_timings import timings_for_row
@@ -395,20 +396,39 @@ def _has_tool_gate(handler: Handler) -> bool:
     return type(handler).offers_tool is not Handler.offers_tool
 
 
+def _tool_order(handler: Handler) -> int:
+    """0 for an ungated tool, 1 for a gated tool that is on offer unless an
+    utterance rules it out (calculator, library), 2 for one that is only
+    offered when the utterance asks for it (double_check, news). An empty
+    transcript tells the two gated kinds apart: it rules nothing out and
+    asks for nothing."""
+    if not _has_tool_gate(handler):
+        return 0
+    try:
+        return 1 if handler.offers_tool("") else 2
+    except Exception:  # noqa: BLE001 — a broken plugin gate sorts last
+        return 2
+
+
 def offered_tool_schemas(transcript: str) -> list[dict]:
     """The tool schemas the LLM router is offered for this (normalized)
     transcript — every registered handler's ``tool_schema``, minus the
     ones whose ``offers_tool`` says the utterance can't be theirs.
 
-    Handlers that gate their tool go LAST, in band order after the
-    ungated ones. The tool list is rendered into the prompt prefix that
-    Ollama's KV cache reuses between requests; keeping the part that
-    never changes at the front means a withheld tool only shortens the
-    tail, so a routed turn on a CPU host doesn't re-process three
-    thousand tokens of schema JSON every time the gate flips.
+    Order (band order within each group): ungated tools, then gated tools
+    that are usually on offer, then the ones offered only on request. The
+    tool list is rendered into the prompt prefix that Ollama's KV cache
+    reuses between requests, and on a CPU host re-reading it costs ~12 ms
+    a token: everything after the first tool that differs from the last
+    turn is read again. Kept this way, the common changes only touch the
+    end — a verification or news request appends its tool (~200 tokens,
+    not the ~900 behind it), and the next ordinary turn finds the old
+    prefix intact. The utterances that withhold a usually-offered tool
+    (plain knowledge questions) don't reach the router at all
+    (``answers_without_tools``).
     """
     offered = [h for h in HANDLERS if h.offers_tool(transcript)]
-    offered.sort(key=_has_tool_gate)  # stable: band order within each group
+    offered.sort(key=_tool_order)  # stable: band order within each group
     return [h.tool_schema for h in offered]
 
 
@@ -561,10 +581,16 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         )
         return response
 
-    # 2. LLM tool-call fallback (the stub client returns None).
-    tool_schemas = offered_tool_schemas(transcript)
-    ollama_client = await _ready_for(ollama_client, ctx, "tool")
-    tool_call = await ollama_client.route(intent.transcript, tool_schemas)
+    # 2. LLM tool-call fallback (the stub client returns None) — except for
+    # a plain question about the world or a request for a joke or a story,
+    # which no tool is for: those go straight to the Q&A model below. The
+    # tool model would only answer them itself (thrown away) or reach for
+    # a bait tool, and asking it costs a router call either way.
+    tool_call = None
+    if not answers_without_tools(transcript):
+        tool_schemas = offered_tool_schemas(transcript)
+        ollama_client = await _ready_for(ollama_client, ctx, "tool")
+        tool_call = await ollama_client.route(intent.transcript, tool_schemas)
     if tool_call is not None:
         handler = HANDLER_BY_NAME.get(tool_call.get("handler", ""))
         if handler is not None and not any(
@@ -746,8 +772,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
 
     # Per-speaker prompt-prefix injection. Memories +
     # favorites + selected preferences for ctx.person_id are
-    # assembled into a "User context: ..." blob and prepended to the
-    # QA system prompt. Anonymous speakers get ``""`` back — no-op.
+    # assembled into a "User context: ..." blob and added to the QA
+    # system prompt, after its fixed instructions (so they stay cached
+    # across speakers). Anonymous speakers get ``""`` back — no-op.
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:

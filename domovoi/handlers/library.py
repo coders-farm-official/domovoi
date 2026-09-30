@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients.mpd import MPDNotProvisioned, get_mpd_client_for
 from domovoi.db.repositories import utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE
+from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE, MUSIC_CUE_RE
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -93,18 +93,9 @@ _ENRICH_RE = re.compile(
 # ─── LLM tool-offer gate ─────────────────────────────────────────────
 #
 # Anything that could make an utterance a question ABOUT THE COLLECTION
-# rather than about the world: a media noun, or an ownership/curation
-# verb. Generous on purpose — a false positive only means the schema is
-# offered to the tool model, exactly as it always was.
-_LIBRARY_CUE_RE = re.compile(
-    r"\b(?:"
-    r"librar\w*|collection|music|song|songs|track|tracks|album|albums"
-    r"|artist\w*|band|bands|record|records|recording\w*|playlist\w*"
-    r"|discograph\w*|mp3|vinyl|cover|covers|remix\w*"
-    r"|sing|sings|singer\w*|sang|sung|perform\w*|play\w*"
-    r"|have|got|own|owns|downloaded|saved|added|add"
-    r")\b"
-)
+# rather than about the world (shared/tool_gate.py keeps the vocabulary,
+# which the router's own "no tools at all" check uses too).
+_LIBRARY_CUE_RE = MUSIC_CUE_RE
 
 
 class LibraryHandler(Handler):

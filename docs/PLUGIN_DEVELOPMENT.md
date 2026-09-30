@@ -800,7 +800,14 @@ class Handler(ABC):
   word), `news` (needs a news word), `calculator` and `library` (both withheld
   on who/why/where questions with no digit / no library cue — the shared regex
   lives in `handlers/shared/tool_gate.py`). Check the effect with
-  `scripts/eval_routing.py`.
+  `scripts/eval_routing.py --live-tools <core url>`. The router keeps gated
+  tools at the end of its list (Ollama caches the list's prefix): one that
+  `offers_tool("")` says True for goes with the usually-offered group, one
+  that says False is appended only when asked for. Two kinds of utterance
+  never reach the tool model at all, so no tool — yours included — is
+  offered for them: a plain who/why/where question about the world, and a
+  request for a joke, a fact, a story or an explanation
+  (`tool_gate.answers_without_tools`). Give such a command a fast path.
 * **Tool arguments**: describe every parameter in `tool_schema` — a small
   tool model files a number under the best-named field it is shown, so an
   undescribed `value` next to a self-explanatory `amount` gets the quantity

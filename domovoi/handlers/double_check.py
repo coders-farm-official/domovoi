@@ -82,16 +82,31 @@ _VERIFY_CLAIM_RE = re.compile(r"^is it (?:true|right|correct) that (.+)$")
 
 # Words a verification request carries. Used by ``offers_tool`` to keep
 # the double_check schema OUT of the LLM router's tool list for
-# utterances that can't be asking for a check (see the method). Generous
-# on purpose: "right"/"real"/"source" over-match harmlessly.
+# utterances that can't be asking for a check (see the method). An
+# over-match is not free: adding the tool changes the router's prompt, so
+# the tool model re-reads the schema on that turn. The everyday words —
+# sure, true, right, correct, real, fact, source, check — count only in
+# the phrases that ask for a check ("are you sure", "is that right",
+# "fact check", "what's your source", "check that"); bare, they matched
+# "tell me a fun fact", "make sure", "the right song", "remind me to
+# check the oven". "really", "actually" and "bet" are gone: they are
+# filler far more often than doubt.
 _VERIFY_CUE_RE = re.compile(
     r"\b(?:"
-    r"sure|check|verif\w*|fact|true|truth|correct|incorrect|right|wrong"
-    r"|accura\w*|really|confirm\w*|certain|legit\w*|actually|trust\w*"
-    r"|believ\w*|lie|lying|liar|prove|proof|source|look (?:that|this|it) up"
-    r"|mistake\w*|doubt\w*|kidding|serious\w*|real|positive|bet"
-    r"|made (?:that|this|it) up|hallucinat\w*"
+    r"verif\w*|truth\w*|incorrect|wrong|accura\w*|confirm\w*|certain"
+    r"|legit\w*|trust\w*|believ\w*|lie|lying|liar|prove|proof"
+    r"|mistake\w*|doubt\w*|kidding|serious\w*|positive|hallucinat\w*"
+    r"|look (?:that|this|it) up|made (?:that|this|it) up"
+    r"|(?:double|fact|re)[- ]?check\w*"
+    r"|check(?:ed|ing)? (?:that|this|it|again|your|what|whether|if|on that)"
+    r"|(?:are|were) you (?:\w+ )?(?:sure|right|correct)|you sure|not so sure"
+    r"|not sure (?:about |of )?(?:that|this|it)"
+    r"|(?:is|was|isn't|wasn't|that's|thats|it's|its) (?:\w+ ){0,2}?"
+    r"(?:true|right|correct|real|accurate|a fact)"
+    r"|not (?:true|right|correct|real)|sound\w* (?:\w+ )?(?:right|true|correct|off)"
+    r"|for real|(?:your|what's the|whats the|what is the|cite|any) sources?"
     r")\b"
+    r"|^(?:really|seriously|no way)$"
 )
 
 

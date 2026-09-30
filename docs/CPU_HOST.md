@@ -205,7 +205,10 @@ So on a CPU host:
   it would on a 4090.
 - *"Play the Beatles in the kitchen"* → STT + regex. Fast.
 - *"What's the capital of Mongolia?"* → STT + tool router + Q&A model.
-  This is where you wait.
+  This is where you wait. The router only decides "no tool" (its call is
+  dropped at the first word of plain text it writes, well under a second
+  warm), and a plain who/why/where question, a joke or a story skips it
+  entirely.
 
 The system doesn't feel uniformly slower. It feels instant for the
 hundred things you say daily and thoughtful for the ones you say
@@ -493,7 +496,10 @@ other half: Domovoi loads both voice models itself, in the background, when
 the core starts and again after a model, keep-alive or context-window
 change (`ollama_warmup`, dashboard → **Models** → *Load models ahead of
 time*), router prompt included, so the first question after a restart is a
-warm one. When a question does find a model unloaded anyway (Ollama
+warm one. The router prompt is read again at every boot and after a plugin
+is installed, enabled, disabled or removed even when the models are
+already loaded: a deploy that changed a tool's schema would otherwise leave
+the whole ~3.4k-token prompt (~45 s here) to the next routed question. When a question does find a model unloaded anyway (Ollama
 restarted, or another model pushed it out of memory), the satellite says
 "Just a moment, I'm waking up my language model." (`ollama_cold_start_notice`)
 and that call gets `ollama_load_timeout_sec` (300 s) instead of the ordinary

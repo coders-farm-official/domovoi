@@ -952,6 +952,7 @@ async def confirm_install(
         except Exception as e:  # noqa: BLE001 — §3.2 matrix rows 14–15
             resync_warning = f"chat tool resync failed: {e}"
             log.warning("%s", resync_warning)
+        _reprime_router()
 
         # Step 15 (web pickup) rides the plugins_changed NOTIFY from step 12.
         _STAGED.pop(staged_id, None)
@@ -1087,6 +1088,19 @@ async def _best_effort_resync() -> None:
         await resync_tools()
     except Exception as e:  # noqa: BLE001 — non-fatal by design
         log.warning("chat tool resync failed: %s", e)
+    _reprime_router()
+
+
+def _reprime_router() -> None:
+    """The voice router's tool list may just have changed: have Ollama read
+    the new one now, in the background, instead of during the next routed
+    question (domovoi/llm_warmup.py). Never fails the lifecycle call."""
+    try:
+        from domovoi.llm_warmup import schedule_warm_up
+
+        schedule_warm_up("plugin tools changed")
+    except Exception as e:  # noqa: BLE001 — a warm-up is a nicety
+        log.debug("router re-prime not scheduled: %s", e)
 
 
 # ─── uninstall keep / purge (§3.5) ──────────────────────────────────────────
