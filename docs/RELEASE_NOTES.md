@@ -332,7 +332,8 @@ away: the new setting is off for every satellite.
   "set a reminder…") no longer stores the command as the reminder's
   words. Talking *about* a reminder or a timer ("my reminder for 10
   minutes didn't go off", "you have a reminder in 10 minutes") no longer
-  sets one. "Cancel the laundry reminder" and "cancel the ten minute
+  sets one: it is answered by the Q&A model without asking the tool
+  router. "Cancel the laundry reminder" and "cancel the ten minute
   reminder" cancel that one (they used to cancel every reminder in the
   room). Absolute times ("remind me at 6 pm") still go to the language
   model, which guesses a duration.

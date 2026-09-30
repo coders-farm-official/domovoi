@@ -35,7 +35,7 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.handlers.shared.tool_gate import answers_without_tools
 from domovoi.models import Context, Intent
-from domovoi.router import _LEADING_FILLER_RE, offered_tool_schemas, route
+from domovoi.router import _GATES_KEEP_BAND_PLACE, _LEADING_FILLER_RE, offered_tool_schemas, route
 from domovoi.tests.conftest import requires_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -252,10 +252,13 @@ def test_ungated_handlers_always_offer() -> None:
 
 def test_gated_tools_are_offered_last() -> None:
     """Withholding a tool must only shorten the tail of the tool list —
-    the prefix Ollama's KV cache reuses between turns stays put."""
+    the prefix Ollama's KV cache reuses between turns stays put. Reminder
+    and timer keep their band place (their gate never fires on a routed
+    turn: the next test)."""
     names = _offered("play some jazz in the kitchen")
-    ungated = [n for n in names if n not in GATED]
-    gated = [n for n in names if n in GATED]
+    last = GATED - _GATES_KEEP_BAND_PLACE
+    ungated = [n for n in names if n not in last]
+    gated = [n for n in names if n in last]
     assert names == ungated + gated
     assert gated, "expected at least one gated tool on offer for a plain command"
     # Band order is preserved inside each group.
@@ -264,15 +267,39 @@ def test_gated_tools_are_offered_last() -> None:
     assert gated == sorted(gated, key=band.__getitem__)
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "my reminder for ten minutes didn't go off",
+        "you have a reminder in ten minutes",
+        "the reminder in ten minutes is for the oven",
+        "why didn't the timer go off",
+        "where did my reminders go",
+    ],
+)
+def test_reminder_and_timer_withhold_only_where_the_router_never_looks(utterance: str) -> None:
+    """Talk about a timer or reminder goes straight to the Q&A model
+    (answers_without_tools), so the reminder and timer gates never shorten
+    a routed turn's list — which is why those two keep their band place
+    among the ungated tools, where qwen3:8b routed the measured corpus
+    (moved to the end, it answered "Can you check online?" from Q&A)."""
+    assert _GATES_KEEP_BAND_PLACE == {"reminder", "timer"}
+    assert answers_without_tools(_normalize(utterance))
+    ordinary = _offered("play some jazz in the kitchen")
+    band = {h.name: h.priority_band for h in HANDLERS}
+    ungated = [n for n in ordinary if n not in GATED or n in _GATES_KEEP_BAND_PLACE]
+    assert ungated == sorted(ungated, key=band.__getitem__)
+    assert {"reminder", "timer"} <= set(ungated)
+
+
 def test_tools_offered_only_on_request_are_appended_after_the_usual_ones() -> None:
     """double_check and news are offered only when asked for; they go after
-    the gated tools that are on offer unless ruled out (reminder, calculator,
-    timer, library, in band order), so asking for one APPENDS a tool: the
-    router re-reads that schema, not the ~900 tokens of calculator and
-    library behind it, and the next ordinary turn finds its cached prefix
-    intact."""
+    calculator and library (on offer unless ruled out), so asking for one
+    APPENDS a tool: the router re-reads that schema, not the ~900 tokens
+    of calculator and library behind it, and the next ordinary turn finds
+    its cached prefix intact."""
     usual = _offered("play some jazz in the kitchen")
-    assert usual[-4:] == ["reminder", "calculator", "timer", "library"]
+    assert usual[-2:] == ["calculator", "library"]
     for utterance, extra in (
         ("fact check what you just said", ["double_check"]),
         ("what's happening in the world today", ["news"]),

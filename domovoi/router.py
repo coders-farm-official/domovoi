@@ -467,13 +467,24 @@ def _has_tool_gate(handler: Handler) -> bool:
     return type(handler).offers_tool is not Handler.offers_tool
 
 
+# Gated tools that keep their band place among the ungated ones. The
+# reminder and timer gates withhold only on talk about a timer or reminder,
+# which never reaches the router (answers_without_tools sends it to the Q&A
+# model), so no routed turn's list changes with them — and they sit where
+# the latency work measured the list: moved to the end with the gated
+# tools, qwen3:8b answered "Can you check online?" from Q&A instead of
+# calling double_check (2026-09-30, the live tool list).
+_GATES_KEEP_BAND_PLACE = frozenset({"reminder", "timer"})
+
+
 def _tool_order(handler: Handler) -> int:
-    """0 for an ungated tool, 1 for a gated tool that is on offer unless an
-    utterance rules it out (calculator, library), 2 for one that is only
-    offered when the utterance asks for it (double_check, news). An empty
-    transcript tells the two gated kinds apart: it rules nothing out and
-    asks for nothing."""
-    if not _has_tool_gate(handler):
+    """0 for an ungated tool (or one in ``_GATES_KEEP_BAND_PLACE``), 1 for
+    a gated tool that is on offer unless an utterance rules it out
+    (calculator, library), 2 for one that is only offered when the
+    utterance asks for it (double_check, news). An empty transcript tells
+    the two gated kinds apart: it rules nothing out and asks for
+    nothing."""
+    if not _has_tool_gate(handler) or handler.name in _GATES_KEEP_BAND_PLACE:
         return 0
     try:
         return 1 if handler.offers_tool("") else 2
@@ -500,7 +511,10 @@ def offered_tool_schemas(transcript: str) -> list[dict]:
     does reach it — a who/why/where question about the house included —
     sees them, so the list only ever changes at its end. (Withholding them
     from "where are my notes" cost the next ordinary turn 11-15 s of
-    re-reading on a CPU host, measured 2026-09-30.)
+    re-reading on a CPU host, measured 2026-09-30.) Reminder and timer are
+    gated the same way — withheld only on talk about a timer or reminder,
+    which doesn't reach the router either — and keep their band place
+    (``_GATES_KEEP_BAND_PLACE``).
     """
     offered = [h for h in HANDLERS if h.offers_tool(transcript)]
     offered.sort(key=_tool_order)  # stable: band order within each group

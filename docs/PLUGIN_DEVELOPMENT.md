@@ -801,7 +801,8 @@ class Handler(ABC):
   from a plain who/why/where question about the world, which never reaches the
   router anyway — the shared check lives in `handlers/shared/tool_gate.py`),
   `reminder` and `timer` (both withheld on talk about a timer or reminder,
-  "my reminder didn't go off", `tool_gate.TIMER_STATEMENT_RE`).
+  "my reminder didn't go off", `tool_gate.TIMER_STATEMENT_RE`, which the
+  router sends straight to Q&A too).
   Every gate that flips changes the router's tool list, and the next ordinary
   turn re-reads everything after the change (11-15 s on a CPU host), so
   withhold only where your tool is actually picked wrongly. Check the effect
@@ -810,9 +811,10 @@ class Handler(ABC):
   `offers_tool("")` says True for goes with the usually-offered group, one
   that says False is appended only when asked for. Two kinds of utterance
   never reach the tool model at all, so no tool — yours included — is
-  offered for them: a plain who/why/where question about the world, and a
-  request for a joke, a fact, a story or an explanation
-  (`tool_gate.answers_without_tools`). Give such a command a fast path.
+  offered for them: a plain who/why/where question about the world, a
+  request for a joke, a fact, a story or an explanation, and talk about a
+  timer or reminder (`tool_gate.answers_without_tools`). Give such a
+  command a fast path.
 * **Prompt size**: every tool schema lengthens the router's prompt (the stock
   list is ~3,340 tokens; the five sibling plugins with tools bring it to
   ~3,900), and Ollama's default 4096-token window on a CPU host then no

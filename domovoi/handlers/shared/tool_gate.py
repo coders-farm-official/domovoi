@@ -12,11 +12,12 @@ later gets exactly the openers that were measured, not a fresh
 approximation of them.
 
 The router asks the same question one level up (``answers_without_tools``):
-a plain question about the world, or a request for a joke or a story, is
-not shown to the tool model at all — it goes straight to the Q&A model.
-That is cheaper than offering it a trimmed tool list (no router call, and
-no change to the tool list whose prompt prefix Ollama caches), and no
-bait tool is on offer to be picked.
+a plain question about the world, a request for a joke or a story, or
+talk about a timer or reminder (``TIMER_STATEMENT_RE``) is not shown to
+the tool model at all — it goes straight to the Q&A model. That is
+cheaper than offering it a trimmed tool list (no router call, and no
+change to the tool list whose prompt prefix Ollama caches), and no bait
+tool is on offer to be picked.
 """
 
 from __future__ import annotations
@@ -124,11 +125,28 @@ def is_plain_qa_request(transcript: str) -> bool:
 def answers_without_tools(transcript: str) -> bool:
     """Whether the router should hand ``transcript`` (normalized, filler
     stripped) straight to the Q&A model without asking the tool model.
-    True only for a plain knowledge question or a plain request for a
-    joke, fact or story — the utterances no tool is for, and the ones a
-    small tool model most often answers itself (or baits on) instead of
-    saying "no tool"."""
-    return is_plain_knowledge_question(transcript) or is_plain_qa_request(transcript)
+    True only for a plain knowledge question, a plain request for a joke,
+    fact or story, or talk about a timer or reminder ("my reminder didn't
+    go off") — the utterances no tool is for, and the ones a small tool
+    model most often answers itself (or baits on, or files as a new
+    reminder) instead of saying "no tool"."""
+    return (
+        is_plain_knowledge_question(transcript)
+        or is_plain_qa_request(transcript)
+        or is_timer_statement(transcript)
+    )
+
+
+def is_timer_statement(transcript: str) -> bool:
+    """Talk ABOUT a timer or reminder, which asks for no timer or reminder
+    action (``TIMER_STATEMENT_RE``): "my reminder for 10 minutes didn't go
+    off", "you have a reminder in 10 minutes". The reminder and timer
+    handlers withhold their tools on it too (``offers_tool``); the router
+    sends it to the Q&A model before any tool list is built, so their
+    withholding never changes a routed turn's list."""
+    return TIMER_STATEMENT_RE.match(transcript) is not None
+
+
 # What a statement about a timer or reminder goes on with: "my reminder for
 # 10 minutes DIDN'T go off", "that timer WAS useless".
 STATEMENT_VERBS = (
