@@ -110,7 +110,11 @@ async def test_a_daemon_that_never_speaks_is_bounded() -> None:
     server, port = await _serve(frozen)
     try:
         began = time.monotonic()
-        assert await _wait_for_mpd(HOST, port, timeout=0.4, interval=0.05) is False
+        # Held to an outer limit too, so a read that lost its bound fails
+        # this test instead of hanging the suite.
+        assert await asyncio.wait_for(
+            _wait_for_mpd(HOST, port, timeout=0.4, interval=0.05), timeout=5.0,
+        ) is False
         assert time.monotonic() - began < 1.2
     finally:
         release.set()
