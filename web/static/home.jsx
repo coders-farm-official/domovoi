@@ -296,45 +296,28 @@ const HomeHooks = (() => {
   };
 
   /* The house's timers against the SERVER's clock (server_now), plus the
-   * ones that just fired. The server deletes a timer the moment it fires,
-   * so this page is the only place that remembers it for the minute of
-   * "done · kitchen". A timer that vanishes before its time was cancelled,
-   * not fired, and leaves no line. */
+   * ones that just went off. "done · kitchen" comes from the server's
+   * fire history (`fires`, V017) — never from a row vanishing, which is
+   * what a cancel looks like too — and lingers a minute after the fire.
+   * No `fires` (an older server, V017 not applied): no done lines.
+   * `cancelledRef` holds the rows this page has cancelled; they leave the
+   * countdown before the re-read confirms it. */
   const useTimers = (data, cancelledRef) => {
     const list = (data && Array.isArray(data.timers)) ? data.timers : [];
+    const fires = (data && Array.isArray(data.fires)) ? data.fires : [];
     const offset = React.useMemo(() => {
       const s = data && Date.parse(data.server_now);
       return Number.isFinite(s) ? s - Date.now() : 0;
     }, [data]);
-    const prevRef = React.useRef(new Map());
-    const firedRef = React.useRef(new Map());
-    React.useEffect(() => {
-      const now = Date.now() + offset;
-      const next = new Map(list.map((t) => [t.id, t]));
-      for (const [id, t] of prevRef.current) {
-        if (next.has(id) || cancelledRef.current.has(id)) continue;
-        const at = Date.parse(t.expires_at);
-        if (at <= now + 2000) firedRef.current.set(id, { ...t, doneAt: at });
-      }
-      prevRef.current = next;
-    }, [data]);
-
     const now = Date.now() + offset;
-    const active = [];
-    const done = new Map();
-    for (const t of list) {
-      const at = Date.parse(t.expires_at);
-      if (at > now) active.push(t);
-      else if (!cancelledRef.current.has(t.id)) done.set(t.id, { ...t, doneAt: at });
-    }
-    for (const [id, d] of firedRef.current) {
-      if (now - d.doneAt >= HOME_DONE_MS) firedRef.current.delete(id);
-      else if (!done.has(id)) done.set(id, d);
-    }
-    const doneList = [...done.values()]
-      .filter((d) => now - d.doneAt < HOME_DONE_MS)
-      .sort((a, b) => b.doneAt - a.doneAt);
-    return { active, done: doneList, now };
+    const active = list.filter((t) => Date.parse(t.expires_at) > now && !cancelledRef.current.has(t.id));
+    const done = fires
+      .filter((f) => {
+        const at = Date.parse(f.fired_at);
+        return Number.isFinite(at) && now - at < HOME_DONE_MS;
+      })
+      .sort((a, b) => Date.parse(b.fired_at) - Date.parse(a.fired_at) || b.id - a.id);
+    return { active, done, now };
   };
 
   return { useViewer, useLive, useInterval, useOnFocus, useDebounced, useTick, useIsPhone, useTimers,
@@ -681,6 +664,18 @@ const HomeTimerRow = ({ t, now, shared, roomOnline, busy, extra, onCancel }) => 
   );
 };
 
+/* A fire (GET /api/timers `fires`) in the shape HomeTimerTitle reads. */
+const HomeFireAsTimer = (f) => ({
+  is_reminder: f.is_reminder, label: f.label, message: f.message, room_id: f.room_id,
+  expires_at: f.due_at, created_at: f.created_at,
+});
+// Heard somewhere → ok; a room still waiting its turn → warn; nowhere → err.
+const HomeFireTone = (f) => {
+  if ((f.heard_in || []).length) return 'ok';
+  if ((f.deliveries || []).some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  return 'err';
+};
+
 const HomeTimers = ({ active, done, now, shared, onlineRooms, cancelling, onCancel }) => {
   const [expanded, setExpanded] = React.useState(false);
   if (!active.length && !done.length) return null;
@@ -696,11 +691,12 @@ const HomeTimers = ({ active, done, now, shared, onlineRooms, cancelling, onCanc
                         roomOnline={onlineRooms.has(t.room_id)} busy={cancelling.has(t.id)}
                         extra={i >= HOME_PHONE_TIMERS && !expanded} onCancel={onCancel}/>
         ))}
-        {done.map((d) => (
-          <div key={`done-${d.id}`} className="home-timer-done" data-done={d.id}>
-            <StatusDot tone="ok"/>
-            <span>done · {d.room_id || 'no room'}</span>
-            {!(shared && d.is_reminder) && <span className="meta">{HomeTimerTitle(d, shared)}</span>}
+        {done.map((f) => (
+          <div key={`done-${f.id}`} className="home-timer-done" data-done={f.id}>
+            <StatusDot tone={HomeFireTone(f)}/>
+            <span>done · {f.room_id || 'no room'}</span>
+            {!(shared && f.is_reminder) && <span className="meta">{HomeTimerTitle(HomeFireAsTimer(f), shared)}</span>}
+            {f.summary && <span className="meta home-timer-heard">{f.summary}</span>}
           </div>
         ))}
       </Card>
@@ -1081,7 +1077,9 @@ const HomePage = ({ counts, badges }) => {
   const cfg = useApiObject('/api/config', HOME_QUIET);
   const health = useApiObject('/api/health', HOME_QUIET);
   const sats = useApiObject('/api/satellites', HOME_QUIET);
-  const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed'], quiet: true });
+  // `timer_fires.changed` too: a fire's "done · kitchen" line comes from
+  // the same read, and its "heard in …" moves as each room announces it.
+  const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true });
   const plugins = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'], quiet: true });
   const acq = useApiObject('/api/acquisitions?status=pending&limit=100',
                            { eventTypes: ['acquisitions.changed'], quiet: true });
@@ -1307,17 +1305,18 @@ const HomePage = ({ counts, badges }) => {
   };
 
   // One DELETE per timer at a time: a double tap must not send a second
-  // one and toast "that one already finished" over "cancelled".
+  // one and toast "that one already finished" over "cancelled". The row
+  // shows "cancelling…" while the DELETE is out, and leaves the countdown
+  // once the server has said yes (useTimers skips `cancelled`).
   const onCancel = async (t) => {
     if (cancellingRef.current.has(t.id)) return;
     cancellingRef.current.add(t.id);
     setCancelling((c) => new Set(c).add(t.id));
-    cancelled.current.add(t.id);
     try {
       await apiDelete(`/api/timers/${t.id}`);
+      cancelled.current.add(t.id);
       fire(`cancelled ${HomeTimerNoun(t, shared)}`);
     } catch (e) {
-      cancelled.current.delete(t.id);
       if (e && e.status === 404) fire('that one already finished');
       else reportMutationFailure(fire, 'cancel', e);
     } finally {

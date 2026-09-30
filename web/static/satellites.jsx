@@ -6,6 +6,8 @@
  *   * GET /api/satellites/{room}/conversations                — drawer · conversations tab (paired devices only)
  *   * GET /api/satellites/{room}/notes                        — drawer · notes tab (paired devices only)
  *   * GET /api/satellites/{room}/timers                       — drawer · timers tab
+ *   * GET /api/timers/fires?room_id={room}                    — drawer · timers tab · "recently fired here"
+ *   * PUT /api/satellites/{room}/timer-announcements          — drawer · overview · "Only reminders for this device"
  *   * GET /api/satellites/{room}/recently-played              — drawer · recently-played tab
  *   * POST /api/music/add-by-url|query                        — drawer · recently-played "+ add" (generic acquisition)
  *   * POST /api/satellites/{room}/volume                      — drawer · overview · volume slider (master output)
@@ -441,6 +443,53 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   );
 };
 
+/* "Only reminders for this device" — which timers and reminders this
+ * satellite announces. Off (the default): every room's, each named by the
+ * room it was set in ("From the garage: your 10 minute timer is done").
+ * On: only the ones set on this satellite. The room a timer was set in
+ * always announces it. A household setting (device tier, like volume):
+ * no admin check, and it works while the room is offline — it is a row
+ * in the database the core reads each time something goes off. */
+const SatTimerScopeControl = ({ s, fire, refresh }) => {
+  const [busy, setBusy] = React.useState(false);
+  // What the last change here set, until the roster (a slower read) agrees.
+  const [justSet, setJustSet] = React.useState(null);
+  React.useEffect(() => { setJustSet(null); }, [s.room_id, s.timers_own_only]);
+  const on = justSet !== null ? justSet : !!s.timers_own_only;
+
+  const onChange = async (e) => {
+    if (busy) return;
+    const next = !!(e && e.target && e.target.checked);
+    setBusy(true);
+    try {
+      await apiFetch(`/api/satellites/${encodeURIComponent(s.room_id)}/timer-announcements`, {
+        method: 'PUT', body: JSON.stringify({ own_only: next }),
+      });
+      setJustSet(next);
+      fire(next
+        ? `${s.room_id} now announces only its own timers and reminders`
+        : `${s.room_id} now announces timers and reminders from every room`);
+      refresh && refresh();
+    } catch (err) {
+      reportMutationFailure(fire, 'change timer announcements', err);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>timers &amp; reminders</div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+                      cursor: busy ? 'default' : 'pointer' }}>
+        <input type="checkbox" checked={on} disabled={busy} onChange={onChange}/>
+        Only reminders for this device
+      </label>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+        Covers timers and reminders. Off: this satellite also announces the ones set in other rooms and says which room they came from. On: it announces only the ones set on this satellite. The room a timer or reminder was set in always announces it.
+      </div>
+    </div>
+  );
+};
+
 const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
@@ -711,6 +760,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         </div>
       </div>
 
+      <SatTimerScopeControl s={s} fire={fire} refresh={refresh}/>
+
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>drop in</div>
         {s.in_call_with ? (
@@ -880,6 +931,39 @@ const RoomNotesBody = ({ room }) => {
   );
 };
 
+/* A reminder whose words the server held back: this browser holds no
+ * household credential (rule M1). Pair it, or sign in, to read them. */
+const SatTimerWordsHidden = 'reminder (words hidden)';
+
+// What a fired timer or reminder is called in the "recently fired" list.
+const SatTimerFireTitle = (f) => {
+  if (f.is_reminder) return f.masked ? SatTimerWordsHidden : (f.message || 'reminder');
+  if (f.label) return `${f.label} timer`;
+  const total = (Date.parse(f.due_at) - Date.parse(f.created_at)) / 1000;
+  if (!(total > 0)) return 'timer';
+  return total < 90 ? `${Math.round(total)}s timer` : `${Math.round(total / 60)} min timer`;
+};
+
+/* What went off that was SET in this room lately (fire history, V017),
+ * and where it was heard. Nothing when the server keeps no history. */
+const SatTimerFiredList = ({ room }) => {
+  const { data } = useApiObject(`/api/timers/fires?room_id=${encodeURIComponent(room)}&limit=10`,
+                                { eventTypes: ['timer_fires.changed'], quiet: true });
+  const fires = (data && Array.isArray(data.fires)) ? data.fires : [];
+  if (!fires.length) return null;
+  return (
+    <div className="sat-timer-fired" style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>recently fired here</div>
+      {fires.map((f) => (
+        <div key={f.id} className="sat-timer-fired-row mono" data-fire={f.id}
+             style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '3px 0', overflowWrap: 'anywhere' }}>
+          {`fired ${relTime(f.fired_at)} · ${SatTimerFireTitle(f)} · ${f.summary || ''}`}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const RoomTimersBody = ({ room, fire }) => {
   const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`);
   // Tick state so the remaining-time column counts down between fetches.
@@ -902,8 +986,14 @@ const RoomTimersBody = ({ room, fire }) => {
   if (loading && rows.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading timers…</div>;
   if (rows.length === 0)
-    return <Empty glyph="sleeping" title="no active timers or reminders"/>;
+    return (
+      <>
+        <Empty glyph="sleeping" title="no active timers or reminders"/>
+        <SatTimerFiredList room={room}/>
+      </>
+    );
   return (
+    <>
     <table className="tbl">
       <thead><tr>
         <th>kind</th><th>label</th><th>fires</th><th className="num">remaining</th><th className="actions"></th>
@@ -915,7 +1005,9 @@ const RoomTimersBody = ({ room, fire }) => {
           return (
             <tr key={t.id}>
               <td><Pill tone={kind === 'timer' ? 'live' : 'idle'}>{kind}</Pill></td>
-              <td style={{ fontWeight: 500 }}>{t.label || (t.is_reminder ? t.message : '—')}</td>
+              <td style={{ fontWeight: 500 }}>
+                {t.masked ? SatTimerWordsHidden : (t.label || (t.is_reminder ? t.message : '—'))}
+              </td>
               <td className="mono">{relTime(t.expires_at)}</td>
               <td className="num mono" style={{ color: remaining != null && remaining < 600 ? 'var(--warn)' : 'var(--fg)' }}>
                 {fmtRemaining(remaining)}
@@ -928,6 +1020,8 @@ const RoomTimersBody = ({ room, fire }) => {
         })}
       </tbody>
     </table>
+    <SatTimerFiredList room={room}/>
+    </>
   );
 };
 

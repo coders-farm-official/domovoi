@@ -335,6 +335,9 @@
               <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
             </main>
             <AuthModalHost/>
+            {/* A timer or reminder went off somewhere in the house: a card
+                that stays until dismissed (components.jsx). */}
+            <TimerFireAlerts/>
             {pluginsStale && (
               <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', right: 24, zIndex: 80,
                             background: 'var(--overlay)', border: '1px solid var(--border)',

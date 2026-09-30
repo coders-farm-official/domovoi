@@ -14,7 +14,9 @@ of visitor and what it must never do:
 * nothing private anywhere on the page: no Wi-Fi name, no event
   description, and no read of transcripts, notes, memories or people;
 * timers: the countdown against the server's clock, the elapsed bar, the
-  "done · kitchen" line for a minute after one fires, and cancel through
+  "done · kitchen · heard in kitchen" line for a minute after one fires —
+  from the server's fire history (``fires``, V017), never from a row that
+  vanished, which is what a cancel looks like too — and cancel through
   the pair prompt and replay;
 * rooms: per-room transport, the "play" sheet (favorites, shuffled),
   "stop all" needing a second tap, "last known" when the core is down,
@@ -219,6 +221,23 @@ def timer(tid: int, *, left_s: int, total_s: int = 600, label: str | None = None
 
 
 PASTA = timer(5, left_s=300, total_s=600, label="pasta")
+
+
+def fire(fid: int, *, timer_id: int, fired_ms: int, total_s: int = 600, label: str | None = None,
+         message: str | None = None, room_id: str | None = "kitchen",
+         deliveries: list | None = None, summary: str | None = None, masked: bool = False) -> dict:
+    """One Fire, as GET /api/timers `fires` carries it (docs/API_REFERENCE.md)."""
+    if deliveries is None:
+        deliveries = [{"room_id": room_id, "is_origin": True, "outcome": "spoken", "detail": None,
+                       "finished_at": iso(fired_ms + 2000)}]
+    heard = [d["room_id"] for d in deliveries if d["outcome"] in ("spoken", "interrupted")]
+    return {"id": fid, "timer_id": timer_id, "kind": "reminder" if message is not None else "timer",
+            "is_reminder": message is not None, "label": label, "message": message, "masked": masked,
+            "room_id": room_id, "created_at": iso(fired_ms - total_s * 1000), "due_at": iso(fired_ms),
+            "fired_at": iso(fired_ms), "settled_at": None, "acked_at": None, "acked_by": None,
+            "heard_in": heard,
+            "summary": summary if summary is not None else ("heard in " + ", ".join(heard) if heard else "announcing…"),
+            "deliveries": deliveries}
 EVENTS = [
     {"id": 1, "title": "Standup", "starts_at": iso(NOW - 30 * MIN), "ends_at": iso(NOW + 30 * MIN),
      "location": "Office", "description": "SECRET DESCRIPTION", "source": "local"},
@@ -429,19 +448,59 @@ SCENARIOS["push_debounced"] = scenario(
 _T_PASTA = timer(5, left_s=65, total_s=120, label="pasta")
 _T_ROAST = timer(7, left_s=20 * 60, total_s=40 * 60, label="roast", room_id=None)
 _T_TEA = timer(8, left_s=500, total_s=600, label="tea")
+_F_PASTA = fire(41, timer_id=5, fired_ms=NOW + 65_500, total_s=120, label="pasta")
 SCENARIOS["timer_countdown"] = scenario(
     house(**{"GET /api/satellites": [room("kitchen")],
-             "GET /api/timers": {"server_now": iso(NOW), "timers": [_T_PASTA, _T_TEA, _T_ROAST]}}),
+             "GET /api/timers": {"server_now": iso(NOW), "timers": [_T_PASTA, _T_TEA, _T_ROAST],
+                                 "fires": []}}),
     "const t0 = w.__snap(h);"
     f"w.__setNow({NOW + 10_000}); h.rerender(); const t10 = w.__snap(h);"
     f"w.__setNow({NOW + 66_000}); h.rerender(); const fired = w.__snap(h);"
     # The server fires pasta (and tea is cancelled by voice meanwhile): the
-    # next read has only the roast, pushed on the timers channel.
-    f"w.__table['GET /api/timers'] = {{ server_now: '{iso(NOW + 66_000)}', timers: [{json.dumps(_T_ROAST)}] }};"
-    "w.__wsOpen(); w.__wsEmit({ type: 'timers.changed', data: [] }); await w.__flush(h);"
+    # next read has only the roast, and pasta in the fire history — pushed
+    # on the fire-history channel.
+    f"w.__table['GET /api/timers'] = {{ server_now: '{iso(NOW + 66_000)}', timers: [{json.dumps(_T_ROAST)}],"
+    f" fires: [{json.dumps(_F_PASTA)}] }};"
+    "w.__wsOpen(); w.__wsEmit({ type: 'timer_fires.changed', data: [] }); await w.__flush(h);"
     "const pushed = w.__snap(h);"
     f"w.__setNow({NOW + 130_000}); h.rerender(); const later = w.__snap(h);"
     "return { t0, t10, fired, pushed, later };",
+    ls=PAIRED_LS,
+)
+# The tone of each done line's dot, in order.
+_DONE_DOTS = ("w.__doneDots = () => h.findAll((e) => w.__cls(e).includes('dot'))"
+              ".filter((e) => h.inside(e, (a) => w.__cls(a).includes('home-timer-done')))"
+              ".map((e) => e.props.style.background);")
+_F_HEARD = fire(51, timer_id=11, fired_ms=NOW - 5_000, label="tea")
+_F_ON_ITS_WAY = fire(52, timer_id=12, fired_ms=NOW - 10_000, message="call mum about the tickets",
+                     room_id="office", deliveries=[
+                         {"room_id": "office", "is_origin": True, "outcome": "offline", "detail": None,
+                          "finished_at": None},
+                         {"room_id": "kitchen", "is_origin": False, "outcome": "pending",
+                          "detail": "capturing", "finished_at": None}])
+_F_NOWHERE = fire(53, timer_id=13, fired_ms=NOW - 20_000, room_id="garage", total_s=300, deliveries=[
+    {"room_id": "garage", "is_origin": True, "outcome": "offline", "detail": None, "finished_at": None}],
+    summary="not heard in any room (garage offline)")
+_F_OLD = fire(50, timer_id=10, fired_ms=NOW - 61_000, label="eggs")
+_FIRE_HOUSE = house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [],
+                                           "fires": [_F_HEARD, _F_ON_ITS_WAY, _F_NOWHERE, _F_OLD]}})
+SCENARIOS["timer_fires_lines"] = scenario(
+    _FIRE_HOUSE, _DONE_DOTS + "return { snap: w.__snap(h), dots: w.__doneDots() };", ls=PAIRED_LS)
+SCENARIOS["timer_fires_shared"] = scenario(_FIRE_HOUSE, SNAP, ls=SHARED_LS)
+# No household credential: the server masked the reminder (rule M1).
+SCENARIOS["timer_fires_masked"] = scenario(
+    house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
+        {**_F_ON_ITS_WAY, "message": None, "label": None, "masked": True}]}}),
+    SNAP)
+# An older server (or V017 not applied): `fires` null or absent — a row
+# that vanished past its time still draws no line.
+SCENARIOS["timer_fires_null"] = scenario(
+    house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [_T_PASTA], "fires": None}}),
+    f"const t0 = w.__snap(h);"
+    f"w.__table['GET /api/timers'] = {{ server_now: '{iso(NOW + 66_000)}', timers: [], fires: null }};"
+    f"w.__setNow({NOW + 66_000}); w.__wsOpen(); w.__wsEmit({{ type: 'timers.changed', data: [] }});"
+    "await w.__flush(h);"
+    "return { t0, after: w.__snap(h) };",
     ls=PAIRED_LS,
 )
 SCENARIOS["timer_skewed_phone"] = scenario(
@@ -1078,14 +1137,51 @@ def test_timers_count_down_soonest_first_with_the_elapsed_bar(driven) -> None:
 
 def test_a_fired_timer_says_done_for_a_minute(driven) -> None:
     out = driven["timer_countdown"]
-    assert out["fired"]["done"] == ["done · kitchenpasta"]
+    # Past its time, pasta leaves the countdown — but "done" waits for the
+    # server to say it went off.
+    assert out["fired"]["done"] == []
     assert [t["id"] for t in out["fired"]["timers"]] == [8, 7]
-    # The server deleted it and pushed; the line stays — and tea, which
-    # vanished before its time, was cancelled, not fired: no line.
-    assert out["pushed"]["done"] == ["done · kitchenpasta"]
+    # The fire history says so, with where it was heard; tea, which
+    # vanished with no fire, was cancelled: no line.
+    assert out["pushed"]["done"] == ["done · kitchenpastaheard in kitchen"]
     assert [t["id"] for t in out["pushed"]["timers"]] == [7]
     assert "1 timer" in out["pushed"]["text"]
     assert out["later"]["done"] == []
+
+
+def test_done_lines_come_from_the_fire_history_newest_first(driven) -> None:
+    out = driven["timer_fires_lines"]
+    # 61 s old is past the minute; the rest newest first.
+    assert out["snap"]["done"] == [
+        "done · kitchenteaheard in kitchen",
+        "done · officecall mum about the ticketsannouncing…",
+        "done · garage5 min timernot heard in any room (garage offline)",
+    ]
+    # Heard → ok; still on its way → warn; heard nowhere → err.
+    assert out["dots"] == ["var(--ok)", "var(--warn)", "var(--err)"]
+
+
+def test_a_shared_screen_hides_the_reminder_words_in_the_done_line(driven) -> None:
+    snap = driven["timer_fires_shared"]
+    assert "done · officeannouncing…" in snap["done"]
+    assert "call mum" not in snap["blob"]
+    assert "done · kitchenteaheard in kitchen" in snap["done"]      # a timer's label stays
+
+
+def test_a_masked_reminder_reads_reminder(driven) -> None:
+    assert driven["timer_fires_masked"]["done"] == ["done · officereminderannouncing…"]
+
+
+def test_no_fire_history_draws_no_done_line(driven) -> None:
+    out = driven["timer_fires_null"]
+    assert out["t0"]["done"] == [] and [t["id"] for t in out["t0"]["timers"]] == [5]
+    assert out["after"]["done"] == [] and out["after"]["timers"] == []
+
+
+def test_home_rereads_the_timers_on_either_push() -> None:
+    home = (STATIC / "home.jsx").read_text(encoding="utf-8")
+    assert ("useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'],"
+            " quiet: true })") in home
 
 
 def test_countdown_follows_the_server_clock_not_the_phone(driven) -> None:
