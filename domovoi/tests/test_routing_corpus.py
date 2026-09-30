@@ -33,6 +33,7 @@ import pytest
 from domovoi.clients.ollama import ROUTER_SYSTEM_PROMPT, RealOllamaClient
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, as_fast_path
+from domovoi.handlers.shared.tool_gate import answers_without_tools
 from domovoi.models import Context, Intent
 from domovoi.router import _LEADING_FILLER_RE, offered_tool_schemas, route
 from domovoi.tests.conftest import requires_db
@@ -231,10 +232,124 @@ def test_gated_tools_are_offered_last() -> None:
     assert gated == sorted(gated, key=band.__getitem__)
 
 
+def test_tools_offered_only_on_request_are_appended_after_the_usual_ones() -> None:
+    """double_check and news are offered only when asked for; they go after
+    calculator and library (on offer unless ruled out), so asking for one
+    APPENDS a tool: the router re-reads that schema, not the ~900 tokens
+    of calculator and library behind it, and the next ordinary turn finds
+    its cached prefix intact."""
+    usual = _offered("play some jazz in the kitchen")
+    assert usual[-2:] == ["calculator", "library"]
+    for utterance, extra in (
+        ("fact check what you just said", ["double_check"]),
+        ("what's happening in the world today", ["news"]),
+        ("double check the latest news about the 3 timers i set", ["double_check", "news"]),
+    ):
+        names = _offered(utterance)
+        assert names == usual + extra, utterance
+
+
+def test_an_ordinary_turn_offers_the_warm_up_list() -> None:
+    """What the boot warm-up primes (offered_tool_schemas("")) is exactly
+    what an ordinary routed turn offers, so the first turn finds it cached."""
+    assert _offered("") == _offered("remind me to call mom at five")
+    assert _offered("") == _offered("could you put on something relaxing")
+
+
+# ─── Straight to QA ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("case", CORPUS, ids=_ids(CORPUS))
+def test_only_qa_utterances_skip_the_router(case) -> None:
+    """Every utterance that goes straight to the Q&A model must be one the
+    corpus expects QA to answer; a handler case must reach the router."""
+    if answers_without_tools(_normalize(case["utterance"])):
+        assert case["handler"] is None, (
+            f"{case['utterance']!r} would skip the router but belongs to {case['handler']!r}"
+        )
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        # the bait class (F-V002/F-V004) and the measured slow answers
+        "who wrote the odyssey", "who wrote pride and prejudice", "who painted the mona lisa",
+        "who invented the telephone", "where is the eiffel tower", "why is the sky blue",
+        "tell me who wrote the odyssey", "do you know why the sky is blue",
+        "who won the 1998 world cup", "tell me a joke", "tell me another joke",
+        "tell me a fun fact", "give me a fun fact", "tell me some facts about the moon",
+        "tell me a story", "tell me a bedtime story about a dragon", "tell me a riddle",
+        "tell me something interesting", "make me laugh", "explain how a rainbow forms",
+    ],
+)
+def test_plain_questions_and_requests_skip_the_router(utterance: str) -> None:
+    assert answers_without_tools(_normalize(utterance))
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        # about the house, the speaker or something pointed at
+        "who sings creep", "whose album is ok computer", "who is the artist on this track",
+        "where did i put that playlist", "why is the wifi so slow",
+        "where did i leave off in my audiobook", "who is in the kitchen", "why did you say that",
+        "who is this", "where are my notes", "who is home", "where is everyone",
+        "who is at the door", "why is the music off", "where's the timer",
+        "tell me a joke about my dog", "tell me a news story", "tell me the stories",
+        # openers that front real handler turns
+        "what is the capital of mongolia", "how many days until christmas",
+        "what time is it", "tell me about the history of rome",
+    ],
+)
+def test_questions_about_the_house_still_reach_the_router(utterance: str) -> None:
+    assert not answers_without_tools(_normalize(utterance))
+
+
+# ─── Cue words (a false positive changes the router's prompt) ─────────
+
+
+@pytest.mark.parametrize(
+    ("utterance", "tool", "offered"),
+    [
+        # "history" held "story"; "reporter", "topical" held "report", "topic"
+        ("tell me about the history of rome", "news", False),
+        ("who was the first reporter on the moon", "news", False),
+        ("is that topical", "news", False),
+        ("tell me a story", "news", False),
+        ("i want to hear a short story about pirates", "news", False),
+        ("tell me a news story", "news", True),
+        ("what's the top story", "news", True),
+        ("read me the stories", "news", True),
+        ("any reports on the election", "news", True),
+        # everyday words that are not a request to verify
+        ("tell me a fun fact", "double_check", False),
+        ("remind me in twenty minutes to check the oven", "double_check", False),
+        ("make sure the timer is set", "double_check", False),
+        ("i really want some jazz", "double_check", False),
+        ("actually play the other one", "double_check", False),
+        ("i bet it rains", "double_check", False),
+        ("what's the source of the nile", "double_check", True),
+        # and the ones that are
+        ("is that right", "double_check", True),
+        ("is that really true", "double_check", True),
+        ("are you sure", "double_check", True),
+        ("you sure", "double_check", True),
+        ("that's not right", "double_check", True),
+        ("what's your source", "double_check", True),
+        ("can you check that", "double_check", True),
+        ("really", "double_check", True),
+        ("is that a fact", "double_check", True),
+        ("for real", "double_check", True),
+    ],
+)
+def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
+    assert (tool in _offered(utterance)) is offered, utterance
+
+
 def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     """The gate withholds only on evidence — a command with a digit, a
     verification word and a news word in it must see every tool."""
-    names = _offered("check the latest news about the 3 timers i set")
+    names = _offered("double check the latest news about the 3 timers i set")
     assert set(names) == {h.name for h in HANDLERS}
 
 
@@ -303,18 +418,50 @@ async def test_router_offers_gated_schemas_and_ignores_withheld_calls(db_session
             return SearchSubject(subject="", refined_query=transcript)
 
     with patch("domovoi.router.get_ollama_client", lambda: _BaitingOllama()):
+        # A who-question about music reaches the router, calculator withheld.
         response = await route(
-            Intent(transcript="who wrote the odyssey", room_id="kitchen"),
+            Intent(transcript="who sings creep", room_id="kitchen"),
             Context(room_id="kitchen", online=True),
             db_session,
         )
         await db_session.commit()
 
     assert "calculator" not in seen["names"]
+    assert "library" in seen["names"]
     assert "double_check" not in seen["names"]
     assert response.matched_handler is None
     assert response.matched_path == "qa"
     assert "Homer" in response.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_plain_question_never_asks_the_tool_model(db_session) -> None:
+    """"who wrote the odyssey" goes straight to the Q&A model: no router
+    call to answer it in throwaway text, and no bait tool to pick."""
+    routed: list[str] = []
+
+    class _Ollama:
+        async def route(self, transcript, tool_schemas):
+            routed.append(transcript)
+            return {"handler": "calculator", "args": {"action": "arithmetic", "expression": "1+1"}}
+
+        async def qa_with_uncertainty(self, transcript, history=None, profile_prefix=None):
+            from domovoi.clients.ollama import QAWithUncertainty
+
+            return QAWithUncertainty(answer="Homer.", needs_verification=False, candidate_claim="")
+
+    with patch("domovoi.router.get_ollama_client", lambda: _Ollama()):
+        for utterance in ("Who wrote the Odyssey?", "Tell me a joke.", "Tell me a fun fact."):
+            response = await route(
+                Intent(transcript=utterance, room_id="kitchen"),
+                Context(room_id="kitchen", online=True),
+                db_session,
+            )
+            assert (response.matched_path, response.text) == ("qa", "Homer."), utterance
+        await db_session.commit()
+
+    assert routed == []
 
 
 # ─── Live core (opt-in) ───────────────────────────────────────────────

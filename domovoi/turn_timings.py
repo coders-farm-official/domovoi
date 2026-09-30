@@ -38,6 +38,9 @@ The stages, in pipeline order, all integer milliseconds:
 ``route_ms``
     The routing transaction: ``route()`` (fast path or language model, the
     handler, the audit writes), the voice-profile hooks, and the commit.
+    For a Q&A answer spoken as it is written (``Response.qa_stream``): up
+    to its first complete sentence, the moment it can start to be heard;
+    the rest of the answer and its records come after the first audio.
 ``tts_first_ms``
     From the routed response to the first reply audio handed to the
     socket: the voice lookup, the first sentence's synthesis and the

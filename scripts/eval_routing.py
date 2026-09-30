@@ -18,13 +18,17 @@ you actually run. This script does, against either of two targets:
                  schemas) against an Ollama server. Use it to A/B a prompt
                  or description edit before deploying, or to compare tool
                  models with --model. Needs the `ollama` package (the
-                 real-clients extra). Core handlers only — installed
-                 plugins' tools are not offered here.
+                 real-clients extra). Core handlers only, unless
+                 --live-tools adds the plugins' tools a running core
+                 offers (the bundled radio plugin on a stock install):
+                 the router's prompt then matches that core's, token for
+                 token.
 
 Usage:
     python scripts/eval_routing.py --core http://192.168.0.117:6370 --room bench
     python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b
     python scripts/eval_routing.py --ollama http://localhost:11434 --only qa --only double_check
+    python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b         --live-tools http://192.168.0.117:6370
     python scripts/eval_routing.py --list
 
 Exit status is 1 when any case misroutes, so it can gate a deploy. Pass
@@ -143,6 +147,70 @@ def run_core(cases: list[Case], base_url: str, room: str, timeout: float) -> lis
 # ─── Target: Ollama directly (router-only) ────────────────────────────
 
 
+def _read_live_handlers(source: str) -> list[dict[str, Any]]:
+    """GET /v1/handlers from a core (open, read-only), or a saved copy."""
+    if source.startswith(("http://", "https://")):
+        url = source.rstrip("/")
+        if not url.endswith("/v1/handlers"):
+            url += "/v1/handlers"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    return json.loads(Path(source).read_text(encoding="utf-8"))
+
+
+def _bundled_plugin_handler(name: str) -> Any | None:
+    """The bundled plugin's own handler class for ``name`` (plugins/<name>),
+    built without its SDK — enough for its fast paths and tool schema."""
+    plugin_dir = REPO_ROOT / "plugins" / name
+    if not plugin_dir.is_dir():
+        return None
+    if str(plugin_dir) not in sys.path:
+        sys.path.insert(0, str(plugin_dir))
+    try:
+        import importlib
+
+        module = importlib.import_module(f"domovoi_plugin_{name}.handlers")
+        for obj in vars(module).values():
+            if isinstance(obj, type) and getattr(obj, "name", None) == name:
+                return obj(None)
+    except Exception as e:  # noqa: BLE001 — fall back to a stand-in
+        print(f"(bundled plugin {name!r} not importable: {e})", file=sys.stderr)
+    return None
+
+
+def register_live_tools(source: str) -> list[str]:
+    """Make the local registry offer what a running core offers: every
+    handler in its GET /v1/handlers list that this checkout doesn't have
+    (plugins) is registered — the bundled plugin's own handler when it is
+    in plugins/, else a stand-in with the live schema, band and no fast
+    paths. Returns the names added. Core handlers keep this checkout's
+    schemas and gates: those are what is being evaluated."""
+    from domovoi.handlers import HANDLER_BY_NAME, register_handler
+    from domovoi.handlers.base import Handler
+
+    added: list[str] = []
+    for entry in _read_live_handlers(source):
+        name = entry.get("name")
+        if not name or name in HANDLER_BY_NAME or not entry.get("tool_schema"):
+            continue
+        handler = _bundled_plugin_handler(name)
+        if handler is None or handler.tool_schema != entry["tool_schema"]:
+            standin = type(
+                f"Live_{name}", (Handler,),
+                {
+                    "name": name,
+                    "priority_band": int(entry.get("priority_band") or 500),
+                    "tool_schema": entry["tool_schema"],
+                    "execute": lambda self, intent, ctx, session: None,
+                },
+            )
+            handler = standin()
+            handler.fast_paths = []
+        register_handler(handler)
+        added.append(name)
+    return added
+
+
 async def run_ollama(
     cases: list[Case], base_url: str, model: str | None
 ) -> list[Result]:
@@ -150,6 +218,7 @@ async def run_ollama(
     from domovoi.config import settings
     from domovoi.handlers import HANDLERS
     from domovoi.handlers.base import as_fast_path
+    from domovoi.handlers.shared.tool_gate import answers_without_tools
     from domovoi.router import _LEADING_FILLER_RE, offered_tool_schemas
 
     tool_model = model or settings.ollama_tool_model
@@ -174,6 +243,9 @@ async def run_ollama(
         winner = fast_path_winner(normalized)
         if winner is not None:
             handler, path, detail = winner, "fast", "fast path"
+        elif answers_without_tools(normalized):
+            # route() hands these to the Q&A model without a router call.
+            handler, path, detail = None, "qa", "straight to QA (no router call)"
         else:
             schemas = offered_tool_schemas(normalized)
             withheld = sorted(
@@ -243,6 +315,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     p.add_argument("--timeout", type=float, default=120.0, help="per-request timeout for --core, seconds")
     p.add_argument("--jsonl", type=Path, help="append one result row per case to this file")
+    p.add_argument(
+        "--live-tools", metavar="URL_OR_FILE",
+        help="for --ollama: also offer the plugin tools a running core lists at "
+             "GET /v1/handlers (a core URL, or a saved copy of that JSON)",
+    )
     p.add_argument("--list", action="store_true", help="print the corpus and exit")
     args = p.parse_args(argv)
 
@@ -264,6 +341,9 @@ def main(argv: list[str] | None = None) -> int:
         results = run_core(cases, args.core, args.room, args.timeout)
         target_name, model = args.core, None
     else:
+        if args.live_tools:
+            added = register_live_tools(args.live_tools)
+            print(f"live tools from {args.live_tools}: added {', '.join(added) or 'nothing'}")
         results = asyncio.run(run_ollama(cases, args.ollama, args.model))
         target_name, model = args.ollama, args.model
         print(f"target: ollama {args.ollama} model {model or '(settings default)'}, {len(cases)} cases")
