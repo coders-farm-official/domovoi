@@ -3,8 +3,6 @@ package com.domovoi.app.ui.screens.home
 import com.domovoi.app.net.ApiClient
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.Dispatcher
@@ -112,15 +110,6 @@ class HomeApiTest {
         assertEquals("POST", r.method)
         assertEquals("/api/music/pause/living%20room", r.path)
         assertEquals("DomovoiApp", r.getHeader("X-Requested-With"))
-
-        server.enqueue(MockResponse().setBody("{}"))
-        HomeApi.playFavorites(api, "kitchen")
-        val fav = server.takeRequest()
-        assertEquals("/api/music/play-playlist", fav.path)
-        val b = body(fav)
-        assertEquals("kitchen", b["room_id"]!!.jsonPrimitive.content)
-        assertEquals(0, b["playlist_id"]!!.jsonPrimitive.int)
-        assertEquals(true, b["shuffle"]!!.jsonPrimitive.boolean)
     }
 
     @Test fun stopAllStopsEveryRoomAndReportsAPartialFailure() = runBlocking {

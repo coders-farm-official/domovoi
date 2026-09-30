@@ -268,7 +268,6 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val busy = remember { mutableStateMapOf<String, Boolean>() }
     val cancelling = remember { mutableStateMapOf<Long, Boolean>() }
     var stoppingAll by remember { mutableStateOf(false) }
-    var sheetRoom by remember { mutableStateOf<String?>(null) }
 
     val onAct: (String, String) -> Unit = { room, verb ->
         if (busy[room] != true) {
@@ -284,23 +283,6 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                     busy.remove(room)
                     refetchRooms()
                 }
-            }
-        }
-    }
-    val onFavorites: (String) -> Unit = { room ->
-        sheetRoom = null
-        busy[room] = true
-        scope.launch {
-            try {
-                HomeApi.playFavorites(app.api, room)
-                toast("playing favorites in $room")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                toast(failureText("play", e))
-            } finally {
-                busy.remove(room)
-                refetchRooms()
             }
         }
     }
@@ -420,7 +402,6 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             compact = compact,
             onOpenRoom = { navigate(Route.Satellites) },
             onAct = onAct,
-            onPlay = { sheetRoom = it },
             onStopAll = onStopAll,
         )
     }
@@ -493,16 +474,6 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                 }
             }
         }
-    }
-
-    sheetRoom?.let { room ->
-        HomePlaySheet(
-            room = room,
-            compact = compact,
-            onDismiss = { sheetRoom = null },
-            onFavorites = { onFavorites(room) },
-            onPickInMusic = { sheetRoom = null; navigate(Route.Music) },
-        )
     }
 }
 

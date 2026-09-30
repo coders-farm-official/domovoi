@@ -28,22 +28,18 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -68,7 +64,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
@@ -545,7 +540,6 @@ internal fun HomeRooms(
     compact: Boolean,
     onOpenRoom: (String) -> Unit,
     onAct: (String, String) -> Unit,
-    onPlay: (String) -> Unit,
     onStopAll: (List<String>) -> Unit,
 ) {
     val playing = if (stale) emptyList() else rooms.filter { roomRank(it) == 0 }.map { it.room_id }
@@ -591,7 +585,7 @@ internal fun HomeRooms(
                         HomeRoomRow(
                             r = r, stale = stale, sinceReadSec = sinceReadSec,
                             nextTimerLeft = timerLeftByRoom[r.room_id], busy = busy[r.room_id] == true,
-                            tile = tile, onOpen = { onOpenRoom(r.room_id) }, onAct = onAct, onPlay = onPlay,
+                            tile = tile, onOpen = { onOpenRoom(r.room_id) }, onAct = onAct,
                         )
                     }
                     if (compact) {
@@ -663,8 +657,10 @@ private fun StopAllButton(count: Int, busy: Boolean, onConfirm: () -> Unit) {
 
 /**
  * One room. The left part leads to Satellites; the transport buttons sit
- * apart on the right edge, in thumb reach. Offline (and last-known) rooms
- * are dimmed.
+ * apart on the right edge, in thumb reach, while something is playing or
+ * paused. A quiet room has none: starting something in a room belongs to
+ * the Music page, which picks the room and the track together. Offline
+ * (and last-known) rooms are dimmed.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -677,7 +673,6 @@ private fun HomeRoomRow(
     tile: Boolean,
     onOpen: () -> Unit,
     onAct: (String, String) -> Unit,
-    onPlay: (String) -> Unit,
 ) {
     val online = r.online
     val np = r.now_playing
@@ -777,16 +772,6 @@ private fun HomeRoomRow(
                             TransportButton(Icons.Filled.PlayArrow, "resume ${r.room_id}", canAct) { onAct(r.room_id, "resume") }
                             TransportButton(Icons.Filled.Stop, "stop ${r.room_id}", canAct) { onAct(r.room_id, "stop") }
                         }
-                        else -> OutlinedButton(
-                            onClick = { onPlay(r.room_id) },
-                            enabled = canAct,
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            modifier = Modifier.heightIn(min = 44.dp).padding(end = 8.dp),
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("play", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg)
-                        }
                     }
                 }
             }
@@ -830,71 +815,6 @@ private fun HomeChip(icon: androidx.compose.ui.graphics.vector.ImageVector, text
     ) {
         Icon(icon, contentDescription = null, tint = Domovoi.colors.fgMuted, modifier = Modifier.size(12.dp))
         Text(text, style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted, maxLines = 1)
-    }
-}
-
-/** A quiet room's "play": favorites shuffled, or off to Music to pick
- *  something. A bottom sheet on a phone, a small dialog on a wider screen. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun HomePlaySheet(
-    room: String,
-    compact: Boolean,
-    onDismiss: () -> Unit,
-    onFavorites: () -> Unit,
-    onPickInMusic: () -> Unit,
-) {
-    val content: @Composable () -> Unit = {
-        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "play in $room",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Domovoi.colors.fg,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "close", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            SheetOption(Icons.Filled.Shuffle, "favorites · shuffle", onFavorites)
-            SheetOption(Icons.Filled.MusicNote, "pick something in music", onPickInMusic)
-        }
-    }
-    if (compact) {
-        ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Domovoi.colors.raised) {
-            Box(Modifier.padding(bottom = 24.dp)) { content() }
-        }
-    } else {
-        Dialog(onDismissRequest = onDismiss) {
-            Surface(
-                modifier = Modifier.widthIn(max = 420.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = Domovoi.colors.raised,
-                border = BorderStroke(1.dp, Domovoi.colors.border),
-            ) { content() }
-        }
-    }
-}
-
-@Composable
-private fun SheetOption(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Icon(icon, contentDescription = null, tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
     }
 }
 

@@ -32,6 +32,12 @@ rendered through. The model picker stays open; it lists models, not
 anything anybody said. Mutations fire
 ``chat_changed`` NOTIFY → the ``chat.changed`` WS event so a second open
 dashboard's thread list stays fresh.
+
+Message details (V017): an assistant row keeps ``stats`` — Ollama's token
+counts and durations for the reply, the server's own first-token and wall
+times, how much of the thread was sent as context and which model setting
+answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
+install that sent it; reads join ``devices`` for its current name.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ import base64
 import json
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -198,10 +205,53 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
 
 
 # ─── Messages ───────────────────────────────────────────────────────────────
+_MSG_COLUMNS = "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id"
+
+
 def _msg_dict(r: Any) -> dict[str, Any]:
     d = dict(r)
     d["created_at"] = d["created_at"].isoformat()
+    if isinstance(d.get("stats"), str):
+        d["stats"] = json.loads(d["stats"])
     return d
+
+
+def _ms(ns: Any) -> float | None:
+    return round(ns / 1_000_000, 1) if isinstance(ns, (int, float)) else None
+
+
+def _reply_stats(
+    ollama: dict[str, Any],
+    *,
+    first_token_ms: float | None,
+    wall_ms: float,
+    context_sent: int,
+    context_in_thread: int,
+    model_role: str,
+) -> dict[str, Any]:
+    """The ``chat_messages.stats`` object for one reply (keys: V017).
+    ``ollama`` is what :func:`ollama_client.chat_stream` reported, possibly
+    nothing at all if the stream failed; absent figures are left out."""
+    out: dict[str, Any] = {
+        "prompt_tokens": ollama.get("prompt_eval_count"),
+        "output_tokens": ollama.get("eval_count"),
+        "total_ms": _ms(ollama.get("total_duration")),
+        "load_ms": _ms(ollama.get("load_duration")),
+        "prompt_ms": _ms(ollama.get("prompt_eval_duration")),
+        "generate_ms": _ms(ollama.get("eval_duration")),
+        "done_reason": ollama.get("done_reason"),
+        "first_token_ms": round(first_token_ms, 1) if first_token_ms is not None else None,
+        "wall_ms": round(wall_ms, 1),
+        "context_sent": context_sent,
+        "context_in_thread": context_in_thread,
+        "context_limit": _HISTORY_LIMIT,
+        "num_ctx": core_settings.ollama_num_ctx or None,
+        "model_role": model_role,
+    }
+    tokens, gen_ns = ollama.get("eval_count"), ollama.get("eval_duration")
+    if isinstance(tokens, int) and isinstance(gen_ns, (int, float)) and gen_ns > 0:
+        out["tokens_per_sec"] = round(tokens / (gen_ns / 1e9), 1)
+    return {k: v for k, v in out.items() if v is not None}
 
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
@@ -216,9 +266,11 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
             await s.execute(
                 text(
                     """
-                    SELECT id, role, content, images, model, error, created_at
-                      FROM chat_messages WHERE thread_id = :id ORDER BY id
-                    """
+                    SELECT {cols}, d.name AS device_name
+                      FROM chat_messages m
+                      LEFT JOIN devices d ON d.device_id = m.device_id
+                     WHERE m.thread_id = :id ORDER BY m.id
+                    """.format(cols=_MSG_COLUMNS)
                 ),
                 {"id": thread_id},
             )
@@ -230,6 +282,8 @@ class SendBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=32000)
     images: list[dict[str, str]] = Field(default_factory=list, max_length=_MAX_IMAGES_PER_MESSAGE)
     model: Optional[str] = Field(None, max_length=200)
+    # The sending install (the device tier's usual id), for the details view.
+    device_id: Optional[str] = Field(None, max_length=64)
 
 
 def _upload_path(token: str) -> Path | None:
@@ -289,9 +343,12 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         if _upload_path(i.get("token", "")) is not None
     ]
     has_images = bool(images)
-    model = (body.model or "").strip() or (
+    override = (body.model or "").strip()
+    model = override or (
         core_settings.ollama_vision_model if has_images else core_settings.ollama_model
     )
+    model_role = "override" if override else ("vision" if has_images else "chat")
+    device_id = (body.device_id or "").strip() or None
 
     async with session_scope() as s:
         exists = (
@@ -302,12 +359,12 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         await s.execute(
             text(
                 """
-                INSERT INTO chat_messages (thread_id, role, content, images)
-                VALUES (:t, 'user', :c, CAST(:imgs AS JSONB))
+                INSERT INTO chat_messages (thread_id, role, content, images, device_id)
+                VALUES (:t, 'user', :c, CAST(:imgs AS JSONB), :dev)
                 """
             ),
             {"t": thread_id, "c": body.content,
-             "imgs": json.dumps(images) if images else None},
+             "imgs": json.dumps(images) if images else None, "dev": device_id},
         )
         # First user message titles the thread (cheap heuristic, editable).
         await s.execute(
@@ -325,12 +382,24 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         await s.commit()
 
     history = await _history_for_model(thread_id)
+    async with session_scope() as s:
+        in_thread = (
+            await s.execute(
+                text("SELECT COUNT(*) FROM chat_messages WHERE thread_id = :id AND error IS NULL"),
+                {"id": thread_id},
+            )
+        ).scalar_one()
 
     async def sse() -> AsyncIterator[str]:
         chunks: list[str] = []
         error: str | None = None
+        ollama_stats: dict[str, Any] = {}
+        started = time.monotonic()
+        first_token_ms: float | None = None
         try:
-            async for delta in ollama_client.chat_stream(history, model=model):
+            async for delta in ollama_client.chat_stream(history, model=model, stats=ollama_stats):
+                if first_token_ms is None:
+                    first_token_ms = (time.monotonic() - started) * 1000
                 chunks.append(delta)
                 yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
         except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
@@ -340,17 +409,25 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         content = "".join(chunks)
         if not content and error is None:
             error = "the model returned nothing"
+        stats = _reply_stats(
+            ollama_stats,
+            first_token_ms=first_token_ms,
+            wall_ms=(time.monotonic() - started) * 1000,
+            context_sent=len(history),
+            context_in_thread=int(in_thread),
+            model_role=model_role,
+        )
         async with session_scope() as s:
             row = (
                 await s.execute(
                     text(
                         """
-                        INSERT INTO chat_messages (thread_id, role, content, model, error)
-                        VALUES (:t, 'assistant', :c, :m, :e)
-                        RETURNING id, role, content, images, model, error, created_at
-                        """
+                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
+                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
+                        RETURNING {cols}, NULL::text AS device_name
+                        """.format(cols=_MSG_COLUMNS)
                     ),
-                    {"t": thread_id, "c": content, "m": model, "e": error},
+                    {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
                 )
             ).mappings().first()
             await s.execute(

@@ -106,6 +106,59 @@ def test_send_streams_and_persists(stub_stream):
 
 
 @requires_db
+def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
+    """V017: the assistant row carries the reply's figures (Ollama's and the
+    server's own), the user row the sending device — read back by name."""
+    async def _stream(messages, model, stats=None, **kw):
+        yield "Hi"
+        if stats is not None:
+            stats.update({
+                "done_reason": "length", "prompt_eval_count": 50, "eval_count": 20,
+                "total_duration": 3_000_000_000, "load_duration": 1_500_000_000,
+                "prompt_eval_duration": 500_000_000, "eval_duration": 1_000_000_000,
+            })
+
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
+    with _client() as c:
+        assert c.post("/api/devices/register", json={"device_id": "chat-test-phone", "name": "Kitchen tablet"}).status_code == 200
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "hello", "device_id": "chat-test-phone"})
+        done = next(d for ev, d in _sse_events(r.text) if ev == "done")
+        st = done["stats"]
+        assert st["prompt_tokens"] == 50 and st["output_tokens"] == 20
+        assert st["total_ms"] == 3000.0 and st["load_ms"] == 1500.0
+        assert st["prompt_ms"] == 500.0 and st["generate_ms"] == 1000.0
+        assert st["tokens_per_sec"] == 20.0
+        assert st["done_reason"] == "length"
+        assert st["model_role"] == "chat"
+        assert st["context_sent"] == 1 and st["context_in_thread"] == 1
+        assert st["context_limit"] == chat_api._HISTORY_LIMIT
+        assert st["first_token_ms"] >= 0 and st["wall_ms"] >= st["first_token_ms"]
+
+        msgs = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        user, reply = msgs
+        assert user["device_id"] == "chat-test-phone"
+        assert user["device_name"] == "Kitchen tablet"
+        assert user["stats"] is None
+        assert reply["stats"] == st and reply["device_id"] is None
+
+
+def test_reply_stats_leave_out_what_is_unknown() -> None:
+    """A failed stream reports nothing from Ollama: only the server's own
+    figures remain, and no speed is invented from missing durations."""
+    st = chat_api._reply_stats(
+        {}, first_token_ms=None, wall_ms=12.34, context_sent=3,
+        context_in_thread=40, model_role="vision",
+    )
+    assert st == {
+        "wall_ms": 12.3, "context_sent": 3, "context_in_thread": 40,
+        "context_limit": chat_api._HISTORY_LIMIT, "model_role": "vision",
+        **({"num_ctx": chat_api.core_settings.ollama_num_ctx} if chat_api.core_settings.ollama_num_ctx else {}),
+    }
+
+
+@requires_db
 def test_send_error_lands_on_row(monkeypatch):
     async def _boom(messages, model, **kw):
         raise RuntimeError("model exploded")

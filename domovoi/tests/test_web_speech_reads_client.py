@@ -44,6 +44,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INTERACT = Path(__file__).with_name("jsx_interact_harness.js")
 DATA_JS = REPO_ROOT / "web" / "static" / "data.js"
 COMPONENTS = "web/static/components.jsx"
+# The chat page's own helpers load before it, as in index.html (without
+# marked, chat_markdown.js shows a reply as escaped text).
+CHAT_FILES = [COMPONENTS, "web/static/chat_markdown.js", "web/static/chat_details.js",
+              "web/static/chat.jsx"]
 SATELLITE_FILES = [COMPONENTS, "web/static/satellite_media.jsx", "web/static/satellites.jsx"]
 
 
@@ -195,7 +199,7 @@ def _scenarios() -> dict:
             "script": PEOPLE_SCRIPT,
         },
         "chat": {
-            "files": [COMPONENTS, "web/static/chat.jsx"],
+            "files": CHAT_FILES,
             "component": "ChatPage",
             "setup": setup,
             "api": {
@@ -207,7 +211,7 @@ def _scenarios() -> dict:
             "script": CHAT_SCRIPT,
         },
         "chat_rail_refused": {
-            "files": [COMPONENTS, "web/static/chat.jsx"],
+            "files": CHAT_FILES,
             "component": "ChatPage",
             "setup": setup,
             "api": {

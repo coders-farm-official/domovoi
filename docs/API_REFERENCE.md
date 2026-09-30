@@ -1043,11 +1043,21 @@ upload — is **Device** tier.
 | `POST /api/chat/threads` | `ThreadCreate` | New thread (first user message titles it). |
 | `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
 | `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
-| `GET /api/chat/threads/{id}/messages` | — | Full transcript. |
-| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). |
+| `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time). |
+| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). `SendBody.device_id` (optional) records the sending install. |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
 | `GET /api/chat/models` | Open | Installed Ollama models + configured default/vision models for the composer. |
+
+A reply's `stats` (V017) is an object whose keys are all optional:
+`prompt_tokens`, `output_tokens`, `tokens_per_sec`; `total_ms`, `load_ms`,
+`prompt_ms`, `generate_ms` (Ollama's own timings — `load_ms` well above zero
+means the model had to be loaded first); `first_token_ms`, `wall_ms`
+(measured by the server); `done_reason` (`stop`, or `length` when the reply
+was cut off); `context_sent`, `context_in_thread`, `context_limit` (messages
+sent to the model against those in the thread — fewer sent means older ones
+fell out of what it saw); `num_ctx`; and `model_role` (`chat`, `vision` when
+images were attached, `override` when the request named a model).
 
 ### 3.19 Models (LLM management)
 

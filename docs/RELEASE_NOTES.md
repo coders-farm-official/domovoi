@@ -8,7 +8,8 @@ a way that would otherwise get reported as a bug.
 
 ### Do this once, after upgrading
 
-**Restart the core.** Nothing to migrate.
+**Restart the core.** Nothing to migrate for this part (the timers and
+chat entries below need Flyway: V017 and V018).
 
 **Check the server's Ollama** (`ollama -v`). From 0.9.0 the tool router's
 call is streamed and stopped at its first word. An older one logs `Ollama
@@ -184,7 +185,9 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
 
 1. **Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
    **V018** — the record of every timer and reminder that goes off and
-   where it was heard, and the new per-satellite setting. Without it the
+   where it was heard, and the new per-satellite setting. The same run
+   applies **V017** first (the chat message details, see "Chat replies
+   read as formatted text" below). Without V018 the
    Domovoi server logs `timer_fires missing — run Flyway (V018); timers
    still fire but nothing is recorded` once, timers still go off and still
    reach every room, but the dashboard and the phone have no history to
@@ -465,6 +468,50 @@ can't play.
   starts the queue paused on the first added track and runs the normal
   handshake. It used to call `pause 0`, which does nothing on a stopped
   MPD.
+
+## 2026-09-30 — Chat replies read as formatted text, with their details
+
+### Do this once, after upgrading
+
+**Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
+**V017** (`chat_messages.stats` and `chat_messages.device_id`; the timers
+entry above needs the same run for V018). The dashboard's and the app's
+chat read and write both columns: without V017 a thread's messages don't
+load and a new message isn't sent. **Install the new Android app** for its
+half.
+
+### What changes for the people in the house
+
+* Chat replies (dashboard and Android app) render the Markdown the models
+  write: headings, lists, bold and italic, code, quotes, links and tables.
+  The dashboard shows raw HTML in a reply as text, and images as their alt
+  text.
+* Every chat message has a time stamp, and the model beside a reply. A
+  message's menu ("more" button, right-click or a long press) copies it or
+  shows its details: who sent it and from which device, the model and why
+  it was chosen, how long the reply took, tokens, speed, why it stopped and
+  how much of the thread the model saw. Messages from before this release
+  have no stats and no device.
+* Home no longer has a "play" button on a quiet room (dashboard and app).
+  A room that is playing or paused keeps pause, resume and stop; starting
+  something in a room is done from Music, which picks the room and the
+  track together.
+* The Android app shows local media when its saved server hasn't answered
+  for 10 seconds (away from home, say), naming the server as offline, and
+  returns to the same screen the moment the server answers. An unpaired
+  phone whose live connection is refused stays on the server.
+
+### What changed
+
+* V017: `chat_messages.stats` (JSONB, assistant rows) and
+  `chat_messages.device_id` (TEXT, user rows); `IF NOT EXISTS`.
+* Web: chat messages gain `stats`, `device_id` and `device_name`; a send
+  takes an optional `device_id`. See docs/API_REFERENCE.md.
+* Core: `clients/ollama.chat_stream` takes an optional `stats` dict it
+  fills from Ollama's final chunk; existing callers are unchanged.
+* The dashboard's HTML sanitiser no longer escapes an entity it has
+  already produced: an ampersand in a document preview or a chat reply
+  reads "&", not "&amp;".
 
 ## 2026-09-29 — The satellite acknowledges the wake word, then listens
 

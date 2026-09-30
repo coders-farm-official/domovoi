@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,6 +87,35 @@ import kotlinx.coroutines.delay
 fun AppShell() {
     val app = LocalApp.current
     val serverUrl by app.prefs.serverUrl.collectAsState()
+    val connected by app.bus.connected.collectAsState()
+    val pairingRequired by app.api.pairingRequired.collectAsState()
+    val workspaceState = rememberSaveableStateHolder()
+
+    // A saved server that has not answered for the grace period drops the
+    // app back to local media (see shellMode); an answer brings the
+    // workspace straight back. The live socket being down is not enough on
+    // its own — an unpaired phone's socket is refused by a server that is
+    // right there — so while it is down the server is asked directly, and
+    // any HTTP answer counts. Reset per server, so a switch gets a fresh
+    // grace period rather than inheriting the old server's verdict.
+    var unreachable by remember(serverUrl) { mutableStateOf(false) }
+    LaunchedEffect(serverUrl, connected) {
+        if (serverUrl.isBlank() || connected) {
+            unreachable = false
+            return@LaunchedEffect
+        }
+        var lastAnswer = System.currentTimeMillis()
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (app.api.answers()) {
+                lastAnswer = now
+                unreachable = false
+            } else if (now - lastAnswer >= UNREACHABLE_GRACE_MS) {
+                unreachable = true
+            }
+            delay(REACH_PROBE_EVERY_MS)
+        }
+    }
 
     // Toast host — bottom-center, auto-dismiss 2.4s, like the web useToast().
     val toasts = remember { mutableStateListOf<Pair<Long, String>>() }
@@ -102,10 +132,13 @@ fun AppShell() {
 
     CompositionLocalProvider(LocalToast provides toast) {
         Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
-            if (serverUrl.isBlank()) {
-                OfflineShell()
-            } else {
-                ShellContent()
+            when (shellMode(serverUrl, unreachable, pairingRequired)) {
+                ShellMode.Local -> OfflineShell(
+                    unreachableServer = if (serverUrl.isBlank()) null else app.prefs.serverLabel(),
+                )
+                // Kept in a saveable slot so a trip through local media
+                // (server out of reach) returns to the same screen.
+                ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) { ShellContent() }
             }
             // Toasts overlay. This Column is a SIBLING of the shells, so the
             // shells' own consumption of WindowInsets.ime cannot reach it —
@@ -380,15 +413,19 @@ private fun TopChrome(content: @Composable () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Offline/local mode: no domovoi configured. Music + Videos are the only
-// tabs, backed by on-device media (MediaStore); "connect" opens the
-// discovery/startup screen. Connecting flips prefs.serverUrl, which
-// recomposes AppShell straight into the full workspace.
+// Offline/local mode: no domovoi configured, or the saved one is out of
+// reach ([unreachableServer] names it). Music + Videos are the only tabs,
+// backed by on-device media (MediaStore); "connect" opens the
+// discovery/startup screen. Connecting flips prefs.serverUrl (or, for an
+// unreachable server, the live connection coming back), which recomposes
+// AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
-private fun OfflineShell() {
+private fun OfflineShell(unreachableServer: String? = null) {
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
     var showConnect by rememberSaveable { mutableStateOf(false) }
+    // Back from the server picker returns to local media, not out of the app.
+    BackHandler(enabled = showConnect) { showConnect = false }
 
     if (showConnect) {
         Box(Modifier.fillMaxSize()) {
@@ -413,7 +450,7 @@ private fun OfflineShell() {
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = {
-          TopChrome {
+          TopChrome { Column {
             Surface(color = Domovoi.colors.canvas) {
                 Row(
                     Modifier
@@ -438,18 +475,42 @@ private fun OfflineShell() {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Icon(
-                            Icons.Filled.Dns, contentDescription = "connect",
+                            Icons.Filled.Dns,
+                            contentDescription = if (unreachableServer == null) "connect" else "switch server",
                             tint = Domovoi.colors.brand, modifier = Modifier.size(13.dp),
                         )
                         Text(
-                            "connect",
+                            unreachableServer ?: "connect",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Domovoi.colors.fgMuted,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 140.dp),
+                        )
+                    }
+                    if (unreachableServer != null) {
+                        Box(Modifier.width(10.dp))
+                        StatusDot(Tone.Idle)
+                        Text(
+                            "  offline",
                             style = MaterialTheme.typography.labelMedium,
                             color = Domovoi.colors.fgMuted,
                         )
                     }
                 }
             }
-          }
+            if (unreachableServer != null) {
+                Surface(color = Domovoi.colors.canvas) {
+                    Text(
+                        "Can't reach $unreachableServer. Showing media on this phone; " +
+                            "the workspace comes back when the server does.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    )
+                }
+            }
+          } }
         },
         bottomBar = {
             BottomChrome {
