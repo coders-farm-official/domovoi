@@ -298,6 +298,26 @@ class Settings(BaseSettings):
 
     timer_watcher_interval_sec: float = 1.0
 
+    # ─── Timers & reminders: house-wide delivery (V017) ────────────────
+    # Every online satellite announces every timer and reminder, unless
+    # its room turned on "Only reminders for this device"
+    # (domovoi/timer_delivery.py). All four are read at use time ('hot').
+    #
+    # A satellite that connects or reconnects within this long after one
+    # goes off still announces it; after a restart the window starts once
+    # the server accepts satellites again.
+    timer_offline_grace_sec: float = 120.0
+    # How long an announcement holds back while a room expects a follow-up
+    # answer, has just connected, or has just finished speaking. Replies,
+    # captures, calls and wake-word recording are always waited out.
+    timer_announce_busy_wait_sec: float = 45.0
+    # A room still busy after this long skips the announcement
+    # (busy_timeout); the phone and the dashboard still show it.
+    timer_announce_max_wait_sec: float = 300.0
+    # How long fired timers and reminders, and where they were heard, are
+    # kept (timer_fires). Pruned hourly by the timer watcher.
+    timer_fire_retention_days: int = 7
+
     # ─── Client stubs vs real implementations ───────────────────────────
     # When true, whisper/ollama/tts clients return deterministic fakes.
     # Tests set this to true so the suite runs without CUDA/Ollama/TTS deps.

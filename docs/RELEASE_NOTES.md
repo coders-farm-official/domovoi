@@ -4,6 +4,110 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-30 — Timers and reminders reach the whole house
+
+### Do this once, after upgrading
+
+1. **Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
+   **V017** — the record of every timer and reminder that goes off and
+   where it was heard, and the new per-satellite setting. Without it the
+   Domovoi server logs `timer_fires missing — run Flyway (V017); timers
+   still fire but nothing is recorded` once, timers still go off and still
+   reach every room, but the dashboard and the phone have no history to
+   show and the new setting can't be changed.
+2. **Upgrade each satellite** (Satellites → the satellite → Overview →
+   **Upgrade satellite**). A satellite that hasn't been upgraded plays
+   *silence* for any announcement that arrives after it reconnects — and
+   after a server update every satellite reconnects, which is exactly when
+   a timer that came due during the update is announced. The server can't
+   tell: it records such an announcement as spoken.
+3. **Install the new Android app** and allow its notifications (the app
+   asks; "Timers and reminders" is its own channel in Android's settings).
+
+Every room starts announcing every room's timers and reminders straight
+away: the new setting is off for every satellite.
+
+### What changes for the people in the house
+
+* **Every satellite announces every timer and reminder**, not only the one
+  in the room it was set in. The room it was set in says it as before
+  ("Your 10 minute timer is done." / "Reminder: call mom"); every other
+  room says where it came from: "From the garage: Your 10 minute timer is
+  done." / "Reminder from the garage: call mom". A line spoken 90 seconds
+  or more late says so ("… went off 3 minutes ago").
+* **"Only reminders for this device"** — a new switch per satellite (the
+  dashboard's satellite Overview, and the Android app's). On: that
+  satellite announces only the timers and reminders set on it. Off (the
+  default): it announces every room's. The room one was set in always
+  announces it. There are no quiet hours: this switch is the one control
+  (a bedroom, say). Any paired phone or dashboard can change it.
+* **Nothing is dropped any more.** A room that is answering, listening,
+  in a drop-in call or still speaking is waited for — never talked over —
+  for up to 5 minutes. A satellite that is offline, or reconnecting after
+  a server restart or update, still announces anything that went off in
+  the last 2 minutes once it is back (after a restart, the 2 minutes start
+  when the server is up again).
+* **Reminders and timers set from the app or the dashboard chat** (no
+  room) are now spoken — in every room with the switch off. They used to
+  be spoken nowhere.
+* **"Stop the timer" right after one goes off** now just acknowledges it
+  ("Okay.") and stops it being announced in rooms still waiting their
+  turn. It used to cancel the timers running in that room — so a kitchen
+  "stop the timer" after the garage's announcement cancelled the kitchen's
+  own timer. More than 30 seconds later it cancels as before.
+* **"Cancel the timer for pasta" cancels it only in the room you are in.**
+  Add "everywhere" ("… in every room", "… in the whole house") to cancel it
+  in every room; said somewhere it isn't running, the answer names the
+  room. From the app or the dashboard chat it stays house-wide. "Cancel
+  the timer" never deletes a reminder any more, and "how long left on the
+  timer" never describes one.
+* **The dashboard and the phone notify.** The dashboard shows a card that
+  stays until dismissed (30 minutes at most) — "Timer done · garage",
+  where it was heard; Home's "done" lines now come from that record
+  instead of guessing from a row disappearing. The Android app posts a
+  notification from the live connection, and sets a local alarm so a
+  timer still rings on the phone when it is off the home network (marked
+  "couldn't reach Domovoi to confirm"; a timer cancelled while the phone
+  was away still rings there).
+* **The words of a reminder now need a paired device to read.** Open
+  timer reads (the dashboard's Home on an unpaired tablet, say) still show
+  every countdown, room and whether it was heard, but a reminder reads
+  "reminder (words hidden)". Plain timer labels ("pasta") stay visible.
+* Every announcement pauses and resumes music in the rooms it plays in.
+
+### What changed
+
+* Core: `domovoi/timer_delivery.py`. Each watcher tick moves every due
+  timer into `timer_fires` in the same transaction that deletes it, with
+  one `timer_fire_deliveries` row per room it goes to; each room is
+  claimed before a frame is sent, so no room hears one twice, across
+  reconnects and restarts. Fires interrupted by a restart are picked up
+  again if under 10 minutes old (a room caught mid-announcement is
+  recorded `failed`, not repeated). History is kept 7 days.
+* Core settings (Settings → Timers & reminders, advanced, applied
+  immediately): `timer_offline_grace_sec` (120), `timer_announce_busy_wait_sec`
+  (45 — how long a pending follow-up question or a just-finished reply
+  holds an announcement back), `timer_announce_max_wait_sec` (300),
+  `timer_fire_retention_days` (7).
+* Core journal: the two `timer fired…` lines are unchanged. New, one per
+  room: `timer fire <id> room=<room> origin=<room> outcome=<spoken|
+  interrupted|failed|offline|busy_timeout|cancelled> detail=<reason>
+  waited=<s>` — WARNING for offline, busy_timeout and failed. It never
+  carries the reminder's words. The old `… fired for offline room=…;
+  dropping …` and `…-broadcast-… failed; dropping` lines are gone.
+* Core: `StreamSession.announce` plays one announcement at a time per
+  room (intercom broadcasts, `/v1/admin/announce` and plugin
+  `sdk.speech.announce` included), and a wake word or barge-in cuts an
+  announcement off like a reply.
+* Core events (catalog still v1, additive): `core.timer_fired`,
+  `core.timer_fire_settled`. NOTIFY channel `timer_fires_changed`.
+* Web: `GET /api/timers` gains `fires` (null without V017); new
+  `GET /api/timers/fires`, `GET`/`PUT /api/satellites/{room}/timer-announcements`
+  (PUT is device tier); satellite rows gain `timers_own_only`; realtime
+  channel `timer_fires`. See docs/API_REFERENCE.md.
+* Retiring a room (`DELETE /v1/admin/satellites/{room}`) also clears its
+  "Only reminders for this device" setting; its timer history stays.
+
 ## 2026-09-29 — The satellite acknowledges the wake word, then listens
 
 ### Do this once, after upgrading
