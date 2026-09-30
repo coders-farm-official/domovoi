@@ -413,11 +413,14 @@ const useToast = () => {
    * clear whatever that surface is — the same argument that raised
    * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
    * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
-   * docked player while one shows (styles.css, html.mp-docked). */
+   * docked player while one shows (styles.css, html.mp-docked). 111, one
+   * above the timer alert cards (TimerFireAlerts, 110), which share that
+   * bottom edge on a phone and stay until dismissed: the answer to a press
+   * must never sit under them. */
   const node = items.length > 0 && (
     <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
-                  gap: 8, zIndex: 110, maxWidth: 'min(90vw, 560px)' }}>
+                  gap: 8, zIndex: 111, maxWidth: 'min(90vw, 560px)' }}>
       {items.map((t) => (
         <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
              style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',

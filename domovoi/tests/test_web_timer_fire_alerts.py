@@ -386,6 +386,18 @@ def test_the_shell_renders_the_alerts_once() -> None:
     assert "  TimerFireAlerts,\n});" in comps
 
 
+def test_the_stack_sits_above_the_dock_and_under_the_toasts() -> None:
+    """Bottom right on the toast's lifted edge, z-index 110; a toast (the
+    answer to a press) is 111, so a card that stays never hides it —
+    found on a 375px phone, where both share the bottom edge."""
+    comps = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
+    block = comps[comps.index("const TimerFireAlerts = "):comps.index("/* expose to other Babel scripts */")]
+    assert "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'" in block
+    assert "zIndex: 110" in block
+    toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
+    assert "zIndex: 111" in toast
+
+
 def test_no_browser_notification_or_sound() -> None:
     comps = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
     block = comps[comps.index("const TIMER_FIRE_SEEN_KEY"):comps.index("/* expose to other Babel scripts */")]
