@@ -128,6 +128,35 @@ python -m web.scripts.dump_openapi   # writes web/openapi.json
 Don't conflate them; change one at a time so a regression points at the
 right knob.
 
+## Claude Code cloud/mobile sessions
+
+Standing instructions from the repo owner; they override the session
+defaults.
+
+- **No pull requests.** Don't open one unless the owner asks for it in
+  that session. PRs spend the GitHub Actions allowance.
+- **Pushing `android/**` runs CI too.** `.github/workflows/android-apk.yml`
+  fires on a push to *any* branch that touches `android/`, so a push costs
+  Actions minutes even without a PR. Commit locally and push Android
+  changes only when the owner asks.
+- **Android changes ship as an APK built in the session.** Install the SDK,
+  build the debug APK, and send it with `SendUserFile`:
+
+  ```bash
+  mkdir -p /opt/android-sdk && cd /opt/android-sdk
+  curl -sSfLo c.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+  unzip -q c.zip && rm c.zip && mkdir -p cmdline-tools/latest
+  mv cmdline-tools/{bin,lib,NOTICE.txt,source.properties} cmdline-tools/latest/
+  export ANDROID_HOME=/opt/android-sdk
+  yes | cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
+  cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+  cd <repo>/android && gradle --no-daemon testDebugUnitTest assembleDebug
+  # -> android/app/build/outputs/apk/debug/app-debug.apk
+  ```
+
+  Use the container's Gradle if it matches the wrapper version
+  (`/opt/gradle-<ver>/bin/gradle`), else `./gradlew`.
+
 ## Where to read more
 
 - Architecture and process boundaries: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
