@@ -484,3 +484,109 @@ def test_the_endpoint_serves_it(stub_version_probes):
     assert body["last_update"]["status"] == "rolled_back"
     assert body["bad_sha"] == "b" * 40
     assert body["restart_mode"] == "update"
+    assert body["last_update_problem"] is None
+
+
+# What apply-update.sh wrote, byte for byte in its own layout, when the wall
+# clock stepped back during a run (2026-09-30): printf '%d.%03d' of a
+# negative millisecond count gives "-89.-983", "0.-88" and so on. The
+# installer, reading fields with sed, still printed "result ok", while the
+# core's json.loads refused the file and the panel showed no last update,
+# and would have lost this bad_sha.
+BROKEN_DURATIONS = (
+    "{\n"
+    '  "status": "rolled_back",\n'
+    '  "mode": "update",\n'
+    f'  "from_sha": "{"a" * 40}",\n'
+    f'  "to_sha": "{"b" * 40}",\n'
+    '  "prev_source": "applied",\n'
+    f'  "bad_sha": "{"b" * 40}",\n'
+    '  "started_at": "2026-09-30T02:34:12Z",\n'
+    '  "finished_at": "2026-09-30T02:33:52Z",\n'
+    '  "duration_sec": -19.-412,\n'
+    '  "deps_changed": true,\n'
+    '  "mpd_changed": false,\n'
+    '  "error": "update to bbbbbbbbbbbb failed at health and was rolled back",\n'
+    '  "steps": [{"name": "preflight", "status": "ok", "duration_sec": 0.-88, '
+    '"detail": "deps_changed=1 mpd_changed=0"},{"name": "health", "status": "failed", '
+    '"duration_sec": -89.-983, "detail": "said \\"-1.-5\\" once"},'
+    '{"name": "rollback-health", "status": "ok", "duration_sec": 12.034, "detail": null}]\n'
+    "}\n"
+)
+
+
+def test_a_result_with_the_old_negative_durations_is_still_served(stub_version_probes):
+    with pytest.raises(ValueError):
+        json.loads(BROKEN_DURATIONS)
+    _write_result(BROKEN_DURATIONS)
+
+    state = asyncio.run(git_version.version_state())
+
+    last = state["last_update"]
+    assert last is not None and last["status"] == "rolled_back"
+    assert state["bad_sha"] == "b" * 40
+    assert state["last_update_problem"] is None
+    assert last["duration_sec"] == 0.0
+    assert [s["duration_sec"] for s in last["steps"]] == [0.0, 0.0, 12.034]
+
+
+def test_the_repair_touches_nothing_but_those_durations(stub_version_probes):
+    """Text that only looks like a broken duration, inside a string, stays."""
+    doc = {**ROLLED_BACK, "error": 'the log said "duration_sec": -1.-5 here'}
+    _write_result(json.dumps(doc)[:-1] + ', "duration_sec": -3.-001}')
+
+    last = asyncio.run(git_version.version_state())["last_update"]
+
+    assert last["error"] == 'the log said "duration_sec": -1.-5 here'
+    assert last["duration_sec"] == 0.0
+
+
+@pytest.mark.parametrize(("content", "problem"), [
+    ("{not json", "invalid"),
+    ('{\n  "status": "ok",\n  "duration_sec": 1.2.3\n}\n', "invalid"),
+    ("[]", "not_a_result"),
+    (json.dumps({"no": "status"}), "not_a_result"),
+    (json.dumps({**ROLLED_BACK, "status": 3}), "not_a_result"),
+], ids=["not-json", "a-number-with-two-points", "a-list", "no-status", "status-not-text"])
+def test_the_endpoint_says_why_there_is_no_last_update(stub_version_probes, content, problem):
+    _write_result(content)
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] == problem
+
+
+def test_an_oversized_result_says_so(stub_version_probes):
+    _write_result({**ROLLED_BACK, "error": "x" * (git_version._LAST_UPDATE_MAX_BYTES + 1)})
+    assert asyncio.run(git_version.version_state())["last_update_problem"] == "too_large"
+
+
+def test_an_unreadable_result_says_so(stub_version_probes):
+    # A directory where the file should be: open() fails with an OSError
+    # other than "not found" on every platform.
+    Path(settings.update_result_file).mkdir(parents=True)
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] == "unreadable"
+
+
+def test_no_result_yet_under_the_unit_is_missing(stub_version_probes):
+    assert asyncio.run(git_version.version_state())["last_update_problem"] == "missing"
+
+
+def test_no_result_without_the_unit_is_no_problem(stub_version_probes, monkeypatch):
+    monkeypatch.setattr(self_restart, "restart_mode", lambda: "restart")
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] is None
+
+
+def test_a_broken_result_is_logged_once_not_on_every_poll(stub_version_probes, caplog, monkeypatch):
+    monkeypatch.setattr(git_version, "_LOGGED_PROBLEM", None)
+    _write_result("{not json")
+    with caplog.at_level("WARNING", logger=git_version.log.name):
+        for _ in range(5):
+            asyncio.run(git_version.version_state())
+    warnings = [r for r in caplog.records if "last_update null" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "invalid" in warnings[0].getMessage()
+    assert settings.update_result_file in warnings[0].getMessage()

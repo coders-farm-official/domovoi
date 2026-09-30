@@ -45,7 +45,8 @@ trap cleanup EXIT
 : >"$WORK/gitconfig"
 export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
 SHIM_REAL_GIT=$(command -v git)
-export SHIM_REAL_GIT
+SHIM_REAL_DATE=$(command -v date)
+export SHIM_REAL_GIT SHIM_REAL_DATE
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 
@@ -384,6 +385,7 @@ again_after() {  # again_after A B: some call matching B comes after the first m
 }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
 step_is() { grep -qF "{\"name\": \"$1\", \"status\": \"$2\"" "$RESULT"; }  # step_is NAME STATUS
+step_is_timed() { grep -qF "{\"name\": \"$1\", \"status\": \"ok\", \"duration_sec\": $2," "$RESULT"; }  # step_is_timed NAME SECONDS
 file_is() { [ -f "$1" ] && eq "$(tr -d '[:space:]' <"$1")" "$2"; }
 
 valid_json() {
@@ -917,6 +919,38 @@ case_sync_failure_output_stays_valid_utf8() {
   end_case
 }
 
+case_clock_stepped_back_keeps_the_result_valid() {
+  new_case clock_stepped_back_keeps_the_result_valid
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  # A wall clock that NTP steps back 90 s after the run's second reading
+  # (START_MS, then the preflight's t0): the preflight and the whole run
+  # both end "before" they started.
+  mkdir -p "$CASE/clockbin"
+  cat >"$CASE/clockbin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = +%s%3N ]; then
+  n=$(cat "$SHIM_STATE/date-readings" 2>/dev/null || echo 0)
+  echo $((n + 1)) >"$SHIM_STATE/date-readings"
+  t=$("$SHIM_REAL_DATE" +%s%3N)
+  if [ "$n" -ge 2 ]; then t=$((t - 90000)); fi
+  echo "$t"
+  exit 0
+fi
+exec "$SHIM_REAL_DATE" "$@"
+SH
+  chmod +x "$CASE/clockbin/date"
+  run_update "$CASE/clockbin"
+  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings") > 2 ))" 1
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no negative duration" eq "$(grep -c '"duration_sec": -' "$RESULT")" 0
+  check "no half-negative duration" eq "$(grep -c '[0-9]\.-' "$RESULT")" 0
+  check "the run's duration reads 0" eq "$(field duration_sec)" 0.000
+  check "so does the preflight's" step_is_timed preflight 0.000
+  end_case
+}
+
 case_venv_from_the_core_unit() {
   new_case venv_from_the_core_unit
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -1004,6 +1038,7 @@ case_backups_pruned
 case_noop_health_failure_reports
 case_rollback_that_cannot_get_healthy
 case_sync_failure_output_stays_valid_utf8
+case_clock_stepped_back_keeps_the_result_valid
 case_venv_from_the_core_unit
 case_venv_ignores_a_non_venv_interpreter
 case_venv_not_writable_aborts

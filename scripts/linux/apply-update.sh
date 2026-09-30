@@ -149,7 +149,16 @@ now_ms() {
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-fmt_sec() { printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000)); }
+# Milliseconds as seconds, printed straight into the result JSON. The
+# durations are wall-clock differences, so a clock stepped back during the
+# run (NTP correcting a clock that ran fast) makes one negative, and printf
+# would write "-89.-412": not JSON, and the core then drops the whole
+# result, bad_sha and all. A duration that went backwards is 0.
+fmt_sec() {
+  local ms=$1
+  [[ $ms =~ ^[0-9]+$ ]] || ms=0
+  printf '%d.%03d' $((10#$ms / 1000)) $((10#$ms % 1000))
+}
 
 # JSON string literal for $1: control characters dropped, the rest escaped.
 json_str() {
