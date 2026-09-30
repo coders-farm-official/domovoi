@@ -82,6 +82,11 @@ class ApiClient(
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
+        // Walking out of Wi-Fi range often leaves the state socket half-open
+        // rather than closed: no FIN arrives, so without a ping it would read
+        // "live" indefinitely and the shell would never fall back to local
+        // media. A missed pong fails the socket and StateBus reconnects.
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
     /** Flipped when the server refuses this phone for want of the device
