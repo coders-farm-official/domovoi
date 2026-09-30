@@ -4,6 +4,57 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-30 — Short commands decode faster, and answers start sooner
+
+### Do this once, after upgrading
+
+**Restart the core.** Nothing to migrate, and nothing else to change.
+Check the server's Ollama (`ollama -v`): from 0.9.0 the tool router's
+call is streamed and stopped early; an older one logs `Ollama X streams no
+tool calls (needs 0.9.0)` once at INFO and routes as before.
+
+### What changes for the people in the house
+
+* A short command is transcribed about three times faster on a CPU-only
+  server (small.en, 8 cores: about 0.25 s instead of 0.9 s), so a whole
+  closed command can now be answered without waiting out the satellite's
+  silence timeout ([early commit](CPU_HOST.md#measuring-turn-latency)).
+* A question, a joke or a story starts to be spoken at its first sentence
+  while the rest is written, instead of after the whole answer. The tool
+  router no longer writes an answer of its own that is thrown away, and a
+  plain who/why/where question or a request for a joke, fact, story, poem
+  or explanation skips it altogether.
+* The first spoken command after a restart no longer pays for loading
+  the voice-identification model and the Piper voice (about 0.6 s each,
+  and the encoder's load used to stall every room).
+
+### What changed
+
+* Whisper: captures of up to 9 s decode on a 10-second window when the
+  model is English-only (`.en`); anything the short decode isn't sure of
+  is decoded again the old way. `whisper_short_window_enabled` (on)
+  applies without a restart. The boot log says `Whisper: short-window
+  decoding ready …`, or `… unavailable (ctranslate2 X)` when the installed
+  CTranslate2 can't, and then everything stays on the 30 s path.
+  Multilingual models always keep the 30 s window.
+* `GET /v1/stats/latency` gains `stt_window` (`{short, full}`) and
+  `whisper.short_window`; each turn records `stt_window_s`, and the turn
+  log line shows `window=10s`.
+* For a spoken Q&A answer, `route_ms` and `intents_log.latency_ms` now end
+  at its first sentence. Q&A figures from before and after this release
+  are not comparable.
+* Conversation history past `session_recent_turns_cap` is cut to its newer
+  half in one go (it used to slide one exchange per turn), so a model's
+  cached reading of it survives between cuts. A room already over the cap
+  is cut once, on its next turn.
+* `GET /v1/admin/version`: a `last_update` whose durations can't be right
+  (negative, not a number, or longer than the run) now reports those
+  durations as `null` instead of the whole result being unreadable.
+  `apply-update.sh` times its steps with bash's own clock: on Ubuntu 26.04
+  `date +%s%3N` (uutils) printed 16-19 digits and produced them. A result
+  file an earlier run wrote keeps its `null` durations until the next
+  update overwrites it.
+
 ## 2026-09-30 — Short commands start their transcript on time
 
 ### Do this once, after upgrading

@@ -345,7 +345,7 @@ journalctl -u domovoi-core | grep 'turn timings'
 | `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
 | `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
 | `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran right after that decode, so this is only the lookup |
-| `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
+| `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes (a spoken Q&A answer: up to its first sentence, which starts playing while the rest is written) |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
 | `speech_to_reply_ms` | your last word to the first reply audio: `endpoint_silence_ms + total_ms`. The number you feel. |
@@ -396,7 +396,9 @@ that decode to ~0.25 s: the transcript is ready about 0.5 s after your
 last word, the capture ends at the tier's hold, and the reply starts
 roughly 0.15 s after that (`speech_to_reply_ms`) — about 0.6-0.7 s for a
 tier-A phrase and 0.8 s for tier B on the reference 8-core server, if
-the satellite's pause report arrives on time.
+the satellite's pause report arrives on time (a satellite from before
+2026-09-30 sends it late after the wake greeting: see
+[When the early transcript starts late](#when-the-early-transcript-starts-late)).
 
 Whatever is said after the hold is lost ("set a timer for ten minutes …
 for the pasta" gets no label). When the satellite heard speech after the
