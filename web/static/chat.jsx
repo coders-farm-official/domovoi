@@ -9,8 +9,8 @@
  *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
- * surface; assistant text renders as plain pre-wrap (no markdown lib in
- * the no-build bundle).
+ * surface; assistant text renders as Markdown (chat_markdown.js: the
+ * vendored marked, then the sanitiser), the user's own text as pre-wrap.
  */
 
 /* An <img src> (and the new tab its link opens) cannot set a header, and a
@@ -117,9 +117,8 @@ const ChatMessage = ({ m }) => {
       ) : (
         <div style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
-          <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap',
-                        overflowWrap: 'break-word', minWidth: 0 }}>
-            {m.content}
+          <div style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
+            <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
             {m.error && (
               <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>

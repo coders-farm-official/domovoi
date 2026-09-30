@@ -64,6 +64,15 @@ const SanitizeHtml = (() => {
   const escapeText = (s) => s
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const escapeAttr = (s) => escapeText(s).replace(/"/g, '&quot;');
+  /* Text BETWEEN tags keeps the entities it already carries: marked has
+   * escaped the author's "&" to "&amp;" once, and escaping it again put
+   * a literal "&amp;" on screen. An entity in a text node only ever
+   * decodes to a character — "&lt;script&gt;" reads as those characters
+   * and is never parsed as a tag — so leaving one alone is safe. A bare
+   * "&", "<" or ">" is still escaped. */
+  const ENTITY = /&(?!(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});)/g;
+  const escapeTextRun = (s) => s
+    .replace(ENTITY, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const NAMED = {
     amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
@@ -181,10 +190,10 @@ const SanitizeHtml = (() => {
     while (i < input.length) {
       const lt = input.indexOf('<', i);
       if (lt === -1) {
-        out += escapeText(input.slice(i));
+        out += escapeTextRun(input.slice(i));
         break;
       }
-      out += escapeText(input.slice(i, lt));
+      out += escapeTextRun(input.slice(i, lt));
 
       // Comments, doctypes and processing instructions: dropped whole.
       if (input.startsWith('<!--', lt)) {
@@ -211,7 +220,7 @@ const SanitizeHtml = (() => {
       if (parsed === null) {
         // An unterminated tag: everything after it is suspect, so the
         // rest of the input becomes text rather than markup.
-        out += escapeText(input.slice(lt));
+        out += escapeTextRun(input.slice(lt));
         break;
       }
 

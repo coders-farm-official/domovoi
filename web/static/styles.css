@@ -1164,3 +1164,25 @@ a.home-att-row:hover { background: var(--brand-soft); }
   /* ...without making a card header any taller ("+2 more", "calendar"). */
   .home .card-head .home-link { margin-block: -12px; }
 }
+
+/* Chat replies rendered as Markdown (chat_markdown.js) */
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md p, .chat-md ul, .chat-md ol, .chat-md pre, .chat-md blockquote, .chat-md table { margin: 0 0 8px; }
+.chat-md ul, .chat-md ol { padding-left: 20px; }
+.chat-md li + li { margin-top: 2px; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { margin: 12px 0 6px; font-weight: 600; line-height: 1.3; }
+.chat-md h1 { font-size: 17px; }
+.chat-md h2 { font-size: 15px; }
+.chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { font-size: 13px; }
+.chat-md code { font-family: var(--ff-mono); font-size: 12px; background: var(--sunken); padding: 1px 4px; border-radius: 4px; }
+.chat-md pre { background: var(--sunken); border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; }
+.chat-md pre code { background: none; padding: 0; }
+.chat-md blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--fg-muted); }
+.chat-md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.chat-md a { color: var(--brand); text-decoration: underline; }
+.chat-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
+.chat-md th, .chat-md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.chat-md th { background: var(--sunken); font-weight: 600; }
+.chat-md td[align="center"], .chat-md th[align="center"] { text-align: center; }
+.chat-md td[align="right"], .chat-md th[align="right"] { text-align: right; }

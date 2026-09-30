@@ -8,9 +8,11 @@
 // assert on what the preview would actually put in the page.
 //
 // Usage: node markdown_preview_harness.js <repo-root> '<cases json>'
-//   cases: { "<name>": {markdown: "..."} | {html: "..."} }
+//   cases: { "<name>": {markdown: "..."} | {html: "..."} | {chat: "..."} }
 //     markdown — run through marked, then the sanitiser (the real path)
 //     html     — run through the sanitiser alone (a direct probe)
+//     chat     — run through chat_markdown.js, the chat reply renderer
+//                (its own marked instance, then the sanitiser)
 // Output: { "<name>": { raw, sanitized } }
 'use strict';
 const fs = require('fs');
@@ -31,6 +33,7 @@ const run = (file) => vm.runInContext(
 
 run('web/static/vendor/marked/marked.min.js');
 run('web/static/sanitize_html.js');
+run('web/static/chat_markdown.js');
 
 const marked = sandbox.marked || sandbox.window.marked;
 if (!marked || typeof marked.parse !== 'function') {
@@ -43,6 +46,11 @@ if (typeof sanitize !== 'function') {
 
 const result = {};
 for (const [name, sc] of Object.entries(cases)) {
+  if (sc.chat !== undefined) {
+    const out = sandbox.window.chatMarkdownHtml(sc.chat);
+    result[name] = { raw: out, sanitized: out };
+    continue;
+  }
   const raw = sc.html !== undefined ? sc.html : marked.parse(sc.markdown);
   result[name] = { raw, sanitized: sanitize(raw) };
 }

@@ -44,7 +44,7 @@ CASES = {
     "ordinary": {
         "markdown": (
             "# Shopping\n\n"
-            "Milk **and** eggs, see [the list](https://example.com/list).\n\n"
+            "Milk **and** eggs & bread, see [the list](https://example.com/list).\n\n"
             "- one\n- two\n\n"
             "```python\nprint('hi')\n```\n\n"
             "| a | b |\n|---|---|\n| 1 | 2 |\n\n"
@@ -107,6 +107,14 @@ def test_an_ordinary_note_still_renders_as_a_note(previews) -> None:
     assert 'href="https://example.com/list"' in html
     assert 'rel="noopener noreferrer nofollow"' in html
     assert "/api/images/raw?library_id=core%3Apictures&amp;path=x.png" in html
+
+
+def test_an_ampersand_is_escaped_exactly_once(previews) -> None:
+    """marked escapes the author's "&" to "&amp;"; the sanitiser must not
+    escape it again, or the preview shows a literal "&amp;"."""
+    html = previews["ordinary"]["sanitized"]
+    assert "eggs &amp; bread" in html
+    assert "&amp;amp;" not in html
 
 
 def test_a_dropped_element_keeps_the_text_a_person_wrote(previews) -> None:
