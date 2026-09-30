@@ -320,11 +320,22 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
     ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke — no words",
     ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions — times and counts, no words",
     ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
-    ("web", "/api/satellites/{room_id}/timers"): "household state; a reminder's message is text somebody set",
+    ("web", "/api/satellites/{room_id}/timers"): (
+        "household state: a room's countdowns; rule M1 — every reminder answers without its "
+        "words (masked) unless the caller passes the device check"
+    ),
     ("web", "/api/timers"): (
-        "every room's rows at once — Home's countdowns (owner decision 2026-09-26); a reminder "
-        "set with NO room, which no open route listed before, answers without its words unless "
-        "the caller passes the device check"
+        "every room's rows at once — Home's countdowns (owner decision 2026-09-26) and the last "
+        "10 minutes of fires; rule M1 — every reminder, row or fire, answers without its words "
+        "unless the caller passes the device check"
+    ),
+    ("web", "/api/timers/fires"): (
+        "what went off, where it was heard, who stopped it — rooms, times and outcomes; rule M1 "
+        "masks every reminder's words, and the words spoken are never served"
+    ),
+    ("web", "/api/satellites/{room_id}/timer-announcements"): (
+        "a room's \"Only reminders for this device\" flag — anyone in the house may see how a "
+        "room behaves (the write is device tier)"
     ),
     ("web", "/api/calendar/events"): "household state; titles and descriptions",
     ("web", "/api/calendar/events/{event_id}"): "household state",
