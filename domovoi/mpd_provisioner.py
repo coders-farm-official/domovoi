@@ -190,9 +190,11 @@ async def _pin_startup_volume(control_port: int) -> None:
 
     target = settings.mpd_startup_volume
     # setvol races the daemon's control-port bind on a cold start; wait for
-    # the port before trying (short cap — if it's not up quickly the pin is
-    # skipped and the next play/volume command re-pins anyway).
-    if not await _wait_for_tcp(settings.mpd_host, control_port, timeout=15.0):
+    # MPD's greeting before trying — not a bare connect, which Docker's port
+    # proxy accepts before the daemon listens (short cap — if it's not up
+    # quickly the pin is skipped and the next play/volume command re-pins
+    # anyway).
+    if not await _wait_for_mpd(settings.mpd_host, control_port, timeout=15.0):
         log.warning(
             "MPD control port %d not up; skipping startup volume pin",
             control_port,
@@ -323,24 +325,54 @@ async def _ensure_container(
     await _pin_startup_volume(control_port)
 
 
-async def _wait_for_tcp(host: str, port: int, timeout: float, interval: float = 0.3) -> bool:
-    """Poll until host:port accepts TCP. Returns True on success, False on timeout."""
-    loop = asyncio.get_event_loop()
+# What MPD says first on every control connection: "OK MPD <version>".
+_MPD_GREETING = b"OK MPD "
+# The most one connect, or one wait for the greeting, may take.
+_MPD_ATTEMPT_SEC = 2.0
+
+
+async def _wait_for_mpd(host: str, port: int, timeout: float, interval: float = 0.3) -> bool:
+    """Poll until MPD itself answers on host:port with its ``OK MPD``
+    greeting. Returns True on success, False once ``timeout`` has run out.
+
+    A TCP connect is not enough. The control port is published through
+    Docker's port proxy, which accepts a loopback connection even while
+    nothing in the container listens yet (a daemon still starting, still
+    scanning the library), then closes it with no bytes: a connect-only wait
+    returned at once and the caller went on to a daemon that was not there.
+    MPD sends its greeting as soon as it accepts a client, so reading one
+    line is the whole check. Every connect and every read is bounded by
+    what is left of ``timeout``, so neither a refusing port nor a frozen
+    daemon (accepts, never speaks) holds the caller past it.
+    """
+    loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    while loop.time() < deadline:
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        writer = None
         try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=2.0
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=min(_MPD_ATTEMPT_SEC, remaining),
             )
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-            return True
-        except (OSError, asyncio.TimeoutError):
-            await asyncio.sleep(interval)
-    return False
+            line = await asyncio.wait_for(
+                reader.readline(),
+                timeout=min(_MPD_ATTEMPT_SEC, max(0.05, deadline - loop.time())),
+            )
+            if line.startswith(_MPD_GREETING):
+                return True
+        except (OSError, asyncio.TimeoutError, ValueError):
+            pass
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+        await asyncio.sleep(max(0.0, min(interval, deadline - loop.time())))
 
 
 # ─── Public API ───────────────────────────────────────────────────────────
@@ -540,7 +572,7 @@ async def ensure_room(room_id: str) -> tuple[int, int]:
         music_dir=music_dir,
         volume_name=volume,
     )
-    if not await _wait_for_tcp(
+    if not await _wait_for_mpd(
         settings.mpd_host, ctrl, timeout=settings.mpd_provision_timeout_sec
     ):
         log.warning(
