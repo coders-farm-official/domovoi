@@ -386,6 +386,29 @@ async def test_text_chat_carries_the_qa_num_ctx(monkeypatch):
     assert "think" not in bodies[0]
 
 
+async def test_text_chat_reports_the_closing_figures(monkeypatch):
+    """The last line of a streamed reply carries Ollama's counts and
+    durations; a ``stats`` dict gets them, and the deltas are unchanged."""
+    done = {
+        "message": {"content": ""}, "done": True, "done_reason": "stop",
+        "prompt_eval_count": 120, "eval_count": 42, "total_duration": 2_500_000_000,
+        "load_duration": 900_000_000, "prompt_eval_duration": 300_000_000,
+        "eval_duration": 1_200_000_000, "created_at": "ignored",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        lines = [json.dumps({"message": {"content": "hi"}, "done": False}), json.dumps(done)]
+        return httpx.Response(200, content="\n".join(lines).encode())
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **k: real(transport=httpx.MockTransport(handler), timeout=None))
+    stats: dict = {}
+    out = [d async for d in ollama_mod.chat_stream([{"role": "user", "content": "hi"}], model="m", stats=stats)]
+    assert out == ["hi"]
+    assert stats == {k: v for k, v in done.items() if k not in ("message", "done", "created_at")}
+
+
 # ─── the settings and their dashboard registration ────────────────────────
 
 

@@ -1,0 +1,33 @@
+-- V017 — What a chat message's "details" view shows (web + Android chat).
+--
+-- `created_at`, `model` and `error` already say when a message was written,
+-- which model answered and whether it failed. Two more things are kept:
+--
+-- `stats` (assistant rows): the numbers behind one reply, for debugging a
+-- slow or cut-off answer or comparing models and hosts. One JSONB object so
+-- a new figure needs no migration; every key is optional and readers must
+-- tolerate a missing one (rows written before this migration have NULL).
+-- Written by web/backend/api/chat.py:
+--   prompt_tokens, output_tokens     Ollama's prompt_eval_count / eval_count
+--   total_ms, load_ms, prompt_ms,    Ollama's *_duration, in milliseconds
+--   generate_ms                      (load_ms > 0 means the model was cold)
+--   tokens_per_sec                   output_tokens over generate_ms
+--   done_reason                      "stop", or "length" when it was cut off
+--   first_token_ms, wall_ms          measured by the server around the call
+--   context_sent, context_in_thread, earlier turns sent with the request,
+--   context_limit                    turns the thread holds, and the cap —
+--                                    sent < in_thread means older turns fell
+--                                    out of what the model saw
+--   num_ctx                          the context window asked for, if set
+--   model_role                       "chat", "vision" (images attached) or
+--                                    "override" (the caller named a model)
+--
+-- `device_id` (user rows): the install that sent it — the same id the
+-- device tier uses everywhere (`devices.device_id`, V010). Not a foreign
+-- key: a device can be forgotten while its messages stay, and the name is
+-- looked up when read, so a renamed device reads with its new name.
+--
+-- IF NOT EXISTS so a database patched by hand ahead of Flyway stays valid.
+
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS stats JSONB;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS device_id TEXT;

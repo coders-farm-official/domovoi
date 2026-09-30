@@ -14898,6 +14898,18 @@
               }
             ],
             "title": "Model"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",

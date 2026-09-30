@@ -199,6 +199,7 @@ async def chat_stream(
     model: str,
     base_url: str | None = None,
     connect_timeout: float = 10.0,
+    stats: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
     assistant-content deltas as they arrive.
@@ -209,7 +210,13 @@ async def chat_stream(
     web text-chat surface (module-level like :func:`pull_model`; the voice
     pipeline's Protocol clients are untouched). No overall read timeout — a
     long completion on a big model is legitimate; only connect is bounded.
-    Raises on transport errors so the caller can surface the failure."""
+    Raises on transport errors so the caller can surface the failure.
+
+    Pass a dict as ``stats`` to get Ollama's closing figures for the reply
+    copied into it when the stream ends: ``done_reason``, the token counts
+    ``prompt_eval_count`` / ``eval_count`` and the nanosecond durations
+    ``total_duration`` / ``load_duration`` / ``prompt_eval_duration`` /
+    ``eval_duration`` — whichever the server sent. Untouched on failure."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
@@ -241,7 +248,16 @@ async def chat_stream(
                 if delta:
                     yield delta
                 if chunk.get("done"):
+                    if stats is not None:
+                        stats.update({k: chunk[k] for k in _DONE_STATS if chunk.get(k) is not None})
                     return
+
+
+# The closing figures of a streamed chat reply (see chat_stream's ``stats``).
+_DONE_STATS = (
+    "done_reason", "prompt_eval_count", "eval_count",
+    "total_duration", "load_duration", "prompt_eval_duration", "eval_duration",
+)
 
 
 def pct_from_progress(chunk: dict[str, Any]) -> int | None:
