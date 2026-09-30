@@ -326,6 +326,15 @@ class Settings(BaseSettings):
     # a person waited for every transcript. A number pins it (and, being
     # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
     whisper_cpu_threads: int = 0
+    # Short-window decoding: on an English-only (.en) model, a capture of
+    # up to 9 s (every spoken command) is decoded on a 10 s window instead
+    # of the 30 s one faster-whisper always pads to — the encoder does a
+    # third of the work, so small.en on a CPU answers in about a quarter
+    # of the time with the same command accuracy. Longer captures,
+    # multilingual models, and any short decode that comes back blank,
+    # unsure or failed use the 30 s path as before. false = the 30 s path
+    # always. Applies on the next transcription.
+    whisper_short_window_enabled: bool = True
     # Speculative transcription (early endpointing, part A): start Whisper
     # at the first ~240 ms pause in a satellite's capture instead of after
     # its whole silence timeout, and use that transcript when no speech

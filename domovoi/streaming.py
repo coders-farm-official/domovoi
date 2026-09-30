@@ -337,14 +337,16 @@ capture only after `listen.silence_timeout` (1.2 s by default) of silence,
 but its frames are here as they are spoken. So at the first ~240 ms pause
 after speech — the satellite's own `speech_pause`, or for one that doesn't
 send it `endpointing.LevelPauseDetector` on the frames — the server copies
-the buffer and starts Whisper (and the voice embedding) on the copy. At
+the buffer and starts Whisper on the copy (then, once the transcript is
+out, the voice embedding). At
 `utterance_end` it uses that transcript if and only if no frame the
 satellite called speech came after the copy: exact frame accounting, from
 `last_voiced_frame` in `utterance_end` or, for a satellite that doesn't
 report it, from the silence timeout it reported in `config_status`
 (`endpointing.last_voiced_from_timeout`). Otherwise the copy is dropped
-and the whole buffer is transcribed as before. One Whisper call per room
-at a time, speculative or not; a new `utterance_start` discards the copy.
+and the whole buffer is transcribed as before. One Whisper call (or voice
+embedding) per room at a time, speculative or not; a new `utterance_start`
+discards the copy.
 The greeting strip, the greeting-only drop, the self-echo guard and the
 blank-capture guard run on whichever transcript is used. Off with
 `speculative_stt_enabled=false`.
@@ -398,6 +400,7 @@ from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
     SttUnavailableError,
     get_whisper_client,
+    transcribe_with_window,
     whisper_runtime,
 )
 from domovoi.config import settings
@@ -794,7 +797,13 @@ class _Heard:
     Only the embedding: it is the expensive, side-effect-free part of voice
     identification (``voice_identifier.embed_voice``). The matching touches
     ``last_seen`` and the drift counter, so it runs once, in the turn —
-    never on a copy the turn may throw away."""
+    never on a copy the turn may throw away.
+
+    A speculative copy's embedding is computed AFTER its decode, never
+    beside it (the two share the CPU, and the transcript is what the early
+    commit and the turn wait on): ``embed_task`` is still running when the
+    transcript is handed over, and the turn awaits it just before voice
+    identification (:meth:`StreamSession._copy_embedding`)."""
 
     text: str
     stt_ms: int
@@ -802,6 +811,12 @@ class _Heard:
     # False: nothing was embedded from this audio; the turn embeds it.
     embedded: bool = False
     embedding: Any = None
+    # The copy's embedding, still being computed: resolves to the
+    # (embedded, embedding) pair above.
+    embed_task: asyncio.Task[tuple[bool, Any]] | None = None
+    # The mel window (seconds) Whisper decoded this on — 10 for a short
+    # capture, 30 otherwise — when the client says (clients/whisper.py).
+    window_s: int | None = None
 
 
 @dataclass
@@ -1371,37 +1386,24 @@ class StreamSession:
             self._maybe_commit()
 
     async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
-        """Transcribe (and embed the voice in) a copy of the capture so
-        far. Never raises: None means "no speculative transcript", and the
-        turn transcribes the whole capture as it always did."""
+        """Transcribe a copy of the capture so far, then start embedding
+        the voice in it. Never raises: None means "no speculative
+        transcript", and the turn transcribes the whole capture as it
+        always did.
+
+        The transcript is returned as soon as it exists — the early commit
+        and the turn are waiting for it — and the embedding runs after the
+        decode, in the room's decode slot (``_one_at_a_time``), never
+        beside it: at the same time the two share the CPU, which slowed a
+        10 s-window decode by ~80 ms (240 → 321 ms, measured). Embedding
+        first instead costs ~60 ms of the decode's start. The turn awaits
+        the embedding only at voice identification."""
         try:
             whisper = get_whisper_client()
         except SttUnavailableError:
             return None
-        from domovoi.voice_identifier import embed_voice
-
-        async def _stt() -> str:
-            text, spec.stt_ms = await self._whisper_call(whisper, pcm)
-            return text
-
-        async def _embed() -> tuple[bool, Any]:
-            # Pure: nothing here may count as having heard somebody, since
-            # this copy may never be used. On any failure the turn embeds
-            # the audio itself, exactly as it would have without this.
-            # So does a copy shorter than the embedder's minimum: the
-            # whole capture (the copy plus its trailing silence) may not
-            # be, and whether a turn gets an embedding at all must not
-            # depend on when the copy was taken.
-            if len(pcm) < settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2:
-                return False, None
-            try:
-                return True, await embed_voice(pcm)
-            except Exception as e:
-                log.debug("stream %s: speculative voice embedding failed: %s", self.room_id, e)
-                return False, None
-
         try:
-            text, (embedded, embedding) = await asyncio.gather(_stt(), _embed())
+            text, spec.stt_ms, window = await self._whisper_call(whisper, pcm)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1410,34 +1412,90 @@ class StreamSession:
                 "transcribe the whole capture: %s", self.room_id, e,
             )
             return None
-        return _Heard(
+        heard = _Heard(
             text=text,
             stt_ms=spec.stt_ms or 0,
             whisper=whisper_block(whisper_runtime()),
-            embedded=embedded,
-            embedding=embedding,
+            window_s=window,
         )
+        # A copy shorter than the embedder's minimum gets no embedding: the
+        # whole capture (the copy plus its trailing silence) may clear it,
+        # and whether a turn gets an embedding at all must not depend on
+        # when the copy was taken. The turn embeds its own audio then.
+        if len(pcm) >= settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2:
+            heard.embed_task = asyncio.create_task(
+                self._embed_copy(pcm), name=f"speculative-embed:{self.room_id}",
+            )
+        return heard
 
-    async def _whisper_call(self, whisper: Any, pcm: bytes) -> tuple[str, int]:
-        """One Whisper call for this room — never alongside another of its
-        own. A call already running (a speculative decode, or one a
-        cancelled turn left behind) is waited out first: faster-whisper
-        can't stop a decode midway, and two at once would only share the
-        CPU. Returns the text and the call's own time.
+    async def _embed_copy(self, pcm: bytes) -> tuple[bool, Any]:
+        """The voice embedding of a speculative copy, in the room's decode
+        slot. Pure: nothing here may count as having heard somebody, since
+        this copy may never be used. On any failure the turn embeds the
+        audio itself, exactly as it would have without this."""
+        from domovoi.voice_identifier import embed_voice
 
-        The call itself is shielded from whoever awaits it: the real client
-        decodes in a worker thread (``asyncio.to_thread``), which a cancel
-        can't stop, so a cancelled caller (a discarded copy, a barge-in)
-        must leave ``_decode_inflight`` pending until the thread is really
-        done — otherwise the next call would start beside it."""
+        try:
+            return True, await self._one_at_a_time(lambda: embed_voice(pcm))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.debug("stream %s: speculative voice embedding failed: %s", self.room_id, e)
+            return False, None
+
+    async def _copy_embedding(self, heard: _Heard) -> None:
+        """Wait for a speculative copy's embedding (usually long done: it
+        takes ~10 ms after the decode) and put it on ``heard``. Shielded:
+        a barge-in cancelling the turn must not cancel the embedding, which
+        holds the room's decode slot until its thread ends."""
+        task = heard.embed_task
+        if task is None:
+            return
+        try:
+            heard.embedded, heard.embedding = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # This turn being cancelled (a barge-in) propagates; the
+            # embedding alone having been cancelled (its slot torn down)
+            # just means the turn embeds its own audio.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            heard.embedded, heard.embedding = False, None
+        except Exception:  # _embed_copy never raises; belt and braces
+            heard.embedded, heard.embedding = False, None
+
+    async def _one_at_a_time(self, start: Any) -> Any:
+        """Run ``start()`` (a coroutine factory: a Whisper decode or a voice
+        embedding) in this room's decode slot — never alongside another
+        of its own. Whatever is already running (a speculative decode, its
+        embedding, or a call a cancelled turn left behind) is waited out
+        first: faster-whisper can't stop a decode midway, and two at once
+        would only share the CPU.
+
+        The call itself is shielded from whoever awaits it: the real
+        clients run in a worker thread (``asyncio.to_thread``), which a
+        cancel can't stop, so a cancelled caller (a discarded copy, a
+        barge-in) must leave ``_decode_inflight`` pending until the thread
+        is really done — otherwise the next call would start beside it."""
         while (prev := self._decode_inflight) is not None and not prev.done():
             await asyncio.wait({prev})
-        t0 = time.perf_counter()
-        fut = asyncio.ensure_future(whisper.transcribe(pcm))
+        fut = asyncio.ensure_future(start())
         fut.add_done_callback(_consume_outcome)
         self._decode_inflight = fut
-        text = await asyncio.shield(fut)
-        return text, _elapsed_ms(t0)
+        return await asyncio.shield(fut)
+
+    async def _whisper_call(self, whisper: Any, pcm: bytes) -> tuple[str, int, int | None]:
+        """One Whisper call in the room's decode slot (``_one_at_a_time``).
+        Returns the text, the call's own time (not counting the wait for
+        the slot) and the mel window it decoded on, when the client says."""
+        t0: list[float] = []
+
+        def _start() -> Any:
+            t0.append(time.perf_counter())
+            return transcribe_with_window(whisper, pcm)
+
+        text, window = await self._one_at_a_time(_start)
+        return text, _elapsed_ms(t0[0]), window
 
     def _on_speech_hint(self, t: str, ctrl: dict[str, Any]) -> None:
         """`speech_pause` / `speech_resume` from the satellite. Frames and
@@ -2227,6 +2285,11 @@ class StreamSession:
                 self.ws.app.state.satellite_voice[self.room_id] = str(voice)
             else:
                 self.ws.app.state.satellite_voice.pop(self.room_id, None)
+            # Load that voice now, off the event loop, so the room's first
+            # reply doesn't pay the model load (domovoi/speech_warmup.py).
+            from domovoi.speech_warmup import schedule_room_voice_warm_up
+
+            schedule_room_voice_warm_up(str(voice) if voice else None)
             return
         if t == "logs_chunk":
             # One slice of a log pull we asked for. Reassembly is sync and
@@ -2495,11 +2558,16 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return None
-            text, stt_ms = await self._whisper_call(whisper, pcm_bytes)
-            heard = _Heard(text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()))
+            text, stt_ms, window = await self._whisper_call(whisper, pcm_bytes)
+            heard = _Heard(
+                text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()),
+                window_s=window,
+            )
         timings.stages["stt_ms"] = heard.stt_ms
         timings.stages["stt_wait_ms"] = _elapsed_ms(wait_t0)
         timings.whisper = heard.whisper
+        if heard.window_s is not None:
+            timings.flags["stt_window_s"] = heard.window_s
         if speculations:
             timings.flags["stt_reused"] = reused
             timings.flags["speculative_decodes"] = len(speculations)
@@ -2693,12 +2761,13 @@ class StreamSession:
             # and how aggressively to prompt for identity. Best-effort —
             # any failure leaves person_id=None / presence_tier="high"
             # rather than blocking the response cycle. A speculative
-            # transcript brings the embedding of its copy, computed
-            # alongside the decode; the matching (and its last_seen and
-            # drift bookkeeping) runs here, once per turn, either way.
+            # transcript brings the embedding of its copy, computed right
+            # after its decode; the matching (and its last_seen and drift
+            # bookkeeping) runs here, once per turn, either way.
             from domovoi.voice_identifier import identify
             stage_t0 = time.perf_counter()
             try:
+                await self._copy_embedding(heard)
                 if heard.embedded:
                     ident = await identify(pcm_bytes, embedding=heard.embedding)
                 else:

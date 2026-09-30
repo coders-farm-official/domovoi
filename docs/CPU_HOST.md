@@ -80,6 +80,38 @@ Drop the `.en` suffix if anyone in the house talks to Domovoi in another
 language; the English-only models are meaningfully faster but will
 mistranscribe rather than switch.
 
+### Short commands decode on a 10-second window
+
+faster-whisper pads every call to a 30-second window, so its encoder —
+most of a CPU decode — does as much work for "stop" as for half a minute
+of speech. With an English-only model (`small.en`, `base.en`, ...), a
+capture of up to 9 seconds, which is every spoken command, is decoded on
+a 10-second window instead (`whisper_short_window_enabled`, on by
+default, applies without a restart): the same model, called directly
+through CTranslate2, with a third of the encoder work. With `small.en` on
+8 CPU threads that takes a command from about 0.9 s to about 0.23 s, and
+the command accuracy measured on a 333-clip corpus is the same. A
+multilingual model keeps the 30-second window for everything: it works
+out the language from the window, and on a short one it too often gets
+that wrong.
+
+A longer capture still takes the 30-second path, and so does a short one
+whose result the 10-second decode isn't sure of — no speech in it, or a
+result faster-whisper itself would have re-decoded at a higher
+temperature — so those cost the short decode plus the full one. The
+boot log says which is in use:
+
+```bash
+journalctl -u domovoi-core | grep 'short-window'
+# Whisper: short-window decoding ready — captures up to 9 s decode on a 10 s window (warm-up 212 ms)
+```
+
+A CTranslate2 too old to take a window shorter than 30 seconds logs
+`short-window decoding is unavailable` instead and runs everything on the
+30-second path. `GET /v1/stats/latency` reports `whisper.short_window`
+(in effect now) and `stt_window` (`{short, full}`: how many recent turns
+were decoded on each window).
+
 > These are ballparks, not promises — core count, memory bandwidth, and
 > what else the box is doing all move them. Measure yours rather than
 > trusting the table: see [Measuring turn latency](#measuring-turn-latency)
@@ -101,6 +133,23 @@ setting is ignored on `cuda`. The boot log says what was used:
 journalctl -u domovoi-core | grep "loading Whisper"
 # loading Whisper model=small.en device=cpu compute=int8 cpu_threads=8
 ```
+
+Why physical cores and not every hardware thread: measured with
+`small.en` on the 10-second window, eight cores with two threads each
+(an 8-core/16-thread box, like the reference AMD server) went from about
+286 ms at 8 threads to 273 ms at 12 and 275 ms at 16 — the second thread
+on a core shares that core's vector units, so it buys a few percent at
+most. More *cores* do help: on a machine with cores to spare, 12 threads
+beat 10 and 8 (338, 353 and 378 ms). So `0` gives 8 threads on an 8-core
+server and 12 on a 12-core one, and there is nothing to gain from pinning
+more.
+
+One exception: a CPU that mixes fast and slow cores (Intel's P- and
+E-cores). Every thread gets an equal share of each step, so the slowest
+core sets the pace — on a hybrid test box, 12 threads spread over 8 fast
+and 4 slow cores took ~500 ms where 8 threads kept on the fast cores took
+~290. On such a CPU, set `whisper_cpu_threads` to the number of fast
+cores.
 
 ### `qwen2.5:7b` instead of `qwen2.5:14b`
 
@@ -254,6 +303,18 @@ The gap between those lines is how long Whisper took to load. The *first*
 one also downloads the model from Hugging Face, so restart once and time
 the second for a true figure.
 
+The voice-identification encoder and the Piper voices load in the
+background right after boot (the default voice at once, each room's own
+voice when its satellite connects), so the first command after a restart
+doesn't pay for them — before, it paid about 0.6 s for each, and the
+encoder's load stalled every room while it ran:
+
+```bash
+journalctl -u domovoi-core | grep "speech warm-up"
+# speech warm-up: voice encoder ready in 0.7 s
+# speech warm-up: Piper voice en_US-lessac-medium ready in 0.5 s
+```
+
 Ollama's model loads are the exception: they are boot cost only if the
 models *stay* loaded, which is what [Memory budget](#memory-budget) is
 about. A first question that takes most of a minute after a quiet
@@ -267,8 +328,12 @@ journalctl -u domovoi-core | grep 'turn timings'
 # turn timings room=kitchen trigger=wake_word path=fast capture_audio_ms=2130
 #   endpoint_silence_ms=1200 stt_ms=640 stt_wait_ms=0 identify_ms=41 route_ms=22
 #   tts_first_ms=95 total_ms=190 speech_to_reply_ms=1390 stt=reused/1spec
-#   whisper=small.en/cpu/int8/8t
+#   window=10s whisper=small.en/cpu/int8/8t
 ```
+
+`window=10s` means the transcript came from the
+[10-second window](#short-commands-decode-on-a-10-second-window);
+`window=30s`, from faster-whisper's own 30-second one.
 
 | Stage | What it measures |
 |---|---|
@@ -276,7 +341,7 @@ journalctl -u domovoi-core | grep 'turn timings'
 | `endpoint_silence_ms` | the silence the satellite waited out after your last word before it stopped listening — `listen.silence_timeout`, give or take a frame |
 | `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
 | `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
-| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran alongside that decode, so this is only the lookup |
+| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran right after that decode, so this is only the lookup |
 | `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
@@ -320,14 +385,15 @@ becomes the turn's `endpoint_silence_ms`; the turn's log line carries
 "volume up", "what's playing") needs 350 ms of silence, tier B (a timer or
 reminder with a duration, "volume 40", the clock, one-word commands) 650
 ms (`early_commit_hold_a_ms`, `early_commit_hold_b_ms`). On a CPU-only
-server the decode itself usually takes longer than either hold, so in
-practice the capture ends when the transcript is ready: about
-`240 ms + stt_ms` after your last word instead of `silence_timeout +
-stt_ms` before this release. For "set a timer for ten minutes" on an
-8-core server with small.en that is roughly 0.8-1.2 s to the end of
-listening plus 0.2-0.4 s to the first reply audio (`speech_to_reply_ms`);
-getting under a second needs a faster decode (base.en, a GPU, or a
-dedicated fast recognizer for simple commands).
+server a 30-second-window decode takes longer than either hold (small.en:
+~0.9 s), so the transcript isn't ready until the satellite has stopped
+listening anyway and early commit can't fire. The
+[10-second window](#short-commands-decode-on-a-10-second-window) brings
+that decode to ~0.25 s: the transcript is ready about 0.5 s after your
+last word, the capture ends at the tier's hold, and the reply starts
+roughly 0.15 s after that (`speech_to_reply_ms`) — about 0.6-0.7 s for a
+tier-A phrase and 0.8 s for tier B on the reference 8-core server, if
+the satellite's pause report arrives on time.
 
 Whatever is said after the hold is lost ("set a timer for ten minutes …
 for the pasta" gets no label). When the satellite heard speech after the
@@ -353,7 +419,8 @@ Whisper settings, so the numbers are all from the settings now running
 `speculative` in the answer is `{turns, reused, decodes}`: turns that had
 an early transcript, how many used it, and how many speculative decodes
 were started; `early_commit` is `{turns, A, B, cut_in}` for the captures
-the core ended early.
+the core ended early; `stt_window` is `{short, full}`, the turns decoded
+on each window.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops

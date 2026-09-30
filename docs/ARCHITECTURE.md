@@ -117,15 +117,21 @@ prose:
    **Speculative transcription:** the Pi only sends `utterance_end` after
    `listen.silence_timeout` (1.2 s) of silence, but its frames arrive as
    they are spoken, so at the first ~240 ms pause the core copies the
-   buffer and starts Whisper and the voice embedding on the copy. At
+   buffer and starts Whisper on the copy (the voice embedding follows the
+   decode, never beside it). At
    `utterance_end` it uses that transcript if and only if the Pi's last
    voiced frame is inside the copy — exact frame accounting, from
    `last_voiced_frame` in `utterance_end` (new satellites, which also send
    `speech_pause` hints) or from the silence timeout an older satellite
    reported in `config_status` (`domovoi/endpointing.py`); otherwise the
-   whole buffer is transcribed as before. One Whisper call per room at a
-   time. The silence and the transcription overlap instead of adding up
-   (`speculative_stt_enabled`).
+   whole buffer is transcribed as before. One Whisper call (or embedding)
+   per room at a time. The silence and the transcription overlap instead
+   of adding up (`speculative_stt_enabled`). On an English-only model a
+   capture of up to 9 s — any command — decodes on a 10 s mel window
+   instead of the 30 s one faster-whisper pads to, calling CTranslate2
+   directly: about a quarter of the CPU time, falling back to the 30 s
+   path for longer captures or a blank or unsure result
+   (`whisper_short_window_enabled`).
    **Early commit:** when that early transcript is a whole closed command,
    the core doesn't wait for the rest of the silence — it sends the
    satellite `end_capture` and answers. Only for satellites that declared

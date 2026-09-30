@@ -7,6 +7,14 @@ Input contract: PCM bytes (16 kHz mono 16-bit). The WebSocket ingestion
 path produces this format directly; other callers can pass a WAV via the
 convenience `transcribe_wav_bytes` entrypoint.
 
+On an English-only (``.en``) model, a capture of up to
+:data:`SHORT_WINDOW_MAX_AUDIO_SEC` — every spoken command — is decoded on a
+:data:`SHORT_WINDOW_SEC` window by :class:`ShortWindowDecoder`, calling
+CTranslate2 directly, instead of the 30 s window faster-whisper pads every
+call to. Longer captures, multilingual models, and any short decode that
+comes back blank, unsure or failed take faster-whisper's own path exactly
+as before (``whisper_short_window_enabled``).
+
 A failed load never takes the core down. :func:`load_whisper_client` walks
 a short ladder — the configured model/device/compute type, then
 ``whisper_cpu_fallback_model`` on cpu at int8 — and when every rung fails
@@ -24,9 +32,14 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 import wave
+import zlib
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+import numpy as np
 
 from domovoi.config import settings
 
@@ -34,6 +47,33 @@ log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16_000
 SAMPLE_WIDTH_BYTES = 2  # int16
+
+# ─── Short-window decoding ─────────────────────────────────────────────
+# faster-whisper pads every call's mel spectrogram to 3000 frames (30 s) —
+# its chunk_length option doesn't change that — so the encoder, most of a
+# CPU decode, does the same work for "stop" as for 29 s of dictation.
+# CTranslate2's Whisper encoder takes a shorter input, so a capture of up
+# to SHORT_WINDOW_MAX_AUDIO_SEC is decoded on a SHORT_WINDOW_SEC window:
+# the same features, zero-padded to 1000 frames instead of 3000. Measured
+# with small.en int8 on 8 threads (oneDNN, the backend an AMD CPU gets):
+# ~890 ms -> ~230 ms, with command accuracy equal on a 333-clip corpus.
+# Shorter windows lose accuracy fast (5 s: 158 of 252 tier A/B commands
+# right against 221; a window sized to the clip, 161), hence one fixed
+# window, and at least a second of it left as padding.
+SHORT_WINDOW_SEC = 10
+SHORT_WINDOW_MAX_AUDIO_SEC = 9.0
+# The window the 30 s path decodes on, for the per-turn record.
+FULL_WINDOW_SEC = 30
+# faster-whisper's own transcribe() defaults — what the 30 s path runs
+# with, so the short decode judges its result by the same rules.
+BEAM_SIZE = 5
+NO_SPEECH_THRESHOLD = 0.6
+LOG_PROB_THRESHOLD = -1.0
+COMPRESSION_RATIO_THRESHOLD = 2.4
+# A capture of 9 s holds a few dozen tokens of speech; a decode that runs
+# to this cap is looping, and goes to the 30 s path (which has the
+# temperature fallback this path leaves out).
+SHORT_MAX_NEW_TOKENS = 128
 
 # CTranslate2 compute types by where they can run. Asking a CPU for a GPU
 # type fails the load ("target device or backend do not support efficient
@@ -53,6 +93,18 @@ FALLBACK_COMPUTE_TYPE = "int8"
 class WhisperClient(Protocol):
     async def transcribe(self, pcm_bytes: bytes) -> str: ...
     async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str: ...
+
+
+async def transcribe_with_window(client: Any, pcm_bytes: bytes) -> tuple[str, int | None]:
+    """``client.transcribe`` plus the mel window (seconds) the transcript
+    was decoded on — :data:`SHORT_WINDOW_SEC` or :data:`FULL_WINDOW_SEC` —
+    when the client says (the real one does; a stub or a test double
+    doesn't, and gets None)."""
+    detailed = getattr(client, "transcribe_with_window", None)
+    if callable(detailed):
+        text, window = await detailed(pcm_bytes)
+        return text, window
+    return await client.transcribe(pcm_bytes), None
 
 
 class SttUnavailableError(RuntimeError):
@@ -180,11 +232,203 @@ def _load_hint(model: str, device: str, compute_type: str, exc: Exception) -> st
     return base
 
 
+def compression_ratio(text: str) -> float:
+    """faster-whisper's repetition measure: how well the text compresses.
+    Above :data:`COMPRESSION_RATIO_THRESHOLD` it is looping."""
+    raw = text.encode("utf-8")
+    return len(raw) / len(zlib.compress(raw)) if raw else 0.0
+
+
+@dataclass(frozen=True)
+class ShortDecode:
+    """One short-window decode, with what faster-whisper would judge it by."""
+
+    text: str
+    avg_logprob: float
+    no_speech_prob: float
+    # Ended on its own end-of-text rather than at SHORT_MAX_NEW_TOKENS.
+    complete: bool
+
+    @property
+    def verdict(self) -> str:
+        """``ok`` (use it), ``blank`` (no speech in it) or ``unsure`` —
+        faster-whisper's own thresholds, one of them applied more strictly:
+
+        * no speech when ``no_speech_prob`` is above 0.6 and the average
+          log-probability isn't above -1.0 (faster-whisper skips such a
+          window, and never retries it at a higher temperature);
+        * unsure when ``no_speech_prob`` is above 0.6 at all. faster-whisper
+          would keep such a window on a good enough log-probability, but on
+          the short window that is how noise with nobody talking comes back
+          as "you": every noise-only capture tried did it, while no spoken
+          command in the 333-clip corpus got above 0.3. The 30 s window gets
+          the say instead, so a noise capture ends as it did before;
+        * unsure when the text is repetitive (compression ratio above 2.4)
+          or unlikely (average log-probability below -1.0) — where
+          faster-whisper would decode again at a higher temperature — or
+          when the decode ran to the token cap;
+        * and blank when what is left holds no letter or digit.
+
+        Anything but ``ok`` sends the capture to the 30 s path.
+        """
+        if self.no_speech_prob > NO_SPEECH_THRESHOLD:
+            return "blank" if self.avg_logprob <= LOG_PROB_THRESHOLD else "unsure"
+        if (
+            not self.complete
+            or self.avg_logprob < LOG_PROB_THRESHOLD
+            or compression_ratio(self.text) > COMPRESSION_RATIO_THRESHOLD
+        ):
+            return "unsure"
+        if not any(ch.isalnum() for ch in self.text):
+            return "blank"
+        return "ok"
+
+
+class ShortWindowDecoder:
+    """Decode a short capture on a :data:`SHORT_WINDOW_SEC` mel window by
+    calling CTranslate2's Whisper directly (see the constants above).
+    English-only (``.en``) models only: a multilingual model detects the
+    language from the same window, and on a short one that goes wrong
+    (multilingual tiny: "Resume the music." came back half in Cyrillic,
+    "Stop." as "Ciao!", and commands repeated themselves; tier A/B
+    commands right fell from 211 to 175 of 252), so those keep the 30 s
+    window (:meth:`for_model` refuses them).
+
+    What faster-whisper's ``transcribe(path, beam_size=5)`` does for the
+    first (and, for a command, only) window, and what this keeps:
+
+    * the features: the same extractor, the capture's own frames, then
+      zero padding — to 1000 frames here instead of 3000;
+    * the decode: English, beam 5, patience 1, no length or repetition
+      penalty, blank and non-speech tokens suppressed (faster-whisper's
+      own list);
+    * the text: every text token decoded, stripped — what joining a
+      single window's segments gives.
+
+    And what it leaves out, on purpose:
+
+    * the temperature fallback — a result faster-whisper would decode again
+      at a higher temperature is ``unsure`` here, and the caller takes the
+      30 s path, fallback and all (:attr:`ShortDecode.verdict`);
+    * timestamp tokens — a command is one segment, and decoding without
+      them is the ``<|notimestamps|>`` prompt, a few tokens fewer;
+    * the temp WAV and PyAV decode — the PCM is converted in memory, the
+      same int16 → float32 scaling.
+
+    Built by :meth:`for_model` from a loaded ``faster_whisper.WhisperModel``;
+    the parts are injectable so the logic tests without faster-whisper.
+    """
+
+    def __init__(
+        self,
+        *,
+        feature_extractor: Callable[[np.ndarray], np.ndarray],
+        model: Any,
+        encode: Callable[[np.ndarray], Any],
+        tokenizer: Any,
+        hop_length: int = 160,
+        sample_rate: int = SAMPLE_RATE,
+    ) -> None:
+        self._features = feature_extractor
+        self._model = model
+        self._encode = encode
+        self._tok = tokenizer
+        self.hop_length = int(hop_length)
+        self.frames = int(SHORT_WINDOW_SEC * sample_rate) // self.hop_length
+        self.max_samples = int(SHORT_WINDOW_MAX_AUDIO_SEC * sample_rate)
+        self._prompt = [*tokenizer.sot_sequence, tokenizer.no_timestamps]
+        # faster-whisper's get_suppressed_tokens for suppress_tokens=[-1].
+        ids = set(tokenizer.non_speech_tokens)
+        ids.update((tokenizer.transcribe, tokenizer.translate, tokenizer.sot,
+                    tokenizer.sot_prev, tokenizer.sot_lm, tokenizer.no_speech))
+        self._suppress = sorted(i for i in ids if isinstance(i, int))
+
+    @classmethod
+    def for_model(cls, whisper_model: Any) -> "ShortWindowDecoder":
+        """The decoder for a loaded ``faster_whisper.WhisperModel``.
+        Raises ValueError for a multilingual model (see above)."""
+        if whisper_model.model.is_multilingual:
+            raise ValueError(
+                "short-window decoding is for English-only (.en) models; a "
+                "multilingual model keeps the 30 s window"
+            )
+        from faster_whisper.tokenizer import Tokenizer
+
+        fe = whisper_model.feature_extractor
+        return cls(
+            feature_extractor=fe,
+            model=whisper_model.model,
+            encode=whisper_model.encode,
+            tokenizer=Tokenizer(whisper_model.hf_tokenizer, False),
+            hop_length=int(getattr(fe, "hop_length", 160) or 160),
+            sample_rate=int(getattr(fe, "sampling_rate", SAMPLE_RATE) or SAMPLE_RATE),
+        )
+
+    def fits(self, pcm_bytes: bytes) -> bool:
+        """Whether a capture this long is decoded here."""
+        return 0 < len(pcm_bytes) // SAMPLE_WIDTH_BYTES <= self.max_samples
+
+    def window_features(self, audio: np.ndarray) -> np.ndarray:
+        """The capture's own mel frames, zero-padded to the window. The
+        extractor may return frames past the audio (older faster-whisper
+        pads the waveform itself); only the audio's are kept, exactly the
+        slice faster-whisper's first window takes."""
+        feats = np.asarray(self._features(audio))
+        content = min(len(audio) // self.hop_length, feats.shape[-1], self.frames)
+        out = np.zeros((feats.shape[0], self.frames), dtype=np.float32)
+        out[:, :content] = feats[:, :content]
+        return out
+
+    def decode(self, pcm_bytes: bytes) -> ShortDecode:
+        """Decode one capture (16 kHz mono int16). Raises whatever
+        CTranslate2 raises; the caller falls back on any exception."""
+        audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        encoded = self._encode(self.window_features(audio))
+        prompt = self._prompt
+        result = self._model.generate(
+            encoded,
+            [prompt],
+            beam_size=BEAM_SIZE,
+            patience=1,
+            length_penalty=1,
+            repetition_penalty=1,
+            no_repeat_ngram_size=0,
+            max_length=len(prompt) + SHORT_MAX_NEW_TOKENS,
+            return_scores=True,
+            return_no_speech_prob=True,
+            suppress_blank=True,
+            suppress_tokens=self._suppress,
+        )[0]
+        ids = list(result.sequences_ids[0])
+        n = len(ids)
+        # faster-whisper's recovery of the average log-probability from
+        # CTranslate2's length-normalised score (length_penalty 1).
+        avg_logprob = float(result.scores[0]) * n / (n + 1)
+        return ShortDecode(
+            text=self._tok.decode(ids).strip(),
+            avg_logprob=avg_logprob,
+            no_speech_prob=float(result.no_speech_prob),
+            complete=n < SHORT_MAX_NEW_TOKENS - 1,
+        )
+
+
+def _ctranslate2_version() -> str:
+    try:
+        import ctranslate2
+
+        return str(ctranslate2.__version__)
+    except Exception:
+        return "unknown"
+
+
 class FasterWhisperClient:
     """Wraps `faster_whisper.WhisperModel` with an async interface.
 
     The model load is synchronous (and slow — ~30 s first run for large-v3).
     Transcription runs in a threadpool so it doesn't block the event loop.
+    A short capture goes to the :class:`ShortWindowDecoder` first (see the
+    module docstring); ``short_window`` is None when this CTranslate2 can't
+    run one, and then every capture takes the 30 s path.
     """
 
     def __init__(self, model: str, device: str, compute_type: str) -> None:
@@ -208,16 +452,86 @@ class FasterWhisperClient:
         except Exception as e:
             raise RuntimeError(_load_hint(model, device, compute_type, e)) from e
         log.info("Whisper ready")
+        self.short_window: ShortWindowDecoder | None = self._load_short_window()
+
+    def _load_short_window(self) -> ShortWindowDecoder | None:
+        """Build the short-window decoder and run it once on a second of
+        silence: that proves this CTranslate2 takes a window shorter than
+        3000 frames (4.x does; the check keeps an older or odd build on the
+        30 s path instead of failing turns), and it warms the encoder for
+        the window's shape so the first command after a boot doesn't pay
+        for it. Built whatever ``whisper_short_window_enabled`` says, so
+        the setting applies without a restart."""
+        t0 = time.perf_counter()
+        if getattr(getattr(self._model, "model", None), "is_multilingual", False) is True:
+            log.info(
+                "Whisper: multilingual model — every capture decodes on the 30 s "
+                "window (short-window decoding is for English-only .en models)"
+            )
+            return None
+        try:
+            short = ShortWindowDecoder.for_model(self._model)
+        except Exception as e:
+            log.warning(
+                "Whisper: short-window decoding is unavailable: %s: %s. Every "
+                "capture uses the 30 s window.", type(e).__name__, e,
+            )
+            return None
+        try:
+            short.decode(bytes(SAMPLE_RATE * SAMPLE_WIDTH_BYTES))
+        except Exception as e:
+            log.warning(
+                "Whisper: short-window decoding is unavailable (ctranslate2 %s): "
+                "%s: %s. Every capture uses the 30 s window.",
+                _ctranslate2_version(), type(e).__name__, e,
+            )
+            return None
+        log.info(
+            "Whisper: short-window decoding ready — captures up to %.0f s decode "
+            "on a %d s window (warm-up %d ms)",
+            SHORT_WINDOW_MAX_AUDIO_SEC, SHORT_WINDOW_SEC,
+            int((time.perf_counter() - t0) * 1000),
+        )
+        return short
 
     async def transcribe(self, pcm_bytes: bytes) -> str:
         """Transcribe raw 16 kHz mono int16 PCM bytes."""
+        text, _window = await asyncio.to_thread(self._transcribe_pcm_sync, pcm_bytes)
+        return text
+
+    async def transcribe_with_window(self, pcm_bytes: bytes) -> tuple[str, int]:
+        """:meth:`transcribe`, plus the window (seconds) the text came from."""
         return await asyncio.to_thread(self._transcribe_pcm_sync, pcm_bytes)
 
     async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
         """Transcribe a complete WAV file's bytes."""
         return await asyncio.to_thread(self._transcribe_wav_sync, wav_bytes)
 
-    def _transcribe_pcm_sync(self, pcm_bytes: bytes) -> str:
+    def _transcribe_pcm_sync(self, pcm_bytes: bytes) -> tuple[str, int]:
+        """The short window when it applies and its result is usable,
+        else faster-whisper's 30 s path. Returns (text, window seconds)."""
+        short = self.short_window
+        if short is not None and settings.whisper_short_window_enabled and short.fits(pcm_bytes):
+            try:
+                result = short.decode(pcm_bytes)
+            except Exception as e:
+                log.warning(
+                    "Whisper: short-window decode failed (%s: %s); using the 30 s window",
+                    type(e).__name__, e,
+                )
+            else:
+                verdict = result.verdict
+                if verdict == "ok":
+                    return result.text, SHORT_WINDOW_SEC
+                log.info(
+                    "Whisper: short-window decode came back %s (%.1f s of audio, "
+                    "avg_logprob %.2f, no_speech %.2f); using the 30 s window",
+                    verdict, len(pcm_bytes) / (SAMPLE_RATE * SAMPLE_WIDTH_BYTES),
+                    result.avg_logprob, result.no_speech_prob,
+                )
+        return self._transcribe_full_sync(pcm_bytes), FULL_WINDOW_SEC
+
+    def _transcribe_full_sync(self, pcm_bytes: bytes) -> str:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp = f.name
             with wave.open(f, "wb") as wf:
@@ -447,12 +761,22 @@ def stt_status() -> dict[str, Any]:
     return {**_status, "configured": dict(_status["configured"])}
 
 
+def short_window_active() -> bool | None:
+    """Whether short captures are decoded on the short window right now:
+    the setting is on and the loaded model could run one. None when no
+    real model is loaded (a stub, or nothing yet)."""
+    if not hasattr(_client, "short_window"):
+        return None
+    return bool(settings.whisper_short_window_enabled and _client.short_window is not None)
+
+
 def whisper_runtime() -> dict[str, Any]:
     """What is transcribing right now, flat, for the per-turn timing record
     and the latency summary: ``{state, model, device, compute_type,
-    cpu_threads}``. The model fields are None unless something loaded
-    (``stub`` included); ``cpu_threads`` is None off the cpu, and for a
-    client that doesn't report one."""
+    cpu_threads, short_window}``. The model fields are None unless
+    something loaded (``stub`` included); ``cpu_threads`` is None off the
+    cpu, and for a client that doesn't report one; ``short_window`` is
+    :func:`short_window_active`."""
     st = stt_status()
     loaded = st.get("loaded") or {}
     threads = getattr(_client, "cpu_threads", None)
@@ -462,6 +786,7 @@ def whisper_runtime() -> dict[str, Any]:
         "device": loaded.get("device"),
         "compute_type": loaded.get("compute_type"),
         "cpu_threads": threads if isinstance(threads, int) else None,
+        "short_window": short_window_active(),
     }
 
 

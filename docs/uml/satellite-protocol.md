@@ -41,7 +41,7 @@ sequenceDiagram
     Pi->>S: utterance_start {trigger:"wake_word", utt}
     Pi->>S: binary PCM …
     Pi->>S: speech_pause {utt, frame, last_voiced_frame} (features only)
-    Note over S: copy the buffer, start Whisper + voice embedding on it
+    Note over S: copy the buffer, start Whisper on it<br/>(then the voice embedding)
     Pi->>S: binary PCM (the rest of the silence) …
     Pi->>S: utterance_end {greeting_played, greeting_clip, ack_before_capture,<br/>utt, frames, last_voiced_frame, exit_reason, voiced_frames, ...}
     Note over S: last voiced frame inside the copy → use its transcript,<br/>otherwise transcribe the whole buffer
@@ -127,7 +127,8 @@ Both sides must keep working against the other's older version:
 The Pi ends a capture only after `listen.silence_timeout` (1.2 s by default)
 of silence, but its frames reach the server as they are spoken. At the first
 ~240 ms pause after speech the server copies the buffer and starts Whisper
-(and the voice embedding) on the copy; at `utterance_end` it uses that
+on the copy (and, once the transcript is out, the voice embedding); at
+`utterance_end` it uses that
 transcript **if and only if** the Pi's last voiced frame is inside the copy.
 
 * The pause: the Pi's own `speech_pause` when it sends one; otherwise the
