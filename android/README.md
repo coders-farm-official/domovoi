@@ -121,10 +121,15 @@ Conventions for adding screens: see `CONVENTIONS.md`.
 When a timer or reminder goes off in any room, the phone posts a
 notification on the **Timers and reminders** channel (`alerts/`,
 process-wide — not a screen, no foreground service, no FCM; nothing
-leaves the home network):
+leaves the home network). What the phone does, exactly:
 
-- **Live:** `timer_fires.changed` on the `/ws/state` socket posts every
-  new fire; each (re)connect catches up from
+| App | New timer set anywhere | Timer goes off |
+|---|---|---|
+| open (on screen) | known at once (`timers.changed`), local alarm armed | notified at once (`timer_fires.changed`) |
+| in the background or closed | known at the next background check, about every 15 min | its local alarm rings on time if the phone knew of it; otherwise notified at the next check if under 30 min old |
+
+- **Live (app open):** `timer_fires.changed` on the `/ws/state` socket
+  posts every new fire; each (re)connect catches up from
   `GET /api/timers/fires?since_id=…` (fires under 30 minutes old; a
   server's first catch-up only the last 2 minutes).
 - **Alarm mirror:** every running timer and reminder on the active
@@ -136,8 +141,50 @@ leaves the home network):
   Exact alarms: always on API 26–30, with `SCHEDULE_EXACT_ALARM` on
   31–32 (inexact without it), `USE_EXACT_ALARM` from 33. Re-armed after
   a reboot or an app update.
+- **Background sync (app off screen):** a self-rescheduling alarm
+  (`alerts/TimerSync.kt`) wakes the app about every 15 minutes for a few
+  seconds to run the same catch-up (`GET /api/timers/fires?since_id=…`,
+  the 30-minute rule) and mirror sync (`GET /api/timers`: arm new timers,
+  disarm cancelled ones), with the household token. Each tick asks for
+  the next one before it touches the network, gives up after 8 s (Doze
+  lifts its network block for an exact allow-while-idle alarm's app for
+  10 s), and skips the network when the start's own sync reached the
+  server under a minute earlier. No server set: no ticks. Notifications
+  off: a tick only disarms. Restarted by `TimerBootReceiver` after a
+  reboot or an app update (first tick within ~2 min) and by every start
+  of the app (the only way back after a force-stop).
+  - **Why an exact alarm chain, not WorkManager or an inexact alarm:**
+    only an exact allow-while-idle alarm gets the network in Doze. On the
+    API 35 emulator in forced Doze the exact tick's receiver read
+    `allowed=POWER_SAVE_ALLOWLIST|NOT_IN_BACKGROUND effective=NONE` in
+    `dumpsys netpolicy` and synced; an inexact `setAndAllowWhileIdle` tick
+    fired on time but read `allowed=NOT_IN_BACKGROUND effective=DOZE`, and
+    its requests timed out. A WorkManager job (JobScheduler) waits for a
+    Doze maintenance window (an hour after the phone settles, then two,
+    four, six apart), and WorkManager would add a dependency, a database
+    and a start-up initializer; the app already re-arms after a reboot.
+    The exact-alarm permissions are the ones the timers already hold.
+  - **How it is armed, per API level**, so it never holds back a timer's
+    own alarm: 31+ with exact alarms allowed: `setExactAndAllowWhileIdle`
+    every 15 min; the timers' exact alarms share Doze's budget of 72 an
+    hour with it (`allow_while_idle_quota`). 26–30: every allow-while-idle
+    alarm of an app shares one slot per ~9 minutes while dozing or in
+    Battery Saver, so the exact tick (no permission needed below 31) is
+    kept out of the 9 minutes either side of every mirrored timer alarm.
+    31–32 with "Alarms & reminders" revoked: no exact alarms at all, so a
+    plain inexact alarm (10 min, delivered up to 7.5 min late) that runs
+    while the phone is awake and waits for Doze's maintenance windows.
+  - **What stops it:** a user-set **Restricted** battery usage stops the
+    ticks and the timer alarms alike while the app is in the background;
+    a force-stop stops both until the next start (Android 15 also sends
+    the app `BOOT_COMPLETED` as it leaves the stopped state, seen on the
+    emulator). Not measured: how far app standby buckets space the ticks
+    for an app Android files as seldom used (`am set-standby-bucket` would
+    not take the app below "working set" on the emulator, where the
+    tick's `app_standby` policy did not defer it).
 - The two paths post one timer once (a small dedupe book keyed by
-  server and timer id), into the same notification.
+  server and timer id), into the same notification; a background check
+  that finds a fire already posted by either posts nothing new.
 - **Privacy:** a shared screen never shows the words, locked or not. On
   any other phone the lock screen shows only the kind and the room
   ("Reminder · garage") **when the phone is set to hide sensitive
@@ -154,17 +201,24 @@ leaves the home network):
 - Tapping an alert opens Home. The satellite detail's **Only reminders
   for this device** switch sets which rooms speak other rooms' timers.
 - A phone that force-stops the app (Settings > Force stop, some
-  makers' swipe-away) loses every alarm it had set; the next start re-arms
-  the ones still ahead before it syncs.
+  makers' swipe-away) loses every alarm it had set, the background
+  sync's included; the next start re-arms the ones still ahead and
+  restarts the sync.
 - **Limit (no foreground service, by design):** Android freezes a
   backgrounded app and, from Android 15, blocks its network a few
   seconds after it leaves the screen (`blocked=APP_BACKGROUND` in
   `dumpsys netpolicy`). So the live path only runs while the app is
-  open, and the alarm mirror only knows the timers that existed the last
-  time the app was open or resumed. A timer set by voice while the app
-  sits in the background reaches the phone only when the app is next
-  opened (the catch-up posts it if it fired under 30 minutes ago). A
-  ringing alarm is allowed the network for its confirm step.
+  open. In the background the phone knows what its last check (at most
+  about 15 minutes ago, unless something above stopped the checks) found: a timer
+  set by voice and due before the next check reaches the phone only as a
+  late notification at that check. A broadcast receiver is exempt from
+  that block while it runs, which is what the ticks and the ringing
+  alarms' confirm step rely on. Checked 2026-09-30 on the API 35
+  emulator against a fake server: with the app in the background
+  (`blocked=APP_BACKGROUND … effective=APP_BACKGROUND`) the tick's
+  requests went through (`allowed=NOT_IN_BACKGROUND effective=NONE`
+  while it ran), posted the fire it had missed and armed the new timer;
+  in forced Doze the exact tick did the same (see above).
 
 ## Capability gating (plugins)
 

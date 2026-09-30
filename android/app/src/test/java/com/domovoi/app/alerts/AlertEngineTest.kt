@@ -349,15 +349,16 @@ class AlertEngineTest {
         assertEquals(setOf(1L, 2L), alarms.armed.keys)
     }
 
-    @Test fun theStartReArmsBeforeItSyncs() {
+    /** The order inside the start's sync (arm the chain, re-arm, catch up,
+     *  re-mirror) is TimerSyncTest.theStartArmsTheChainThenReArms...; this
+     *  pins that start() runs it. */
+    @Test fun theStartRunsTheReArmingSyncAndArmsTheChain() {
         val src = listOf(
             File("src/main/java/com/domovoi/app/alerts/TimerAlerts.kt"),
             File("app/src/main/java/com/domovoi/app/alerts/TimerAlerts.kt"),
         ).first { it.isFile }.readText()
         val start = src.substring(src.indexOf("fun start()"), src.indexOf("fun onAppResumed()"))
-        val rearm = start.indexOf("engine.rearm()")
-        assertTrue("start() re-arms the stored mirror", rearm >= 0)
-        assertTrue(rearm < start.lastIndexOf("engine.syncMirror()"))
+        assertTrue("start() arms the chain, re-arms the stored mirror, then syncs", "sync.onStart()" in start)
     }
 
     @Test fun aRebootReArmsOnlyWhatIsStillAhead() = runBlocking {
