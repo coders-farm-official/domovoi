@@ -30,7 +30,11 @@ from pydantic import ValidationError
 
 from domovoi import reapply
 from domovoi.clients import ollama as ollama_mod
-from domovoi.clients.ollama import ROUTER_NUM_PREDICT, RealOllamaClient
+# A client whose server version is unknown (these fakes answer no
+# /api/version) sends the routing call unstreamed, capped at the size that
+# leaves room for reasoning (test_router_stream pins which cap goes where).
+from domovoi.clients.ollama import ROUTER_THINK_NUM_PREDICT as ROUTE_CAP
+from domovoi.clients.ollama import RealOllamaClient
 from domovoi.config import Settings, settings
 from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
 
@@ -130,7 +134,7 @@ async def test_qa_paths_send_no_options_and_no_think_by_default(name, call):
 async def test_route_sends_only_temperature_and_its_cap_by_default():
     chat = _FakeChat()
     await _ROUTE[1](_client(chat))
-    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": ROUTER_NUM_PREDICT}
+    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": ROUTE_CAP}
     assert chat.calls[0]["think"] is False                 # ollama_tool_think, as before
 
 
@@ -147,7 +151,7 @@ async def test_a_client_built_without_init_sends_what_it_always_did():
     await c.qa("hi")
     await c.route("play jazz", TOOLS)
     assert "options" not in chat.calls[0] and "think" not in chat.calls[0]
-    assert chat.calls[1]["options"] == {"temperature": 0, "num_predict": ROUTER_NUM_PREDICT}
+    assert chat.calls[1]["options"] == {"temperature": 0, "num_predict": ROUTE_CAP}
 
 
 # ─── num_ctx per role ─────────────────────────────────────────────────────
@@ -164,14 +168,14 @@ async def test_qa_num_ctx_rides_every_qa_path(name, call):
 async def test_qa_num_ctx_leaves_the_route_call_alone():
     chat = _FakeChat()
     await _ROUTE[1](_client(chat, num_ctx=8192))
-    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": ROUTER_NUM_PREDICT}
+    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": ROUTE_CAP}
 
 
 async def test_tool_num_ctx_joins_the_route_options():
     chat = _FakeChat()
     await _ROUTE[1](_client(chat, tool_num_ctx=8192))
     assert chat.calls[0]["options"] == {
-        "temperature": 0, "num_ctx": 8192, "num_predict": ROUTER_NUM_PREDICT,
+        "temperature": 0, "num_ctx": 8192, "num_predict": ROUTE_CAP,
     }
 
 
@@ -534,7 +538,7 @@ async def test_wire_defaults_are_the_payloads_every_call_always_sent(monkeypatch
     for body in (qa, stream, memories):
         assert "options" not in body and "think" not in body, body
         assert body["keep_alive"] == "24h"
-    assert route["options"] == {"temperature": 0, "num_predict": ROUTER_NUM_PREDICT}
+    assert route["options"] == {"temperature": 0, "num_predict": ROUTE_CAP}
     assert route["think"] is False
 
 
@@ -555,7 +559,7 @@ async def test_wire_carries_each_knob_to_its_own_role(monkeypatch):
     assert "format" not in uncertainty                     # a spoken answer is plain text
     assert route["model"] == "qwen3:8b"
     assert route["options"] == {
-        "temperature": 0, "num_ctx": 16384, "num_predict": ROUTER_NUM_PREDICT,
+        "temperature": 0, "num_ctx": 16384, "num_predict": ROUTE_CAP,
     }
     assert route["think"] is False                         # ollama_tool_think, not QA's
 

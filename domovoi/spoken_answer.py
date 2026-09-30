@@ -19,6 +19,13 @@ in the only form that works once words have been spoken:
   never spoken.
 * A first sentence that is only a placeholder is held back until the next
   one shows it isn't the whole answer.
+* So is a first sentence of fewer than :data:`SHORT_LEAD_WORDS` words
+  ("Sure!", "Great question.", "Knock knock!"): said alone it plays in well
+  under a second, and with the satellite's playback buffer that is still
+  less than the time the model takes to write the next sentence, so the
+  room would hear it, then a gap, and the satellite's "playback queue
+  drained mid-response" warning. Held, it goes out with the next sentence
+  (or at the end).
 * ``unreachable`` is set only when the Ollama calls themselves failed and
   nothing was said; the router then speaks its outage line, as before.
 
@@ -46,6 +53,20 @@ log = logging.getLogger(__name__)
 # The same split the streaming layer synthesizes by (streaming._split_sentences):
 # after a sentence end and the whitespace that follows it.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+# A first sentence shorter than this (in words) waits for the next one.
+# llama3.2:3b on a CPU host took up to ~1.6 s to write the sentence after a
+# short first one (measured 2026-09-30: "That's a long story!" handed over
+# at 1.55 s, the next at 3.17 s). Four words plus the satellite's 0.5 s
+# playback buffer take about that long to play out (~0.3 s a word); three
+# or fewer leave a gap.
+SHORT_LEAD_WORDS = 4
+
+
+def _holds_back(sentence: str) -> bool:
+    """A first sentence not to say on its own: a bare placeholder ("None.")
+    or too short to cover the wait for the next one."""
+    return bool(_PLACEHOLDER_ANSWER_RE.match(sentence)) or len(sentence.split()) < SHORT_LEAD_WORDS
 
 
 def _sentences(text: str) -> list[str]:
@@ -107,9 +128,10 @@ class SpokenAnswer:
                             sentence = sentence.strip()
                             if not sentence:
                                 continue
-                            if not self.spoken and not held and _PLACEHOLDER_ANSWER_RE.match(sentence):
+                            if not self.spoken and not held and _holds_back(sentence):
                                 # "None." alone is no answer; followed by
                                 # more, it is just an odd first sentence.
+                                # "Sure!" alone would be followed by a gap.
                                 held.append(sentence)
                                 continue
                             for waiting in held:

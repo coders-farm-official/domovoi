@@ -5,7 +5,9 @@ first word was synthesized (0.7-6 s on a CPU host). Now the streaming layer
 speaks each sentence as soon as it is complete. Pinned here, DB-free:
 
   * a sentence is handed over the moment it ends — before the rest of the
-    reply has even been written — and a joke keeps its punchline;
+    reply has even been written — and a joke keeps its punchline; a first
+    sentence of fewer than four words ("Sure!") waits for the next one, so
+    it isn't followed by a gap;
   * the whole-reply rules still hold where they can: nothing usable yet
     (empty, a bare placeholder, cut on a contraction stem) is asked for
     once more; a cut tail is never spoken; ``unreachable`` only when the
@@ -141,6 +143,51 @@ async def test_a_placeholder_first_sentence_is_held_until_more_follows() -> None
     answer, opened = _answer(_Stream(["None.", " But here is", " a guess."]))
     assert await _all(answer) == ["None.", "But here is a guess."]
     assert len(opened) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_short_first_sentence_waits_for_the_next_one() -> None:
+    """"Sure!" said alone plays in well under a second, less than the wait
+    for the next sentence: the room would hear it, then a gap. It goes out
+    together with the next one — both as sentences of their own."""
+    stream = _Stream(["Sure!", " Here is one:", " why did the chicken", " cross the road?", " To get across."])
+    answer, _ = _answer(stream)
+    agen = answer.sentences()
+    first = await agen.__anext__()
+    assert first == "Sure!"
+    # Not handed over when it ended (seen at the 2nd delta), only once the
+    # next sentence had ended too (seen at the 5th, where the words after
+    # it begin).
+    assert stream.read == 5
+    second = await agen.__anext__()
+    assert second == "Here is one: why did the chicken cross the road?"
+    assert [s async for s in agen] == ["To get across."]
+    assert answer.answer == "Sure! Here is one: why did the chicken cross the road? To get across."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deltas", "said"),
+    [
+        (["Great question."], ["Great question."]),                       # all there is: said at the end
+        (["Knock knock!", " Who's there?"], ["Knock knock!", "Who's there?"]),
+        (["Yes.", " No.", " Maybe so."], ["Yes.", "No.", "Maybe so."]),   # only the first waits
+    ],
+)
+async def test_a_short_answer_is_still_said_whole(deltas, said) -> None:
+    answer, opened = _answer(_Stream(deltas))
+    assert await _all(answer) == said
+    assert len(opened) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_four_word_first_sentence_is_not_held() -> None:
+    stream = _Stream(["That's a long story!", " It began", " in Rome."])
+    answer, _ = _answer(stream)
+    agen = answer.sentences()
+    assert await agen.__anext__() == "That's a long story!"
+    assert stream.read == 2
+    await agen.aclose()
 
 
 @pytest.mark.asyncio

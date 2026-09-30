@@ -183,6 +183,30 @@
       "note": "off-pattern phrasing must still reach double_check through the LLM"
     },
     {
+      "utterance": "That can't be right.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "That can't be true.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "Check online.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "Can you check online?",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: filler-stripped to 'check online'; withheld, it went to QA. Written as Whisper hands it over: qwen3:8b routed the lowercase, unpunctuated 'that can't be right' to QA even with the tool offered"
+    },
+    {
       "utterance": "set a timer for ten minutes",
       "handler": "timer",
       "tags": ["action"],

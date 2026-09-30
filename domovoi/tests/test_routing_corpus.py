@@ -163,6 +163,38 @@ def test_library_withheld_from_bare_knowledge_questions(utterance: str) -> None:
     assert "library" not in _offered(utterance)
 
 
+def test_library_withheld_from_bare_knowledge_questions_twin() -> None:
+    """The gate and the router's straight-to-QA check agree: every utterance
+    the library or calculator gate withholds from is one that never reaches
+    the router."""
+    for utterance in ("who wrote pride and prejudice", "why is the sky blue",
+                      "where is the eiffel tower", "tell me who painted the mona lisa"):
+        normalized = _normalize(utterance)
+        assert answers_without_tools(normalized), utterance
+        assert "library" not in _offered(utterance)
+        assert "calculator" not in _offered(utterance)
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "where are my notes", "who is at the front door", "why did the music stop",
+        "who sings this song", "where did i leave off in my audiobook",
+        "why is the wifi so slow", "who is home", "where's the timer",
+    ],
+)
+def test_a_routed_who_why_where_question_sees_the_ordinary_tool_list(utterance: str) -> None:
+    """A who/why/where question about the house reaches the router (it is
+    not answered straight from QA) and is offered exactly what an ordinary
+    routed turn is offered — calculator and library included. Withholding
+    them there changed the tool list the router's cached prompt is built
+    from: the next ordinary turn re-read ~800 tokens, 11-15 s on a CPU host
+    (qwen3:8b, measured 2026-09-30)."""
+    normalized = _normalize(utterance)
+    assert not answers_without_tools(normalized)
+    assert _offered(utterance) == _offered("")
+
+
 @pytest.mark.parametrize(
     "utterance",
     [
@@ -340,6 +372,20 @@ def test_questions_about_the_house_still_reach_the_router(utterance: str) -> Non
         ("really", "double_check", True),
         ("is that a fact", "double_check", True),
         ("for real", "double_check", True),
+        # doubt said outright, and a request to look it up (2026-09-30:
+        # withheld, these went to the Q&A model instead of a check)
+        ("that can't be right", "double_check", True),
+        ("that can't be true", "double_check", True),
+        ("that cannot be correct", "double_check", True),
+        ("that couldn't possibly be true", "double_check", True),
+        ("check online", "double_check", True),
+        ("can you check online", "double_check", True),
+        ("look that up on the internet", "double_check", True),
+        ("google it", "double_check", True),
+        # and the everyday uses of the same words
+        ("i can't be late for the bus", "double_check", False),
+        ("search for jazz", "double_check", False),
+        ("google maps says it's twenty minutes", "double_check", False),
     ],
 )
 def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
@@ -402,7 +448,7 @@ async def test_router_offers_gated_schemas_and_ignores_withheld_calls(db_session
     class _BaitingOllama:
         async def route(self, transcript, tool_schemas):
             seen["names"] = [s["name"] for s in tool_schemas]
-            return {"handler": "calculator", "args": {"action": "arithmetic", "expression": "1+1"}}
+            return {"handler": "double_check", "args": {"claim": "radiohead sings creep"}}
 
         async def qa(self, transcript, system_prompt=None, history=None):
             return "(stub)"
@@ -418,7 +464,9 @@ async def test_router_offers_gated_schemas_and_ignores_withheld_calls(db_session
             return SearchSubject(subject="", refined_query=transcript)
 
     with patch("domovoi.router.get_ollama_client", lambda: _BaitingOllama()):
-        # A who-question about music reaches the router, calculator withheld.
+        # A who-question about music reaches the router with the ordinary
+        # list (calculator and library on offer, double_check withheld),
+        # and the model names the withheld tool.
         response = await route(
             Intent(transcript="who sings creep", room_id="kitchen"),
             Context(room_id="kitchen", online=True),
@@ -426,7 +474,7 @@ async def test_router_offers_gated_schemas_and_ignores_withheld_calls(db_session
         )
         await db_session.commit()
 
-    assert "calculator" not in seen["names"]
+    assert "calculator" in seen["names"]
     assert "library" in seen["names"]
     assert "double_check" not in seen["names"]
     assert response.matched_handler is None

@@ -797,10 +797,13 @@ class Handler(ABC):
   questions. Keep it a cheap regex and err generous: a false positive just
   offers the tool as before; a false negative silently drops a real command
   to the QA fallthrough. Core examples: `double_check` (needs a verification
-  word), `news` (needs a news word), `calculator` and `library` (both withheld
-  on who/why/where questions with no digit / no library cue — the shared regex
-  lives in `handlers/shared/tool_gate.py`). Check the effect with
-  `scripts/eval_routing.py --live-tools <core url>`. The router keeps gated
+  word), `news` (needs a news word), `calculator` and `library` (withheld only
+  from a plain who/why/where question about the world, which never reaches the
+  router anyway — the shared check lives in `handlers/shared/tool_gate.py`).
+  Every gate that flips changes the router's tool list, and the next ordinary
+  turn re-reads everything after the change (11-15 s on a CPU host), so
+  withhold only where your tool is actually picked wrongly. Check the effect
+  with `scripts/eval_routing.py --live-tools <core url>`. The router keeps gated
   tools at the end of its list (Ollama caches the list's prefix): one that
   `offers_tool("")` says True for goes with the usually-offered group, one
   that says False is appended only when asked for. Two kinds of utterance
@@ -808,6 +811,13 @@ class Handler(ABC):
   offered for them: a plain who/why/where question about the world, and a
   request for a joke, a fact, a story or an explanation
   (`tool_gate.answers_without_tools`). Give such a command a fast path.
+* **Prompt size**: every tool schema lengthens the router's prompt (the stock
+  list is ~3,340 tokens; the five sibling plugins with tools bring it to
+  ~3,900), and Ollama's default 4096-token window on a CPU host then no
+  longer holds the prompt plus the router's reply cap. Keep descriptions
+  short, and tell users of a tool-heavy plugin to raise
+  `ollama_tool_num_ctx` (8192; see CPU_HOST.md, "Context window") — the
+  core's warm-up logs a warning when the prompt doesn't fit.
 * **Tool arguments**: describe every parameter in `tool_schema` — a small
   tool model files a number under the best-named field it is shown, so an
   undescribed `value` next to a self-explanatory `amount` gets the quantity

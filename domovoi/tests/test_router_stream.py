@@ -11,11 +11,13 @@ tool call (Ollama sends it whole), and its length is capped either way.
 Pinned here:
   * a streamed tool call routes, and the stream is closed right after it;
   * plain text ends the call at its first word — the rest is never read;
-  * whitespace, a tool call written out as text, and a ``<think>`` block
-    are not taken for an answer;
+  * whitespace and a ``<think>`` block are not taken for an answer; any
+    other text is, a tool call written out as text included (0.9+ sends a
+    real call parsed, and nothing reads one out of the text);
   * only an Ollama known to stream tool calls (and take ``think``) gets a
     streamed call; older, unknown and unreachable ones get the plain
-    request, and every routing call carries a ``num_predict`` cap;
+    request, and every routing call carries a ``num_predict`` cap — the
+    tight one only where the model is known not to reason first;
   * ``think`` / ``keep_alive`` rejections that only surface once a stream
     is read are retried and latched off, as for the plain request;
   * on the wire, through the installed ollama client, the connection is
@@ -147,13 +149,24 @@ async def test_whitespace_is_not_an_answer_yet() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_tool_call_written_as_text_is_read_to_the_end() -> None:
-    """A server or template that leaves the call in the text: not an answer
-    in words, so it is read out (and, unparsed, falls through as before)."""
-    s = _Stream(_text("<tool", "_call>", '\n{"name": "music"', "}\n</tool_call>"))
-    out = await _client(_Chat(s)).route("play jazz", TOOLS)
+@pytest.mark.parametrize(
+    "pieces",
+    [
+        ('{"name": "calculator", "arguments": {"action": "arithmetic"', "}}"),
+        ("<tool", "_call>", '\n{"name": "music"', "}\n</tool_call>"),
+        ("```json\n", '{"name": "dismiss"}', "\n```"),
+    ],
+)
+async def test_a_tool_call_written_as_text_ends_the_call_too(pieces) -> None:
+    """A call written out as text isn't a call: the streamed router only runs
+    on Ollama 0.9.0+, whose parser sends a real one parsed, and nothing reads
+    a call out of the text. So it ends the call at once, like any text —
+    qwen3:8b wrote '{"name": "calculator", ...' as plain text for "can
+    penguins fly?", and reading it out cost 6.6 s (measured 2026-09-30)."""
+    s = _Stream(_text(*pieces))
+    out = await _client(_Chat(s)).route("can penguins fly", TOOLS)
     assert out is None
-    assert s.read == len(s.chunks) and s.closed
+    assert s.read == 1 and s.closed
 
 
 @pytest.mark.asyncio
@@ -175,12 +188,13 @@ def test_what_counts_as_text_starting() -> None:
     assert _plain_text_started("  Sure")
     assert not _plain_text_started("")
     assert not _plain_text_started(" \n")
-    for partial in ("<", "<tool", "<tool_call>", "{", '{"na', '{"name": "x"', "[TOOL", "`", "```json"):
+    # The start of a <think> block is not text yet, nor is the block itself.
+    for partial in ("<", "<th", "<think", "<think>", "<think>hmm", "<think>hmm</think>", " <think>\n"):
         assert not _plain_text_started(partial), partial
-    assert not _plain_text_started("<think>")
-    assert not _plain_text_started("<think>hmm</think>")
     assert _plain_text_started("<think>\n\n</think>\n\nParis.")
-    assert _plain_text_started('{"answer": 1}')   # JSON that isn't a call
+    # Anything else is: a call written out as text is never read as one.
+    for text in ("<tool", "<tool_call>", "{", '{"name": "x"', "[TOOL", "`", "```json", '{"answer": 1}'):
+        assert _plain_text_started(text), text
 
 
 @pytest.mark.asyncio
@@ -215,13 +229,41 @@ async def test_a_client_that_answers_in_one_piece_still_routes() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [True, False])
-async def test_every_routing_call_is_capped(stream: bool) -> None:
+@pytest.mark.parametrize(
+    ("stream", "cap"),
+    [(True, ROUTER_NUM_PREDICT), (False, ROUTER_THINK_NUM_PREDICT), (None, ROUTER_THINK_NUM_PREDICT)],
+)
+async def test_every_routing_call_is_capped(stream, cap) -> None:
+    """The tight cap only on a streamed call sent with think=false; a plain
+    request (an old server, or one whose version isn't known) may carry a
+    hybrid model's reasoning before its call, which the tight cap cut off
+    mid-thought (qwen3:8b: 4 of 6 LLM-routed commands lost, 2026-09-30)."""
     reply = {"message": {"content": "Paris."}}
     chat = _Chat(_Stream(_text("Paris.")), reply=reply)
     await _client(chat, stream=stream).route("capital of france", TOOLS)
-    assert chat.calls[0]["stream"] is stream
-    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": ROUTER_NUM_PREDICT}
+    assert chat.calls[0]["stream"] is bool(stream)
+    assert chat.calls[0]["options"] == {"temperature": 0, "num_predict": cap}
+
+
+@pytest.mark.asyncio
+async def test_a_think_flag_latched_off_gets_room_to_reason() -> None:
+    """After the server rejected ``think`` it is no longer sent, so a hybrid
+    model may reason first — in the stream too — and gets the larger cap."""
+    chat = _Chat(_Stream(_text("Paris.")))
+    await _client(chat, send_think=False).route("capital of france", TOOLS)
+    assert "think" not in chat.calls[0]
+    assert chat.calls[0]["options"]["num_predict"] == ROUTER_THINK_NUM_PREDICT
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_think_flag_retries_with_the_larger_cap() -> None:
+    rejected = _Stream([], error=RuntimeError('"qwen3:8b" does not support thinking'))
+    ok = _Stream([{"message": {"content": "", "tool_calls": [_CALL]}, "done": False}])
+    chat = _Chat(rejected, ok)
+    await _client(chat).route("play jazz", TOOLS)
+    assert [call["options"]["num_predict"] for call in chat.calls] == [
+        ROUTER_NUM_PREDICT, ROUTER_THINK_NUM_PREDICT,
+    ]
 
 
 @pytest.mark.asyncio
@@ -235,7 +277,8 @@ async def test_the_cap_leaves_room_for_reasoning_when_the_router_thinks() -> Non
 def test_the_cap_fits_the_prompt_in_a_4096_context() -> None:
     """The live prompt is ~3,340 tokens with the bundled radio plugin: a
     reply past the rest of a 4096 window makes Ollama shift the context and
-    drop the cached tool prefix."""
+    drop the cached tool prefix. Only for the stock tool list — more plugin
+    tools need a larger ``ollama_tool_num_ctx`` (llm_warmup warns)."""
     assert 3400 + ROUTER_NUM_PREDICT <= 4096
     assert 32 <= ROUTER_NUM_PREDICT
 
@@ -420,7 +463,7 @@ async def test_on_the_wire_an_old_server_gets_the_plain_request(monkeypatch) -> 
     out = await _wired(monkeypatch, server).route("Put on some jazz.", TOOLS)
     assert out is not None and out["handler"] == "music"
     assert server.requests[0]["stream"] is False
-    assert server.requests[0]["options"]["num_predict"] == ROUTER_NUM_PREDICT
+    assert server.requests[0]["options"]["num_predict"] == ROUTER_THINK_NUM_PREDICT
 
 
 def test_the_module_exports_what_the_tests_pin() -> None:
