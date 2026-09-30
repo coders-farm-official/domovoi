@@ -188,7 +188,9 @@ class AlertEngine(
                         return@catchUp false
                     }
                     if (activeKey() != key) return@catchUp false
-                    if (!historyBehind(top.fires.firstOrNull(), remembered)) return@catchUp true
+                    if (!historyBehind(top.fires.firstOrNull(), remembered, windowed = top.window_sec != null)) {
+                        return@catchUp true
+                    }
                     log("timer fire history is behind this phone's; starting over")
                     store.startOver(key)
                     seen = null

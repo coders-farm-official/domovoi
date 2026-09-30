@@ -57,11 +57,14 @@ data class TimerFire(
     val reminder: Boolean get() = is_reminder || kind == "reminder"
 }
 
-/** GET /api/timers/fires. */
+/** GET /api/timers/fires. [window_sec] says how far back the answer
+ *  reaches: null for the whole history (the household token's view), 600
+ *  for the open view a caller without a valid token gets (rule F1). */
 @Serializable
 data class TimerFireList(
     val server_now: String? = null,
     val fires: List<TimerFire> = emptyList(),
+    val window_sec: Int? = null,
 )
 
 /** One row of GET /api/timers, as the alarm mirror needs it. */

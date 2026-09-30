@@ -240,6 +240,21 @@ class AlertEngineTest {
         assertEquals(0L, store.seen(key))
     }
 
+    @Test fun anEmptyTenMinuteViewIsNotAnotherHistory() = runBlocking {
+        // A phone whose token the server no longer takes gets the open view
+        // (rule F1: the last 10 minutes, `window_sec` 600). Quiet for longer
+        // than that, its answer is empty; that must not start anything over.
+        store.setSeen(key, 100, iso(nowMs - 60 * 60_000))
+        assertTrue(store.markAlerted(key, 17, nowMs - 60 * 60_000))
+        answer("/api/timers/fires?since_id=100&limit=50", """{"server_now":"${iso(nowMs)}","fires":[],"window_sec":600}""")
+        answer("/api/timers/fires?limit=1", """{"server_now":"${iso(nowMs)}","fires":[],"window_sec":600}""")
+        engine.catchUp()
+        assertEquals(listOf("/api/timers/fires?since_id=100&limit=50", "/api/timers/fires?limit=1"), paths.toList())
+        assertEquals(100L, store.seen(key))
+        assertEquals(iso(nowMs - 60 * 60_000), store.seenAt(key))
+        assertEquals(emptyList<Post>(), sink.posts.toList())
+    }
+
     @Test fun aConsistentHistoryIsLeftAlone() = runBlocking {
         store.setSeen(key, 7, iso(nowMs - 60_000))
         answer("/api/timers/fires?since_id=7&limit=50", """{"server_now":"${iso(nowMs)}","fires":[]}""")
@@ -274,6 +289,11 @@ class AlertEngineTest {
         assertFalse(historyBehind(null, 0))
         assertTrue(historyBehind(f(4, nowMs), 5))
         assertFalse(historyBehind(f(5, nowMs), 5))
+        // The open view (rule F1) reaches back 10 minutes: empty is no verdict,
+        // but a fire in it still dates the history.
+        assertFalse(historyBehind(null, 5, windowed = true))
+        assertTrue(historyBehind(f(4, nowMs), 5, windowed = true))
+        assertFalse(historyBehind(f(6, nowMs), 5, windowed = true))
         assertEquals(listOf("b|1|5"), forgetServer(listOf("a|1|5", "b|1|5", "a|2|6"), "a"))
     }
 

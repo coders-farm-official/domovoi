@@ -102,10 +102,13 @@ internal fun historyRestarted(fires: List<TimerFire>, seen: Long?, seenAtMs: Lon
 /**
  * A catch-up past [seen] found nothing: whether the server's newest fire
  * ([newest], null when it has none) is BEHIND what this phone remembers,
- * i.e. another history answers on the same address.
+ * i.e. another history answers on the same address. [windowed]: the answer
+ * reached back only a while (`window_sec`, a phone whose token the server
+ * refused gets the last 10 minutes), so an empty one says nothing about
+ * the history — only that nothing went off lately.
  */
-internal fun historyBehind(newest: TimerFire?, seen: Long): Boolean =
-    if (newest == null) seen > 0 else newest.id < seen
+internal fun historyBehind(newest: TimerFire?, seen: Long, windowed: Boolean = false): Boolean =
+    if (newest == null) seen > 0 && !windowed else newest.id < seen
 
 /** What to post from a batch of fires, and the seen id (and when that fire
  *  went off, when the batch says) afterwards. */
