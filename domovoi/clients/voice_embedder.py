@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from typing import Protocol
 
 import numpy as np
@@ -61,20 +62,47 @@ class StubVoiceEmbedder:
 
 
 class RealVoiceEmbedder:
-    """Resemblyzer wrapper. Lazy model load on first embed."""
+    """Resemblyzer wrapper. The model loads once, in a worker thread: at
+    boot (:meth:`preload`, from ``domovoi/speech_warmup.py``), or on the
+    first embed if that hasn't happened yet.
+
+    Never on the event loop: the load is ~600 ms of torch on a CPU host,
+    and the loop serves every room's socket — a load there (as the first
+    turn after a restart used to do) froze them all for that long."""
 
     def __init__(self) -> None:
         self._encoder = None
+        self._load_lock = threading.Lock()
 
     def _ensure_encoder(self) -> None:
+        """Load the encoder if it isn't. Blocking — worker threads only.
+        The lock makes a boot preload and a first turn racing it load the
+        model once between them."""
         if self._encoder is not None:
             return
-        # Imported lazily so USE_STUBS=true can run without the heavy
-        # resemblyzer + librosa stack installed.
-        from resemblyzer import VoiceEncoder
+        with self._load_lock:
+            if self._encoder is not None:
+                return
+            # Imported lazily so USE_STUBS=true can run without the heavy
+            # resemblyzer + librosa stack installed.
+            from resemblyzer import VoiceEncoder
 
-        log.info("loading Resemblyzer VoiceEncoder (one-time)")
-        self._encoder = VoiceEncoder()
+            log.info("loading Resemblyzer VoiceEncoder (one-time)")
+            self._encoder = VoiceEncoder()
+
+    async def preload(self) -> bool:
+        """Load the encoder and run it once on a short silence, in a worker
+        thread, so the first turn after a boot pays neither the load nor
+        the first forward pass. True when the encoder is ready."""
+        import asyncio
+
+        return await asyncio.to_thread(self._preload_sync)
+
+    def _preload_sync(self) -> bool:
+        self._ensure_encoder()
+        assert self._encoder is not None
+        self._encoder.embed_utterance(np.zeros(16_000, dtype=np.float32))
+        return True
 
     async def embed(self, pcm_int16: bytes) -> np.ndarray | None:
         if not pcm_int16:
@@ -88,16 +116,15 @@ class RealVoiceEmbedder:
         if seconds < settings.voice_profile_min_utterance_sec:
             return None
 
-        self._ensure_encoder()
-
-        # Push the actual NN forward pass to a worker thread — it's
-        # synchronous C code that would otherwise block the event loop
-        # for ~100 ms per call.
+        # The load (when the boot preload hasn't done it) and the NN
+        # forward pass both run in a worker thread — synchronous torch
+        # code that would otherwise block the event loop.
         import asyncio
         return await asyncio.to_thread(self._embed_sync, pcm_int16)
 
     def _embed_sync(self, pcm_int16: bytes) -> np.ndarray | None:
         try:
+            self._ensure_encoder()
             wav = np.frombuffer(pcm_int16, dtype=np.int16).astype(np.float32) / 32768.0
             assert self._encoder is not None
             emb = self._encoder.embed_utterance(wav)

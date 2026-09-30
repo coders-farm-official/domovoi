@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -123,6 +124,7 @@ def _synth_edge_sync(text: str, voice: str, speed: float) -> bytes | None:
 
 
 _piper_voice_cache: dict[str, object] = {}
+_piper_load_lock = threading.Lock()
 
 
 def _voices_dir() -> Path:
@@ -180,15 +182,42 @@ def _piper_voice_path(model_ref: str) -> Path:
     return onnx
 
 
+def _piper_voice(voice: str) -> object:
+    """The loaded PiperVoice for ``voice`` (a model_ref), loading it once.
+    Blocking — worker threads only. The lock makes a boot or connect-time
+    preload and a turn racing it load the model once between them."""
+    v = _piper_voice_cache.get(voice)
+    if v is None:
+        with _piper_load_lock:
+            v = _piper_voice_cache.get(voice)
+            if v is None:
+                from piper import PiperVoice
+
+                v = PiperVoice.load(str(_piper_voice_path(voice)))
+                _piper_voice_cache[voice] = v
+    return v
+
+
+def piper_voice_loaded(voice: str) -> bool:
+    return voice in _piper_voice_cache
+
+
+def preload_piper_voice_sync(voice: str) -> bool:
+    """Load a Piper voice and synthesize one short word with it, so the
+    first reply in that voice pays neither the model load nor the first
+    inference (~600 ms on a CPU host, against ~50 ms warm). Blocking —
+    run it in a worker thread (``domovoi/speech_warmup.py``). True when
+    the voice rendered audio."""
+    return _synth_piper_sync("Okay.", voice, 1.0) is not None
+
+
 def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
     try:
-        from piper import PiperVoice, SynthesisConfig
+        from piper import SynthesisConfig
     except ImportError:
         return None
 
-    if voice not in _piper_voice_cache:
-        _piper_voice_cache[voice] = PiperVoice.load(str(_piper_voice_path(voice)))
-    v = _piper_voice_cache[voice]
+    v = _piper_voice(voice)
 
     syn_config = SynthesisConfig(length_scale=(1.0 / speed) if speed > 0 else 1.0)
     pcm_parts: list[bytes] = []

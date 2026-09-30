@@ -560,6 +560,19 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", section="advanced", tier="restart", min=0, max=256,
     ),
     FieldSpec(
+        "whisper_short_window_enabled", "Fast decoding for short commands",
+        "Speech-to-text",
+        "On by default: with an English-only (.en) model, a capture of "
+        "up to 9 seconds (every spoken command) is decoded on a 10-second "
+        "window instead of the 30 seconds Whisper normally pads everything "
+        "to, which cuts the wait for a transcript to about a quarter on a "
+        "CPU with the same accuracy for commands. Longer captures, "
+        "multilingual models, and any short decode that comes back blank "
+        "or unsure still use the 30-second path. Off uses the 30-second "
+        "path for everything.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",
         "Speech-to-text",
         "On by default: while a satellite is still waiting out its "

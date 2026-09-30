@@ -33,7 +33,8 @@ The stages, in pipeline order, all integer milliseconds:
     Voice identification (the embedding plus the profile lookup). When
     the turn used a speculative transcript at least
     ``voice_profile_min_utterance_sec`` long, the embedding was computed
-    alongside that decode and this is the lookup alone.
+    right after that decode and this is the lookup alone (plus whatever
+    of the embedding was still running).
 ``route_ms``
     The routing transaction: ``route()`` (fast path or language model, the
     handler, the audit writes), the voice-profile hooks, and the commit.
@@ -52,7 +53,11 @@ The stages, in pipeline order, all integer milliseconds:
     ``endpoint_silence_ms`` is known.
 
 Plus ``whisper``: the model, device, compute type and CPU threads that
-actually transcribed, so a before/after comparison splits on the row.
+actually transcribed, so a before/after comparison splits on the row, and
+``stt_window_s``: the mel window the transcript was decoded on — 10 for a
+short capture on the short window, 30 for faster-whisper's own path (a
+long capture, the setting off, or a short decode that came back blank or
+unsure; clients/whisper.py). Counted under ``stt_window``.
 And, on a turn whose capture was transcribed speculatively while the
 satellite was still counting silence (``domovoi/streaming.py``,
 "Speculative transcription"): ``stt_reused`` (true when the turn used
@@ -129,6 +134,9 @@ LATE_STAGES = ("speech_to_reply_ms", "post_commit_voiced_ms")
 
 # What the per-turn `whisper` block carries, from clients.whisper.whisper_runtime.
 WHISPER_KEYS = ("model", "device", "compute_type", "cpu_threads")
+# faster-whisper's own window; a turn's `stt_window_s` below it was decoded
+# on the short window (clients/whisper.py SHORT_WINDOW_SEC).
+FULL_WINDOW_S = 30
 
 # The summary's default window, and the most recent timed turns it reads
 # inside any window: enough for stable percentiles, bounded work per call.
@@ -230,6 +238,8 @@ class TurnTimings:
                 f"early_commit={self.flags['early_commit']}"
                 f"/{self.stages.get('early_commit_hold_ms', '?')}ms"
             )
+        if "stt_window_s" in self.flags:
+            parts.append(f"window={self.flags['stt_window_s']}s")
         if self.whisper and self.whisper.get("model"):
             w = self.whisper
             threads = w.get("cpu_threads")
@@ -368,8 +378,10 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     """Per-stage ``{count, p50, p95, max}``, the matched-path mix, the
     Whisper settings seen, how the speculative transcripts fared
     (``speculative``: turns that had one, how many used it, decodes
-    started) and the captures the server ended early (``early_commit``:
-    how many, by tier, and how many of those cut in on speech), over
+    started), the captures the server ended early (``early_commit``:
+    how many, by tier, and how many of those cut in on speech) and the
+    window each turn's transcript was decoded on (``stt_window``:
+    ``short``, the 10 s one, or ``full``, the 30 s one), over
     ``(timings, matched_path)`` rows.
 
     Pure — the endpoint's arithmetic, testable without a database. A row
@@ -385,6 +397,7 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     turns = 0
     speculative = {"turns": 0, "reused": 0, "decodes": 0}
     early_commit = {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
+    stt_window = {"short": 0, "full": 0}
     for raw, matched_path in rows:
         doc = raw
         if isinstance(doc, (str, bytes)):
@@ -413,6 +426,9 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
             cut_in = _stage_value(doc, "post_commit_voiced_ms")
             if cut_in:
                 early_commit["cut_in"] += 1
+        window = _stage_value(doc, "stt_window_s")
+        if window is not None:
+            stt_window["short" if window < FULL_WINDOW_S else "full"] += 1
         if isinstance(matched_path, str) and matched_path:
             paths[matched_path] = paths.get(matched_path, 0) + 1
         wk = _whisper_key(doc)
@@ -442,6 +458,7 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
         "whisper_seen": whisper_seen,
         "speculative": speculative,
         "early_commit": early_commit,
+        "stt_window": stt_window,
     }
 
 

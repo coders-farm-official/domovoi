@@ -202,6 +202,41 @@ def test_summarize_skips_what_is_not_a_timing() -> None:
     assert s["whisper_seen"] == []
 
 
+def test_summarize_counts_the_window_each_transcript_came_from() -> None:
+    """``stt_window_s`` rides the row (clients/whisper.py): 10 for a short
+    capture decoded on the short window, 30 for faster-whisper's own path.
+    Rows from before it existed, and junk, count as neither."""
+    rows = (
+        [({"stt_ms": 230, "stt_window_s": 10}, "fast")] * 4
+        + [({"stt_ms": 900, "stt_window_s": 30}, "qa")]
+        + [({"stt_ms": 900}, "fast"), ({"stt_window_s": "10"}, "fast"),
+           ({"stt_window_s": True}, "fast")]
+    )
+    s = summarize(rows)
+    assert s["stt_window"] == {"short": 4, "full": 1}
+    assert "stt_window_s" not in s["stages"]
+    assert summarize([])["stt_window"] == {"short": 0, "full": 0}
+
+
+def test_the_log_line_says_which_window() -> None:
+    t = TurnTimings(audio_bytes=32_000)
+    t.flags["stt_window_s"] = 10
+    assert "window=10s" in t.describe().split(" ")
+    assert t.row_document()["stt_window_s"] == 10
+
+
+@pytest.mark.asyncio
+async def test_a_turn_records_the_window_its_transcript_came_from(db_free_turn, monkeypatch) -> None:
+    class _WindowedWhisper(_DelayedWhisper):
+        async def transcribe_with_window(self, pcm: bytes):
+            return await self.transcribe(pcm), 10
+
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: _WindowedWhisper(SECRET, 0.01))
+    sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
+    await sess._process_utterance(b"\x00" * 48_000, trigger="wake_word")
+    assert db_free_turn["inserted"]["stt_window_s"] == 10
+
+
 def test_summarize_groups_the_whisper_settings_most_turns_first() -> None:
     rows = (
         [({"stt_ms": 900, "whisper": _w(threads=None)}, "fast")] * 2
@@ -319,9 +354,10 @@ def test_the_cpu_fallback_rung_gets_the_threads_too(fake_faster_whisper, monkeyp
     assert whisper_mod.load_whisper_client() is not None
     assert [c[1].get("cpu_threads") for c in fake_faster_whisper.calls] == [None, 8]
     rt = whisper_mod.whisper_runtime()
+    # The fake model has no CTranslate2 underneath: no short window.
     assert rt == {
         "state": "fallback", "model": "small.en", "device": "cpu",
-        "compute_type": "int8", "cpu_threads": 8,
+        "compute_type": "int8", "cpu_threads": 8, "short_window": False,
     }
 
 
@@ -331,7 +367,7 @@ def test_the_runtime_of_the_stub(monkeypatch) -> None:
     whisper_mod.load_whisper_client()
     assert whisper_mod.whisper_runtime() == {
         "state": "stub", "model": None, "device": None,
-        "compute_type": None, "cpu_threads": None,
+        "compute_type": None, "cpu_threads": None, "short_window": None,
     }
 
 
@@ -833,7 +869,8 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body) == {"since", "room", "limit", "turns", "stages", "paths",
-                         "whisper_seen", "whisper", "speculative", "early_commit"}
+                         "whisper_seen", "whisper", "speculative", "early_commit",
+                         "stt_window"}
     assert body["speculative"] == {"turns": 0, "reused": 0, "decodes": 0}
     assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
     assert body["turns"] == 6 and body["room"] is None and body["limit"] == 1000
@@ -842,7 +879,8 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
     assert body["stages"]["total_ms"]["count"] == 5
     assert body["paths"] == {"fast": 5, "qa": 1}
     assert body["whisper_seen"][0] == {**w8, "turns": 5}
-    assert set(body["whisper"]) == {"state", "model", "device", "compute_type", "cpu_threads"}
+    assert set(body["whisper"]) == {"state", "model", "device", "compute_type", "cpu_threads",
+                                    "short_window"}
     since = datetime.fromisoformat(body["since"])
     assert timedelta(days=6, hours=23) < now - since < timedelta(days=7, minutes=1)
     # Numbers only: the transcript, the presence tier and the handler are

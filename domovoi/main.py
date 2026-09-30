@@ -594,6 +594,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.llm_warmup import cancel_warm_up, schedule_warm_up
 
     schedule_warm_up("boot")
+    # Likewise the voice encoder and the default Piper voice, in worker
+    # threads: the first turn after a restart used to load both, the
+    # encoder on the event loop (domovoi/speech_warmup.py). Each room's own
+    # voice follows when the room reports it.
+    from domovoi.speech_warmup import cancel_speech_warm_up, schedule_speech_warm_up
+
+    schedule_speech_warm_up("boot")
 
     log.info("domovoi started; bot_name=%s", settings.bot_name)
     try:
@@ -601,6 +608,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         signal_shutdown()
         await cancel_warm_up()
+        await cancel_speech_warm_up()
         # Plugins first (reverse of startup: they loaded last), then the
         # core worker set in reverse registration order, then the probe.
         try:
