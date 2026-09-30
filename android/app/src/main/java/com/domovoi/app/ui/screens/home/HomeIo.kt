@@ -49,16 +49,6 @@ internal object HomeApi {
         api.post("/api/music/$verb/${enc(room)}")
     }
 
-    /** A quiet room's "play": favorites, shuffled. Playlist 0 is the
-     *  virtual Favorites list. */
-    suspend fun playFavorites(api: ApiClient, room: String) {
-        api.post("/api/music/play-playlist", buildJsonObject {
-            put("room_id", room)
-            put("playlist_id", 0)
-            put("shuffle", true)
-        })
-    }
-
     /** DELETE /api/timers/{id}, which also reaches a timer set with no room. */
     suspend fun cancelTimer(api: ApiClient, t: HomeTimer, shared: Boolean): CancelOutcome = try {
         api.delete("/api/timers/${t.id}")
