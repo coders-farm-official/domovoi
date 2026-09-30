@@ -123,6 +123,9 @@ private data class MessageRow(
     val model: String? = null,
     val error: String? = null,
     val created_at: String? = null,
+    val stats: ChatStats? = null,
+    val device_id: String? = null,
+    val device_name: String? = null,
 )
 
 @Serializable
@@ -155,6 +158,8 @@ private class LiveMessage(
     pending: Boolean = false,
     id: Long? = null,
     createdAt: String? = null,
+    stats: ChatStats? = null,
+    device: String? = null,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
@@ -162,6 +167,8 @@ private class LiveMessage(
     var model by mutableStateOf(model)
     var id by mutableStateOf(id)
     var createdAt by mutableStateOf(createdAt)
+    var stats by mutableStateOf(stats)
+    var device by mutableStateOf(device)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -171,6 +178,8 @@ private class LiveMessage(
         id = id, threadId = threadId, role = role, content = content,
         createdAt = createdAt, model = model, error = error,
         imageNames = images.map { it.name },
+        stats = stats,
+        device = device,
         firstWordsMs = sentAtMs?.let { s -> firstWordsAtMs?.let { it - s } },
         totalMs = sentAtMs?.let { s -> doneAtMs?.let { it - s } },
     )
@@ -191,6 +200,8 @@ private suspend fun sendStreaming(
 ) = withContext(Dispatchers.IO) {
     val body = buildJsonObject {
         put("content", content)
+        // Which install sent it, for the message's details (V017).
+        put("device_id", app.prefs.deviceId)
         put("images", buildJsonArray {
             images.forEach { img ->
                 add(buildJsonObject { put("token", img.token); put("name", img.name) })
@@ -367,6 +378,11 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                     LiveMessage(
                         it.role, it.content, it.images.orEmpty(), it.model, it.error,
                         id = it.id.takeIf { id -> id > 0 }, createdAt = it.created_at,
+                        stats = it.stats,
+                        device = when {
+                            it.device_id != null && it.device_id == app.prefs.deviceId -> "this phone"
+                            else -> it.device_name ?: it.device_id
+                        },
                     ),
                 )
             }
@@ -495,7 +511,9 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         following = true
         // Stamped now; the server's own row (with its id) is not sent back
         // for the user turn, and the two clocks agree to the second on a LAN.
-        transcript.add(LiveMessage("user", content, images, createdAt = Instant.now().toString()))
+        transcript.add(
+            LiveMessage("user", content, images, createdAt = Instant.now().toString(), device = "this phone"),
+        )
         val live = LiveMessage("assistant", "", pending = true)
         live.sentAtMs = System.currentTimeMillis()
         transcript.add(live)
@@ -512,6 +530,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         live.id = row.id.takeIf { it > 0 }
                         live.createdAt = row.created_at
                         live.model = row.model ?: live.model
+                        live.stats = row.stats
                     },
                 )
             }.onFailure { live.error = it.message ?: "send failed" }
