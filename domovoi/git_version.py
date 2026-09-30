@@ -29,10 +29,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from domovoi import self_restart
@@ -296,12 +298,21 @@ _LAST_UPDATE_FIELDS = (
 )
 _STEP_FIELDS = ("name", "status", "duration_sec")
 _ERROR_MAX_CHARS = 500
-# apply-update.sh before 2026-09-30 printed a duration the wall clock made
-# negative (an NTP step back during the run) as "-89.-412", which no JSON
-# parser takes. Such a file stays until the next update replaces it, and it
-# can hold a bad_sha, so a result that fails to parse is read once more with
-# those durations as 0.
+# apply-update.sh before 2026-09-30 printed a negative duration as
+# "-89.-412", which no JSON parser takes: a wall clock stepped back during
+# the run, or the uutils date(1) of Ubuntu 26.04, whose +%s%3N gave the
+# script nanoseconds of varying width to subtract. Such a file stays until
+# the next update replaces it, and it can hold a bad_sha, so a result that
+# fails to parse is read once more with those durations as null.
 _BROKEN_DURATION_RE = re.compile(r'("duration_sec": )-?[0-9]+\.-[0-9]+')
+# The same uutils date made every other duration garbage too, some of them
+# plausible-looking (a 102 s run recorded as 101766807.450 s, one step as
+# 62577.839 s). A duration longer than its run, by the run's own
+# started_at and finished_at (whole seconds, hence the slack), is served as
+# null; so is one over a day, the bound when the result gives none.
+_DURATION_SLACK_SEC = 2
+_DURATION_MAX_SEC = 86400
+_RESULT_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 # The last problem logged, so a dashboard polling every 1.5 s logs a broken
 # result once, not on every poll.
@@ -317,6 +328,33 @@ def _note_problem(path: Path, problem: str, detail: str) -> None:
             "the update unit's result %s is %s (%s), so GET /v1/admin/version "
             "reports last_update null", path, problem, detail,
         )
+
+
+def _result_time(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, _RESULT_TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _duration_bound(doc: dict) -> float:
+    """The longest any duration in this result can honestly be."""
+    started = _result_time(doc.get("started_at"))
+    finished = _result_time(doc.get("finished_at"))
+    if started is None or finished is None or finished < started:
+        # Still running, or a clock stepped back during the run.
+        return _DURATION_MAX_SEC
+    return min(finished - started + _DURATION_SLACK_SEC, _DURATION_MAX_SEC)
+
+
+def _duration(value: object, bound: float) -> float | int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not (math.isfinite(value) and 0 <= value <= bound):
+        return None
+    return value
 
 
 def read_last_update() -> dict | None:
@@ -352,7 +390,7 @@ def load_last_update() -> tuple[dict | None, str | None]:
         doc = json.loads(text)
     except ValueError as e:
         try:
-            doc = json.loads(_BROKEN_DURATION_RE.sub(r"\g<1>0.000", text))
+            doc = json.loads(_BROKEN_DURATION_RE.sub(r"\g<1>null", text))
         except ValueError:
             _note_problem(path, "invalid", f"not JSON: {e}")
             return None, "invalid"
@@ -366,12 +404,16 @@ def load_last_update() -> tuple[dict | None, str | None]:
             out[k] = None
     if isinstance(out.get("error"), str):
         out["error"] = out["error"][:_ERROR_MAX_CHARS]
+    bound = _duration_bound(doc)
+    if "duration_sec" in out:
+        out["duration_sec"] = _duration(out["duration_sec"], bound)
     steps = doc.get("steps")
-    out["steps"] = [
-        {k: s.get(k) for k in _STEP_FIELDS}
-        for s in (steps if isinstance(steps, list) else [])
-        if isinstance(s, dict)
-    ]
+    out["steps"] = []
+    for s in steps if isinstance(steps, list) else []:
+        if isinstance(s, dict):
+            step = {k: s.get(k) for k in _STEP_FIELDS}
+            step["duration_sec"] = _duration(step["duration_sec"], bound)
+            out["steps"].append(step)
     return out, None
 
 

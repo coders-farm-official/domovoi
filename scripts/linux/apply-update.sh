@@ -140,11 +140,24 @@ SERVICES_STOPPED=0
 
 log() { printf 'apply-update: %s\n' "$*"; }
 
+# Wall-clock milliseconds since the epoch, for the durations in the result.
+#
+# Bash's own clock first: $EPOCHREALTIME (bash 5 and later, no fork) is the
+# seconds, the locale's decimal point ("." or ","), then six digits of
+# microseconds. `date +%s%3N` only when it prints exactly 13 digits: the
+# uutils date(1) that Ubuntu 26.04 ships as coreutils ignores the 3 and
+# prints the nanoseconds unpadded, anything from 11 to 19 digits, and every
+# duration worked out from those is garbage (a 102 s run was recorded as
+# 101766807.450 s). A date(1) without %N prints it literally. Failing both,
+# whole seconds.
 now_ms() {
-  local t
-  t=$(date +%s%3N)
-  # A date(1) without %N prints it literally; fall back to whole seconds.
-  if [[ $t =~ ^[0-9]+$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
+  local t=${EPOCHREALTIME-}
+  if [ "${BASH_VERSINFO[0]}" -ge 5 ] && [[ $t =~ ^([0-9]+)[.,]([0-9]{3}) ]]; then
+    printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return
+  fi
+  t=$(date +%s%3N 2>/dev/null) || t=""
+  if [[ $t =~ ^[0-9]{13}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
