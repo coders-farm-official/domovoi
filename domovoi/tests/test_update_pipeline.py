@@ -484,3 +484,214 @@ def test_the_endpoint_serves_it(stub_version_probes):
     assert body["last_update"]["status"] == "rolled_back"
     assert body["bad_sha"] == "b" * 40
     assert body["restart_mode"] == "update"
+    assert body["last_update_problem"] is None
+
+
+# What apply-update.sh wrote, byte for byte in its own layout, when the wall
+# clock stepped back during a run (2026-09-30): printf '%d.%03d' of a
+# negative millisecond count gives "-89.-983", "0.-88" and so on. The
+# installer, reading fields with sed, still printed "result ok", while the
+# core's json.loads refused the file and the panel showed no last update,
+# and would have lost this bad_sha.
+BROKEN_DURATIONS = (
+    "{\n"
+    '  "status": "rolled_back",\n'
+    '  "mode": "update",\n'
+    f'  "from_sha": "{"a" * 40}",\n'
+    f'  "to_sha": "{"b" * 40}",\n'
+    '  "prev_source": "applied",\n'
+    f'  "bad_sha": "{"b" * 40}",\n'
+    '  "started_at": "2026-09-30T02:34:12Z",\n'
+    '  "finished_at": "2026-09-30T02:33:52Z",\n'
+    '  "duration_sec": -19.-412,\n'
+    '  "deps_changed": true,\n'
+    '  "mpd_changed": false,\n'
+    '  "error": "update to bbbbbbbbbbbb failed at health and was rolled back",\n'
+    '  "steps": [{"name": "preflight", "status": "ok", "duration_sec": 0.-88, '
+    '"detail": "deps_changed=1 mpd_changed=0"},{"name": "health", "status": "failed", '
+    '"duration_sec": -89.-983, "detail": "said \\"-1.-5\\" once"},'
+    '{"name": "rollback-health", "status": "ok", "duration_sec": 12.034, "detail": null}]\n'
+    "}\n"
+)
+
+
+def test_a_result_with_the_old_negative_durations_is_still_served(stub_version_probes):
+    with pytest.raises(ValueError):
+        json.loads(BROKEN_DURATIONS)
+    _write_result(BROKEN_DURATIONS)
+
+    state = asyncio.run(git_version.version_state())
+
+    last = state["last_update"]
+    assert last is not None and last["status"] == "rolled_back"
+    assert state["bad_sha"] == "b" * 40
+    assert state["last_update_problem"] is None
+    # Unknown, not 0: the file doesn't say how long they took.
+    assert last["duration_sec"] is None
+    assert [s["duration_sec"] for s in last["steps"]] == [None, None, 12.034]
+
+
+def test_the_repair_touches_nothing_but_those_durations(stub_version_probes):
+    """Text that only looks like a broken duration, inside a string, stays."""
+    doc = {**ROLLED_BACK, "error": 'the log said "duration_sec": -1.-5 here'}
+    _write_result(json.dumps(doc)[:-1] + ', "duration_sec": -3.-001}')
+
+    last = asyncio.run(git_version.version_state())["last_update"]
+
+    assert last["error"] == 'the log said "duration_sec": -1.-5 here'
+    assert last["duration_sec"] is None
+
+
+# The Beelink's last-result.json on 2026-09-30, its durations verbatim (the
+# SHAs, times and step names stand in, for a plain restart of 102 s).
+# Ubuntu 26.04's uutils date printed +%s%3N as 11 to 19 digits, so the run
+# was recorded as 101766807.450 s and its steps as anything from 17 hours
+# to minus 56 million years, the last of those not JSON.
+UUTILS_DURATIONS = (
+    "{\n"
+    '  "status": "ok",\n'
+    '  "mode": "restart",\n'
+    f'  "from_sha": "{"a" * 40}",\n'
+    f'  "to_sha": "{"a" * 40}",\n'
+    '  "prev_source": "applied",\n'
+    '  "bad_sha": null,\n'
+    '  "started_at": "2026-09-30T03:41:07Z",\n'
+    '  "finished_at": "2026-09-30T03:42:49Z",\n'
+    '  "duration_sec": 101766807.450,\n'
+    '  "deps_changed": false,\n'
+    '  "mpd_changed": false,\n'
+    '  "migrations_before": null,\n'
+    '  "migrations_after": null,\n'
+    '  "plugin_migrations_before": null,\n'
+    '  "plugin_migrations_after": null,\n'
+    '  "backup": null,\n'
+    '  "test_backup": null,\n'
+    '  "db_restored": false,\n'
+    '  "test_db_restored": false,\n'
+    '  "error": null,\n'
+    '  "steps": [{"name": "stop-services", "status": "ok", "duration_sec": 62577.839, "detail": null},'
+    '{"name": "migrate", "status": "ok", "duration_sec": 90436712.476, "detail": null},'
+    '{"name": "start-services", "status": "ok", "duration_sec": -1772828437033323.-568, "detail": null},'
+    '{"name": "health", "status": "ok", "duration_sec": 1611662219683503.615, "detail": null}]\n'
+    "}\n"
+)
+
+
+def test_the_beelinks_uutils_result_is_served_without_its_durations(stub_version_probes):
+    with pytest.raises(ValueError):
+        json.loads(UUTILS_DURATIONS)
+    _write_result(UUTILS_DURATIONS)
+
+    state = asyncio.run(git_version.version_state())
+
+    assert state["last_update_problem"] is None
+    last = state["last_update"]
+    assert last["status"] == "ok" and last["mode"] == "restart"
+    assert last["finished_at"] == "2026-09-30T03:42:49Z"
+    assert last["duration_sec"] is None
+    assert last["steps"] == [
+        {"name": "stop-services", "status": "ok", "duration_sec": None},
+        {"name": "migrate", "status": "ok", "duration_sec": None},
+        {"name": "start-services", "status": "ok", "duration_sec": None},
+        {"name": "health", "status": "ok", "duration_sec": None},
+    ]
+    assert state["bad_sha"] is None
+
+
+# A run of 62 s by its whole-second timestamps.
+_TIMED = {**ROLLED_BACK, "started_at": "2026-09-30T10:00:00Z", "finished_at": "2026-09-30T10:01:02Z"}
+
+
+@pytest.mark.parametrize(("duration", "served"), [
+    (0, 0),
+    (0.0, 0.0),
+    (61.874, 61.874),
+    # The timestamps are whole seconds and the durations milliseconds.
+    (63.999, 63.999),
+    (64.001, None),
+    (62577.839, None),
+    (-0.5, None),
+    (float("nan"), None),
+    (float("inf"), None),
+    (True, None),
+    ("61.874", None),
+    (None, None),
+], ids=lambda v: repr(v))
+def test_a_duration_longer_than_its_run_is_null(stub_version_probes, duration, served):
+    step = {"name": "health", "status": "ok", "duration_sec": duration, "detail": None}
+    _write_result({**_TIMED, "duration_sec": duration, "steps": [step]})
+
+    last = asyncio.run(git_version.version_state())["last_update"]
+
+    assert last["duration_sec"] == served and type(last["duration_sec"]) is type(served)
+    assert last["steps"][0]["duration_sec"] == served
+
+
+@pytest.mark.parametrize(("started_at", "finished_at"), [
+    ("2026-09-30T10:00:00Z", None),                      # still running
+    ("2026-09-30T10:00:00Z", "2026-09-30T09:58:30Z"),    # the clock stepped back
+    ("sometime", "2026-09-30T10:01:02Z"),
+    (None, None),
+], ids=["running", "stepped-back", "unparsable", "no-times"])
+def test_without_a_run_length_a_day_is_the_bound(stub_version_probes, started_at, finished_at):
+    steps = [
+        {"name": "backup", "status": "ok", "duration_sec": 86400, "detail": None},
+        {"name": "health", "status": "ok", "duration_sec": 86400.001, "detail": None},
+    ]
+    _write_result({**_TIMED, "status": "running", "started_at": started_at,
+                   "finished_at": finished_at, "duration_sec": None, "steps": steps})
+
+    last = asyncio.run(git_version.version_state())["last_update"]
+
+    assert [s["duration_sec"] for s in last["steps"]] == [86400, None]
+
+
+@pytest.mark.parametrize(("content", "problem"), [
+    ("{not json", "invalid"),
+    ('{\n  "status": "ok",\n  "duration_sec": 1.2.3\n}\n', "invalid"),
+    ("[]", "not_a_result"),
+    (json.dumps({"no": "status"}), "not_a_result"),
+    (json.dumps({**ROLLED_BACK, "status": 3}), "not_a_result"),
+], ids=["not-json", "a-number-with-two-points", "a-list", "no-status", "status-not-text"])
+def test_the_endpoint_says_why_there_is_no_last_update(stub_version_probes, content, problem):
+    _write_result(content)
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] == problem
+
+
+def test_an_oversized_result_says_so(stub_version_probes):
+    _write_result({**ROLLED_BACK, "error": "x" * (git_version._LAST_UPDATE_MAX_BYTES + 1)})
+    assert asyncio.run(git_version.version_state())["last_update_problem"] == "too_large"
+
+
+def test_an_unreadable_result_says_so(stub_version_probes):
+    # A directory where the file should be: open() fails with an OSError
+    # other than "not found" on every platform.
+    Path(settings.update_result_file).mkdir(parents=True)
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] == "unreadable"
+
+
+def test_no_result_yet_under_the_unit_is_missing(stub_version_probes):
+    assert asyncio.run(git_version.version_state())["last_update_problem"] == "missing"
+
+
+def test_no_result_without_the_unit_is_no_problem(stub_version_probes, monkeypatch):
+    monkeypatch.setattr(self_restart, "restart_mode", lambda: "restart")
+    state = asyncio.run(git_version.version_state())
+    assert state["last_update"] is None
+    assert state["last_update_problem"] is None
+
+
+def test_a_broken_result_is_logged_once_not_on_every_poll(stub_version_probes, caplog, monkeypatch):
+    monkeypatch.setattr(git_version, "_LOGGED_PROBLEM", None)
+    _write_result("{not json")
+    with caplog.at_level("WARNING", logger=git_version.log.name):
+        for _ in range(5):
+            asyncio.run(git_version.version_state())
+    warnings = [r for r in caplog.records if "last_update null" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "invalid" in warnings[0].getMessage()
+    assert settings.update_result_file in warnings[0].getMessage()
