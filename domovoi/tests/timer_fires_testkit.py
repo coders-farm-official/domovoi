@@ -40,3 +40,22 @@ async def apply_v017() -> None:
             "TRUNCATE timer_fire_deliveries, timer_fires, timer_own_only_rooms "
             "RESTART IDENTITY"
         ))
+
+
+async def clear_fire_ledger() -> None:
+    """Empty the three V017 tables when this lane has them; a no-op when
+    it doesn't. For tests that run the real core lifespan: its timer
+    watcher records every timer it fires in the ledger, and a fire left
+    unsettled there is resumed by the next lifespan in the run, which
+    would then announce it to that test's satellites."""
+    from domovoi.db.session import engine
+
+    async with engine.begin() as conn:
+        present = (await conn.execute(
+            text("SELECT to_regclass('public.timer_fires') IS NOT NULL")
+        )).scalar_one()
+        if present:
+            await conn.execute(text(
+                "TRUNCATE timer_fire_deliveries, timer_fires, timer_own_only_rooms "
+                "RESTART IDENTITY"
+            ))
