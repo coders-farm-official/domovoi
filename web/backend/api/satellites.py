@@ -19,8 +19,10 @@ the Domovoi server's ``app.state.active_sessions`` to do TTS fanout.
 Timers: every open timer read holds back a REMINDER's words (``message``
 and ``label``) from a caller with no household credential — rule M1, see
 ``_READS_REMINDER_TEXT`` — and says so with ``masked``. Timer fire
-history (V017, :mod:`web.backend.timer_fires`) is served beside them, and
-each room's "Only reminders for this device" flag is read (open) and
+history (V017, :mod:`web.backend.timer_fires`) is served beside them:
+whole to that same tier, and to anyone else only the last 10 minutes, each
+fire cut down to what Home draws — rule F1, see ``_READS_FIRE_LEDGER``.
+Each room's "Only reminders for this device" flag is read (open) and
 written (device tier) here.
 
 A room's conversations and voice notes are what the household SAID, so
@@ -626,8 +628,20 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
 # reminders set with NO room were masked.)
 _READS_REMINDER_TEXT = ("ok", "admin", "pre-setup", "cookie-only")
 
-# How far back GET /api/timers reaches into the fire history, and how many.
-_TIMERS_FIRES_WINDOW_SEC = 600
+# Rule F1. Who reads the whole fire ledger (V017): the same tier — and
+# exactly the tier /ws/state admits, whose `timer_fires` push carries the
+# ledger unmasked. The ledger is 7 days of when every timer and reminder
+# went off, each room's outcome and reason code, and which room said "stop
+# the timer" and when (a log of where somebody was). Anyone else — no
+# credential, a stale token, a throttled source — gets the last
+# ``timer_fires.OPEN_WINDOW_SEC`` (10 minutes) only, each fire cut down by
+# ``timer_fires.open_fire`` to what Home's done line and the alert card
+# draw on an unpaired kitchen tablet.
+_READS_FIRE_LEDGER = _READS_REMINDER_TEXT
+
+# How far back GET /api/timers reaches into the fire history, and how many
+# — the same 10 minutes an open read of the history is held to.
+_TIMERS_FIRES_WINDOW_SEC = timer_fires.OPEN_WINDOW_SEC
 _TIMERS_FIRES_MAX = 20
 
 _V017_MISSING_FIRES = "timer fire history needs database migration V017 — run Flyway"
@@ -643,19 +657,21 @@ def _mask_timer(t: Timer) -> Timer:
 async def _apply_m1(
     request: Request, timers: list[Timer], fires: list[dict[str, Any]] | None
 ) -> tuple[list[Timer], list[dict[str, Any]] | None]:
-    """Mask every reminder (timer rows and fires alike) unless the caller
-    may read the words. The caller is classified only when the answer
-    holds a reminder, so an ordinary read charges no token backoff."""
-    if not any(t.is_reminder for t in timers) and not any(
-        f.get("is_reminder") for f in (fires or [])
-    ):
+    """What this caller reads of an open timer answer: every reminder
+    masked (rule M1, timer rows and fires alike) and every fire cut down
+    (rule F1, ``timer_fires.open_fire``) unless it holds a household
+    credential. The caller is classified only when the answer would
+    differ — a reminder in it, or a fire — so an ordinary read (plain
+    timers, nothing went off lately) charges no token backoff. When it
+    does differ the answer itself tells a guessed token's worth, which is
+    why it must go through the classifier and its backoff."""
+    open_timers = [_mask_timer(t) for t in timers]
+    open_fires = None if fires is None else [timer_fires.open_fire(f) for f in fires]
+    if open_timers == timers and open_fires == fires:
         return timers, fires
-    if await check_device_request(request) in _READS_REMINDER_TEXT:
+    if await check_device_request(request) in _READS_FIRE_LEDGER:
         return timers, fires
-    return (
-        [_mask_timer(t) for t in timers],
-        None if fires is None else [timer_fires.mask_fire(f) for f in fires],
-    )
+    return open_timers, open_fires
 
 
 @timers_router.get("", response_model=TimerList)
@@ -677,7 +693,10 @@ async def list_all_timers(request: Request) -> TimerList:
 
     Rule M1 (``_READS_REMINDER_TEXT``): without a household credential,
     every reminder — timer rows and fires alike — answers with ``message``
-    and ``label`` null and ``masked`` true."""
+    and ``label`` null and ``masked`` true. Rule F1
+    (``_READS_FIRE_LEDGER``): without one, each fire is also cut down to
+    what Home draws (``timer_fires.open_fire``: no per-room outcomes, no
+    who-stopped-it)."""
     async with session_scope() as s:
         server_now = (await s.execute(text("SELECT now()"))).scalar_one()
         rows = await s.execute(
@@ -723,18 +742,34 @@ async def list_timer_fires(
     * ``room_id`` — the room the timer or reminder was SET in.
     * ``timer_id`` — the fire of one timer (the phone's alarm confirm).
 
-    Open, with rule M1. 503 — not an empty list — when the server keeps
-    no fire history (V017 missing), so a client can tell "unknown" from
-    "none"."""
+    Open, but tiered in here (rules M1 and F1). A household credential
+    (``_READS_FIRE_LEDGER``: the device token, an admin Bearer, the
+    dashboard cookie, the pre-setup grace — the Android app, a paired
+    shared screen, a signed-in dashboard) reads the whole ledger,
+    ``window_sec: null``. Anyone else reads the last 10 minutes only
+    (``window_sec: 600``), each fire cut down by ``timer_fires.open_fire``
+    — what an unpaired kitchen tablet's Home and alert cards draw. The
+    caller is ALWAYS classified here, since how far back the answer
+    reaches depends on it (and so says whether a presented token is
+    good: the classifier's backoff applies).
+
+    503 — not an empty list — when the server keeps no fire history
+    (V017 missing), so a client can tell "unknown" from "none"."""
+    ledger = await check_device_request(request) in _READS_FIRE_LEDGER
+    window = None if ledger else timer_fires.OPEN_WINDOW_SEC
     async with session_scope() as s:
         server_now = (await s.execute(text("SELECT now()"))).scalar_one()
         fires = await timer_fires.recent_fires(
-            s, since_id=since_id, origin_room_id=room_id, timer_id=timer_id, limit=limit
+            s, since_id=since_id, origin_room_id=room_id, timer_id=timer_id, limit=limit,
+            window_sec=window,
         )
     if fires is None:
         raise HTTPException(status_code=503, detail=_V017_MISSING_FIRES)
-    _, fires = await _apply_m1(request, [], fires)
-    return TimerFireList(server_now=server_now, fires=[TimerFire(**f) for f in fires or []])
+    if not ledger:
+        fires = [timer_fires.open_fire(f) for f in fires]
+    return TimerFireList(
+        server_now=server_now, fires=[TimerFire(**f) for f in fires], window_sec=window
+    )
 
 
 @timers_router.delete(

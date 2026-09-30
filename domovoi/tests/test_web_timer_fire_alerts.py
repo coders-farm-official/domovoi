@@ -28,7 +28,13 @@ timer because he was not in the garage. What these tests pin:
 * a history that is BEHIND what this browser remembers (a rebuilt
   database, a reinstall on the same address) starts it over as a first
   visit, dismissals included, instead of skipping every new fire up to
-  the old id.
+  the old id — but an empty answer the server held to a window
+  (``window_sec``: a browser with no household credential reads only the
+  last 10 minutes, rule F1) says nothing about the history, and starts
+  nothing over;
+* such a browser gets no per-room rows (``deliveries: []``): a fire
+  still on its way reads ``announcing…`` and its dot is the warning one,
+  as on a paired screen.
 
 The component runs on top of the REAL auth.js and data.js (scripted
 ``fetch`` and ``WebSocket`` only, like test_web_home_page), so the quiet
@@ -148,9 +154,11 @@ window.__snap = (h) => {
   const cards = h.findAll((e) => w.__cls(e).includes('timer-fire-card')).map((c) => {
     const within = (cls) => h.findAll((e) => w.__cls(e).includes(cls) && h.inside(e, (a) => a === c))
       .map((e) => w.__deepText(e));
+    const dot = h.findAll((e) => w.__cls(e).includes('dot') && h.inside(e, (a) => a === c))[0];
     return { id: c.props['data-fire'], title: within('timer-fire-title')[0] || null,
              body: within('timer-fire-body').length ? within('timer-fire-body')[0] : null,
-             meta: within('timer-fire-meta')[0] || null };
+             meta: within('timer-fire-meta')[0] || null,
+             dot: dot && dot.props.style ? dot.props.style.background : null };
   });
   const more = h.find((e) => w.__cls(e).includes('timer-fire-more'));
   return {
@@ -340,6 +348,34 @@ SCENARIOS["poll_while_down"] = scenario(
     ls={**PAIRED_LS, **_SEEN_40},
 )
 
+# A browser with no household credential (rule F1): each fire comes cut
+# down — no per-room rows, no who-stopped-it — and the history reaches back
+# 10 minutes only (`window_sec: 600`). Fire 41 is on its way, 20 s old; 42
+# was heard. Eleven minutes on, the windowed answers are empty: nothing
+# went off lately, which says nothing about the history this browser
+# remembers — no start-over, the cards stay, the dismissals stay.
+_OPEN_41 = {**fire(41, age_ms=20 * SEC, message="call mom", summary="announcing…", deliveries=[]),
+            "message": None, "label": None, "masked": True}
+_OPEN_42 = fire(42, age_ms=15 * SEC, room_id="kitchen", label="pasta", summary="heard in kitchen",
+                deliveries=[])
+_OPEN_43 = fire(43, age_ms=10 * SEC, summary="not heard in any room (garage offline)", deliveries=[])
+
+
+def open_page(*fires: dict, server_now: int = NOW) -> dict:
+    return {**fires_page(*fires, server_now=server_now), "window_sec": 600}
+
+
+SCENARIOS["open_window"] = scenario(
+    {"GET /api/timers/fires?since_id=40&limit=50": open_page(_OPEN_41, _OPEN_42, _OPEN_43)},
+    "const polls = () => [...w.__intervals.values()].filter((i) => i.ms === 30000);"
+    "const shown = snap();"
+    f"w.__table['GET /api/timers/fires?since_id=43&limit=50'] = {json.dumps(open_page(server_now=NOW + 11 * MIN))};"
+    f"w.__table['GET /api/timers/fires?limit=1'] = {json.dumps(open_page(server_now=NOW + 11 * MIN))};"
+    f"w.__setNow({NOW + 11 * MIN}); for (const p of polls()) p.fn(); await w.__flush(h);"
+    "return { shown, later: snap() };",
+    ls={SEEN: json.dumps({"id": 40, "at": iso(NOW - 40 * MIN)}), DISMISSED: "[7]"},
+)
+
 
 @pytest.fixture(scope="module")
 def driven(tmp_path_factory) -> dict:
@@ -500,6 +536,29 @@ def test_a_push_that_went_off_after_the_remembered_fire_starts_over(driven) -> N
     assert seen_of(out["after"])["id"] == 3
     # An older fire pushed again (a summary update) starts nothing over.
     assert _ids(out["older"]) == [3]
+
+
+def test_a_windowed_empty_history_starts_nothing_over(driven) -> None:
+    out = driven["open_window"]
+    assert _ids(out["shown"]) == [43, 42, 41]
+    later = out["later"]
+    assert later["fetches"][-2:] == ["/api/timers/fires?since_id=43&limit=50",
+                                     "/api/timers/fires?limit=1"]
+    assert "/api/timers/fires?limit=50" not in later["fetches"]     # no first visit again
+    assert _ids(later) == [43, 42, 41]                              # 11 minutes: still up
+    assert seen_of(later)["id"] == 43
+    assert later["dismissed"] == "[7]"
+
+
+def test_a_cut_down_fire_still_reads_and_colours_right(driven) -> None:
+    """No per-room rows to go by: the summary says a fire is on its way."""
+    cards = {c["id"]: c for c in driven["open_window"]["shown"]["cards"]}
+    assert cards[41]["title"] == "Reminder · garage" and cards[41]["body"] is None
+    assert cards[41]["meta"].startswith("announcing… · ")
+    assert cards[41]["dot"] == "var(--warn)"
+    assert cards[42]["body"] == "pasta" and cards[42]["dot"] == "var(--ok)"
+    assert cards[43]["meta"].startswith("not heard in any room (garage offline) · ")
+    assert cards[43]["dot"] == "var(--err)"
 
 
 def test_the_history_is_polled_while_the_socket_is_down(driven) -> None:

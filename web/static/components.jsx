@@ -1365,8 +1365,10 @@ const WriteBlockedNotice = ({ reason, children }) => {
  * unmasked — the socket is device tier) and a catch-up read of
  * GET /api/timers/fires on mount, whenever the socket comes back, and
  * every 30 s while it is down (an unpaired tablet's socket is refused
- * for good; the read is open), so a fire that went off while this tab
- * slept still shows.
+ * for good; the read is open, but to a browser with no household
+ * credential it reaches back only 10 minutes — `window_sec: 600` —
+ * which is as far back as a catch-up alerts anyway), so a fire that went
+ * off while this tab slept still shows.
  *
  * The last fire this browser has seen is remembered (its id and when it
  * went off), so a reload does not replay the day: a first visit alerts
@@ -1484,9 +1486,13 @@ const TimerFireBody = (f, shared) => {
 };
 
 // Heard somewhere → ok; still on its way → warn; heard nowhere → err.
+// A browser with no household credential gets no per-room rows (rule F1:
+// `deliveries` is []), so its summary is what says a fire is on its way.
 const TimerFireTone = (f) => {
   if ((f.heard_in || []).length) return 'ok';
-  if ((f.deliveries || []).some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  const rows = f.deliveries || [];
+  if (rows.some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  if (!rows.length && String(f.summary || '').startsWith('announcing')) return 'warn';
   return 'err';
 };
 
@@ -1614,10 +1620,13 @@ const TimerFireAlerts = () => {
           // Nothing past the last fire seen. If the newest fire the server
           // has is BEHIND it (or it has none at all), this browser
           // remembers another history: read the newest page as a first visit.
+          // An answer held to a window (`window_sec`: no household
+          // credential) that is empty only says nothing went off lately.
           const top = await apiGet('/api/timers/fires?limit=1', { quiet: true });
           if (!top || !Array.isArray(top.fires)) break;
           const newest = top.fires[0];
-          if (newest ? newest.id < from : from > 0) { startOver(); continue; }
+          const whole = top.window_sec == null;
+          if (newest ? newest.id < from : (whole && from > 0)) { startOver(); continue; }
           break;
         }
         ingest(r.fires, serverNow(), TIMER_FIRE_CATCHUP_MS);

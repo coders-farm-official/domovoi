@@ -670,9 +670,13 @@ const HomeFireAsTimer = (f) => ({
   expires_at: f.due_at, created_at: f.created_at,
 });
 // Heard somewhere → ok; a room still waiting its turn → warn; nowhere → err.
+// A browser with no household credential gets no per-room rows (rule F1:
+// `deliveries` is []), so its summary is what says a fire is on its way.
 const HomeFireTone = (f) => {
   if ((f.heard_in || []).length) return 'ok';
-  if ((f.deliveries || []).some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  const rows = f.deliveries || [];
+  if (rows.some((d) => d.outcome === 'pending' || d.outcome === 'sending')) return 'warn';
+  if (!rows.length && String(f.summary || '').startsWith('announcing')) return 'warn';
   return 'err';
 };
 

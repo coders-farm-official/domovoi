@@ -951,7 +951,9 @@ const SatTimerFireTitle = (f, shared) => {
 };
 
 /* What went off that was SET in this room lately (fire history, V017),
- * and where it was heard. Nothing when the server keeps no history. */
+ * and where it was heard. Nothing when the server keeps no history. A
+ * browser with no household credential is served only the last 10
+ * minutes (rule F1), so on an unpaired screen the list is short. */
 const SatTimerFiredList = ({ room }) => {
   const shared = useSharedScreen();
   const { data } = useApiObject(`/api/timers/fires?room_id=${encodeURIComponent(room)}&limit=10`,

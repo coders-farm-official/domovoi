@@ -313,9 +313,11 @@ away: the new setting is off for every satellite.
   timer reads (the dashboard's Home on an unpaired tablet, say) still show
   every countdown, room and whether it was heard, but a reminder reads
   "reminder" on Home and "reminder (words hidden)" in a satellite's Timers
-  tab (web and Android). Plain timer labels ("pasta") stay visible. What
-  the open history still shows, for 7 days — when each went off, where it
-  was heard, and which room said "stop the timer" — is listed in
+  tab (web and Android). Plain timer labels ("pasta") stay visible. The
+  timer history (7 days: where each was heard, which room said "stop the
+  timer") is for paired devices and a signed-in dashboard too; without
+  one, only the last 10 minutes show, with where each was heard but not
+  who stopped it — enough for Home and the alert cards. The details are in
   SECURITY_PRIVACY.md. The satellites themselves are sent the words (they
   speak them, and log them in their own journal).
 * **Setting reminders** understands more ways of saying it: "laundry
