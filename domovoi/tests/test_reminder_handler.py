@@ -1012,13 +1012,13 @@ async def test_list_reads_a_task_and_a_no_task_reminder(db_session) -> None:
 
 
 @pytest.fixture
-async def v017_session(db_session):
-    from domovoi.tests.timer_fires_testkit import apply_v017
+async def v018_session(db_session):
+    from domovoi.tests.timer_fires_testkit import apply_v018
 
-    await apply_v017()
+    await apply_v018()
     yield db_session
     await db_session.rollback()
-    await apply_v017()
+    await apply_v018()
 
 
 async def _announced_here(s, *, room: str, kind: str, ago_sec: float = 5.0) -> int:
@@ -1039,8 +1039,8 @@ async def _announced_here(s, *, room: str, kind: str, ago_sec: float = 5.0) -> i
 
 @requires_db
 @pytest.mark.asyncio
-async def test_cancel_that_reminder_right_after_hearing_one_acknowledges_it(v017_session) -> None:
-    s = v017_session
+async def test_cancel_that_reminder_right_after_hearing_one_acknowledges_it(v018_session) -> None:
+    s = v018_session
     await TimerRepository(s).create(
         expires_at=utcnow() + timedelta(minutes=30), label="take out the trash",
         message="take out the trash", room_id="kitchen")
@@ -1066,8 +1066,8 @@ async def test_cancel_that_reminder_right_after_hearing_one_acknowledges_it(v017
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_named_reminder_cancel_or_a_timer_fire_is_a_normal_cancel(v017_session) -> None:
-    s = v017_session
+async def test_a_named_reminder_cancel_or_a_timer_fire_is_a_normal_cancel(v018_session) -> None:
+    s = v018_session
     repo = TimerRepository(s)
     await repo.create(expires_at=utcnow() + timedelta(minutes=30), label="call mom",
                       message="call mom", room_id="kitchen")

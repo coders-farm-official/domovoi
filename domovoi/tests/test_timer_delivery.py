@@ -7,15 +7,15 @@ turned on announces only its own; the room it was set in always does.
 DB-FREE (most of this file): the coordinator runs on a fake clock against
 fake rooms (``announce_block`` / ``announce``) and the in-memory ledger, so
 every rule — who announces, the wording, busy rooms, retries, grace
-windows, never-twice, settlement, restart resume, V017 missing — is pinned
+windows, never-twice, settlement, restart resume, V018 missing — is pinned
 without Postgres. Two tests use real StreamSessions (stub TTS, fake socket)
 for the busy-room and boot-race paths end to end.
 
-DB tier (``requires_db``): the V017 ledger itself — the atomic pop, the
+DB tier (``requires_db``): the V018 ledger itself — the atomic pop, the
 NOTIFYs, the exclusive claim, ON CONFLICT late joiners, the cascade prune,
 and a boot race through the real ledger and real sessions. Each of those
-applies V017's SQL itself and truncates the three tables (they are NOT in
-conftest's TABLES_TO_TRUNCATE, which lanes without V017 must survive).
+applies V018's SQL itself and truncates the three tables (they are NOT in
+conftest's TABLES_TO_TRUNCATE, which lanes without V018 must survive).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from domovoi import timer_delivery as td
 from domovoi.config import settings
 from domovoi.events import EventBus
 from domovoi.tests.conftest import requires_db
-from domovoi.tests.timer_fires_testkit import apply_v017
+from domovoi.tests.timer_fires_testkit import apply_v018
 from domovoi.timer_delivery import (
     AnnounceInterrupted,
     AnnounceNotStarted,
@@ -749,14 +749,14 @@ async def test_resume_after_a_restart() -> None:
     assert [s["fire_id"] for s in h.settled] == [-51, -50]
 
 
-# ─── C13 V017 missing ────────────────────────────────────────────────────
+# ─── C13 V018 missing ────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_without_v017_timers_still_fire_and_fan_out(monkeypatch, caplog) -> None:
+async def test_without_v018_timers_still_fire_and_fan_out(monkeypatch, caplog) -> None:
     probes: list[int] = []
 
-    async def _no_v017() -> bool:
+    async def _no_v018() -> bool:
         probes.append(1)
         return False
 
@@ -773,7 +773,7 @@ async def test_without_v017_timers_still_fire_and_fan_out(monkeypatch, caplog) -
         async def pop_expired(self):
             return batches.pop(0) if batches else []
 
-    monkeypatch.setattr(td, "_probe_v017", _no_v017)
+    monkeypatch.setattr(td, "_probe_v018", _no_v018)
     monkeypatch.setattr(td, "session_scope", _scope)
     monkeypatch.setattr(td, "TimerRepository", _Repo)
 
@@ -794,7 +794,7 @@ async def test_without_v017_timers_still_fire_and_fan_out(monkeypatch, caplog) -
         assert await d.tick() == 1
         await _yield(40)
     assert isinstance(d._ledger, MemoryFireLedger)
-    assert caplog.messages.count(td.MISSING_V017_WARNING) == 1
+    assert caplog.messages.count(td.MISSING_V018_WARNING) == 1
     assert len(probes) == 1                     # re-probed only every 10 min
     assert garage.texts == ["Your 10 minute timer is done.", "Your eggs timer is done."]
     assert kitchen.texts == ["From the garage: Your 10 minute timer is done.",
@@ -806,13 +806,13 @@ async def test_without_v017_timers_still_fire_and_fan_out(monkeypatch, caplog) -
 
 
 @pytest.mark.asyncio
-async def test_v017_appearing_later_switches_to_the_real_ledger(monkeypatch) -> None:
+async def test_v018_appearing_later_switches_to_the_real_ledger(monkeypatch) -> None:
     answers = [False, True]
 
     async def _probe() -> bool:
         return answers.pop(0)
 
-    monkeypatch.setattr(td, "_probe_v017", _probe)
+    monkeypatch.setattr(td, "_probe_v018", _probe)
     clock = FakeClock()
     d = TimerDelivery(None, clock=clock)
     assert isinstance(await d.ensure_ledger(), MemoryFireLedger)
@@ -1517,16 +1517,16 @@ async def test_a_pairing_check_that_cannot_run_is_not_token_authenticated(monkey
     assert sess.token_authenticated is False
 
 
-# ─── DB tier: the V017 ledger ────────────────────────────────────────────
+# ─── DB tier: the V018 ledger ────────────────────────────────────────────
 
 
 @pytest.fixture
-async def v017(db_session):
-    await apply_v017()
+async def v018(db_session):
+    await apply_v018()
     yield db_session
     # End the test's transaction first: the TRUNCATE waits for its locks.
     await db_session.rollback()
-    await apply_v017()
+    await apply_v018()
 
 
 async def _add_timer(*, room: str | None, label=None, message=None,
@@ -1596,7 +1596,7 @@ def _targets(online: set[str]):
 
 @requires_db
 @pytest.mark.asyncio
-async def test_pop_due_records_targets_and_notifies_only_when_something_fired(v017) -> None:
+async def test_pop_due_records_targets_and_notifies_only_when_something_fired(v018) -> None:
     await _q("INSERT INTO timer_own_only_rooms (room_id) VALUES ('office') RETURNING 1")
     ledger = FireLedger()
     async with _Heard() as heard:
@@ -1624,7 +1624,7 @@ async def test_pop_due_records_targets_and_notifies_only_when_something_fired(v0
 
 @requires_db
 @pytest.mark.asyncio
-async def test_pop_due_is_atomic_a_failed_insert_keeps_the_timer(v017) -> None:
+async def test_pop_due_is_atomic_a_failed_insert_keeps_the_timer(v018) -> None:
     await _add_timer(room="garage", label="pasta")
     ledger = FireLedger()
 
@@ -1643,7 +1643,7 @@ async def test_pop_due_is_atomic_a_failed_insert_keeps_the_timer(v017) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_claim_is_exclusive_late_joiners_conflict_and_prune_cascades(v017) -> None:
+async def test_claim_is_exclusive_late_joiners_conflict_and_prune_cascades(v018) -> None:
     ledger = FireLedger()
     await _add_timer(room="garage")
     [(rec, _)] = await ledger.pop_due(_targets({"garage"}))
@@ -1677,7 +1677,7 @@ async def test_claim_is_exclusive_late_joiners_conflict_and_prune_cascades(v017)
 
 @requires_db
 @pytest.mark.asyncio
-async def test_boot_race_through_the_real_ledger(v017, stub_tts) -> None:
+async def test_boot_race_through_the_real_ledger(v018, stub_tts) -> None:
     """A timer due while the core was down: the first tick (no satellite
     connected yet) records it, the rooms reconnect after the server starts
     accepting, and each hears it once — recorded in timer_fire_deliveries."""
@@ -1724,7 +1724,7 @@ async def test_boot_race_through_the_real_ledger(v017, stub_tts) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_resume_marks_a_mid_send_row_failed_through_the_real_ledger(v017) -> None:
+async def test_resume_marks_a_mid_send_row_failed_through_the_real_ledger(v018) -> None:
     ledger = FireLedger()
     await _add_timer(room="garage")
     [(rec, _)] = await ledger.pop_due(_targets({"garage", "kitchen"}))
@@ -1739,7 +1739,7 @@ async def test_resume_marks_a_mid_send_row_failed_through_the_real_ledger(v017) 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_retiring_a_room_clears_its_timer_scope_but_keeps_history(v017) -> None:
+async def test_retiring_a_room_clears_its_timer_scope_but_keeps_history(v018) -> None:
     from domovoi import main as core_main
 
     await _q("INSERT INTO timer_own_only_rooms (room_id) VALUES ('attic'), ('den') RETURNING 1")
@@ -1752,7 +1752,7 @@ async def test_retiring_a_room_clears_its_timer_scope_but_keeps_history(v017) ->
 
 
 @pytest.mark.asyncio
-async def test_retiring_a_room_without_v017_is_quiet(monkeypatch, caplog) -> None:
+async def test_retiring_a_room_without_v018_is_quiet(monkeypatch, caplog) -> None:
     from domovoi import main as core_main
 
     class _Missing(Exception):
@@ -1795,7 +1795,7 @@ async def _drain(d, n: int = 300) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_room_that_joins_after_the_acknowledgement_never_hears_it(v017) -> None:
+async def test_a_room_that_joins_after_the_acknowledgement_never_hears_it(v018) -> None:
     """The review's repro: the garage says "stop the timer"; the office,
     back from a Wi-Fi drop inside the grace window (or any room after a
     core restart), used to get a fresh row and announce it anyway."""
@@ -1819,7 +1819,7 @@ async def test_a_room_that_joins_after_the_acknowledgement_never_hears_it(v017) 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_ledger_refuses_a_late_row_after_an_acknowledgement(v017) -> None:
+async def test_the_ledger_refuses_a_late_row_after_an_acknowledgement(v018) -> None:
     ledger = FireLedger()
     await _add_timer(room="garage")
     [(rec, _)] = await ledger.pop_due(_targets({"garage", "kitchen"}))

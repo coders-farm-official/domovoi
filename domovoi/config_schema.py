@@ -440,7 +440,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", min=0, max=23,
     ),
 
-    # ─── Timers & reminders (house-wide delivery, V017) ────────────────
+    # ─── Timers & reminders (house-wide delivery, V018) ────────────────
     FieldSpec(
         "timer_offline_grace_sec", "Late-joiner window", "Timers & reminders",
         "A satellite that connects or reconnects within this long after a timer "

@@ -22,12 +22,12 @@ What the web serves, and to whom:
   ``heard_in`` and ``summary`` (without `` · stopped in …``), a plain
   timer's label; ``deliveries`` ``[]``, ``acked_at`` / ``acked_by`` /
   ``settled_at`` null.
-* **Fire history** (V017) — ``GET /api/timers/fires`` (open, M1 + F1):
+* **Fire history** (V018) — ``GET /api/timers/fires`` (open, M1 + F1):
   ``since_id`` catches up oldest first, ``room_id`` is the room it was
   SET in, ``timer_id`` finds one timer's fire, ``limit`` 1–200. 503 — not
-  an empty list — when V017 is missing, so a client can tell "unknown"
+  an empty list — when V018 is missing, so a client can tell "unknown"
   from "none". ``GET /api/timers`` carries the last 10 minutes as
-  ``fires`` (``null`` without V017). Each fire has a ``summary`` the web
+  ``fires`` (``null`` without V018). Each fire has a ``summary`` the web
   computes ("heard in garage, kitchen · still announcing").
 * **"Only reminders for this device"** — ``GET`` (open) and ``PUT``
   (device tier + the CSRF header) ``/api/satellites/{room}/timer-
@@ -39,16 +39,16 @@ What the web serves, and to whom:
 Two halves:
 
 * DB-FREE (always runs): the routes through the real web app with the
-  auth primitives faked (``auth_testkit.install_fake_db``) and the V017
+  auth primitives faked (``auth_testkit.install_fake_db``) and the V018
   seam (:mod:`web.backend.timer_fires`) replaced by fakes; the seam's own
   SQL shape against a recording fake session; the summary rules.
-* DB-BACKED (``requires_db``): the seam against a real database. The V017
+* DB-BACKED (``requires_db``): the seam against a real database. The V018
   tables are created from the migration file itself, statement by
-  statement (``timer_fires_testkit.apply_v017``; the V016 precedent in
+  statement (``timer_fires_testkit.apply_v018``; the V016 precedent in
   test_command_captures_api runs its one statement whole), and truncated
   around each test — they are NOT in conftest's TABLES_TO_TRUNCATE, so a
-  lane without V017 still runs everything else. Skipped when the file is
-  not on this branch (V017 is the core's).
+  lane without V018 still runs everything else. Skipped when the file is
+  not on this branch (V018 is the core's).
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ DEVICE_TOKEN = "d3v1ce-t0ken"
 BROWSER = {"X-Requested-With": "XMLHttpRequest"}
 T0 = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
-V017 = MIGRATIONS / "V017__timer_fires.sql"
+V018 = MIGRATIONS / "V018__timer_fires.sql"
 
 
 # ─── fakes ───────────────────────────────────────────────────────────────
@@ -175,7 +175,7 @@ def claimed(monkeypatch):
 
 @pytest.fixture
 def seam(monkeypatch):
-    """The routes' database: a fake session with TIMER_ROWS, and the V017
+    """The routes' database: a fake session with TIMER_ROWS, and the V018
     seam faked. Returns the recorder the fakes write to."""
     rec: dict[str, Any] = {"recent": [], "set": [], "known": {"garage", "kitchen"},
                            "fires": [dict(f) for f in FIRES], "flags": {}, "classified": 0}
@@ -717,7 +717,7 @@ async def test_no_fire_history_is_503_there_and_null_in_the_timer_list(claimed, 
         r = await c.get("/api/timers/fires")
         timers = (await c.get("/api/timers")).json()
     assert r.status_code == 503
-    assert r.json() == {"detail": "timer fire history needs database migration V017 — run Flyway"}
+    assert r.json() == {"detail": "timer fire history needs database migration V018 — run Flyway"}
     assert timers["fires"] is None
     assert [t["id"] for t in timers["timers"]] == [1, 2, 3]
 
@@ -850,7 +850,7 @@ async def test_the_seam_never_reads_the_spoken_words() -> None:
 
 
 @pytest.mark.asyncio
-async def test_without_v017_the_seam_says_so_and_touches_nothing() -> None:
+async def test_without_v018_the_seam_says_so_and_touches_nothing() -> None:
     s = _SqlSession(ready=False)
     assert await timer_fires.recent_fires(s) is None
     assert await timer_fires.own_only_rooms(s) == {}
@@ -919,12 +919,12 @@ async def test_a_bad_room_id_is_422(claimed, seam) -> None:
 
 
 @pytest.mark.asyncio
-async def test_without_v017_the_write_is_503(claimed, seam) -> None:
+async def test_without_v018_the_write_is_503(claimed, seam) -> None:
     seam["missing"] = True
     async with _client({**BROWSER, HEADER: DEVICE_TOKEN}) as c:
         r = await c.put("/api/satellites/garage/timer-announcements", json={"own_only": True})
     assert r.status_code == 503
-    assert "V017" in r.json()["detail"]
+    assert "V018" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -1049,15 +1049,15 @@ async def test_a_change_is_pushed_under_data_once(pushed) -> None:
 # ─── DB-backed: the seam against a real database ─────────────────────────
 
 
-async def _v017() -> None:
-    if not V017.exists():
-        pytest.skip("V017__timer_fires.sql is the core's; it arrives with that branch")
-    # V017 holds several statements and a prepared statement takes one: the
+async def _v018() -> None:
+    if not V018.exists():
+        pytest.skip("V018__timer_fires.sql is the core's; it arrives with that branch")
+    # V018 holds several statements and a prepared statement takes one: the
     # core's testkit runs them one by one (IF NOT EXISTS), then empties the
     # three tables.
-    from domovoi.tests.timer_fires_testkit import apply_v017
+    from domovoi.tests.timer_fires_testkit import apply_v018
 
-    await apply_v017()
+    await apply_v018()
 
 
 async def _clear() -> None:
@@ -1071,7 +1071,7 @@ async def _clear() -> None:
 
 @pytest.fixture
 async def ledger(db_session):
-    await _v017()
+    await _v018()
     from domovoi.db.session import engine
 
     async with engine.begin() as conn:

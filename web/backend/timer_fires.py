@@ -1,4 +1,4 @@
-"""Timer fire history (V017) — every read and write the web process makes.
+"""Timer fire history (V018) — every read and write the web process makes.
 
 When a timer or a reminder goes off, the core moves its ``timers`` row
 into ``timer_fires`` (same transaction) and records, per room, whether the
@@ -7,12 +7,12 @@ announcement was spoken there (``timer_fire_deliveries``). A row in
 this device" turned ON: that room then announces only what was set on it.
 The core writes the ledger; this process reads it and writes the flag.
 
-All of the V017 SQL the web process runs lives here, so the routes
+All of the V018 SQL the web process runs lives here, so the routes
 (web/backend/api/satellites.py) and the realtime helper
 (web/backend/realtime.py) stay DB-shape-free and their tests can replace
 these functions with fakes.
 
-A missing V017 (Flyway not run yet) is never an error here: the reads
+A missing V018 (Flyway not run yet) is never an error here: the reads
 answer ``None`` (fires) or ``{}`` (the flag), and the one write raises
 :class:`LedgerMissing` so its route can answer 503. The probe is
 ``to_regclass`` — it never aborts the caller's transaction, so a route
@@ -36,13 +36,13 @@ from typing import Any
 
 from sqlalchemy import text
 
-# Delivery outcomes (V017 CHECK constraint).
+# Delivery outcomes (V018 CHECK constraint).
 HEARD_OUTCOMES = ("spoken", "interrupted")
 OPEN_OUTCOMES = ("pending", "sending")
 
 
 class LedgerMissing(RuntimeError):
-    """V017's tables are not in this database (Flyway has not run)."""
+    """V018's tables are not in this database (Flyway has not run)."""
 
 
 _LEDGER_TABLES = text(
@@ -77,7 +77,7 @@ async def recent_fires(
     * ``origin_room_id`` — the room the fire was SET in.
     * ``window_sec`` — only fires this recent (``fired_at``, database clock).
 
-    ``None`` when V017 is missing."""
+    ``None`` when V018 is missing."""
     if not await _ready(s, _LEDGER_TABLES):
         return None
     where: list[str] = []
@@ -284,7 +284,7 @@ def open_fire(fire: dict[str, Any]) -> dict[str, Any]:
 
 async def own_only_rooms(s: Any) -> dict[str, datetime]:
     """``{room_id: enabled_at}`` for every room whose "Only reminders for
-    this device" is ON. ``{}`` when V017 is missing (every room is OFF,
+    this device" is ON. ``{}`` when V018 is missing (every room is OFF,
     the default)."""
     if not await _ready(s, _FLAG_TABLE):
         return {}
@@ -297,7 +297,7 @@ async def own_only_rooms(s: Any) -> dict[str, datetime]:
 async def set_own_only(s: Any, room_id: str, on: bool) -> datetime | None:
     """Turn the flag ON (idempotent: a room already on keeps its original
     ``enabled_at``, which is returned) or OFF (returns ``None``). Raises
-    :class:`LedgerMissing` when V017 is missing."""
+    :class:`LedgerMissing` when V018 is missing."""
     if not await _ready(s, _FLAG_TABLE):
         raise LedgerMissing("timer_own_only_rooms is missing")
     if not on:

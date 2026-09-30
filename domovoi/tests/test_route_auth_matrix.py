@@ -435,7 +435,7 @@ def test_the_reads_left_open_are_still_open(label, path) -> None:
 
 # Open at the gate, tiered inside the handler: the route answers anyone,
 # but HOW MUCH depends on the caller's device check. Rule F1 (2026-09-30):
-# the timer fire ledger (V017) is 7 days of when every timer and reminder
+# the timer fire ledger (V018) is 7 days of when every timer and reminder
 # went off, each room's outcome and reason code (``in_call``,
 # ``recording``, ``capturing``) and which room said "stop the timer" and
 # when. Read whole only by the tier ``/ws/state`` admits (whose

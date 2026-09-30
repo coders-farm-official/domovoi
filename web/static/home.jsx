@@ -297,9 +297,9 @@ const HomeHooks = (() => {
 
   /* The house's timers against the SERVER's clock (server_now), plus the
    * ones that just went off. "done · kitchen" comes from the server's
-   * fire history (`fires`, V017) — never from a row vanishing, which is
+   * fire history (`fires`, V018) — never from a row vanishing, which is
    * what a cancel looks like too — and lingers a minute after the fire.
-   * No `fires` (an older server, V017 not applied): no done lines.
+   * No `fires` (an older server, V018 not applied): no done lines.
    * `cancelledRef` holds the rows this page has cancelled; they leave the
    * countdown before the re-read confirms it. */
   const useTimers = (data, cancelledRef) => {

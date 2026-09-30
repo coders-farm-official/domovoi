@@ -2,7 +2,7 @@
 
 When a timer or a reminder goes off, EVERY online satellite announces it —
 the room it was set in, and every other room that has not turned on "Only
-reminders for this device" (a row in V017's ``timer_own_only_rooms``). The
+reminders for this device" (a row in V018's ``timer_own_only_rooms``). The
 phone and the dashboard notify from the same record. Plain timers follow
 the same rule as reminders.
 
@@ -13,12 +13,12 @@ the app with no room meant nobody heard it and nothing said so.
 
 The pieces:
 
-* **The ledger** (:class:`FireLedger`, V017). Each watcher tick moves every
+* **The ledger** (:class:`FireLedger`, V018). Each watcher tick moves every
   due ``timers`` row into ``timer_fires`` in ONE transaction, with one
   ``timer_fire_deliveries`` row per room it is going to. Every later step
   (a room's announcement starting, ending, being skipped) is a short
   transaction of its own, and every write NOTIFYs ``timer_fires_changed``
-  for the web. Without V017 the core logs one warning and keeps the same
+  for the web. Without V018 the core logs one warning and keeps the same
   state in memory (:class:`MemoryFireLedger`): a missing migration never
   stops a timer from firing.
 
@@ -110,13 +110,13 @@ TTS_MAX_ATTEMPTS = 3
 # write that records how a room's announcement ended.
 LEDGER_RETRY_SEC = 1.0
 LEDGER_FINISH_BUDGET_SEC = 30.0
-# While V017 is missing the core looks for it again this often.
+# While V018 is missing the core looks for it again this often.
 PROBE_RETRY_SEC = 600.0
 # The retention prune runs at most this often.
 PRUNE_EVERY_SEC = 3600.0
 
-MISSING_V017_WARNING = (
-    "timer_fires missing — run Flyway (V017); timers still fire but nothing is recorded"
+MISSING_V018_WARNING = (
+    "timer_fires missing — run Flyway (V018); timers still fire but nothing is recorded"
 )
 
 HEARD_OUTCOMES = ("spoken", "interrupted")
@@ -257,8 +257,8 @@ async def _notify_fires(s: AsyncSession, payload: str) -> None:
     )
 
 
-async def _probe_v017() -> bool:
-    """Whether all three V017 tables exist. Raises when the database is
+async def _probe_v018() -> bool:
+    """Whether all three V018 tables exist. Raises when the database is
     unreachable (the caller decides what that means)."""
     async with session_scope() as s:
         row = (
@@ -288,7 +288,7 @@ def _record(row: Any) -> FireRecord:
 
 
 class FireLedger:
-    """The V017-backed ledger. Every method is its own short transaction;
+    """The V018-backed ledger. Every method is its own short transaction;
     every write that changed something NOTIFYs ``timer_fires_changed``."""
 
     async def pop_due(
@@ -569,7 +569,7 @@ class FireLedger:
 
 
 class MemoryFireLedger:
-    """The same ledger in memory, for a database without V017: timers still
+    """The same ledger in memory, for a database without V018: timers still
     fire and fan out, nothing is recorded, nothing is NOTIFYed on
     ``timer_fires_changed`` (``timers_changed`` still is, by the pop)."""
 
@@ -696,7 +696,7 @@ async def ack_recent_fire(
     kind: str | None = None,
 ) -> int | None:
     """If a fire (of ``kind``, when given) just went off for ``room_id``,
-    acknowledge it and return its id; else None (nothing recent, or V017
+    acknowledge it and return its id; else None (nothing recent, or V018
     missing). "Just went off" is any of:
 
     * it was announced here (sending, spoken or interrupted) in the last
@@ -944,7 +944,7 @@ class TimerDelivery:
         return is_target(room_id, origin, own_only) and self._house_wide(room_id, sess)
 
     async def ensure_ledger(self) -> Any:
-        """The ledger to use: V017 when its tables exist, else the
+        """The ledger to use: V018 when its tables exist, else the
         in-memory one (one warning, a fresh look every 10 minutes)."""
         if self._ledger_factory is not None:
             if self._ledger is None:
@@ -960,7 +960,7 @@ class TimerDelivery:
         ):
             return self._ledger
         try:
-            present = await _probe_v017()
+            present = await _probe_v018()
         except Exception:
             if self._ledger is None:
                 raise
@@ -969,11 +969,11 @@ class TimerDelivery:
         self._probed_at = now
         if present:
             if self._ledger is not None:
-                log.info("timer_fires found (V017); recording timer fires from now on")
+                log.info("timer_fires found (V018); recording timer fires from now on")
             self._ledger = FireLedger()
         else:
             if not self._warned_missing:
-                log.warning(MISSING_V017_WARNING)
+                log.warning(MISSING_V018_WARNING)
                 self._warned_missing = True
             if self._ledger is None:
                 self._ledger = MemoryFireLedger()

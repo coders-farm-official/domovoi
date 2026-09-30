@@ -57,7 +57,7 @@ async def _has_utterance_trigger(s: AsyncSession) -> bool:
 # NOTIFY only on COMMIT, so a rolled-back write never announces anything.
 TIMERS_CHANGED_CHANNEL = "timers_changed"
 
-# NOTIFY channel for any write to the V017 fire ledger (timer_fires /
+# NOTIFY channel for any write to the V018 fire ledger (timer_fires /
 # timer_fire_deliveries): a timer or reminder going off, each room's
 # announcement starting and ending, an acknowledgement. The web maps it to
 # the `timer_fires` realtime channel. The payload is informational (the

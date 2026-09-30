@@ -195,7 +195,7 @@ SCENARIOS = {
         "props": {"room": "kitchen"}, "fnProps": ["fire"], "setup": SETUP,
         "api": {
             "GET /api/satellites/kitchen/timers": [_TIMER_ROW],
-            "GET /api/timers/fires": {"__error": {"status": 503, "message": "503 V017"}},
+            "GET /api/timers/fires": {"__error": {"status": 503, "message": "503 V018"}},
         },
         "script": "h.render(); await h.settle(); h.rerender(); return { texts: h.text() };",
     },

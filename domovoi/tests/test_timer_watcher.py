@@ -9,7 +9,7 @@ these tests keep the watcher-level contract: the tick pops and counts, the
 two "timer fired" log lines are unchanged, the fired line's wording, and
 the old "dropping" paths now wait or record instead.
 
-Unit tier swaps the DB pop for canned rows (and V017 for the in-memory
+Unit tier swaps the DB pop for canned rows (and V018 for the in-memory
 ledger) so the rules run without Postgres. One DB-tier test drives a real
 timer from the handler through the ledger so the duration the fired line
 speaks is the one the handler stored.
@@ -75,7 +75,7 @@ def _row(
 @pytest.fixture
 def expire(monkeypatch):
     """Make the next tick() pop exactly ``rows`` without touching the DB:
-    V017 reads as missing (the in-memory ledger) and the pop is canned."""
+    V018 reads as missing (the in-memory ledger) and the pop is canned."""
 
     def _set(*rows: tuple) -> None:
         @asynccontextmanager
@@ -89,10 +89,10 @@ def expire(monkeypatch):
             async def pop_expired(self):
                 return list(rows)
 
-        async def _no_v017() -> bool:
+        async def _no_v018() -> bool:
             return False
 
-        monkeypatch.setattr(td, "_probe_v017", _no_v017)
+        monkeypatch.setattr(td, "_probe_v018", _no_v018)
         monkeypatch.setattr(td, "session_scope", _scope)
         monkeypatch.setattr(td, "TimerRepository", _Repo)
 
@@ -325,16 +325,16 @@ async def test_handler_timer_fires_with_its_spoken_duration(db_session) -> None:
     """The duration comes back out of the row exactly: the handler stamps
     created_at and expires_at from one instant, not NOW() at transaction
     start (which a slow tool-routed turn would skew)."""
-    from domovoi.tests.timer_fires_testkit import apply_v017
+    from domovoi.tests.timer_fires_testkit import apply_v018
 
     # The fire ledger is not in conftest's truncation set: start and end
     # empty, so no later core boot in this run resumes this fire.
-    await apply_v017()
+    await apply_v018()
     try:
         await _fire_a_handler_timer(db_session)
     finally:
         await db_session.rollback()
-        await apply_v017()
+        await apply_v018()
 
 
 async def _fire_a_handler_timer(db_session) -> None:
@@ -364,15 +364,15 @@ async def _fire_a_handler_timer(db_session) -> None:
 async def test_misheard_no_task_reminder_fires_as_a_reminder(db_session) -> None:
     """The live 2026-09-30 garage utterance, end to end: it used to store
     its own words and fire "Reminder: Better reminder for 10 minutes"."""
-    from domovoi.tests.timer_fires_testkit import apply_v017
+    from domovoi.tests.timer_fires_testkit import apply_v018
 
     # Like the timer test above: the fire ledger starts and ends empty.
-    await apply_v017()
+    await apply_v018()
     try:
         await _fire_a_misheard_reminder(db_session)
     finally:
         await db_session.rollback()
-        await apply_v017()
+        await apply_v018()
 
 
 async def _fire_a_misheard_reminder(db_session) -> None:

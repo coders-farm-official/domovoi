@@ -564,20 +564,20 @@ async def _rows(s) -> list[tuple]:
 
 
 @pytest.fixture
-async def v017_session(db_session):
-    from domovoi.tests.timer_fires_testkit import apply_v017
+async def v018_session(db_session):
+    from domovoi.tests.timer_fires_testkit import apply_v018
 
-    await apply_v017()
+    await apply_v018()
     yield db_session
     # End the test's transaction first: the TRUNCATE waits for its locks.
     await db_session.rollback()
-    await apply_v017()
+    await apply_v018()
 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_stop_the_timer_never_deletes_a_reminder(v017_session) -> None:
-    s = v017_session
+async def test_stop_the_timer_never_deletes_a_reminder(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="garage", label="call mom", message="call mom")
     await _timer(s, room="garage")
     await s.commit()
@@ -591,8 +591,8 @@ async def test_stop_the_timer_never_deletes_a_reminder(v017_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_labelled_cancel_stays_in_its_room_and_says_where_it_is(v017_session) -> None:
-    s = v017_session
+async def test_a_labelled_cancel_stays_in_its_room_and_says_where_it_is(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="garage", label="pasta")
     await s.commit()
 
@@ -608,8 +608,8 @@ async def test_a_labelled_cancel_stays_in_its_room_and_says_where_it_is(v017_ses
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_hint_names_every_room_it_is_in(v017_session) -> None:
-    s = v017_session
+async def test_the_hint_names_every_room_it_is_in(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="garage", label="the pasta")
     await _timer(s, room="living-room", label="the pasta")
     await s.commit()
@@ -623,8 +623,8 @@ async def test_the_hint_names_every_room_it_is_in(v017_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_everywhere_cancels_plain_timers_in_every_room_but_no_reminder(v017_session) -> None:
-    s = v017_session
+async def test_everywhere_cancels_plain_timers_in_every_room_but_no_reminder(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="garage", label="pasta")
     await _timer(s, room="office", label="pasta")
     await _timer(s, room="kitchen", label="pasta", message="pasta")
@@ -639,8 +639,8 @@ async def test_everywhere_cancels_plain_timers_in_every_room_but_no_reminder(v01
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_roomless_labelled_cancel_is_house_wide(v017_session) -> None:
-    s = v017_session
+async def test_a_roomless_labelled_cancel_is_house_wide(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="garage", label="pasta")
     await _timer(s, room=None, label="pasta")
     await s.commit()
@@ -653,8 +653,8 @@ async def test_a_roomless_labelled_cancel_is_house_wide(v017_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_tool_cancel_is_room_scoped_unless_everywhere(v017_session) -> None:
-    s = v017_session
+async def test_the_tool_cancel_is_room_scoped_unless_everywhere(v018_session) -> None:
+    s = v018_session
     handler = TimerHandler()
     await _timer(s, room="garage", label="pasta")
     await _timer(s, room="kitchen", label="pasta")
@@ -679,11 +679,11 @@ async def test_the_tool_cancel_is_room_scoped_unless_everywhere(v017_session) ->
 
 @requires_db
 @pytest.mark.asyncio
-async def test_status_never_calls_a_reminder_a_timer(v017_session) -> None:
+async def test_status_never_calls_a_reminder_a_timer(v018_session) -> None:
     # next_active is timers only. "How long left on the timer" reads the
     # room's plain timer first (wf/reminder-parse's next_for_status) and a
     # lone reminder as a reminder, never as "the call mom timer".
-    s = v017_session
+    s = v018_session
     await _timer(s, room="kitchen", label="call mom", message="call mom", minutes=2)
     await s.commit()
     assert await TimerRepository(s).next_active(room_id="kitchen") is None
@@ -732,10 +732,10 @@ async def _spoken_fire(s, *, spoken_ago_sec: float, kind: str = "timer",
 
 @requires_db
 @pytest.mark.asyncio
-async def test_stop_the_timer_right_after_a_fire_acknowledges_it(v017_session) -> None:
+async def test_stop_the_timer_right_after_a_fire_acknowledges_it(v018_session) -> None:
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     own = await _timer(s, room="kitchen", label="pasta")
     await s.commit()
     fid = await _spoken_fire(s, spoken_ago_sec=10)
@@ -766,10 +766,10 @@ async def test_stop_the_timer_right_after_a_fire_acknowledges_it(v017_session) -
 
 @requires_db
 @pytest.mark.asyncio
-async def test_stop_the_timer_31_seconds_later_is_a_normal_cancel(v017_session) -> None:
+async def test_stop_the_timer_31_seconds_later_is_a_normal_cancel(v018_session) -> None:
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     await _timer(s, room="kitchen", label="pasta")
     await s.commit()
     fid = await _spoken_fire(s, spoken_ago_sec=31)
@@ -785,8 +785,8 @@ async def test_stop_the_timer_31_seconds_later_is_a_normal_cancel(v017_session) 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_fire_heard_only_in_other_rooms_is_not_acknowledged_here(v017_session) -> None:
-    s = v017_session
+async def test_a_fire_heard_only_in_other_rooms_is_not_acknowledged_here(v018_session) -> None:
+    s = v018_session
     await _timer(s, room="office", label="eggs")
     await s.commit()
     # Spoken in garage and kitchen; the office was offline and never will.
@@ -798,14 +798,14 @@ async def test_a_fire_heard_only_in_other_rooms_is_not_acknowledged_here(v017_se
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_second_room_stopping_it_after_the_first_deletes_nothing(v017_session) -> None:
+async def test_a_second_room_stopping_it_after_the_first_deletes_nothing(v018_session) -> None:
     """The review's repro: garage and kitchen both hear the garage timer;
     the kitchen says "stop the timer", then the garage does. The fire was
     already acknowledged, and the garage's own running timer is not what
     it meant. (It fell through to a plain cancel and deleted it.)"""
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     eggs = await _timer(s, room="garage", label="eggs")
     pasta = await _timer(s, room="kitchen", label="pasta")
     await s.commit()
@@ -823,12 +823,12 @@ async def test_a_second_room_stopping_it_after_the_first_deletes_nothing(v017_se
 
 @requires_db
 @pytest.mark.asyncio
-async def test_stop_the_timer_after_a_reminder_still_cancels_this_rooms_timer(v017_session) -> None:
+async def test_stop_the_timer_after_a_reminder_still_cancels_this_rooms_timer(v018_session) -> None:
     """The acknowledgement is per kind: a REMINDER just announced here does
     not turn "cancel the timer" into "Okay." with the pasta still running."""
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     await _timer(s, room="kitchen", label="pasta")
     await s.commit()
     fid = await _spoken_fire(s, spoken_ago_sec=5, kind="reminder")
@@ -843,14 +843,14 @@ async def test_stop_the_timer_after_a_reminder_still_cancels_this_rooms_timer(v0
 
 @requires_db
 @pytest.mark.asyncio
-async def test_stop_the_timer_while_this_rooms_announcement_still_waits_acks_it(v017_session) -> None:
+async def test_stop_the_timer_while_this_rooms_announcement_still_waits_acks_it(v018_session) -> None:
     """The office is busy (its announcement still pending) but the phone
     and the dashboard already rang: "stop the timer" there means that fire.
     It used to delete the office's own running timer, and the waiting
     announcement still played afterwards."""
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     eggs = await _timer(s, room="office", label="eggs")
     await s.commit()
     fid = await _spoken_fire(s, spoken_ago_sec=5)
@@ -867,13 +867,13 @@ async def test_stop_the_timer_while_this_rooms_announcement_still_waits_acks_it(
 
 @requires_db
 @pytest.mark.asyncio
-async def test_only_the_origin_stops_its_own_waiting_announcement(v017_session) -> None:
+async def test_only_the_origin_stops_its_own_waiting_announcement(v018_session) -> None:
     """Owner rule 2: "The origin room always announces its own." The
     kitchen's acknowledgement cancels the office's waiting announcement but
     not the garage's; the garage's own "stop the timer" does."""
     from sqlalchemy import text
 
-    s = v017_session
+    s = v018_session
     fid = await _spoken_fire(s, spoken_ago_sec=5, garage="pending")
     m = _CANCEL_RE.match("stop the timer")
     assert (await TimerHandler()._cancel_from_match(m, _ctx("kitchen"), s)).text == "Okay."
@@ -926,7 +926,7 @@ async def test_the_tool_reads_everywhere_strictly(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_the_acknowledgement_is_asked_only_for_a_plain_room_cancel(monkeypatch) -> None:
-    """ack_recent_fire answers None when V017 is missing (or nothing is
+    """ack_recent_fire answers None when V018 is missing (or nothing is
     recent) and the cancel goes ahead as before. A labelled or house-wide
     cancel, or a turn with no room, never asks."""
     from domovoi import timer_delivery

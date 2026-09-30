@@ -1633,7 +1633,7 @@ const TimerFireAlerts = () => {
         if (from == null || r.fires.length < TIMER_FIRE_PAGE) break;
       }
     } catch {
-      // Quiet on purpose: 503 without the fire history (V017), 404 on an
+      // Quiet on purpose: 503 without the fire history (V018), 404 on an
       // older server, or the network away. The next reconnect asks again.
     } finally {
       busyRef.current = false;

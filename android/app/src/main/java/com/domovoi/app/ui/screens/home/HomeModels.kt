@@ -113,7 +113,7 @@ internal data class HomeFire(
 /** GET /api/timers: every timer in the house, soonest first, plus the
  *  server's clock — the one that decides when a timer fires — and the
  *  fires of the last ten minutes. `fires` is null from a server without
- *  the fire ledger (older, or V017 not applied): Home then falls back to
+ *  the fire ledger (older, or V018 not applied): Home then falls back to
  *  guessing from rows that vanish ([TimerBook]). */
 @Serializable
 internal data class HomeTimerList(

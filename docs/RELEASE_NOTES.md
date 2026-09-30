@@ -183,9 +183,9 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
 ### Do this once, after upgrading
 
 1. **Run Flyway** (`docker compose run --rm flyway` from `domovoi/`) for
-   **V017** — the record of every timer and reminder that goes off and
+   **V018** — the record of every timer and reminder that goes off and
    where it was heard, and the new per-satellite setting. Without it the
-   Domovoi server logs `timer_fires missing — run Flyway (V017); timers
+   Domovoi server logs `timer_fires missing — run Flyway (V018); timers
    still fire but nothing is recorded` once, timers still go off and still
    reach every room, but the dashboard and the phone have no history to
    show and the new setting can't be changed.
@@ -379,7 +379,7 @@ away: the new setting is off for every satellite.
   alarm under the exact-alarm permissions the timers already hold (only
   an exact alarm gets the network while the phone sleeps), restarted
   after a reboot and after an app update. No new permission.
-* Web: `GET /api/timers` gains `fires` (null without V017); new
+* Web: `GET /api/timers` gains `fires` (null without V018); new
   `GET /api/timers/fires`, `GET`/`PUT /api/satellites/{room}/timer-announcements`
   (PUT is device tier); satellite rows gain `timers_own_only`; realtime
   channel `timer_fires`. See docs/API_REFERENCE.md.

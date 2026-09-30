@@ -12,7 +12,7 @@ import kotlin.math.roundToLong
 // Android so the JVM tests can hold them to the contract.
 //
 // A fire is a timer or reminder that went off, as the web backend's ledger
-// (migration V017) records it. Every field is nullable with a default: the
+// (migration V018) records it. Every field is nullable with a default: the
 // backend evolves, and an older server sends none of this at all.
 // ---------------------------------------------------------------------------
 

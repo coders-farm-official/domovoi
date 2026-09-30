@@ -35,7 +35,7 @@ Channels emitted (core; enabled plugins add their own via manifest
   ``GET /api/timers`` lists, without its ``server_now``); fires when one
   is set, cancelled (by voice or from any dashboard) or goes off
 * ``timer_fires`` — the timers and reminders that went off in the last
-  hour (V017 fire history, newest first, at most 20) with where each was
+  hour (V018 fire history, newest first, at most 20) with where each was
   announced; fires when one goes off and as each room's announcement
   lands. Unmasked and whole, like ``timers``: this socket admits exactly
   the tier that reads the whole ledger over HTTP (rule F1,
@@ -163,7 +163,7 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # fires it from both cancel routes. Home's timers section rides the
     # resulting `timers.changed` event.
     "timers_changed": "timers",
-    # Timer fire history (V017). The core fires `timer_fires_changed` on
+    # Timer fire history (V018). The core fires `timer_fires_changed` on
     # every ledger write — a timer going off, each room's announcement
     # being claimed / spoken / given up on, an acknowledgement, the fire
     # settling. The dashboard's alert stack and Home's "done" lines ride
@@ -837,7 +837,7 @@ async def _snapshot_timer_fires() -> list[dict[str, Any]]:
     like ``timers``; a caller with no credential never gets this socket
     and reads the cut-down open view over HTTP). Nothing in it moves on
     its own, so the diff stays quiet between ledger writes; a fire only
-    drops out when it ages past the hour. ``[]`` when V017 is missing."""
+    drops out when it ages past the hour. ``[]`` when V018 is missing."""
     async with session_scope() as s:
         fires = await timer_fires.recent_fires(
             s, window_sec=TIMER_FIRES_PUSH_WINDOW_SEC, limit=TIMER_FIRES_PUSH_MAX

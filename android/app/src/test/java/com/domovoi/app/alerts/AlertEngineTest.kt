@@ -187,7 +187,7 @@ class AlertEngineTest {
 
     @Test fun catchUpFromAnOlderServerOrOneWithoutTheLedgerDoesNothing() = runBlocking {
         engine.catchUp() // 404
-        answer("/api/timers/fires?limit=50", """{"detail":"timer fire history needs database migration V017 — run Flyway"}""", code = 503)
+        answer("/api/timers/fires?limit=50", """{"detail":"timer fire history needs database migration V018 — run Flyway"}""", code = 503)
         engine.catchUp()
         assertEquals(emptyList<Post>(), sink.posts.toList())
         assertNull(store.seen(key))
@@ -442,7 +442,7 @@ class AlertEngineTest {
         assertEquals("call mom", loud().single().content.text)
 
         mirrorOne(id = 18)
-        answer("/api/timers/fires?timer_id=18&limit=1", """{"detail":"timer fire history needs database migration V017 — run Flyway"}""", code = 503)
+        answer("/api/timers/fires?timer_id=18&limit=1", """{"detail":"timer fire history needs database migration V018 — run Flyway"}""", code = 503)
         engine.onAlarm(18, key)
         assertEquals(listOf(SUB_UNCONFIRMED, SUB_UNCONFIRMED), loud().map { it.content.subText })
     }

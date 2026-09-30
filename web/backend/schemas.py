@@ -394,11 +394,11 @@ class Satellite(BaseModel):
     # The recordings themselves are admin-only (/api/captures).
     capture_commands: bool = False
     capture_since: datetime | None = None
-    # The per-satellite setting "Only reminders for this device" (V017
+    # The per-satellite setting "Only reminders for this device" (V018
     # timer_own_only_rooms): true = this room announces only the timers
     # and reminders set on it; false (the default) = every room's, named
     # by the room they came from. Open like the rest of the row: it says
-    # how a room behaves, not what anybody said. False when V017 is missing.
+    # how a room behaves, not what anybody said. False when V018 is missing.
     timers_own_only: bool = False
 
 
@@ -442,7 +442,7 @@ class TimerFireDelivery(BaseModel):
 
 
 class TimerFire(BaseModel):
-    """A timer or reminder that went off (V017 ``timer_fires``), and where
+    """A timer or reminder that went off (V018 ``timer_fires``), and where
     it was announced. ``room_id`` is the room it was SET in (null = set
     with no room). ``deliveries`` lists the origin room first, then the
     other rooms A→Z; ``heard_in`` is the rooms that heard it, same order.
@@ -483,7 +483,7 @@ class TimerList(BaseModel):
 
     ``fires`` is what went off in the last 10 minutes (newest first, at
     most 20) — the source of Home's "done · kitchen" lines. ``null`` means
-    the server keeps no fire history (V017 missing): a client falls back to
+    the server keeps no fire history (V018 missing): a client falls back to
     its own behaviour. ``[]`` means nothing fired lately. Without a
     household credential each fire comes cut down as on
     ``GET /api/timers/fires`` (rule F1)."""

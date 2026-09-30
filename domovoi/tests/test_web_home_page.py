@@ -15,7 +15,7 @@ of visitor and what it must never do:
   description, and no read of transcripts, notes, memories or people;
 * timers: the countdown against the server's clock, the elapsed bar, the
   "done · kitchen · heard in kitchen" line for a minute after one fires —
-  from the server's fire history (``fires``, V017), never from a row that
+  from the server's fire history (``fires``, V018), never from a row that
   vanished, which is what a cancel looks like too — and cancel through
   the pair prompt and replay;
 * rooms: per-room transport, the "play" sheet (favorites, shuffled),
@@ -505,7 +505,7 @@ SCENARIOS["timer_fires_open"] = scenario(
     house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
         _open(f) for f in (_F_HEARD, _F_ON_ITS_WAY, _F_NOWHERE, _F_OLD)]}}),
     _DONE_DOTS + "return { snap: w.__snap(h), dots: w.__doneDots() };")
-# An older server (or V017 not applied): `fires` null or absent — a row
+# An older server (or V018 not applied): `fires` null or absent — a row
 # that vanished past its time still draws no line.
 SCENARIOS["timer_fires_null"] = scenario(
     house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [_T_PASTA], "fires": None}}),

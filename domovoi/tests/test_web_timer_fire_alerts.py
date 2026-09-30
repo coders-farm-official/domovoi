@@ -22,7 +22,7 @@ timer because he was not in the garage. What these tests pin:
   (760px and below) only the newest card until ``+N more`` is tapped;
   ``role="alert"``; a card hides 30 minutes after the fire; clicking one
   opens Home;
-* the catch-up read is quiet: a 503 (no fire history, V017 missing) opens
+* the catch-up read is quiet: a 503 (no fire history, V018 missing) opens
   no prompt and raises nothing; while the socket is down (an unpaired
   tablet's is refused for good) it runs every 30 s instead;
 * a history that is BEHIND what this browser remembers (a rebuilt
@@ -239,7 +239,7 @@ SCENARIOS["first_load_empty_history"] = scenario(_EMPTY, "return snap();", ls=PA
 # follows the first-visit rule too, and nothing prompts.
 SCENARIOS["first_push_after_503"] = scenario(
     {"GET /api/timers/fires": {"__status": 503, "__body": {
-        "detail": "timer fire history needs database migration V017 — run Flyway"}}},
+        "detail": "timer fire history needs database migration V018 — run Flyway"}}},
     "const before = snap(); w.__wsOpen(); await w.__flush(h);"
     + emit(fire(21, age_ms=10 * SEC, label="tea"), fire(20, age_ms=20 * MIN, label="eggs"))
     + "return { before, after: snap() };",

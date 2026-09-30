@@ -1,4 +1,4 @@
--- V017 — Timers and reminders reach the whole house, and every one that
+-- V018 — Timers and reminders reach the whole house, and every one that
 -- goes off leaves a record.
 --
 -- Until now a timer or reminder that came due was DELETEd from `timers`

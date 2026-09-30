@@ -298,7 +298,7 @@ class Settings(BaseSettings):
 
     timer_watcher_interval_sec: float = 1.0
 
-    # ─── Timers & reminders: house-wide delivery (V017) ────────────────
+    # ─── Timers & reminders: house-wide delivery (V018) ────────────────
     # Every online satellite announces every timer and reminder, unless
     # its room turned on "Only reminders for this device"
     # (domovoi/timer_delivery.py). All four are read at use time ('hot').

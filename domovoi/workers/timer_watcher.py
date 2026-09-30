@@ -42,7 +42,7 @@ class TimerWatcher(Worker):
 
     The work lives in :class:`domovoi.timer_delivery.TimerDelivery`, which
     the core builds at startup (``app.state.timer_delivery``): each tick
-    moves every due row from ``timers`` into the V017 fire ledger in one
+    moves every due row from ``timers`` into the V018 fire ledger in one
     transaction, then announces it in the room it was set in and in every
     other connected room that has not turned on "Only reminders for this
     device" (``timer_own_only_rooms``). A busy room is waited for, an

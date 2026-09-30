@@ -55,7 +55,7 @@ data class Satellite(
     val full_duplex: Boolean = false,
     val in_call_with: String? = null,
     // "Only reminders for this device": ON = this room announces only the
-    // timers and reminders set on it. Absent (an older server, or no V017
+    // timers and reminders set on it. Absent (an older server, or no V018
     // yet) = OFF, the default for every room.
     val timers_own_only: Boolean = false,
 ) {

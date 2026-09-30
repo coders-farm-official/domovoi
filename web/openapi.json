@@ -4247,7 +4247,7 @@
           "satellites"
         ],
         "summary": "Get Timer Announcements",
-        "description": "Whether this room announces only the timers and reminders set on it\n(``own_only`` true) or every room's (false, the default), and since\nwhen. Open, like ``capture_commands``: anyone in the house may see how\na room behaves. 404 for a room this server has never known. Reads as\noff when V017 is missing.",
+        "description": "Whether this room announces only the timers and reminders set on it\n(``own_only`` true) or every room's (false, the default), and since\nwhen. Open, like ``capture_commands``: anyone in the house may see how\na room behaves. 404 for a room this server has never known. Reads as\noff when V018 is missing.",
         "operationId": "get_timer_announcements_api_satellites__room_id__timer_announcements_get",
         "parameters": [
           {
@@ -4288,7 +4288,7 @@
           "satellites"
         ],
         "summary": "Set Timer Announcements",
-        "description": "Turn \"Only reminders for this device\" on or off for this room.\nIdempotent: turning it on again keeps the original ``since``. Written\nstraight to the shared database; the core reads it each time a timer\nor reminder goes off. Works for an offline room. 404 unknown room,\n422 bad room id or body, 503 when V017 is missing.",
+        "description": "Turn \"Only reminders for this device\" on or off for this room.\nIdempotent: turning it on again keeps the original ``since``. Written\nstraight to the shared database; the core reads it each time a timer\nor reminder goes off. Works for an offline room. 404 unknown room,\n422 bad room id or body, 503 when V018 is missing.",
         "operationId": "set_timer_announcements_api_satellites__room_id__timer_announcements_put",
         "parameters": [
           {
@@ -4323,7 +4323,7 @@
             }
           },
           "503": {
-            "description": "V017 not applied"
+            "description": "V018 not applied"
           },
           "422": {
             "description": "Validation Error",
@@ -4935,7 +4935,7 @@
           "timers"
         ],
         "summary": "List All Timers",
-        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock, plus what went\noff in the last 10 minutes.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock the core fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel; a fire's progress\nfrom room to room on ``timer_fires``.\n\n``fires`` (newest first, at most 20) is where Home's \"done \u00b7 kitchen\"\nlines come from: a row that vanished was cancelled unless the ledger\nsays it fired. ``null`` when the server keeps no fire history (V017\nnot applied) \u2014 a client then falls back to its own behaviour.\n\nRule M1 (``_READS_REMINDER_TEXT``): without a household credential,\nevery reminder \u2014 timer rows and fires alike \u2014 answers with ``message``\nand ``label`` null and ``masked`` true. Rule F1\n(``_READS_FIRE_LEDGER``): without one, each fire is also cut down to\nwhat Home draws (``timer_fires.open_fire``: no per-room outcomes, no\nwho-stopped-it).",
+        "description": "Every running timer and reminder in the house, soonest first \u2014\nrows with no room included \u2014 plus the database clock, plus what went\noff in the last 10 minutes.\n\nOpen, like the per-room read above: household state. The dashboard's\nHome page counts these down, so the answer carries ``server_now`` (the\nclock the core fires against) and each row its ``created_at``.\nChanges push on the ``timers`` realtime channel; a fire's progress\nfrom room to room on ``timer_fires``.\n\n``fires`` (newest first, at most 20) is where Home's \"done \u00b7 kitchen\"\nlines come from: a row that vanished was cancelled unless the ledger\nsays it fired. ``null`` when the server keeps no fire history (V018\nnot applied) \u2014 a client then falls back to its own behaviour.\n\nRule M1 (``_READS_REMINDER_TEXT``): without a household credential,\nevery reminder \u2014 timer rows and fires alike \u2014 answers with ``message``\nand ``label`` null and ``masked`` true. Rule F1\n(``_READS_FIRE_LEDGER``): without one, each fire is also cut down to\nwhat Home draws (``timer_fires.open_fire``: no per-room outcomes, no\nwho-stopped-it).",
         "operationId": "list_all_timers_api_timers_get",
         "responses": {
           "200": {
@@ -4957,7 +4957,7 @@
           "timers"
         ],
         "summary": "List Timer Fires",
-        "description": "Timers and reminders that went off (kept 7 days), and where each\nwas announced.\n\n* ``since_id`` \u2014 only fires with a larger id, OLDEST first: how a\n  client that was away catches up. Without it, newest first.\n* ``room_id`` \u2014 the room the timer or reminder was SET in.\n* ``timer_id`` \u2014 the fire of one timer (the phone's alarm confirm).\n\nOpen, but tiered in here (rules M1 and F1). A household credential\n(``_READS_FIRE_LEDGER``: the device token, an admin Bearer, the\ndashboard cookie, the pre-setup grace \u2014 the Android app, a paired\nshared screen, a signed-in dashboard) reads the whole ledger,\n``window_sec: null``. Anyone else reads the last 10 minutes only\n(``window_sec: 600``), each fire cut down by ``timer_fires.open_fire``\n\u2014 what an unpaired kitchen tablet's Home and alert cards draw. The\ncaller is ALWAYS classified here, since how far back the answer\nreaches depends on it (and so says whether a presented token is\ngood: the classifier's backoff applies).\n\n503 \u2014 not an empty list \u2014 when the server keeps no fire history\n(V017 missing), so a client can tell \"unknown\" from \"none\".",
+        "description": "Timers and reminders that went off (kept 7 days), and where each\nwas announced.\n\n* ``since_id`` \u2014 only fires with a larger id, OLDEST first: how a\n  client that was away catches up. Without it, newest first.\n* ``room_id`` \u2014 the room the timer or reminder was SET in.\n* ``timer_id`` \u2014 the fire of one timer (the phone's alarm confirm).\n\nOpen, but tiered in here (rules M1 and F1). A household credential\n(``_READS_FIRE_LEDGER``: the device token, an admin Bearer, the\ndashboard cookie, the pre-setup grace \u2014 the Android app, a paired\nshared screen, a signed-in dashboard) reads the whole ledger,\n``window_sec: null``. Anyone else reads the last 10 minutes only\n(``window_sec: 600``), each fire cut down by ``timer_fires.open_fire``\n\u2014 what an unpaired kitchen tablet's Home and alert cards draw. The\ncaller is ALWAYS classified here, since how far back the answer\nreaches depends on it (and so says whether a presented token is\ngood: the classifier's backoff applies).\n\n503 \u2014 not an empty list \u2014 when the server keeps no fire history\n(V018 missing), so a client can tell \"unknown\" from \"none\".",
         "operationId": "list_timer_fires_api_timers_fires_get",
         "parameters": [
           {
@@ -5038,7 +5038,7 @@
             }
           },
           "503": {
-            "description": "V017 not applied: this server keeps no fire history"
+            "description": "V018 not applied: this server keeps no fire history"
           },
           "422": {
             "description": "Validation Error",
@@ -15657,7 +15657,7 @@
           "fired_at"
         ],
         "title": "TimerFire",
-        "description": "A timer or reminder that went off (V017 ``timer_fires``), and where\nit was announced. ``room_id`` is the room it was SET in (null = set\nwith no room). ``deliveries`` lists the origin room first, then the\nother rooms A\u2192Z; ``heard_in`` is the rooms that heard it, same order.\n``summary`` is computed by the server (\"heard in garage, kitchen \u00b7\nstill announcing\") and shown verbatim. The words the core spoke are\nnever part of this shape.\n\nTo a caller with no household credential (rule F1) a fire comes cut\ndown: ``deliveries`` ``[]``, ``acked_at`` / ``acked_by`` /\n``settled_at`` null, no `` \u00b7 stopped in \u2026`` in ``summary``, and a\nreminder's words masked (rule M1)."
+        "description": "A timer or reminder that went off (V018 ``timer_fires``), and where\nit was announced. ``room_id`` is the room it was SET in (null = set\nwith no room). ``deliveries`` lists the origin room first, then the\nother rooms A\u2192Z; ``heard_in`` is the rooms that heard it, same order.\n``summary`` is computed by the server (\"heard in garage, kitchen \u00b7\nstill announcing\") and shown verbatim. The words the core spoke are\nnever part of this shape.\n\nTo a caller with no household credential (rule F1) a fire comes cut\ndown: ``deliveries`` ``[]``, ``acked_at`` / ``acked_by`` /\n``settled_at`` null, no `` \u00b7 stopped in \u2026`` in ``summary``, and a\nreminder's words masked (rule M1)."
       },
       "TimerFireDelivery": {
         "properties": {
@@ -15775,7 +15775,7 @@
           "timers"
         ],
         "title": "TimerList",
-        "description": "Every timer and reminder in the house, soonest first.\n\n``server_now`` is the database clock at the moment of the read \u2014 the\nclock that decides when a timer fires \u2014 so a page counts down against\nthe server rather than a phone whose clock is minutes off.\n\n``fires`` is what went off in the last 10 minutes (newest first, at\nmost 20) \u2014 the source of Home's \"done \u00b7 kitchen\" lines. ``null`` means\nthe server keeps no fire history (V017 missing): a client falls back to\nits own behaviour. ``[]`` means nothing fired lately. Without a\nhousehold credential each fire comes cut down as on\n``GET /api/timers/fires`` (rule F1)."
+        "description": "Every timer and reminder in the house, soonest first.\n\n``server_now`` is the database clock at the moment of the read \u2014 the\nclock that decides when a timer fires \u2014 so a page counts down against\nthe server rather than a phone whose clock is minutes off.\n\n``fires`` is what went off in the last 10 minutes (newest first, at\nmost 20) \u2014 the source of Home's \"done \u00b7 kitchen\" lines. ``null`` means\nthe server keeps no fire history (V018 missing): a client falls back to\nits own behaviour. ``[]`` means nothing fired lately. Without a\nhousehold credential each fire comes cut down as on\n``GET /api/timers/fires`` (rule F1)."
       },
       "Track": {
         "properties": {

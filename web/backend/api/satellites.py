@@ -19,7 +19,7 @@ the Domovoi server's ``app.state.active_sessions`` to do TTS fanout.
 Timers: every open timer read holds back a REMINDER's words (``message``
 and ``label``) from a caller with no household credential — rule M1, see
 ``_READS_REMINDER_TEXT`` — and says so with ``masked``. Timer fire
-history (V017, :mod:`web.backend.timer_fires`) is served beside them:
+history (V018, :mod:`web.backend.timer_fires`) is served beside them:
 whole to that same tier, and to anyone else only the last 10 minutes, each
 fire cut down to what Home draws — rule F1, see ``_READS_FIRE_LEDGER``.
 Each room's "Only reminders for this device" flag is read (open) and
@@ -628,7 +628,7 @@ async def cancel_timer(room_id: str, timer_id: int) -> None:
 # reminders set with NO room were masked.)
 _READS_REMINDER_TEXT = ("ok", "admin", "pre-setup", "cookie-only")
 
-# Rule F1. Who reads the whole fire ledger (V017): the same tier — and
+# Rule F1. Who reads the whole fire ledger (V018): the same tier — and
 # exactly the tier /ws/state admits, whose `timer_fires` push carries the
 # ledger unmasked. The ledger is 7 days of when every timer and reminder
 # went off, each room's outcome and reason code, and which room said "stop
@@ -644,8 +644,8 @@ _READS_FIRE_LEDGER = _READS_REMINDER_TEXT
 _TIMERS_FIRES_WINDOW_SEC = timer_fires.OPEN_WINDOW_SEC
 _TIMERS_FIRES_MAX = 20
 
-_V017_MISSING_FIRES = "timer fire history needs database migration V017 — run Flyway"
-_V017_MISSING_FLAG = "timer announcements need database migration V017 — run Flyway"
+_V018_MISSING_FIRES = "timer fire history needs database migration V018 — run Flyway"
+_V018_MISSING_FLAG = "timer announcements need database migration V018 — run Flyway"
 
 
 def _mask_timer(t: Timer) -> Timer:
@@ -688,7 +688,7 @@ async def list_all_timers(request: Request) -> TimerList:
 
     ``fires`` (newest first, at most 20) is where Home's "done · kitchen"
     lines come from: a row that vanished was cancelled unless the ledger
-    says it fired. ``null`` when the server keeps no fire history (V017
+    says it fired. ``null`` when the server keeps no fire history (V018
     not applied) — a client then falls back to its own behaviour.
 
     Rule M1 (``_READS_REMINDER_TEXT``): without a household credential,
@@ -723,7 +723,7 @@ async def list_all_timers(request: Request) -> TimerList:
 @timers_router.get(
     "/fires",
     response_model=TimerFireList,
-    responses={503: {"description": "V017 not applied: this server keeps no fire history"}},
+    responses={503: {"description": "V018 not applied: this server keeps no fire history"}},
 )
 async def list_timer_fires(
     request: Request,
@@ -754,7 +754,7 @@ async def list_timer_fires(
     good: the classifier's backoff applies).
 
     503 — not an empty list — when the server keeps no fire history
-    (V017 missing), so a client can tell "unknown" from "none"."""
+    (V018 missing), so a client can tell "unknown" from "none"."""
     ledger = await check_device_request(request) in _READS_FIRE_LEDGER
     window = None if ledger else timer_fires.OPEN_WINDOW_SEC
     async with session_scope() as s:
@@ -764,7 +764,7 @@ async def list_timer_fires(
             window_sec=window,
         )
     if fires is None:
-        raise HTTPException(status_code=503, detail=_V017_MISSING_FIRES)
+        raise HTTPException(status_code=503, detail=_V018_MISSING_FIRES)
     if not ledger:
         fires = [timer_fires.open_fire(f) for f in fires]
     return TimerFireList(
@@ -790,7 +790,7 @@ async def cancel_any_timer(timer_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"timer {timer_id} not found")
 
 
-# ─── "Only reminders for this device" (per room, V017) ─────────────────
+# ─── "Only reminders for this device" (per room, V018) ─────────────────
 
 
 _ROOM_MAX = 120
@@ -807,7 +807,7 @@ async def get_timer_announcements(room_id: str) -> TimerAnnouncements:
     (``own_only`` true) or every room's (false, the default), and since
     when. Open, like ``capture_commands``: anyone in the house may see how
     a room behaves. 404 for a room this server has never known. Reads as
-    off when V017 is missing."""
+    off when V018 is missing."""
     _check_room_id(room_id)
     async with session_scope() as s:
         if not await captures_api._room_known(s, room_id):
@@ -819,7 +819,7 @@ async def get_timer_announcements(room_id: str) -> TimerAnnouncements:
 @router.put(
     "/{room_id}/timer-announcements",
     response_model=TimerAnnouncements,
-    responses={503: {"description": "V017 not applied"}},
+    responses={503: {"description": "V018 not applied"}},
     # Device tier, like the room's other household preferences (volume,
     # room label, announce, timer cancel). It only changes what a room
     # SAYS: on, the room says less, and the default already speaks every
@@ -836,7 +836,7 @@ async def set_timer_announcements(
     Idempotent: turning it on again keeps the original ``since``. Written
     straight to the shared database; the core reads it each time a timer
     or reminder goes off. Works for an offline room. 404 unknown room,
-    422 bad room id or body, 503 when V017 is missing."""
+    422 bad room id or body, 503 when V018 is missing."""
     _check_room_id(room_id)
     try:
         async with session_scope() as s:
@@ -844,7 +844,7 @@ async def set_timer_announcements(
                 raise HTTPException(status_code=404, detail=f"unknown room {room_id!r}")
             since = await timer_fires.set_own_only(s, room_id, body.own_only)
     except timer_fires.LedgerMissing:
-        raise HTTPException(status_code=503, detail=_V017_MISSING_FLAG)
+        raise HTTPException(status_code=503, detail=_V018_MISSING_FLAG)
     log.info("timer announcements: room %s own_only=%s", room_id, body.own_only)
     return TimerAnnouncements(room_id=room_id, own_only=body.own_only, since=since)
 
@@ -1319,7 +1319,7 @@ async def _satellite_for(
         # since when — never what it recorded.
         capture_commands=room_id in (captures or {}),
         capture_since=(captures or {}).get(room_id),
-        # "Only reminders for this device" (V017): what this room announces.
+        # "Only reminders for this device" (V018): what this room announces.
         timers_own_only=room_id in (own_only or {}),
     )
 

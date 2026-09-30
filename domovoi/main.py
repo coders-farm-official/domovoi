@@ -2436,8 +2436,8 @@ async def admin_preseed_satellite_pairing(
 
 
 async def _forget_timer_scope(room_id: str) -> None:
-    """Drop a retired room's "Only reminders for this device" row (V017's
-    ``timer_own_only_rooms``). A database without V017 has nothing to
+    """Drop a retired room's "Only reminders for this device" row (V018's
+    ``timer_own_only_rooms``). A database without V018 has nothing to
     forget; any other failure is logged, never fatal to the retirement."""
     try:
         async with session_scope() as s:
@@ -2533,7 +2533,7 @@ async def admin_delete_satellite(
     from domovoi import command_captures
 
     removed_captures = await command_captures.forget_room(room_id)
-    # Its "Only reminders for this device" goes too (V017), so a satellite
+    # Its "Only reminders for this device" goes too (V018), so a satellite
     # reusing the name starts with the default. Fired-timer history stays.
     await _forget_timer_scope(room_id)
 

@@ -950,7 +950,7 @@ const SatTimerFireTitle = (f, shared) => {
   return total < 90 ? `${Math.round(total)}s timer` : `${Math.round(total / 60)} min timer`;
 };
 
-/* What went off that was SET in this room lately (fire history, V017),
+/* What went off that was SET in this room lately (fire history, V018),
  * and where it was heard. Nothing when the server keeps no history. A
  * browser with no household credential is served only the last 10
  * minutes (rule F1), so on an unpaired screen the list is short. */

@@ -20,7 +20,7 @@ async def _truncate_between_tests():
     await clear_fire_ledger()
     yield
     # These tests run the real lifespan: the timer watcher records what it
-    # fires (V017), and an unsettled fire left behind would be resumed —
+    # fires (V018), and an unsettled fire left behind would be resumed —
     # and announced — by the next lifespan in the run.
     await clear_fire_ledger()
 
