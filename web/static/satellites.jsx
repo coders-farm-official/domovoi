@@ -1024,6 +1024,23 @@ const RoomRecentlyPlayedBody = ({ room, fire }) => {
   );
 };
 
+// A setting this satellite's code predates (`supported: false` — missing
+// from the report it sent): shown, but not editable. Saved, an older Pi
+// would write it to config.toml and restart, then ignore it.
+const SatelliteSettingNeedsUpgrade = ({ f }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)' }}>
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-muted)' }}>{f.label}</span>
+      <span title={f.help} style={{ color: 'var(--fg-subtle)', cursor: 'help', display: 'inline-flex' }}>
+        <Icon name="info" size={13}/>
+      </span>
+    </div>
+    <span title="This satellite's software doesn't have this setting yet. Upgrade it from its Overview tab." style={{ flexShrink: 0 }}>
+      <Pill tone="warn">needs a satellite upgrade</Pill>
+    </span>
+  </div>
+);
+
 // Per-satellite config editor. Reuses the global ConfigField + _groupBy
 // from components.jsx (same field UI as the server gear). Saving
 // pushes edits to the Pi, which rewrites config.toml and restarts.
@@ -1063,7 +1080,9 @@ const RoomSettingsBody = ({ room, fire }) => {
     return Object.keys(grouped).map(group => (
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
-        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} onChange={v => setEdit(f.name, v)}/>)}
+        {grouped[group].map(f => f.supported === false
+          ? <SatelliteSettingNeedsUpgrade key={f.name} f={f}/>
+          : <ConfigField key={f.name} f={f} value={valueOf(f)} onChange={v => setEdit(f.name, v)}/>)}
       </div>
     ));
   };

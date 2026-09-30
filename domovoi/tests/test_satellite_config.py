@@ -3,6 +3,8 @@ contract that the core schema keys match what the Pi reports."""
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from domovoi.satellite_config_schema import (
@@ -138,3 +140,74 @@ async def test_the_config_read_carries_the_choice_labels(monkeypatch) -> None:
     monkeypatch.setattr(main.app.state, "satellite_config", {"office": {}}, raising=False)
     body = await main.admin_get_satellite_config("office")
     assert {f["name"]: f for f in body["fields"]}["wake.ack_mode"]["value"] is None
+
+
+def _an_older_satellites_report() -> dict:
+    """What a 7f5d2cd satellite reports: everything but the settings added
+    after it (listen.speech_pause_ms, 2026-09-30)."""
+    return {name: None for name in FIELD_BY_NAME if name != "listen.speech_pause_ms"}
+
+
+@pytest.mark.asyncio
+async def test_a_setting_the_satellite_predates_is_marked_unsupported(monkeypatch) -> None:
+    """A satellite reports every setting it has (null when unset), so one
+    missing from its report is one its code doesn't know. The dashboard
+    must not offer to edit it: the Pi would write it, restart, and ignore
+    it."""
+    from domovoi import main
+
+    monkeypatch.setattr(main.app.state, "active_sessions", {"office": object()}, raising=False)
+    monkeypatch.setattr(main.app.state, "satellite_config", {"office": _an_older_satellites_report()},
+                        raising=False)
+    by_name = {f["name"]: f for f in (await main.admin_get_satellite_config("office"))["fields"]}
+    assert by_name["listen.speech_pause_ms"]["supported"] is False
+    assert by_name["listen.speech_pause_ms"]["value"] is None
+    assert by_name["listen.silence_timeout"]["supported"] is True
+    assert by_name["audio.input_device"]["supported"] is True        # reported as null: it has it
+    # Nothing reported yet: unknown, not unsupported.
+    monkeypatch.setattr(main.app.state, "satellite_config", {}, raising=False)
+    by_name = {f["name"]: f for f in (await main.admin_get_satellite_config("office"))["fields"]}
+    assert by_name["listen.speech_pause_ms"]["supported"] is None
+
+
+@pytest.mark.asyncio
+async def test_saving_a_setting_the_satellite_predates_is_refused(monkeypatch) -> None:
+    from domovoi import main
+
+    sent: list[dict] = []
+
+    class _Session:
+        async def send_config(self, changes):
+            sent.append(dict(changes))
+
+    @asynccontextmanager
+    async def _scope():
+        class _S:
+            async def execute(self, *a, **kw):
+                return None
+        yield _S()
+
+    class _Log:
+        def __init__(self, s):
+            pass
+
+        async def log(self, **kw):
+            return 1
+
+    monkeypatch.setattr(main.app.state, "active_sessions", {"office": _Session()}, raising=False)
+    monkeypatch.setattr(main.app.state, "satellite_config", {"office": _an_older_satellites_report()},
+                        raising=False)
+    monkeypatch.setattr(main, "session_scope", _scope)
+    monkeypatch.setattr("domovoi.db.repositories.IntentLogRepository", _Log)
+    body = main._AdminSatelliteConfigBody(changes={"listen.speech_pause_ms": 180})
+    out = await main.admin_update_satellite_config("office", body)
+    assert out["sent"] == [] and out["restarting"] is False
+    assert "upgrade it first" in out["rejected"]["listen.speech_pause_ms"]
+    assert sent == []
+    # A setting it has goes through, alongside the refused one.
+    body = main._AdminSatelliteConfigBody(
+        changes={"listen.speech_pause_ms": 180, "listen.silence_timeout": 0.8},
+    )
+    out = await main.admin_update_satellite_config("office", body)
+    assert out["sent"] == ["listen.silence_timeout"] and out["restarting"] is True
+    assert sent == [{"listen.silence_timeout": 0.8}]

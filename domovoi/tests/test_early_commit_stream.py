@@ -406,6 +406,122 @@ def test_speech_after_the_commit_is_logged_as_a_cut_in(commit_on, caplog) -> Non
     assert any("cut in on speech" in r.getMessage() for r in caplog.records)
 
 
+def _commit_a_timer(ws) -> int:
+    frames = _speak_then_pause(ws)
+    _send(ws, [QUIET] * (HOLD_B_FRAMES - 8))
+    frames += HOLD_B_FRAMES - 8
+    assert ws.receive_json() == {"type": "end_capture", "utt": 1}
+    _finish_turn(ws)
+    return frames
+
+
+def test_speech_after_the_capture_ended_counts_as_a_cut_in(commit_on, caplog) -> None:
+    """The frames on their way when the satellite stopped were silent, but
+    it listened on and heard the person go on ("... for the pasta") 150 ms
+    after its capture ended — 2 frames past the server's stop, so 210 ms
+    after the server stopped listening. Before satellites listened on,
+    this was invisible."""
+    caplog.set_level(logging.INFO, logger="domovoi.streaming")
+    commit_on["whisper"] = _WatchedWhisper("Set a timer for 10 minutes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _commit_a_timer(ws)
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames + 2, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            "voiced_after_end_ms": 150, "listened_after_end_ms": 150,
+        }))
+        _barrier(ws)
+    (timings,) = commit_on["timings"]
+    assert timings.stages["post_commit_voiced_ms"] == 0
+    assert timings.stages["post_commit_resume_ms"] == 2 * 30 + 150
+    assert timings.stages["post_commit_listened_ms"] == 2 * 30 + 150
+    assert any("spoke again 210 ms after the server stopped listening" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_a_satellite_that_listened_on_and_heard_nothing_records_how_long(commit_on, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="domovoi.streaming")
+    commit_on["whisper"] = _WatchedWhisper("Set a timer for 10 minutes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _commit_a_timer(ws)
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames + 1, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            "voiced_after_end_ms": 0, "listened_after_end_ms": 90,
+        }))
+        _barrier(ws)
+    (timings,) = commit_on["timings"]
+    assert timings.stages["post_commit_voiced_ms"] == 0
+    assert timings.stages["post_commit_listened_ms"] == 30 + 90
+    assert "post_commit_resume_ms" not in timings.stages
+    assert not any("cut in on speech" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "watch",
+    [
+        {"voiced_after_end_ms": "150", "listened_after_end_ms": 150.0},
+        {"voiced_after_end_ms": -30, "listened_after_end_ms": True},
+        {"voiced_after_end_ms": 150, "listened_after_end_ms": 999_999},
+        {"voiced_after_end_ms": 150},                     # no listened: not a watch report
+    ],
+)
+def test_a_watch_report_that_is_not_one_is_ignored(commit_on, watch) -> None:
+    commit_on["whisper"] = _WatchedWhisper("Set a timer for 10 minutes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _commit_a_timer(ws)
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            **watch,
+        }))
+        _barrier(ws)
+    (timings,) = commit_on["timings"]
+    assert timings.stages["post_commit_voiced_ms"] == 0
+    assert "post_commit_listened_ms" not in timings.stages
+    assert "post_commit_resume_ms" not in timings.stages
+
+
+def test_the_late_stages_reach_the_row_after_its_post_route_write(commit_on, monkeypatch) -> None:
+    """A satellite that listens on sends its utterance_end up to its silence
+    timeout after the server stopped listening — often after the turn's
+    post-route write has gone. The late stages are then written on their
+    own, into the same row."""
+    writes: list = []
+
+    async def _write(self, row_id, patch):
+        writes.append((row_id, dict(patch)))
+
+    monkeypatch.setattr(StreamSession, "_write_post_route_timings", _write)
+
+    async def _route(intent, ctx, s):
+        from domovoi.models import Response
+
+        ctx.timings.intents_log_id = 4242
+        commit_on["timings"].append(ctx.timings)
+        return Response(text="Done.", session_id=None, matched_handler="timer",
+                        matched_path="fast", online=True)
+
+    monkeypatch.setattr("domovoi.streaming.route", _route)
+    commit_on["whisper"] = _WatchedWhisper("Set a timer for 10 minutes.")
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        frames = _commit_a_timer(ws)
+        _barrier(ws)
+        assert writes and "post_commit_listened_ms" not in writes[0][1]   # the turn's own
+        ws.send_text(json.dumps({
+            "type": "utterance_end", "greeting_played": False, "utt": 1,
+            "frames": frames, "last_voiced_frame": 19, "exit_reason": "server_endpoint",
+            "voiced_after_end_ms": 60, "listened_after_end_ms": 60,
+        }))
+        _barrier(ws)
+    assert (4242, {"post_commit_voiced_ms": 0, "post_commit_listened_ms": 60,
+                   "post_commit_resume_ms": 60}) in writes
+
+
 def test_a_late_utterance_end_for_another_capture_is_ignored(commit_on) -> None:
     commit_on["whisper"] = _WatchedWhisper("Pause the music.")
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
@@ -491,10 +607,16 @@ def test_the_summary_counts_early_commits_and_speculative_transcripts() -> None:
           "early_commit": "A", "post_commit_voiced_ms": 0}, "fast"),
         ({"stt_ms": 700, "stt_reused": True, "speculative_decodes": 2,
           "early_commit": "B", "post_commit_voiced_ms": 120}, "fast"),
+        # listened on after the commit: heard nothing, then heard speech
+        ({"stt_ms": 700, "stt_reused": True, "speculative_decodes": 1,
+          "early_commit": "B", "post_commit_voiced_ms": 0, "post_commit_listened_ms": 120}, "fast"),
+        ({"stt_ms": 700, "stt_reused": True, "speculative_decodes": 1,
+          "early_commit": "A", "post_commit_voiced_ms": 0, "post_commit_listened_ms": 210,
+          "post_commit_resume_ms": 210}, "fast"),
         ({"stt_ms": 700, "stt_reused": False, "speculative_decodes": 1}, "qa"),
         ({"stt_ms": 700}, "qa"),                              # nothing speculative
         ({"stt_ms": 700, "early_commit": "Z"}, "fast"),       # not a tier
     ]
     s = summarize(rows)
-    assert s["speculative"] == {"turns": 3, "reused": 2, "decodes": 4}
-    assert s["early_commit"] == {"turns": 2, "A": 1, "B": 1, "cut_in": 1}
+    assert s["speculative"] == {"turns": 5, "reused": 4, "decodes": 6}
+    assert s["early_commit"] == {"turns": 4, "A": 2, "B": 2, "cut_in": 2, "watched": 2}

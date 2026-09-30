@@ -1997,7 +1997,14 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
     reported via config_status) for the per-satellite Settings tab. 404 when
-    the room isn't connected — you can't edit an offline Pi."""
+    the room isn't connected — you can't edit an offline Pi.
+
+    ``supported`` per field: whether this satellite's code has the setting.
+    A satellite reports every setting it has (null when unset), so a key
+    missing from a report it did send is one it predates — the dashboard
+    shows it as needing an upgrade instead of offering an edit the Pi would
+    write to config.toml, restart for, and then ignore. null until the
+    satellite has reported."""
     from domovoi.satellite_config_schema import EDITABLE_FIELDS
 
     if room_id not in app.state.active_sessions:
@@ -2011,6 +2018,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
             "choice_labels": spec.choice_labels,
             "unit": spec.unit, "help": spec.help,
             "value": reported.get(spec.name),
+            "supported": (spec.name in reported) if reported else None,
         }
         for spec in EDITABLE_FIELDS
     ]
@@ -2048,6 +2056,10 @@ async def admin_update_satellite_config(
     target = app.state.active_sessions.get(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    # A setting missing from the satellite's own report is one its code
+    # predates (see admin_get_satellite_config): an older Pi would write it
+    # to config.toml and restart, then ignore it.
+    reported: dict[str, Any] = app.state.satellite_config.get(room_id) or {}
 
     accepted: dict[str, Any] = {}
     rejected: dict[str, str] = {}
@@ -2055,6 +2067,9 @@ async def admin_update_satellite_config(
         spec = FIELD_BY_NAME.get(name)
         if spec is None:
             rejected[name] = "not an editable setting"
+            continue
+        if reported and name not in reported:
+            rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
             continue
         try:
             accepted[name] = coerce_and_validate(spec, raw)

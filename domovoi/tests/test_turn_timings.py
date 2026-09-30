@@ -209,13 +209,15 @@ def test_summarize_counts_the_window_each_transcript_came_from() -> None:
     rows = (
         [({"stt_ms": 230, "stt_window_s": 10}, "fast")] * 4
         + [({"stt_ms": 900, "stt_window_s": 30}, "qa")]
+        # heard again on the 30 s path (the second hearing): full, and rechecked
+        + [({"stt_ms": 1130, "stt_window_s": 30, "stt_rechecked": True, "stt_recheck_ms": 900}, "llm")]
         + [({"stt_ms": 900}, "fast"), ({"stt_window_s": "10"}, "fast"),
-           ({"stt_window_s": True}, "fast")]
+           ({"stt_window_s": True}, "fast"), ({"stt_rechecked": True}, "qa")]
     )
     s = summarize(rows)
-    assert s["stt_window"] == {"short": 4, "full": 1}
-    assert "stt_window_s" not in s["stages"]
-    assert summarize([])["stt_window"] == {"short": 0, "full": 0}
+    assert s["stt_window"] == {"short": 4, "full": 2, "rechecked": 1}
+    assert "stt_window_s" not in s["stages"] and "stt_recheck_ms" not in s["stages"]
+    assert summarize([])["stt_window"] == {"short": 0, "full": 0, "rechecked": 0}
 
 
 def test_the_log_line_says_which_window() -> None:
@@ -878,7 +880,7 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
                          "whisper_seen", "whisper", "speculative", "early_commit",
                          "stt_window", "capture_timing"}
     assert body["speculative"] == {"turns": 0, "reused": 0, "decodes": 0}
-    assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
+    assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0, "watched": 0}
     assert body["turns"] == 6 and body["room"] is None and body["limit"] == 1000
     assert body["stages"]["stt_ms"] == {"count": 6, "p50": 350, "p95": 1250, "max": 1500}
     assert body["stages"]["identify_ms"] == {"count": 1, "p50": 60, "p95": 60, "max": 60}

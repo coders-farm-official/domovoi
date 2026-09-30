@@ -60,7 +60,14 @@ actually transcribed, so a before/after comparison splits on the row, and
 ``stt_window_s``: the mel window the transcript was decoded on — 10 for a
 short capture on the short window, 30 for faster-whisper's own path (a
 long capture, the setting off, or a short decode that came back blank or
-unsure; clients/whisper.py). Counted under ``stt_window``.
+unsure; clients/whisper.py). Counted under ``stt_window``. A short-window
+transcript that would have gone to the tool model (a question about the
+world aside) is decoded again on the 30 s path and that text used
+(``streaming``, "the second hearing"): such a
+turn records ``stt_window_s`` 30, ``stt_rechecked`` true and
+``stt_recheck_ms`` (the second decode), and ``stt_window`` counts it under
+``full`` and ``rechecked`` (under ``short`` and ``rechecked`` when the second
+hearing heard nothing usable and the short-window text was kept).
 And, on a turn whose capture was transcribed speculatively while the
 satellite was still counting silence (``domovoi/streaming.py``,
 "Speculative transcription"): ``stt_reused`` (true when the turn used
@@ -70,9 +77,17 @@ CPU the speculation cost). These ride the row but are not stages: the
 summary counts them instead (``speculative``). A turn whose capture the
 server ended early (part B, ``domovoi/early_commit.py``) also carries
 ``early_commit`` (the tier, "A" or "B"), ``early_commit_hold_ms``, and — once
-the satellite's own ``utterance_end`` for it arrives — ``post_commit_voiced_ms``:
-how much speech came after the server stopped listening (0 when none; the
-misfire the hold exists to prevent). Counted under ``early_commit``.
+the satellite's own ``utterance_end`` for it arrives — whether the person was
+still talking when the server stopped listening (the misfire the hold exists
+to prevent): ``post_commit_voiced_ms``, speech in the frames that were
+already on their way (0 when none), and, from a satellite that listens on
+after an ``end_capture`` (2026-09-30 on), ``post_commit_listened_ms`` (how
+far past the server's stop it listened: up to where its own silence timeout
+would have ended the capture) and ``post_commit_resume_ms`` (when speech
+came back, past the server's stop; only when it did). Counted under
+``early_commit``: ``cut_in`` (either kind of speech) and ``watched`` (turns
+with ``post_commit_listened_ms``; for the rest ``cut_in`` can only see the
+first 30-90 ms after the stop).
 
 And the capture clock (:data:`CAPTURE_TIMING_KEYS`, whole milliseconds, not
 stages): when the capture's frames and its pause reached the server,
@@ -147,7 +162,10 @@ POST_ROUTE_STAGES = ("route_ms", "tts_first_ms", "total_ms")
 # to the reply needs the endpoint silence, and a capture the server ended
 # early learns whether speech came after the commit from the satellite's
 # own late utterance_end.
-LATE_STAGES = ("speech_to_reply_ms", "post_commit_voiced_ms")
+LATE_STAGES = (
+    "speech_to_reply_ms", "post_commit_voiced_ms", "post_commit_listened_ms",
+    "post_commit_resume_ms",
+)
 
 # What the per-turn `whisper` block carries, from clients.whisper.whisper_runtime.
 WHISPER_KEYS = ("model", "device", "compute_type", "cpu_threads")
@@ -280,7 +298,9 @@ class TurnTimings:
                 f"/{self.stages.get('early_commit_hold_ms', '?')}ms"
             )
         if "stt_window_s" in self.flags:
-            parts.append(f"window={self.flags['stt_window_s']}s")
+            # "/recheck": heard a second time on the 30 s path (streaming).
+            recheck = "/recheck" if self.flags.get("stt_rechecked") else ""
+            parts.append(f"window={self.flags['stt_window_s']}s{recheck}")
         for key in ("decode_start_ms", "pause_rx_lag_ms", "sat_start_backlog_ms"):
             if key in self.flags:
                 parts.append(f"{key}={self.flags[key]}")
@@ -465,8 +485,8 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     seen: dict[tuple[Any, ...], int] = {}
     turns = 0
     speculative = {"turns": 0, "reused": 0, "decodes": 0}
-    early_commit = {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
-    stt_window = {"short": 0, "full": 0}
+    early_commit = {"turns": 0, "A": 0, "B": 0, "cut_in": 0, "watched": 0}
+    stt_window = {"short": 0, "full": 0, "rechecked": 0}
     for raw, matched_path in rows:
         doc = raw
         if isinstance(doc, (str, bytes)):
@@ -496,12 +516,17 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
         if tier in ("A", "B"):
             early_commit["turns"] += 1
             early_commit[tier] += 1
-            cut_in = _stage_value(doc, "post_commit_voiced_ms")
-            if cut_in:
+            if _stage_value(doc, "post_commit_voiced_ms") or _stage_value(
+                doc, "post_commit_resume_ms"
+            ):
                 early_commit["cut_in"] += 1
+            if _stage_value(doc, "post_commit_listened_ms") is not None:
+                early_commit["watched"] += 1
         window = _stage_value(doc, "stt_window_s")
         if window is not None:
             stt_window["short" if window < FULL_WINDOW_S else "full"] += 1
+            if doc.get("stt_rechecked") is True:
+                stt_window["rechecked"] += 1
         if isinstance(matched_path, str) and matched_path:
             paths[matched_path] = paths.get(matched_path, 0) + 1
         wk = _whisper_key(doc)

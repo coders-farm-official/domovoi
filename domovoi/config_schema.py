@@ -569,10 +569,26 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "up to 9 seconds (every spoken command) is decoded on a 10-second "
         "window instead of the 30 seconds Whisper normally pads everything "
         "to, which cuts the wait for a transcript to about a quarter on a "
-        "CPU with the same accuracy for commands. Longer captures, "
-        "multilingual models, and any short decode that comes back blank "
-        "or unsure still use the 30-second path. Off uses the 30-second "
-        "path for everything.",
+        "CPU. Command accuracy was the same on clean recordings; with "
+        "simulated room echo and noise the short window changed about 1 "
+        "command in 10 (as many better as worse in some rooms, a few more "
+        "worse in others), which the second hearing below makes up for. "
+        "Longer captures, multilingual models, and any short decode that "
+        "comes back blank or unsure still use the 30-second path. Off uses "
+        "the 30-second path for everything.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "whisper_short_window_recheck", "Second hearing for unmatched commands",
+        "Speech-to-text",
+        "On by default: when a short-window transcript matches no quick "
+        "command and isn't a question the answering model takes on its own "
+        "— so it would go to the slower language-model router — the same "
+        "audio is decoded again the 30-second way and that text is used. "
+        "It catches commands the short window misheard, for about a "
+        "second on those turns; quick commands and general-knowledge "
+        "questions (\"What is the capital of France?\") keep their speed. "
+        "Off routes the short-window text as it is.",
         "bool", section="advanced", tier="hot",
     ),
     FieldSpec(

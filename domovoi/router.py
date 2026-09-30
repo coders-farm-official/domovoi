@@ -24,7 +24,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path
-from domovoi.handlers.shared.tool_gate import answers_without_tools
+from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
@@ -276,6 +276,55 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
     return RoutePlan(path="fast", handler=handler, transcript=transcript, fast_path=fp, match=m)
 
 
+def goes_to_the_tool_model(raw_transcript: str) -> bool:
+    """Whether route() would hand ``raw_transcript`` to the tool model (the
+    LLM router): something in it, not a yes/no answer (a parked question's
+    reply, or a bare "no"), no fast path, and not a plain question or Q&A
+    request (``answers_without_tools``). Pure, like :func:`plan_route`.
+
+    The voice turn's second hearing asks it (``streaming``): a short-window
+    transcript headed there is either a command the short decode misheard
+    or a turn about to spend seconds in the tool router, so it is decoded
+    again on the 30 s path first. A fast-path command or a plain question
+    keeps its short-window speed."""
+    transcript = normalize_transcript(raw_transcript)
+    if not any(ch.isalnum() for ch in transcript):
+        return False
+    if _parse_yes_no(transcript) is not None:
+        return False
+    transcript = strip_leading_filler(transcript)
+    if first_fast_path(transcript) is not None:
+        return False
+    return not answers_without_tools(transcript)
+
+
+# The shortest question a second hearing is skipped for (see below): two-
+# and three-word ones are as often a short command misheard — "What
+# plane?" and "What's true?" were "What's playing?" on far-field audio.
+WORLD_QUESTION_MIN_WORDS = 4
+
+
+def is_question_about_the_world(raw_transcript: str) -> bool:
+    """A question — Whisper ended it with "?" — of at least
+    ``WORLD_QUESTION_MIN_WORDS`` words with nothing about the house, the
+    speaker, the assistant or something pointed at in it (the vocabulary
+    ``tool_gate`` keeps): "What is the capital of France?", "How far away
+    is the moon?". It goes to the tool model like any unmatched turn, but
+    streamed the router gives it up in ~0.7 s; hearing it again would add
+    a whole 30 s decode (~0.9-1.3 s) to a question no command was
+    misheard as. On the review's far-field corpus, skipping the second
+    hearing for these lost nothing in any of six conditions."""
+    raw = (raw_transcript or "").strip()
+    if not raw.endswith("?"):
+        return False
+    # Not filler-stripped: "could you put on something relaxing?" is a
+    # request to the assistant, and its "you" is what says so.
+    transcript = normalize_transcript(raw)
+    if len(transcript.split()) < WORLD_QUESTION_MIN_WORDS:
+        return False
+    return not about_the_house(transcript)
+
+
 async def _persist_turn(
     *,
     session: AsyncSession,
@@ -425,9 +474,13 @@ def offered_tool_schemas(transcript: str) -> list[dict]:
     turn is read again. Kept this way, the common changes only touch the
     end — a verification or news request appends its tool (~200 tokens,
     not the ~900 behind it), and the next ordinary turn finds the old
-    prefix intact. The utterances that withhold a usually-offered tool
-    (plain knowledge questions) don't reach the router at all
-    (``answers_without_tools``).
+    prefix intact. The usually-offered ones (calculator, library) are
+    withheld only from a plain question about the world, which doesn't
+    reach the router at all (``answers_without_tools``): every turn that
+    does reach it — a who/why/where question about the house included —
+    sees them, so the list only ever changes at its end. (Withholding them
+    from "where are my notes" cost the next ordinary turn 11-15 s of
+    re-reading on a CPU host, measured 2026-09-30.)
     """
     offered = [h for h in HANDLERS if h.offers_tool(transcript)]
     offered.sort(key=_tool_order)  # stable: band order within each group
@@ -775,8 +828,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # Per-speaker prompt-prefix injection. Memories +
     # favorites + selected preferences for ctx.person_id are
     # assembled into a "User context: ..." blob and added to the QA
-    # system prompt, after its fixed instructions (so they stay cached
-    # across speakers). Anonymous speakers get ``""`` back — no-op.
+    # system prompt, after its fixed instructions (so those stay cached
+    # across speakers; the history after the profile doesn't — see
+    # voice_qa_system_prompt). Anonymous speakers get ``""`` back — no-op.
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:

@@ -103,17 +103,21 @@ SPEECH_PAUSE_FRAMES_MAX = 20
 
 # openWakeWord's `Model.reset()` refills its feature buffer by running the
 # speech-embedding model over 4 s of random noise: 41 embedding windows, the
-# work of about 24 `predict()` calls, done inline. On a desktop that is
-# 35 ms; on a Pi Zero 2 W, where one `predict()` barely keeps up with the
-# 80 ms of audio it is given, it is well over a second — and the wake path
-# reset the model after the acknowledgement, BEFORE the capture opened. The
-# mic queued the person's first words meanwhile and the capture then sent
-# them in one burst, so a short command's `speech_pause` reached the core
-# 0.3-0.4 s after the pause itself (garage and office, 2026-09-30: every
-# capture of 1.95 s or less started its transcript late, every longer one
-# on time). `_reset_wake_model` hands the model back the noise features it
-# computed when it was loaded instead: the same kind of filler, none of the
-# cost. This is the length of noise `reset()` embeds, which is how the
+# work of about 26-29 `predict()` calls, done inline. Measured on a desktop
+# i9 (openwakeword 0.6.0, hey_jarvis): 97-110 ms against 3.5-4 ms for one
+# predict(). On a Pi Zero 2 W, where one `predict()` barely keeps up with
+# the 80 ms of audio it is given, that ratio puts it past a second — an
+# estimate, not yet measured on a Pi — and the wake path reset the model
+# after the acknowledgement, BEFORE the capture opened. The mic queued the
+# person's first words meanwhile and the capture then sent them in one
+# burst, which fits what the live satellites showed: a short command's
+# `speech_pause` reached the core 0.3-0.4 s after the pause itself (garage
+# and office, 2026-09-30: every capture of 1.95 s or less started its
+# transcript late, every longer one on time). An upgraded satellite's
+# `sat_start_backlog_ms` (0-60 expected) confirms or refutes it.
+# `_reset_wake_model` hands the model back the noise features it computed
+# when it was loaded instead: the same kind of filler, none of the cost
+# (0.4 ms). This is the length of noise `reset()` embeds, which is how the
 # cached answer recognises the call it stands in for.
 _WAKE_RESET_NOISE_SAMPLES = 16_000 * 4
 
@@ -1012,6 +1016,11 @@ class Satellite:
         # the playback thread's close_stream signals drain" from
         # "empty response, drain is instantaneous, release immediately."
         self._response_audio_received = threading.Event()
+        # How many `response_start`s this client has seen. The flags above
+        # keep the previous reply's state until the next one starts, so a
+        # capture notes this count to tell its own reply from the last one
+        # (`_reply_may_be_playing`).
+        self._response_starts = 0
         # Pre-buffer state. While `_prebuffer_active` is True, the
         # receiver accumulates binary audio frames in `_prebuffer_buffer`
         # instead of pushing them to playback_q — gives the playback
@@ -3672,8 +3681,10 @@ class Satellite:
         before every frame, and the capture ends there — exit reason
         `server_endpoint`, no noisy-capture check (the core is already
         answering; an apology would cancel that answer), and an
-        `utterance_end` all the same, which the core reads only to log
-        whether speech came after it stopped listening.
+        `utterance_end` all the same, which the core reads only to record
+        whether speech came after it stopped listening. For that the mic
+        is read on, sending nothing, for as long as this satellite would
+        still have been listening (`_listen_after_end`).
         """
         with self._capture_lock:
             self._capture_utt = self._utt_seq
@@ -3683,6 +3694,56 @@ class Satellite:
         finally:
             with self._capture_lock:
                 self._capture_utt = None
+
+    def _reply_may_be_playing(self, since: int) -> bool:
+        """Whether a reply that started after `since` (a `_response_starts`
+        count) may already be coming out of the speaker: some of its audio
+        has arrived, and it is not being held in the receiver's prebuffer
+        (flushed, or no prebuffer at all). The count keeps the previous
+        reply out of it: its flags stand until the next `response_start`."""
+        if getattr(self, "_response_starts", 0) == since:
+            return False
+        received = getattr(self, "_response_audio_received", None)
+        if received is None or not received.is_set():
+            return False
+        return not getattr(self, "_prebuffer_active", False)
+
+    def _listen_after_end(
+        self, vad: Any, silent_frames: int, silence_limit: int, frames_left: int,
+        reply_mark: int = 0,
+    ) -> tuple[int, int]:
+        """After the core ended the capture (`end_capture`), go on reading
+        the mic — sending nothing — for as long as this satellite's own
+        endpointing would still have been listening: until its silence
+        timeout would have ended the capture (`silent_frames` of it have
+        gone by), or until the person speaks again. Returns
+        `(voiced_after_ms, listened_ms)`: when speech came back, in ms
+        after the capture's last frame (0 when it didn't), and how long
+        the mic was read.
+
+        This is what makes an early commit's cut-in visible. The core
+        stopped listening at a pause its hold judged final; if the person
+        was only pausing ("set a timer for ten minutes ... for the pasta"),
+        the rest of the sentence comes after the capture — and the frames
+        already on their way when the capture ended hold only its first
+        30-90 ms. Stops early (a shorter `listened_ms`) when the reply may
+        already be playing — its sound would come back through the mic —
+        when the mic stalls, or on shutdown. `reply_mark`: the
+        `_response_starts` count when the capture began."""
+        wanted = max(0, min(silence_limit - silent_frames, frames_left))
+        deadline = time.monotonic() + wanted * FRAME_MS / 1000 + 0.5
+        listened = 0
+        while listened < wanted and not self.shutdown_event.is_set():
+            if self._reply_may_be_playing(reply_mark) or time.monotonic() > deadline:
+                break
+            try:
+                frame = self.raw_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            listened += 1
+            if _frame_dbfs(frame) >= self.cfg.noise_gate_dbfs and vad.is_speech(frame, SAMPLE_RATE):
+                return listened * FRAME_MS, listened * FRAME_MS
+        return 0, listened * FRAME_MS
 
     def _capture(
         self,
@@ -3732,6 +3793,8 @@ class Satellite:
         # older core, which answers an unknown type with `error`.
         utt = self._utt_seq
         started = self._utt_started
+        # Replies that start after this are this capture's (`_listen_after_end`).
+        reply_mark = getattr(self, "_response_starts", 0)
         last_voiced = len(prefix_frames) - 1
         pause_reported = False
         pause_frames = self._speech_pause_frames()
@@ -3826,6 +3889,21 @@ class Satellite:
         if self.shutdown_event.is_set() and not speaking:
             return False
 
+        # The core ended the capture: listen on, silently, to learn whether
+        # the person was still talking (see `_listen_after_end`).
+        after_end: dict[str, int] = {}
+        if exit_reason == "server_endpoint" and speaking:
+            self._leds.set_state("thinking")
+            voiced_after, listened = self._listen_after_end(
+                vad, silent_frames, silence_limit, max_frames - sent, reply_mark,
+            )
+            after_end = {"voiced_after_end_ms": voiced_after, "listened_after_end_ms": listened}
+            if voiced_after:
+                log.info(
+                    "early commit: speech came back %d ms after the core stopped "
+                    "listening (this satellite would have kept listening)", voiced_after,
+                )
+
         stats = _capture_stats_str(
             sent, gate_pass_count, voiced_count,
             capture_dbfs, self.cfg.noise_gate_dbfs,
@@ -3899,6 +3977,10 @@ class Satellite:
             "voiced_frames": voiced_count,
             "trailing_silent_frames": silent_frames,
             "silence_limit_frames": silence_limit,
+            # A capture the core ended: whether speech came back before this
+            # satellite's own silence timeout would have ended it, and how
+            # long it listened to find out (`_listen_after_end`).
+            **after_end,
             # When this was sent, by this side's clock (`_capture_clock`).
             **self._capture_clock(started),
         })
@@ -4923,6 +5005,7 @@ class Satellite:
             # spawns mpg123 before TTS even begins.
             self._playback_idle.clear()
             self._response_audio_received.clear()
+            self._response_starts += 1
             self._post_playback_state = None
             # Arm the receiver-side prebuffer. Audio chunks for this
             # response will accumulate in `_prebuffer_buffer` until we

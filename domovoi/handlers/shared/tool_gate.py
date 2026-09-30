@@ -89,9 +89,13 @@ _QA_REQUEST_RE = re.compile(
 )
 
 
-def _about_the_house(text: str) -> bool:
-    # A music word counts too: "who sings creep" is a library turn.
+def about_the_house(text: str) -> bool:
+    """Whether ``text`` (normalized) is about this household rather than
+    the world: the speaker or the assistant, something pointed at, or
+    something Domovoi runs. A music word counts too: "who sings creep" is a
+    library turn."""
     return bool(_ABOUT_THE_HOUSE_RE.search(text) or MUSIC_CUE_RE.search(text))
+
 
 
 def is_plain_knowledge_question(transcript: str) -> bool:
@@ -102,7 +106,7 @@ def is_plain_knowledge_question(transcript: str) -> bool:
     if not KNOWLEDGE_QUESTION_RE.match(transcript):
         return False
     question = transcript[_LEAD_IN_RE.match(transcript).end():]
-    return not _about_the_house(question)
+    return not about_the_house(question)
 
 
 def is_plain_qa_request(transcript: str) -> bool:
@@ -114,7 +118,7 @@ def is_plain_qa_request(transcript: str) -> bool:
         return False
     # Skip "tell me" / "give us" before looking for cues.
     rest = re.sub(r"^(?:tell|give|say|share|make|explain|describe)(?: me| us)?\s+", "", transcript)
-    return not _about_the_house(rest)
+    return not about_the_house(rest)
 
 
 def answers_without_tools(transcript: str) -> bool:

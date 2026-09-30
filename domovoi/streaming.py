@@ -389,6 +389,7 @@ on the Pi stops it declaring `capture_control`.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import logging
@@ -411,8 +412,12 @@ from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha2
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
+    FULL_WINDOW_SEC,
+    SHORT_WINDOW_SEC,
     SttUnavailableError,
+    can_decode_full_window,
     get_whisper_client,
+    transcribe_full_window,
     transcribe_with_window,
     whisper_runtime,
 )
@@ -434,7 +439,7 @@ from domovoi.endpointing import (
 )
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
-from domovoi.router import route
+from domovoi.router import goes_to_the_tool_model, is_question_about_the_world, route
 from domovoi.turn_timings import (
     TurnTimings,
     merge_post_route,
@@ -985,6 +990,32 @@ def _elapsed_ms(t0: float) -> int:
     return max(0, int(round((time.perf_counter() - t0) * 1000)))
 
 
+# A satellite's after-the-end numbers (`voiced_after_end_ms`,
+# `listened_after_end_ms`) are bounded by its silence timeout (at most 5 s);
+# anything else is not a report of that watch.
+_AFTER_END_MAX_MS = 10_000
+
+
+def _after_end_ms(value: Any) -> int | None:
+    if type(value) is not int or not 0 <= value <= _AFTER_END_MAX_MS:
+        return None
+    return value
+
+
+def _cancel_copy_embedding(spec: "_Speculation") -> None:
+    """Cancel a finished copy's voice embedding (``_Heard.embed_task``) if
+    it hasn't finished. One already running in its thread still runs to the
+    end — the decode slot is held until it does (``_one_at_a_time``) — but
+    one still waiting for the slot never starts."""
+    task = spec.task
+    if task is None or not task.done() or task.cancelled() or task.exception() is not None:
+        return
+    heard = task.result()
+    embed = getattr(heard, "embed_task", None)
+    if embed is not None and not embed.done():
+        embed.cancel()
+
+
 def _consume_outcome(fut: "asyncio.Future[Any]") -> None:
     # A decode nobody awaits any more (its turn was cancelled, its copy
     # discarded) must not log "exception was never retrieved".
@@ -1484,10 +1515,13 @@ class StreamSession:
 
     def _discard_speculation(self) -> None:
         """Drop this utterance's copies and stop looking for pauses. The
-        current decode task is cancelled: nobody will read it."""
+        current decode task is cancelled, and so is a finished copy's voice
+        embedding that hasn't run yet: nobody will read either."""
         spec = self._spec
         if spec is not None and spec.task is not None and not spec.task.done():
             spec.task.cancel()
+        elif spec is not None:
+            _cancel_copy_embedding(spec)
         self._spec = None
         self._spec_history = []
         self._spec_wanted = False
@@ -1590,7 +1624,19 @@ class StreamSession:
         # whole capture (the copy plus its trailing silence) may clear it,
         # and whether a turn gets an embedding at all must not depend on
         # when the copy was taken. The turn embeds its own audio then.
-        if len(pcm) >= settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2:
+        #
+        # Nor does a copy that is already superseded: another pause came
+        # while it decoded (`_spec_wanted`), so there was speech after it
+        # and no turn can use it, or a new utterance has started — and its
+        # embedding, in the decode slot, would only hold up the next copy's
+        # decode (10-30 ms; seconds while the voice encoder is still
+        # loading after a boot). (A copy the turn is waiting for is no
+        # longer `self._spec` — utterance_end hands it over — so that is
+        # not a sign of anything.)
+        superseded = self._spec_wanted or spec.serial != self._utt_serial
+        if not superseded and (
+            len(pcm) >= settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2
+        ):
             heard.embed_task = asyncio.create_task(
                 self._embed_copy(pcm), name=f"speculative-embed:{self.room_id}",
             )
@@ -1654,6 +1700,7 @@ class StreamSession:
 
     async def _whisper_call(
         self, whisper: Any, pcm: bytes, *, marks: dict[str, Any] | None = None,
+        full_window: bool = False,
     ) -> tuple[str, int, int | None]:
         """One Whisper call in the room's decode slot (``_one_at_a_time``).
         Returns the text, the call's own time (not counting the wait for
@@ -1661,7 +1708,9 @@ class StreamSession:
         ``marks``, when given, gets the wait for the slot (``wait_ms``)
         and the moment the call itself started (``started``,
         perf_counter), so a decode that queued behind another decode or
-        a copy's embedding isn't mistaken for one that started late."""
+        a copy's embedding isn't mistaken for one that started late.
+        ``full_window``: faster-whisper's 30 s path whatever the length
+        (the second hearing; only for a client that has it)."""
         waited = time.perf_counter()
         t0: list[float] = []
 
@@ -1670,6 +1719,8 @@ class StreamSession:
             if marks is not None:
                 marks["wait_ms"] = _elapsed_ms(waited)
                 marks["started"] = t0[0]
+            if full_window:
+                return transcribe_full_window(whisper, pcm)
             return transcribe_with_window(whisper, pcm)
 
         text, window = await self._one_at_a_time(_start)
@@ -1919,8 +1970,19 @@ class StreamSession:
 
     def _note_late_utterance_end(self, ctrl: dict[str, Any]) -> None:
         """The satellite's own `utterance_end` for a capture this server
-        already ended. Nothing to do but say whether the person was still
-        talking — the misfire the hold is meant to prevent, made visible."""
+        already ended. Nothing to do but record whether the person was still
+        talking — the misfire the hold is meant to prevent, made visible.
+
+        Two kinds of evidence. The frames already on their way when the
+        satellite stopped (its `last_voiced_frame` past the server's count:
+        ``post_commit_voiced_ms``) cover only the first 30-90 ms. A
+        satellite from 2026-09-30 on also reads its mic on, sending nothing,
+        until its own silence timeout would have ended the capture, and
+        says whether speech came back (``voiced_after_end_ms``) and how long
+        it listened (``listened_after_end_ms``): recorded past the server's
+        stop as ``post_commit_resume_ms`` / ``post_commit_listened_ms``.
+        An older satellite sends neither, and then a pause the hold misjudged
+        by more than ~90 ms is never seen."""
         committed = self._committed
         if committed is None or ctrl.get("utt") != committed.utt:
             return
@@ -1928,9 +1990,28 @@ class StreamSession:
         last, frames = ctrl.get("last_voiced_frame"), ctrl.get("frames")
         if type(last) is not int or type(frames) is not int:
             return
-        voiced_after_ms = max(0, last - committed.frames + 1) * FRAME_MS
-        if committed.timings is not None:
-            committed.timings.stages["post_commit_voiced_ms"] = voiced_after_ms
+        late: dict[str, int] = {
+            "post_commit_voiced_ms": max(0, last - committed.frames + 1) * FRAME_MS,
+        }
+        # Frames the satellite sent after the server's count: the watch
+        # starts where they end.
+        in_flight_ms = max(0, frames - committed.frames) * FRAME_MS
+        listened = _after_end_ms(ctrl.get("listened_after_end_ms"))
+        if listened is not None:
+            late["post_commit_listened_ms"] = in_flight_ms + listened
+            resumed = _after_end_ms(ctrl.get("voiced_after_end_ms"))
+            if resumed:
+                late["post_commit_resume_ms"] = in_flight_ms + resumed
+        timings = committed.timings
+        if timings is not None:
+            timings.stages.update(late)
+            if timings.intents_log_id is not None:
+                # The turn's row exists, and its post-route write may already
+                # have gone (the watch holds this message back by up to the
+                # satellite's silence timeout): write these on their own.
+                self._merge_late_stages(timings.intents_log_id, late)
+        voiced_after_ms = late["post_commit_voiced_ms"]
+        resume_ms = late.get("post_commit_resume_ms")
         if voiced_after_ms:
             log.warning(
                 "early commit room=%s tier=%s cut in on speech: the satellite "
@@ -1939,6 +2020,25 @@ class StreamSession:
                 "repeats, turn early_commit_tier_b off or raise the hold.",
                 self.room_id, committed.tier, voiced_after_ms, frames, committed.frames,
             )
+        elif resume_ms:
+            log.warning(
+                "early commit room=%s tier=%s cut in on speech: the person "
+                "spoke again %d ms after the server stopped listening, before "
+                "the satellite's own silence timeout would have ended the "
+                "capture. If this repeats, turn early_commit_tier_b off or "
+                "raise the hold.",
+                self.room_id, committed.tier, resume_ms,
+            )
+
+    def _merge_late_stages(self, row_id: int, late: dict[str, int]) -> None:
+        """Write a committed turn's late stages into its row, in a task of
+        its own (held like the post-route write, best-effort)."""
+        write = asyncio.create_task(
+            self._write_post_route_timings(row_id, dict(late)),
+            name=f"turn-timings-late:{self.room_id}",
+        )
+        _TIMING_WRITES.add(write)
+        write.add_done_callback(_TIMING_WRITES.discard)
 
     async def _await_hello(self) -> bool:
         """Block until the client's FIRST frame arrives and is an accepted
@@ -2786,6 +2886,77 @@ class StreamSession:
         barge-in's own echo, and end a turn with nothing in it — or with
         nothing but the wake greeting. None when the turn has been ended
         here (the satellite got its response_end)."""
+        cleaned, drop = self._screen_transcript(
+            transcript, greeting_played=greeting_played, trigger=trigger,
+            greeting_clip=greeting_clip, ack_before_capture=ack_before_capture,
+        )
+        if drop is None:
+            return cleaned
+        if drop == "greeting":
+            # Nothing BUT the greeting: the capture closed on the pause
+            # after it, before the user said anything (office row #187:
+            # "Back so soon?" came back as "Back so soon." and was answered
+            # as a command). Domovoi's own words are never a command — end
+            # the turn the way the blank guard does: no speech, no DB row,
+            # mic released. The same whether the transcript is a
+            # speculative copy's or the whole capture's: an early commit
+            # never takes such a copy (_commit_decision), and a copy that
+            # is reused here says nothing the whole capture wouldn't.
+            log.warning(
+                "greeting echo: dropping %s turn in room=%s — the "
+                "transcript %r is only the wake greeting%s coming "
+                "back through the mic. This satellite plays its "
+                "greeting over the capture: upgrade it (a current "
+                "satellite plays the greeting before it listens), or "
+                "check [music] alsa_device.",
+                trigger, self.room_id, cleaned,
+                f" ({greeting_clip})" if greeting_clip else "",
+            )
+        elif drop == "echo":
+            log.warning(
+                "self-echo: dropping barge-triggered turn in room=%s — "
+                "transcript %r is the satellite's own reply %r coming "
+                "back through the mic. Barge-in is firing on speaker "
+                "echo; raise [barge_in] min_speech_ms or set "
+                "require_wake_word=true for this room.",
+                self.room_id, cleaned, self._last_spoken_text,
+            )
+        else:
+            log.warning(
+                "blank capture in room=%s (trigger=%s, %.1fs of audio): "
+                "nothing transcribed, not routing. If this repeats after "
+                "every wake word the satellite's capture is silent - "
+                "check its log for the 'capture ended' stats line.",
+                self.room_id, trigger, audio_bytes / (16_000 * 2),
+            )
+        # End the turn with no speech and no DB row. interrupted=True (not
+        # False) because without a response_start this turn the Pi's
+        # `_response_audio_received` may still be set from the PREVIOUS
+        # response — and the deferred-drain branch would then park the mic
+        # thread waiting on a drain that never comes. interrupted=True
+        # takes the immediate-release path.
+        await self._safe_send_text({
+            "type": "response_end",
+            "interrupted": True,
+            "expect_followup": False,
+        })
+        return None
+
+    def _screen_transcript(
+        self,
+        transcript: str,
+        *,
+        greeting_played: bool,
+        trigger: str | None,
+        greeting_clip: str | None = None,
+        ack_before_capture: bool = False,
+    ) -> tuple[str, str | None]:
+        """What ``_clean_transcript`` decides, without acting on it: the
+        transcript with a bled-in greeting and a barge-in's own echo
+        stripped, and why the turn must end instead — "greeting" (nothing
+        but the wake greeting), "echo" (the satellite quoting its own
+        reply), "blank" (nothing to route) — or None. The second hearing
+        screens its transcript with it too."""
         # If the Pi played a wake greeting this turn, the array's AEC may
         # have let it bleed into the capture ("Hi there. Say something
         # mean." → greeting + command). Strip a known leading greeting so
@@ -2799,32 +2970,8 @@ class StreamSession:
             if cleaned != transcript:
                 log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
                 transcript = cleaned
-            # Nothing BUT the greeting: the capture closed on the pause
-            # after it, before the user said anything (office row #187:
-            # "Back so soon?" came back as "Back so soon." and was answered
-            # as a command). Domovoi's own words are never a command — end
-            # the turn the way the blank guard below does: no speech, no
-            # DB row, mic released. The same whether the transcript is a
-            # speculative copy's or the whole capture's: an early commit
-            # never takes such a copy (_commit_decision), and a copy that
-            # is reused here says nothing the whole capture wouldn't.
             if greeting_only:
-                log.warning(
-                    "greeting echo: dropping %s turn in room=%s — the "
-                    "transcript %r is only the wake greeting%s coming "
-                    "back through the mic. This satellite plays its "
-                    "greeting over the capture: upgrade it (a current "
-                    "satellite plays the greeting before it listens), or "
-                    "check [music] alsa_device.",
-                    trigger, self.room_id, transcript,
-                    f" ({greeting_clip})" if greeting_clip else "",
-                )
-                await self._safe_send_text({
-                    "type": "response_end",
-                    "interrupted": True,
-                    "expect_followup": False,
-                })
-                return None
+                return transcript, "greeting"
 
         # Self-echo guard. A barge-triggered capture opens WHILE the
         # speaker is still playing and carries the frames that tripped
@@ -2841,26 +2988,7 @@ class StreamSession:
                 strip_leading_echo,
             )
             if is_self_echo(transcript, self._last_spoken_text):
-                log.warning(
-                    "self-echo: dropping barge-triggered turn in room=%s — "
-                    "transcript %r is the satellite's own reply %r coming "
-                    "back through the mic. Barge-in is firing on speaker "
-                    "echo; raise [barge_in] min_speech_ms or set "
-                    "require_wake_word=true for this room.",
-                    self.room_id, transcript, self._last_spoken_text,
-                )
-                # End the turn with no speech and no DB row. interrupted=True
-                # (not False) because without a response_start this turn the
-                # Pi's `_response_audio_received` may still be set from the
-                # PREVIOUS response — and the deferred-drain branch would
-                # then park the mic thread waiting on a drain that never
-                # comes. interrupted=True takes the immediate-release path.
-                await self._safe_send_text({
-                    "type": "response_end",
-                    "interrupted": True,
-                    "expect_followup": False,
-                })
-                return None
+                return transcript, "echo"
             cleaned = strip_leading_echo(transcript, self._last_spoken_text)
             if cleaned != transcript:
                 log.info(
@@ -2878,26 +3006,108 @@ class StreamSession:
         # without a wake word, hears nothing again, and the room loops
         # apology after apology at one LLM call and one TTS per lap.
         # Seen on hardware: every conversation_log row for the room
-        # had user_text "" and the same reply. End the turn with no
-        # speech and no DB row; interrupted=True releases the Pi's mic
-        # immediately (see the self-echo drop above for why). A
-        # transcript of punctuation alone (office row #114 was ".") is
-        # just as empty.
+        # had user_text "" and the same reply. The turn ends with no
+        # speech and no DB row. A transcript of punctuation alone (office
+        # row #114 was ".") is just as empty.
         if not any(ch.isalnum() for ch in transcript):
-            log.warning(
-                "blank capture in room=%s (trigger=%s, %.1fs of audio): "
-                "nothing transcribed, not routing. If this repeats after "
-                "every wake word the satellite's capture is silent - "
-                "check its log for the 'capture ended' stats line.",
-                self.room_id, trigger, audio_bytes / (16_000 * 2),
+            return transcript, "blank"
+        return transcript, None
+
+    def _wants_second_hearing(
+        self, heard: _Heard, transcript: str, *, early_commit: bool,
+    ) -> bool:
+        """Whether a turn's transcript is heard again on the 30 s path before
+        it is routed: it came from the 10 s window, the capture wasn't ended
+        early (an early commit is a closed command by construction), and
+        route() would hand it to the tool model (``goes_to_the_tool_model``)
+        — likely a command the short decode misheard, or a turn about to
+        spend seconds in the tool router anyway. A fast-path command, a
+        yes/no answer or a plain question keeps the short window's speed,
+        and so does a question about the world
+        (``is_question_about_the_world``: "What is the capital of
+        France?"), which the streamed router gives up on in ~0.7 s — a
+        second decode would add more than that for nothing. Not in chat
+        mode either: those turns go to the chat agent, not the router.
+
+        Why (2026-09-30 review, small.en on the 333-clip corpus made far-
+        field, 252 tier A/B/B1 commands, router-level outcome right):
+        30 s / 10 s / 10 s with the review's rule — 202 / 191 / 205,
+        206 / 201 / 212 and 165 / 170 / 181 over three noise conditions,
+        224 / 222 / 227 on the clean clips; at or above both windows every
+        time, for a second decode on 20-34% of captures. This rule scores
+        the same as the review's on every condition of that corpus (the
+        world-question skip lost nothing there), hearing 17-34% twice."""
+        return (
+            not early_commit
+            and not self.conversational_mode
+            and heard.window_s == SHORT_WINDOW_SEC
+            and settings.whisper_short_window_recheck
+            and goes_to_the_tool_model(transcript)
+            and not is_question_about_the_world(transcript)
+        )
+
+    async def _hear_again(
+        self,
+        pcm_bytes: bytes,
+        heard: _Heard,
+        transcript: str,
+        *,
+        timings: TurnTimings,
+        trigger: str | None,
+        greeting_played: bool,
+        greeting_clip: str | None,
+        ack_before_capture: bool,
+    ) -> tuple[_Heard, str]:
+        """The second hearing (``_wants_second_hearing``): the whole capture
+        on faster-whisper's 30 s path, in the room's decode slot, screened
+        like the first. Returns the hearing the turn goes on with — the new
+        one, or the first when the second can't be had, fails, or hears
+        nothing usable (the first did hear speech). Records it on the turn:
+        ``stt_rechecked``, ``stt_recheck_ms``, the window the text came
+        from, and the extra wait in ``stt_ms`` / ``stt_wait_ms``."""
+        try:
+            whisper = get_whisper_client()
+        except SttUnavailableError:
+            return heard, transcript
+        if not can_decode_full_window(whisper):
+            return heard, transcript
+        t0 = time.perf_counter()
+        try:
+            text, recheck_ms, _window = await self._whisper_call(
+                whisper, pcm_bytes, full_window=True,
             )
-            await self._safe_send_text({
-                "type": "response_end",
-                "interrupted": True,
-                "expect_followup": False,
-            })
-            return None
-        return transcript
+        except Exception as e:  # noqa: BLE001 — the first hearing stands
+            log.warning(
+                "stream %s: the second hearing failed; routing the first: %s",
+                self.room_id, e,
+            )
+            return heard, transcript
+        timings.flags["stt_rechecked"] = True
+        timings.flags["stt_recheck_ms"] = recheck_ms
+        timings.stages["stt_ms"] = heard.stt_ms + recheck_ms
+        timings.stages["stt_wait_ms"] = timings.stages.get("stt_wait_ms", 0) + _elapsed_ms(t0)
+        cleaned, drop = self._screen_transcript(
+            text, greeting_played=greeting_played, trigger=trigger,
+            greeting_clip=greeting_clip, ack_before_capture=ack_before_capture,
+        )
+        if drop is not None:
+            log.info(
+                "stream %s: the second hearing heard nothing usable (%s); "
+                "routing the first", self.room_id, drop,
+            )
+            return heard, transcript
+        timings.flags["stt_window_s"] = FULL_WINDOW_SEC
+        if cleaned != transcript:
+            log.info(
+                "stream %s: second hearing on the 30 s window: %r -> %r",
+                self.room_id, transcript, cleaned,
+            )
+        return (
+            dataclasses.replace(
+                heard, text=text, stt_ms=heard.stt_ms + recheck_ms, window_s=FULL_WINDOW_SEC,
+            ),
+            cleaned,
+        )
 
     async def _process_utterance(
         self,
@@ -2955,6 +3165,14 @@ class StreamSession:
             )
             if transcript is None:
                 return
+            if self._wants_second_hearing(
+                heard, transcript, early_commit=early_commit is not None,
+            ):
+                heard, transcript = await self._hear_again(
+                    pcm_bytes, heard, transcript, timings=timings, trigger=trigger,
+                    greeting_played=greeting_played, greeting_clip=greeting_clip,
+                    ack_before_capture=ack_before_capture,
+                )
 
             # ── Respond ──────────────────────────────────────────────────
             await self._safe_send_text({"type": "transcript", "text": transcript})

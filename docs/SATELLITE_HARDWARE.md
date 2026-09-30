@@ -385,6 +385,8 @@ gaps between words, and each one it fires on costs the server a
 transcript it throws away. Leave it at 240 unless the server decodes fast
 (`capture_timing` and `speculative` in `GET /v1/stats/latency` show what
 it buys and costs).
+A satellite from before 2026-09-30 doesn't have this setting: the
+dashboard shows **needs a satellite upgrade** in its place.
 
 ## Custom wake words
 

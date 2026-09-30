@@ -56,7 +56,13 @@ SAMPLE_WIDTH_BYTES = 2  # int16
 # to SHORT_WINDOW_MAX_AUDIO_SEC is decoded on a SHORT_WINDOW_SEC window:
 # the same features, zero-padded to 1000 frames instead of 3000. Measured
 # with small.en int8 on 8 threads (oneDNN, the backend an AMD CPU gets):
-# ~890 ms -> ~230 ms, with command accuracy equal on a 333-clip corpus.
+# ~890 ms -> ~230 ms. Command accuracy was equal on the 333-clip corpus of
+# clean TTS clips (221 of 252 tier A/B commands). On the same clips made
+# far-field (reverberation and noise, 2026-09-30 review) the 10 s window
+# changed about 1 command outcome in 10, net -11 to +5 of 252 depending on
+# the noise — almost all between a fast path and the LLM route — which is
+# why a transcript that would go to the tool model is heard again on the
+# 30 s path (:func:`transcribe_full_window`, streaming's second hearing).
 # Shorter windows lose accuracy fast (5 s: 158 of 252 tier A/B commands
 # right against 221; a window sized to the clip, 161), hence one fixed
 # window, and at least a second of it left as padding.
@@ -105,6 +111,20 @@ async def transcribe_with_window(client: Any, pcm_bytes: bytes) -> tuple[str, in
         text, window = await detailed(pcm_bytes)
         return text, window
     return await client.transcribe(pcm_bytes), None
+
+
+def can_decode_full_window(client: Any) -> bool:
+    """Whether ``client`` can be asked for the 30 s path by name
+    (:func:`transcribe_full_window`) — only one that decodes short captures
+    on the short window has a second path to ask for."""
+    return callable(getattr(client, "transcribe_full_window", None))
+
+
+async def transcribe_full_window(client: Any, pcm_bytes: bytes) -> tuple[str, int]:
+    """``pcm_bytes`` on faster-whisper's own 30 s path whatever its length:
+    the second hearing of a short-window transcript (``streaming``). Only
+    for a client :func:`can_decode_full_window` says can."""
+    return await client.transcribe_full_window(pcm_bytes)
 
 
 class SttUnavailableError(RuntimeError):
@@ -502,6 +522,11 @@ class FasterWhisperClient:
     async def transcribe_with_window(self, pcm_bytes: bytes) -> tuple[str, int]:
         """:meth:`transcribe`, plus the window (seconds) the text came from."""
         return await asyncio.to_thread(self._transcribe_pcm_sync, pcm_bytes)
+
+    async def transcribe_full_window(self, pcm_bytes: bytes) -> tuple[str, int]:
+        """The 30 s path, even for a capture the short window would take."""
+        text = await asyncio.to_thread(self._transcribe_full_sync, pcm_bytes)
+        return text, FULL_WINDOW_SEC
 
     async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
         """Transcribe a complete WAV file's bytes."""

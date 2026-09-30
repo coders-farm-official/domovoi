@@ -398,6 +398,159 @@ def test_a_capture_the_core_ended_is_never_reported_noisy() -> None:
     assert texts(out)[-1]["exit_reason"] == "server_endpoint"
 
 
+# ─── after the core ended it: was the person still talking? ───────────────
+#
+# The core's early commit stops listening at a pause its hold judged final.
+# If the person was only pausing, the rest of what they said comes after the
+# capture — and the frames already on their way when it ended hold only the
+# first 30-90 ms of it. So the satellite reads the mic on (sending nothing)
+# for as long as its own silence timeout would have kept it listening, and
+# says in utterance_end whether speech came back.
+
+
+def test_after_an_end_capture_the_mic_is_read_to_the_satellites_own_timeout() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.78)          # 26 frames
+        sat._begin_utterance("wake_word")
+        # 20 voiced, then the core commits after 17 silent frames (510 ms).
+        out = _run_with_end_capture(sat, loop, [FRAME] * 20 + [SILENCE] * 40, at=37)
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["exit_reason"] == "server_endpoint" and end["frames"] == 37
+    assert out.count("audio") == 37, "nothing heard afterwards is sent"
+    # 26 - 17 = 9 more frames: where this satellite would have ended it.
+    assert end["voiced_after_end_ms"] == 0
+    assert end["listened_after_end_ms"] == 9 * 30
+    assert sat.raw_q.qsize() == 40 - 17 - 9, "no more than that is read"
+
+
+def test_speech_after_an_end_capture_is_reported_with_when_it_came() -> None:
+    """"Set a timer for ten minutes ... for the pasta": the core committed on
+    the pause; the person went on 4 frames after the capture ended."""
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.78)
+        sat._begin_utterance("wake_word")
+        frames = [FRAME] * 20 + [SILENCE] * 22 + [SILENCE] * 3 + [FRAME] * 10
+        out = _run_with_end_capture(sat, loop, frames, at=42)
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["exit_reason"] == "server_endpoint" and end["frames"] == 42
+    assert end["voiced_after_end_ms"] == 4 * 30
+    assert end["listened_after_end_ms"] == 4 * 30
+    assert out.count("audio") == 42
+    assert sat.raw_q.qsize() == 9, "the watch stops at the first voiced frame"
+
+
+def test_the_watch_stops_once_the_reply_may_be_playing() -> None:
+    """The reply's own sound would come back through the mic: once its audio
+    may be playing (received, and not held in the prebuffer), stop."""
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=1.2)            # 40 frames
+        sat._response_audio_received = threading.Event()
+        sat._prebuffer_active = False
+        sat._response_starts = 0
+        sat._begin_utterance("wake_word")
+
+        class TwoHooks(HookedQueue):
+            def get(self, *a, **kw):
+                item = super().get(*a, **kw)
+                if self.taken == 23:                         # response_start
+                    sat._response_starts += 1
+                    sat._response_audio_received.clear()
+                    sat._prebuffer_active = True
+                if self.taken == 25:
+                    sat._response_audio_received.set()       # audio arrives, prebuffered
+                if self.taken == 30:
+                    sat._prebuffer_active = False            # flushed: it may be playing
+                return item
+
+        def arrive() -> None:
+            sat._handle_text_frame({"type": "end_capture", "utt": sat._capture_utt})
+
+        hooked = TwoHooks(20, arrive)
+        for f in [FRAME] * 10 + [SILENCE] * 60:
+            hooked.put(f)
+        sat.raw_q = hooked
+        out = capture(sat, loop, [])
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["frames"] == 20 and end["voiced_after_end_ms"] == 0
+    assert end["listened_after_end_ms"] == 10 * 30        # frames 21-30, then the flush
+
+
+def test_the_last_replys_flags_do_not_stop_the_watch() -> None:
+    """Until this capture's reply starts, the flags still describe the last
+    one (audio received, prebuffer flushed): that is not this reply playing."""
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.78)            # 26 frames
+        sat._response_audio_received = threading.Event()
+        sat._response_audio_received.set()
+        sat._prebuffer_active = False
+        sat._response_starts = 7
+        sat._begin_utterance("wake_word")
+        out = _run_with_end_capture(sat, loop, [FRAME] * 20 + [SILENCE] * 40, at=37)
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["listened_after_end_ms"] == 9 * 30 and end["voiced_after_end_ms"] == 0
+
+
+def test_response_start_counts_the_replies() -> None:
+    src = inspect.getsource(client.Satellite)
+    at = src.index('elif t == "response_start":')
+    block = src[at:src.index("elif t ==", at + 10)]
+    assert "self._response_audio_received.clear()" in block
+    assert "self._response_starts += 1" in block
+
+
+def test_a_stalled_mic_does_not_hold_the_utterance_end_up(monkeypatch) -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.78)
+        sat._begin_utterance("wake_word")
+        clock = [1000.0]
+        monkeypatch.setattr(client.time, "monotonic", lambda: clock[0])
+
+        class Stalls(HookedQueue):
+            def get(self, *a, **kw):
+                if self.empty():
+                    clock[0] += 0.2                          # each empty wait: 200 ms
+                return super().get(*a, **kw)
+
+        def arrive() -> None:
+            sat._handle_text_frame({"type": "end_capture", "utt": sat._capture_utt})
+
+        hooked = Stalls(22, arrive)
+        for f in [FRAME] * 20 + [SILENCE] * 2:                # nothing after the commit
+            hooked.put(f)
+        sat.raw_q = hooked
+        out = capture(sat, loop, [])
+    finally:
+        loop.close()
+    end = texts(out)[-1]
+    assert end["exit_reason"] == "server_endpoint"
+    assert end["voiced_after_end_ms"] == 0 and end["listened_after_end_ms"] == 0
+
+
+def test_a_capture_that_ended_on_its_own_carries_no_watch() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, silence_timeout=0.3)
+        sat._begin_utterance("wake_word")
+        end = texts(capture(sat, loop, [FRAME] * 5 + [SILENCE] * 12))[-1]
+    finally:
+        loop.close()
+    assert end["exit_reason"] == "vad_silence_after_speech"
+    assert "voiced_after_end_ms" not in end and "listened_after_end_ms" not in end
+
+
 def test_the_hello_declares_capture_control_from_the_rooms_setting(tmp_path) -> None:
     src = inspect.getsource(client.Satellite._run_session)
     hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
