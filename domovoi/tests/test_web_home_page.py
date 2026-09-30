@@ -16,7 +16,7 @@ of visitor and what it must never do:
 * timers: the countdown against the server's clock, the elapsed bar, the
   "done · kitchen" line for a minute after one fires, and cancel through
   the pair prompt and replay;
-* rooms: per-room transport, the "play" sheet (favorites, shuffled),
+* rooms: per-room transport (none on a quiet room: Music starts things),
   "stop all" needing a second tap, "last known" when the core is down,
   one debounced re-read for a burst of pushes;
 * the first-run hint, the empty states, and the phone's everything grid;
@@ -172,7 +172,6 @@ window.__snap = (h) => {
     events: byCls('home-today-row').map((e) => ({ text: w.__deepText(e),
       extra: w.__cls(e).includes('home-phone-extra') })),
     live: liveEl ? w.__deepText(liveEl) : null,
-    sheet: !!h.find((e) => w.__cls(e).includes('home-sheet')),
   };
 };
 """
@@ -377,15 +376,11 @@ SCENARIOS["rooms"] = scenario(
             room("lounge", sat_type="video", display={"kiosk_alive": False}),
         ],
         "POST /api/music/pause/kitchen": {"ok": True},
-        "POST /api/music/play-playlist": {"ok": True},
     }),
     "const before = w.__snap(h);"
     "await h.click({ type: 'button', title: 'pause kitchen' });"
-    "await h.click({ type: 'button', title: 'play in office' });"
-    "const sheetOpen = w.__snap(h).sheet;"
-    "await h.click((e) => e.type === 'button' && w.__cls(e).includes('home-sheet-opt'));"
     "await w.__flush(h);"
-    "return { before, sheetOpen, after: w.__snap(h),"
+    "return { before, after: w.__snap(h),"
     " posts: w.__fetches.filter((f) => f.method === 'POST').map((f) => ({ path: f.path, body: f.body })) };",
     ls=PAIRED_LS,
 )
@@ -1002,9 +997,11 @@ def test_rooms_order_state_and_transport(driven) -> None:
     snap = out["before"]
     assert [r["room"] for r in snap["rooms"]] == ["kitchen", "den", "lounge", "office", "garage", "attic"]
     titles = _titles(snap)
-    assert {"pause kitchen", "stop kitchen", "resume den", "stop den", "play in office",
-            "play in lounge"} <= titles
+    assert {"pause kitchen", "stop kitchen", "resume den", "stop den"} <= titles
     assert not {t for t in titles if t.endswith(("attic", "garage"))}
+    # A quiet room has no transport at all: starting something in a room is
+    # the Music page's job, where the room and the track are picked together.
+    assert not {t for t in titles if t.endswith(("office", "lounge"))}
     attic = _room(snap, "attic")
     assert attic["dim"] and "last seen" in attic["text"]
     assert _room(snap, "garage")["dim"]
@@ -1025,15 +1022,8 @@ def test_a_rooms_count_stops_at_the_songs_end(driven) -> None:
     assert "5:00" not in kitchen["text"]
 
 
-def test_pause_and_the_play_sheet_post_to_the_room(driven) -> None:
-    out = driven["rooms"]
-    assert out["sheetOpen"] is True
-    assert out["after"]["sheet"] is False
-    posts = out["posts"]
-    assert posts[0] == {"path": "/api/music/pause/kitchen", "body": "{}"}
-    assert posts[1]["path"] == "/api/music/play-playlist"
-    assert json.loads(posts[1]["body"]) == {"room_id": "office", "playlist_id": 0, "shuffle": True}
-    assert "playing favorites in office" in out["after"]["text"]
+def test_pause_posts_to_the_room(driven) -> None:
+    assert driven["rooms"]["posts"] == [{"path": "/api/music/pause/kitchen", "body": "{}"}]
 
 
 def test_stop_all_needs_a_second_tap(driven) -> None:
@@ -1207,7 +1197,7 @@ def test_every_one_tap_control_is_44px_on_a_phone() -> None:
     css = (STATIC / "styles.css").read_text(encoding="utf-8")
     phone = _media(css[css.index("Home page (home.jsx)"):], "(max-width: 760px)")
     for sel in (".home-room-actions .btn", ".home-timer .btn", ".home-sec-head .btn",
-                ".home-sheet-head .btn", ".home-sec-announce .btn"):
+                ".home-sec-announce .btn"):
         assert sel in phone, sel
     assert ".home-sec-announce input { height: 44px; }" in phone
     assert ".home-link { min-height: 44px;" in phone

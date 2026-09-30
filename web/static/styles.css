@@ -1117,21 +1117,6 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .home-tile .lab { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-tile-badge { position: absolute; top: 4px; right: 8px; font-family: var(--ff-mono); font-size: 10px; color: var(--fg-faint); }
 
-/* the "play" sheet: a bottom sheet on a phone, a small dialog on a desktop */
-.home-sheet-bg { position: fixed; inset: 0; z-index: 80; background: oklch(0 0 0 / 0.4); display: flex; align-items: center; justify-content: center; }
-.home-sheet {
-  width: min(420px, 100%); padding: 8px;
-  background: var(--overlay); border: 1px solid var(--border); border-radius: var(--r-lg);
-  box-shadow: var(--shadow-md), var(--inner-highlight);
-}
-.home-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 8px; font-size: 13px; font-weight: 600; }
-.home-sheet-opt {
-  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 12px;
-  font: inherit; font-size: 13px; color: var(--fg); background: transparent; border: none;
-  border-radius: var(--r-sm); cursor: pointer; text-decoration: none; text-align: left;
-}
-.home-sheet-opt:hover { background: var(--brand-soft); }
-
 @media (min-width: 761px) {
   .home-phone-only { display: none; }
 }
@@ -1171,13 +1156,11 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .home-room { border: none; border-radius: 0; box-shadow: none; border-top: 1px solid var(--border-soft); }
   .home-room:first-child { border-top: none; }
   /* Every one-tap control is a 44px target on a phone. */
-  .home-room-actions .btn, .home-timer .btn, .home-sec-head .btn, .home-sheet-head .btn,
+  .home-room-actions .btn, .home-timer .btn, .home-sec-head .btn,
   .home-sec-announce .btn { height: 44px; min-width: 44px; justify-content: center; }
   .home-sec-announce input { height: 44px; }
   .home-sec-announce .broadcast-send-label { display: none; }   /* the megaphone says it */
   .home-link { min-height: 44px; display: inline-flex; align-items: center; }
   /* ...without making a card header any taller ("+2 more", "calendar"). */
   .home .card-head .home-link { margin-block: -12px; }
-  .home-sheet-bg { align-items: flex-end; }
-  .home-sheet { border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 }

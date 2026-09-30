@@ -722,8 +722,11 @@ const HomeRoomRank = (s) => {
 
 /* One room. Not SatCard: that is a single <button>, and a button can't
  * hold the transport buttons. The left part is a link to Satellites; the
- * buttons sit apart on the right edge, in thumb reach on a phone. */
-const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPlay }) => {
+ * buttons sit apart on the right edge, in thumb reach on a phone, while
+ * something is playing or paused. A quiet room has none: starting
+ * something in a room belongs to the Music page, which picks the room and
+ * the track together. */
+const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) => {
   const online = s.status === 'online';
   const np = s.now_playing;
   const song = online && np && np.song ? np.song : null;
@@ -803,8 +806,6 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct, onPl
           <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
         </>
       );
-    } else {
-      actions = <Button icon="play" title={`play in ${s.room_id}`} disabled={!canAct} onClick={() => { onPlay(s.room_id); }}>play</Button>;
     }
   }
 
@@ -846,7 +847,7 @@ const HomeStopAll = ({ count, busy, onConfirm }) => {
 };
 
 const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLeftByRoom, busy, stoppingAll,
-                     onAct, onPlay, onStopAll }) => {
+                     onAct, onStopAll }) => {
   const playing = stale ? [] : rooms.filter((s) => HomeRoomRank(s) === 0);
   const head = (
     <div className="home-sec-head">
@@ -888,7 +889,7 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
         {list.map((s) => (
           <HomeRoomRow key={s.room_id} s={s} stale={stale} sinceFetchSec={since}
                        nextTimerLeft={timerLeftByRoom[s.room_id]}
-                       busy={!!busy[s.room_id]} onAct={onAct} onPlay={onPlay}/>
+                       busy={!!busy[s.room_id]} onAct={onAct}/>
         ))}
       </div>
     );
@@ -911,26 +912,6 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
   }
   return <div className="home-sec home-sec-rooms">{head}{content}</div>;
 };
-
-/* A quiet room's "play": favorites, shuffled (playlist 0 is the virtual
- * Favorites list), or a way to Music to pick something. A bottom sheet on
- * a phone, a small dialog on a desktop. */
-const HomePlaySheet = ({ room, onClose, onFavorites }) => (
-  <div className="home-sheet-bg" onClick={onClose}>
-    <div className="home-sheet" role="dialog" aria-label={`play in ${room}`} onClick={(e) => e.stopPropagation()}>
-      <div className="home-sheet-head">
-        <span>play in {room}</span>
-        <IconButton name="x" title="close" onClick={onClose}/>
-      </div>
-      <button type="button" className="home-sheet-opt" onClick={() => { onFavorites(room); }}>
-        <Icon name="shuffle" size={16}/><span>favorites · shuffle</span>
-      </button>
-      <a className="home-sheet-opt" href="#music" onClick={onClose}>
-        <Icon name="music" size={16}/><span>pick something in music</span>
-      </a>
-    </div>
-  </div>
-);
 
 /* ---- today --------------------------------------------------------- */
 
@@ -1241,7 +1222,6 @@ const HomePage = ({ counts, badges }) => {
 
   // ── actions (device tier; data.js prompts and replays when unpaired) ──
   const [busy, setBusy] = React.useState({});
-  const [sheetRoom, setSheetRoom] = React.useState(null);
   const [stoppingAll, setStoppingAll] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(() => new Set());
   // The guards read refs, not render state: two taps inside one batch of
@@ -1261,20 +1241,6 @@ const HomePage = ({ counts, badges }) => {
       await apiPost(`/api/music/${verb}/${encodeURIComponent(room)}`);
     } catch (e) {
       reportMutationFailure(fire, verb, e);
-    } finally {
-      setRoomBusy(room, false);
-      refetchRooms();
-    }
-  };
-
-  const onFavorites = async (room) => {
-    setSheetRoom(null);
-    setRoomBusy(room, true);
-    try {
-      await apiPost('/api/music/play-playlist', { room_id: room, playlist_id: 0, shuffle: true });
-      fire(`playing favorites in ${room}`);
-    } catch (e) {
-      reportMutationFailure(fire, 'play', e);
     } finally {
       setRoomBusy(room, false);
       refetchRooms();
@@ -1343,7 +1309,7 @@ const HomePage = ({ counts, badges }) => {
           <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
                      dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
                      busy={busy} stoppingAll={stoppingAll}
-                     onAct={onAct} onPlay={setSheetRoom} onStopAll={onStopAll}/>
+                     onAct={onAct} onStopAll={onStopAll}/>
           <div className="home-pair">
             <HomeTimers active={active} done={done} now={now} shared={shared}
                         onlineRooms={onlineRooms} cancelling={cancelling} onCancel={onCancel}/>
@@ -1363,7 +1329,6 @@ const HomePage = ({ counts, badges }) => {
           {isPhone !== false && <HomeEverything counts={counts} badges={badges} shared={shared}/>}
         </div>
       </div>
-      {sheetRoom && <HomePlaySheet room={sheetRoom} onClose={() => setSheetRoom(null)} onFavorites={onFavorites}/>}
       {toastNode}
     </div>
   );
