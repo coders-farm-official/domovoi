@@ -43,7 +43,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from domovoi.clients import mpd as mpd_module
-from domovoi.clients.mpd import MPDStubClient, ensure_stream_serving, probe_stream
+from domovoi.clients.mpd import (
+    MPDStubClient,
+    RealMPDClient,
+    ensure_stream_serving,
+    probe_stream,
+)
 from domovoi.config import settings
 from domovoi.main import app
 from domovoi.models import Response
@@ -222,6 +227,31 @@ async def test_a_stream_that_never_opens_is_bounded(real_mode) -> None:
         assert room.primes >= 3
 
 
+async def test_a_daemon_that_never_answers_is_bounded_too(real_mode) -> None:
+    """A frozen container: its control port accepts and MPD says nothing
+    (python-mpd2 waits 5 s for the hello, and has no bound at all on a
+    command after it). The music_start must not wait past the budget for
+    it — measured on a paused real container before this bound: 5.0 s."""
+
+    class Frozen(FakeRoom):
+        task: asyncio.Task | None = None
+
+        async def prime_stream_output(self) -> str:
+            self.task = asyncio.current_task()
+            await asyncio.sleep(5)
+            return "pause"
+
+    async with Frozen(serving=False) as room:
+        real_mode(room)
+        started = time.monotonic()
+        try:
+            assert await ensure_stream_serving(ROOM, url_for(room), timeout=0.3) is False
+            assert time.monotonic() - started < 1.5
+        finally:
+            if room.task is not None:
+                room.task.cancel()
+
+
 async def test_the_default_bound_is_the_setting(real_mode, monkeypatch) -> None:
     monkeypatch.setattr(settings, "music_stream_ready_timeout_sec", 0.2)
     async with FakeRoom("pause", serving=False, opens_on=10**6) as room:
@@ -275,6 +305,67 @@ async def test_the_start_survives_a_check_that_blows_up(monkeypatch) -> None:
 async def test_stub_mode_checks_nothing(monkeypatch) -> None:
     assert settings.use_stubs
     assert await ensure_stream_serving("anywhere", "http://nowhere:1") is True
+
+
+# ─── what the real client sends MPD ────────────────────────────────────────
+
+
+class _RecordingMPD:
+    """One control connection to MPD, recording the commands sent on it."""
+
+    def __init__(self, state: str, playlistlength: int = 1) -> None:
+        self.reply = {"state": state, "playlistlength": str(playlistlength)}
+        self.sent: list[str] = []
+
+    async def status(self) -> dict:
+        self.sent.append("status")
+        return dict(self.reply)
+
+    async def pause(self, flag) -> None:
+        self.sent.append(f"pause {flag}")
+
+    async def play(self, pos=None) -> None:
+        self.sent.append("play" if pos is None else f"play {pos}")
+
+
+def _real_client(conn: _RecordingMPD) -> RealMPDClient:
+    from contextlib import asynccontextmanager
+
+    client = RealMPDClient(HOST, 1)
+
+    @asynccontextmanager
+    async def one_connection():
+        yield conn
+
+    client._connect = one_connection  # type: ignore[method-assign]
+    return client
+
+
+@pytest.mark.parametrize(
+    "state, expected",
+    [
+        # Opened and paused again, on one connection: the song stays at 0:00.
+        ("pause", ["status", "pause 0", "pause 1"]),
+        # "play" opens the output by itself; "stop" has nothing to open.
+        ("play", ["status"]),
+        ("stop", ["status"]),
+    ],
+)
+async def test_the_real_prime_toggles_only_a_paused_daemon_and_leaves_it_paused(
+    state: str, expected: list[str],
+) -> None:
+    conn = _RecordingMPD(state)
+    assert await _real_client(conn).prime_stream_output() == state
+    assert conn.sent == expected
+
+
+async def test_the_real_start_paused_plays_the_first_song_and_pauses_on_it() -> None:
+    conn = _RecordingMPD("stop")
+    assert await _real_client(conn).start_paused() is True
+    assert conn.sent == ["status", "play 0", "pause 1"]
+    empty = _RecordingMPD("stop", playlistlength=0)
+    assert await _real_client(empty).start_paused() is False
+    assert empty.sent == ["status"]
 
 
 # ─── send_music_start ──────────────────────────────────────────────────────

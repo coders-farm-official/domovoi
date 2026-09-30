@@ -308,6 +308,21 @@ def test_a_failure_that_is_not_the_connection_is_given_up_on_at_once(monkeypatch
     assert sat._leds.state == "idle"
 
 
+def test_giving_up_leaves_a_ring_someone_else_painted(monkeypatch):
+    """The wake path paints "listening" BEFORE it stops the music (feedback
+    first, then the up-to-3 s mpg123 teardown). A give-up landing in that
+    gap still reports, but must not paint idle over the capture."""
+    sat = make_sat(monkeypatch, [("refused",)], prime=0.5, window=0.0, after=0.2)
+    t = start(sat)
+    wait_for(lambda: sat._leds.state == "music")
+    sat._leds.set_state("listening")           # wake word; music not stopped yet
+    t.join(5)
+    settle(sat)
+    assert len(sat.procs) == 1
+    assert sat._leds.state == "listening"
+    assert [f["type"] for f in sat.frames] == ["music_failed"]
+
+
 def test_a_music_start_after_giving_up_spawns_again(monkeypatch):
     sat = make_sat(monkeypatch, [("refused",), ("plays",)], window=0.0)
     start(sat).join(5)

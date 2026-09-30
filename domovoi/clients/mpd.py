@@ -925,6 +925,19 @@ async def probe_stream(host: str, port: int, *, timeout: float = 0.5) -> bool:
     return len(parts) >= 2 and parts[0].startswith(b"HTTP/") and parts[1] == b"200"
 
 
+# The least a prime is given even when the budget is nearly spent: one
+# control round trip is a few ms, so this only matters to a daemon that is
+# not answering at all.
+_PRIME_MIN_WAIT_SEC = 0.5
+
+
+def _forget_result(task: "asyncio.Future[Any]") -> None:
+    """Done-callback for a prime nobody waits for any more: fetch its
+    outcome so a late failure is not reported as never retrieved."""
+    if not task.cancelled():
+        task.exception()
+
+
 def _stream_target(room_id: str | None, stream_url: str | None) -> tuple[str, int] | None:
     """Which room's daemon serves the stream the satellite will be sent to,
     and on which port: the port in ``stream_url`` (the one mpg123 will
@@ -991,11 +1004,32 @@ async def ensure_stream_serving(
     primes = 0
     state = "?"
     while True:
+        # Shielded: `pause 0` without its `pause 1` would leave the song
+        # playing to nobody. A turn that cancels this wait (a wake, a
+        # barge-in) must not be able to split the pair. And bounded by what
+        # is left of the budget: a daemon that accepts the connection and
+        # then says nothing (a frozen container — python-mpd2 waits 5 s for
+        # the hello and has no bound on a command after it) must not hold
+        # the music_start past it. Timed out or cancelled, the prime carries
+        # on by itself (its outcome is fetched and dropped when it lands).
+        prime = asyncio.ensure_future(client.prime_stream_output())
         try:
-            # Shielded: `pause 0` without its `pause 1` would leave the song
-            # playing to nobody. A turn that cancels this wait (a wake, a
-            # barge-in) must not be able to split the pair.
-            state = await asyncio.shield(client.prime_stream_output())
+            state = await asyncio.wait_for(
+                asyncio.shield(prime),
+                timeout=max(deadline - loop.time(), _PRIME_MIN_WAIT_SEC),
+            )
+        except asyncio.TimeoutError:
+            prime.add_done_callback(_forget_result)
+            log.warning(
+                "music stream: room=%s MPD did not answer within %.1f s while "
+                "opening its stream on :%d; the satellite will retry and the "
+                "music_ready fallback resumes MPD",
+                key, loop.time() - began, port,
+            )
+            return False
+        except asyncio.CancelledError:
+            prime.add_done_callback(_forget_result)
+            raise
         except Exception as e:  # noqa: BLE001 — best-effort, see docstring
             log.warning(
                 "music stream: room=%s MPD unreachable while opening its "
