@@ -172,8 +172,9 @@ class TimerRepository:
         return [r[0] for r in rows.all()]
 
     async def next_active(self, room_id: str | None) -> tuple[int, datetime, str | None] | None:
-        """The room's next plain timer. Reminders are not timers: "how long
-        left on the timer" never describes one."""
+        """The room's next plain timer; reminders are not timers. "How long
+        left on the timer" reads :meth:`next_for_status`, which prefers this
+        and names a lone reminder as a reminder."""
         row = await self.s.execute(
             text(
                 """
@@ -191,6 +192,33 @@ class TimerRepository:
         if result is None:
             return None
         return int(result[0]), result[1], result[2]
+
+    async def next_for_status(
+        self, room_id: str | None
+    ) -> tuple[int, datetime, str | None, str | None] | None:
+        """What "how long left on the timer" reads: the room's soonest plain
+        timer, or its soonest reminder when it has no timer running.
+
+        Returns (id, expires_at, label, message); ``message`` is not None
+        for a reminder (``''`` for one set with no task), so the reply can
+        call it a reminder rather than "the 10 minute reminder timer".
+        """
+        row = await self.s.execute(
+            text(
+                """
+                SELECT id, expires_at, label, message
+                FROM timers
+                WHERE room_id IS NOT DISTINCT FROM :room_id
+                ORDER BY (message IS NOT NULL), expires_at ASC
+                LIMIT 1
+                """
+            ),
+            {"room_id": room_id},
+        )
+        result = row.first()
+        if result is None:
+            return None
+        return int(result[0]), result[1], result[2], result[3]
 
     async def pop_expired(
         self,

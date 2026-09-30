@@ -198,6 +198,9 @@ class _OneTimerRepo:
     async def next_active(self, room_id):
         return 1, utcnow() + timedelta(minutes=10, seconds=30), self.label
 
+    async def next_for_status(self, room_id):
+        return 1, utcnow() + timedelta(minutes=10, seconds=30), self.label, None
+
 
 @pytest.mark.asyncio
 async def test_labelled_cancel_and_status_read_the_label_once(monkeypatch) -> None:
@@ -229,6 +232,89 @@ async def test_unarticled_label_wording_is_unchanged(monkeypatch) -> None:
     assert response.text == "Cancelled the pasta timer."
     response = await handler._status(ctx=ctx, session=None)  # type: ignore[arg-type]
     assert response.text == "10 minutes left on the pasta timer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "message", "expected"),
+    [
+        # a plain timer: unchanged
+        (None, None, "10 minutes left on the timer."),
+        ("the pasta", None, "10 minutes left on the pasta timer."),
+        # a reminder is read as one: set with no task, it used to be "10
+        # minutes left on the 10 minute reminder timer."
+        ("10 minute reminder", "", "10 minutes left on your 10 minute reminder."),
+        ("call mom", "call mom", "10 minutes left on your reminder: call mom."),
+        ("laundry", "laundry", "10 minutes left on your reminder: laundry."),
+    ],
+)
+async def test_status_reads_a_reminder_as_a_reminder(
+    monkeypatch, label, message, expected
+) -> None:
+    class _Repo(_OneTimerRepo):
+        async def next_for_status(self, room_id):
+            return 1, utcnow() + timedelta(minutes=10, seconds=30), label, message
+
+    monkeypatch.setattr(timer_mod, "TimerRepository", _Repo)
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    response = await TimerHandler()._status(ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == expected
+
+
+@pytest.mark.asyncio
+async def test_status_of_a_reminder_about_to_fire(monkeypatch) -> None:
+    class _Repo(_OneTimerRepo):
+        async def next_for_status(self, room_id):
+            return 1, utcnow() - timedelta(seconds=1), "10 minute reminder", ""
+
+    monkeypatch.setattr(timer_mod, "TimerRepository", _Repo)
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    response = await TimerHandler()._status(ctx=ctx, session=None)  # type: ignore[arg-type]
+    assert response.text == "That reminder is about to go off."
+
+
+def _offered(transcript: str) -> list[str]:
+    from domovoi.router import normalize_transcript, offered_tool_schemas, strip_leading_filler
+
+    norm = strip_leading_filler(normalize_transcript(transcript))
+    return [s["name"] for s in offered_tool_schemas(norm)]
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        # talk about a timer is no timer command (the reminder shapes are
+        # in test_reminder_handler)
+        "My timer didn't go off.",
+        "The garage timer never went off.",
+        "That timer was useless.",
+        "My timer for 10 minutes did not go off.",
+        "You have a timer running in the kitchen.",
+        "You've set a timer for the pasta already.",
+        "Why didn't the timer go off?",
+    ],
+)
+def test_talk_about_a_timer_is_not_offered_the_timer_tool(transcript: str) -> None:
+    assert "timer" not in _offered(transcript)
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "The pasta timer, how long is left?",
+        "How much time is left on the garage timer?",
+        "Start a timer for the eggs.",
+        "I need a timer for ten minutes.",
+        "Cancel the garage timer.",
+        "Stop the timer for the pasta.",
+        "Put a timer on for the pizza.",
+        "Is the timer still running?",
+        "You set a timer for ten minutes.",
+        "I set a timer for ten minutes.",
+    ],
+)
+def test_timer_commands_keep_the_timer_tool(transcript: str) -> None:
+    assert "timer" in _offered(transcript)
 
 
 @pytest.mark.asyncio
@@ -365,6 +451,35 @@ async def test_status_with_no_timer(db_session) -> None:
     assert m2
     response = await handler._status_from_match(m2, ctx, db_session)
     assert "no timer" in response.text.lower()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_status_prefers_the_timer_and_reads_a_reminder_as_one(db_session) -> None:
+    """"How long left on the timer" answers the room's timer even when a
+    reminder is due sooner, and reads a reminder as a reminder when that
+    is all the room has."""
+    repo = TimerRepository(db_session)
+    now = utcnow()
+    await repo.create(
+        expires_at=now + timedelta(minutes=5), created_at=now,
+        label="10 minute reminder", message="", room_id="garage",
+    )
+    await db_session.commit()
+    handler = TimerHandler()
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    m = _STATUS_RE.match("how much time left on the timer")
+
+    response = await handler._status_from_match(m, ctx, db_session)
+    assert response.text.endswith(" left on your 10 minute reminder."), response.text
+
+    await repo.create(
+        expires_at=now + timedelta(minutes=20), created_at=now,
+        label="pasta", message=None, room_id="garage",
+    )
+    await db_session.commit()
+    response = await handler._status_from_match(m, ctx, db_session)
+    assert response.text.endswith(" left on the pasta timer."), response.text
 
 
 @requires_db
@@ -564,14 +679,23 @@ async def test_the_tool_cancel_is_room_scoped_unless_everywhere(v017_session) ->
 
 @requires_db
 @pytest.mark.asyncio
-async def test_status_ignores_reminders(v017_session) -> None:
+async def test_status_never_calls_a_reminder_a_timer(v017_session) -> None:
+    # next_active is timers only. "How long left on the timer" reads the
+    # room's plain timer first (wf/reminder-parse's next_for_status) and a
+    # lone reminder as a reminder, never as "the call mom timer".
     s = v017_session
     await _timer(s, room="kitchen", label="call mom", message="call mom", minutes=2)
     await s.commit()
     assert await TimerRepository(s).next_active(room_id="kitchen") is None
     m = _STATUS_RE.match("how much time left on the timer")
     reply = await TimerHandler()._status_from_match(m, _ctx("kitchen"), s)
-    assert reply.text == "No timers running."
+    assert reply.text.endswith(" left on your reminder: call mom."), reply.text
+    assert "timer" not in reply.text
+
+    await _timer(s, room="kitchen", label="pasta", minutes=20)
+    await s.commit()
+    reply = await TimerHandler()._status_from_match(m, _ctx("kitchen"), s)
+    assert reply.text.endswith(" left on the pasta timer."), reply.text
 
 
 async def _spoken_fire(s, *, spoken_ago_sec: float) -> int:

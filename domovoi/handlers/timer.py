@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
+from domovoi.handlers.shared.tool_gate import TIMER_STATEMENT_RE
 from domovoi.models import Context, Intent, Response
 
 # The duration grammar lives in handlers/shared/number_words: digits,
@@ -70,6 +71,17 @@ def _format_duration(seconds: int) -> str:
     return f"{hours} hour{'s' if hours != 1 else ''}"
 
 
+# "10 minutes" → "10 minute": the duration as an adjective.
+_PLURAL_UNIT_RE = re.compile(r"\b(second|minute|hour)s\b")
+
+
+def duration_adjective(seconds: int) -> str:
+    """``_format_duration`` in front of a noun: 600 → "10 minute" (as in
+    "Your 10 minute timer is done.", "10 minute reminder"), 5400 → "1 hour
+    and 30 minute"."""
+    return _PLURAL_UNIT_RE.sub(r"\1", _format_duration(seconds))
+
+
 class TimerHandler(Handler):
     name = "timer"
     # band rationale: after reminder (140) — see the "remind" collision note there.
@@ -104,6 +116,13 @@ class TimerHandler(Handler):
             FastPath(_CANCEL_RE, TimerHandler._cancel_from_match, early_commit="B"),
             FastPath(_STATUS_RE, TimerHandler._status_from_match, early_commit="A"),
         ]
+
+    def offers_tool(self, transcript: str) -> bool:
+        # Talk about a timer or reminder ("my timer didn't go off", "the
+        # reminder in 10 minutes is for the oven") is no timer command. The
+        # reminder handler withholds its tool on the same shapes, and with
+        # only that one withheld qwen3:8b (2026-09-30) set a timer instead.
+        return not TIMER_STATEMENT_RE.match(transcript)
 
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
         # execute() is normally reached via fast paths or tool-call —
@@ -257,25 +276,34 @@ class TimerHandler(Handler):
 
     async def _status(self, *, ctx: Context, session: AsyncSession) -> Response:
         repo = TimerRepository(session)
-        nxt = await repo.next_active(room_id=ctx.room_id)
+        # The room's timer first; its reminder only when no timer runs.
+        nxt = await repo.next_for_status(room_id=ctx.room_id)
         if nxt is None:
             return Response(
                 text="No timers running.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        _id, expires_at, label = nxt
+        _id, expires_at, label, message = nxt
+        is_reminder = message is not None
         remaining = int((expires_at - utcnow()).total_seconds())
         if remaining <= 0:
             return Response(
-                text="That timer is about to go off.",
+                text=f"That {'reminder' if is_reminder else 'timer'} is about to go off.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
         spoken = _format_duration(remaining)
-        text = (
-            f"{spoken} left on the {spoken_label(label)} timer."
-            if label
-            else f"{spoken} left on the timer."
-        )
+        if is_reminder and message.strip():
+            # "4 minutes left on your reminder: call mom."
+            text = f"{spoken} left on your reminder: {message}."
+        elif is_reminder:
+            # A reminder set with no task is labelled "10 minute reminder":
+            # "8 minutes left on your 10 minute reminder.", not "... on the
+            # 10 minute reminder timer."
+            text = f"{spoken} left on your {label or 'reminder'}."
+        elif label:
+            text = f"{spoken} left on the {spoken_label(label)} timer."
+        else:
+            text = f"{spoken} left on the timer."
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)

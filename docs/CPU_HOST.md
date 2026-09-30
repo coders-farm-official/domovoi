@@ -407,7 +407,7 @@ What it commits on, and after how much quiet:
 |---|---|
 | 350 ms | Closed phrases: pause / resume / stop the music, next / previous song, volume up / down, what's playing, how long is left on the timer, hang up, next / previous chapter, the wifi, server and voice questions, play / shuffle my favorites |
 | 650 ms | A number, a duration or a label: set a timer, cancel or stop the timer ("... for the pasta"), set the volume to N, skip N seconds, a calculation; the clock ("what time is it" can become "... in Tokyo"); phrases that can start a question ("what was that ... song", "what are my reminders ... for tomorrow", "how many albums ... does Adele have", "what's this book ... about"); a bare word ("stop", "pause", "next") and "go back", which often start a longer command |
-| never | Open slots (`play ...`, `remember ...`, `announce ...`), a reminder's message, plugin commands, anything for the language model |
+| never | Open slots (`play ...`, `remember ...`, `announce ...`), a reminder's message, a reminder with no task yet ("set a reminder for 10 minutes", which "... to call mom" can follow), plugin commands, anything for the language model |
 
 What you see: one line per turn it would have acted on,
 

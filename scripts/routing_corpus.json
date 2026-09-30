@@ -183,6 +183,39 @@
       "note": "action routing guard"
     },
     {
+      "utterance": "set a reminder for ten minutes",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder"],
+      "note": "2026-09-30 live garage: no fast path, and the tool model stored the transcript as the task ('Reminder: Better reminder for 10 minutes')"
+    },
+    {
+      "utterance": "better reminder for ten minutes",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder"],
+      "note": "2026-09-30 live garage: Whisper's 'set a' heard as 'better'; a no-task reminder, never the task 'better'"
+    },
+    {
+      "utterance": "laundry reminder in five minutes",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder"],
+      "note": "a task named in front of 'reminder' is the task, not a verb to drop"
+    },
+    {
+      "utterance": "remind me at six pm to feed the dog",
+      "handler": "reminder",
+      "tags": ["action", "reminder"],
+      "note": "an absolute time has no fast path; the reminder tool must stay on offer for it"
+    },
+    {
+      "utterance": "my reminder for ten minutes didn't go off",
+      "handler": null,
+      "tags": ["reminder"],
+      "note": "2026-09-30: a complaint, not a command; the widened grammar at 7fa80b9 made it a reminder 'did not go off'"
+    },
+    {
       "utterance": "tell the kitchen dinner is ready",
       "handler": "intercom",
       "tags": ["action"],
