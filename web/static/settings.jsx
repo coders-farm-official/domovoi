@@ -468,7 +468,11 @@ const AdminSection = () => {
           </span>
         )}
         {viewOnly && (
-          <span className="admin-view-only" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          // Its own row UNDER the pill and both buttons (order: 1): inline, the
+          // long sentence pushed "sign out" onto a line of its own, away
+          // from "sign in again".
+          <span className="admin-view-only"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
             A page reload keeps this browser signed in for viewing, but forgets
             the admin sign-in this tab needs to change settings or see
             Advanced. Sign in again to get it back.

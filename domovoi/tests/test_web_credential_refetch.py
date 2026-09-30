@@ -137,6 +137,11 @@ const __route = (method, path, c) => {
     srv.sessions.delete(c.bearer); srv.cookie = null;
     return __answer(200, { ok: true, revoked: true });
   }
+  // A config write is Bearer-only (security tier): the cookie is refused.
+  if (method === 'PATCH' && path === '/api/config/editable') {
+    if (c.who !== 'bearer') return __answer(403, { detail: 'admin session required' });
+    return __answer(200, { applied: ['bot_name'], restart_required: [], rejected: {}, normalized: {} });
+  }
   if (method !== 'GET') return __answer(404, { detail: 'not found' });
   const bare = path.split('?')[0];
   if (bare === '/api/auth/status') return __answer(200, { setup_complete: true, authenticated: admin });
@@ -302,6 +307,21 @@ SCENARIOS["object_stale_answer"] = scenario(
     component=PROBE, probe=("object", "/api/probe", {"refetchOnAuth": True}),
     ls={"domovoi-device-token": "house-token"},
 )
+SCENARIOS["list_stale_answer"] = scenario(
+    r"""
+    await A.login('pw'); await step();
+    const signedIn = view();
+    w.__hold['GET /api/probe/list'] = 1;
+    w.__probe.refresh();                  // sent under the Bearer; held
+    await A.logout(); await step();       // dropped; the re-read is not held
+    const afterSignOut = view();
+    const released = w.__release(); await step();
+    return { signedIn, afterSignOut, released, after: view(),
+             sent: w.__gets('/api/probe/list').map((f) => f.who) };
+    """,
+    component=PROBE, probe=("list", "/api/probe/list", {"refetchOnAuth": True}),
+    ls={"domovoi-device-token": "house-token"},
+)
 SCENARIOS["list_opt_in"] = scenario(
     r"""
     const n = () => w.__gets('/api/probe/list').length;
@@ -434,6 +454,47 @@ SCENARIOS["config_signed_out"] = scenario(
     return { before, prompted, signedIn: snap() };
     """,
 )
+# A save from a view-only tab: the write is Bearer-only, so it asks. Dismissed,
+# it says "cancelled" (never a raw 403); signed in, the save is replayed.
+SCENARIOS["config_view_only_save"] = scenario(
+    SNAP + r"""
+    const saveBtn = (e) => e.type === 'button' && e.text.includes('Save')
+      && !h.inside(e, (a) => w.__cls(a).includes('cal-modal'));
+    // Pressed, not awaited: the save waits on the sign-in prompt, and
+    // h.click would wait on the save.
+    const press = (sel) => { h.find(sel).props.onClick({ preventDefault() {}, stopPropagation() {} }); };
+    await h.type((e) => e.type === 'input' && e.props.value === 'Domovoi', 'Domovoi-2'); await step();
+    press(saveBtn); await step();
+    const asked = snap();
+    await h.click(modalButton('cancel')); await step();
+    const cancelled = snap();
+    press(saveBtn); await step();
+    await h.type(password, 'the-admin-password');
+    await h.click(modalButton('log in')); await step();
+    const saved = snap();
+    const patches = w.__fetches.filter((f) => f.method === 'PATCH').map((f) => f.who);
+    return { asked, cancelled, saved, patches };
+    """,
+    cookie="old-session",
+)
+# The sidebar footer says what the Admin card says.
+SCENARIOS["footer_view_only"] = scenario(
+    SNAP + r"""
+    const who = () => h.findAll((e) => w.__cls(e).includes('name')
+      && h.inside(e, (a) => w.__cls(a).includes('who'))).map((e) => e.text);
+    const viewOnly = who();
+    await h.click(cardButton('sign in again')); await step();
+    await h.type(password, 'the-admin-password');
+    await h.click(modalButton('log in')); await step();
+    const live = who();
+    await h.click(cardButton('sign out')); await step();
+    return { viewOnly, live, signedOut: who() };
+    """,
+    component=("(window.__Auth = Auth, function FooterWithConfig() { return React.createElement("
+               "React.Fragment, null, React.createElement(SidebarFooter), React.createElement(ConfigPanel),"
+               " React.createElement(AuthModalHost)); })"),
+    cookie="old-session",
+)
 
 
 @pytest.fixture(scope="module")
@@ -510,6 +571,17 @@ def test_an_answer_sent_under_the_old_credential_is_thrown_away(driven) -> None:
     assert o["after"] == "device"
     # (`none` is a request with no admin credential: the household token
     # rode along, so the server answered `device`.)
+    assert o["sent"] == ["none", "bearer", "bearer", "none"]
+
+
+def test_a_list_answer_sent_under_the_old_credential_is_thrown_away(driven) -> None:
+    """The same guard on useApiList: a Bearer's answer landing after the
+    sign-out's re-read must not put the privileged list back."""
+    o = driven["list_stale_answer"]
+    assert o["signedIn"] == "bearer"
+    assert o["afterSignOut"] == "device"
+    assert o["released"] is True
+    assert o["after"] == "device"
     assert o["sent"] == ["none", "bearer", "bearer", "none"]
 
 
@@ -635,6 +707,28 @@ def test_a_refused_config_read_offers_the_sign_in_itself(driven) -> None:
     after = o["signedIn"]
     assert after["editable"] == ["none", "bearer"]
     assert after["advancedToggle"] and SECRET_KEY in after["inputs"]
+
+
+def test_a_save_from_a_view_only_tab_says_cancelled_or_replays(driven) -> None:
+    o = driven["config_view_only_save"]
+    assert o["asked"]["modal"] is True and o["asked"]["modalTitle"] == "admin login"
+    cancelled = o["cancelled"]
+    assert cancelled["modal"] is False
+    assert "Save cancelled — not signed in. Your changes are still here." in cancelled["blob"]
+    assert "403" not in cancelled["blob"] and "save failed" not in cancelled["blob"].lower()
+    assert "Domovoi-2" in cancelled["inputs"]
+    # Signed in the second time: the refused write is replayed with the Bearer.
+    assert o["patches"] == ["cookie", "cookie", "bearer"]
+    saved = o["saved"]
+    assert "saved ✓" in saved["blob"] and "cancelled" not in saved["blob"]
+    assert saved["advancedToggle"]
+
+
+def test_the_sidebar_says_view_only_like_the_admin_card(driven) -> None:
+    o = driven["footer_view_only"]
+    assert o["viewOnly"] == ["Admin (view only)"]
+    assert o["live"] == ["Admin"]
+    assert o["signedOut"] == ["Not signed in"]
 
 
 # ─── the audit: every credential-dependent read is opted in ──────────────
