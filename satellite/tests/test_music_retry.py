@@ -32,7 +32,15 @@ connection is scripted per spawn:
 * a stream that played and then dropped on its own turns the ring off and
   is reported; one stopped on purpose is not;
 * the defaults: the retry window outlasts the core's 5 s music_ready
-  fallback, because an older core's stream opens only then.
+  fallback, because an older core's stream opens only then;
+* a start still waiting for the speaker (up to 10 s, while the last TTS
+  sentence drains) is dropped by a music_stop, a wake or a barge-in that
+  lands in that wait — through the real receiver and barge monitors — but
+  not by a newer music_start, which goes ahead;
+* a refusal is judged over the connect grace, not the prime alone: with
+  `[music] prime_sec` below a refused mpg123's lifetime (~230 ms on a Pi),
+  music_ready still goes out at the prime, and the refusal that follows is
+  retried instead of reported as a stream that played and dropped.
 """
 
 from __future__ import annotations
@@ -147,7 +155,7 @@ class Ring:
 
 
 def make_sat(monkeypatch, plans, *, features=("speech_pause", "end_capture", "music_failed"),
-             prime=0.05, backoff=(0.02, 0.04), window=0.6, after=0.01):
+             prime=0.05, backoff=(0.02, 0.04), window=0.6, after=0.01, grace=0.1):
     """A Satellite with exactly the state the music path touches, and a
     Popen that hands out one scripted mpg123 per spawn (the last plan
     repeats)."""
@@ -163,6 +171,7 @@ def make_sat(monkeypatch, plans, *, features=("speech_pause", "end_capture", "mu
     sat._core_features = frozenset(features)
     sat.MUSIC_RETRY_BACKOFF_SEC = backoff
     sat.MUSIC_RETRY_WINDOW_SEC = window
+    sat.MUSIC_CONNECT_GRACE_SEC = grace
     sat.frames = []
     sat._emit_text = lambda payload: sat.frames.append(payload) or True
     sat.procs = []
@@ -498,3 +507,194 @@ def test_the_ring_is_taken_back_only_from_music():
     leds.set_state("listening")
     leds.set_state_if("music", "idle")
     assert leds._current_state() == "listening"
+
+
+# ─── a stop while the start waits for the speaker ─────────────────────────
+#
+# The receiver hands a music_start to the music-defer thread, which waits
+# (up to 10 s) for the playback thread to release the output — the reply's
+# last sentence is usually still playing. Something that stops the music in
+# that wait must stop this start too, or mpg123 comes up over the capture
+# the moment the speaker is free.
+
+
+def defer_runs(sat) -> list[threading.Event]:
+    """Record each music-defer run the receiver starts; each Event is set
+    when that run is over."""
+    runs: list[threading.Event] = []
+    real = client.Satellite._start_music_when_idle.__get__(sat)
+
+    def wrapped(url, stop_gen=None):
+        done = threading.Event()
+        runs.append(done)
+        try:
+            real(url, stop_gen)
+        finally:
+            done.set()
+
+    sat._start_music_when_idle = wrapped
+    return runs
+
+
+def speaker_busy(monkeypatch, plans=(("plays",),), **kw):
+    """A satellite whose last TTS sentence is still playing."""
+    sat = make_sat(monkeypatch, list(plans), **kw)
+    sat._playback_idle.clear()
+    return sat, defer_runs(sat)
+
+
+def music_start(sat, url: str = URL) -> None:
+    """The music_start frame, through the real receiver."""
+    sat._handle_text_frame({"type": "music_start", "stream_url": url})
+
+
+def test_a_start_waiting_for_the_speaker_plays_once_it_is_free(monkeypatch):
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    time.sleep(0.05)
+    assert sat.procs == []                      # still waiting
+    sat._playback_idle.set()
+    assert runs[0].wait(3)
+    assert len(sat.procs) == 1 and sat._is_music_playing()
+    assert sat.frames == [{"type": "music_ready"}]
+
+
+def test_a_music_stop_while_the_start_waits_for_the_speaker_cancels_it(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=client.log.name)
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    sat._handle_text_frame({"type": "music_stop"})
+    sat._playback_idle.set()                    # the reply finishes
+    assert runs[0].wait(3)
+    assert sat.procs == []
+    assert sat.frames == []                     # and no music_ready
+    assert "music" not in sat._leds.log
+    assert f"music: not starting {URL}; it was stopped while it waited" in caplog.text
+
+
+def test_a_wake_while_the_start_waits_for_the_speaker_cancels_it(monkeypatch):
+    """The mic thread on a wake word: ring to "listening", `_stop_music`,
+    then the capture — with the speaker free, a start that survived the
+    stop would spawn mpg123 into it."""
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    sat._leds.set_state("listening")
+    sat._stop_music()
+    sat._playback_idle.set()
+    assert runs[0].wait(3)
+    assert sat.procs == [] and sat.frames == []
+    assert sat._leds.state == "listening"
+
+
+class _Oww:
+    def reset(self) -> None:
+        pass
+
+    def predict(self, chunk):
+        return {"hey_jarvis": 0.99}
+
+
+class _Vad:
+    def __init__(self, aggressiveness) -> None:
+        pass
+
+    def is_speech(self, frame, rate) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("wake_gated", [True, False], ids=["wake-word-barge", "talk-over-barge"])
+def test_a_barge_in_while_the_start_waits_for_the_speaker_cancels_it(monkeypatch, wake_gated):
+    """A barge-in drains the reply, which frees the speaker at once — the
+    very moment the waiting start was waiting for. Driven through the real
+    barge monitors."""
+    import queue
+
+    sat, runs = speaker_busy(monkeypatch)
+    monkeypatch.setattr(client.webrtcvad, "Vad", _Vad, raising=False)
+    sat.cfg.barge_in = True
+    sat.cfg.barge_in_require_wake_word = wake_gated
+    sat.cfg.barge_in_min_speech_ms = client.FRAME_MS
+    sat.cfg.vad_aggressiveness_during_tts = 3
+    sat.cfg.noise_gate_dbfs = -60.0
+    sat._wake_word = "hey_jarvis"
+    sat._wake_threshold = 0.5
+    sat.response_done = threading.Event()
+    sat.playback_active = threading.Event()
+    sat.playback_active.set()                   # the reply is playing
+    sat.stop_playback = threading.Event()
+    sat.playback_q = queue.Queue()
+    sat.raw_q = queue.Queue()
+    sat._utt_seq = 0
+    frame = b"\xe8\x03" * 1280                  # 80 ms, steady and loud
+    for _ in range(3):
+        sat.raw_q.put(frame)
+
+    music_start(sat)                            # came with the reply
+    assert sat._await_response_with_barge(_Oww()) == "barge"
+    assert [f["type"] for f in sat.frames] == ["barge_in", "utterance_start"]
+    sat._playback_idle.set()                    # the drained reply lets go of the card
+    assert runs[0].wait(3)
+    assert sat.procs == []
+    assert "music_ready" not in [f["type"] for f in sat.frames]
+
+
+def test_a_newer_music_start_does_not_cancel_the_one_waiting(monkeypatch):
+    """Only a stop cancels. The auto-resume after a turn and an
+    announcement's restart can both send music_start while the speaker is
+    busy: both go ahead, the second takes the first over, and the music
+    plays."""
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat)
+    music_start(sat)
+    sat._playback_idle.set()
+    assert runs[0].wait(3) and runs[1].wait(3)
+    assert len(sat.procs) == 1 and sat._is_music_playing()
+    assert sat.frames and {f["type"] for f in sat.frames} == {"music_ready"}
+
+
+def test_two_waiting_starts_for_different_streams_both_go_ahead(monkeypatch):
+    """Neither start cancels the other: whichever runs second replaces the
+    first (two spawns, the later one playing). A count that a start bumps
+    too would let the first spawn cancel the second."""
+    sat, runs = speaker_busy(monkeypatch)
+    music_start(sat, URL)
+    music_start(sat, OTHER)
+    sat._playback_idle.set()
+    assert runs[0].wait(3) and runs[1].wait(3)
+    assert len(sat.procs) == 2
+    assert sat.procs[0].poll() is not None      # replaced
+    assert sat._is_music_playing() and sat._music_url == sat.procs[1].argv[-1]
+
+
+def test_a_start_that_arrives_after_a_stop_is_not_cancelled_by_it(monkeypatch):
+    sat, runs = speaker_busy(monkeypatch)
+    sat._handle_text_frame({"type": "music_stop"})
+    music_start(sat)
+    sat._playback_idle.set()
+    assert runs[0].wait(3)
+    assert len(sat.procs) == 1 and sat._is_music_playing()
+
+
+# ─── the connect grace ─────────────────────────────────────────────────────
+
+
+def test_a_refusal_after_a_short_prime_is_retried_not_reported(monkeypatch):
+    """`[music] prime_sec` 0.05 s and an mpg123 refused 150 ms after it
+    started (a Pi takes ~230 ms). The run outlived the prime, so music_ready
+    went out — but a refusal inside the connect grace is still "not up
+    yet": retried, and the connection that works needs no second
+    music_ready. Judged at the prime alone, it was taken for a stream that
+    played and dropped: reported as music_failed, never retried."""
+    sat = make_sat(monkeypatch, [("refused",), ("plays",)], prime=0.05, grace=0.4, after=0.15)
+    start(sat).join(5)
+    settle(sat)
+    assert len(sat.procs) == 2
+    assert sat.frames == [{"type": "music_ready"}]
+    assert sat._is_music_playing() and sat._leds.state == "music"
+
+
+def test_the_connect_grace_outlasts_a_refusal_on_a_pi():
+    """A refused mpg123 exits about 230 ms after it is spawned on a Pi
+    (office, 2026-09-30); the grace has to cover that whatever prime_sec
+    says."""
+    assert client.Satellite.MUSIC_CONNECT_GRACE_SEC >= 0.4

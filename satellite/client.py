@@ -1566,6 +1566,14 @@ class Satellite:
     # step aside. Read and written under `_music_lock`. Class defaults so a
     # Satellite built field-by-field (the tests) has them too.
     _music_gen: int = 0
+    # Bumped ONLY by a stop (`_stop_music`: music_stop, a wake word, a
+    # barge-in, a response, a drop-in, chat, shutdown) — never by a start.
+    # A music_start snapshots it when its frame arrives; if it has moved by
+    # the time the speaker is free, something stopped the music while the
+    # start waited, and the start is dropped instead of spawning mpg123
+    # over the capture. `_music_gen` cannot do this job: a newer start
+    # bumps it too, so two starts in a row would cancel each other.
+    _music_stop_gen: int = 0
     # The run `_music_proc` belongs to (exit status, who reports its exit).
     _music_run: _MusicRun | None = None
 
@@ -1578,12 +1586,17 @@ class Satellite:
     # Pause before each retry: the first quickly (the core may be opening
     # the stream right now), then backing off; the last entry repeats.
     MUSIC_RETRY_BACKOFF_SEC = (0.25, 0.5, 1.0, 1.5)
-    # How long a new mpg123 must stay up to count as connected when
-    # `[music] prime_sec` is 0 (no music_ready to wait for). A refused
-    # connection exits within a few hundred ms on a Pi.
-    MUSIC_CONNECT_GRACE_SEC = 1.0
+    # How long a new mpg123 is watched for a refused connection, whatever
+    # `[music] prime_sec` says (the longer of the two applies). A refused
+    # mpg123 exits about 230 ms after it is spawned on a Pi (office,
+    # 2026-09-30), so a prime_sec below that, judged alone, would take a
+    # refused stream for a connected one: music_ready, then the watcher
+    # reporting the exit with no retry. music_ready still goes out at
+    # prime_sec; this only decides how long an exit still means "not up
+    # yet, try again".
+    MUSIC_CONNECT_GRACE_SEC = 0.5
 
-    def _start_music_when_idle(self, url: str) -> None:
+    def _start_music_when_idle(self, url: str, stop_gen: int | None = None) -> None:
         """Wait until the playback thread releases the ALSA device, then spawn mpg123.
 
         Pi OS Lite has no software ALSA mixer (see project memory), so the
@@ -1600,22 +1613,33 @@ class Satellite:
         Song frames arrive at an already-primed pipeline — no first-second
         underrun stutter. A stream that refuses the connection is retried
         there too.
+
+        ``stop_gen`` is `_music_stop_gen` as it was when the music_start
+        frame arrived (the receiver takes it; taken here when None). The
+        wait for the speaker can be up to 10 s — the last TTS sentence still
+        playing — and a music_stop, a wake word or a barge-in inside it
+        means the music is no longer wanted: `_start_music` then spawns
+        nothing. A newer music_start does not count; it takes over instead.
         """
+        if stop_gen is None:
+            stop_gen = self._music_stop_gen
         if not self._playback_idle.wait(timeout=10.0):
             log.warning("playback thread didn't release output stream in 10s; skipping music")
             return
         if self.shutdown_event.is_set():
             return
-        gen = self._start_music(url)
-        # None: the subprocess could not be spawned at all (mpg123 not
-        # installed) — nothing to supervise, and no point unpausing MPD;
-        # the server's fallback timer resumes it eventually anyway and the
-        # failure logged out of `_start_music` is the diagnostic signal.
+        gen = self._start_music(url, stop_gen=stop_gen)
+        # None: nothing was spawned — the music was stopped while this
+        # start waited, or the subprocess could not be spawned at all
+        # (mpg123 not installed). Nothing to supervise, and no point
+        # unpausing MPD; after a spawn failure the server's fallback timer
+        # resumes it eventually anyway and the failure logged out of
+        # `_start_music` is the diagnostic signal.
         if gen is None:
             return
         self._supervise_music(url, gen)
 
-    def _start_music(self, url: str) -> int | None:
+    def _start_music(self, url: str, stop_gen: int | None = None) -> int | None:
         """Spawn mpg123 to consume MPD's HTTP stream and play through the HAT.
 
         mpg123 handles MP3 decode + ALSA output natively — no Python decode
@@ -1627,9 +1651,15 @@ class Satellite:
         Idempotent: a second call with the same URL takes over the running
         subprocess instead of spawning another; a different URL replaces
         it. Returns this request's generation (see `_music_gen`), or None
-        when nothing could be spawned.
+        when nothing could be spawned — including when ``stop_gen`` (see
+        `_start_music_when_idle`) is no longer `_music_stop_gen`: checked
+        under the lock, so a stop is either seen here or lands after the
+        spawn and stops it.
         """
         with self._music_lock:
+            if stop_gen is not None and stop_gen != self._music_stop_gen:
+                log.info("music: not starting %s; it was stopped while it waited", url)
+                return None
             if self._music_proc is not None and self._music_proc.poll() is None:
                 run = self._music_run
                 if self._music_url == url and run is not None and run.proc is self._music_proc:
@@ -1735,12 +1765,25 @@ class Satellite:
         stop the music through `_stop_music` or `_start_music`, which bump
         it, and this request then leaves quietly — no respawn over the mic
         or the TTS, no music_ready, no failure report.
+
+        Two windows per mpg123 run, both counted from when this request
+        starts watching it: `music_prime_sec`, at the end of which a run
+        still up gets the request's one `music_ready`; and the connect
+        grace, the longer of the prime and `MUSIC_CONNECT_GRACE_SEC`, for
+        which an exit still means the stream was not up yet (retry) rather
+        than a stream that played and dropped (the watcher's report). With
+        the default prime (1.0 s) the two end together; a prime_sec set
+        below a refused mpg123's lifetime no longer turns a refusal into a
+        "connected" stream.
         """
         began = time.monotonic()
         prime = max(0.0, self.cfg.music_prime_sec)
+        grace = max(prime, self.MUSIC_CONNECT_GRACE_SEC)
         # With prime 0 the handshake is off (no music_ready), but a refused
-        # stream is still worth a retry.
-        window = prime if prime > 0.0 else self.MUSIC_CONNECT_GRACE_SEC
+        # stream is still worth a retry. Otherwise one music_ready per
+        # request: a run retried after it (an exit inside the grace) does not
+        # send another.
+        ready_due = prime > 0.0
         attempts = 1
         while True:
             with self._music_lock:
@@ -1749,21 +1792,34 @@ class Satellite:
                 run = self._music_run
             if run is None:
                 return
-            # Wait out the prime window — or less, if mpg123 exits inside it.
-            run.exited.wait(timeout=window)
+            watched_from = time.monotonic()
+            if ready_due:
+                # Wait out the prime window — or less, if mpg123 exits
+                # inside it.
+                run.exited.wait(timeout=prime)
+                if self.shutdown_event.is_set():
+                    return
+                with self._music_lock:
+                    if self._music_gen != gen or self._music_run is not run:
+                        return
+                    if not run.exited.is_set():
+                        # Priming against the stream. Under the lock, so a
+                        # stop or a newer start (and anything it sends) is
+                        # ordered after this frame.
+                        self._emit_text({"type": "music_ready"})
+                        ready_due = False
+            # The rest of the connect grace (nothing left of it with the
+            # default prime).
+            run.exited.wait(timeout=max(0.0, watched_from + grace - time.monotonic()))
             if self.shutdown_event.is_set():
                 return
             with self._music_lock:
                 if self._music_gen != gen or self._music_run is not run:
                     return
                 if not run.exited.is_set():
-                    # Connected and priming against the stream. An exit from
-                    # here on is the watcher's to report.
+                    # Connected. An exit from here on is the watcher's to
+                    # report.
                     run.supervised = False
-                    if prime > 0.0:
-                        # Under the lock, so a stop or a newer start (and
-                        # anything it sends) is ordered after this frame.
-                        self._emit_text({"type": "music_ready"})
                     return
             reason = _music_exit_reason(run.rc, run.stderr_tail)
             delay = self._music_retry_delay(attempts)
@@ -1850,6 +1906,10 @@ class Satellite:
 
     def _stop_music(self) -> None:
         with self._music_lock:
+            # A stop, not a replacement (`_start_music` calls the locked
+            # half directly): a music_start still waiting for the speaker
+            # is cancelled by this too (see `_music_stop_gen`).
+            self._music_stop_gen += 1
             self._stop_music_locked()
 
     def _stop_music_locked(self) -> None:
@@ -3997,6 +4057,12 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
+                    # A music_start that came with the reply is waiting for
+                    # the speaker, which the drain above just freed: without
+                    # this it would spawn mpg123 over the barge capture. No
+                    # mpg123 runs during TTS, so this only cancels that
+                    # start; the next turn's auto-resume brings music back.
+                    self._stop_music()
                     self._begin_utterance("barge_in")
                     self._barge_prefix = list(recent)
                     return "barge"
@@ -4054,6 +4120,9 @@ class Satellite:
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
+                    # Cancels a music_start waiting for the speaker (see the
+                    # VAD barge above).
+                    self._stop_music()
                     self._begin_utterance("barge_in")
                     self._barge_prefix = []
                     return "barge"
@@ -5057,9 +5126,13 @@ class Satellite:
                 # blocking the asyncio receiver loop. The server emits
                 # music_start immediately after response_end, but bytes from
                 # the last TTS sentence are usually still in playback_q.
+                # The stop count as of THIS frame goes with it: a stop that
+                # lands during that wait cancels the start. Read without the
+                # lock (a plain int read) so a stop busy terminating mpg123
+                # never stalls the receiver.
                 threading.Thread(
                     target=self._start_music_when_idle,
-                    args=(str(stream_url),),
+                    args=(str(stream_url), self._music_stop_gen),
                     daemon=True,
                     name="music-defer",
                 ).start()
