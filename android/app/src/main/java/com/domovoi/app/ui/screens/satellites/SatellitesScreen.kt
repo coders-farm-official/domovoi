@@ -121,6 +121,7 @@ fun SatellitesScreen() {
                 sats = sats,
                 onClose = { openRoom = null },
                 modifier = Modifier.fillMaxSize(),
+                onRefresh = satsState.refresh,
             )
         }
         return
@@ -169,6 +170,7 @@ fun SatellitesScreen() {
                     .width(440.dp)
                     .fillMaxHeight()
                     .padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
+                onRefresh = satsState.refresh,
             )
         }
     }

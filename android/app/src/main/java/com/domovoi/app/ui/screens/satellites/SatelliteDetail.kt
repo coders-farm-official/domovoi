@@ -73,6 +73,7 @@ fun SatelliteDetail(
     sats: List<Satellite>,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    onRefresh: () -> Unit = {},
 ) {
     var tab by remember(s.room_id) { mutableStateOf(SatTab.Overview) }
 
@@ -93,7 +94,7 @@ fun SatelliteDetail(
                     .verticalScroll(rememberScrollState()),
             ) {
                 when (tab) {
-                    SatTab.Overview -> SatOverviewTab(s, sats)
+                    SatTab.Overview -> SatOverviewTab(s, sats, onRefresh)
                     SatTab.Sessions -> SatSessionsTab(s.room_id)
                     SatTab.Conversations -> SatConversationsTab(s.room_id)
                     SatTab.Recently -> SatRecentlyPlayedTab(s.room_id)

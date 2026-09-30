@@ -25,6 +25,18 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- Timer and reminder alerts (alerts/): a local alarm per running timer
+         so the phone rings on time with the app closed. Exact alarms need
+         SCHEDULE_EXACT_ALARM on API 31-32 (user-revocable; inexact without
+         it) and USE_EXACT_ALARM from API 33 (granted at install; fine for
+         this sideloaded app, a restriction for a future Play listing).
+         RECEIVE_BOOT_COMPLETED re-arms them after a reboot. -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- allowBackup=false: nothing the app stores (server address, device id,
          and the pairing token once it lands) is ever copied into a cloud or
          adb backup. networkSecurityConfig scopes cleartext to the home
@@ -49,6 +61,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Not exported: only this app's own immutable PendingIntents (the
+             alarm) and protected system broadcasts (boot, app update) reach
+             them. -->
+        <receiver
+            android:name=".alerts.TimerAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".alerts.TimerBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".player.PlaybackService"

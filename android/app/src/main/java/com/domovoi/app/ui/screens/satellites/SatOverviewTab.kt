@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.Pill
@@ -51,6 +53,7 @@ import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.components.toneColor
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,9 +61,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.math.roundToInt
 
-/** Overview tab — web OverviewBody analog. */
+/** Overview tab — web OverviewBody analog. [onRefresh] re-reads the roster
+ *  after a change only it can show (the timer-scope switch). */
 @Composable
-fun SatOverviewTab(s: Satellite, sats: List<Satellite>) {
+fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = {}) {
     // The Domovoi server's current git SHA. A satellite whose last-synced SHA
     // differs is behind. A null s.version is UNKNOWN, not behind — no false
     // "needs upgrade" nagging, but the upgrade button stays enabled so a
@@ -168,6 +172,8 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>) {
         VolumeSection(s)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         AnnounceSection(s)
+        HorizontalDivider(color = Domovoi.colors.borderSoft)
+        TimerScopeSection(s, onRefresh)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         DropInSection(s, sats)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
@@ -350,6 +356,72 @@ private fun AnnounceSection(s: Satellite) {
                 Text("send")
             }
         }
+    }
+}
+
+/* ---- Timers & reminders ------------------------------------------------------ */
+
+/**
+ * "Only reminders for this device" — web SatTimerScopeControl. Off (the
+ * default): this room also announces the timers and reminders set in other
+ * rooms. On: only its own. Device tier (the household token), so it works
+ * from the phone; DB state, so it works while the room is offline.
+ */
+@Composable
+private fun TimerScopeSection(s: Satellite, onChanged: () -> Unit) {
+    val app = LocalApp.current
+    val toast = LocalToast.current
+    val scope = rememberCoroutineScope()
+    // The switch moves at once; the roster catches up after the PUT.
+    var override by remember(s.room_id) { mutableStateOf<Boolean?>(null) }
+    var busy by remember(s.room_id) { mutableStateOf(false) }
+    val on = override ?: s.timers_own_only
+    LaunchedEffect(s.timers_own_only) {
+        if (!busy && override == s.timers_own_only) override = null
+    }
+
+    fun set(next: Boolean) {
+        if (busy) return
+        val prev = on
+        override = next
+        busy = true
+        scope.launch {
+            try {
+                putTimerScope(app.api, s.room_id, next)
+                toast(timerScopeToast(s.room_id, next))
+                onChanged()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                override = if (prev == s.timers_own_only) null else prev
+                toast(failureText("change timer announcements", e))
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth().background(Domovoi.colors.sunken).padding(16.dp)) {
+        SectionLabel("timers & reminders")
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                TIMER_SCOPE_LABEL,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Domovoi.colors.fg,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = on, onCheckedChange = { set(it) }, enabled = !busy)
+        }
+        Text(
+            TIMER_SCOPE_HELP,
+            style = MaterialTheme.typography.labelSmall,
+            color = Domovoi.colors.fgFaint,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }
 
