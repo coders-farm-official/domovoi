@@ -377,6 +377,15 @@ satellite's Listening settings on the dashboard. An older satellite is
 never stopped early — it doesn't know how. Details:
 [uml/satellite-protocol.md](uml/satellite-protocol.md#early-commit).
 
+How long a pause has to be before the satellite reports it is
+`[listen] speech_pause_ms` (240 by default; the dashboard's **Pause that
+starts transcribing**, under the advanced Listening settings). 150 starts
+the server's transcript about 90 ms sooner; it also fires on more of the
+gaps between words, and each one it fires on costs the server a
+transcript it throws away. Leave it at 240 unless the server decodes fast
+(`capture_timing` and `speculative` in `GET /v1/stats/latency` show what
+it buys and costs).
+
 ## Custom wake words
 
 `hey_jarvis` is the out-of-the-box default; **"Hey Domovoi" is the

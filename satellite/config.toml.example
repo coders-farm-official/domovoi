@@ -247,6 +247,13 @@ followup_pre_speech_timeout = 8.0
 # mid-command. Also switchable for the whole server (early_commit_enabled).
 early_commit = true
 
+# Silence after speech (ms) that counts as a pause worth telling the core
+# about, so it starts transcribing while silence_timeout counts down. Lower
+# starts the transcript sooner but also fires on the gaps between words,
+# which costs the core a transcript it throws away. Whole 30 ms steps,
+# 90-600.
+# speech_pause_ms = 240
+
 [barge_in]
 # Off by default: nothing interrupts Domovoi while he is talking. Turn on to
 # cut him off mid-sentence - with the wake word (require_wake_word below, on

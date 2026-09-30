@@ -74,6 +74,20 @@ the satellite's own ``utterance_end`` for it arrives — ``post_commit_voiced_ms
 how much speech came after the server stopped listening (0 when none; the
 misfire the hold exists to prevent). Counted under ``early_commit``.
 
+And the capture clock (:data:`CAPTURE_TIMING_KEYS`, whole milliseconds, not
+stages): when the capture's frames and its pause reached the server,
+against the pace the audio was spoken at, and when the speculative decode
+started. They answer "did the transcript start late, and whose fault was
+it": the satellite (it began the capture, or sent the pause, with mic audio
+still queued behind it: ``sat_*_backlog_ms``), the network (frames or the
+pause held up on the way: ``frame_lag_*``, ``pause_net_ms``) or this server
+(the decode queued behind another decode or a copy's voice embedding, or
+started late: ``decode_wait_ms``, ``pause_to_decode_ms``). ``decode_start_ms`` is the one to watch: the
+decode's start after the last voiced frame, about the satellite's pause
+length (240 ms) when nothing is late. Only turns from a satellite that
+stamps its messages carry the ``sat_*`` keys. Summarized under
+``capture_timing``.
+
 Where it is stored: ``intents_log.timings`` (V015, JSONB). The stages known
 before routing ride ``Context.timings`` into ``router._persist_turn``, so
 they land in the same INSERT, in the same transaction, as every routed
@@ -140,6 +154,30 @@ WHISPER_KEYS = ("model", "device", "compute_type", "cpu_threads")
 # faster-whisper's own window; a turn's `stt_window_s` below it was decoded
 # on the short window (clients/whisper.py SHORT_WINDOW_SEC).
 FULL_WINDOW_S = 30
+
+# The capture clock (domovoi/streaming.py, _CaptureClock), in milliseconds.
+# Recorded on the row next to the stages, summarized apart from them.
+CAPTURE_TIMING_KEYS = (
+    # The satellite's own view (only from one that stamps its messages):
+    "sat_wake_ms",            # wake word -> utterance_start (acknowledgement included)
+    "sat_start_backlog_ms",   # mic audio already queued when the capture opened
+    "sat_pause_ms",           # utterance_start -> the pause the copy was taken at
+    "sat_pause_backlog_ms",   # mic audio queued behind that pause when it was sent
+    "sat_end_backlog_ms",     # ... and behind utterance_end
+    # Arrival here, against the pace the audio was spoken at:
+    "frame_lag_first_ms",     # the capture's first frame
+    "frame_lag_max_ms",       # its worst frame
+    "pause_rx_lag_ms",        # the pause the copy was taken at
+    "end_rx_lag_ms",          # utterance_end
+    "pause_net_ms",           # the pause's trip, beyond utterance_start's (signed)
+    # This server:
+    "pause_to_decode_ms",     # that pause's arrival -> its decode starting
+    "decode_wait_ms",         # of which: waiting on this room's decode slot
+    "decode_start_ms",        # last voiced frame -> the decode starting
+    "stt_decode_wait_ms",     # the turn's own decode, waiting on this room's decode slot
+)
+# The one of those that may be negative.
+_SIGNED_CAPTURE_KEYS = frozenset({"pause_net_ms"})
 
 # The summary's default window, and the most recent timed turns it reads
 # inside any window: enough for stable percentiles, bounded work per call.
@@ -243,6 +281,9 @@ class TurnTimings:
             )
         if "stt_window_s" in self.flags:
             parts.append(f"window={self.flags['stt_window_s']}s")
+        for key in ("decode_start_ms", "pause_rx_lag_ms", "sat_start_backlog_ms"):
+            if key in self.flags:
+                parts.append(f"{key}={self.flags[key]}")
         if self.whisper and self.whisper.get("model"):
             w = self.whisper
             threads = w.get("cpu_threads")
@@ -377,15 +418,39 @@ def _whisper_key(doc: dict[str, Any]) -> tuple[Any, ...] | None:
     return tuple(out)
 
 
+def _capture_value(doc: dict[str, Any], key: str) -> float | None:
+    if key not in _SIGNED_CAPTURE_KEYS:
+        return _stage_value(doc, key)
+    v = doc.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
+    return float(v)
+
+
+def _spread(vals: list[float]) -> dict[str, Any]:
+    """``{count, p50, p95, max}`` of ``vals``; nulls when empty."""
+    if not vals:
+        return {"count": 0, "p50": None, "p95": None, "max": None}
+    vals.sort()
+    return {
+        "count": len(vals),
+        "p50": _round_ms(percentile(vals, 0.50)),
+        "p95": _round_ms(percentile(vals, 0.95)),
+        "max": _round_ms(vals[-1]),
+    }
+
+
 def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     """Per-stage ``{count, p50, p95, max}``, the matched-path mix, the
     Whisper settings seen, how the speculative transcripts fared
     (``speculative``: turns that had one, how many used it, decodes
     started), the captures the server ended early (``early_commit``:
-    how many, by tier, and how many of those cut in on speech) and the
+    how many, by tier, and how many of those cut in on speech), the
     window each turn's transcript was decoded on (``stt_window``:
-    ``short``, the 10 s one, or ``full``, the 30 s one), over
-    ``(timings, matched_path)`` rows.
+    ``short``, the 10 s one, or ``full``, the 30 s one) and the
+    capture clock (``capture_timing``: the same four numbers per
+    :data:`CAPTURE_TIMING_KEYS` key), over ``(timings, matched_path)``
+    rows.
 
     Pure — the endpoint's arithmetic, testable without a database. A row
     whose ``timings`` isn't a JSON object is skipped; a stage that is
@@ -395,6 +460,7 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
     nulls.
     """
     values: dict[str, list[float]] = {s: [] for s in STAGES}
+    capture: dict[str, list[float]] = {k: [] for k in CAPTURE_TIMING_KEYS}
     paths: dict[str, int] = {}
     seen: dict[tuple[Any, ...], int] = {}
     turns = 0
@@ -415,6 +481,10 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
             v = _stage_value(doc, stage)
             if v is not None:
                 values[stage].append(v)
+        for key in CAPTURE_TIMING_KEYS:
+            v = _capture_value(doc, key)
+            if v is not None:
+                capture[key].append(v)
         reused = doc.get("stt_reused")
         if isinstance(reused, bool):
             speculative["turns"] += 1
@@ -438,18 +508,7 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
         if wk is not None:
             seen[wk] = seen.get(wk, 0) + 1
 
-    stages: dict[str, dict[str, Any]] = {}
-    for stage, vals in values.items():
-        if not vals:
-            stages[stage] = {"count": 0, "p50": None, "p95": None, "max": None}
-            continue
-        vals.sort()
-        stages[stage] = {
-            "count": len(vals),
-            "p50": _round_ms(percentile(vals, 0.50)),
-            "p95": _round_ms(percentile(vals, 0.95)),
-            "max": _round_ms(vals[-1]),
-        }
+    stages = {stage: _spread(vals) for stage, vals in values.items()}
     whisper_seen = [
         {**dict(zip(WHISPER_KEYS, key)), "turns": n}
         for key, n in sorted(seen.items(), key=lambda kv: -kv[1])
@@ -462,6 +521,7 @@ def summarize(rows: Iterable[tuple[Any, Any]]) -> dict[str, Any]:
         "speculative": speculative,
         "early_commit": early_commit,
         "stt_window": stt_window,
+        "capture_timing": {key: _spread(vals) for key, vals in capture.items()},
     }
 
 

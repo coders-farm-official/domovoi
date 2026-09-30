@@ -496,6 +496,11 @@ def test_a_greeting_turn_reports_the_clip_and_that_it_came_first(monkeypatch):
     _audio, controls = _wake_then_capture(sat, loop)
 
     start, pause, end = controls
+    # The capture clock (satellite/tests/test_capture_clock.py): numbers
+    # that depend on when this ran.
+    clock = ("sat_ms", "backlog_ms", "wake_ms")
+    for msg in (start, pause, end):
+        assert all(type(msg.pop(k, 0)) is int for k in clock)
     assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1}
     fields = {"greeting_played": True, "greeting_clip": CLIP, "ack_before_capture": True}
     assert {k: pause[k] for k in fields} == fields

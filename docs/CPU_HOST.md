@@ -440,6 +440,26 @@ Compare the two paths and you can see exactly what the LLM costs on your
 hardware — which is the number that should drive your model choices, not
 the table above.
 
+#### When the early transcript starts late
+
+The early transcript should start at the satellite's pause, about 240 ms
+after your last word. `capture_timing.decode_start_ms` in the answer says
+when it did (per turn it is on the row, and the turn's log line carries
+`decode_start_ms=… pause_rx_lag_ms=… sat_start_backlog_ms=…`). When it is
+well past 240, the other keys say who held it up:
+
+* `sat_start_backlog_ms` / `sat_pause_backlog_ms` past a frame or two
+  (30-60 ms): the satellite itself was behind — the person was talking while it was still busy, and
+  the capture went out in a burst. (Before 2026-09-30 every satellite did
+  this after the wake greeting: the wake model's reset took over a second
+  on a Pi Zero 2 W. Upgrade the satellite.)
+* `frame_lag_max_ms` / `pause_net_ms` high with no satellite backlog: the
+  network held the frames up (Wi-Fi power save, a weak link).
+* `decode_wait_ms` / `pause_to_decode_ms` high: the core — the room's
+  decoder was busy with an earlier copy (its decode, or the voice
+  embedding that follows it). `stt_decode_wait_ms` is the same
+  wait for the turn's own decode, which `stt_ms` leaves out.
+
 ### The streaming fast lane
 
 Every command still waits for the satellite's `listen.silence_timeout`

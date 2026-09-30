@@ -50,12 +50,22 @@ Client → Server
                            other client the reply would play into a capture
                            that is still open.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N}
+                            "utt":N,"backlog_ms":N,"wake_ms":N}
                            — `utt` (optional): the satellite's own number for
                            this capture, increasing per connection. Echoed in
                            the capture's hints and its `utterance_end`, so a
                            message about an older capture is recognisably
                            stale.
+                           — `backlog_ms` / `wake_ms` (optional, whole ms):
+                           the capture clock. `backlog_ms` is mic audio the
+                           satellite had captured and not yet read when it
+                           opened the capture (how far behind the room it
+                           starts); `wake_ms`, after a wake word only, the
+                           wake word to this message. Recorded on the turn
+                           (_CaptureClock, turn_timings.CAPTURE_TIMING_KEYS);
+                           `speech_pause` / `speech_resume` / `utterance_end`
+                           carry `sat_ms` (since this message, on the
+                           satellite's monotonic clock) and `backlog_ms`.
                            — trigger "wake_clip" (Feature 5) marks a positive
                            wake-word TRAINING clip: the Pi is in dashboard-
                            initiated recording mode and the following PCM is a
@@ -69,7 +79,7 @@ Client → Server
                             "greeting_clip":str,"ack_before_capture":true,"utt":N,
                             "frames":N,"last_voiced_frame":N|null,"exit_reason":...,
                             "voiced_frames":N,"trailing_silent_frames":N,
-                            "silence_limit_frames":N}
+                            "silence_limit_frames":N,"sat_ms":N,"backlog_ms":N}
                            — `greeting_played` (optional) marks turns where
                            the Pi played a wake greeting, so the server
                            strips a greeting that bled past the AEC out of
@@ -99,19 +109,22 @@ Client → Server
                            silent run it ended on and the run that ends one)
                            are also kept, numbers only, in an opted-in room's
                            command recording (domovoi/command_captures.py). An
-                           older core reads greeting_played alone.
+                           older core reads greeting_played alone. `sat_ms` /
+                           `backlog_ms`: the capture clock (utterance_start).
   text  speech_pause       {"type":"speech_pause","utt":N,"frame":N,"last_voiced_frame":N,
                             "greeting_played":bool,"greeting_clip":str,
-                            "ack_before_capture":true}
+                            "ack_before_capture":true,"sat_ms":N,"backlog_ms":N}
                            — ONLY when `ready.features` lists "speech_pause".
-                           The capture has just had 8 silent frames (240 ms)
+                           The capture has just had 8 silent frames (240 ms;
+                           the satellite's `[listen] speech_pause_ms`, 90-600)
                            after speech: `frame` is the frames sent so far,
                            `last_voiced_frame` the last voiced one. Once per
                            silence run. The server may start transcribing.
                            `greeting_played` / `greeting_clip` /
                            `ack_before_capture` as in `utterance_end`, for
-                           the early-commit check.
-  text  speech_resume      {"type":"speech_resume","utt":N,"frame":N}
+                           the early-commit check. `sat_ms` / `backlog_ms`:
+                           the capture clock (utterance_start).
+  text  speech_resume      {"type":"speech_resume","utt":N,"frame":N,"sat_ms":N,"backlog_ms":N}
                            — ONLY when `ready.features` lists "speech_pause".
                            Speech came back after a `speech_pause`. Sent
                            BEFORE the audio of the frame that resumed it
@@ -834,6 +847,125 @@ class _Speculation:
     # Early commit: (tier, hold_ms) once judged, or () for "never" — the
     # decision is made once per copy (StreamSession._commit_decision).
     commit: tuple[str, int] | tuple[()] | None = None
+    # For the turn's timing record (_CaptureClock.flags): when the pause
+    # this copy was taken for reached the server (time.perf_counter()),
+    # what the satellite's clock said on it (`sat_ms` / `backlog_ms`), the
+    # last voiced frame it named, and — once the Whisper call is under way —
+    # when that call started and how long it first waited for this room's
+    # decoder.
+    pause_rx: float | None = None
+    pause_clock: dict[str, int] = field(default_factory=dict)
+    last_voiced: int | None = None
+    decode_started: float | None = None
+    decode_wait_ms: int | None = None
+
+
+# 30 ms frames, in seconds, for the capture clock's schedule arithmetic.
+_FRAME_SEC = FRAME_MS / 1000
+
+
+def _sat_clock(ctrl: dict[str, Any], *keys: str) -> dict[str, int]:
+    """The satellite's own timing numbers on a control message (see the
+    `utterance_start` / `speech_pause` / `utterance_end` entries in the
+    module docstring): whole non-negative milliseconds, anything else
+    dropped. An older satellite sends none."""
+    out: dict[str, int] = {}
+    for key in keys:
+        v = ctrl.get(key)
+        if type(v) is int and 0 <= v < 3_600_000:
+            out[key] = v
+    return out
+
+
+def _lag_ms(seconds: float) -> int:
+    return max(0, int(round(seconds * 1000)))
+
+
+@dataclass
+class _CaptureClock:
+    """When one capture's messages reached the server, against the pace
+    its audio was spoken at — the numbers that say whether a speculative
+    transcript started late, and whose fault that was (the satellite, the
+    network or this server). Numbers only; see ``flags``.
+
+    The schedule: frame ``k`` (0-based) of a live capture cannot arrive
+    before ``t0 + k × 30 ms``, where ``t0`` is when its first frame could
+    have. ``lo``, the smallest ``arrival − k × 30 ms`` over the frames so
+    far, is the best estimate of ``t0`` (plus the network's floor), and a
+    frame's lag is how far past ``lo + k × 30 ms`` it arrived. A capture
+    that starts with a backlog — the satellite busy while the person was
+    already talking — sends its first frames in a burst, and they show it
+    as lag; so does a frame the network held up."""
+
+    start_rx: float                          # utterance_start received
+    sat_start: dict[str, int] = field(default_factory=dict)   # its backlog_ms / wake_ms
+    first: float | None = None
+    lo: float | None = None
+    hi: float | None = None
+    # The end: when utterance_end arrived (None for a capture this server
+    # ended itself), the frames held then, and its sat_ms / backlog_ms.
+    end_rx: float | None = None
+    end_frames: int = 0
+    end_sat: dict[str, int] = field(default_factory=dict)
+
+    def frame(self, index: int, now: float) -> None:
+        off = now - index * _FRAME_SEC
+        if self.first is None or self.lo is None or self.hi is None:
+            self.first = self.lo = self.hi = off
+            return
+        if off < self.lo:
+            self.lo = off
+        elif off > self.hi:
+            self.hi = off
+
+    def _due(self, frames: int) -> float | None:
+        """When the last of ``frames`` frames was due on the schedule."""
+        if self.lo is None or frames <= 0:
+            return None
+        return self.lo + (frames - 1) * _FRAME_SEC
+
+    def flags(self, spec: _Speculation | None) -> dict[str, int]:
+        """The ``intents_log.timings`` keys for this capture
+        (turn_timings.CAPTURE_TIMING_KEYS), with ``spec`` the copy the
+        turn used or else the latest one. Each is left out when it can't
+        be known — an older satellite sends no clock of its own, a capture
+        with no pause has no copy."""
+        out: dict[str, int] = {}
+        if self.first is not None and self.lo is not None and self.hi is not None:
+            out["frame_lag_first_ms"] = _lag_ms(self.first - self.lo)
+            out["frame_lag_max_ms"] = _lag_ms(self.hi - self.lo)
+        if "backlog_ms" in self.sat_start:
+            out["sat_start_backlog_ms"] = self.sat_start["backlog_ms"]
+        if "wake_ms" in self.sat_start:
+            out["sat_wake_ms"] = self.sat_start["wake_ms"]
+        end_due = self._due(self.end_frames)
+        if self.end_rx is not None and end_due is not None:
+            out["end_rx_lag_ms"] = _lag_ms(self.end_rx - end_due)
+        if "backlog_ms" in self.end_sat:
+            out["sat_end_backlog_ms"] = self.end_sat["backlog_ms"]
+        if spec is None or spec.pause_rx is None:
+            return out
+        pause_due = self._due(spec.frames)
+        if pause_due is not None:
+            out["pause_rx_lag_ms"] = _lag_ms(spec.pause_rx - pause_due)
+        if spec.decode_started is not None:
+            out["pause_to_decode_ms"] = _lag_ms(spec.decode_started - spec.pause_rx)
+            if spec.last_voiced is not None and self.lo is not None:
+                out["decode_start_ms"] = _lag_ms(
+                    spec.decode_started - (self.lo + spec.last_voiced * _FRAME_SEC)
+                )
+        if spec.decode_wait_ms is not None:
+            out["decode_wait_ms"] = spec.decode_wait_ms
+        if "backlog_ms" in spec.pause_clock:
+            out["sat_pause_backlog_ms"] = spec.pause_clock["backlog_ms"]
+        sat_ms = spec.pause_clock.get("sat_ms")
+        if sat_ms is not None:
+            out["sat_pause_ms"] = sat_ms
+            # Signed: how much longer the pause took to get here than the
+            # utterance_start did, beyond the satellite's own gap between
+            # sending them — the network's share.
+            out["pause_net_ms"] = int(round((spec.pause_rx - self.start_rx) * 1000)) - sat_ms
+        return out
 
 
 @dataclass
@@ -1028,6 +1160,12 @@ class StreamSession:
         # This room's Whisper call in flight, speculative or not: the next
         # one waits for it, so a room never runs two at once.
         self._decode_inflight: asyncio.Future[str] | None = None
+        # When the utterance's messages and frames arrived, against the pace
+        # it was spoken at (see _CaptureClock), and the latest pause: when
+        # it reached the server and what the satellite's clock said on it.
+        self._clock: _CaptureClock | None = None
+        self._pause_rx: float | None = None
+        self._pause_clock: dict[str, int] = {}
         # ── Early commit (part B) ─────────────────────────────────────
         # hello.capture_control: the satellite honours `end_capture`.
         self._capture_control = False
@@ -1266,6 +1404,8 @@ class StreamSession:
                 MAX_UTTERANCE_BYTES,
             )
             return
+        if self._clock is not None:
+            self._clock.frame(self._utt_frames, time.perf_counter())
         self.audio_buf.extend(data)
         self._utt_frames += 1
         # The streaming fast lane (domovoi/fast_lane.py, shadow only) reads
@@ -1275,6 +1415,8 @@ class StreamSession:
         # A satellite that doesn't report its own pauses: find the first
         # short one from the frames themselves.
         if self._pause_detector is not None and self._pause_detector.feed(data):
+            self._pause_rx = time.perf_counter()
+            self._pause_clock = {}
             self._on_pause()
         # Every silent frame after a reported pause brings the hold closer.
         if self._commit_on and self._pi_pause is not None:
@@ -1304,6 +1446,8 @@ class StreamSession:
         self._utt_serial += 1
         self._utt_frames = 0
         self._pi_pause = None
+        self._pause_rx = None
+        self._pause_clock = {}
         self._spec = None
         self._spec_history = []
         self._spec_wanted = False
@@ -1323,6 +1467,20 @@ class StreamSession:
             if self._commit_on
             else None
         )
+
+    def _take_clock(
+        self, *, end_rx: float | None, end_sat: dict[str, int],
+    ) -> _CaptureClock | None:
+        """The utterance's capture clock, closed at its end (``end_rx``:
+        when utterance_end arrived, None when this server ended it) and
+        handed to the turn; the session keeps none until the next
+        utterance_start."""
+        clock, self._clock = self._clock, None
+        if clock is not None:
+            clock.end_rx = end_rx
+            clock.end_frames = self._utt_frames
+            clock.end_sat = end_sat
+        return clock
 
     def _discard_speculation(self) -> None:
         """Drop this utterance's copies and stop looking for pauses. The
@@ -1363,7 +1521,11 @@ class StreamSession:
         self._spec_wanted = False
         if len(self._spec_history) >= SPECULATIVE_MAX_DECODES:
             return
-        spec = _Speculation(serial=self._utt_serial, frames=self._utt_frames)
+        spec = _Speculation(
+            serial=self._utt_serial, frames=self._utt_frames,
+            pause_rx=self._pause_rx, pause_clock=dict(self._pause_clock),
+            last_voiced=self._pi_pause[1] if self._pi_pause is not None else None,
+        )
         spec.task = asyncio.create_task(
             self._speculate(spec, bytes(self.audio_buf)),
             name=f"speculative-stt:{self.room_id}",
@@ -1402,8 +1564,9 @@ class StreamSession:
             whisper = get_whisper_client()
         except SttUnavailableError:
             return None
+        marks: dict[str, Any] = {}
         try:
-            text, spec.stt_ms, window = await self._whisper_call(whisper, pcm)
+            text, spec.stt_ms, window = await self._whisper_call(whisper, pcm, marks=marks)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1412,6 +1575,11 @@ class StreamSession:
                 "transcribe the whole capture: %s", self.room_id, e,
             )
             return None
+        finally:
+            # For the capture clock: when the decode really started, and
+            # how long it first waited for this room's decode slot.
+            spec.decode_started = marks.get("started")
+            spec.decode_wait_ms = marks.get("wait_ms")
         heard = _Heard(
             text=text,
             stt_ms=spec.stt_ms or 0,
@@ -1484,14 +1652,24 @@ class StreamSession:
         self._decode_inflight = fut
         return await asyncio.shield(fut)
 
-    async def _whisper_call(self, whisper: Any, pcm: bytes) -> tuple[str, int, int | None]:
+    async def _whisper_call(
+        self, whisper: Any, pcm: bytes, *, marks: dict[str, Any] | None = None,
+    ) -> tuple[str, int, int | None]:
         """One Whisper call in the room's decode slot (``_one_at_a_time``).
         Returns the text, the call's own time (not counting the wait for
-        the slot) and the mel window it decoded on, when the client says."""
+        the slot) and the mel window it decoded on, when the client says.
+        ``marks``, when given, gets the wait for the slot (``wait_ms``)
+        and the moment the call itself started (``started``,
+        perf_counter), so a decode that queued behind another decode or
+        a copy's embedding isn't mistaken for one that started late."""
+        waited = time.perf_counter()
         t0: list[float] = []
 
         def _start() -> Any:
             t0.append(time.perf_counter())
+            if marks is not None:
+                marks["wait_ms"] = _elapsed_ms(waited)
+                marks["started"] = t0[0]
             return transcribe_with_window(whisper, pcm)
 
         text, window = await self._one_at_a_time(_start)
@@ -1523,6 +1701,8 @@ class StreamSession:
             self._pi_pause = None
             return
         self._pi_pause = (frame, last)
+        self._pause_rx = time.perf_counter()
+        self._pause_clock = _sat_clock(ctrl, "sat_ms", "backlog_ms")
         self._hint_greeting = bool(ctrl.get("greeting_played"))
         clip = ctrl.get("greeting_clip")
         self._hint_greeting_clip = clip if self._hint_greeting and isinstance(clip, str) else None
@@ -1680,6 +1860,8 @@ class StreamSession:
         (`end_capture`) before anything else."""
         received_at = time.perf_counter()
         self.utterance_active = False
+        # No utterance_end to time: the server ended this one itself.
+        clock = self._take_clock(end_rx=None, end_sat={})
         # The fast lane's capture ends here too (its lead is measured to
         # the moment listening stopped, whoever stopped it); a command it
         # hadn't decided yet is "preempted", not missed.
@@ -1731,6 +1913,7 @@ class StreamSession:
                 early_commit=committed,
                 hold_ms=hold_ms,
                 capture_meta=capture_meta,
+                capture_clock=clock,
             )
         )
 
@@ -2143,6 +2326,10 @@ class StreamSession:
             await self._safe_send_text({"type": "pong"})
             return
         if t == "utterance_start":
+            self._clock = _CaptureClock(
+                start_rx=time.perf_counter(),
+                sat_start=_sat_clock(ctrl, "backlog_ms", "wake_ms"),
+            )
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             self.utterance_active = True
@@ -2175,6 +2362,9 @@ class StreamSession:
             # for after the satellite stops listening (turn_timings.total_ms).
             received_at = time.perf_counter()
             self.utterance_active = False
+            clock = self._take_clock(
+                end_rx=received_at, end_sat=_sat_clock(ctrl, "sat_ms", "backlog_ms"),
+            )
             if self._fastlane is not None:
                 self._fastlane.finish(ended_at=received_at)
             pcm = bytes(self.audio_buf)
@@ -2233,6 +2423,7 @@ class StreamSession:
                     speculations=speculations,
                     endpoint_silence_ms=endpoint_silence_ms,
                     capture_meta=capture_meta,
+                    capture_clock=clock,
                 )
             )
             return
@@ -2350,6 +2541,7 @@ class StreamSession:
             self.audio_buf.clear()
             self.dropped_overflow = False
             self._discard_speculation()
+            self._clock = None
             self._fastlane = fast_lane.close(self._fastlane)
             self._response_task = asyncio.create_task(
                 self._respond_noisy_capture(), name="noisy-apology"
@@ -2558,7 +2750,13 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return None
-            text, stt_ms, window = await self._whisper_call(whisper, pcm_bytes)
+            marks: dict[str, Any] = {}
+            text, stt_ms, window = await self._whisper_call(whisper, pcm_bytes, marks=marks)
+            if "wait_ms" in marks:
+                # Behind a copy of this capture still decoding or being
+                # embedded (or a cancelled turn's call): part of
+                # stt_wait_ms, not stt_ms.
+                timings.flags["stt_decode_wait_ms"] = marks["wait_ms"]
             heard = _Heard(
                 text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()),
                 window_s=window,
@@ -2716,6 +2914,7 @@ class StreamSession:
         early_commit: _Committed | None = None,
         hold_ms: int | None = None,
         capture_meta: dict[str, Any] | None = None,
+        capture_clock: _CaptureClock | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -2740,6 +2939,13 @@ class StreamSession:
                 pcm_bytes, timings=timings, trigger=trigger,
                 reuse=reuse, speculations=speculations or [],
             )
+            if capture_clock is not None:
+                # When the capture's frames, its pause and its decode
+                # happened against the pace it was spoken at — the copy the
+                # turn used, else the latest one (turn_timings).
+                timings.flags.update(capture_clock.flags(
+                    reuse or (speculations[-1] if speculations else None)
+                ))
             if heard is None:
                 return
             transcript = await self._clean_transcript(

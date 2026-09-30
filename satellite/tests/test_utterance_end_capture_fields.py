@@ -55,6 +55,9 @@ def test_a_silence_ended_capture_reports_its_reason_and_exact_counts(monkeypatch
         end = json.loads(items[-1][1])
         assert end["type"] == "utterance_end"
         silence_limit = int(sat.cfg.silence_timeout * 1000 / client.FRAME_MS)
+        # The capture clock is numbers too (satellite/tests/test_capture_clock.py);
+        # with no utterance_start before it, only the mic backlog.
+        assert type(end.pop("backlog_ms")) is int and "sat_ms" not in end
         assert end == {
             "type": "utterance_end",
             "greeting_played": False,
