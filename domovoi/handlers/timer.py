@@ -52,6 +52,17 @@ def _format_duration(seconds: int) -> str:
     return f"{hours} hour{'s' if hours != 1 else ''}"
 
 
+# "10 minutes" → "10 minute": the duration as an adjective.
+_PLURAL_UNIT_RE = re.compile(r"\b(second|minute|hour)s\b")
+
+
+def duration_adjective(seconds: int) -> str:
+    """``_format_duration`` in front of a noun: 600 → "10 minute" (as in
+    "Your 10 minute timer is done.", "10 minute reminder"), 5400 → "1 hour
+    and 30 minute"."""
+    return _PLURAL_UNIT_RE.sub(r"\1", _format_duration(seconds))
+
+
 class TimerHandler(Handler):
     name = "timer"
     # band rationale: after reminder (140) — see the "remind" collision note there.

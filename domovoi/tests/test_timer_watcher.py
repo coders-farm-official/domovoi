@@ -25,7 +25,7 @@ from domovoi.handlers.timer import TimerHandler, _CREATE_RE
 from domovoi.models import Context
 from domovoi.tests.conftest import requires_db
 from domovoi.workers import timer_watcher as tw_mod
-from domovoi.workers.timer_watcher import TimerWatcher, _timer_done_text
+from domovoi.workers.timer_watcher import TimerWatcher, _reminder_text, _timer_done_text
 
 _LOGGER = "domovoi.workers.timer_watcher"
 
@@ -199,6 +199,38 @@ async def test_reminder_speaks_its_message(expire) -> None:
     assert kitchen.announced == ["Reminder: call mom"]
 
 
+@pytest.mark.parametrize(
+    ("message", "duration_sec", "expected"),
+    [
+        ("call mom", 600, "Reminder: call mom"),
+        # set with no task (an empty message): named by its duration, the
+        # way an unlabelled timer is
+        ("", 600, "Here's your 10 minute reminder."),
+        ("", 300, "Here's your 5 minute reminder."),
+        ("", 5400, "Here's your 1 hour and 30 minute reminder."),
+        ("", 45, "Here's your 45 second reminder."),
+        ("", 0, "Here's your reminder."),
+    ],
+)
+def test_reminder_text(message, duration_sec, expected) -> None:
+    assert _reminder_text(message, duration_sec) == expected
+
+
+@pytest.mark.asyncio
+async def test_reminder_with_no_task_is_still_a_reminder(expire) -> None:
+    """An empty message is a reminder, not a plain timer: it used to fall
+    into the timer branch (``if message:``) and say "Your 10 minute
+    reminder timer is done."."""
+    garage = _FakeSession("garage")
+    watcher = TimerWatcher(app=_app({"garage": garage}))
+    expire(_row(10, label="10 minute reminder", message="", room_id="garage"))
+
+    await watcher.tick()
+    await _drain(watcher)
+
+    assert garage.announced == ["Here's your 10 minute reminder."]
+
+
 @pytest.mark.asyncio
 async def test_reminder_for_offline_room_logs_and_drops(expire, caplog) -> None:
     watcher = TimerWatcher(app=_app({"office": _FakeSession("office")}))
@@ -240,3 +272,30 @@ async def test_handler_timer_fires_with_its_spoken_duration(db_session) -> None:
     await _drain(watcher)
 
     assert kitchen.announced == ["Your 10 minute timer is done."]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_misheard_no_task_reminder_fires_as_a_reminder(db_session) -> None:
+    """The live 2026-09-30 garage utterance, end to end: it used to store
+    its own words and fire "Reminder: Better reminder for 10 minutes"."""
+    from domovoi.router import plan_route
+
+    plan = plan_route("Better reminder for 10 minutes.")
+    assert plan is not None and plan.handler.name == "reminder"
+    ctx = Context(session_id=uuid4(), room_id="garage", online=True)
+    await plan.fast_path.method(plan.handler, plan.match, ctx, db_session)
+    await db_session.execute(
+        text(
+            "UPDATE timers SET created_at = created_at - interval '10 minutes', "
+            "expires_at = expires_at - interval '10 minutes'"
+        )
+    )
+    await db_session.commit()
+
+    garage = _FakeSession("garage")
+    watcher = TimerWatcher(app=_app({"garage": garage}))
+    assert await watcher.tick() == 1
+    await _drain(watcher)
+
+    assert garage.announced == ["Here's your 10 minute reminder."]

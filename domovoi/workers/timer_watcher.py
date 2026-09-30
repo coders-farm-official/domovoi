@@ -2,18 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 from domovoi.db.repositories import TimerRepository
 from domovoi.db.session import session_scope
-from domovoi.handlers.timer import _format_duration, spoken_label
+from domovoi.handlers.timer import duration_adjective, spoken_label
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
-
-# "10 minutes" → "10 minute": the duration is an adjective in the fired line.
-_PLURAL_UNIT_RE = re.compile(r"\b(second|minute|hour)s\b")
 
 
 def _timer_done_text(label: str | None, duration_sec: int) -> str:
@@ -24,9 +20,20 @@ def _timer_done_text(label: str | None, duration_sec: int) -> str:
         # "the pasta" → "Your pasta timer", not "Your the pasta timer".
         return f"Your {spoken_label(label)} timer is done."
     if duration_sec > 0:
-        spoken = _PLURAL_UNIT_RE.sub(r"\1", _format_duration(duration_sec))
-        return f"Your {spoken} timer is done."
+        # "10 minutes" → "10 minute": the duration is an adjective here.
+        return f"Your {duration_adjective(duration_sec)} timer is done."
     return "Your timer is done."
+
+
+def _reminder_text(message: str, duration_sec: int) -> str:
+    """What a reminder says when it goes off: its task, or — for one set
+    with no task (an empty message, see handlers/reminder.py) — its
+    duration, the way an unlabelled timer names itself."""
+    if message.strip():
+        return f"Reminder: {message}"
+    if duration_sec > 0:
+        return f"Here's your {duration_adjective(duration_sec)} reminder."
+    return "Here's your reminder."
 
 
 class TimerWatcher(Worker):
@@ -36,8 +43,10 @@ class TimerWatcher(Worker):
     StreamSession.announce(): fan-out to the same Pi the user set them
     from. Plain timers (message NULL) say "Your pasta timer is done." /
     "Your 10 minute timer is done."; reminders (message != NULL) say
-    "Reminder: <message>". There's no chime — the satellite has no frame
-    for one outside a drop-in call — so the spoken line is the alert.
+    "Reminder: <message>", or "Here's your 10 minute reminder." when the
+    message is empty (one set with no task). There's no chime — the
+    satellite has no frame for one outside a drop-in call — so the spoken
+    line is the alert.
 
     If the Pi is offline when a timer fires, or the announce fails (the Pi
     is mid-response, the WebSocket died), the line is logged and dropped —
@@ -66,22 +75,26 @@ class TimerWatcher(Worker):
             expired = await TimerRepository(s).pop_expired()
         for tid, label, message, room_id, created_at, expires_at in expired:
             descriptor = label or f"id={tid}"
-            if message:
+            duration_sec = round((expires_at - created_at).total_seconds())
+            # ``is not None``: an EMPTY message is a reminder with no task,
+            # not a plain timer.
+            if message is not None:
                 log.info(
                     "timer fired (reminder): %s room=%s message=%r",
                     descriptor, room_id, message,
                 )
-                self._dispatch_reminder(room_id, message)
+                self._dispatch_reminder(room_id, message, duration_sec)
             else:
                 log.info("timer fired: %s room=%s", descriptor, room_id)
-                duration_sec = round((expires_at - created_at).total_seconds())
                 text = _timer_done_text(label, duration_sec)
                 self._announce(room_id, text, kind="timer", dropping=repr(text))
         return len(expired)
 
-    def _dispatch_reminder(self, room_id: str | None, message: str) -> None:
+    def _dispatch_reminder(
+        self, room_id: str | None, message: str, duration_sec: int = 0,
+    ) -> None:
         self._announce(
-            room_id, f"Reminder: {message}",
+            room_id, _reminder_text(message, duration_sec),
             kind="reminder", dropping=f"message={message!r}",
         )
 
