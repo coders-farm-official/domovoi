@@ -137,8 +137,9 @@ defaults.
   that session. PRs spend the GitHub Actions allowance.
 - **Pushing `android/**` runs CI too.** `.github/workflows/android-apk.yml`
   fires on a push to *any* branch that touches `android/`, so a push costs
-  Actions minutes even without a PR. Commit locally and push Android
-  changes only when the owner asks.
+  Actions minutes even without a PR. Put `[skip ci]` in the message of
+  every commit pushed from a session (GitHub skips push workflows when the
+  head commit carries it), so work is saved to the branch for free.
 - **Android changes ship as an APK built in the session.** Install the SDK,
   build the debug APK, and send it with `SendUserFile`:
 
