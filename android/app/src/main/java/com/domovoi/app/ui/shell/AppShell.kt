@@ -91,17 +91,29 @@ fun AppShell() {
     val pairingRequired by app.api.pairingRequired.collectAsState()
     val workspaceState = rememberSaveableStateHolder()
 
-    // A saved server that has been out of reach for the grace period drops
-    // the app back to local media (see shellMode); reconnecting brings the
-    // workspace straight back. Reset per server, so a switch gets a fresh
+    // A saved server that has not answered for the grace period drops the
+    // app back to local media (see shellMode); an answer brings the
+    // workspace straight back. The live socket being down is not enough on
+    // its own — an unpaired phone's socket is refused by a server that is
+    // right there — so while it is down the server is asked directly, and
+    // any HTTP answer counts. Reset per server, so a switch gets a fresh
     // grace period rather than inheriting the old server's verdict.
     var unreachable by remember(serverUrl) { mutableStateOf(false) }
     LaunchedEffect(serverUrl, connected) {
-        if (connected) {
+        if (serverUrl.isBlank() || connected) {
             unreachable = false
-        } else {
-            delay(UNREACHABLE_GRACE_MS)
-            unreachable = true
+            return@LaunchedEffect
+        }
+        var lastAnswer = System.currentTimeMillis()
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (app.api.answers()) {
+                lastAnswer = now
+                unreachable = false
+            } else if (now - lastAnswer >= UNREACHABLE_GRACE_MS) {
+                unreachable = true
+            }
+            delay(REACH_PROBE_EVERY_MS)
         }
     }
 
@@ -403,6 +415,8 @@ private fun TopChrome(content: @Composable () -> Unit) {
 private fun OfflineShell(unreachableServer: String? = null) {
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
     var showConnect by rememberSaveable { mutableStateOf(false) }
+    // Back from the server picker returns to local media, not out of the app.
+    BackHandler(enabled = showConnect) { showConnect = false }
 
     if (showConnect) {
         Box(Modifier.fillMaxSize()) {

@@ -114,6 +114,31 @@ class ApiClient(
         return baseUrl + path
     }
 
+    /** Short-fused copy of [http] for [answers]: same interceptors, but a
+     *  probe that hangs is itself the answer. */
+    private val probeHttp: OkHttpClient by lazy {
+        http.newBuilder().callTimeout(5, TimeUnit.SECONDS).build()
+    }
+
+    /**
+     * Whether the server answers at all. Any HTTP status counts — a phone
+     * that is not paired yet has its live socket refused (403), and that
+     * server is plainly there — so only a transport failure means "out of
+     * reach". A cleartext refusal is a setting to fix, not an outage, so it
+     * counts as an answer too and the workspace stays up to say so.
+     */
+    suspend fun answers(): Boolean = withContext(Dispatchers.IO) {
+        val base = baseUrl
+        if (base.isBlank()) return@withContext false
+        try {
+            probeHttp.newCall(Request.Builder().url("$base/api/health").build()).execute().use { true }
+        } catch (e: UnknownServiceException) {
+            true
+        } catch (e: IOException) {
+            false
+        }
+    }
+
     /** A WebSocket upgrade carrying this phone's household token. Used by
      *  StateBus (/ws/state) and DropinCallClient (/v1/dropin/{room}). */
     fun wsRequest(url: String): Request =

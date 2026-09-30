@@ -37,6 +37,21 @@ class ApiClientTest {
         assertEquals("https://x.example/a.mp3", api.absolute("https://x.example/a.mp3"))
     }
 
+    @Test fun answers_countsAnyHttpStatusEvenARefusal() = runBlocking {
+        // An unpaired phone: the server is there, it just says no.
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertTrue(api.answers())
+        assertEquals("/api/health", server.takeRequest().path)
+        server.enqueue(MockResponse().setBody("{}"))
+        assertTrue(api.answers())
+    }
+
+    @Test fun answers_isFalseOnlyWhenNothingAnswers() = runBlocking {
+        server.shutdown()
+        assertFalse(api.answers())
+        assertFalse(ApiClient(baseUrlProvider = { "" }).answers())
+    }
+
     @Test fun get_parsesJson() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"ok":true,"bot_name":"domovoi"}"""))
         val el = api.get("/api/health")
