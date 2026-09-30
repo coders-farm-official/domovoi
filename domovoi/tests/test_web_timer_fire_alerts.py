@@ -365,6 +365,21 @@ def open_page(*fires: dict, server_now: int = NOW) -> dict:
     return {**fires_page(*fires, server_now=server_now), "window_sec": 600}
 
 
+# The same browser paired: the card on screen is re-read under the household
+# token and its words come back — once per credential change, none for a
+# modal that merely opened and closed.
+SCENARIOS["masked_then_paired"] = scenario(
+    {"GET /api/timers/fires?since_id=40&limit=50": open_page(_OPEN_41)},
+    "const whole = () => w.__fetches.filter((f) => f.path === '/api/timers/fires?limit=50').length;"
+    "const masked = snap();"
+    "w.__Auth.requestPairing(); await w.__flush(h); w.__Auth.closePairModal(); await w.__flush(h);"
+    "const modalOnly = whole();"
+    f"w.__table['GET /api/timers/fires?limit=50'] = {json.dumps(fires_page({**_OPEN_41, 'message': 'call mom', 'masked': False}))};"
+    "w.__Auth.pair('house-token'); await w.__flush(h);"
+    "return { masked, modalOnly, paired: snap(), whole: whole() };",
+    # Known not to be a shared screen, which would hide the words anyway.
+    ls={SEEN: json.dumps({"id": 40, "at": iso(NOW - 40 * MIN)}), "domovoi-shared-screen": "0"},
+)
 SCENARIOS["open_window"] = scenario(
     {"GET /api/timers/fires?since_id=40&limit=50": open_page(_OPEN_41, _OPEN_42, _OPEN_43)},
     "const polls = () => [...w.__intervals.values()].filter((i) => i.ms === 30000);"
@@ -436,6 +451,19 @@ def test_a_shared_screen_never_shows_a_reminders_words(driven) -> None:
 def test_a_reminder_the_server_masked_shows_no_words(driven) -> None:
     (card,) = driven["masked"]["cards"]
     assert card["title"] == "Reminder · garage" and card["body"] is None
+
+
+def test_pairing_rereads_the_cards_on_screen_and_unmasks_them(driven) -> None:
+    """The alert reads by hand, not through the hooks, so it carries its
+    own once-per-credential re-read (the dashboard's refetchOnAuth rule)."""
+    out = driven["masked_then_paired"]
+    (card,) = out["masked"]["cards"]
+    assert card["id"] == 41 and card["body"] is None
+    assert out["modalOnly"] == 0
+    (card,) = out["paired"]["cards"]
+    assert card["id"] == 41 and card["body"] == "call mom"
+    assert out["whole"] == 1
+    assert out["paired"]["prompt"] == {"pair": False, "login": False}
 
 
 # ─── what alerts, and what is only taken as seen ─────────────────────────

@@ -496,6 +496,23 @@ SCENARIOS["timer_fires_masked"] = scenario(
     house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
         _open(_F_ON_ITS_WAY)]}}),
     SNAP)
+# The same browser paired: the timers are re-read under the household token
+# and the reminder's words come back — once, and not for a modal that
+# merely opened and closed (data.js refetchOnAuth).
+SCENARIOS["timer_fires_masked_then_paired"] = scenario(
+    house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
+        _open(_F_ON_ITS_WAY)]}}),
+    "const reads = () => w.__fetches.filter((f) => f.method === 'GET' && f.path === '/api/timers').length;"
+    "const masked = { done: w.__snap(h).done, reads: reads() };"
+    "w.__Auth.requestPairing(); await w.__flush(h); w.__Auth.closePairModal(); await w.__flush(h);"
+    "const modalOnly = reads();"
+    f"w.__table['GET /api/timers'] = {json.dumps({'server_now': iso(NOW), 'timers': [], 'fires': [_F_ON_ITS_WAY]})};"
+    "w.__Auth.pair('house-token'); await w.__flush(h);"
+    "return { masked, modalOnly, paired: { done: w.__snap(h).done, reads: reads() } };",
+    # Known not to be a shared screen (a paired browser with no answer yet
+    # is treated as one, and would hide the words for that reason instead).
+    ls={"domovoi-shared-screen": "0"},
+)
 SCENARIOS["timer_fires_open"] = scenario(
     house(**{"GET /api/timers": {"server_now": iso(NOW), "timers": [], "fires": [
         _open(f) for f in (_F_HEARD, _F_ON_ITS_WAY, _F_NOWHERE, _F_OLD)]}}),
@@ -1175,6 +1192,18 @@ def test_a_masked_reminder_reads_reminder(driven) -> None:
     assert driven["timer_fires_masked"]["done"] == ["done · officereminderannouncing…"]
 
 
+def test_pairing_rereads_the_timers_and_the_reminder_words_come_back(driven) -> None:
+    """GET /api/timers answers a browser with no household credential
+    with the reminder masked, and SUCCEEDS — so nothing used to re-read it
+    when the browser was paired. It is opted into refetchOnAuth: one
+    re-read per credential change, none for a modal."""
+    out = driven["timer_fires_masked_then_paired"]
+    assert out["masked"] == {"done": ["done · officereminderannouncing…"], "reads": 1}
+    assert out["modalOnly"] == 1
+    assert out["paired"] == {"done": ["done · officecall mum about the ticketsannouncing…"],
+                             "reads": 2}
+
+
 def test_an_unpaired_screen_s_cut_down_fires_draw_the_same_lines(driven) -> None:
     """Rule F1: no per-room rows reach a browser with no household
     credential. Its done lines read as on a paired screen (less a
@@ -1196,8 +1225,8 @@ def test_no_fire_history_draws_no_done_line(driven) -> None:
 
 def test_home_rereads_the_timers_on_either_push() -> None:
     home = (STATIC / "home.jsx").read_text(encoding="utf-8")
-    assert ("useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'],"
-            " quiet: true })") in home
+    assert re.search(r"useApiObject\('/api/timers', \{ eventTypes: \['timers\.changed', "
+                     r"'timer_fires\.changed'\], quiet: true,\s+refetchOnAuth: true \}\)", home)
 
 
 def test_countdown_follows_the_server_clock_not_the_phone(driven) -> None:

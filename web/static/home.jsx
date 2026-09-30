@@ -1064,7 +1064,10 @@ const HomePage = ({ counts, badges }) => {
   const sats = useApiObject('/api/satellites', HOME_QUIET);
   // `timer_fires.changed` too: a fire's "done · kitchen" line comes from
   // the same read, and its "heard in …" moves as each room announces it.
-  const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true });
+  // A reminder's words and the fire details answer to a household
+  // credential (rules M1/F1), so pairing (or signing in) re-reads it.
+  const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true,
+                                               refetchOnAuth: true });
   const plugins = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'], quiet: true });
   const acq = useApiObject('/api/acquisitions?status=pending&limit=100',
                            { eventTypes: ['acquisitions.changed'], quiet: true });

@@ -476,8 +476,12 @@ const ModelsPanel = () => {
   const { data: catalog } = useApiObject('/api/models/catalog');
   const { data: installedData, refresh: refreshInstalled } =
     useApiObject('/api/models/installed', { eventTypes: ['model_jobs.changed'] });
+  // Read from the core's config registry with this caller's credential,
+  // so what it holds depends on who asks: the Whisper model, device and
+  // compute type are ADVANCED settings, which come back only for a live
+  // admin sign-in (CORE-6). Re-read on every sign-in and sign-out.
   const { data: activeData, error: activeError, refresh: refreshActive } =
-    useApiObject('/api/models/active');
+    useApiObject('/api/models/active', { refetchOnAuth: true });
   const { items: jobs } = useApiList('/api/models/jobs', { eventTypes: ['model_jobs.changed'],
     pickItems: (d) => (d && d.jobs) || [] });
   // Open, numbers only. Fetched once per visit — a turn's timings don't

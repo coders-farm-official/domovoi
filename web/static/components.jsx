@@ -816,7 +816,14 @@ const SidebarFooter = () => {
   }, []);
 
   let signedIn = false;
-  try { signedIn = typeof Auth !== 'undefined' && Auth.isLoggedIn(); } catch {}
+  // The cookie a reload keeps, with no admin sign-in in this tab: the
+  // Settings Admin card calls it "view only", so this says the same
+  // rather than "Not signed in" beside a card that says signed in.
+  let viewOnly = false;
+  try {
+    signedIn = typeof Auth !== 'undefined' && Auth.isLoggedIn();
+    viewOnly = !signedIn && typeof Auth !== 'undefined' && !!(Auth.status && Auth.status.authenticated);
+  } catch {}
 
   const host = (() => {
     try { return ServerStore.currentLabel(); } catch { return window.location.host; }
@@ -825,9 +832,9 @@ const SidebarFooter = () => {
   return (
     <div className="footer">
       <div className="who">
-        <Avatar name={signedIn ? 'Admin' : 'Guest'}/>
+        <Avatar name={signedIn || viewOnly ? 'Admin' : 'Guest'}/>
         <div>
-          <div className="name">{signedIn ? 'Admin' : 'Not signed in'}</div>
+          <div className="name">{signedIn ? 'Admin' : (viewOnly ? 'Admin (view only)' : 'Not signed in')}</div>
           <div className="host" title={host}>{host}</div>
         </div>
       </div>
@@ -1146,6 +1153,11 @@ const LoginModal = ({ onClose }) => {
   }, []);
 
   const needsSetup = status && status.setup_complete === false;
+  // Auth.logout() on a tab that holds only the cookie (the page was
+  // reloaded): the server ends a session only for a Bearer, so the
+  // password is asked for once, and this modal says why.
+  let signingOut = false;
+  try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
 
   const submit = async () => {
     setErr(null);
@@ -1169,7 +1181,7 @@ const LoginModal = ({ onClose }) => {
     <div className="cal-modal-bg" onClick={onClose}>
       <div className="cal-modal" onClick={(e) => e.stopPropagation()}>
         <div className="cal-modal-head">
-          <div className="ttl">{needsSetup ? 'first-run admin setup' : 'admin login'}</div>
+          <div className="ttl">{needsSetup ? 'first-run admin setup' : (signingOut ? 'sign out' : 'admin login')}</div>
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div className="cal-modal-body">
@@ -1206,15 +1218,24 @@ const LoginModal = ({ onClose }) => {
             </div>
           )}
           {err && <div className="err">{err}</div>}
-          <div className="hint">
-            Admin actions (deleting files, settings, plugins, satellite
-            upgrades) need this; saving, playback and browsing never do.
-          </div>
+          {signingOut ? (
+            <div className="hint login-sign-out-why">
+              This page was reloaded, so this tab no longer holds the admin
+              sign-in, and the server ends a session only for a tab that can
+              prove it holds one. Enter the password once to sign this
+              browser out.
+            </div>
+          ) : (
+            <div className="hint">
+              Admin actions (deleting files, settings, plugins, satellite
+              upgrades) need this; saving, playback and browsing never do.
+            </div>
+          )}
         </div>
         <div className="cal-modal-foot">
           <Button onClick={onClose}>cancel</Button>
           <Button variant="primary" onClick={submit} disabled={busy || !password}>
-            {busy ? 'working…' : (needsSetup ? 'set password' : 'log in')}
+            {busy ? 'working…' : (needsSetup ? 'set password' : (signingOut ? 'sign out' : 'log in'))}
           </Button>
         </div>
       </div>
@@ -1642,6 +1663,36 @@ const TimerFireAlerts = () => {
   };
 
   React.useEffect(() => { catchUp(); }, []);
+
+  /* A credential arrived or went (a pairing, a sign-in or sign-out): the
+   * cards on screen were read under the old one — a reminder's words
+   * masked for a browser with no household credential (rule M1), or
+   * shown to one that has since lost it. Read the newest page again under
+   * the new one; ingest() replaces a card already on screen by its id,
+   * and alerts only what the catch-up rule would. Once per credential
+   * change, never on a notify that changed none (a modal opening). */
+  const rereadRef = React.useRef(null);
+  rereadRef.current = async () => {
+    try {
+      const r = await apiGet(`/api/timers/fires?limit=${TIMER_FIRE_PAGE}`, { quiet: true });
+      if (!r || !Array.isArray(r.fires)) return;
+      const at = Date.parse(r.server_now);
+      if (Number.isFinite(at)) offsetRef.current = at - Date.now();
+      ingest(r.fires, serverNow(), TIMER_FIRE_CATCHUP_MS);
+    } catch { /* quiet, like the catch-up */ }
+  };
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined' || !Auth.subscribe) return undefined;
+    try {
+      let seen = Auth.credentialVersion;
+      return Auth.subscribe(() => {
+        if (Auth.credentialVersion === seen) return;
+        seen = Auth.credentialVersion;
+        rereadRef.current();
+      });
+    } catch { return undefined; }
+  }, []);
+
   useStateEvents(TIMER_FIRE_EVENTS, (ev) => {
     if (ev.type === '_status') { setLive(!!ev.connected); if (ev.connected) catchUp(); return; }
     if (Array.isArray(ev.data)) ingest(ev.data, serverNow(), null);

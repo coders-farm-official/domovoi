@@ -86,7 +86,8 @@ def test_rename_refreshes_the_shared_devices_list():
 def test_config_panel_names_a_failed_load_and_offers_retry():
     src = _src("settings.jsx")
     panel = _component(src, "ConfigPanel")
-    assert re.search(r"const \{[^}]*\berror\b[^}]*\} = useApiObject\('/api/config/editable'\)", panel)
+    assert re.search(r"const \{[^}]*\berror\b[^}]*\} = useApiObject\('/api/config/editable'"
+                     r"(?:, \{[^}]*\})?\)", panel)
     assert "configLoadMessage(error)" in panel
     # The retry goes through the hook's own refresh.
     assert re.search(r"onClick=\{retry\}", panel)

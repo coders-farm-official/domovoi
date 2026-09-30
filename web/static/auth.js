@@ -6,6 +6,13 @@
  * HttpOnly SameSite=Strict cookie the login endpoint sets lets plain
  * GET page loads render authenticated state after a reload.
  *
+ * So a reloaded tab is VIEW-ONLY: `status.authenticated` (the cookie) with
+ * no token. It renders; every change asks for the password again, and
+ * the settings it reads come back with secrets masked and without the
+ * advanced section (CORE-6). The Settings Admin card says so and offers
+ * "sign in again", and the reads whose answer depends on the credential
+ * re-read on every credentialVersion change (data.js refetchOnAuth).
+ *
  * The DEVICE TOKEN is different: it is the household's credential for
  * ordinary actions (queue edits, announcements, intents…), not a
  * person's, so it persists in localStorage — one entry per server this
@@ -31,6 +38,9 @@ const Auth = (() => {
   let token = null;              // in-memory bearer (never persisted)
   let modalOpen = false;
   let pairModalOpen = false;
+  // Why the login modal is up, when it is not the usual "an admin action
+  // needs you": 'sign-out' (logout, below). The modal says so.
+  let loginReason = null;
   // null = not yet probed; {setup_complete, authenticated} afterwards.
   let status = null;
   // Bumped whenever a credential appears or goes away (login, setup,
@@ -152,6 +162,7 @@ const Auth = (() => {
     get token() { return token; },
     isLoggedIn: () => !!token,
     get modalOpen() { return modalOpen; },
+    get loginReason() { return loginReason; },
     get pairModalOpen() { return pairModalOpen; },
     get status() { return status; },
     get credentialVersion() { return credentialVersion; },
@@ -312,7 +323,22 @@ const Auth = (() => {
       return data;
     },
 
+    // Resolves true once signed out, false when a cookie-only tab's
+    // password prompt (below) was dismissed and nothing changed.
     async logout() {
+      // A reload keeps the HttpOnly cookie but forgets the bearer, and the
+      // server ends a session only for a Bearer (POST /api/auth/logout: a
+      // cross-site POST carrying just the cookie must not sign anyone
+      // out). Sending the cookie alone was refused 401, the cookie
+      // survived, and this tab said "signed out" until the next reload
+      // said "signed in" again. So a tab holding only the cookie asks for
+      // the password once, and revokes the session that proves.
+      if (!token && status && status.authenticated) {
+        loginReason = 'sign-out';
+        let proved = false;
+        try { proved = await this.ensureLoggedIn(); } finally { loginReason = null; }
+        if (!proved) { notify(); return false; }
+      }
       try {
         await fetch(`${base()}/api/auth/logout`, {
           method: 'POST',
@@ -325,6 +351,7 @@ const Auth = (() => {
       credentialVersion += 1;
       // The device token stays: it is the household's, not the admin's.
       notify();
+      return true;
     },
   };
 })();

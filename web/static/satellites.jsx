@@ -956,8 +956,10 @@ const SatTimerFireTitle = (f, shared) => {
  * minutes (rule F1), so on an unpaired screen the list is short. */
 const SatTimerFiredList = ({ room }) => {
   const shared = useSharedScreen();
+  // Masked and cut to 10 minutes without a household credential (rules
+  // M1/F1): re-read when one arrives or goes.
   const { data } = useApiObject(`/api/timers/fires?room_id=${encodeURIComponent(room)}&limit=10`,
-                                { eventTypes: ['timer_fires.changed'], quiet: true });
+                                { eventTypes: ['timer_fires.changed'], quiet: true, refetchOnAuth: true });
   const fires = (data && Array.isArray(data.fires)) ? data.fires : [];
   if (!fires.length) return null;
   return (
@@ -983,7 +985,10 @@ const SatTimerRowLabel = (t, shared) => {
 
 const RoomTimersBody = ({ room, fire }) => {
   const shared = useSharedScreen();
-  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`);
+  // A reminder's words answer to a household credential (rule M1):
+  // re-read when one arrives or goes.
+  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`,
+                                                       { refetchOnAuth: true });
   // Tick state so the remaining-time column counts down between fetches.
   const [, setTick] = React.useState(0);
   React.useEffect(() => {

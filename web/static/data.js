@@ -873,32 +873,119 @@ const useRetryAfterCredential = (refusal, retry) => {
   }, [refusal, retry]);
 };
 
+/* ── Reads whose ANSWER depends on the credential ─────────────────────
+ *
+ * Most reads are allowed or refused, and the retry in the hooks below
+ * recovers a refused one once a credential arrives. A few are allowed
+ * EITHER way and answer differently by who asks:
+ *   * Settings → Configuration (and the Models tab's active models, read
+ *     from the same registry): the advanced section and the unmasked
+ *     secrets come back only for a live admin Bearer. The cookie a
+ *     reload keeps is view-only (CORE-6).
+ *   * the timer reads: a reminder's words, and the whole fire ledger,
+ *     only for a household credential (rules M1 and F1).
+ * Such a read SUCCEEDS under the weaker credential, so "retry after a
+ * 401" never ran for it: signing in left Advanced hidden until the panel
+ * happened to remount (switching Settings tabs), and signing out left the
+ * advanced values and unmasked secrets on screen.
+ *
+ * `refetchOnAuth: true` on useApiObject / useApiList opts a read into:
+ *   * ONE re-read per credential change — sign-in, first-run setup,
+ *     sign-out, pairing, unpairing, a rotated household token — keyed on
+ *     Auth.credentialVersion and never on a notify that changed none (a
+ *     modal opening or closing), so a refused re-read cannot loop. The
+ *     re-read is quiet: nobody pressed anything, and the read that follows
+ *     a sign-out must not answer it with a sign-in prompt.
+ *   * the answer DROPPED at once when a credential went away (the Bearer,
+ *     the cookie session, the household token) instead of when the re-read
+ *     lands — a refused re-read would otherwise leave on screen what only
+ *     the stronger credential was shown.
+ *   * an answer to a request SENT under an older credential thrown away
+ *     when it lands: the re-read under the current one owns the state.
+ * Opt-in, not the default: a read that is merely allowed-or-refused gains
+ * nothing from re-reading on every change. */
+const _credentialVersion = () => {
+  try { return typeof Auth !== 'undefined' ? Auth.credentialVersion : null; }
+  catch { return null; }
+};
+
+// What this browser holds right now, as far as a re-read cares.
+const _credentialState = () => {
+  try {
+    if (typeof Auth === 'undefined') return null;
+    return {
+      version: Auth.credentialVersion,
+      bearer: !!(Auth.isLoggedIn && Auth.isLoggedIn()),
+      cookie: !!(Auth.status && Auth.status.authenticated),
+      device: (Auth.deviceToken && Auth.deviceToken()) || null,
+    };
+  } catch { return null; }
+};
+
+// `reread` once per credential change; `drop` first when one went away.
+// Every notify refreshes what "before" means (a status probe landing
+// changes no credential but does say whether the cookie is good), and
+// only a new credentialVersion re-reads.
+const useRefetchOnCredential = (enabled, reread, drop) => {
+  React.useEffect(() => {
+    if (!enabled || typeof Auth === 'undefined' || !Auth.subscribe) return undefined;
+    try {
+      let was = _credentialState();
+      return Auth.subscribe(() => {
+        const now = _credentialState();
+        if (!now) return;
+        const before = was;
+        was = now;
+        if (before && now.version === before.version) return;
+        const lost = !!before && ((before.bearer && !now.bearer) || (before.cookie && !now.cookie)
+          || (!!before.device && !now.device));
+        if (lost) drop();
+        reread();
+      });
+    } catch { return undefined; }
+  }, [enabled, reread, drop]);
+};
+
 // One-shot list fetch with refresh. `eventTypes` is a list of WS
 // event types that should trigger a refetch (server doesn't always
 // embed the full new payload, so a refetch is the safest move).
 // `quiet: true` makes a refused read open no prompt (see apiGet).
-const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false } = {}) => {
+// `refetchOnAuth: true` for a read whose answer depends on the
+// credential (above).
+const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false,
+                            refetchOnAuth = false } = {}) => {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   // Guards the post-login retry below to one attempt per error.
   const retriedRef = React.useRef(false);
 
-  const refresh = React.useCallback(async () => {
-    try {
-      const data = await apiGet(path, { quiet });
+  // `quietRead`: THIS read opens no prompt even when the hook's do (the
+  // re-read after a credential change).
+  const load = React.useCallback(async (quietRead) => {
+    const sentUnder = _credentialVersion();
+    let data; let failed = null;
+    try { data = await apiGet(path, { quiet: quiet || quietRead === true }); }
+    catch (e) { failed = e; }
+    // Sent under a credential this browser no longer holds: the re-read
+    // under the current one owns the state (refetchOnAuth, above).
+    if (refetchOnAuth && sentUnder !== _credentialVersion()) return;
+    if (failed) {
+      console.warn(`fetch ${path}:`, failed);
+      setError(failed);
+    } else {
       setItems(pickItems(data) || []);
       setError(null);
       retriedRef.current = false;
-    } catch (e) {
-      console.warn(`fetch ${path}:`, e);
-      setError(e);
-    } finally {
-      setLoading(false);
     }
-  }, [path, quiet]);
+    setLoading(false);
+  }, [path, quiet, refetchOnAuth]);
+  const refresh = React.useCallback(() => load(false), [load]);
+  const reread = React.useCallback(() => load(true), [load]);
+  const drop = React.useCallback(() => { setItems([]); setError(null); setLoading(true); }, []);
 
   React.useEffect(() => { refresh(); }, [refresh]);
+  useRefetchOnCredential(refetchOnAuth, reread, drop);
 
   // Recover after login (or pairing). An admin-gated path 401s on first
   // mount (the token lives only in JS memory, so a page load always starts
@@ -911,7 +998,11 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
   // while logged in is a real failure (e.g. a web→core hop that forgets to
   // forward credentials), and retrying it on every Auth notify produces an
   // infinite login-modal loop rather than surfacing the bug.
+  //
+  // Not for a refetchOnAuth read: it re-reads on EVERY credential change
+  // already, so this would read twice.
   React.useEffect(() => {
+    if (refetchOnAuth) return;
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
@@ -926,7 +1017,7 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
         refresh();
       });
     } catch { /* auth.js absent — nothing to recover from */ }
-  }, [error, refresh]);
+  }, [error, refresh, refetchOnAuth]);
 
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;
@@ -941,14 +1032,18 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
 // One-shot single-resource fetch (e.g. /api/config). Same shape as
 // useApiList minus the array-ness — `data` instead of `items`.
 // `quiet: true` makes a refused read open no prompt (see apiGet).
-const useApiObject = (path, { eventTypes = [], quiet = false } = {}) => {
+// `refetchOnAuth: true` for a read whose answer depends on the
+// credential (above useApiList).
+const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = false } = {}) => {
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   // Guards the post-login retry below to one attempt per error.
   const retriedRef = React.useRef(false);
 
-  const refresh = React.useCallback(async () => {
+  // `quietRead`: THIS read opens no prompt even when the hook's do (the
+  // re-read after a credential change).
+  const load = React.useCallback(async (quietRead) => {
     // Skip when path is null/empty (drawers fetch conditionally
     // and pass null when they're closed). Without this guard,
     // `apiGet(null)` would issue a request against the literal
@@ -958,19 +1053,29 @@ const useApiObject = (path, { eventTypes = [], quiet = false } = {}) => {
       setLoading(false);
       return;
     }
-    try {
-      setData(await apiGet(path, { quiet }));
+    const sentUnder = _credentialVersion();
+    let got; let failed = null;
+    try { got = await apiGet(path, { quiet: quiet || quietRead === true }); }
+    catch (e) { failed = e; }
+    // Sent under a credential this browser no longer holds: the re-read
+    // under the current one owns the state (refetchOnAuth, above useApiList).
+    if (refetchOnAuth && sentUnder !== _credentialVersion()) return;
+    if (failed) {
+      console.warn(`fetch ${path}:`, failed);
+      setError(failed);
+    } else {
+      setData(got);
       setError(null);
       retriedRef.current = false;
-    } catch (e) {
-      console.warn(`fetch ${path}:`, e);
-      setError(e);
-    } finally {
-      setLoading(false);
     }
-  }, [path, quiet]);
+    setLoading(false);
+  }, [path, quiet, refetchOnAuth]);
+  const refresh = React.useCallback(() => load(false), [load]);
+  const reread = React.useCallback(() => load(true), [load]);
+  const drop = React.useCallback(() => { setData(null); setError(null); setLoading(true); }, []);
 
   React.useEffect(() => { refresh(); }, [refresh]);
+  useRefetchOnCredential(refetchOnAuth && !!path, reread, drop);
 
   // Recover after login (or pairing). An admin-gated path 401s on first
   // mount (the token lives only in JS memory, so a page load always starts
@@ -983,7 +1088,11 @@ const useApiObject = (path, { eventTypes = [], quiet = false } = {}) => {
   // while logged in is a real failure (e.g. a web→core hop that forgets to
   // forward credentials), and retrying it on every Auth notify produces an
   // infinite login-modal loop rather than surfacing the bug.
+  //
+  // Not for a refetchOnAuth read: it re-reads on EVERY credential change
+  // already, so this would read twice.
   React.useEffect(() => {
+    if (refetchOnAuth) return;
     if (!error || (error.status !== 401 && error.status !== 403)) return;
     if (typeof Auth === 'undefined') return;
     try {
@@ -998,7 +1107,7 @@ const useApiObject = (path, { eventTypes = [], quiet = false } = {}) => {
         refresh();
       });
     } catch { /* auth.js absent — nothing to recover from */ }
-  }, [error, refresh]);
+  }, [error, refresh, refetchOnAuth]);
 
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;

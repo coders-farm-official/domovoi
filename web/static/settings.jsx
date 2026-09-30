@@ -425,6 +425,14 @@ const VoicesPanel = () => {
  * modal pops automatically whenever an admin-gated call returns
  * 401/403; this card is the discoverable path — fresh installs land
  * here looking for where the setup code goes.
+ *
+ * TWO kinds of signed in, and the card says which (CORE-6). A live
+ * admin sign-in in this tab — the Bearer, held in JS memory only — does
+ * everything the tier gates. The HttpOnly cookie a page reload keeps
+ * only RENDERS: settings read with their secrets masked and without the
+ * Advanced section, and any change asks for the password again. The card
+ * used to say "signed in" for both and offer only "sign out", which is
+ * how the owner signed out, signed in, reloaded, and never saw Advanced.
  */
 const AdminSection = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
@@ -435,7 +443,10 @@ const AdminSection = () => {
   }, []);
   const st = Auth.status;
   const needsSetup = st && st.setup_complete === false;
-  const signedIn = Auth.isLoggedIn() || !!(st && st.authenticated);
+  const live = Auth.isLoggedIn();
+  const viewOnly = !live && !!(st && st.authenticated);
+  // Not returned: a view-only tab's sign-out waits on the password prompt.
+  const signOut = () => { Auth.logout(); };
   return (
     <Card title="Admin"
           sub="Gates settings edits, plugin management, satellite upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
@@ -445,21 +456,38 @@ const AdminSection = () => {
           ? <Pill tone="idle">checking…</Pill>
           : needsSetup
             ? <Pill tone="warn">not set up yet</Pill>
-            : signedIn
+            : live
               ? <Pill tone="ok">signed in</Pill>
-              : <Pill tone="idle">signed out</Pill>}
+              : viewOnly
+                ? <Pill tone="warn">signed in (view only after reload)</Pill>
+                : <Pill tone="idle">signed out</Pill>}
         {needsSetup && (
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             Enter the setup code from the Domovoi server console (also in{' '}
             <code>~/.domovoi/setup-code.txt</code>) and choose an admin password.
           </span>
         )}
+        {viewOnly && (
+          <span className="admin-view-only" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            A page reload keeps this browser signed in for viewing, but forgets
+            the admin sign-in this tab needs to change settings or see
+            Advanced. Sign in again to get it back.
+          </span>
+        )}
         <span style={{ flex: 1 }}/>
         {needsSetup
           ? <Button variant="primary" onClick={() => Auth.openModal()}>set up admin</Button>
-          : signedIn
-            ? <Button onClick={() => Auth.logout()}>sign out</Button>
-            : <Button variant="primary" onClick={() => Auth.openModal()}>sign in</Button>}
+          : live
+            ? <Button onClick={signOut}>sign out</Button>
+            : viewOnly
+              ? <>
+                  <Button variant="primary" icon="key" onClick={() => Auth.openModal()}>sign in again</Button>
+                  <Button onClick={signOut}
+                          title="asks for the password once: the server ends a session only for a tab that proves it holds one">
+                    sign out
+                  </Button>
+                </>
+              : <Button variant="primary" onClick={() => Auth.openModal()}>sign in</Button>}
       </div>
     </Card>
   );
@@ -705,17 +733,29 @@ const configLoadMessage = (error) => {
 };
 
 const ConfigPanel = () => {
-  const { data, loading, error, refresh } = useApiObject('/api/config/editable');
+  // What comes back depends on WHO asks (CORE-6): the advanced section
+  // and the unmasked secrets only for a live admin Bearer, the common
+  // section with secrets masked for the cookie a reload keeps. So this
+  // read re-reads on every sign-in and sign-out (refetchOnAuth, data.js)
+  // — it used to succeed under the cookie and never look again, and
+  // Advanced stayed hidden after a sign-in until the tab was switched.
+  const { data, loading, error, refresh } = useApiObject('/api/config/editable', { refetchOnAuth: true });
   const fields = (data && data.fields) || [];
   const [edits, setEdits] = React.useState({});
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState(null);
   const [advOpen, setAdvOpen] = React.useState(false);
+  // "sign in" pressed on the withheld note: open Advanced when it lands.
+  const [wantAdvanced, setWantAdvanced] = React.useState(false);
   const [retrying, setRetrying] = React.useState(false);
   const retry = async () => {
     setRetrying(true);
     try { await refresh(); } finally { setRetrying(false); }
   };
+  const signIn = () => { try { Auth.openModal(); } catch { /* auth.js absent */ } };
+  const signInForAdvanced = () => { setWantAdvanced(true); signIn(); };
+  let signedInHere = false;
+  try { signedInHere = Auth.isLoggedIn(); } catch { /* auth.js absent */ }
 
   const setEdit = (name, v) => setEdits(prev => ({ ...prev, [name]: v }));
   const valueOf = (f) => (f.name in edits ? edits[f.name] : f.value);
@@ -726,6 +766,9 @@ const ConfigPanel = () => {
   // admin bearer. Say so where the block would be — an absent Advanced
   // section otherwise reads as "this server has no infrastructure knobs".
   const advancedWithheld = !!data && data.advanced_available === false;
+  React.useEffect(() => {
+    if (wantAdvanced && advanced.length > 0) { setAdvOpen(true); setWantAdvanced(false); }
+  }, [wantAdvanced, advanced.length]);
 
   const save = async () => {
     if (dirtyCount === 0) return;
@@ -741,7 +784,12 @@ const ConfigPanel = () => {
       });
       refresh();
     } catch (e) {
-      setResult({ error: e.message });
+      // The server's own reason, and "cancelled" for a sign-in the
+      // operator dismissed (a reloaded tab holds no admin sign-in, so a
+      // save asks for one) — never a raw "403 Forbidden: {…}". Nothing
+      // while the sign-in prompt owns the story.
+      const msg = mutationErrorText(e, 'Save');
+      if (msg) setResult({ error: msg });
     } finally {
       setSaving(false);
     }
@@ -772,7 +820,10 @@ const ConfigPanel = () => {
           : error && fields.length === 0
           ? <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>
               <div>{configLoadMessage(error)}</div>
-              <div style={{ marginTop: 10 }}>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'center' }}>
+                {(error.status === 401 || error.status === 403) && (
+                  <Button variant="primary" icon="key" onClick={signIn}>sign in</Button>
+                )}
                 <Button icon="refresh-cw" onClick={retry} disabled={retrying}>
                   {retrying ? 'retrying…' : 'retry'}
                 </Button>
@@ -781,10 +832,24 @@ const ConfigPanel = () => {
           : <>
               {renderGroups(common)}
               {advancedWithheld && (
-                <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 10,
+                <div className="config-advanced-withheld"
+                     style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 10,
                               fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-                  Advanced settings — database URL, ports, paths — need an admin
-                  sign-in on this browser. Sign in to see and edit them.
+                  <div>
+                    {signedInHere
+                      ? 'The server withheld the advanced settings — database URL, ports, paths — from this tab’s sign-in. Signing in again asks for them once more.'
+                      : 'Advanced settings — database URL, ports, paths — need an admin sign-in in this tab.'}
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    A page reload keeps you signed in for viewing, but forgets the
+                    admin sign-in that Advanced and saving changes here need — sign
+                    in again after a reload.
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <Button variant="primary" icon="key" onClick={signInForAdvanced}>
+                      {signedInHere ? 'sign in again' : 'sign in'}
+                    </Button>
+                  </div>
                 </div>
               )}
               {advanced.length > 0 && (
@@ -815,7 +880,7 @@ const ConfigPanel = () => {
         {fields.length > 0 && (
         <div style={{ marginTop: 8, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
           {result && result.error &&
-            <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>save failed: {result.error}</div>}
+            <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>{result.error}</div>}
           {rejectedCount > 0 &&
             <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>
               rejected: {Object.entries(result.rejected).map(([k, v]) => `${k} (${v})`).join('; ')}
