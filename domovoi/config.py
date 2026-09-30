@@ -326,6 +326,32 @@ class Settings(BaseSettings):
     # a person waited for every transcript. A number pins it (and, being
     # non-zero, overrides OMP_NUM_THREADS). Ignored on cuda.
     whisper_cpu_threads: int = 0
+    # Short-window decoding: on an English-only (.en) model, a capture of
+    # up to 9 s (every spoken command) is decoded on a 10 s window instead
+    # of the 30 s one faster-whisper always pads to — the encoder does a
+    # third of the work, so small.en on a CPU answers in about a quarter
+    # of the time. Command accuracy: the same on clean TTS clips; on the
+    # same clips made far-field (synthetic reverberation and noise) the
+    # 10 s window changed about 1 command outcome in 10, net -11 to +5 of
+    # 252 depending on the noise, so the second hearing below is on by
+    # default. Validation on real recordings (the per-room opt-in command
+    # captures) is pending. Longer captures, multilingual models, and any
+    # short decode that comes back blank, unsure or failed use the 30 s
+    # path as before. false = the 30 s path always. Applies on the next
+    # transcription.
+    whisper_short_window_enabled: bool = True
+    # The second hearing: a short-window transcript that would go to the
+    # tool router (no fast path, not a yes/no, not a plain question) is
+    # decoded again on the 30 s path and that text is routed — it is
+    # most often a command the short decode misheard, or one about to
+    # spend seconds in the router anyway. Fast-path commands, plain
+    # questions, questions about the world ("What is the capital of
+    # France?") and requests for a joke or a story keep the short window's
+    # speed. In the same far-field measurement it scored at or above both
+    # windows in every condition (e.g. 205 against 202 for 30 s alone and
+    # 191 for 10 s alone), at a second decode for 16-34% of command
+    # captures. false = route the short-window text as it is.
+    whisper_short_window_recheck: bool = True
     # Speculative transcription (early endpointing, part A): start Whisper
     # at the first ~240 ms pause in a satellite's capture instead of after
     # its whole silence timeout, and use that transcript when no speech

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import time
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import registered_values
 from domovoi.clients.mpd import MPDNotProvisioned
-from domovoi.clients.ollama import get_ollama_client
+from domovoi.clients.ollama import QAWithUncertainty, get_ollama_client
 from domovoi.config import settings
 from domovoi.confirmations import CORE_KIND_PREFIX, request_confirmation
 from domovoi.db.repositories import (
@@ -23,8 +24,10 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path
+from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
+from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
 from domovoi.uncertainty import (
     VOLATILE_CATEGORIES,
@@ -273,6 +276,75 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
     return RoutePlan(path="fast", handler=handler, transcript=transcript, fast_path=fp, match=m)
 
 
+def goes_to_the_tool_model(raw_transcript: str) -> bool:
+    """Whether route() would hand ``raw_transcript`` to the tool model (the
+    LLM router): something in it, not a yes/no answer (a parked question's
+    reply, or a bare "no"), no fast path, and not a plain question or Q&A
+    request (``answers_without_tools``). Pure, like :func:`plan_route`.
+
+    The voice turn's second hearing asks it (``streaming``): a short-window
+    transcript headed there is either a command the short decode misheard
+    or a turn about to spend seconds in the tool router, so it is decoded
+    again on the 30 s path first. A fast-path command or a plain question
+    keeps its short-window speed."""
+    transcript = normalize_transcript(raw_transcript)
+    if not any(ch.isalnum() for ch in transcript):
+        return False
+    if _parse_yes_no(transcript) is not None:
+        return False
+    transcript = strip_leading_filler(transcript)
+    if first_fast_path(transcript) is not None:
+        return False
+    return not answers_without_tools(transcript)
+
+
+# The shortest question a second hearing is skipped for (see below): two-
+# and three-word ones are as often a short command misheard — "What
+# plane?" and "What's true?" were "What's playing?" on far-field audio.
+WORLD_QUESTION_MIN_WORDS = 4
+
+
+def is_question_about_the_world(raw_transcript: str) -> bool:
+    """A question — Whisper ended it with "?" — of at least
+    ``WORLD_QUESTION_MIN_WORDS`` words with nothing about the house, the
+    speaker, the assistant or something pointed at in it (the vocabulary
+    ``tool_gate`` keeps): "What is the capital of France?", "How far away
+    is the moon?". It goes to the tool model like any unmatched turn, but
+    streamed the router gives it up in ~0.7 s; hearing it again would add
+    a whole 30 s decode (~0.9-1.3 s) to a question no command was
+    misheard as. On the review's far-field corpus, skipping the second
+    hearing for these lost nothing in any of six conditions."""
+    raw = (raw_transcript or "").strip()
+    if not raw.endswith("?"):
+        return False
+    # Not filler-stripped: "could you put on something relaxing?" is a
+    # request to the assistant, and its "you" is what says so.
+    transcript = normalize_transcript(raw)
+    if len(transcript.split()) < WORLD_QUESTION_MIN_WORDS:
+        return False
+    return not about_the_house(transcript)
+
+
+# A request for something only the Q&A model makes up, however its article
+# was heard: "Tell me it a joke.", "Tell me the joke." (small.en on two of
+# three TTS voices asking for "a joke"). answers_without_tools wants the
+# article exactly — "tell me the stories" is the news — but for the second
+# hearing the question is only whether another decode could turn it into
+# a command, and none has this shape.
+_QA_REQUEST_LOOSE_RE = re.compile(
+    r"^(?:tell|give|say|share|read)(?: me| us)?\b.*"
+    r"\b(?:jokes?|riddles?|stor(?:y|ies)|poems?|limericks?|puns?|tongue twisters?)\b"
+)
+
+
+def is_request_for_a_story(raw_transcript: str) -> bool:
+    """"Tell me it a joke.", "give us the riddle": a request for a joke, a
+    riddle, a story or a poem, whatever else was heard in it. The second
+    hearing spares it — on the review's far-field corpus that lost nothing
+    — and the router still decides where it goes."""
+    return bool(_QA_REQUEST_LOOSE_RE.match(strip_leading_filler(normalize_transcript(raw_transcript or ""))))
+
+
 async def _persist_turn(
     *,
     session: AsyncSession,
@@ -395,20 +467,43 @@ def _has_tool_gate(handler: Handler) -> bool:
     return type(handler).offers_tool is not Handler.offers_tool
 
 
+def _tool_order(handler: Handler) -> int:
+    """0 for an ungated tool, 1 for a gated tool that is on offer unless an
+    utterance rules it out (calculator, library), 2 for one that is only
+    offered when the utterance asks for it (double_check, news). An empty
+    transcript tells the two gated kinds apart: it rules nothing out and
+    asks for nothing."""
+    if not _has_tool_gate(handler):
+        return 0
+    try:
+        return 1 if handler.offers_tool("") else 2
+    except Exception:  # noqa: BLE001 — a broken plugin gate sorts last
+        return 2
+
+
 def offered_tool_schemas(transcript: str) -> list[dict]:
     """The tool schemas the LLM router is offered for this (normalized)
     transcript — every registered handler's ``tool_schema``, minus the
     ones whose ``offers_tool`` says the utterance can't be theirs.
 
-    Handlers that gate their tool go LAST, in band order after the
-    ungated ones. The tool list is rendered into the prompt prefix that
-    Ollama's KV cache reuses between requests; keeping the part that
-    never changes at the front means a withheld tool only shortens the
-    tail, so a routed turn on a CPU host doesn't re-process three
-    thousand tokens of schema JSON every time the gate flips.
+    Order (band order within each group): ungated tools, then gated tools
+    that are usually on offer, then the ones offered only on request. The
+    tool list is rendered into the prompt prefix that Ollama's KV cache
+    reuses between requests, and on a CPU host re-reading it costs ~12 ms
+    a token: everything after the first tool that differs from the last
+    turn is read again. Kept this way, the common changes only touch the
+    end — a verification or news request appends its tool (~200 tokens,
+    not the ~900 behind it), and the next ordinary turn finds the old
+    prefix intact. The usually-offered ones (calculator, library) are
+    withheld only from a plain question about the world, which doesn't
+    reach the router at all (``answers_without_tools``): every turn that
+    does reach it — a who/why/where question about the house included —
+    sees them, so the list only ever changes at its end. (Withholding them
+    from "where are my notes" cost the next ordinary turn 11-15 s of
+    re-reading on a CPU host, measured 2026-09-30.)
     """
     offered = [h for h in HANDLERS if h.offers_tool(transcript)]
-    offered.sort(key=_has_tool_gate)  # stable: band order within each group
+    offered.sort(key=_tool_order)  # stable: band order within each group
     return [h.tool_schema for h in offered]
 
 
@@ -561,10 +656,16 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         )
         return response
 
-    # 2. LLM tool-call fallback (the stub client returns None).
-    tool_schemas = offered_tool_schemas(transcript)
-    ollama_client = await _ready_for(ollama_client, ctx, "tool")
-    tool_call = await ollama_client.route(intent.transcript, tool_schemas)
+    # 2. LLM tool-call fallback (the stub client returns None) — except for
+    # a plain question about the world or a request for a joke or a story,
+    # which no tool is for: those go straight to the Q&A model below. The
+    # tool model would only answer them itself (thrown away) or reach for
+    # a bait tool, and asking it costs a router call either way.
+    tool_call = None
+    if not answers_without_tools(transcript):
+        tool_schemas = offered_tool_schemas(transcript)
+        ollama_client = await _ready_for(ollama_client, ctx, "tool")
+        tool_call = await ollama_client.route(intent.transcript, tool_schemas)
     if tool_call is not None:
         handler = HANDLER_BY_NAME.get(tool_call.get("handler", ""))
         if handler is not None and not any(
@@ -746,8 +847,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
 
     # Per-speaker prompt-prefix injection. Memories +
     # favorites + selected preferences for ctx.person_id are
-    # assembled into a "User context: ..." blob and prepended to the
-    # QA system prompt. Anonymous speakers get ``""`` back — no-op.
+    # assembled into a "User context: ..." blob and added to the QA
+    # system prompt, after its fixed instructions (so those stay cached
+    # across speakers; the history after the profile doesn't — see
+    # voice_qa_system_prompt). Anonymous speakers get ``""`` back — no-op.
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:
@@ -764,11 +867,70 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # words that it may be out of date. Suppressed offline because we
     # can't actually run the search.
     ollama_client = await _ready_for(ollama_client, ctx, "qa")
+    finish_qa = functools.partial(
+        _finish_qa, session_id=session_id, intent=intent, ctx=ctx, category=category,
+    )
+
+    # A voice turn asks for the answer as a stream (Context.stream_qa): the
+    # streaming layer speaks each sentence as soon as the model has written
+    # it, and records the turn through `finish` once it has all been said
+    # (domovoi/spoken_answer.py). Everything else — /v1/intent, a client
+    # without streaming — gets the whole reply, as before.
+    stream_answer = getattr(ollama_client, "stream_voice_answer", None) if ctx.stream_qa else None
+    if stream_answer is not None:
+        spoken = SpokenAnswer(
+            lambda: stream_answer(
+                intent.transcript, history=history, profile_prefix=profile_prefix or None,
+            ),
+            transcript=intent.transcript,
+        )
+
+        async def finish(s: AsyncSession) -> tuple[Response, str]:
+            # latency_ms: route() to the first sentence, the moment the
+            # answer could start to be heard (the whole reply's wait, before).
+            first = spoken.first_sentence_at
+            latency_ms = int(((first if first is not None else time.monotonic()) - t0) * 1000)
+            qa = QAWithUncertainty(
+                answer=spoken.answer, needs_verification=False, unreachable=spoken.unreachable,
+            )
+            return await finish_qa(s, qa=qa, latency_ms=lambda: latency_ms, spoken=spoken.answer)
+
+        return Response(
+            text="",
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="qa",
+            online=ctx.online,
+            qa_stream=StreamedQA(answer=spoken, finish=finish),
+        )
+
     qa = await ollama_client.qa_with_uncertainty(
         intent.transcript,
         history=history,
         profile_prefix=profile_prefix or None,
     )
+    response, _rest = await finish_qa(session, qa=qa, latency_ms=_elapsed_ms, spoken="")
+    return response
+
+
+async def _finish_qa(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    intent: Intent,
+    ctx: Context,
+    category: str | None,
+    qa: Any,
+    latency_ms: Any,
+    spoken: str,
+) -> tuple[Response, str]:
+    """The end of a Q&A turn, once the answer is known: the fixed line for
+    no answer, the online-check or memory offer (parked, and appended as a
+    sentence of its own), and the turn's records. ``latency_ms()`` is read
+    when the turn is written. ``spoken`` is what of the answer has already
+    been said (a streamed answer: all of it); returns the response and the
+    text still to be said after it — the offer, or the whole line when
+    nothing was said."""
     answer = qa.answer.strip()
     if getattr(qa, "unreachable", False) or not answer:
         # Empty text synthesises to zero audio — the turn would end in
@@ -809,9 +971,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             response=response,
             matched_handler=None,
             matched_path=path,
-            latency_ms=_elapsed_ms(),
+            latency_ms=latency_ms(),
         )
-        return response
+        return response, response.text
     # The model may already close with an offer of its own ("…can I look
     # that up for you?"): that counts as its doubt, and it is the offer —
     # parked below so a "yes" is kept, not asked a second time.
@@ -821,9 +983,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     )
     should_offer = ctx.online and (category is not None or self_doubt)
     expect_followup = False
+    offer = ""
     if should_offer:
         if not offers_itself:
-            answer = _end_sentence(answer) + " " + _ONLINE_CHECK_OFFER
+            offer = _ONLINE_CHECK_OFFER
         try:
             await request_confirmation(
                 session,
@@ -844,16 +1007,16 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             log.warning("couldn't park self_doubt_offer pending_confirmation: %s", e)
             # If we couldn't park the confirmation, drop the offer text
             # so we don't promise something the next "yes" can't honor.
-            answer = qa.answer.strip()
+            offer = ""
     elif ctx.person_id is not None:
         # No higher-priority offer is firing — see if the implicit
         # memory extractor has parked anything to surface. Mutually
         # exclusive with the self-doubt offer above so we never park
         # two pending_confirmations at once.
-        offer = await _maybe_offer_pending_memory(ctx, session)
-        if offer is not None:
-            offer_text, memory_id = offer
-            answer = _end_sentence(answer) + " " + offer_text
+        memory_offer = await _maybe_offer_pending_memory(ctx, session)
+        if memory_offer is not None:
+            offer_text, memory_id = memory_offer
+            offer = offer_text
             try:
                 await request_confirmation(
                     session,
@@ -868,8 +1031,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                     "couldn't park pending_memory_offer pending_confirmation: %s", e
                 )
                 # Drop the offer text if we can't park it.
-                answer = qa.answer.strip()
+                offer = ""
 
+    if offer:
+        answer = _end_sentence(answer) + " " + offer
     response = Response(
         text=answer,
         session_id=session_id,
@@ -886,6 +1051,6 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         response=response,
         matched_handler=None,
         matched_path="qa",
-        latency_ms=_elapsed_ms(),
+        latency_ms=latency_ms(),
     )
-    return response
+    return response, (offer if spoken else response.text)

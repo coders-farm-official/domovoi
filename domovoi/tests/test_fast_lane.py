@@ -1175,6 +1175,21 @@ async def test_the_latency_endpoint_counts_the_shadow_records(monkeypatch) -> No
         fl = r.json()["fastlane"]
         assert (fl["observed"], fl["would_commit"], fl["agree"]) == (2, 1, 1)
         assert fl["commit_ms"]["p50"] == 450
-        assert "pause" not in r.text and "music" not in r.text
+        # Numbers only: neither the lane's text nor its handler path comes
+        # back. Checked on the values, since the answer's own key names
+        # now say "pause" (capture_timing's sat_pause_ms and the like).
+
+        def _strings(v):
+            if isinstance(v, dict):
+                for x in v.values():
+                    yield from _strings(x)
+            elif isinstance(v, list):
+                for x in v:
+                    yield from _strings(x)
+            elif isinstance(v, str):
+                yield v
+
+        assert [s for s in _strings(r.json()) if "pause" in s or "music" in s] == []
+        assert "music" not in r.text and "pause the" not in r.text
     finally:
         await _truncate()

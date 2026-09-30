@@ -999,6 +999,24 @@ class VoiceDenylistRepository:
         return [(int(r[0]), bytes(r[1])) for r in result.all()]
 
 
+def trim_recent_turns(recent: list[dict], cap: int) -> list[dict]:
+    """``recent`` (oldest first) once it has passed ``cap`` entries: only
+    its newer half, in whole exchanges — never less than the last one.
+
+    The history is the middle of the Q&A model's prompt, and Ollama reuses
+    a prompt's cached start only up to the first token that changed. Sliding
+    the window by one exchange a turn changed the very first history entry
+    every turn once a room's session was full, so the whole history was
+    read again each time (~380 tokens, ~1.4 s on a CPU host). Cut in halves,
+    the history only grows between cuts and the cached start holds for
+    about ``cap / 4`` exchanges at a time. So a session keeps between half
+    the cap and the cap."""
+    if len(recent) <= cap:
+        return recent
+    keep = max(2, (cap // 2) // 2 * 2)
+    return recent[-keep:]
+
+
 class SessionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -1047,6 +1065,9 @@ class SessionRepository:
     ) -> None:
         """Append user + assistant turns and update last_assistant_response.
 
+        Past ``recent_turns_cap`` entries the OLDER HALF goes in one cut
+        (see ``trim_recent_turns``), not one exchange per turn.
+
         Read-modify-write on `sessions.context` JSONB. At our QPS this is fine;
         if it ever becomes hot, switch to Postgres jsonb_set/jsonb_array_append.
         """
@@ -1058,8 +1079,7 @@ class SessionRepository:
         recent = list(ctx.get("recent_turns") or [])
         recent.append({"role": "user", "text": user_text, "at": now})
         recent.append({"role": "assistant", "text": assistant_text, "at": now})
-        if len(recent) > recent_turns_cap:
-            recent = recent[-recent_turns_cap:]
+        recent = trim_recent_turns(recent, recent_turns_cap)
 
         ctx["recent_turns"] = recent
         ctx["last_assistant_response"] = assistant_text

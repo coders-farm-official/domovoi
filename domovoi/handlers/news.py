@@ -101,11 +101,21 @@ _FETCH_NEW_RE = re.compile(
 )
 
 # Words a news request carries — the ``offers_tool`` gate. Generous on
-# purpose ("latest", "update", "report" over-match harmlessly): a false
-# positive only means the schema is offered, as it always was.
+# purpose ("latest", "update", "report" over-match mildly): a false
+# positive offers the schema, and adding a tool changes the router's
+# prompt, so each one costs the tool model a re-read of that schema. Whole
+# words only: as bare substrings "history" held "story", and "reporter" or
+# "topical" matched too, so "tell me about the history of Rome" was
+# offered the news tool (and wrote a 300-token answer of its own).
 _NEWS_CUE_RE = re.compile(
-    r"news|headline|briefing|digest|happening|going on|current events"
-    r"|latest|update|stor(?:y|ies)|report|topic|election|politic"
+    r"\b(?:news|headlines?|briefings?|digests?|happening|going on|current events"
+    r"|latest|updates?|stor(?:y|ies)|reports?|topics?|elections?|politic\w*)\b"
+)
+# "a story", "a bedtime story", "a short story about dragons": a story to
+# be told, not a news story, so the article-led singular is not a cue
+# ("a news story", "a top story" still are).
+_TOLD_STORY_RE = re.compile(
+    r"\ban?\s+(?:(?!(?:news|top|breaking|latest|lead|main|big|front)\b)\w+\s+){0,2}?story\b"
 )
 
 # ─── Ad-hoc subject (family A: explicit news noun before the preposition) ─
@@ -197,7 +207,7 @@ class NewsHandler(Handler):
         # subject lookup ("who wrote the odyssey" → news(subject="Odyssey
         # author"), measured 2026-09-15 on qwen2.5:14b). A news request
         # says so somewhere in the utterance; one that doesn't can't be one.
-        return bool(_NEWS_CUE_RE.search(transcript))
+        return bool(_NEWS_CUE_RE.search(_TOLD_STORY_RE.sub(" ", transcript)))
 
     def __init__(self) -> None:
         self.fast_paths = [

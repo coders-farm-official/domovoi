@@ -559,7 +559,10 @@ pull while upstream still points at that commit, and offers the next one.
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
 from/to SHA, each step with its timing, the error). The version panel shows
 it as **last update**, and `GET /v1/admin/version` serves it as
-`last_update`. Everything the script prints goes to the journal:
+`last_update`. When the core can't use the file, `last_update` is `null`
+and `last_update_problem` says why (`unreadable`, `invalid`, ...); the
+core's journal has the detail. Everything the script prints goes to the
+journal:
 
 ```bash
 journalctl -u domovoi-update -n 200

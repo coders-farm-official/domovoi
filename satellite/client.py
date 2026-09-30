@@ -92,8 +92,34 @@ CHIME_FILE = "chime.wav"
 # paused (`speech_pause`, 240 ms), so the core can start transcribing while
 # this side keeps counting toward `listen.silence_timeout`. Sent only to a
 # core whose `ready` lists the feature — an older core answers an unknown
-# message with `error`, which ends the turn here.
+# message with `error`, which ends the turn here. The default; `[listen]
+# speech_pause_ms` sets it per satellite (see `_speech_pause_frames`).
 SPEECH_PAUSE_FRAMES = 8
+# The range `[listen] speech_pause_ms` is held to, in frames: below 3 (90 ms)
+# the gap between two words is a "pause", and past 20 (600 ms) the hint
+# comes too late to buy anything.
+SPEECH_PAUSE_FRAMES_MIN = 3
+SPEECH_PAUSE_FRAMES_MAX = 20
+
+# openWakeWord's `Model.reset()` refills its feature buffer by running the
+# speech-embedding model over 4 s of random noise: 41 embedding windows, the
+# work of about 26-29 `predict()` calls, done inline. Measured on a desktop
+# i9 (openwakeword 0.6.0, hey_jarvis): 97-110 ms against 3.5-4 ms for one
+# predict(). On a Pi Zero 2 W, where one `predict()` barely keeps up with
+# the 80 ms of audio it is given, that ratio puts it past a second — an
+# estimate, not yet measured on a Pi — and the wake path reset the model
+# after the acknowledgement, BEFORE the capture opened. The mic queued the
+# person's first words meanwhile and the capture then sent them in one
+# burst, which fits what the live satellites showed: a short command's
+# `speech_pause` reached the core 0.3-0.4 s after the pause itself (garage
+# and office, 2026-09-30: every capture of 1.95 s or less started its
+# transcript late, every longer one on time). An upgraded satellite's
+# `sat_start_backlog_ms` (0-60 expected) confirms or refutes it.
+# `_reset_wake_model` hands the model back the noise features it computed
+# when it was loaded instead: the same kind of filler, none of the cost
+# (0.4 ms). This is the length of noise `reset()` embeds, which is how the
+# cached answer recognises the call it stands in for.
+_WAKE_RESET_NOISE_SAMPLES = 16_000 * 4
 
 # Log format, shared by the stderr handler (journald picks that up) and by
 # the in-memory ring the dashboard reads, so a line looks identical whether
@@ -450,6 +476,11 @@ class Config:
     # has heard so far is a whole command (declared as `capture_control` in
     # the hello). Defaulted so a Config built without it keeps working.
     early_commit: bool = True
+    # [listen] speech_pause_ms: how much silence after speech counts as a
+    # pause worth telling the core about (`speech_pause`), in ms; whole
+    # 30 ms frames, SPEECH_PAUSE_FRAMES_MIN..MAX of them. Defaulted, like
+    # early_commit, to what it has always been.
+    speech_pause_ms: int = SPEECH_PAUSE_FRAMES * FRAME_MS
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -522,6 +553,7 @@ class Config:
                 f"unknown [wake] ack_mode {ack_mode!r}. "
                 f"Valid values: {', '.join(ACK_MODES)}."
             )
+        speech_pause_ms = _speech_pause_ms(listen.get("speech_pause_ms"))
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -667,7 +699,82 @@ class Config:
             # out silence_timeout. Whatever is said after that is lost —
             # turn off in a room where people pause mid-command.
             early_commit=bool(listen.get("early_commit", True)),
+            speech_pause_ms=speech_pause_ms,
         )
+
+
+def _speech_pause_ms(value: Any) -> int:
+    """`[listen] speech_pause_ms` as the capture will use it: whole 30 ms
+    frames, SPEECH_PAUSE_FRAMES_MIN..MAX of them; absent means the default
+    (240). Anything else fails loud, like a typo'd ack_mode — the
+    dashboard's own range keeps an edit from getting here."""
+    if value is None:
+        return SPEECH_PAUSE_FRAMES * FRAME_MS
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"[listen] speech_pause_ms must be a number of ms, not {value!r}")
+    frames = int(round(value / FRAME_MS))
+    if not SPEECH_PAUSE_FRAMES_MIN <= frames <= SPEECH_PAUSE_FRAMES_MAX:
+        raise ValueError(
+            f"[listen] speech_pause_ms {value!r} is outside "
+            f"{SPEECH_PAUSE_FRAMES_MIN * FRAME_MS}-{SPEECH_PAUSE_FRAMES_MAX * FRAME_MS} ms"
+        )
+    return frames * FRAME_MS
+
+
+# ─── Wake model reset ─────────────────────────────────────────────────────
+
+
+def _prime_wake_reset(oww: Any) -> bool:
+    """Keep the noise features a freshly loaded openWakeWord model computed
+    for its feature buffer, so `_reset_wake_model` can hand them back
+    instead of computing them again (see _WAKE_RESET_NOISE_SAMPLES). Call
+    it once, straight after the model is built and before any `predict`.
+    False — and every reset stays a full one — for a model that isn't
+    shaped the way this expects."""
+    pre = getattr(oww, "preprocessor", None)
+    features = getattr(pre, "feature_buffer", None)
+    if (
+        pre is None
+        or not callable(getattr(pre, "_get_embeddings", None))
+        or not isinstance(features, np.ndarray)
+        or features.ndim != 2
+        or not len(features)
+    ):
+        return False
+    oww._domovoi_noise_features = features.copy()
+    return True
+
+
+def _reset_wake_model(oww: Any) -> None:
+    """`oww.reset()`, without recomputing the noise features it refills the
+    feature buffer with: the library's own reset runs, but its one call to
+    embed 4 s of noise is answered with the features `_prime_wake_reset`
+    kept. Milliseconds instead of over a second on a Pi Zero 2 W, and the
+    buffer ends up holding the same kind of filler. A model that was not
+    primed (or a stand-in) just gets `reset()`; so does any other call to
+    the embedding, should a later openWakeWord make one."""
+    noise = getattr(oww, "_domovoi_noise_features", None)
+    pre = getattr(oww, "preprocessor", None)
+    own = getattr(pre, "__dict__", None)
+    if not isinstance(noise, np.ndarray) or not isinstance(own, dict):
+        oww.reset()
+        return
+    compute = pre._get_embeddings
+    shadowed = own.get("_get_embeddings")
+
+    def _noise_features(x: Any, *args: Any, **kwargs: Any) -> Any:
+        if not args and not kwargs and getattr(x, "shape", None) == (_WAKE_RESET_NOISE_SAMPLES,):
+            return noise.copy()
+        return compute(x, *args, **kwargs)
+
+    own["_get_embeddings"] = _noise_features
+    try:
+        oww.reset()
+    finally:
+        if shadowed is None:
+            own.pop("_get_embeddings", None)
+        else:
+            own["_get_embeddings"] = shadowed
 
 
 # ─── Audio helpers ────────────────────────────────────────────────────────
@@ -909,6 +1016,11 @@ class Satellite:
         # the playback thread's close_stream signals drain" from
         # "empty response, drain is instantaneous, release immediately."
         self._response_audio_received = threading.Event()
+        # How many `response_start`s this client has seen. The flags above
+        # keep the previous reply's state until the next one starts, so a
+        # capture notes this count to tell its own reply from the last one
+        # (`_reply_may_be_playing`).
+        self._response_starts = 0
         # Pre-buffer state. While `_prebuffer_active` is True, the
         # receiver accumulates binary audio frames in `_prebuffer_buffer`
         # instead of pushing them to playback_q — gives the playback
@@ -1430,10 +1542,58 @@ class Satellite:
         """Open a capture on the core: `utterance_start` with this
         connection's next capture number (`utt`), which the capture's
         hints and its `utterance_end` repeat. An older core reads only the
-        trigger."""
+        trigger.
+
+        It also starts the capture's clock (`_capture_clock`) and says how
+        far behind the room the capture begins: `backlog_ms`, the mic audio
+        already queued and not yet read, and — after a wake word —
+        `wake_ms`, the time from the wake word to now (the acknowledgement
+        and anything else done before listening). Numbers only; a core
+        that doesn't know them ignores them."""
         self._utt_seq += 1
-        return self._emit_text(
-            {"type": "utterance_start", "trigger": trigger, "utt": self._utt_seq}
+        self._utt_started = time.monotonic()
+        msg: dict[str, Any] = {
+            "type": "utterance_start", "trigger": trigger, "utt": self._utt_seq,
+            "backlog_ms": self._mic_backlog_ms(),
+        }
+        # Taken once: a wake time is about the capture right after it, never
+        # a later one.
+        woke, self._woke_at = self._woke_at, None
+        if trigger == "wake_word" and woke is not None:
+            msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
+        return self._emit_text(msg)
+
+    def _mic_backlog_ms(self) -> int:
+        """Mic audio captured and not yet read, in ms: how far behind the
+        room this thread is right now. 0 when it can't be told."""
+        try:
+            return max(0, int(self.raw_q.qsize())) * FRAME_MS
+        except Exception:
+            return 0
+
+    def _capture_clock(self, started: float | None) -> dict[str, int]:
+        """What a capture's `speech_pause` / `speech_resume` /
+        `utterance_end` say about when they were sent, for the core's
+        timing record (it can't see this side's clock): `sat_ms`, the time
+        since the capture's `utterance_start` on this satellite's monotonic
+        clock, and `backlog_ms` (see `_mic_backlog_ms`). A message sent
+        late because this side fell behind shows a backlog; one delayed on
+        the way shows a `sat_ms` smaller than the core's own gap."""
+        clock = {"backlog_ms": self._mic_backlog_ms()}
+        if started is not None:
+            clock["sat_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
+        return clock
+
+    def _speech_pause_frames(self) -> int:
+        """Silent frames after speech that make a `speech_pause`:
+        `[listen] speech_pause_ms` in frames, SPEECH_PAUSE_FRAMES when the
+        config doesn't say."""
+        ms = getattr(self.cfg, "speech_pause_ms", None)
+        if isinstance(ms, bool) or not isinstance(ms, (int, float)):
+            return SPEECH_PAUSE_FRAMES
+        return min(
+            SPEECH_PAUSE_FRAMES_MAX,
+            max(SPEECH_PAUSE_FRAMES_MIN, int(round(ms / FRAME_MS))),
         )
 
     def _emit_audio(self, frame: bytes) -> bool:
@@ -2560,6 +2720,7 @@ class Satellite:
             "listen.max_record_seconds": c.max_record_seconds,
             "listen.followup_pre_speech_timeout": c.followup_pre_speech_timeout,
             "listen.early_commit": c.early_commit,
+            "listen.speech_pause_ms": c.speech_pause_ms,
             "greeting.funny_chance": c.greeting_funny_chance,
             "sounds.sync_enabled": c.sounds_sync_enabled,
             "playback.tts_prebuffer_sec": c.tts_prebuffer_sec,
@@ -3302,14 +3463,25 @@ class Satellite:
                 "loading custom wake model from %s (wake word %r)",
                 model_path, self._wake_word,
             )
-            return WakeWordModel(
+            oww = WakeWordModel(
                 wakeword_models=[model_path],
                 inference_framework="onnx",
             )
-        return WakeWordModel(
-            wakeword_models=[self._wake_word],
-            inference_framework="onnx",
-        )
+        else:
+            oww = WakeWordModel(
+                wakeword_models=[self._wake_word],
+                inference_framework="onnx",
+            )
+        # Every reset from here on reuses the noise features this load just
+        # computed (see _WAKE_RESET_NOISE_SAMPLES) — one of them runs
+        # between the wake acknowledgement and the capture.
+        if not _prime_wake_reset(oww):
+            log.warning(
+                "wake model: this openWakeWord is not shaped as expected, so "
+                "every reset recomputes its noise features (over a second on "
+                "a Pi Zero 2 W, spent before each capture opens)"
+            )
+        return oww
 
     def _wait_for_wake(self, oww) -> bool:
         """Block until wake word is heard. Returns False on shutdown.
@@ -3324,7 +3496,7 @@ class Satellite:
         # Safety: the acknowledgement is waited out before every capture, so
         # nothing should still be playing; a player that is, is stopped.
         self._stop_ack()
-        oww.reset()
+        _reset_wake_model(oww)
         log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
         # (1280 samples at 16 kHz). Mic frames are 30 ms (480 samples), so we
@@ -3386,6 +3558,8 @@ class Satellite:
                     continue
                 if pred.get(self._wake_word, 0.0) > self._wake_threshold:
                     woke_at = time.monotonic()
+                    # For the capture's `utterance_start` (`wake_ms`).
+                    self._woke_at = woke_at
                     log.info("wake word detected")
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
@@ -3426,7 +3600,7 @@ class Satellite:
                             # Reset the wake model so its internal state
                             # doesn't carry forward the canned playback's
                             # echo as primed wake context.
-                            oww.reset()
+                            _reset_wake_model(oww)
                             self._drain_mic()
                             continue  # back to listening
                     # Flip the LED to "listening" immediately so the
@@ -3467,7 +3641,10 @@ class Satellite:
                         self._ack_before_capture = False
                     if self.shutdown_event.is_set():
                         return False
-                    oww.reset()
+                    # Cheap (see _WAKE_RESET_NOISE_SAMPLES): whatever this
+                    # costs is spent with the person already talking, and
+                    # the capture starts that far behind them.
+                    _reset_wake_model(oww)
                     return True
         return False
 
@@ -3504,8 +3681,10 @@ class Satellite:
         before every frame, and the capture ends there — exit reason
         `server_endpoint`, no noisy-capture check (the core is already
         answering; an apology would cancel that answer), and an
-        `utterance_end` all the same, which the core reads only to log
-        whether speech came after it stopped listening.
+        `utterance_end` all the same, which the core reads only to record
+        whether speech came after it stopped listening. For that the mic
+        is read on, sending nothing, for as long as this satellite would
+        still have been listening (`_listen_after_end`).
         """
         with self._capture_lock:
             self._capture_utt = self._utt_seq
@@ -3515,6 +3694,56 @@ class Satellite:
         finally:
             with self._capture_lock:
                 self._capture_utt = None
+
+    def _reply_may_be_playing(self, since: int) -> bool:
+        """Whether a reply that started after `since` (a `_response_starts`
+        count) may already be coming out of the speaker: some of its audio
+        has arrived, and it is not being held in the receiver's prebuffer
+        (flushed, or no prebuffer at all). The count keeps the previous
+        reply out of it: its flags stand until the next `response_start`."""
+        if getattr(self, "_response_starts", 0) == since:
+            return False
+        received = getattr(self, "_response_audio_received", None)
+        if received is None or not received.is_set():
+            return False
+        return not getattr(self, "_prebuffer_active", False)
+
+    def _listen_after_end(
+        self, vad: Any, silent_frames: int, silence_limit: int, frames_left: int,
+        reply_mark: int = 0,
+    ) -> tuple[int, int]:
+        """After the core ended the capture (`end_capture`), go on reading
+        the mic — sending nothing — for as long as this satellite's own
+        endpointing would still have been listening: until its silence
+        timeout would have ended the capture (`silent_frames` of it have
+        gone by), or until the person speaks again. Returns
+        `(voiced_after_ms, listened_ms)`: when speech came back, in ms
+        after the capture's last frame (0 when it didn't), and how long
+        the mic was read.
+
+        This is what makes an early commit's cut-in visible. The core
+        stopped listening at a pause its hold judged final; if the person
+        was only pausing ("set a timer for ten minutes ... for the pasta"),
+        the rest of the sentence comes after the capture — and the frames
+        already on their way when the capture ended hold only its first
+        30-90 ms. Stops early (a shorter `listened_ms`) when the reply may
+        already be playing — its sound would come back through the mic —
+        when the mic stalls, or on shutdown. `reply_mark`: the
+        `_response_starts` count when the capture began."""
+        wanted = max(0, min(silence_limit - silent_frames, frames_left))
+        deadline = time.monotonic() + wanted * FRAME_MS / 1000 + 0.5
+        listened = 0
+        while listened < wanted and not self.shutdown_event.is_set():
+            if self._reply_may_be_playing(reply_mark) or time.monotonic() > deadline:
+                break
+            try:
+                frame = self.raw_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            listened += 1
+            if _frame_dbfs(frame) >= self.cfg.noise_gate_dbfs and vad.is_speech(frame, SAMPLE_RATE):
+                return listened * FRAME_MS, listened * FRAME_MS
+        return 0, listened * FRAME_MS
 
     def _capture(
         self,
@@ -3563,8 +3792,12 @@ class Satellite:
         # capture: a session that drops mid-capture may come back to an
         # older core, which answers an unknown type with `error`.
         utt = self._utt_seq
+        started = self._utt_started
+        # Replies that start after this are this capture's (`_listen_after_end`).
+        reply_mark = getattr(self, "_response_starts", 0)
         last_voiced = len(prefix_frames) - 1
         pause_reported = False
+        pause_frames = self._speech_pause_frames()
 
         for f in prefix_frames:
             self._emit_audio(f)
@@ -3598,7 +3831,10 @@ class Satellite:
                 # holds when this arrives, as in `speech_pause`.
                 pause_reported = False
                 if "speech_pause" in self._core_features:
-                    self._emit_text({"type": "speech_resume", "utt": utt, "frame": sent})
+                    self._emit_text({
+                        "type": "speech_resume", "utt": utt, "frame": sent,
+                        **self._capture_clock(started),
+                    })
             self._emit_audio(frame)
             sent += 1
             if is_speech:
@@ -3610,7 +3846,7 @@ class Satellite:
             elif speaking:
                 silent_frames += 1
                 if (
-                    silent_frames == SPEECH_PAUSE_FRAMES
+                    silent_frames == pause_frames
                     and "speech_pause" in self._core_features
                 ):
                     # Once per silence run: `frame` is what the core has
@@ -3618,12 +3854,14 @@ class Satellite:
                     pause_reported = True
                     # As in utterance_end: the core screens the copy it may
                     # end the capture on the way the turn will screen it.
+                    # `sat_ms` / `backlog_ms`: see `_capture_clock`.
                     self._emit_text({
                         "type": "speech_pause",
                         "utt": utt,
                         "frame": sent,
                         "last_voiced_frame": last_voiced,
                         **ack,
+                        **self._capture_clock(started),
                     })
                 if silent_frames >= silence_limit:
                     exit_reason = "vad_silence_after_speech"
@@ -3650,6 +3888,21 @@ class Satellite:
 
         if self.shutdown_event.is_set() and not speaking:
             return False
+
+        # The core ended the capture: listen on, silently, to learn whether
+        # the person was still talking (see `_listen_after_end`).
+        after_end: dict[str, int] = {}
+        if exit_reason == "server_endpoint" and speaking:
+            self._leds.set_state("thinking")
+            voiced_after, listened = self._listen_after_end(
+                vad, silent_frames, silence_limit, max_frames - sent, reply_mark,
+            )
+            after_end = {"voiced_after_end_ms": voiced_after, "listened_after_end_ms": listened}
+            if voiced_after:
+                log.info(
+                    "early commit: speech came back %d ms after the core stopped "
+                    "listening (this satellite would have kept listening)", voiced_after,
+                )
 
         stats = _capture_stats_str(
             sent, gate_pass_count, voiced_count,
@@ -3724,6 +3977,12 @@ class Satellite:
             "voiced_frames": voiced_count,
             "trailing_silent_frames": silent_frames,
             "silence_limit_frames": silence_limit,
+            # A capture the core ended: whether speech came back before this
+            # satellite's own silence timeout would have ended it, and how
+            # long it listened to find out (`_listen_after_end`).
+            **after_end,
+            # When this was sent, by this side's clock (`_capture_clock`).
+            **self._capture_clock(started),
         })
         if not delivered:
             log.info(
@@ -3828,7 +4087,7 @@ class Satellite:
             # don't carry residual state from the previous detection into
             # the new monitoring window.
             if not primed:
-                oww.reset()
+                _reset_wake_model(oww)
                 primed = True
 
             pending = np.concatenate([pending, np.frombuffer(frame, dtype=np.int16)])
@@ -4194,7 +4453,7 @@ class Satellite:
         MAX_PENDING = OWW_CHUNK * 8  # ~0.64 s — bound the backlog
         pending = np.empty(0, dtype=np.int16)
         try:
-            oww.reset()
+            _reset_wake_model(oww)
         except Exception:
             pass
         while not stop.is_set() and not self.shutdown_event.is_set():
@@ -4213,6 +4472,7 @@ class Satellite:
                     log.warning("drop-in wake predict failed: %s", e)
                     continue
                 if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                    self._woke_at = time.monotonic()   # the capture's wake_ms
                     detected.set()
                     return
 
@@ -4642,6 +4902,11 @@ class Satellite:
     # This connection's capture counter: each utterance_start carries the
     # next number (`utt`), and so does everything about that capture.
     _utt_seq: int = 0
+    # When the latest utterance_start went out, on this satellite's
+    # monotonic clock (the capture's `sat_ms` counts from it), and when the
+    # wake word that opened the latest wake capture fired (its `wake_ms`).
+    _utt_started: float | None = None
+    _woke_at: float | None = None
     # The capture `_stream_capture` is running, by number, while it runs
     # (None between captures). An `end_capture` for any other number is
     # stale — the capture it meant already ended on its own — and must not
@@ -4740,6 +5005,7 @@ class Satellite:
             # spawns mpg123 before TTS even begins.
             self._playback_idle.clear()
             self._response_audio_received.clear()
+            self._response_starts += 1
             self._post_playback_state = None
             # Arm the receiver-side prebuffer. Audio chunks for this
             # response will accumulate in `_prebuffer_buffer` until we

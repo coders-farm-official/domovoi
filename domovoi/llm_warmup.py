@@ -8,8 +8,12 @@ question after every core restart, model switch or Ollama restart paid the
 whole cold start while the room sat silent.
 
 So the core loads them itself, in the background: at boot (``lifespan``
-schedules :func:`schedule_warm_up`) and after a change to any setting the
-loaded models depend on (a reapply hook runs :func:`schedule_llm_warmup`).
+schedules :func:`schedule_warm_up`), after a change to any setting the
+loaded models depend on (a reapply hook runs :func:`schedule_llm_warmup`),
+and after a plugin is installed, enabled, disabled or removed (the router's
+tool list changed). The router's prompt is read again each time even when
+its model is loaded, so a deploy that changed a tool schema doesn't leave
+the first question to re-read it.
 The work is ``RealOllamaClient.warm_up`` — both models, with the options
 their real calls send, the router's prompt prefix included. Never blocks
 boot or a settings write, and never raises. ``ollama_warmup`` turns it off.
@@ -62,7 +66,10 @@ async def warm_up_models(reason: str) -> list[str]:
                     reason, ", ".join(loaded), time.monotonic() - t0,
                 )
             else:
-                log.info("LLM warm-up (%s): models already loaded", reason)
+                log.info(
+                    "LLM warm-up (%s): models already loaded; router prompt re-read",
+                    reason,
+                )
             return loaded
         if attempt < _ATTEMPTS:
             log.info(

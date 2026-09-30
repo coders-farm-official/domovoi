@@ -4,6 +4,181 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-09-30 — Short commands decode faster, and answers start sooner
+
+### Do this once, after upgrading
+
+**Restart the core.** Nothing to migrate.
+
+**Check the server's Ollama** (`ollama -v`). From 0.9.0 the tool router's
+call is streamed and stopped at its first word. An older one logs `Ollama
+X streams no tool calls (needs 0.9.0)` once at INFO and keeps the slow,
+unstreamed route: a question still waits for the tool model's whole
+throwaway answer — up to about 30-45 s on a CPU — before the Q&A model
+starts, so the Q&A saving below needs 0.9.0 or later.
+
+**If you run plugins that bring tools**, raise `ollama_tool_num_ctx` to
+8192 (dashboard → **Models**): with the five sibling plugins that do, the
+router's prompt no longer fits Ollama's default 4096-token window. The
+core's log says so after the restart (`The tool router's prompt is N
+tokens ...`) when it doesn't fit.
+
+### How to check it worked
+
+In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart time>`):
+
+1. The boot log says `Whisper: short-window decoding ready`, the answer's
+   `whisper.short_window` is `true`, and after a few commands
+   `stt_window.short` is above `stt_window.full`. If it says
+   `unavailable (ctranslate2 X)`, the installed CTranslate2 can't — every
+   capture stays on the 30 s path.
+2. Before upgrading any satellite: on short commands (under ~2 s)
+   `capture_timing.frame_lag_first_ms` should read about the old wake
+   model's reset (the capture going out in a burst after it) — that
+   confirms why their early transcripts started late. `early_commit.turns`
+   will mostly stay 0 for short commands until then.
+3. After upgrading the satellites (the next entry): `sat_start_backlog_ms`
+   about 0-60, `decode_start_ms` about 240 — and only then
+   `early_commit.turns` above 0 for short commands, with
+   `early_commit.watched` counting them.
+
+### What changes for the people in the house
+
+* A short command is transcribed about three times faster on a CPU-only
+  server (small.en, 8 cores: about 0.25 s instead of 0.9 s), so a whole
+  closed command can be answered without waiting out the satellite's
+  silence timeout ([early commit](CPU_HOST.md#measuring-turn-latency)) —
+  once the satellite is upgraded too (step 3 above).
+* A transcript that matches no command and isn't a question is heard a
+  second time the slower way before the language-model router gets it:
+  that catches most commands the fast decode misheard. It costs about a
+  second on those turns, which were headed for several seconds in the
+  router anyway; a general-knowledge question ("What is the capital of
+  France?") or a request for a joke is not heard twice.
+* A question, a joke or a story starts to be spoken at its first sentence
+  while the rest is written, instead of after the whole answer (a first
+  sentence of one to three words waits for the next, so it isn't followed
+  by a gap). The tool router no longer writes an answer of its own that is
+  thrown away, and a plain who/why/where question or a request for a
+  joke, fact, story, poem or explanation skips it altogether.
+* The first spoken command after a restart no longer pays for loading
+  the voice-identification model and the Piper voice (about 0.6 s each,
+  and the encoder's load used to stall every room).
+
+### What changed
+
+* Whisper: captures of up to 9 s decode on a 10-second window when the
+  model is English-only (`.en`); anything the short decode isn't sure of
+  is decoded again the old way. `whisper_short_window_enabled` (on)
+  applies without a restart. The boot log says `Whisper: short-window
+  decoding ready …`, or `… unavailable (ctranslate2 X)` when the installed
+  CTranslate2 can't, and then everything stays on the 30 s path.
+  Multilingual models always keep the 30 s window. Command accuracy: the
+  same on clean TTS clips; on the same clips made far-field (synthetic
+  echo and noise) the 10 s window changed about 1 command outcome in 10,
+  net -11 to +5 of 252 depending on the noise. Real recordings (the
+  opt-in command recordings) are not measured yet.
+* The second hearing, `whisper_short_window_recheck` (on, applies without
+  a restart): a short-window transcript that would go to the tool router
+  is decoded again on the 30 s path and that text is routed. On the same
+  far-field clips it scored at or above both windows in every condition
+  (e.g. 205 of 252 against 202 for the 30 s path and 191 for the 10 s
+  one), for a second decode on 16-34% of command captures. Fast-path
+  commands, yes/no answers, plain questions, questions about the world
+  (a question mark, four words or more, nothing about the house), requests
+  for a joke or a story, and early commits are never heard twice.
+* `GET /v1/stats/latency` gains `stt_window` (`{short, full, rechecked}`)
+  and `whisper.short_window`; each turn records `stt_window_s` (and, heard
+  twice, `stt_rechecked` and `stt_recheck_ms`, with both decodes in
+  `stt_ms`), and the turn log line shows `window=10s` (`window=30s/recheck`
+  when heard twice).
+* `early_commit` in the same answer gains `watched`, and `cut_in` now also
+  counts a person who spoke again after the capture ended, as reported by
+  an upgraded satellite (the next entry). For commits from older
+  satellites `cut_in` is a lower bound: it only sees the first 30-90 ms.
+* The tool router: its call is capped at 256 tokens only when it is
+  streamed with `think=false` (Ollama 0.9.0+); otherwise — an older
+  Ollama, thinking on, or the flag rejected — at 1024, since qwen3 may
+  reason before its call and 256 cut it off mid-thought (a lost command).
+  Streamed, any text that isn't a `<think>` block ends the call, even
+  text that looks like a tool call (a real one arrives parsed).
+  `calculator` and `library` are offered to every routed turn (a
+  who/why/where question about the house included): withholding them
+  changed the router's tool list, and the next turn re-read ~800 tokens
+  (11-15 s on a CPU). `double_check` is offered again for doubt said
+  outright ("that can't be right", "check online", "google it"), and a
+  call whose `claim` is only the request itself ("That can't be right.")
+  checks the previous answer instead of searching for those words.
+* The core's warm-up logs a warning when the router's prompt plus its
+  reply cap doesn't fit the tool model's context window.
+* For a spoken Q&A answer, `route_ms` and `intents_log.latency_ms` now end
+  at its first sentence. Q&A figures from before and after this release
+  are not comparable.
+* Conversation history past `session_recent_turns_cap` is cut to its newer
+  half in one go (it used to slide one exchange per turn), so a model's
+  cached reading of it survives between cuts. A room already over the cap
+  is cut once, on its next turn.
+* `GET /v1/admin/version`: a `last_update` whose durations can't be right
+  (negative, not a number, or longer than the run) now reports those
+  durations as `null` instead of the whole result being unreadable.
+  `apply-update.sh` times its steps with bash's own clock: on Ubuntu 26.04
+  `date +%s%3N` (uutils) printed 16-19 digits and produced them. A result
+  file an earlier run wrote keeps its `null` durations until the next
+  update overwrites it.
+
+## 2026-09-30 — Short commands start their transcript on time
+
+### Do this once, after upgrading
+
+**Upgrade each satellite** (Satellites → the satellite → Overview →
+**Upgrade satellite**). The fix is in the satellite's own code.
+
+### What changes for the people in the house
+
+* After the wake greeting a satellite should start listening sooner. It
+  used to reset its wake model between the greeting and the capture, with
+  whatever you had already started saying queued behind it; a short
+  command ("stop", "what time is it") then reached the server in a burst,
+  and its early transcript started 0.3-0.4 s late (garage and office:
+  every capture of 1.95 s or less). A long command was unaffected. The
+  reset measured about 0.1 s on a desktop (26-29 wake predictions' worth
+  of CPU); by that ratio it is over a second on a Pi Zero 2 W, but that is
+  expected, not measured: an upgraded satellite's `sat_start_backlog_ms`
+  (see "How to check it worked" above) settles it.
+
+### What changed
+
+* Satellite: the wake model's reset reuses the noise features the model
+  computed when it loaded instead of recomputing them (41 speech-embedding
+  windows, about 26-29 wake-word predictions' worth of CPU, on every reset —
+  after the greeting, at the start of each reply with wake-word barge-in,
+  and at the start of every wait for the wake word). The model ends up in
+  the same state.
+* Protocol: `utterance_start` gains `backlog_ms` and `wake_ms`;
+  `speech_pause`, `speech_resume` and `utterance_end` gain `sat_ms` and
+  `backlog_ms` — the satellite's own clock. New fields on existing frames:
+  safe with an older core either way.
+* `GET /v1/stats/latency` gains `capture_timing`: when each turn's frames,
+  its pause and its early transcript happened against the pace it was
+  spoken at, and whose delay it was (satellite, network or server). Numbers
+  only, like the rest of the answer. Rows from before this release have
+  none. See [CPU_HOST.md](CPU_HOST.md#when-the-early-transcript-starts-late).
+* Satellite: `[listen] speech_pause_ms` (240 by default, unchanged) sets
+  how long a pause must be before the server starts transcribing; the
+  dashboard shows it as **Pause that starts transcribing** under the
+  advanced Listening settings. For a satellite not yet upgraded the
+  dashboard shows **needs a satellite upgrade** there instead of an input,
+  and the server refuses to send it: an older Pi would have written it to
+  `config.toml` and restarted, then ignored it. The same goes for any
+  setting a satellite doesn't report.
+* Satellite: when the core ends a capture early (`end_capture`), the
+  satellite keeps reading its mic — sending nothing — until its own
+  silence timeout would have ended the capture, or the reply's audio may
+  be playing, and reports in `utterance_end` whether the person spoke
+  again (`voiced_after_end_ms`, `listened_after_end_ms`). Its
+  `utterance_end` for such a capture comes that much later; nothing waits
+  for it. An older core ignores the fields.
+
 ## 2026-09-29 — The satellite acknowledges the wake word, then listens
 
 ### Do this once, after upgrading

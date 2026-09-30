@@ -642,8 +642,11 @@ def test_plain_text_qa_answers_the_turn_either_way(pipeline, monkeypatch, reused
         turn = _read_turn(ws)
     assert turn[0] == {"type": "transcript", "text": "Tell me a joke."}
     (start,) = [f for f in turn if f["type"] == "response_start"]
-    assert start["text"] == JOKE and start["matched_path"] == "qa"
+    # A voice turn speaks the answer as it is written: the response opens at
+    # its first sentence, and the punchline follows in the same response.
+    assert start["text"] == "What do you call a fake noodle?" and start["matched_path"] == "qa"
     assert tts.said == ["What do you call a fake noodle?", "An impasta!"]
+    assert " ".join(tts.said) == JOKE
     (call,) = chat.calls
     assert "format" not in call
     assert call["messages"][-1] == {"role": "user", "content": "Tell me a joke."}

@@ -202,6 +202,43 @@ def test_summarize_skips_what_is_not_a_timing() -> None:
     assert s["whisper_seen"] == []
 
 
+def test_summarize_counts_the_window_each_transcript_came_from() -> None:
+    """``stt_window_s`` rides the row (clients/whisper.py): 10 for a short
+    capture decoded on the short window, 30 for faster-whisper's own path.
+    Rows from before it existed, and junk, count as neither."""
+    rows = (
+        [({"stt_ms": 230, "stt_window_s": 10}, "fast")] * 4
+        + [({"stt_ms": 900, "stt_window_s": 30}, "qa")]
+        # heard again on the 30 s path (the second hearing): full, and rechecked
+        + [({"stt_ms": 1130, "stt_window_s": 30, "stt_rechecked": True, "stt_recheck_ms": 900}, "llm")]
+        + [({"stt_ms": 900}, "fast"), ({"stt_window_s": "10"}, "fast"),
+           ({"stt_window_s": True}, "fast"), ({"stt_rechecked": True}, "qa")]
+    )
+    s = summarize(rows)
+    assert s["stt_window"] == {"short": 4, "full": 2, "rechecked": 1}
+    assert "stt_window_s" not in s["stages"] and "stt_recheck_ms" not in s["stages"]
+    assert summarize([])["stt_window"] == {"short": 0, "full": 0, "rechecked": 0}
+
+
+def test_the_log_line_says_which_window() -> None:
+    t = TurnTimings(audio_bytes=32_000)
+    t.flags["stt_window_s"] = 10
+    assert "window=10s" in t.describe().split(" ")
+    assert t.row_document()["stt_window_s"] == 10
+
+
+@pytest.mark.asyncio
+async def test_a_turn_records_the_window_its_transcript_came_from(db_free_turn, monkeypatch) -> None:
+    class _WindowedWhisper(_DelayedWhisper):
+        async def transcribe_with_window(self, pcm: bytes):
+            return await self.transcribe(pcm), 10
+
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: _WindowedWhisper(SECRET, 0.01))
+    sess = StreamSession(_FakeWS(), "kitchen")  # type: ignore[arg-type]
+    await sess._process_utterance(b"\x00" * 48_000, trigger="wake_word")
+    assert db_free_turn["inserted"]["stt_window_s"] == 10
+
+
 def test_summarize_groups_the_whisper_settings_most_turns_first() -> None:
     rows = (
         [({"stt_ms": 900, "whisper": _w(threads=None)}, "fast")] * 2
@@ -319,9 +356,10 @@ def test_the_cpu_fallback_rung_gets_the_threads_too(fake_faster_whisper, monkeyp
     assert whisper_mod.load_whisper_client() is not None
     assert [c[1].get("cpu_threads") for c in fake_faster_whisper.calls] == [None, 8]
     rt = whisper_mod.whisper_runtime()
+    # The fake model has no CTranslate2 underneath: no short window.
     assert rt == {
         "state": "fallback", "model": "small.en", "device": "cpu",
-        "compute_type": "int8", "cpu_threads": 8,
+        "compute_type": "int8", "cpu_threads": 8, "short_window": False,
     }
 
 
@@ -331,7 +369,7 @@ def test_the_runtime_of_the_stub(monkeypatch) -> None:
     whisper_mod.load_whisper_client()
     assert whisper_mod.whisper_runtime() == {
         "state": "stub", "model": None, "device": None,
-        "compute_type": None, "cpu_threads": None,
+        "compute_type": None, "cpu_threads": None, "short_window": None,
     }
 
 
@@ -403,7 +441,13 @@ async def test_a_turn_records_every_stage_in_two_writes(db_free_turn, caplog) ->
 
     # Write 1 — with the row: the stages known before routing.
     ins = db_free_turn["inserted"]
-    assert set(ins) == {"capture_audio_ms", "stt_ms", "stt_wait_ms", "identify_ms", "whisper"}
+    assert set(ins) == {
+        "capture_audio_ms", "stt_ms", "stt_wait_ms", "identify_ms", "whisper",
+        # Its own decode waited for nothing: no other call of this room's
+        # was running (turn_timings.CAPTURE_TIMING_KEYS).
+        "stt_decode_wait_ms",
+    }
+    assert ins["stt_decode_wait_ms"] == 0
     assert ins["capture_audio_ms"] == 1500
     assert ins["stt_ms"] >= 120 - SLACK_MS
     # Nothing speculative ran, so the wait was the call itself.
@@ -833,16 +877,18 @@ async def test_the_summary_math_filters_and_leaks_nothing(clean_db) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body) == {"since", "room", "limit", "turns", "stages", "paths",
-                         "whisper_seen", "whisper", "speculative", "early_commit"}
+                         "whisper_seen", "whisper", "speculative", "early_commit",
+                         "stt_window", "capture_timing"}
     assert body["speculative"] == {"turns": 0, "reused": 0, "decodes": 0}
-    assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0}
+    assert body["early_commit"] == {"turns": 0, "A": 0, "B": 0, "cut_in": 0, "watched": 0}
     assert body["turns"] == 6 and body["room"] is None and body["limit"] == 1000
     assert body["stages"]["stt_ms"] == {"count": 6, "p50": 350, "p95": 1250, "max": 1500}
     assert body["stages"]["identify_ms"] == {"count": 1, "p50": 60, "p95": 60, "max": 60}
     assert body["stages"]["total_ms"]["count"] == 5
     assert body["paths"] == {"fast": 5, "qa": 1}
     assert body["whisper_seen"][0] == {**w8, "turns": 5}
-    assert set(body["whisper"]) == {"state", "model", "device", "compute_type", "cpu_threads"}
+    assert set(body["whisper"]) == {"state", "model", "device", "compute_type", "cpu_threads",
+                                    "short_window"}
     since = datetime.fromisoformat(body["since"])
     assert timedelta(days=6, hours=23) < now - since < timedelta(days=7, minutes=1)
     # Numbers only: the transcript, the presence tier and the handler are
@@ -935,7 +981,10 @@ def test_a_live_stream_turn_records_its_timings(monkeypatch) -> None:
 
         (row_id, doc, latency_ms), = asyncio.run(_row())
         doc = json.loads(doc) if isinstance(doc, str) else doc
-        assert set(doc) == (set(STAGES) - unknowable) | {"whisper"}
+        # Plus the capture clock this socket can give without a clock of
+        # its own and without pauses (turn_timings.CAPTURE_TIMING_KEYS).
+        clock = {"frame_lag_first_ms", "frame_lag_max_ms", "end_rx_lag_ms", "stt_decode_wait_ms"}
+        assert set(doc) == (set(STAGES) - unknowable) | {"whisper"} | clock
         assert doc["capture_audio_ms"] == 1000
         assert doc["stt_ms"] >= 150 - SLACK_MS
         assert doc["identify_ms"] >= 40 - SLACK_MS

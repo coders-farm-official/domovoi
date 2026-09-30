@@ -320,9 +320,12 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Conversation & memory ─────────────────────────────────────────
     FieldSpec(
         "session_recent_turns_cap", "Conversation memory", "Conversation",
-        "How many recent back-and-forth turns are fed to the LLM as context. "
-        "Higher = it remembers more of the conversation, at the cost of more "
-        "tokens and a little latency.",
+        "How many recent turns (each question and each answer counts as one) "
+        "are fed to the LLM as context. Past this, the older half is dropped "
+        "in one go, so a conversation carries between half this and this "
+        "many — cutting in halves lets the model reuse its cached reading of "
+        "the conversation between cuts. Higher = it remembers more of the "
+        "conversation, at the cost of more tokens and a little latency.",
         "int", min=2, max=50, unit="turns",
     ),
     FieldSpec(
@@ -558,6 +561,36 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "leaves less CPU for the language model while it works. Ignored on "
         "cuda. Takes effect after a restart.",
         "int", section="advanced", tier="restart", min=0, max=256,
+    ),
+    FieldSpec(
+        "whisper_short_window_enabled", "Fast decoding for short commands",
+        "Speech-to-text",
+        "On by default: with an English-only (.en) model, a capture of "
+        "up to 9 seconds (every spoken command) is decoded on a 10-second "
+        "window instead of the 30 seconds Whisper normally pads everything "
+        "to, which cuts the wait for a transcript to about a quarter on a "
+        "CPU. Command accuracy was the same on clean recordings; with "
+        "simulated room echo and noise the short window changed about 1 "
+        "command in 10 (as many better as worse in some rooms, a few more "
+        "worse in others), which the second hearing below makes up for. "
+        "Longer captures, multilingual models, and any short decode that "
+        "comes back blank or unsure still use the 30-second path. Off uses "
+        "the 30-second path for everything.",
+        "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "whisper_short_window_recheck", "Second hearing for unmatched commands",
+        "Speech-to-text",
+        "On by default: when a short-window transcript matches no quick "
+        "command and isn't a question the answering model takes on its own "
+        "— so it would go to the slower language-model router — the same "
+        "audio is decoded again the 30-second way and that text is used. "
+        "It catches commands the short window misheard, for about a "
+        "second on those turns; quick commands, general-knowledge "
+        "questions (\"What is the capital of France?\") and requests for a "
+        "joke or a story keep their speed. "
+        "Off routes the short-window text as it is.",
+        "bool", section="advanced", tier="hot",
     ),
     FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",

@@ -18,6 +18,7 @@ from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.double_check import (
     DoubleCheckHandler,
     _VERIFY_RE,
+    _claim_refers_back,
     _format_voice_response,
     _parse_verdict,
 )
@@ -65,6 +66,66 @@ def test_verify_regex_does_not_swallow_unrelated() -> None:
 
 
 # ─── Verdict parsing ──────────────────────────────────────────────────────
+
+
+# ─── A tool call whose claim is the request itself ──────────────────────
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        # what qwen3:8b put in `claim` for these requests (2026-09-30)
+        "That can't be right.", "That can't be true.", "Check online",
+        "Can you check online?", "what you just said",
+        # and their near kin
+        "That's not right.", "It isn't true.", "google it", "look it up",
+        "are you sure", "double check that", "your last answer", "really", "",
+    ],
+)
+def test_a_claim_that_is_the_request_itself_means_the_last_answer(claim: str) -> None:
+    assert _claim_refers_back(claim)
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Water boils at 100C at sea level.",
+        "the great wall is visible from space",
+        "It is not true that the great wall is visible from space",
+        "Radiohead released OK Computer in 1997",
+        "the moon is made of cheese",
+    ],
+)
+def test_a_real_claim_is_verified_as_stated(claim: str) -> None:
+    assert not _claim_refers_back(claim)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("claim", "path"),
+    [("That can't be right.", "previous"), ("Check online", "previous"),
+     ("the great wall is visible from space", "direct"), ("", "previous")],
+)
+async def test_the_tool_call_verifies_the_last_answer_for_a_doubt_phrase(claim, path) -> None:
+    """"That can't be right." routed to double_check with that very phrase
+    as its claim would search the web for "That can't be right." — it means
+    "check what you just said"."""
+    handler = DoubleCheckHandler()
+    seen: list[str] = []
+
+    async def _previous(ctx, session):
+        seen.append("previous")
+        return "checked the last answer"
+
+    async def _direct(c, ctx, session):
+        seen.append("direct")
+        return f"checked {c!r}"
+
+    handler._verify = _previous
+    handler._verify_claim_directly = _direct
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    await handler.execute_from_tool({"claim": claim}, ctx, None)
+    assert seen == [path]
 
 
 def test_parse_verdict_confirmed() -> None:

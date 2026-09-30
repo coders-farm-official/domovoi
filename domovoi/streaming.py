@@ -50,12 +50,22 @@ Client → Server
                            other client the reply would play into a capture
                            that is still open.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N}
+                            "utt":N,"backlog_ms":N,"wake_ms":N}
                            — `utt` (optional): the satellite's own number for
                            this capture, increasing per connection. Echoed in
                            the capture's hints and its `utterance_end`, so a
                            message about an older capture is recognisably
                            stale.
+                           — `backlog_ms` / `wake_ms` (optional, whole ms):
+                           the capture clock. `backlog_ms` is mic audio the
+                           satellite had captured and not yet read when it
+                           opened the capture (how far behind the room it
+                           starts); `wake_ms`, after a wake word only, the
+                           wake word to this message. Recorded on the turn
+                           (_CaptureClock, turn_timings.CAPTURE_TIMING_KEYS);
+                           `speech_pause` / `speech_resume` / `utterance_end`
+                           carry `sat_ms` (since this message, on the
+                           satellite's monotonic clock) and `backlog_ms`.
                            — trigger "wake_clip" (Feature 5) marks a positive
                            wake-word TRAINING clip: the Pi is in dashboard-
                            initiated recording mode and the following PCM is a
@@ -69,7 +79,7 @@ Client → Server
                             "greeting_clip":str,"ack_before_capture":true,"utt":N,
                             "frames":N,"last_voiced_frame":N|null,"exit_reason":...,
                             "voiced_frames":N,"trailing_silent_frames":N,
-                            "silence_limit_frames":N}
+                            "silence_limit_frames":N,"sat_ms":N,"backlog_ms":N}
                            — `greeting_played` (optional) marks turns where
                            the Pi played a wake greeting, so the server
                            strips a greeting that bled past the AEC out of
@@ -99,19 +109,22 @@ Client → Server
                            silent run it ended on and the run that ends one)
                            are also kept, numbers only, in an opted-in room's
                            command recording (domovoi/command_captures.py). An
-                           older core reads greeting_played alone.
+                           older core reads greeting_played alone. `sat_ms` /
+                           `backlog_ms`: the capture clock (utterance_start).
   text  speech_pause       {"type":"speech_pause","utt":N,"frame":N,"last_voiced_frame":N,
                             "greeting_played":bool,"greeting_clip":str,
-                            "ack_before_capture":true}
+                            "ack_before_capture":true,"sat_ms":N,"backlog_ms":N}
                            — ONLY when `ready.features` lists "speech_pause".
-                           The capture has just had 8 silent frames (240 ms)
+                           The capture has just had 8 silent frames (240 ms;
+                           the satellite's `[listen] speech_pause_ms`, 90-600)
                            after speech: `frame` is the frames sent so far,
                            `last_voiced_frame` the last voiced one. Once per
                            silence run. The server may start transcribing.
                            `greeting_played` / `greeting_clip` /
                            `ack_before_capture` as in `utterance_end`, for
-                           the early-commit check.
-  text  speech_resume      {"type":"speech_resume","utt":N,"frame":N}
+                           the early-commit check. `sat_ms` / `backlog_ms`:
+                           the capture clock (utterance_start).
+  text  speech_resume      {"type":"speech_resume","utt":N,"frame":N,"sat_ms":N,"backlog_ms":N}
                            — ONLY when `ready.features` lists "speech_pause".
                            Speech came back after a `speech_pause`. Sent
                            BEFORE the audio of the frame that resumed it
@@ -337,14 +350,16 @@ capture only after `listen.silence_timeout` (1.2 s by default) of silence,
 but its frames are here as they are spoken. So at the first ~240 ms pause
 after speech — the satellite's own `speech_pause`, or for one that doesn't
 send it `endpointing.LevelPauseDetector` on the frames — the server copies
-the buffer and starts Whisper (and the voice embedding) on the copy. At
+the buffer and starts Whisper on the copy (then, once the transcript is
+out, the voice embedding). At
 `utterance_end` it uses that transcript if and only if no frame the
 satellite called speech came after the copy: exact frame accounting, from
 `last_voiced_frame` in `utterance_end` or, for a satellite that doesn't
 report it, from the silence timeout it reported in `config_status`
 (`endpointing.last_voiced_from_timeout`). Otherwise the copy is dropped
-and the whole buffer is transcribed as before. One Whisper call per room
-at a time, speculative or not; a new `utterance_start` discards the copy.
+and the whole buffer is transcribed as before. One Whisper call (or voice
+embedding) per room at a time, speculative or not; a new `utterance_start`
+discards the copy.
 The greeting strip, the greeting-only drop, the self-echo guard and the
 blank-capture guard run on whichever transcript is used. Off with
 `speculative_stt_enabled=false`.
@@ -374,6 +389,7 @@ on the Pi stops it declaring `capture_control`.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import logging
@@ -396,8 +412,13 @@ from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha2
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
+    FULL_WINDOW_SEC,
+    SHORT_WINDOW_SEC,
     SttUnavailableError,
+    can_decode_full_window,
     get_whisper_client,
+    transcribe_full_window,
+    transcribe_with_window,
     whisper_runtime,
 )
 from domovoi.config import settings
@@ -418,7 +439,12 @@ from domovoi.endpointing import (
 )
 from domovoi.models import Context, Intent
 from domovoi.now_playing import NOW_PLAYING
-from domovoi.router import route
+from domovoi.router import (
+    goes_to_the_tool_model,
+    is_question_about_the_world,
+    is_request_for_a_story,
+    route,
+)
 from domovoi.turn_timings import (
     TurnTimings,
     merge_post_route,
@@ -794,7 +820,13 @@ class _Heard:
     Only the embedding: it is the expensive, side-effect-free part of voice
     identification (``voice_identifier.embed_voice``). The matching touches
     ``last_seen`` and the drift counter, so it runs once, in the turn —
-    never on a copy the turn may throw away."""
+    never on a copy the turn may throw away.
+
+    A speculative copy's embedding is computed AFTER its decode, never
+    beside it (the two share the CPU, and the transcript is what the early
+    commit and the turn wait on): ``embed_task`` is still running when the
+    transcript is handed over, and the turn awaits it just before voice
+    identification (:meth:`StreamSession._copy_embedding`)."""
 
     text: str
     stt_ms: int
@@ -802,6 +834,12 @@ class _Heard:
     # False: nothing was embedded from this audio; the turn embeds it.
     embedded: bool = False
     embedding: Any = None
+    # The copy's embedding, still being computed: resolves to the
+    # (embedded, embedding) pair above.
+    embed_task: asyncio.Task[tuple[bool, Any]] | None = None
+    # The mel window (seconds) Whisper decoded this on — 10 for a short
+    # capture, 30 otherwise — when the client says (clients/whisper.py).
+    window_s: int | None = None
 
 
 @dataclass
@@ -819,6 +857,125 @@ class _Speculation:
     # Early commit: (tier, hold_ms) once judged, or () for "never" — the
     # decision is made once per copy (StreamSession._commit_decision).
     commit: tuple[str, int] | tuple[()] | None = None
+    # For the turn's timing record (_CaptureClock.flags): when the pause
+    # this copy was taken for reached the server (time.perf_counter()),
+    # what the satellite's clock said on it (`sat_ms` / `backlog_ms`), the
+    # last voiced frame it named, and — once the Whisper call is under way —
+    # when that call started and how long it first waited for this room's
+    # decoder.
+    pause_rx: float | None = None
+    pause_clock: dict[str, int] = field(default_factory=dict)
+    last_voiced: int | None = None
+    decode_started: float | None = None
+    decode_wait_ms: int | None = None
+
+
+# 30 ms frames, in seconds, for the capture clock's schedule arithmetic.
+_FRAME_SEC = FRAME_MS / 1000
+
+
+def _sat_clock(ctrl: dict[str, Any], *keys: str) -> dict[str, int]:
+    """The satellite's own timing numbers on a control message (see the
+    `utterance_start` / `speech_pause` / `utterance_end` entries in the
+    module docstring): whole non-negative milliseconds, anything else
+    dropped. An older satellite sends none."""
+    out: dict[str, int] = {}
+    for key in keys:
+        v = ctrl.get(key)
+        if type(v) is int and 0 <= v < 3_600_000:
+            out[key] = v
+    return out
+
+
+def _lag_ms(seconds: float) -> int:
+    return max(0, int(round(seconds * 1000)))
+
+
+@dataclass
+class _CaptureClock:
+    """When one capture's messages reached the server, against the pace
+    its audio was spoken at — the numbers that say whether a speculative
+    transcript started late, and whose fault that was (the satellite, the
+    network or this server). Numbers only; see ``flags``.
+
+    The schedule: frame ``k`` (0-based) of a live capture cannot arrive
+    before ``t0 + k × 30 ms``, where ``t0`` is when its first frame could
+    have. ``lo``, the smallest ``arrival − k × 30 ms`` over the frames so
+    far, is the best estimate of ``t0`` (plus the network's floor), and a
+    frame's lag is how far past ``lo + k × 30 ms`` it arrived. A capture
+    that starts with a backlog — the satellite busy while the person was
+    already talking — sends its first frames in a burst, and they show it
+    as lag; so does a frame the network held up."""
+
+    start_rx: float                          # utterance_start received
+    sat_start: dict[str, int] = field(default_factory=dict)   # its backlog_ms / wake_ms
+    first: float | None = None
+    lo: float | None = None
+    hi: float | None = None
+    # The end: when utterance_end arrived (None for a capture this server
+    # ended itself), the frames held then, and its sat_ms / backlog_ms.
+    end_rx: float | None = None
+    end_frames: int = 0
+    end_sat: dict[str, int] = field(default_factory=dict)
+
+    def frame(self, index: int, now: float) -> None:
+        off = now - index * _FRAME_SEC
+        if self.first is None or self.lo is None or self.hi is None:
+            self.first = self.lo = self.hi = off
+            return
+        if off < self.lo:
+            self.lo = off
+        elif off > self.hi:
+            self.hi = off
+
+    def _due(self, frames: int) -> float | None:
+        """When the last of ``frames`` frames was due on the schedule."""
+        if self.lo is None or frames <= 0:
+            return None
+        return self.lo + (frames - 1) * _FRAME_SEC
+
+    def flags(self, spec: _Speculation | None) -> dict[str, int]:
+        """The ``intents_log.timings`` keys for this capture
+        (turn_timings.CAPTURE_TIMING_KEYS), with ``spec`` the copy the
+        turn used or else the latest one. Each is left out when it can't
+        be known — an older satellite sends no clock of its own, a capture
+        with no pause has no copy."""
+        out: dict[str, int] = {}
+        if self.first is not None and self.lo is not None and self.hi is not None:
+            out["frame_lag_first_ms"] = _lag_ms(self.first - self.lo)
+            out["frame_lag_max_ms"] = _lag_ms(self.hi - self.lo)
+        if "backlog_ms" in self.sat_start:
+            out["sat_start_backlog_ms"] = self.sat_start["backlog_ms"]
+        if "wake_ms" in self.sat_start:
+            out["sat_wake_ms"] = self.sat_start["wake_ms"]
+        end_due = self._due(self.end_frames)
+        if self.end_rx is not None and end_due is not None:
+            out["end_rx_lag_ms"] = _lag_ms(self.end_rx - end_due)
+        if "backlog_ms" in self.end_sat:
+            out["sat_end_backlog_ms"] = self.end_sat["backlog_ms"]
+        if spec is None or spec.pause_rx is None:
+            return out
+        pause_due = self._due(spec.frames)
+        if pause_due is not None:
+            out["pause_rx_lag_ms"] = _lag_ms(spec.pause_rx - pause_due)
+        if spec.decode_started is not None:
+            out["pause_to_decode_ms"] = _lag_ms(spec.decode_started - spec.pause_rx)
+            if spec.last_voiced is not None and self.lo is not None:
+                out["decode_start_ms"] = _lag_ms(
+                    spec.decode_started - (self.lo + spec.last_voiced * _FRAME_SEC)
+                )
+        if spec.decode_wait_ms is not None:
+            out["decode_wait_ms"] = spec.decode_wait_ms
+        if "backlog_ms" in spec.pause_clock:
+            out["sat_pause_backlog_ms"] = spec.pause_clock["backlog_ms"]
+        sat_ms = spec.pause_clock.get("sat_ms")
+        if sat_ms is not None:
+            out["sat_pause_ms"] = sat_ms
+            # Signed: how much longer the pause took to get here than the
+            # utterance_start did, beyond the satellite's own gap between
+            # sending them — the network's share.
+            out["pause_net_ms"] = int(round((spec.pause_rx - self.start_rx) * 1000)) - sat_ms
+        return out
 
 
 @dataclass
@@ -836,6 +993,32 @@ class _Committed:
 
 def _elapsed_ms(t0: float) -> int:
     return max(0, int(round((time.perf_counter() - t0) * 1000)))
+
+
+# A satellite's after-the-end numbers (`voiced_after_end_ms`,
+# `listened_after_end_ms`) are bounded by its silence timeout (at most 5 s);
+# anything else is not a report of that watch.
+_AFTER_END_MAX_MS = 10_000
+
+
+def _after_end_ms(value: Any) -> int | None:
+    if type(value) is not int or not 0 <= value <= _AFTER_END_MAX_MS:
+        return None
+    return value
+
+
+def _cancel_copy_embedding(spec: "_Speculation") -> None:
+    """Cancel a finished copy's voice embedding (``_Heard.embed_task``) if
+    it hasn't finished. One already running in its thread still runs to the
+    end — the decode slot is held until it does (``_one_at_a_time``) — but
+    one still waiting for the slot never starts."""
+    task = spec.task
+    if task is None or not task.done() or task.cancelled() or task.exception() is not None:
+        return
+    heard = task.result()
+    embed = getattr(heard, "embed_task", None)
+    if embed is not None and not embed.done():
+        embed.cancel()
 
 
 def _consume_outcome(fut: "asyncio.Future[Any]") -> None:
@@ -1013,6 +1196,12 @@ class StreamSession:
         # This room's Whisper call in flight, speculative or not: the next
         # one waits for it, so a room never runs two at once.
         self._decode_inflight: asyncio.Future[str] | None = None
+        # When the utterance's messages and frames arrived, against the pace
+        # it was spoken at (see _CaptureClock), and the latest pause: when
+        # it reached the server and what the satellite's clock said on it.
+        self._clock: _CaptureClock | None = None
+        self._pause_rx: float | None = None
+        self._pause_clock: dict[str, int] = {}
         # ── Early commit (part B) ─────────────────────────────────────
         # hello.capture_control: the satellite honours `end_capture`.
         self._capture_control = False
@@ -1251,6 +1440,8 @@ class StreamSession:
                 MAX_UTTERANCE_BYTES,
             )
             return
+        if self._clock is not None:
+            self._clock.frame(self._utt_frames, time.perf_counter())
         self.audio_buf.extend(data)
         self._utt_frames += 1
         # The streaming fast lane (domovoi/fast_lane.py, shadow only) reads
@@ -1260,6 +1451,8 @@ class StreamSession:
         # A satellite that doesn't report its own pauses: find the first
         # short one from the frames themselves.
         if self._pause_detector is not None and self._pause_detector.feed(data):
+            self._pause_rx = time.perf_counter()
+            self._pause_clock = {}
             self._on_pause()
         # Every silent frame after a reported pause brings the hold closer.
         if self._commit_on and self._pi_pause is not None:
@@ -1289,6 +1482,8 @@ class StreamSession:
         self._utt_serial += 1
         self._utt_frames = 0
         self._pi_pause = None
+        self._pause_rx = None
+        self._pause_clock = {}
         self._spec = None
         self._spec_history = []
         self._spec_wanted = False
@@ -1309,12 +1504,29 @@ class StreamSession:
             else None
         )
 
+    def _take_clock(
+        self, *, end_rx: float | None, end_sat: dict[str, int],
+    ) -> _CaptureClock | None:
+        """The utterance's capture clock, closed at its end (``end_rx``:
+        when utterance_end arrived, None when this server ended it) and
+        handed to the turn; the session keeps none until the next
+        utterance_start."""
+        clock, self._clock = self._clock, None
+        if clock is not None:
+            clock.end_rx = end_rx
+            clock.end_frames = self._utt_frames
+            clock.end_sat = end_sat
+        return clock
+
     def _discard_speculation(self) -> None:
         """Drop this utterance's copies and stop looking for pauses. The
-        current decode task is cancelled: nobody will read it."""
+        current decode task is cancelled, and so is a finished copy's voice
+        embedding that hasn't run yet: nobody will read either."""
         spec = self._spec
         if spec is not None and spec.task is not None and not spec.task.done():
             spec.task.cancel()
+        elif spec is not None:
+            _cancel_copy_embedding(spec)
         self._spec = None
         self._spec_history = []
         self._spec_wanted = False
@@ -1348,7 +1560,11 @@ class StreamSession:
         self._spec_wanted = False
         if len(self._spec_history) >= SPECULATIVE_MAX_DECODES:
             return
-        spec = _Speculation(serial=self._utt_serial, frames=self._utt_frames)
+        spec = _Speculation(
+            serial=self._utt_serial, frames=self._utt_frames,
+            pause_rx=self._pause_rx, pause_clock=dict(self._pause_clock),
+            last_voiced=self._pi_pause[1] if self._pi_pause is not None else None,
+        )
         spec.task = asyncio.create_task(
             self._speculate(spec, bytes(self.audio_buf)),
             name=f"speculative-stt:{self.room_id}",
@@ -1371,37 +1587,25 @@ class StreamSession:
             self._maybe_commit()
 
     async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
-        """Transcribe (and embed the voice in) a copy of the capture so
-        far. Never raises: None means "no speculative transcript", and the
-        turn transcribes the whole capture as it always did."""
+        """Transcribe a copy of the capture so far, then start embedding
+        the voice in it. Never raises: None means "no speculative
+        transcript", and the turn transcribes the whole capture as it
+        always did.
+
+        The transcript is returned as soon as it exists — the early commit
+        and the turn are waiting for it — and the embedding runs after the
+        decode, in the room's decode slot (``_one_at_a_time``), never
+        beside it: at the same time the two share the CPU, which slowed a
+        10 s-window decode by ~80 ms (240 → 321 ms, measured). Embedding
+        first instead costs ~60 ms of the decode's start. The turn awaits
+        the embedding only at voice identification."""
         try:
             whisper = get_whisper_client()
         except SttUnavailableError:
             return None
-        from domovoi.voice_identifier import embed_voice
-
-        async def _stt() -> str:
-            text, spec.stt_ms = await self._whisper_call(whisper, pcm)
-            return text
-
-        async def _embed() -> tuple[bool, Any]:
-            # Pure: nothing here may count as having heard somebody, since
-            # this copy may never be used. On any failure the turn embeds
-            # the audio itself, exactly as it would have without this.
-            # So does a copy shorter than the embedder's minimum: the
-            # whole capture (the copy plus its trailing silence) may not
-            # be, and whether a turn gets an embedding at all must not
-            # depend on when the copy was taken.
-            if len(pcm) < settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2:
-                return False, None
-            try:
-                return True, await embed_voice(pcm)
-            except Exception as e:
-                log.debug("stream %s: speculative voice embedding failed: %s", self.room_id, e)
-                return False, None
-
+        marks: dict[str, Any] = {}
         try:
-            text, (embedded, embedding) = await asyncio.gather(_stt(), _embed())
+            text, spec.stt_ms, window = await self._whisper_call(whisper, pcm, marks=marks)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1410,34 +1614,122 @@ class StreamSession:
                 "transcribe the whole capture: %s", self.room_id, e,
             )
             return None
-        return _Heard(
+        finally:
+            # For the capture clock: when the decode really started, and
+            # how long it first waited for this room's decode slot.
+            spec.decode_started = marks.get("started")
+            spec.decode_wait_ms = marks.get("wait_ms")
+        heard = _Heard(
             text=text,
             stt_ms=spec.stt_ms or 0,
             whisper=whisper_block(whisper_runtime()),
-            embedded=embedded,
-            embedding=embedding,
+            window_s=window,
         )
+        # A copy shorter than the embedder's minimum gets no embedding: the
+        # whole capture (the copy plus its trailing silence) may clear it,
+        # and whether a turn gets an embedding at all must not depend on
+        # when the copy was taken. The turn embeds its own audio then.
+        #
+        # Nor does a copy that is already superseded: another pause came
+        # while it decoded (`_spec_wanted`), so there was speech after it
+        # and no turn can use it, or a new utterance has started — and its
+        # embedding, in the decode slot, would only hold up the next copy's
+        # decode (10-30 ms; seconds while the voice encoder is still
+        # loading after a boot). (A copy the turn is waiting for is no
+        # longer `self._spec` — utterance_end hands it over — so that is
+        # not a sign of anything.)
+        superseded = self._spec_wanted or spec.serial != self._utt_serial
+        if not superseded and (
+            len(pcm) >= settings.voice_profile_min_utterance_sec * PCM_INPUT_SAMPLE_RATE * 2
+        ):
+            heard.embed_task = asyncio.create_task(
+                self._embed_copy(pcm), name=f"speculative-embed:{self.room_id}",
+            )
+        return heard
 
-    async def _whisper_call(self, whisper: Any, pcm: bytes) -> tuple[str, int]:
-        """One Whisper call for this room — never alongside another of its
-        own. A call already running (a speculative decode, or one a
-        cancelled turn left behind) is waited out first: faster-whisper
-        can't stop a decode midway, and two at once would only share the
-        CPU. Returns the text and the call's own time.
+    async def _embed_copy(self, pcm: bytes) -> tuple[bool, Any]:
+        """The voice embedding of a speculative copy, in the room's decode
+        slot. Pure: nothing here may count as having heard somebody, since
+        this copy may never be used. On any failure the turn embeds the
+        audio itself, exactly as it would have without this."""
+        from domovoi.voice_identifier import embed_voice
 
-        The call itself is shielded from whoever awaits it: the real client
-        decodes in a worker thread (``asyncio.to_thread``), which a cancel
-        can't stop, so a cancelled caller (a discarded copy, a barge-in)
-        must leave ``_decode_inflight`` pending until the thread is really
-        done — otherwise the next call would start beside it."""
+        try:
+            return True, await self._one_at_a_time(lambda: embed_voice(pcm))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.debug("stream %s: speculative voice embedding failed: %s", self.room_id, e)
+            return False, None
+
+    async def _copy_embedding(self, heard: _Heard) -> None:
+        """Wait for a speculative copy's embedding (usually long done: it
+        takes ~10 ms after the decode) and put it on ``heard``. Shielded:
+        a barge-in cancelling the turn must not cancel the embedding, which
+        holds the room's decode slot until its thread ends."""
+        task = heard.embed_task
+        if task is None:
+            return
+        try:
+            heard.embedded, heard.embedding = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # This turn being cancelled (a barge-in) propagates; the
+            # embedding alone having been cancelled (its slot torn down)
+            # just means the turn embeds its own audio.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            heard.embedded, heard.embedding = False, None
+        except Exception:  # _embed_copy never raises; belt and braces
+            heard.embedded, heard.embedding = False, None
+
+    async def _one_at_a_time(self, start: Any) -> Any:
+        """Run ``start()`` (a coroutine factory: a Whisper decode or a voice
+        embedding) in this room's decode slot — never alongside another
+        of its own. Whatever is already running (a speculative decode, its
+        embedding, or a call a cancelled turn left behind) is waited out
+        first: faster-whisper can't stop a decode midway, and two at once
+        would only share the CPU.
+
+        The call itself is shielded from whoever awaits it: the real
+        clients run in a worker thread (``asyncio.to_thread``), which a
+        cancel can't stop, so a cancelled caller (a discarded copy, a
+        barge-in) must leave ``_decode_inflight`` pending until the thread
+        is really done — otherwise the next call would start beside it."""
         while (prev := self._decode_inflight) is not None and not prev.done():
             await asyncio.wait({prev})
-        t0 = time.perf_counter()
-        fut = asyncio.ensure_future(whisper.transcribe(pcm))
+        fut = asyncio.ensure_future(start())
         fut.add_done_callback(_consume_outcome)
         self._decode_inflight = fut
-        text = await asyncio.shield(fut)
-        return text, _elapsed_ms(t0)
+        return await asyncio.shield(fut)
+
+    async def _whisper_call(
+        self, whisper: Any, pcm: bytes, *, marks: dict[str, Any] | None = None,
+        full_window: bool = False,
+    ) -> tuple[str, int, int | None]:
+        """One Whisper call in the room's decode slot (``_one_at_a_time``).
+        Returns the text, the call's own time (not counting the wait for
+        the slot) and the mel window it decoded on, when the client says.
+        ``marks``, when given, gets the wait for the slot (``wait_ms``)
+        and the moment the call itself started (``started``,
+        perf_counter), so a decode that queued behind another decode or
+        a copy's embedding isn't mistaken for one that started late.
+        ``full_window``: faster-whisper's 30 s path whatever the length
+        (the second hearing; only for a client that has it)."""
+        waited = time.perf_counter()
+        t0: list[float] = []
+
+        def _start() -> Any:
+            t0.append(time.perf_counter())
+            if marks is not None:
+                marks["wait_ms"] = _elapsed_ms(waited)
+                marks["started"] = t0[0]
+            if full_window:
+                return transcribe_full_window(whisper, pcm)
+            return transcribe_with_window(whisper, pcm)
+
+        text, window = await self._one_at_a_time(_start)
+        return text, _elapsed_ms(t0[0]), window
 
     def _on_speech_hint(self, t: str, ctrl: dict[str, Any]) -> None:
         """`speech_pause` / `speech_resume` from the satellite. Frames and
@@ -1465,6 +1757,8 @@ class StreamSession:
             self._pi_pause = None
             return
         self._pi_pause = (frame, last)
+        self._pause_rx = time.perf_counter()
+        self._pause_clock = _sat_clock(ctrl, "sat_ms", "backlog_ms")
         self._hint_greeting = bool(ctrl.get("greeting_played"))
         clip = ctrl.get("greeting_clip")
         self._hint_greeting_clip = clip if self._hint_greeting and isinstance(clip, str) else None
@@ -1622,6 +1916,8 @@ class StreamSession:
         (`end_capture`) before anything else."""
         received_at = time.perf_counter()
         self.utterance_active = False
+        # No utterance_end to time: the server ended this one itself.
+        clock = self._take_clock(end_rx=None, end_sat={})
         # The fast lane's capture ends here too (its lead is measured to
         # the moment listening stopped, whoever stopped it); a command it
         # hadn't decided yet is "preempted", not missed.
@@ -1673,13 +1969,25 @@ class StreamSession:
                 early_commit=committed,
                 hold_ms=hold_ms,
                 capture_meta=capture_meta,
+                capture_clock=clock,
             )
         )
 
     def _note_late_utterance_end(self, ctrl: dict[str, Any]) -> None:
         """The satellite's own `utterance_end` for a capture this server
-        already ended. Nothing to do but say whether the person was still
-        talking — the misfire the hold is meant to prevent, made visible."""
+        already ended. Nothing to do but record whether the person was still
+        talking — the misfire the hold is meant to prevent, made visible.
+
+        Two kinds of evidence. The frames already on their way when the
+        satellite stopped (its `last_voiced_frame` past the server's count:
+        ``post_commit_voiced_ms``) cover only the first 30-90 ms. A
+        satellite from 2026-09-30 on also reads its mic on, sending nothing,
+        until its own silence timeout would have ended the capture, and
+        says whether speech came back (``voiced_after_end_ms``) and how long
+        it listened (``listened_after_end_ms``): recorded past the server's
+        stop as ``post_commit_resume_ms`` / ``post_commit_listened_ms``.
+        An older satellite sends neither, and then a pause the hold misjudged
+        by more than ~90 ms is never seen."""
         committed = self._committed
         if committed is None or ctrl.get("utt") != committed.utt:
             return
@@ -1687,9 +1995,28 @@ class StreamSession:
         last, frames = ctrl.get("last_voiced_frame"), ctrl.get("frames")
         if type(last) is not int or type(frames) is not int:
             return
-        voiced_after_ms = max(0, last - committed.frames + 1) * FRAME_MS
-        if committed.timings is not None:
-            committed.timings.stages["post_commit_voiced_ms"] = voiced_after_ms
+        late: dict[str, int] = {
+            "post_commit_voiced_ms": max(0, last - committed.frames + 1) * FRAME_MS,
+        }
+        # Frames the satellite sent after the server's count: the watch
+        # starts where they end.
+        in_flight_ms = max(0, frames - committed.frames) * FRAME_MS
+        listened = _after_end_ms(ctrl.get("listened_after_end_ms"))
+        if listened is not None:
+            late["post_commit_listened_ms"] = in_flight_ms + listened
+            resumed = _after_end_ms(ctrl.get("voiced_after_end_ms"))
+            if resumed:
+                late["post_commit_resume_ms"] = in_flight_ms + resumed
+        timings = committed.timings
+        if timings is not None:
+            timings.stages.update(late)
+            if timings.intents_log_id is not None:
+                # The turn's row exists, and its post-route write may already
+                # have gone (the watch holds this message back by up to the
+                # satellite's silence timeout): write these on their own.
+                self._merge_late_stages(timings.intents_log_id, late)
+        voiced_after_ms = late["post_commit_voiced_ms"]
+        resume_ms = late.get("post_commit_resume_ms")
         if voiced_after_ms:
             log.warning(
                 "early commit room=%s tier=%s cut in on speech: the satellite "
@@ -1698,6 +2025,25 @@ class StreamSession:
                 "repeats, turn early_commit_tier_b off or raise the hold.",
                 self.room_id, committed.tier, voiced_after_ms, frames, committed.frames,
             )
+        elif resume_ms:
+            log.warning(
+                "early commit room=%s tier=%s cut in on speech: the person "
+                "spoke again %d ms after the server stopped listening, before "
+                "the satellite's own silence timeout would have ended the "
+                "capture. If this repeats, turn early_commit_tier_b off or "
+                "raise the hold.",
+                self.room_id, committed.tier, resume_ms,
+            )
+
+    def _merge_late_stages(self, row_id: int, late: dict[str, int]) -> None:
+        """Write a committed turn's late stages into its row, in a task of
+        its own (held like the post-route write, best-effort)."""
+        write = asyncio.create_task(
+            self._write_post_route_timings(row_id, dict(late)),
+            name=f"turn-timings-late:{self.room_id}",
+        )
+        _TIMING_WRITES.add(write)
+        write.add_done_callback(_TIMING_WRITES.discard)
 
     async def _await_hello(self) -> bool:
         """Block until the client's FIRST frame arrives and is an accepted
@@ -2085,6 +2431,10 @@ class StreamSession:
             await self._safe_send_text({"type": "pong"})
             return
         if t == "utterance_start":
+            self._clock = _CaptureClock(
+                start_rx=time.perf_counter(),
+                sat_start=_sat_clock(ctrl, "backlog_ms", "wake_ms"),
+            )
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
             self.utterance_active = True
@@ -2117,6 +2467,9 @@ class StreamSession:
             # for after the satellite stops listening (turn_timings.total_ms).
             received_at = time.perf_counter()
             self.utterance_active = False
+            clock = self._take_clock(
+                end_rx=received_at, end_sat=_sat_clock(ctrl, "sat_ms", "backlog_ms"),
+            )
             if self._fastlane is not None:
                 self._fastlane.finish(ended_at=received_at)
             pcm = bytes(self.audio_buf)
@@ -2175,6 +2528,7 @@ class StreamSession:
                     speculations=speculations,
                     endpoint_silence_ms=endpoint_silence_ms,
                     capture_meta=capture_meta,
+                    capture_clock=clock,
                 )
             )
             return
@@ -2227,6 +2581,11 @@ class StreamSession:
                 self.ws.app.state.satellite_voice[self.room_id] = str(voice)
             else:
                 self.ws.app.state.satellite_voice.pop(self.room_id, None)
+            # Load that voice now, off the event loop, so the room's first
+            # reply doesn't pay the model load (domovoi/speech_warmup.py).
+            from domovoi.speech_warmup import schedule_room_voice_warm_up
+
+            schedule_room_voice_warm_up(str(voice) if voice else None)
             return
         if t == "logs_chunk":
             # One slice of a log pull we asked for. Reassembly is sync and
@@ -2287,6 +2646,7 @@ class StreamSession:
             self.audio_buf.clear()
             self.dropped_overflow = False
             self._discard_speculation()
+            self._clock = None
             self._fastlane = fast_lane.close(self._fastlane)
             self._response_task = asyncio.create_task(
                 self._respond_noisy_capture(), name="noisy-apology"
@@ -2495,11 +2855,22 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return None
-            text, stt_ms = await self._whisper_call(whisper, pcm_bytes)
-            heard = _Heard(text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()))
+            marks: dict[str, Any] = {}
+            text, stt_ms, window = await self._whisper_call(whisper, pcm_bytes, marks=marks)
+            if "wait_ms" in marks:
+                # Behind a copy of this capture still decoding or being
+                # embedded (or a cancelled turn's call): part of
+                # stt_wait_ms, not stt_ms.
+                timings.flags["stt_decode_wait_ms"] = marks["wait_ms"]
+            heard = _Heard(
+                text=text, stt_ms=stt_ms, whisper=whisper_block(whisper_runtime()),
+                window_s=window,
+            )
         timings.stages["stt_ms"] = heard.stt_ms
         timings.stages["stt_wait_ms"] = _elapsed_ms(wait_t0)
         timings.whisper = heard.whisper
+        if heard.window_s is not None:
+            timings.flags["stt_window_s"] = heard.window_s
         if speculations:
             timings.flags["stt_reused"] = reused
             timings.flags["speculative_decodes"] = len(speculations)
@@ -2520,6 +2891,77 @@ class StreamSession:
         barge-in's own echo, and end a turn with nothing in it — or with
         nothing but the wake greeting. None when the turn has been ended
         here (the satellite got its response_end)."""
+        cleaned, drop = self._screen_transcript(
+            transcript, greeting_played=greeting_played, trigger=trigger,
+            greeting_clip=greeting_clip, ack_before_capture=ack_before_capture,
+        )
+        if drop is None:
+            return cleaned
+        if drop == "greeting":
+            # Nothing BUT the greeting: the capture closed on the pause
+            # after it, before the user said anything (office row #187:
+            # "Back so soon?" came back as "Back so soon." and was answered
+            # as a command). Domovoi's own words are never a command — end
+            # the turn the way the blank guard does: no speech, no DB row,
+            # mic released. The same whether the transcript is a
+            # speculative copy's or the whole capture's: an early commit
+            # never takes such a copy (_commit_decision), and a copy that
+            # is reused here says nothing the whole capture wouldn't.
+            log.warning(
+                "greeting echo: dropping %s turn in room=%s — the "
+                "transcript %r is only the wake greeting%s coming "
+                "back through the mic. This satellite plays its "
+                "greeting over the capture: upgrade it (a current "
+                "satellite plays the greeting before it listens), or "
+                "check [music] alsa_device.",
+                trigger, self.room_id, cleaned,
+                f" ({greeting_clip})" if greeting_clip else "",
+            )
+        elif drop == "echo":
+            log.warning(
+                "self-echo: dropping barge-triggered turn in room=%s — "
+                "transcript %r is the satellite's own reply %r coming "
+                "back through the mic. Barge-in is firing on speaker "
+                "echo; raise [barge_in] min_speech_ms or set "
+                "require_wake_word=true for this room.",
+                self.room_id, cleaned, self._last_spoken_text,
+            )
+        else:
+            log.warning(
+                "blank capture in room=%s (trigger=%s, %.1fs of audio): "
+                "nothing transcribed, not routing. If this repeats after "
+                "every wake word the satellite's capture is silent - "
+                "check its log for the 'capture ended' stats line.",
+                self.room_id, trigger, audio_bytes / (16_000 * 2),
+            )
+        # End the turn with no speech and no DB row. interrupted=True (not
+        # False) because without a response_start this turn the Pi's
+        # `_response_audio_received` may still be set from the PREVIOUS
+        # response — and the deferred-drain branch would then park the mic
+        # thread waiting on a drain that never comes. interrupted=True
+        # takes the immediate-release path.
+        await self._safe_send_text({
+            "type": "response_end",
+            "interrupted": True,
+            "expect_followup": False,
+        })
+        return None
+
+    def _screen_transcript(
+        self,
+        transcript: str,
+        *,
+        greeting_played: bool,
+        trigger: str | None,
+        greeting_clip: str | None = None,
+        ack_before_capture: bool = False,
+    ) -> tuple[str, str | None]:
+        """What ``_clean_transcript`` decides, without acting on it: the
+        transcript with a bled-in greeting and a barge-in's own echo
+        stripped, and why the turn must end instead — "greeting" (nothing
+        but the wake greeting), "echo" (the satellite quoting its own
+        reply), "blank" (nothing to route) — or None. The second hearing
+        screens its transcript with it too."""
         # If the Pi played a wake greeting this turn, the array's AEC may
         # have let it bleed into the capture ("Hi there. Say something
         # mean." → greeting + command). Strip a known leading greeting so
@@ -2533,32 +2975,8 @@ class StreamSession:
             if cleaned != transcript:
                 log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
                 transcript = cleaned
-            # Nothing BUT the greeting: the capture closed on the pause
-            # after it, before the user said anything (office row #187:
-            # "Back so soon?" came back as "Back so soon." and was answered
-            # as a command). Domovoi's own words are never a command — end
-            # the turn the way the blank guard below does: no speech, no
-            # DB row, mic released. The same whether the transcript is a
-            # speculative copy's or the whole capture's: an early commit
-            # never takes such a copy (_commit_decision), and a copy that
-            # is reused here says nothing the whole capture wouldn't.
             if greeting_only:
-                log.warning(
-                    "greeting echo: dropping %s turn in room=%s — the "
-                    "transcript %r is only the wake greeting%s coming "
-                    "back through the mic. This satellite plays its "
-                    "greeting over the capture: upgrade it (a current "
-                    "satellite plays the greeting before it listens), or "
-                    "check [music] alsa_device.",
-                    trigger, self.room_id, transcript,
-                    f" ({greeting_clip})" if greeting_clip else "",
-                )
-                await self._safe_send_text({
-                    "type": "response_end",
-                    "interrupted": True,
-                    "expect_followup": False,
-                })
-                return None
+                return transcript, "greeting"
 
         # Self-echo guard. A barge-triggered capture opens WHILE the
         # speaker is still playing and carries the frames that tripped
@@ -2575,26 +2993,7 @@ class StreamSession:
                 strip_leading_echo,
             )
             if is_self_echo(transcript, self._last_spoken_text):
-                log.warning(
-                    "self-echo: dropping barge-triggered turn in room=%s — "
-                    "transcript %r is the satellite's own reply %r coming "
-                    "back through the mic. Barge-in is firing on speaker "
-                    "echo; raise [barge_in] min_speech_ms or set "
-                    "require_wake_word=true for this room.",
-                    self.room_id, transcript, self._last_spoken_text,
-                )
-                # End the turn with no speech and no DB row. interrupted=True
-                # (not False) because without a response_start this turn the
-                # Pi's `_response_audio_received` may still be set from the
-                # PREVIOUS response — and the deferred-drain branch would
-                # then park the mic thread waiting on a drain that never
-                # comes. interrupted=True takes the immediate-release path.
-                await self._safe_send_text({
-                    "type": "response_end",
-                    "interrupted": True,
-                    "expect_followup": False,
-                })
-                return None
+                return transcript, "echo"
             cleaned = strip_leading_echo(transcript, self._last_spoken_text)
             if cleaned != transcript:
                 log.info(
@@ -2612,26 +3011,111 @@ class StreamSession:
         # without a wake word, hears nothing again, and the room loops
         # apology after apology at one LLM call and one TTS per lap.
         # Seen on hardware: every conversation_log row for the room
-        # had user_text "" and the same reply. End the turn with no
-        # speech and no DB row; interrupted=True releases the Pi's mic
-        # immediately (see the self-echo drop above for why). A
-        # transcript of punctuation alone (office row #114 was ".") is
-        # just as empty.
+        # had user_text "" and the same reply. The turn ends with no
+        # speech and no DB row. A transcript of punctuation alone (office
+        # row #114 was ".") is just as empty.
         if not any(ch.isalnum() for ch in transcript):
-            log.warning(
-                "blank capture in room=%s (trigger=%s, %.1fs of audio): "
-                "nothing transcribed, not routing. If this repeats after "
-                "every wake word the satellite's capture is silent - "
-                "check its log for the 'capture ended' stats line.",
-                self.room_id, trigger, audio_bytes / (16_000 * 2),
+            return transcript, "blank"
+        return transcript, None
+
+    def _wants_second_hearing(
+        self, heard: _Heard, transcript: str, *, early_commit: bool,
+    ) -> bool:
+        """Whether a turn's transcript is heard again on the 30 s path before
+        it is routed: it came from the 10 s window, the capture wasn't ended
+        early (an early commit is a closed command by construction), and
+        route() would hand it to the tool model (``goes_to_the_tool_model``)
+        — likely a command the short decode misheard, or a turn about to
+        spend seconds in the tool router anyway. A fast-path command, a
+        yes/no answer or a plain question keeps the short window's speed,
+        and so does a question about the world
+        (``is_question_about_the_world``: "What is the capital of
+        France?"), which the streamed router gives up on in ~0.7 s — a
+        second decode would add more than that for nothing — and a request
+        for a joke or a story however its article was heard
+        (``is_request_for_a_story``: "Tell me it a joke."). Not in chat
+        mode either: those turns go to the chat agent, not the router.
+
+        Why (2026-09-30 review, small.en on the 333-clip corpus made far-
+        field, 252 tier A/B/B1 commands, router-level outcome right):
+        30 s / 10 s / 10 s with the review's rule — 202 / 191 / 205,
+        206 / 201 / 212 and 165 / 170 / 181 over three noise conditions,
+        224 / 222 / 227 on the clean clips; at or above both windows every
+        time, for a second decode on 20-34% of captures. This rule scores
+        the same as the review's on every condition of that corpus (the
+        two skips lost nothing there), hearing 15-34% twice."""
+        return (
+            not early_commit
+            and not self.conversational_mode
+            and heard.window_s == SHORT_WINDOW_SEC
+            and settings.whisper_short_window_recheck
+            and goes_to_the_tool_model(transcript)
+            and not is_question_about_the_world(transcript)
+            and not is_request_for_a_story(transcript)
+        )
+
+    async def _hear_again(
+        self,
+        pcm_bytes: bytes,
+        heard: _Heard,
+        transcript: str,
+        *,
+        timings: TurnTimings,
+        trigger: str | None,
+        greeting_played: bool,
+        greeting_clip: str | None,
+        ack_before_capture: bool,
+    ) -> tuple[_Heard, str]:
+        """The second hearing (``_wants_second_hearing``): the whole capture
+        on faster-whisper's 30 s path, in the room's decode slot, screened
+        like the first. Returns the hearing the turn goes on with — the new
+        one, or the first when the second can't be had, fails, or hears
+        nothing usable (the first did hear speech). Records it on the turn:
+        ``stt_rechecked``, ``stt_recheck_ms``, the window the text came
+        from, and the extra wait in ``stt_ms`` / ``stt_wait_ms``."""
+        try:
+            whisper = get_whisper_client()
+        except SttUnavailableError:
+            return heard, transcript
+        if not can_decode_full_window(whisper):
+            return heard, transcript
+        t0 = time.perf_counter()
+        try:
+            text, recheck_ms, _window = await self._whisper_call(
+                whisper, pcm_bytes, full_window=True,
             )
-            await self._safe_send_text({
-                "type": "response_end",
-                "interrupted": True,
-                "expect_followup": False,
-            })
-            return None
-        return transcript
+        except Exception as e:  # noqa: BLE001 — the first hearing stands
+            log.warning(
+                "stream %s: the second hearing failed; routing the first: %s",
+                self.room_id, e,
+            )
+            return heard, transcript
+        timings.flags["stt_rechecked"] = True
+        timings.flags["stt_recheck_ms"] = recheck_ms
+        timings.stages["stt_ms"] = heard.stt_ms + recheck_ms
+        timings.stages["stt_wait_ms"] = timings.stages.get("stt_wait_ms", 0) + _elapsed_ms(t0)
+        cleaned, drop = self._screen_transcript(
+            text, greeting_played=greeting_played, trigger=trigger,
+            greeting_clip=greeting_clip, ack_before_capture=ack_before_capture,
+        )
+        if drop is not None:
+            log.info(
+                "stream %s: the second hearing heard nothing usable (%s); "
+                "routing the first", self.room_id, drop,
+            )
+            return heard, transcript
+        timings.flags["stt_window_s"] = FULL_WINDOW_SEC
+        if cleaned != transcript:
+            log.info(
+                "stream %s: second hearing on the 30 s window: %r -> %r",
+                self.room_id, transcript, cleaned,
+            )
+        return (
+            dataclasses.replace(
+                heard, text=text, stt_ms=heard.stt_ms + recheck_ms, window_s=FULL_WINDOW_SEC,
+            ),
+            cleaned,
+        )
 
     async def _process_utterance(
         self,
@@ -2648,6 +3132,7 @@ class StreamSession:
         early_commit: _Committed | None = None,
         hold_ms: int | None = None,
         capture_meta: dict[str, Any] | None = None,
+        capture_clock: _CaptureClock | None = None,
     ) -> None:
         interrupted = False
         response = None
@@ -2672,6 +3157,13 @@ class StreamSession:
                 pcm_bytes, timings=timings, trigger=trigger,
                 reuse=reuse, speculations=speculations or [],
             )
+            if capture_clock is not None:
+                # When the capture's frames, its pause and its decode
+                # happened against the pace it was spoken at — the copy the
+                # turn used, else the latest one (turn_timings).
+                timings.flags.update(capture_clock.flags(
+                    reuse or (speculations[-1] if speculations else None)
+                ))
             if heard is None:
                 return
             transcript = await self._clean_transcript(
@@ -2681,6 +3173,14 @@ class StreamSession:
             )
             if transcript is None:
                 return
+            if self._wants_second_hearing(
+                heard, transcript, early_commit=early_commit is not None,
+            ):
+                heard, transcript = await self._hear_again(
+                    pcm_bytes, heard, transcript, timings=timings, trigger=trigger,
+                    greeting_played=greeting_played, greeting_clip=greeting_clip,
+                    ack_before_capture=ack_before_capture,
+                )
 
             # ── Respond ──────────────────────────────────────────────────
             await self._safe_send_text({"type": "transcript", "text": transcript})
@@ -2693,12 +3193,13 @@ class StreamSession:
             # and how aggressively to prompt for identity. Best-effort —
             # any failure leaves person_id=None / presence_tier="high"
             # rather than blocking the response cycle. A speculative
-            # transcript brings the embedding of its copy, computed
-            # alongside the decode; the matching (and its last_seen and
-            # drift bookkeeping) runs here, once per turn, either way.
+            # transcript brings the embedding of its copy, computed right
+            # after its decode; the matching (and its last_seen and drift
+            # bookkeeping) runs here, once per turn, either way.
             from domovoi.voice_identifier import identify
             stage_t0 = time.perf_counter()
             try:
+                await self._copy_embedding(heard)
                 if heard.embedded:
                     ident = await identify(pcm_bytes, embedding=heard.embedding)
                 else:
@@ -2746,6 +3247,7 @@ class StreamSession:
                 app=self.ws.app,
                 timings=timings,
                 speak_interim=interim.say,
+                stream_qa=True,
             )
             intent = Intent(
                 transcript=transcript,
@@ -2792,181 +3294,33 @@ class StreamSession:
             stage_t0 = time.perf_counter()
             async with session_scope() as s:
                 response = await route(intent, ctx, s)
-                # Third-party intro hybrid hook. Two mutually-exclusive
-                # paths run in the same transaction as routing so the
-                # post-state is consistent:
-                #   * unknown voice + active expectation → buffer this
-                #     turn into the expectation's candidate clusters.
-                #   * introducer voice + buffered clusters → maybe
-                #     append "By the way, was that <name>?" to the
-                #     response and park pending_confirmation.
-                # The hooks no-op cleanly when no expectation is parked.
-                from domovoi.handlers.voice_profile import (
-                    buffer_unknown_voice_turn,
-                    maybe_inject_third_party_ask,
-                )
-                ctx_with_session = ctx.model_copy(
-                    update={"session_id": response.session_id}
-                )
-                if (
-                    person_id is None
-                    and ident is not None
-                    and ident.embedding is not None
-                    # Respect the opt-out: a denylisted ("never save my voice")
-                    # speaker must not be buffered into a third-party enrollment
-                    # cluster, or someone else's introduction could re-enroll
-                    # them without consent.
-                    and not ident.denylisted
-                ):
-                    await buffer_unknown_voice_turn(
-                        s,
-                        session_id=response.session_id,
-                        transcript=transcript,
-                        embedding=ident.embedding,
+                streamed = getattr(response, "qa_stream", None) is not None
+                if not streamed:
+                    # A streamed answer is recorded once it has been said
+                    # (_speak_streamed_answer); these hooks run with it.
+                    await self._voice_profile_hooks(
+                        s, response=response, ctx=ctx, ident=ident,
+                        person_id=person_id, transcript=transcript,
                         audio_seconds=audio_seconds,
                     )
-                elif person_id is not None:
-                    injected = await maybe_inject_third_party_ask(
-                        s,
-                        ctx=ctx_with_session,
-                        response=response,
-                    )
-                    if injected:
-                        # The conversation_log row for this turn was
-                        # written by route() with the *pre-injection*
-                        # text. Update it so the audit trail matches
-                        # what the user actually hears. Targets the
-                        # most recent row for this session — safe
-                        # because we're inside the same transaction
-                        # and no concurrent turn can interleave.
-                        from sqlalchemy import text as sql_text
-                        await s.execute(
-                            sql_text(
-                                """
-                                UPDATE conversation_log
-                                SET assistant_text = :t
-                                WHERE id = (
-                                    SELECT id FROM conversation_log
-                                    WHERE session_id = :sid
-                                    ORDER BY id DESC
-                                    LIMIT 1
-                                )
-                                """
-                            ),
-                            {"t": response.text, "sid": str(response.session_id)},
-                        )
-            # The whole routing transaction, commit included.
-            timings.stage("route_ms", stage_t0)
             self.session_id = response.session_id
 
-            tts_t0 = time.perf_counter()
-            tts = get_tts_client()
-            sentences = _split_sentences(response.text) or [response.text or ""]
-
-            # Resolve which voice to synthesize this turn in. A per-response
-            # override (VoiceHandler sampling / switching) wins; otherwise
-            # the room's reported voice; otherwise the registry default.
-            # (None, None) → the TTS client's construct-time globals.
-            override = getattr(response, "voice_override", None)
-            synth_engine, synth_voice = await resolve_voice(override or satellite_voice)
-
-            # Synthesize the first sentence so we know the sample rate before
-            # emitting response_start. Subsequent sentences inherit it.
-            first_pcm, sr = _wav_to_pcm(
-                await tts.synthesize(sentences[0], engine=synth_engine, voice=synth_voice)
-            )
-
-            # Master output-volume change (MusicHandler), applied BEFORE the
-            # response audio so the spoken confirmation ("Volume up to 80
-            # percent.") is itself heard at the new level. The satellite
-            # drives its hardware mixer, which scales both TTS and music.
-            if response.satellite_volume is not None:
-                await self._safe_send_text({
-                    "type": "set_volume",
-                    "level": max(0, min(100, int(response.satellite_volume))),
-                })
-
-            if interim.started:
-                # An interim line (the cold-start notice) already opened
-                # this turn's response: the reply carries on in it, at the
-                # rate the Pi is already playing, with no second
-                # response_start. The self-echo guard hears both.
-                if sr != interim.sample_rate:
-                    first_pcm = _resample_pcm(first_pcm, sr, interim.sample_rate)
-                    sr = interim.sample_rate
-                self._last_spoken_text = f"{interim.text} {response.text}"
-            else:
-                await self._safe_send_text({
-                    "type": "response_start",
-                    "text": response.text,
-                    "matched_handler": response.matched_handler,
-                    "matched_path": response.matched_path,
-                    "session_id": str(response.session_id) if response.session_id else None,
-                    "online": response.online,
-                    "audio_sample_rate": sr,
-                })
-
-            async def _synth(s: str) -> tuple[bytes, int]:
-                # Keep each sentence's OWN sample rate — the engine fallback
-                # chain can render a later sentence with a different engine
-                # (and rate) than the first, so the caller must reconcile it
-                # against the response's announced rate rather than assume
-                # uniformity.
-                pcm, s_sr = _wav_to_pcm(
-                    await tts.synthesize(s, engine=synth_engine, voice=synth_voice)
+            if streamed:
+                # A Q&A answer: its first sentence is spoken while the model
+                # is still writing the rest. route_ms ends at that sentence.
+                response = await self._speak_streamed_answer(
+                    response, ctx=ctx, ident=ident, person_id=person_id,
+                    transcript=transcript, audio_seconds=audio_seconds,
+                    timings=timings, stage_t0=stage_t0, interim=interim,
+                    satellite_voice=satellite_voice,
                 )
-                return pcm, s_sr
-
-            # Pipeline sentence synthesis so the Pi never sees a gap in
-            # the WS audio stream. The naive serial pattern
-            # (`for s: synth → stream`) blocks for 100-500 ms per
-            # sentence between sends, which drains the Pi's playback
-            # queue and produces an audible click between sentences.
-            # Instead, kick off the next synthesis as a background task
-            # before we start streaming the current one — by the time
-            # the current chunks are sent, the next one's PCM is
-            # usually already done.
-            next_task: asyncio.Task[tuple[bytes, int]] | None = (
-                asyncio.create_task(_synth(sentences[1]))
-                if len(sentences) > 1
-                else None
-            )
-            try:
-                for chunk in _iter_chunks(first_pcm):
-                    await self.ws.send_bytes(chunk)
-                    # First call only: tts_first_ms + total_ms.
-                    timings.first_audio(tts_t0)
-
-                for i, _ in enumerate(sentences[1:], start=1):
-                    assert next_task is not None
-                    pcm, pcm_sr = await next_task
-                    next_task = (
-                        asyncio.create_task(_synth(sentences[i + 1]))
-                        if i + 1 < len(sentences)
-                        else None
-                    )
-                    # Reconcile against the rate the Pi is playing at (the
-                    # first sentence's). A mismatch means this sentence hit a
-                    # different engine via the fallback chain; resample so its
-                    # audio doesn't play too fast/slow (garbled response tail).
-                    if pcm_sr != sr:
-                        log.warning(
-                            "TTS sentence %d rate %d != response rate %d; "
-                            "resampling (engine fallback mid-response?)",
-                            i, pcm_sr, sr,
-                        )
-                        pcm = _resample_pcm(pcm, pcm_sr, sr)
-                    for chunk in _iter_chunks(pcm):
-                        await self.ws.send_bytes(chunk)
-                        # A first sentence that rendered to no audio at all.
-                        timings.first_audio(tts_t0)
-            finally:
-                # Cancel any in-flight synth on early exit (barge-in,
-                # WS drop, exception) so we don't leak a background
-                # task waiting on edge-tts to return audio nobody will
-                # ever play.
-                if next_task is not None and not next_task.done():
-                    next_task.cancel()
+            else:
+                # The whole routing transaction, commit included.
+                timings.stage("route_ms", stage_t0)
+                await self._speak_response(
+                    response, timings=timings, interim=interim,
+                    satellite_voice=satellite_voice,
+                )
         except asyncio.CancelledError:
             interrupted = True
         except Exception as e:
@@ -3201,6 +3555,351 @@ class StreamSession:
             await asyncio.shield(timing_write)
         if capture_write is not None:
             await asyncio.shield(capture_write)
+
+    async def _voice_profile_hooks(
+        self,
+        s: Any,
+        *,
+        response: Any,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+    ) -> None:
+        """The voice-profile hooks that run in the transaction that records
+        a turn: after route() for a whole reply, after the answer has been
+        said for a streamed one (the conversation_log row they may rewrite
+        exists only then)."""
+        # Third-party intro hybrid hook. Two mutually-exclusive
+        # paths run in the same transaction as routing so the
+        # post-state is consistent:
+        #   * unknown voice + active expectation → buffer this
+        #     turn into the expectation's candidate clusters.
+        #   * introducer voice + buffered clusters → maybe
+        #     append "By the way, was that <name>?" to the
+        #     response and park pending_confirmation.
+        # The hooks no-op cleanly when no expectation is parked.
+        from domovoi.handlers.voice_profile import (
+            buffer_unknown_voice_turn,
+            maybe_inject_third_party_ask,
+        )
+        ctx_with_session = ctx.model_copy(
+            update={"session_id": response.session_id}
+        )
+        if (
+            person_id is None
+            and ident is not None
+            and ident.embedding is not None
+            # Respect the opt-out: a denylisted ("never save my voice")
+            # speaker must not be buffered into a third-party enrollment
+            # cluster, or someone else's introduction could re-enroll
+            # them without consent.
+            and not ident.denylisted
+        ):
+            await buffer_unknown_voice_turn(
+                s,
+                session_id=response.session_id,
+                transcript=transcript,
+                embedding=ident.embedding,
+                audio_seconds=audio_seconds,
+            )
+        elif person_id is not None:
+            injected = await maybe_inject_third_party_ask(
+                s,
+                ctx=ctx_with_session,
+                response=response,
+            )
+            if injected:
+                # The conversation_log row for this turn was
+                # written by route() with the *pre-injection*
+                # text. Update it so the audit trail matches
+                # what the user actually hears. Targets the
+                # most recent row for this session — safe
+                # because we're inside the same transaction
+                # and no concurrent turn can interleave.
+                from sqlalchemy import text as sql_text
+                await s.execute(
+                    sql_text(
+                        """
+                        UPDATE conversation_log
+                        SET assistant_text = :t
+                        WHERE id = (
+                            SELECT id FROM conversation_log
+                            WHERE session_id = :sid
+                            ORDER BY id DESC
+                            LIMIT 1
+                        )
+                        """
+                    ),
+                    {"t": response.text, "sid": str(response.session_id)},
+                )
+
+    async def _speak_response(
+        self,
+        response: Any,
+        *,
+        timings: TurnTimings,
+        interim: "_InterimSpeech",
+        satellite_voice: str | None,
+    ) -> None:
+        """Speak a routed response whose text is complete: synthesize the
+        first sentence, open the response, stream it, and synthesize each
+        next sentence while the one before it is sent."""
+        tts_t0 = time.perf_counter()
+        tts = get_tts_client()
+        sentences = _split_sentences(response.text) or [response.text or ""]
+
+        # Resolve which voice to synthesize this turn in. A per-response
+        # override (VoiceHandler sampling / switching) wins; otherwise
+        # the room's reported voice; otherwise the registry default.
+        # (None, None) → the TTS client's construct-time globals.
+        override = getattr(response, "voice_override", None)
+        synth_engine, synth_voice = await resolve_voice(override or satellite_voice)
+
+        # Synthesize the first sentence so we know the sample rate before
+        # emitting response_start. Subsequent sentences inherit it.
+        first_pcm, sr = _wav_to_pcm(
+            await tts.synthesize(sentences[0], engine=synth_engine, voice=synth_voice)
+        )
+
+        # Master output-volume change (MusicHandler), applied BEFORE the
+        # response audio so the spoken confirmation ("Volume up to 80
+        # percent.") is itself heard at the new level. The satellite
+        # drives its hardware mixer, which scales both TTS and music.
+        if response.satellite_volume is not None:
+            await self._safe_send_text({
+                "type": "set_volume",
+                "level": max(0, min(100, int(response.satellite_volume))),
+            })
+
+        if interim.started:
+            # An interim line (the cold-start notice) already opened
+            # this turn's response: the reply carries on in it, at the
+            # rate the Pi is already playing, with no second
+            # response_start. The self-echo guard hears both.
+            if sr != interim.sample_rate:
+                first_pcm = _resample_pcm(first_pcm, sr, interim.sample_rate)
+                sr = interim.sample_rate
+            self._last_spoken_text = f"{interim.text} {response.text}"
+        else:
+            await self._safe_send_text({
+                "type": "response_start",
+                "text": response.text,
+                "matched_handler": response.matched_handler,
+                "matched_path": response.matched_path,
+                "session_id": str(response.session_id) if response.session_id else None,
+                "online": response.online,
+                "audio_sample_rate": sr,
+            })
+
+        async def _synth(s: str) -> tuple[bytes, int]:
+            # Keep each sentence's OWN sample rate — the engine fallback
+            # chain can render a later sentence with a different engine
+            # (and rate) than the first, so the caller must reconcile it
+            # against the response's announced rate rather than assume
+            # uniformity.
+            pcm, s_sr = _wav_to_pcm(
+                await tts.synthesize(s, engine=synth_engine, voice=synth_voice)
+            )
+            return pcm, s_sr
+
+        # Pipeline sentence synthesis so the Pi never sees a gap in
+        # the WS audio stream. The naive serial pattern
+        # (`for s: synth → stream`) blocks for 100-500 ms per
+        # sentence between sends, which drains the Pi's playback
+        # queue and produces an audible click between sentences.
+        # Instead, kick off the next synthesis as a background task
+        # before we start streaming the current one — by the time
+        # the current chunks are sent, the next one's PCM is
+        # usually already done.
+        next_task: asyncio.Task[tuple[bytes, int]] | None = (
+            asyncio.create_task(_synth(sentences[1]))
+            if len(sentences) > 1
+            else None
+        )
+        try:
+            for chunk in _iter_chunks(first_pcm):
+                await self.ws.send_bytes(chunk)
+                # First call only: tts_first_ms + total_ms.
+                timings.first_audio(tts_t0)
+
+            for i, _ in enumerate(sentences[1:], start=1):
+                assert next_task is not None
+                pcm, pcm_sr = await next_task
+                next_task = (
+                    asyncio.create_task(_synth(sentences[i + 1]))
+                    if i + 1 < len(sentences)
+                    else None
+                )
+                # Reconcile against the rate the Pi is playing at (the
+                # first sentence's). A mismatch means this sentence hit a
+                # different engine via the fallback chain; resample so its
+                # audio doesn't play too fast/slow (garbled response tail).
+                if pcm_sr != sr:
+                    log.warning(
+                        "TTS sentence %d rate %d != response rate %d; "
+                        "resampling (engine fallback mid-response?)",
+                        i, pcm_sr, sr,
+                    )
+                    pcm = _resample_pcm(pcm, pcm_sr, sr)
+                for chunk in _iter_chunks(pcm):
+                    await self.ws.send_bytes(chunk)
+                    # A first sentence that rendered to no audio at all.
+                    timings.first_audio(tts_t0)
+        finally:
+            # Cancel any in-flight synth on early exit (barge-in,
+            # WS drop, exception) so we don't leak a background
+            # task waiting on edge-tts to return audio nobody will
+            # ever play.
+            if next_task is not None and not next_task.done():
+                next_task.cancel()
+
+    async def _speak_streamed_answer(
+        self,
+        routed: Any,
+        *,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+        timings: TurnTimings,
+        stage_t0: float,
+        interim: "_InterimSpeech",
+        satellite_voice: str | None,
+    ) -> Any:
+        """Speak a Q&A answer while the model is still writing it
+        (``routed.qa_stream``, domovoi/spoken_answer.py): each sentence is
+        synthesized and sent as soon as it is complete, so the first one
+        plays while the rest is generated. On a CPU host that is the
+        difference between ~0.5 s and the whole reply (0.7-6 s on
+        llama3.2:3b) before the first word.
+
+        When the answer has been said, the turn is recorded — the full
+        text, the online-check or memory offer appended and parked, the
+        voice-profile hooks — and whatever that added is spoken last. A
+        barge-in (or a failure) mid-answer stops the model and still
+        records what was said. Returns the turn's final response.
+
+        ``route_ms`` runs to the first sentence (the routing plus the time
+        the model took to write it); ``tts_first_ms`` from there to its
+        audio on the socket."""
+        streamed = routed.qa_stream
+        tts: Any = None
+        engine: str | None = None
+        voice: str | None = None
+        # An interim line (the cold-start notice) already opened the
+        # response: carry on in it, at its rate.
+        rate: int | None = interim.sample_rate if interim.started else None
+        said: list[str] = [interim.text] if interim.started else []
+        tts_t0: float | None = None
+        recording: asyncio.Task[tuple[Any, str]] | None = None
+
+        def first_sentence_ready() -> None:
+            nonlocal tts_t0
+            if tts_t0 is None:
+                timings.stage("route_ms", stage_t0)
+                tts_t0 = time.perf_counter()
+
+        async def speak(sentence: str) -> None:
+            nonlocal rate
+            pcm, s_sr = _wav_to_pcm(
+                await tts.synthesize(sentence, engine=engine, voice=voice)
+            )
+            if rate is None:
+                rate = s_sr
+                await self._safe_send_text({
+                    "type": "response_start",
+                    "text": sentence,
+                    "matched_handler": routed.matched_handler,
+                    "matched_path": routed.matched_path,
+                    "session_id": str(routed.session_id) if routed.session_id else None,
+                    "online": routed.online,
+                    "audio_sample_rate": s_sr,
+                })
+            elif s_sr != rate:
+                pcm = _resample_pcm(pcm, s_sr, rate)
+            said.append(sentence)
+            # What a barge-triggered capture may hear back
+            # (self_echo_filter): everything said so far, not just the
+            # sentence that opened the response.
+            self._last_spoken_text = " ".join(said)
+            for chunk in _iter_chunks(pcm):
+                await self.ws.send_bytes(chunk)
+                timings.first_audio(tts_t0)
+
+        async def record() -> tuple[Any, str]:
+            # The turn's records, in a task of its own awaited through
+            # asyncio.shield: a barge-in's cancel — or the next
+            # utterance_start's, right behind it — must not abort the
+            # transaction and lose the turn. Started once, whichever way
+            # the answer ends.
+            nonlocal recording
+            if recording is None:
+                recording = asyncio.create_task(
+                    self._finish_streamed_answer(
+                        streamed, ctx=ctx, ident=ident, person_id=person_id,
+                        transcript=transcript, audio_seconds=audio_seconds,
+                    ),
+                    name=f"qa-answer-record:{self.room_id}",
+                )
+                _TIMING_WRITES.add(recording)
+                recording.add_done_callback(_TIMING_WRITES.discard)
+            return await asyncio.shield(recording)
+
+        sentences = streamed.answer.sentences()
+        try:
+            tts = get_tts_client()
+            engine, voice = await resolve_voice(satellite_voice)
+            async for sentence in sentences:
+                first_sentence_ready()
+                await speak(sentence)
+            final, rest = await record()
+            # Nothing was said (no answer at all): the router's fixed line
+            # is the whole reply. Else: the offer, the third-party ask.
+            first_sentence_ready()
+            for sentence in _split_sentences(rest):
+                await speak(sentence)
+            return final
+        except BaseException:
+            # A barge-in cancelled the turn, or TTS / the socket failed:
+            # stop the model, make sure what was said is recorded, then let
+            # the turn end the way it would have.
+            try:
+                await sentences.aclose()
+                final, _rest = await record()
+                routed.text = final.text
+                routed.matched_path = final.matched_path
+            except BaseException as e:  # noqa: BLE001 — never mask the original
+                log.warning(
+                    "stream %s: recording an interrupted answer failed: %r", self.room_id, e,
+                )
+            raise
+
+    async def _finish_streamed_answer(
+        self,
+        streamed: Any,
+        *,
+        ctx: Context,
+        ident: Any,
+        person_id: int | None,
+        transcript: str,
+        audio_seconds: float,
+    ) -> tuple[Any, str]:
+        """The router's end of a streamed answer (offers, persistence) and
+        the voice-profile hooks, in one transaction. Returns the final
+        response and the text still to be said after the answer."""
+        async with session_scope() as s:
+            response, rest = await streamed.finish(s)
+            before = response.text
+            await self._voice_profile_hooks(
+                s, response=response, ctx=ctx, ident=ident, person_id=person_id,
+                transcript=transcript, audio_seconds=audio_seconds,
+            )
+            if response.text != before and response.text.startswith(before):
+                rest = f"{rest} {response.text[len(before):].strip()}".strip()
+        return response, rest
 
     def _keep_capture(
         self,

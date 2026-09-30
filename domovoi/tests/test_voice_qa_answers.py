@@ -111,14 +111,17 @@ async def test_the_spoken_answer_is_free_text_not_a_json_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_profile_prefix_leads_the_voice_prompt() -> None:
+async def test_profile_prefix_follows_the_fixed_instructions() -> None:
+    """The profile differs by speaker; after the instructions, a change of
+    speaker leaves the instructions' cached reading in place (Ollama reuses
+    a prompt's start up to the first token that differs)."""
     chat = _Chat("Some jazz, then.")
     await _client(chat).qa_with_uncertainty(
         "play me something", profile_prefix="User context: likes jazz."
     )
     system = chat.calls[0]["messages"][0]["content"]
-    assert system.startswith("User context: likes jazz.\n\n")
-    assert system.endswith(VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name))
+    assert system.startswith(VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name) + "\n\n")
+    assert system.endswith("User context: likes jazz.")
 
 
 def test_the_voice_prompt_keeps_answers_short_in_words_not_by_cutting() -> None:

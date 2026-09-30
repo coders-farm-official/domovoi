@@ -82,17 +82,77 @@ _VERIFY_CLAIM_RE = re.compile(r"^is it (?:true|right|correct) that (.+)$")
 
 # Words a verification request carries. Used by ``offers_tool`` to keep
 # the double_check schema OUT of the LLM router's tool list for
-# utterances that can't be asking for a check (see the method). Generous
-# on purpose: "right"/"real"/"source" over-match harmlessly.
+# utterances that can't be asking for a check (see the method). An
+# over-match is not free: adding the tool changes the router's prompt, so
+# the tool model re-reads the schema on that turn. The everyday words —
+# sure, true, right, correct, real, fact, source, check — count only in
+# the phrases that ask for a check ("are you sure", "is that right",
+# "fact check", "what's your source", "check that"); bare, they matched
+# "tell me a fun fact", "make sure", "the right song", "remind me to
+# check the oven". "really", "actually" and "bet" are gone: they are
+# filler far more often than doubt. Doubt said outright ("that can't be
+# right") and a request to look it up ("check online", "google it") stay:
+# withheld, qwen3:8b answered those from its own knowledge instead of
+# checking (measured 2026-09-30 against the live tool list).
 _VERIFY_CUE_RE = re.compile(
     r"\b(?:"
-    r"sure|check|verif\w*|fact|true|truth|correct|incorrect|right|wrong"
-    r"|accura\w*|really|confirm\w*|certain|legit\w*|actually|trust\w*"
-    r"|believ\w*|lie|lying|liar|prove|proof|source|look (?:that|this|it) up"
-    r"|mistake\w*|doubt\w*|kidding|serious\w*|real|positive|bet"
-    r"|made (?:that|this|it) up|hallucinat\w*"
+    r"verif\w*|truth\w*|incorrect|wrong|accura\w*|confirm\w*|certain"
+    r"|legit\w*|trust\w*|believ\w*|lie|lying|liar|prove|proof"
+    r"|mistake\w*|doubt\w*|kidding|serious\w*|positive|hallucinat\w*"
+    r"|look (?:that|this|it) up|made (?:that|this|it) up"
+    r"|(?:can'?t|cannot|can not|couldn'?t|could not) (?:possibly )?be"
+    r" (?:true|right|correct|real|accurate)"
+    r"|(?:check|look|search)\w*(?: \w+){0,3}? (?:online|on the (?:web|internet))"
+    r"|google (?:it|that|this)"
+    r"|(?:double|fact|re)[- ]?check\w*"
+    r"|check(?:ed|ing)? (?:that|this|it|again|your|what|whether|if|on that)"
+    r"|(?:are|were) you (?:\w+ )?(?:sure|right|correct)|you sure|not so sure"
+    r"|not sure (?:about |of )?(?:that|this|it)"
+    r"|(?:is|was|isn't|wasn't|that's|thats|it's|its) (?:\w+ ){0,2}?"
+    r"(?:true|right|correct|real|accurate|a fact)"
+    r"|not (?:true|right|correct|real)|sound\w* (?:\w+ )?(?:right|true|correct|off)"
+    r"|for real|(?:your|what's the|whats the|what is the|cite|any) sources?"
     r")\b"
+    r"|^(?:really|seriously|no way)$"
 )
+
+
+# A `claim` argument that states no claim: the tool model copied the
+# request itself into it — "That can't be right." → claim "That can't be
+# right.", "Check online." → "Check online", "fact check what you just said"
+# → "what you just said" (qwen3:8b, 2026-09-30, the live tool list). Searched
+# as written, that verifies nothing; it means "check what you just said", so
+# the handler verifies its previous response instead. Short on purpose (at
+# most 6 words for the first two): "it is not true that the great wall is
+# visible from space" is a claim, and is searched.
+_REFERS_BACK_RE = re.compile(
+    r"^(?:(?:can|could|would) you |please |go )*"
+    r"(?:double[- ]?check|fact[- ]?check|re[- ]?check|check|verify|look|search|google)\w*"
+    r"(?: (?:that|this|it|up|again|online|the (?:web|internet)|on the (?:web|internet)|for me))*$"
+    r"|^(?:that|this|it|that's|thats|it's|its)(?: (?:is|was))? ?"
+    r"(?:can'?t|cannot|can not|couldn'?t|could not|isn'?t|is not|wasn'?t|was not|not|doesn'?t|does not)\b"
+    r"|\bwhat you (?:just )?(?:said|told me)\b"
+    r"|\byour (?:last |previous )?(?:answer|response|reply)\b"
+    r"|\b(?:the )?(?:last|previous) (?:answer|response|reply|thing you said)\b"
+)
+
+
+def _claim_refers_back(claim: str) -> bool:
+    """Whether a tool call's ``claim`` is really "what you just said" (see
+    ``_REFERS_BACK_RE``) rather than a statement to look up."""
+    norm = " ".join(claim.lower().strip().strip(".,!?\"'").split())
+    if not norm:
+        return True
+    if _VERIFY_RE.match(norm):
+        return True
+    m = _REFERS_BACK_RE.search(norm)
+    if m is None:
+        return False
+    if m.start() == 0 and len(norm.split()) > 6:
+        # A long statement that merely begins like doubt ("it is not true
+        # that ...") is a claim of its own.
+        return False
+    return True
 
 
 # ─── Prompts ──────────────────────────────────────────────────────────────
@@ -381,7 +441,7 @@ class DoubleCheckHandler(Handler):
         self, args: dict, ctx: Context, session: AsyncSession
     ) -> Response:
         claim = (args.get("claim") or "").strip()
-        if claim:
+        if claim and not _claim_refers_back(claim):
             return await self._verify_claim_directly(claim, ctx, session)
         return await self._verify(ctx, session)
 

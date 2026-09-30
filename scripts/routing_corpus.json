@@ -83,6 +83,30 @@
       "note": "2026-09-01: qwen2.5:7b sent this to intercom"
     },
     {
+      "utterance": "tell me a fun fact",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-30: 'fact' was a verification cue, so double_check was offered and the router's cached prompt changed (+4.6-16 s)"
+    },
+    {
+      "utterance": "tell me a story",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-30: 'story' offered the news tool; a NONE-sentinel router prompt sent this to chat_mode"
+    },
+    {
+      "utterance": "tell me about the history of rome",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-30: the news cue matched 'story' inside 'history'; qwen3:8b then wrote a 300-token answer of its own (~48 s CPU)"
+    },
+    {
+      "utterance": "explain how a rainbow forms",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-09-30: the router wrote a 309-347 token answer of its own before QA answered again (45-54 s CPU)"
+    },
+    {
       "utterance": "what is 47 times 89",
       "handler": "calculator",
       "tags": ["calculator"],
@@ -159,6 +183,30 @@
       "note": "off-pattern phrasing must still reach double_check through the LLM"
     },
     {
+      "utterance": "That can't be right.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "That can't be true.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "Check online.",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: dropped from the verify cues, double_check was withheld and qwen3:8b answered it as QA"
+    },
+    {
+      "utterance": "Can you check online?",
+      "handler": "double_check",
+      "tags": ["double_check"],
+      "note": "2026-09-30: filler-stripped to 'check online'; withheld, it went to QA. Written as Whisper hands it over: qwen3:8b routed the lowercase, unpunctuated 'that can't be right' to QA even with the tool offered"
+    },
+    {
       "utterance": "set a timer for ten minutes",
       "handler": "timer",
       "tags": ["action"],
@@ -229,6 +277,18 @@
       "handler": "wifi",
       "tags": ["action"],
       "note": "a 'how is' question that IS a tool: wifi status"
+    },
+    {
+      "utterance": "remind me in twenty minutes to check the oven",
+      "handler": "reminder",
+      "tags": ["action"],
+      "note": "2026-09-30: 'check' is not a request to verify: double_check stays out of the router's prompt"
+    },
+    {
+      "utterance": "where are my notes",
+      "handler": "voice_notes",
+      "tags": ["action"],
+      "note": "a where-question about the house still reaches the router (not straight to QA)"
     }
   ]
 }

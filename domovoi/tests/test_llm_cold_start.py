@@ -276,14 +276,133 @@ async def test_warm_up_loads_both_models_like_their_real_calls(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_warm_up_skips_what_is_loaded_and_can_tell_ollama_is_down(monkeypatch) -> None:
+async def test_warm_up_rereads_the_router_prompt_even_when_loaded(monkeypatch) -> None:
+    """Loaded models are not loaded again, but the router's prompt is read
+    once more: a deploy (or a plugin change) that altered the tool list or
+    the routing prompt would otherwise leave the whole ~3.4k-token prefix
+    to the first routed question. The Q&A model is left alone — its cache
+    may hold a room's conversation. Ollama down: nothing is sent."""
+    chat = _Chat()
+    c = _client(chat, url="http://ollama.test:11434")
+    c._cold_twin = c
+    c._route_stream = True
+    _ps(monkeypatch, [("qwen3:8b", 4096), ("llama3.2:3b", 4096)])
+    assert await c.warm_up(TOOLS) == []
+    assert [call["model"] for call in chat.calls] == ["qwen3:8b"]
+    assert chat.calls[0]["tools"][0]["function"]["name"] == "music"
+    assert chat.calls[0]["options"]["num_predict"] == 1
+    chat.calls.clear()
+    _ps(monkeypatch, None)
+    assert await c.warm_up(TOOLS) is None and chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_warm_up_learns_whether_routing_can_stream(monkeypatch) -> None:
     chat = _Chat()
     c = _client(chat, url="http://ollama.test:11434")
     c._cold_twin = c
     _ps(monkeypatch, [("qwen3:8b", 4096), ("llama3.2:3b", 4096)])
-    assert await c.warm_up(TOOLS) == [] and chat.calls == []
-    _ps(monkeypatch, None)
-    assert await c.warm_up(TOOLS) is None and chat.calls == []
+
+    async def version(self):
+        return (0, 34, 2)
+
+    monkeypatch.setattr(RealOllamaClient, "_server_version", version)
+    await c.warm_up(TOOLS)
+    assert c._route_stream is True
+
+
+class _CountingChat(_Chat):
+    """Answers the router's warm-up with the prompt length Ollama reports
+    (``prompt_eval_count``: the whole prompt, cached or not)."""
+
+    def __init__(self, prompt_tokens) -> None:
+        super().__init__()
+        self.prompt_tokens = prompt_tokens
+
+    async def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("tools"):
+            reply = {"message": {"content": ""}}
+            if self.prompt_tokens is not None:
+                reply["prompt_eval_count"] = self.prompt_tokens
+            return reply
+        return {"message": {"content": "hi"}}
+
+
+def _streaming_warm_client(chat, **kw) -> RealOllamaClient:
+    c = _client(chat, url="http://ollama.test:11434", **kw)
+    c._cold_twin = c
+    c._route_stream = True          # 0.9+: think=false sent, the tight cap
+    c._send_think = True
+    return c
+
+
+@pytest.mark.asyncio
+async def test_warm_up_warns_when_the_router_prompt_outgrows_the_context(monkeypatch, caplog) -> None:
+    """With the five sibling plugins' tools the router's prompt is ~3,900
+    tokens: with the 256-token cap that is past a CPU host's default 4096
+    window, so Ollama would cut the prompt or drop it from its cache on a
+    long reply. The warm-up says so and names the fix."""
+    _ps(monkeypatch, [("qwen3:8b", 4096), ("llama3.2:3b", 4096)])
+    c = _streaming_warm_client(_CountingChat(3896))
+    with caplog.at_level("WARNING", logger="domovoi.clients.ollama"):
+        await c.warm_up(TOOLS)
+    [record] = [r for r in caplog.records if "tool router's prompt" in r.getMessage()]
+    message = record.getMessage()
+    assert "3896 tokens" in message and "256-token reply cap" in message
+    assert "4096-token context" in message and "ollama_tool_num_ctx to 8192" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt_tokens", "tool_num_ctx", "ps_ctx"),
+    [
+        (3340, None, 4096),     # the stock list fits
+        (3896, 8192, 4096),     # ollama_tool_num_ctx raised: /api/ps isn't consulted
+        (None, None, 4096),     # no count reported: nothing to judge
+        (3896, None, None),     # the window isn't known
+    ],
+)
+async def test_warm_up_stays_quiet_when_the_prompt_fits_or_cant_be_judged(
+    monkeypatch, caplog, prompt_tokens, tool_num_ctx, ps_ctx,
+) -> None:
+    models = [("llama3.2:3b", 4096)] + ([("qwen3:8b", ps_ctx)] if ps_ctx else [])
+    _ps(monkeypatch, models)
+    c = _streaming_warm_client(_CountingChat(prompt_tokens), tool_num_ctx=tool_num_ctx)
+    with caplog.at_level("WARNING", logger="domovoi.clients.ollama"):
+        await c.warm_up(TOOLS)
+    assert not [r for r in caplog.records if "tool router's prompt" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_the_context_check_counts_the_cap_the_router_really_uses(monkeypatch, caplog) -> None:
+    """On a server the router isn't streamed on, the cap leaves room for
+    reasoning (1024), and the stock prompt no longer fits 4096 either."""
+    _ps(monkeypatch, [("qwen3:8b", 4096), ("llama3.2:3b", 4096)])
+    c = _streaming_warm_client(_CountingChat(3340))
+    c._route_stream = False
+    with caplog.at_level("WARNING", logger="domovoi.clients.ollama"):
+        await c.warm_up(TOOLS)
+    [record] = [r for r in caplog.records if "tool router's prompt" in r.getMessage()]
+    assert "1024-token reply cap" in record.getMessage()
+    assert "ollama_tool_num_ctx to 8192" in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_plugin_change_schedules_a_router_reread(monkeypatch) -> None:
+    from domovoi.plugins_runtime import installer
+
+    reasons: list[str] = []
+    monkeypatch.setattr(llm_warmup, "schedule_warm_up", lambda reason: reasons.append(reason))
+
+    async def no_resync():
+        return None
+
+    import domovoi.plugins_runtime.letta_resync as letta_resync
+
+    monkeypatch.setattr(letta_resync, "resync_tools", no_resync)
+    await installer._best_effort_resync()
+    assert reasons == ["plugin tools changed"]
 
 
 @pytest.mark.asyncio
@@ -391,7 +510,9 @@ async def test_a_cold_turn_says_so_once_then_answers(monkeypatch) -> None:
         _dry_run_winner,
     )
 
-    said = "who wrote pride and prejudice"
+    # A question the tool model is asked about (a plain who/why question
+    # goes straight to the Q&A model and never needs the tool model).
+    said = "what is the capital of mongolia"
     assert _dry_run_winner(said) is None
     rows: list[dict] = []
 

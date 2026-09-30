@@ -69,7 +69,8 @@ def test_apply_update_harness():
         [BASH, str(HARNESS)],
         capture_output=True,
         text=True,
-        timeout=600,
+        # About 450 s under Git Bash on the dev box, where every fork is slow.
+        timeout=900,
         env={**os.environ, "HARNESS_PYTHON": sys.executable},
     )
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]

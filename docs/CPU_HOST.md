@@ -80,6 +80,75 @@ Drop the `.en` suffix if anyone in the house talks to Domovoi in another
 language; the English-only models are meaningfully faster but will
 mistranscribe rather than switch.
 
+### Short commands decode on a 10-second window
+
+faster-whisper pads every call to a 30-second window, so its encoder —
+most of a CPU decode — does as much work for "stop" as for half a minute
+of speech. With an English-only model (`small.en`, `base.en`, ...), a
+capture of up to 9 seconds, which is every spoken command, is decoded on
+a 10-second window instead (`whisper_short_window_enabled`, on by
+default, applies without a restart): the same model, called directly
+through CTranslate2, with a third of the encoder work. With `small.en` on
+8 CPU threads that takes a command from about 0.9 s to about 0.23 s. A
+multilingual model keeps the 30-second window for everything: it works
+out the language from the window, and on a short one it too often gets
+that wrong.
+
+How well it hears. On a 333-clip corpus of clean TTS recordings the two
+windows got the same number of commands right (221 of 252 tier A/B). On
+the same clips made far-field — simulated room echo (RT60 0.5-0.7 s) and
+pink noise (6-12 dB SNR), three conditions — the 10-second window changed
+about 1 command outcome in 10, net -11 to +5 of 252 depending on the
+noise, almost all between a fast path and the LLM route. How it does on
+real rooms isn't measured yet: that is what the opt-in [command
+recordings](SECURITY_PRIVACY.md#command-recordings-for-tuning-opt-in-per-room)
+are for.
+
+That is why a short-window transcript that would go to the tool router —
+no fast path matches it, it isn't a yes/no, and it isn't a plain question
+the Q&A model takes straight — is **heard a second time** on the
+30-second path before it is routed, and that text is used
+(`whisper_short_window_recheck`, on by default, applies without a
+restart). Such a transcript is most often a command the short decode
+misheard, or a command about to spend 4-7 s in the tool router anyway. A
+fast-path command, a yes/no or a plain question keeps the short window's
+speed, and so does every early commit — and so does a question about the
+world ("What is the capital of France?": ends in a question mark, four
+words or more, nothing about the house, the speaker or the assistant in
+it), which the streamed router gives up on in ~0.7 s: a second decode
+there costs more than the router does, for a question no command was
+misheard as. So does a request for a joke or a story however its article
+was heard ("Tell me it a joke."). A one-word transcript is always heard
+again: that is where it pays most ("Lighter" → "Louder.", "soft" →
+"Stop."). Measured on the same far-field clips (router-level outcome
+right, of 252): 30 s alone / 10 s alone / 10 s with the second hearing —
+202 / 191 / 205, 206 / 201 / 212 and 165 / 170 / 181 over the three
+conditions, 224 / 222 / 227 on the clean clips. It costs a second decode
+(~0.9 s with `small.en` on the reference server, ~1.2 s on a desktop i9;
+more when the 30 s path falls back to higher temperatures on a word it
+can't make out) on 16-34% of those command captures, and it can add a
+wrong fast action: 1-2 in 252 on degraded audio.
+
+A longer capture still takes the 30-second path, and so does a short one
+whose result the 10-second decode isn't sure of — no speech in it, or a
+result faster-whisper itself would have re-decoded at a higher
+temperature — so those cost the short decode plus the full one. The
+boot log says which is in use:
+
+```bash
+journalctl -u domovoi-core | grep 'short-window'
+# Whisper: short-window decoding ready — captures up to 9 s decode on a 10 s window (warm-up 212 ms)
+```
+
+A CTranslate2 too old to take a window shorter than 30 seconds logs
+`short-window decoding is unavailable` instead and runs everything on the
+30-second path. `GET /v1/stats/latency` reports `whisper.short_window`
+(in effect now) and `stt_window` (`{short, full, rechecked}`: how many
+recent turns were decoded on each window, and how many were heard a
+second time). A turn heard twice records `stt_rechecked` and
+`stt_recheck_ms`, its `stt_ms` counts both decodes, and its log line says
+`window=30s/recheck`.
+
 > These are ballparks, not promises — core count, memory bandwidth, and
 > what else the box is doing all move them. Measure yours rather than
 > trusting the table: see [Measuring turn latency](#measuring-turn-latency)
@@ -101,6 +170,23 @@ setting is ignored on `cuda`. The boot log says what was used:
 journalctl -u domovoi-core | grep "loading Whisper"
 # loading Whisper model=small.en device=cpu compute=int8 cpu_threads=8
 ```
+
+Why physical cores and not every hardware thread: measured with
+`small.en` on the 10-second window, eight cores with two threads each
+(an 8-core/16-thread box, like the reference AMD server) went from about
+286 ms at 8 threads to 273 ms at 12 and 275 ms at 16 — the second thread
+on a core shares that core's vector units, so it buys a few percent at
+most. More *cores* do help: on a machine with cores to spare, 12 threads
+beat 10 and 8 (338, 353 and 378 ms). So `0` gives 8 threads on an 8-core
+server and 12 on a 12-core one, and there is nothing to gain from pinning
+more.
+
+One exception: a CPU that mixes fast and slow cores (Intel's P- and
+E-cores). Every thread gets an equal share of each step, so the slowest
+core sets the pace — on a hybrid test box, 12 threads spread over 8 fast
+and 4 slow cores took ~500 ms where 8 threads kept on the fast cores took
+~290. On such a CPU, set `whisper_cpu_threads` to the number of fast
+cores.
 
 ### `qwen2.5:7b` instead of `qwen2.5:14b`
 
@@ -152,7 +238,11 @@ The flag degrades safely in both directions: Domovoi omits it entirely
 when the installed `ollama` client predates the kwarg, and if a server
 rejects it for a model with no thinking mode, the turn is retried once
 without it and the flag latches off for the process. Neither case costs
-you a failed route.
+you a failed route. The routing call's length cap follows it: 256 tokens
+only when `think=false` really went out on a streamed call (Ollama 0.9.0
+or later), 1024 otherwise — with thinking on, the flag latched off, or an
+older server, a hybrid model may reason before its call, and at 256 it
+was cut off mid-thought (4 of 6 LLM-routed commands lost on qwen3:8b).
 
 The Q&A model has its own switch, `ollama_qa_think` (dashboard →
 **Models** → *Q&A model thinks first*). Its default, `default`, sends no
@@ -166,10 +256,19 @@ text chat still sends no `think` flag.
 
 Domovoi sends no `num_ctx` unless you set one, so every call gets the
 Ollama server's default window: 4096 tokens on most hosts, or whatever
-`OLLAMA_CONTEXT_LENGTH` says in Ollama's unit. The routing prompt alone is
-roughly 3.4k tokens before plugins and grows with every plugin, so a
-router that starts missing commands as plugins are added may be running
-out of room. `ollama_tool_num_ctx` (the router) and `ollama_num_ctx` (Q&A
+`OLLAMA_CONTEXT_LENGTH` says in Ollama's unit. The routing prompt is
+about 3,340 tokens with the stock tools (core plus the bundled radio
+plugin) and grows with every plugin that brings a tool: with the five
+sibling plugins that do (jellyfin, kiwix, romm, sleep, ytdlp) it is about
+3,900. The routing call's reply cap (256 tokens, or 1024 where the router
+may reason first — see above) has to fit on top, so with those plugins a
+4096 window is already too small: Ollama cuts the prompt (tools drop out
+of the router's sight) or, on a long reply, shifts it out of its cache
+(the next routed turn re-reads all of it, ~45 s on a CPU). **Raise
+`ollama_tool_num_ctx` to 8192 once you add plugins with tools.** The
+boot warm-up checks: `The tool router's prompt is N tokens ... Set
+ollama_tool_num_ctx to 8192 or more` in the core's log means it doesn't
+fit. `ollama_tool_num_ctx` (the router) and `ollama_num_ctx` (Q&A
 and the dashboard's text chat) set it per role, under dashboard →
 **Models**; 8192 is a sensible first step. Voice picks a change up at
 once; the text chat runs in the dashboard's process and picks it up when
@@ -205,7 +304,10 @@ So on a CPU host:
   it would on a 4090.
 - *"Play the Beatles in the kitchen"* → STT + regex. Fast.
 - *"What's the capital of Mongolia?"* → STT + tool router + Q&A model.
-  This is where you wait.
+  This is where you wait. The router only decides "no tool" (its call is
+  dropped at the first word of plain text it writes, well under a second
+  warm), and a plain who/why/where question, a joke or a story skips it
+  entirely.
 
 The system doesn't feel uniformly slower. It feels instant for the
 hundred things you say daily and thoughtful for the ones you say
@@ -254,6 +356,18 @@ The gap between those lines is how long Whisper took to load. The *first*
 one also downloads the model from Hugging Face, so restart once and time
 the second for a true figure.
 
+The voice-identification encoder and the Piper voices load in the
+background right after boot (the default voice at once, each room's own
+voice when its satellite connects), so the first command after a restart
+doesn't pay for them — before, it paid about 0.6 s for each, and the
+encoder's load stalled every room while it ran:
+
+```bash
+journalctl -u domovoi-core | grep "speech warm-up"
+# speech warm-up: voice encoder ready in 0.7 s
+# speech warm-up: Piper voice en_US-lessac-medium ready in 0.5 s
+```
+
 Ollama's model loads are the exception: they are boot cost only if the
 models *stay* loaded, which is what [Memory budget](#memory-budget) is
 about. A first question that takes most of a minute after a quiet
@@ -267,8 +381,13 @@ journalctl -u domovoi-core | grep 'turn timings'
 # turn timings room=kitchen trigger=wake_word path=fast capture_audio_ms=2130
 #   endpoint_silence_ms=1200 stt_ms=640 stt_wait_ms=0 identify_ms=41 route_ms=22
 #   tts_first_ms=95 total_ms=190 speech_to_reply_ms=1390 stt=reused/1spec
-#   whisper=small.en/cpu/int8/8t
+#   window=10s whisper=small.en/cpu/int8/8t
 ```
+
+`window=10s` means the transcript came from the
+[10-second window](#short-commands-decode-on-a-10-second-window);
+`window=30s`, from faster-whisper's own 30-second one (a long capture, or
+a second hearing).
 
 | Stage | What it measures |
 |---|---|
@@ -276,8 +395,8 @@ journalctl -u domovoi-core | grep 'turn timings'
 | `endpoint_silence_ms` | the silence the satellite waited out after your last word before it stopped listening — `listen.silence_timeout`, give or take a frame |
 | `stt_ms` | the Whisper call whose transcript the turn used — the number this page is mostly about |
 | `stt_wait_ms` | how long the turn actually waited for that transcript after the satellite stopped listening (see below) |
-| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran alongside that decode, so this is only the lookup |
-| `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes |
+| `identify_ms` | voice identification (which household member spoke); with a reused speculative transcript (one at least `voice_profile_min_utterance_sec` long) the voice embedding already ran right after that decode, so this is only the lookup |
+| `route_ms` | the routing transaction: fast path or language model, the handler, the audit writes (a spoken Q&A answer: up to its first sentence, which starts playing while the rest is written) |
 | `tts_first_ms` | the first sentence of the reply, synthesized and on its way to the satellite |
 | `total_ms` | end of speech (the satellite's `utterance_end`) to the first reply audio |
 | `speech_to_reply_ms` | your last word to the first reply audio: `endpoint_silence_ms + total_ms`. The number you feel. |
@@ -320,22 +439,42 @@ becomes the turn's `endpoint_silence_ms`; the turn's log line carries
 "volume up", "what's playing") needs 350 ms of silence, tier B (a timer or
 reminder with a duration, "volume 40", the clock, one-word commands) 650
 ms (`early_commit_hold_a_ms`, `early_commit_hold_b_ms`). On a CPU-only
-server the decode itself usually takes longer than either hold, so in
-practice the capture ends when the transcript is ready: about
-`240 ms + stt_ms` after your last word instead of `silence_timeout +
-stt_ms` before this release. For "set a timer for ten minutes" on an
-8-core server with small.en that is roughly 0.8-1.2 s to the end of
-listening plus 0.2-0.4 s to the first reply audio (`speech_to_reply_ms`);
-getting under a second needs a faster decode (base.en, a GPU, or a
-dedicated fast recognizer for simple commands).
+server a 30-second-window decode takes longer than either hold (small.en:
+~0.9 s), so the transcript isn't ready until the satellite has stopped
+listening anyway and early commit can't fire. The
+[10-second window](#short-commands-decode-on-a-10-second-window) brings
+that decode to ~0.25 s: the transcript is ready about 0.5 s after your
+last word, the capture ends at the tier's hold, and the reply starts
+roughly 0.15 s after that (`speech_to_reply_ms`). Expected: about
+0.6-0.7 s for a tier-A phrase and 0.8 s for tier B on the reference
+8-core server — measured on a desktop through a simulated satellite, not
+yet on the server — and only if the satellite's pause report arrives on
+time. The decode must finish inside the satellite's own silence timeout
+(0.78 s with `silence_timeout` 0.8): 240 ms for the pause plus ~280 ms of
+decode leaves about 260 ms for the pause to be late. A satellite from
+before 2026-09-30 is later than that on a short command after the wake
+greeting (300-420 ms measured), so short commands from such a satellite
+mostly won't commit early until it is upgraded: see
+[When the early transcript starts late](#when-the-early-transcript-starts-late).
 
-Whatever is said after the hold is lost ("set a timer for ten minutes …
-for the pasta" gets no label). When the satellite heard speech after the
-core stopped listening, the core logs `early commit … cut in on speech`
-and records `post_commit_voiced_ms` on the turn; the summary's
-`early_commit` block counts them (`cut_in`). If a room sees those, turn
-the room's **Stop listening early on a whole command** off (satellite
-Listening settings), or `early_commit_tier_b` off for the whole house.
+Whatever is said after the capture ends is lost ("set a timer for ten
+minutes … for the pasta" gets no label). A tier-A command can end at
+about 0.5-0.6 s of silence and a tier-B one at 0.66 s, where the satellite
+alone would have waited 0.78 s — a pause between those is the new risk.
+When the person was still talking, the core logs `early commit … cut in on
+speech` and records it on the turn: `post_commit_voiced_ms` (speech in
+the frames already on their way when the satellite stopped — only the
+first 30-90 ms) and, from a satellite from 2026-09-30 on,
+`post_commit_resume_ms` — such a satellite keeps listening, silently,
+until its own silence timeout would have ended the capture
+(`post_commit_listened_ms` says how far past the stop it heard) and
+reports whether speech came back. The summary's `early_commit` block
+counts them (`cut_in`), and `watched` says how many of the commits had a
+satellite listening on: for the rest `cut_in` is a lower bound — a pause
+longer than ~90 ms that was cut off is invisible. If a room sees cut-ins,
+turn the room's **Stop listening early on a whole command** off
+(satellite Listening settings), or `early_commit_tier_b` off for the
+whole house.
 
 The same stages are stored on each turn's `intents_log` row
 (`timings`, a JSON column; migration V015), and the dashboard's **Models**
@@ -352,12 +491,15 @@ Whisper settings, so the numbers are all from the settings now running
 (`whisper_seen` in the answer lists the settings the window covers).
 `speculative` in the answer is `{turns, reused, decodes}`: turns that had
 an early transcript, how many used it, and how many speculative decodes
-were started; `early_commit` is `{turns, A, B, cut_in}` for the captures
-the core ended early.
+were started; `early_commit` is `{turns, A, B, cut_in, watched}` for the
+captures the core ended early (see above: `cut_in` is exact only for the
+`watched` ones); `stt_window` is `{short, full, rechecked}`, the turns
+decoded on each window and how many were heard a second time.
 
 `intents_log.latency_ms` is **not** the whole turn. It is the router's
 share only: its clock starts after speech-to-text has finished and stops
-before any reply audio exists. It is still the useful number next to
+before any reply audio exists (for a spoken Q&A answer, at its first
+sentence: the rest is written while that one plays). It is still the useful number next to
 `matched_path`, which tells you whether a turn took a regex fast path or
 went through the language models:
 
@@ -368,6 +510,33 @@ docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, 
 Compare the two paths and you can see exactly what the LLM costs on your
 hardware — which is the number that should drive your model choices, not
 the table above.
+
+#### When the early transcript starts late
+
+The early transcript should start at the satellite's pause, about 240 ms
+after your last word. `capture_timing.decode_start_ms` in the answer says
+when it did (per turn it is on the row, and the turn's log line carries
+`decode_start_ms=… pause_rx_lag_ms=… sat_start_backlog_ms=…`). When it is
+well past 240, the other keys say who held it up:
+
+* `sat_start_backlog_ms` / `sat_pause_backlog_ms` past a frame or two
+  (30-60 ms): the satellite itself was behind — the person was talking while it was still busy, and
+  the capture went out in a burst. (Before 2026-09-30 every satellite is
+  expected to do this after the wake greeting: its wake model's reset runs
+  the embedding model over 4 s of noise, 26-29 wake predictions' worth —
+  about 0.1 s on a desktop i9, and by that ratio over a second on a Pi Zero
+  2 W, though that is not measured on a Pi yet. Upgrade the satellite; an
+  upgraded one reports `sat_start_backlog_ms`, which should then read
+  0-60.)
+* `frame_lag_max_ms` / `pause_net_ms` high with no satellite backlog: the
+  network held the frames up (Wi-Fi power save, a weak link) — or the
+  core itself: frames and pauses are stamped when the core's receive loop
+  reads them, so a stall of the core's event loop shows up here too. If
+  every room lags at the same moments, it is the core, not the network.
+* `decode_wait_ms` / `pause_to_decode_ms` high: the core — the room's
+  decoder was busy with an earlier copy (its decode, or the voice
+  embedding that follows it). `stt_decode_wait_ms` is the same
+  wait for the turn's own decode, which `stt_ms` leaves out.
 
 ### The streaming fast lane
 
@@ -493,7 +662,10 @@ other half: Domovoi loads both voice models itself, in the background, when
 the core starts and again after a model, keep-alive or context-window
 change (`ollama_warmup`, dashboard → **Models** → *Load models ahead of
 time*), router prompt included, so the first question after a restart is a
-warm one. When a question does find a model unloaded anyway (Ollama
+warm one. The router prompt is read again at every boot and after a plugin
+is installed, enabled, disabled or removed even when the models are
+already loaded: a deploy that changed a tool's schema would otherwise leave
+the whole ~3.4k-token prompt (~45 s here) to the next routed question. When a question does find a model unloaded anyway (Ollama
 restarted, or another model pushed it out of memory), the satellite says
 "Just a moment, I'm waking up my language model." (`ollama_cold_start_notice`)
 and that call gets `ollama_load_timeout_sec` (300 s) instead of the ordinary

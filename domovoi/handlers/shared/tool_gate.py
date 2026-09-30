@@ -10,18 +10,122 @@ bare knowledge question?". Keeping the pattern here means the two gates
 that use it can't drift apart — a handler added to the withhold list
 later gets exactly the openers that were measured, not a fresh
 approximation of them.
+
+The router asks the same question one level up (``answers_without_tools``):
+a plain question about the world, or a request for a joke or a story, is
+not shown to the tool model at all — it goes straight to the Q&A model.
+That is cheaper than offering it a trimmed tool list (no router call, and
+no change to the tool list whose prompt prefix Ollama caches), and no
+bait tool is on offer to be picked.
 """
 
 from __future__ import annotations
 
 import re
 
+# The polite wrappers Whisper transcribes in full ("tell me who wrote the
+# odyssey"). They carry "me"/"you", so the cue search below skips them.
+_LEAD_IN = r"(?:(?:tell me|do you know|do you happen to know|any idea|i wonder)[,\s]+)?"
+
 # Question openers that never front a command. Deliberately NOT "what",
 # "how", "when": those front real handler turns ("what is a third of
 # ninety", "how many songs do i have", "what did i add today", "when is
-# thanksgiving"). The optional lead-in matches the polite wrappers
-# Whisper transcribes in full ("tell me who wrote the odyssey").
-KNOWLEDGE_QUESTION_RE = re.compile(
-    r"^(?:(?:tell me|do you know|do you happen to know|any idea|i wonder)[,\s]+)?"
-    r"(?:who|whose|whom|why|where)\b"
+# thanksgiving").
+KNOWLEDGE_QUESTION_RE = re.compile(r"^" + _LEAD_IN + r"(?:who|whose|whom|why|where)\b")
+_LEAD_IN_RE = re.compile(r"^" + _LEAD_IN)
+
+# Anything that could make an utterance a question ABOUT THE COLLECTION
+# rather than about the world: a media noun, or an ownership/curation
+# verb. Generous on purpose — a false positive only means the library
+# schema is offered to the tool model, exactly as it always was.
+MUSIC_CUE_RE = re.compile(
+    r"\b(?:"
+    r"librar\w*|collection|music|song|songs|track|tracks|album|albums"
+    r"|artist\w*|band|bands|record|records|recording\w*|playlist\w*"
+    r"|discograph\w*|mp3|vinyl|cover|covers|remix\w*"
+    r"|sing|sings|singer\w*|sang|sung|perform\w*|play\w*"
+    r"|have|got|own|owns|downloaded|saved|added|add"
+    r")\b"
 )
+
+# What makes a question about THIS household rather than about the world:
+# the speaker or the assistant ("my", "you"), something pointed at
+# ("this", "that", "it"), or the name of something Domovoi runs (plus
+# MUSIC_CUE_RE). Any one of them sends the utterance to the tool model as
+# before — "why is the wifi so slow", "where did I leave off", "who sings
+# creep". Kept to words that rarely turn up in trivia: a false positive
+# only costs a router call.
+_ABOUT_THE_HOUSE_RE = re.compile(
+    r"\b(?:"
+    # the speaker, the household, the assistant
+    r"i|i'm|im|i've|i'd|i'll|me|my|mine|myself|we|we're|our|ours|us"
+    r"|you|your|yours|you're|youre|yourself|domovoi"
+    # something pointed at
+    r"|this|that|that's|these|those|here|it|its|it's"
+    # what Domovoi runs
+    r"|wi-?fi|internet|network|speakers?|satellites?|volume|timers?|alarms?"
+    r"|reminders?|remind|notes?|memos?|news|headlines?|briefing"
+    r"|podcasts?|episodes?|audiobooks?|chapters?|radio|stations?|server|homelab"
+    r"|rooms?|kitchen|bedroom|bathroom|office|garage|basement|living room"
+    r"|upstairs|downstairs|intercom|home|doors?|doorbell|cameras?"
+    r"|everyone|everybody|anyone|anybody|listen\w*"
+    r")\b"
+)
+
+# A request for something to listen to that only the Q&A model makes up:
+# a joke, a riddle, a fun fact, a story, a poem — or an explanation
+# ("explain how a rainbow forms"). The article is required for the
+# singular, so "tell me the stories" (the news) stays a routed turn.
+_QA_REQUEST_RE = re.compile(
+    r"^(?:tell|give|say|share)(?: me| us)?\s+"
+    r"(?:"
+    r"(?:a|an|another|one more|one|some|any)\s+(?:\w+\s+){0,2}?"
+    r"(?:joke|jokes|riddle|riddles|pun|puns|fact|facts|story|poem|limerick|tongue twister)"
+    r"|something (?:interesting|funny|fun|random|cool|amazing|surprising)"
+    r")"
+    r"(?:\s+(?:about|on|with|involving|featuring)\s+.+)?$"
+    r"|^make (?:me|us) laugh$"
+    r"|^(?:explain|describe)\s+(?:how|why|what|the|a|an)\b.+$"
+)
+
+
+def about_the_house(text: str) -> bool:
+    """Whether ``text`` (normalized) is about this household rather than
+    the world: the speaker or the assistant, something pointed at, or
+    something Domovoi runs. A music word counts too: "who sings creep" is a
+    library turn."""
+    return bool(_ABOUT_THE_HOUSE_RE.search(text) or MUSIC_CUE_RE.search(text))
+
+
+
+def is_plain_knowledge_question(transcript: str) -> bool:
+    """A who/whose/whom/why/where question about the world: "who wrote the
+    odyssey", "why is the sky blue", "tell me where the eiffel tower is".
+    ``transcript`` is normalized the way fast paths see it. The lead-in is
+    left out of the cue search (it is "tell me", "do you know")."""
+    if not KNOWLEDGE_QUESTION_RE.match(transcript):
+        return False
+    question = transcript[_LEAD_IN_RE.match(transcript).end():]
+    return not about_the_house(question)
+
+
+def is_plain_qa_request(transcript: str) -> bool:
+    """"tell me a joke", "give me a fun fact", "tell me a story about a
+    dragon", "explain how a rainbow forms": something to say that no tool
+    provides."""
+    m = _QA_REQUEST_RE.match(transcript)
+    if m is None:
+        return False
+    # Skip "tell me" / "give us" before looking for cues.
+    rest = re.sub(r"^(?:tell|give|say|share|make|explain|describe)(?: me| us)?\s+", "", transcript)
+    return not about_the_house(rest)
+
+
+def answers_without_tools(transcript: str) -> bool:
+    """Whether the router should hand ``transcript`` (normalized, filler
+    stripped) straight to the Q&A model without asking the tool model.
+    True only for a plain knowledge question or a plain request for a
+    joke, fact or story — the utterances no tool is for, and the ones a
+    small tool model most often answers itself (or baits on) instead of
+    saying "no tool"."""
+    return is_plain_knowledge_question(transcript) or is_plain_qa_request(transcript)

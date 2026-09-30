@@ -121,6 +121,17 @@ async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str
     return await _ps_or_none(base_url, timeout) or []
 
 
+def _parse_ollama_version(text: Any) -> tuple[int, int, int] | None:
+    """``"0.34.2"`` → ``(0, 34, 2)``; a pre-release suffix ("0.9.1-rc0") is
+    ignored. None for anything else, and for ``0.0.0``, which is what a
+    source build of Ollama reports: that says nothing about its features."""
+    m = re.match(r"^\s*v?(\d+)\.(\d+)(?:\.(\d+))?", str(text or ""))
+    if m is None:
+        return None
+    version = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+    return None if version == (0, 0, 0) else version
+
+
 def _model_key(name: str | None) -> str:
     """A model name as Ollama reports it: lower case, ``:latest`` when no
     tag was given ("llama3.2" → "llama3.2:latest")."""
@@ -283,6 +294,26 @@ VOICE_QA_SYSTEM_PROMPT = (
 )
 
 
+def voice_qa_system_prompt(profile_prefix: str | None = None) -> str:
+    """The spoken Q&A system prompt, with the speaker's profile blob (their
+    memories, favorites, preferences) AFTER the fixed instructions. Ollama
+    reuses a prompt's cached start up to the first token that differs, and
+    the profile differs by speaker (or is absent): in front, a change of
+    speaker re-read the instructions too; behind, they stay cached for
+    everyone. That is all it saves: the conversation history still comes
+    after the profile and is re-read on a change of speaker — measured
+    2026-09-30 on llama3.2:3b, 76 of 263 prompt tokens kept against 21
+    before, about 55 tokens (~0.2 s on a CPU host). Sending the profile as
+    a second system message after the history would keep the history
+    cached as well, but llama3.2's Ollama template renders every system
+    message at the top (it has no place for one between turns), so it
+    would land exactly where it is now."""
+    prompt = VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name)
+    if profile_prefix and profile_prefix.strip():
+        prompt += "\n\n" + profile_prefix.strip()
+    return prompt
+
+
 # System prompt for the tool-routing call (``RealOllamaClient.route``).
 #
 # The router runs at temperature 0 with every handler's schema on offer,
@@ -316,6 +347,91 @@ ROUTER_SYSTEM_PROMPT = (
     "units or dates to compute with. When no tool clearly fits, "
     "respond with plain text and no tool call."
 )
+
+# The routing call's length cap (``RealOllamaClient._route_options``). The
+# longest tool call in the routing corpus is ~40 tokens (a reminder with
+# its text and time); 256 leaves room for a long dictated argument. It is
+# used only when the model is known not to reason first: a streamed call
+# (Ollama 0.9.0+) that sent ``think=false``. Anywhere else a hybrid model
+# such as qwen3 may reason before its call — the ``think`` flag latched off
+# after a rejection, or a server too old to be sent it — and the reasoning
+# counts against the cap: at 256, 4 of 6 LLM-routed commands (qwen3:8b,
+# think left out, measured 2026-09-30) stopped mid-thought with no call and
+# fell through to Q&A after 35-50 s. Those get the larger cap.
+#
+# With the stock tool list the router's prompt is ~3,340 tokens, so prompt
+# + 256 fits a 4096-token context (a CPU host's Ollama default). Every
+# plugin tool adds to the prompt: with the five sibling plugins that bring
+# tools it is ~3,900, and prompt + cap no longer fits — raise
+# ``ollama_tool_num_ctx`` (docs/CPU_HOST.md). The warm-up logs a warning
+# when it sees that (``RealOllamaClient._check_router_context``).
+ROUTER_NUM_PREDICT = 256
+ROUTER_THINK_NUM_PREDICT = 1024
+# The oldest Ollama the routing call is streamed on. 0.8.0 (May 2025) was
+# the first to stream tool calls — sent parsed, their tokens held back from
+# the text; 0.9.0 added the `think` flag, without which a hybrid model such
+# as qwen3 reasons in the text before its call. Older servers get the plain
+# request, capped.
+ROUTER_STREAM_MIN_OLLAMA = (0, 9, 0)
+
+
+def _field(obj: Any, name: str) -> Any:
+    """``obj[name]`` for a dict, ``obj.name`` for ollama-python's typed
+    objects; None when there is no such field."""
+    if obj is None:
+        return None
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+def _message_of(response: Any) -> Any:
+    return _field(response, "message")
+
+
+def _first_tool_call(message: Any) -> dict[str, Any] | None:
+    """``{"handler", "args"}`` for the first tool call in a reply message."""
+    tool_calls = _field(message, "tool_calls")
+    if not tool_calls:
+        return None
+    func = _field(tool_calls[0], "function")
+    name = _field(func, "name")
+    if not name:
+        return None
+    return {"handler": name, "args": _field(func, "arguments") or {}}
+
+
+def _plain_text_started(content: str) -> bool:
+    """Whether the router's streamed text so far means no tool call is
+    coming: anything but whitespace or a ``<think>`` block. Only the
+    streamed call asks, and only Ollama 0.9.0 or later gets one
+    (``ROUTER_STREAM_MIN_OLLAMA``), whose parser holds a real tool call
+    back from the text and sends it parsed. Text that merely looks like a
+    call is not one — nothing reads a call out of the text — so it isn't
+    waited out either: qwen3:8b wrote '{"name": "calculator", ...' as plain
+    text for "can penguins fly?" and read to its end, the router took 6.6 s
+    against ~0.9 s for other questions, for the same Q&A answer (measured
+    2026-09-30)."""
+    text = content.lstrip()
+    if text.startswith("<think>") or "<think>".startswith(text):
+        # Reasoning left in the text (a thinking model on a server that
+        # doesn't separate it): judge what comes after it.
+        end = text.find("</think>")
+        if end < 0:
+            return False
+        text = text[end + len("</think>"):].lstrip()
+    return bool(text)
+
+
+async def _close_stream(stream: Any) -> None:
+    """Close an ollama-python response stream early. Its HTTP response is
+    opened inside the generator, so closing the generator closes the
+    connection, and Ollama stops generating for a client that left."""
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception as e:  # noqa: BLE001 — the answer is already in hand
+        log.debug("closing the router stream: %s", e)
 
 
 # What ``qa_with_uncertainty`` hands the router: the spoken answer, plus
@@ -551,6 +667,13 @@ class OllamaClient(Protocol):
         profile_prefix: str | None = None,
     ) -> QAWithUncertainty: ...
 
+    def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]: ...
+
     async def extract_search_subject(
         self,
         transcript: str,
@@ -606,6 +729,17 @@ class OllamaStubClient:
             needs_verification=False,
             candidate_claim="",
         )
+
+    async def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]:
+        # The same text qa_with_uncertainty answers, in two pieces.
+        prefix_tag = f" [profile: {profile_prefix}]" if profile_prefix else ""
+        yield "(stub qa) I heard: "
+        yield f"{transcript}{prefix_tag}"
 
     async def extract_search_subject(
         self,
@@ -731,6 +865,9 @@ class RealOllamaClient:
     _url: str | None = None
     _cold_twin: "RealOllamaClient | None" = None
     _tool_keep_alive: str | int | float | None = None
+    # Whether the routing call is streamed (see `_route_streams`): None
+    # until the server's version has been read, then fixed for this client.
+    _route_stream: bool | None = None
 
     def __init__(
         self,
@@ -796,6 +933,15 @@ class RealOllamaClient:
 
         `tool_schemas` is a list of handler tool schemas in Ollama's expected
         function-calling format. We wrap each in `{"type": "function", "function": schema}`.
+
+        None means "no tool": the QA model answers instead, so any plain
+        text the router writes is thrown away. On a CPU host that text was
+        most of a question's wait — qwen3:8b answered "tell me a joke"
+        itself (21-42 tokens, 3-5 s) and "tell me about the history of
+        Rome" at 300 tokens (~48 s) before llama3.2:3b answered it again.
+        So the call is streamed and dropped at the first word of plain
+        text (see ``_stream_route``), and its length is capped either way
+        (``_route_options``).
         """
         if not tool_schemas:
             return None
@@ -803,27 +949,174 @@ class RealOllamaClient:
         tools = [{"type": "function", "function": s} for s in tool_schemas]
 
         try:
-            response = await self._route_chat(transcript, tools)
+            message = await self._route_message(transcript, tools)
         except Exception as e:
             log.warning("ollama route failed: %s — falling through to qa", e)
             return None
+        return _first_tool_call(message)
 
-        message = response.get("message") if isinstance(response, dict) else getattr(response, "message", None)
-        if message is None:
-            return None
-        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
-        if not tool_calls:
-            return None
+    # ── the routing call: streamed, dropped at the first word of text ────
 
-        first = tool_calls[0]
-        func = first.get("function") if isinstance(first, dict) else getattr(first, "function", None)
-        if func is None:
+    async def _route_message(self, transcript: str, tools: list[dict[str, Any]]) -> Any:
+        """The router's reply message (``{"tool_calls", "content"}`` when
+        streamed, the server's own message when not), with the one-time
+        retries ``_route_chat`` and ``_chat`` make for a rejected ``think``
+        or ``keep_alive`` — here also for a streamed call, where the
+        rejection only surfaces once the stream is read. Each retry
+        latches one flag off, so this goes round at most twice more."""
+        stream = await self._route_streams()
+        while True:
+            try:
+                if not stream:
+                    response = await self._chat_for_route(
+                        transcript, tools, send_think=self._send_think,
+                        extra_options=self._route_options(),
+                    )
+                    return _message_of(response)
+                return await self._stream_route(transcript, tools)
+            except Exception as e:
+                if self._send_think and self._looks_like_think_rejection(e):
+                    log.info(
+                        "tool model %s rejected the 'think' flag (%s) — retrying "
+                        "without it and disabling it for this client",
+                        self._tool_model, e,
+                    )
+                    self._send_think = False
+                elif stream and self._send_keep_alive and self._looks_like_keep_alive_rejection(e):
+                    self._disable_keep_alive(e)
+                else:
+                    raise
+
+    def _route_options(self) -> dict[str, Any]:
+        """``num_predict`` for the routing call. A tool call is 20-40
+        tokens, so where the model is known not to reason first — a
+        streamed call (``_route_streams``: Ollama 0.9.0+) sent with
+        ``think=false`` — the tight cap only ever stops text nobody reads.
+        Without a cap that tail was bounded only by the 120 s read timeout,
+        and a long one pushed the ~3.4k-token prompt past a 4096-token
+        context: Ollama then shifts the context and drops the cached tool
+        prefix, and the next routed turn pays the whole prefill again
+        (~45 s on a CPU host).
+
+        Anywhere else reasoning may come first, and it counts against the
+        cap: thinking asked for, the flag latched off after the server
+        rejected it, or a server too old to be sent it (or streamed). There
+        256 cut a hybrid model off mid-thought, before its call — a lost
+        command — so those get ``ROUTER_THINK_NUM_PREDICT``."""
+        think_off = (
+            self._route_stream is True and self._send_think and self._tool_think is False
+        )
+        return {"num_predict": ROUTER_NUM_PREDICT if think_off else ROUTER_THINK_NUM_PREDICT}
+
+    async def _route_streams(self) -> bool:
+        """Whether the routing call can be streamed and dropped early: only
+        on an Ollama known to stream tool calls and to take ``think``
+        (``ROUTER_STREAM_MIN_OLLAMA``). Older servers differ in ways that
+        matter here: 0.5.x held a streamed reply back until it was whole
+        (streaming saves nothing), and 0.3.x streamed a tool call as raw
+        text and never parsed it (streaming would lose every command). A
+        server that can't be asked, or reports no usable version, gets the
+        plain request, as before. Asked once per client; a failed probe is
+        asked again on the next turn."""
+        if self._route_stream is not None:
+            return self._route_stream
+        version = await self._server_version()
+        if version is None:
+            return False
+        self._route_stream = version >= ROUTER_STREAM_MIN_OLLAMA
+        if not self._route_stream:
+            log.info(
+                "Ollama %s streams no tool calls (needs %s) — the router waits for "
+                "each whole reply, capped at %d tokens: a question can wait 30-45 s "
+                "on a CPU host for text nobody reads. Upgrade Ollama to stop it early.",
+                ".".join(map(str, version)),
+                ".".join(map(str, ROUTER_STREAM_MIN_OLLAMA)),
+                ROUTER_THINK_NUM_PREDICT,
+            )
+        return self._route_stream
+
+    async def _server_version(self) -> tuple[int, int, int] | None:
+        """``GET /api/version`` → (major, minor, patch), None when it can't
+        be had. Goes through the ollama client's own HTTP client when it has
+        one (same host, same transport), else a short-lived one."""
+        if self._url is None:
             return None
-        name = func.get("name") if isinstance(func, dict) else getattr(func, "name", None)
-        args = func.get("arguments") if isinstance(func, dict) else getattr(func, "arguments", {})
-        if not name:
+        inner = getattr(self._client, "_client", None)
+        try:
+            if inner is not None and hasattr(inner, "get"):
+                resp = await inner.get("/api/version", timeout=2.0)
+            else:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=2.0) as c:
+                    resp = await c.get(f"{_ollama_base(self._url)}/api/version")
+            resp.raise_for_status()
+            version = resp.json().get("version")
+        except Exception as e:  # noqa: BLE001 — unknown version, not a failure
+            log.debug("ollama /api/version failed: %s", e)
             return None
-        return {"handler": name, "args": args or {}}
+        return _parse_ollama_version(version)
+
+    async def _stream_route(self, transcript: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
+        """Stream the routing call and stop reading — which closes the
+        connection, and Ollama stops generating — as soon as the answer is
+        known: the first tool call (Ollama sends it whole, and nothing
+        after it is used), or the first word of plain text, which means
+        "no tool". Measured on qwen3:8b, CPU-only, the live tool list:
+        plain text starts ~0.6-0.7 s into a warm call, against 1-48 s for
+        the whole throwaway answer; tool calls come with no text before
+        them. Text that starts like a tool call written out as text (an
+        old or unparsed template) is read to the end, as before."""
+        extra: dict[str, Any] = {"think": self._tool_think} if self._send_think else {}
+        stream = await self._chat(
+            model=self._tool_model,
+            messages=self._route_messages(transcript),
+            tools=tools,
+            stream=True,
+            options=self._route_chat_options(self._route_options()),
+            **extra,
+        )
+        if not hasattr(stream, "__aiter__"):
+            # A client that answered in one piece after all.
+            return _message_of(stream)
+        content = ""
+        try:
+            async for chunk in stream:
+                message = _message_of(chunk)
+                calls = _field(message, "tool_calls")
+                if calls:
+                    return {"tool_calls": list(calls), "content": content}
+                content += _field(message, "content") or ""
+                if _plain_text_started(content):
+                    return {"tool_calls": [], "content": content}
+                if _field(chunk, "done"):
+                    break
+        finally:
+            await _close_stream(stream)
+        return {"tool_calls": [], "content": content}
+
+    @staticmethod
+    def _route_messages(transcript: str) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ]
+
+    def _route_chat_options(self, extra_options: dict[str, Any] | None) -> dict[str, Any]:
+        # Deterministic, best-guess routing. Intent classification wants the
+        # model's single most-likely tool for a given transcript, not sampled
+        # variety — at Ollama's default temperature (0.8) the same utterance
+        # routes inconsistently (observed: a lightly-garbled "…play the new
+        # TI song" routed to `music` on some calls and declined to plain text
+        # on others). temperature=0 makes a transcript route the same way
+        # every time and biases toward acting on borderline commands instead
+        # of randomly bailing to the QA fallthrough. num_ctx only when
+        # ollama_tool_num_ctx is set.
+        return {
+            "temperature": 0,
+            **_num_ctx_options(self._tool_num_ctx),
+            **(extra_options or {}),
+        }
 
     async def _route_chat(
         self,
@@ -929,32 +1222,12 @@ class RealOllamaClient:
         extra: dict[str, Any] = {"think": self._tool_think} if send_think else {}
         return await self._chat(
             model=self._tool_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": ROUTER_SYSTEM_PROMPT,
-                },
-                {"role": "user", "content": transcript},
-            ],
+            messages=self._route_messages(transcript),
             tools=tools,
             stream=False,
-            # Deterministic, best-guess routing. Intent classification
-            # wants the model's single most-likely tool for a given
-            # transcript, not sampled variety — at Ollama's default
-            # temperature (0.8) the same utterance routes inconsistently
-            # (observed: a lightly-garbled "…play the new TI song" routed
-            # to `music` on some calls and declined to plain text on
-            # others). temperature=0 makes a transcript route the same
-            # way every time and biases toward acting on borderline
-            # commands instead of randomly bailing to the QA fallthrough.
-            # num_ctx only when ollama_tool_num_ctx is set.
-            options={
-                "temperature": 0,
-                **_num_ctx_options(self._tool_num_ctx),
-                **(extra_options or {}),
-            },
+            options=self._route_chat_options(extra_options),
             **extra,
-            )
+        )
 
     # ── the QA-model calls' optional knobs ───────────────────────────────
 
@@ -1038,6 +1311,12 @@ class RealOllamaClient:
             stream = await self._chat(
                 model=self._qa_model, messages=messages, stream=True, **self._qa_extras()
             )
+            if not hasattr(stream, "__aiter__"):
+                # A client that answered in one piece after all.
+                content = self._chunk_content(stream)
+                if content:
+                    yield content
+                return
             try:
                 async for chunk in stream:
                     content = self._chunk_content(chunk)
@@ -1099,13 +1378,12 @@ class RealOllamaClient:
         the answer says (see ``domovoi.uncertainty``).
 
         ``profile_prefix`` is the speaker's memories + favorites + prefs
-        blob, prepended to the system prompt so answers can lean on
-        personal context.
+        blob, added to the system prompt so answers can lean on personal
+        context — AFTER the fixed instructions (``voice_qa_system_prompt``).
         """
-        system_prompt = VOICE_QA_SYSTEM_PROMPT.format(bot=settings.bot_name)
-        if profile_prefix:
-            system_prompt = profile_prefix.rstrip() + "\n\n" + system_prompt
-        messages = self._build_messages(transcript, system_prompt, history)
+        messages = self._build_messages(
+            transcript, voice_qa_system_prompt(profile_prefix), history
+        )
         text, problem = "", "empty"
         for attempt in (1, 2):
             try:
@@ -1139,6 +1417,20 @@ class RealOllamaClient:
         elif problem is not None:
             text = ""
         return QAWithUncertainty(answer=text, needs_verification=False)
+
+    def stream_voice_answer(
+        self,
+        transcript: str,
+        history: list[dict[str, str]] | None = None,
+        profile_prefix: str | None = None,
+    ) -> AsyncIterator[str]:
+        """The spoken answer as it is written: :meth:`stream_qa` with the
+        prompt :meth:`qa_with_uncertainty` uses. The checks that turn a
+        stream into speakable sentences (retry on nothing usable, never a
+        cut tail) are domovoi.spoken_answer's."""
+        return self.stream_qa(
+            transcript, system_prompt=voice_qa_system_prompt(profile_prefix), history=history,
+        )
 
     # ── cold starts: what's loaded, a long-timeout twin, the warm-up ─────
 
@@ -1225,23 +1517,74 @@ class RealOllamaClient:
         num_ctx would only make Ollama load it again), the router's system
         prompt and tool list included so that prefix is already processed.
         One generated token each. Returns the models it loaded, [] when
-        both were already loaded, None when Ollama couldn't be asked."""
+        both were already loaded, None when Ollama couldn't be asked.
+
+        The router's prompt is read again even when its model is loaded:
+        a deploy that changed the routing prompt or any tool's schema, a
+        plugin enabled or disabled, leaves Ollama holding the old prefix,
+        and the first routed turn after it would re-read ~3.4k tokens
+        (~45 s on a CPU host) while someone waits. With the prefix
+        unchanged this costs a few tokens. The Q&A model is only warmed
+        when cold: its cached prompt may hold a room's conversation."""
         cold = await self.cold_models("tool", "qa")
-        if not cold:
-            return cold
+        if cold is None:
+            return None
+        # Learn now, not on the first turn, whether routing can stream.
+        await self._route_streams()
         twin = self.for_cold_start()
         loaded: list[str] = []
-        if self._tool_model in cold and tool_schemas:
-            await twin._warm_tool_model(tool_schemas)
-            loaded.append(self._tool_model)
+        if tool_schemas:
+            reply = await twin._warm_tool_model(tool_schemas)
+            await self._check_router_context(reply)
+            if self._tool_model in cold:
+                loaded.append(self._tool_model)
         if self._qa_model in cold and self._qa_model not in loaded:
             await twin._warm_qa_model()
             loaded.append(self._qa_model)
         return loaded
 
-    async def _warm_tool_model(self, tool_schemas: list[dict[str, Any]]) -> None:
+    async def _warm_tool_model(self, tool_schemas: list[dict[str, Any]]) -> Any:
         tools = [{"type": "function", "function": s} for s in tool_schemas]
-        await self._route_chat("hello", tools, extra_options={"num_predict": 1})
+        return await self._route_chat("hello", tools, extra_options={"num_predict": 1})
+
+    async def _check_router_context(self, reply: Any) -> None:
+        """Warn when the router's prompt, with its reply cap on top, is more
+        than the tool model's context window. The prompt grows with every
+        plugin tool: ~3,340 tokens with the stock list, ~3,900 with the five
+        sibling plugins that bring tools, against the 4096 a CPU host's
+        Ollama runs with by default. Past the window Ollama cuts the prompt
+        (tools lost from the router's sight), or shifts it out of its cache
+        on a long reply (the next routed turn re-reads all of it, ~45 s on a
+        CPU). The warm-up's own prompt is the router's (the system prompt
+        and the same tool list) with "hello" for the transcript, and
+        Ollama reports its whole length, cached or not. Only a warning:
+        nothing here changes a setting."""
+        prompt = _field(reply, "prompt_eval_count")
+        if not isinstance(prompt, int) or isinstance(prompt, bool) or prompt <= 0:
+            return
+        window = self._tool_num_ctx
+        if window is None:
+            loaded = await _ps_or_none(self._url, 2.0) if self._url else None
+            key = _model_key(self._tool_model)
+            for entry in loaded or []:
+                if not isinstance(entry, dict):
+                    continue
+                if key in (_model_key(entry.get("name")), _model_key(entry.get("model"))):
+                    window = _positive_int(entry.get("context_length"))
+                    break
+        if not window:
+            return
+        cap = int(self._route_options()["num_predict"])
+        if prompt + cap <= window:
+            return
+        suggested = 1 << (prompt + cap - 1).bit_length()
+        log.warning(
+            "The tool router's prompt is %d tokens with its current tool list; with "
+            "its %d-token reply cap that is more than the %d-token context %s runs "
+            "with, so Ollama will cut the prompt or drop it from its cache on a "
+            "long reply. Set ollama_tool_num_ctx to %d or more (docs/CPU_HOST.md).",
+            prompt, cap, window, self._tool_model, suggested,
+        )
 
     async def _warm_qa_model(self) -> None:
         await self._qa_chat(

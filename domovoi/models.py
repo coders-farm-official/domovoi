@@ -104,6 +104,12 @@ class Context(BaseModel):
     # stamps it on a voice turn; None everywhere else (the line is simply
     # not said).
     speak_interim: Any = None
+    # Whether the caller can speak a Q&A answer while it is being written.
+    # The streaming layer sets it on a voice turn: route() then hands back
+    # the answer as a stream (Response.qa_stream) instead of waiting for the
+    # model's whole reply. False everywhere else (/v1/intent), which gets
+    # the whole reply as before.
+    stream_qa: bool = False
 
 
 class Response(BaseModel):
@@ -179,6 +185,11 @@ class Response(BaseModel):
     dropin_action: Literal["request", "accept", "end"] | None = None
     dropin_room: str | None = None
     dropin_peer_label: str | None = None
+    # A Q&A answer still being written (domovoi.spoken_answer.StreamedQA),
+    # handed to a caller that asked for one (Context.stream_qa). ``text`` is
+    # empty until the caller has spoken it and called its ``finish``, which
+    # records the turn and returns the final response. Never serialized.
+    qa_stream: Any = Field(default=None, exclude=True)
 
 
 class ConnectivityState(BaseModel):

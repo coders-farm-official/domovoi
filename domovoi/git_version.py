@@ -29,10 +29,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from domovoi import self_restart
@@ -180,7 +182,11 @@ async def version_state() -> dict:
     # Whether the dashboard can offer a working "restart to apply" button, or
     # has to fall back to printing the command.
     can_restart, restart_hint = await self_restart.capable_async()
-    last = await asyncio.to_thread(read_last_update)
+    mode = self_restart.restart_mode()
+    last, problem = await asyncio.to_thread(load_last_update)
+    if problem == "missing" and mode != "update":
+        # A host without the unit has no result, and that is no problem.
+        problem = None
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
@@ -197,9 +203,14 @@ async def version_state() -> dict:
         # "update" when the restart starts domovoi-update.service (sync,
         # migrate, health-check, roll back); "restart" when it only bounces
         # core and web, as every host did before that unit existed.
-        "restart_mode": self_restart.restart_mode(),
+        "restart_mode": mode,
         # The update unit's last run, or None on a host without one.
         "last_update": last,
+        # Why last_update is None when it shouldn't be: "missing" (the unit
+        # is installed but no result is there), "unreadable", "too_large",
+        # "invalid" (not JSON) or "not_a_result". None when there is a result,
+        # or no unit. A word only; the detail goes to this process's log.
+        "last_update_problem": problem,
         # A commit that failed to apply and was rolled back. The panel stops
         # offering a pull while the upstream still points at it.
         "bad_sha": _bad_sha(last),
@@ -287,43 +298,123 @@ _LAST_UPDATE_FIELDS = (
 )
 _STEP_FIELDS = ("name", "status", "duration_sec")
 _ERROR_MAX_CHARS = 500
+# apply-update.sh before 2026-09-30 printed a negative duration as
+# "-89.-412", which no JSON parser takes: a wall clock stepped back during
+# the run, or the uutils date(1) of Ubuntu 26.04, whose +%s%3N gave the
+# script nanoseconds of varying width to subtract. Such a file stays until
+# the next update replaces it, and it can hold a bad_sha, so a result that
+# fails to parse is read once more with those durations as null.
+_BROKEN_DURATION_RE = re.compile(r'("duration_sec": )-?[0-9]+\.-[0-9]+')
+# The same uutils date made every other duration garbage too, some of them
+# plausible-looking (a 102 s run recorded as 101766807.450 s, one step as
+# 62577.839 s). A duration longer than its run, by the run's own
+# started_at and finished_at (whole seconds, hence the slack), is served as
+# null; so is one over a day, the bound when the result gives none.
+_DURATION_SLACK_SEC = 2
+_DURATION_MAX_SEC = 86400
+_RESULT_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# The last problem logged, so a dashboard polling every 1.5 s logs a broken
+# result once, not on every poll.
+_LOGGED_PROBLEM: tuple[str, str, str] | None = None
+
+
+def _note_problem(path: Path, problem: str, detail: str) -> None:
+    global _LOGGED_PROBLEM
+    key = (str(path), problem, detail)
+    if key != _LOGGED_PROBLEM:
+        _LOGGED_PROBLEM = key
+        log.warning(
+            "the update unit's result %s is %s (%s), so GET /v1/admin/version "
+            "reports last_update null", path, problem, detail,
+        )
+
+
+def _result_time(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, _RESULT_TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _duration_bound(doc: dict) -> float:
+    """The longest any duration in this result can honestly be."""
+    started = _result_time(doc.get("started_at"))
+    finished = _result_time(doc.get("finished_at"))
+    if started is None or finished is None or finished < started:
+        # Still running, or a clock stepped back during the run.
+        return _DURATION_MAX_SEC
+    return min(finished - started + _DURATION_SLACK_SEC, _DURATION_MAX_SEC)
+
+
+def _duration(value: object, bound: float) -> float | int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not (math.isfinite(value) and 0 <= value <= bound):
+        return None
+    return value
 
 
 def read_last_update() -> dict | None:
     """Blocking. The update unit's last result (``settings.update_result_file``),
     trimmed to the fields the dashboard needs, or None when there is no
     readable result. Never raises."""
+    return load_last_update()[0]
+
+
+def load_last_update() -> tuple[dict | None, str | None]:
+    """Blocking. :func:`read_last_update`, plus why it is None: "missing",
+    "unreadable", "too_large", "invalid" or "not_a_result" (None along with
+    a result). Every reason but "missing" is logged once. Never raises."""
+    global _LOGGED_PROBLEM
     path = Path(settings.update_result_file).expanduser()
     try:
         with path.open("rb") as f:
             raw = f.read(_LAST_UPDATE_MAX_BYTES + 1)
-    except OSError:
-        return None
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError as e:
+        _note_problem(path, "unreadable", f"{type(e).__name__}: {e.strerror or e}")
+        return None, "unreadable"
     if len(raw) > _LAST_UPDATE_MAX_BYTES:
-        return None
+        _note_problem(path, "too_large", f"over {_LAST_UPDATE_MAX_BYTES} bytes")
+        return None, "too_large"
     # "replace", not strict: the error and step text are the tail of pip,
     # docker or git output, cut to length by the script. One stray byte
     # there must not hide the whole result, and with it the bad_sha that
     # stops the panel offering a rolled-back commit again.
+    text = raw.decode("utf-8", errors="replace")
     try:
-        doc = json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError:
-        return None
+        doc = json.loads(text)
+    except ValueError as e:
+        try:
+            doc = json.loads(_BROKEN_DURATION_RE.sub(r"\g<1>null", text))
+        except ValueError:
+            _note_problem(path, "invalid", f"not JSON: {e}")
+            return None, "invalid"
     if not isinstance(doc, dict) or not isinstance(doc.get("status"), str):
-        return None
+        _note_problem(path, "not_a_result", "no status")
+        return None, "not_a_result"
+    _LOGGED_PROBLEM = None
     out = {k: doc[k] for k in _LAST_UPDATE_FIELDS if k in doc}
     for k in ("from_sha", "to_sha", "bad_sha"):
         if k in out and not (isinstance(out[k], str) and _FULL_SHA_RE.match(out[k])):
             out[k] = None
     if isinstance(out.get("error"), str):
         out["error"] = out["error"][:_ERROR_MAX_CHARS]
+    bound = _duration_bound(doc)
+    if "duration_sec" in out:
+        out["duration_sec"] = _duration(out["duration_sec"], bound)
     steps = doc.get("steps")
-    out["steps"] = [
-        {k: s.get(k) for k in _STEP_FIELDS}
-        for s in (steps if isinstance(steps, list) else [])
-        if isinstance(s, dict)
-    ]
-    return out
+    out["steps"] = []
+    for s in steps if isinstance(steps, list) else []:
+        if isinstance(s, dict):
+            step = {k: s.get(k) for k in _STEP_FIELDS}
+            step["duration_sec"] = _duration(step["duration_sec"], bound)
+            out["steps"].append(step)
+    return out, None
 
 
 async def fetch() -> dict:

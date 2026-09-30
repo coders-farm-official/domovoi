@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.clients.holidays import next_occurrence
 from domovoi.clients.units import UNITS, convert as unit_convert, lookup as unit_lookup
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.handlers.shared.tool_gate import KNOWLEDGE_QUESTION_RE
+from domovoi.handlers.shared.tool_gate import is_plain_knowledge_question
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -389,12 +389,6 @@ _SPLIT_TIP_RE = re.compile(
 # ─── LLM tool-offer gate ─────────────────────────────────────────────
 
 _ANY_DIGIT_RE = re.compile(r"\d")
-# Question openers that are never arithmetic — shared with the other
-# handlers that withhold on the same evidence (see shared/tool_gate.py).
-# Deliberately NOT "what", "how", "when": those front real calculator
-# turns ("what is a third of ninety", "how many days until christmas",
-# "when is thanksgiving").
-_KNOWLEDGE_QUESTION_RE = KNOWLEDGE_QUESTION_RE
 
 
 # ─── Tool-call argument contract ─────────────────────────────────────
@@ -651,10 +645,21 @@ class CalculatorHandler(Handler):
         # 2026-09-15 live) and answers "I'm not sure what to calculate."
         # Any digit keeps the tool on offer; "what"/"how many"/"when" stay
         # on offer too, because "what is the square root of pi" and "how
-        # many days until christmas" are real calculator turns.
+        # many days until christmas" are real calculator turns (the
+        # openers are shared with the library's gate: shared/tool_gate.py).
+        #
+        # Only a question about the world is ruled out — one of those
+        # openers with nothing about the house in it — and such a question
+        # never reaches the router (answers_without_tools); the gate keeps
+        # any other caller safe. A who/why/where question about the house
+        # ("where are my notes", "who is at the door") does reach it, and
+        # sees the tool: withholding it there changed the router's tool
+        # list for one turn, and the next ordinary turn re-read the ~800
+        # tokens behind the change (11-15 s on a CPU host, qwen3:8b,
+        # measured 2026-09-30).
         if _ANY_DIGIT_RE.search(transcript):
             return True
-        return not _KNOWLEDGE_QUESTION_RE.match(transcript)
+        return not is_plain_knowledge_question(transcript)
 
     async def execute_from_tool(
         self, args: dict, ctx: Context, session: AsyncSession

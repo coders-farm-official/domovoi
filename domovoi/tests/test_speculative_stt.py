@@ -559,6 +559,180 @@ def test_a_discarded_copy_is_never_identified(pipeline, voice_id) -> None:
     ]
 
 
+class _Log:
+    """One timeline for the decodes and the embeddings: (event, t)."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, float]] = []
+        self.busy = 0
+        self.max_busy = 0
+
+    def start(self, what: str) -> None:
+        self.busy += 1
+        self.max_busy = max(self.max_busy, self.busy)
+        self.events.append((f"{what} start", time.perf_counter()))
+
+    def end(self, what: str) -> None:
+        self.busy -= 1
+        self.events.append((f"{what} end", time.perf_counter()))
+
+    def names(self) -> list[str]:
+        return [e for e, _ in self.events]
+
+
+def _logged(log: _Log, whisper_texts: tuple[str, ...], *, stt: float, embed: float):
+    class _Whisper(_WatchedWhisper):
+        async def transcribe(self, pcm: bytes) -> str:
+            log.start("stt")
+            try:
+                return await super().transcribe(pcm)
+            finally:
+                log.end("stt")
+
+    async def _embed(pcm):
+        log.start("embed")
+        try:
+            await asyncio.sleep(embed)
+        finally:
+            log.end("embed")
+        return ("embedding of", len(pcm))
+
+    return _Whisper(*whisper_texts, delay=stt), _embed
+
+
+def test_the_embedding_runs_after_the_decode_never_beside_it(pipeline, voice_id, monkeypatch) -> None:
+    """Side by side the two share the CPU: a 10 s-window decode went from
+    ~240 to ~320 ms with the embedding running next to it. So the copy is
+    decoded, THEN embedded, in the room's one decode slot."""
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    log = _Log()
+    pipeline["whisper"], embed = _logged(log, ("set a timer for ten minutes",), stt=0.1, embed=0.1)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 30 + [QUIET] * 8)
+        ws.send_text(_pause(1, 38, 29))
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(1, frames=70, last=29))
+        assert _finish_turn(ws) == "set a timer for ten minutes"
+    assert log.names() == ["stt start", "stt end", "embed start", "embed end"]
+    assert log.max_busy == 1
+    # ...and the turn's identification still gets the copy's embedding.
+    assert voice_id["identify"] == [(70 * FRAME_BYTES, ("embedding of", 38 * FRAME_BYTES))]
+
+
+def test_a_decode_after_a_copy_waits_for_its_embedding(pipeline, voice_id, monkeypatch) -> None:
+    """Speech after the copy: the turn decodes the whole capture — after
+    the discarded copy's embedding is done, not beside it."""
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    log = _Log()
+    pipeline["whisper"], embed = _logged(
+        log, ("set a timer", "set a timer for ten minutes"), stt=0.05, embed=0.3,
+    )
+    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 30 + [QUIET] * 8)
+        ws.send_text(_pause(1, 38, 29))
+        time.sleep(0.1)                  # the copy is decoded, its embedding running
+        _send(ws, [LOUD] * 10 + [QUIET] * 40)
+        ws.send_text(_end(1, frames=88, last=47))
+        assert _finish_turn(ws) == "set a timer for ten minutes"
+    assert log.names() == ["stt start", "stt end", "embed start", "embed end", "stt start", "stt end"]
+    assert log.max_busy == 1
+    # The discarded copy's embedding is not the turn's: it embeds its own audio.
+    assert voice_id["identify"] == [(88 * FRAME_BYTES, "embed it here")]
+
+
+def test_a_copy_superseded_while_it_decoded_is_never_embedded(pipeline, voice_id, monkeypatch) -> None:
+    """Speech came back, and paused again, while the first copy was still
+    decoding: no turn can use that copy, and its embedding in the decode
+    slot would only hold up the next copy's decode (seconds, right after a
+    boot, while the voice encoder loads). So it isn't embedded: the next
+    copy is decoded straight after it, and only that one is embedded."""
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 0.5)
+    log = _Log()
+    pipeline["whisper"], embed = _logged(
+        log, ("set a timer for ten", "set a timer for ten minutes"), stt=0.3, embed=0.05,
+    )
+    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 7}))
+        _send(ws, [LOUD] * 20 + [QUIET] * 8)
+        ws.send_text(_pause(7, 28, 19))
+        ws.send_text(json.dumps({"type": "speech_resume", "utt": 7, "frame": 28}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 8)
+        ws.send_text(_pause(7, 46, 37))
+        time.sleep(0.8)                  # both decodes and the one embedding
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(7, frames=78, last=37))
+        assert _finish_turn(ws) == "set a timer for ten minutes"
+    assert log.names() == ["stt start", "stt end", "stt start", "stt end", "embed start", "embed end"]
+    assert voice_id["identify"] == [(78 * FRAME_BYTES, ("embedding of", 46 * FRAME_BYTES))]
+
+
+def test_a_discarded_utterance_cancels_its_copys_waiting_embedding() -> None:
+    """A finished copy's embedding still waiting for the decode slot is
+    cancelled with the utterance (noisy capture, a drop-in): it would only
+    hold the slot up."""
+    from domovoi.streaming import _cancel_copy_embedding, _Heard, _Speculation
+
+    async def run() -> tuple[bool, bool]:
+        waiting = asyncio.get_running_loop().create_future()
+        embed = asyncio.ensure_future(waiting)
+        heard = _Heard(text="stop", stt_ms=200, whisper=None, embed_task=embed)
+        spec = _Speculation(serial=1, frames=20, pause_rx=None, pause_clock={}, last_voiced=10)
+
+        async def decoded() -> _Heard:
+            return heard
+
+        spec.task = asyncio.ensure_future(decoded())
+        await spec.task
+        _cancel_copy_embedding(spec)
+        await asyncio.sleep(0)
+        # A copy whose decode is still running has no embedding to cancel.
+        busy = _Speculation(serial=1, frames=20, pause_rx=None, pause_clock={}, last_voiced=10)
+        busy.task = asyncio.ensure_future(asyncio.sleep(1))
+        _cancel_copy_embedding(busy)
+        busy.task.cancel()
+        return embed.cancelled(), busy.task.cancelled() or True
+
+    cancelled, _ = asyncio.run(run())
+    assert cancelled
+
+
+def test_the_transcript_is_not_held_for_the_embedding(pipeline, voice_id, monkeypatch) -> None:
+    """The copy's transcript is out as soon as the decode is: a slow
+    embedding holds up neither the reuse check nor the turn's transcript
+    — only the identification, which is what needs it."""
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    log = _Log()
+    pipeline["whisper"], embed = _logged(log, ("volume up",), stt=0.05, embed=0.8)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _connect(ws, hints=True)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
+        _send(ws, [LOUD] * 30 + [QUIET] * 8)
+        ws.send_text(_pause(1, 38, 29))
+        time.sleep(0.2)
+        sess = app.state.active_sessions["kitchen"]
+        # The speculative copy is done — transcript in hand — while its
+        # embedding is still running.
+        assert sess._spec is not None and sess._spec.task.done()
+        assert sess._spec.task.result().text == "volume up"
+        assert log.names()[-1] == "embed start"
+        _send(ws, [QUIET] * 32)
+        ws.send_text(_end(1, frames=70, last=29))
+        assert _finish_turn(ws) == "volume up"
+    # Identification waited for the embedding and got it.
+    assert voice_id["identify"] == [(70 * FRAME_BYTES, ("embedding of", 38 * FRAME_BYTES))]
+    (_, doc), = pipeline["routed"]
+    assert doc["stt_reused"] is True
+
+
 def test_embedding_alone_touches_nothing(monkeypatch) -> None:
     """embed_voice is the pure part: no database, no drift counter. And
     identify() handed an embedding doesn't embed again."""

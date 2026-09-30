@@ -45,7 +45,8 @@ trap cleanup EXIT
 : >"$WORK/gitconfig"
 export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
 SHIM_REAL_GIT=$(command -v git)
-export SHIM_REAL_GIT
+SHIM_REAL_DATE=$(command -v date)
+export SHIM_REAL_GIT SHIM_REAL_DATE
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 
@@ -342,16 +343,22 @@ new_case() {
   mkdir -p "$REPO/plugins/radio/migrations"
   printf 'CREATE TABLE stations (id bigserial PRIMARY KEY);\n' >"$REPO/plugins/radio/migrations/V001__stations.sql"
   SHA_A=$(commit_all A)
+  RESULT=""
 
   export SHIM_STATE=$STATE SHIM_REPO=$REPO
 }
 
 # run_update [extra PATH dir]: run the script against the current case.
+# NO_BASH_CLOCK=1 runs it without $EPOCHREALTIME, the way a bash older than
+# 5 would, so its clock is date(1) and a shim can play that.
 run_update() {
   local extra_bin=${1-}
   local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv")
+  local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
+  # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
+  if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
@@ -362,7 +369,7 @@ run_update() {
     DOMOVOI_UPDATE_HEALTH_TIMEOUT=1 \
     DOMOVOI_UPDATE_HEALTH_INTERVAL=0.2 \
     DOMOVOI_UPDATE_KEEP_BACKUPS="${KEEP_BACKUPS:-5}" \
-    bash "$SCRIPT" >"$CASE/output.log" 2>&1 || RC=$?
+    "${run[@]}" >"$CASE/output.log" 2>&1 || RC=$?
   RESULT=$UPD/last-result.json
 }
 
@@ -384,6 +391,7 @@ again_after() {  # again_after A B: some call matching B comes after the first m
 }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
 step_is() { grep -qF "{\"name\": \"$1\", \"status\": \"$2\"" "$RESULT"; }  # step_is NAME STATUS
+step_is_timed() { grep -qF "{\"name\": \"$1\", \"status\": \"ok\", \"duration_sec\": $2," "$RESULT"; }  # step_is_timed NAME SECONDS
 file_is() { [ -f "$1" ] && eq "$(tr -d '[:space:]' <"$1")" "$2"; }
 
 valid_json() {
@@ -393,8 +401,28 @@ valid_json() {
   "$py" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d, dict) and isinstance(d["steps"], list)' "$p"
 }
 
+# durations_within SECONDS [AT_LEAST]: the result has AT_LEAST (1)
+# durations, and every one is a plain N.NNN no longer than SECONDS.
+durations_within() {
+  local d n=0 bad=0
+  while IFS= read -r d; do
+    n=$((n + 1))
+    if ! [[ $d =~ ^[0-9]{1,6}\.[0-9]{3}$ ]] || [ "${d%.*}" -gt "$1" ]; then
+      echo "      duration $d is not a plain N.NNN of at most ${1}s"; bad=1
+    fi
+  done < <(grep -o '"duration_sec": [^,}]*' "$RESULT" | sed 's/^"duration_sec": //')
+  [ "$n" -ge "${2:-1}" ] || { echo "      $n durations, expected at least ${2:-1}"; bad=1; }
+  [ "$bad" = 0 ]
+}
+
 end_case() {
-  check "result file is valid JSON" valid_json
+  # RESULT is empty in a case that never ran the script.
+  if [ -n "$RESULT" ]; then
+    check "result file is valid JSON" valid_json
+    # Whatever date(1) the host has (uutils on Ubuntu 26.04), no case here
+    # runs for anything like an hour.
+    check "every duration is plausible" durations_within 3600
+  fi
   if [ "$CASE_FAILED" = 0 ]; then
     PASSED=$((PASSED + 1)); echo "ok   $CASE_NAME"
   else
@@ -917,6 +945,144 @@ case_sync_failure_output_stays_valid_utf8() {
   end_case
 }
 
+case_clock_stepped_back_keeps_the_result_valid() {
+  new_case clock_stepped_back_keeps_the_result_valid
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  # A wall clock that NTP steps back 90 s after the run's second reading
+  # (START_MS, then the preflight's t0): the preflight and the whole run
+  # both end "before" they started. The script reads bash's clock, which
+  # no shim can move, so this run goes without it and reads date(1): 13
+  # digits of milliseconds, taken from the shim's own bash clock (the real
+  # date may be uutils, whose +%s%3N is no use).
+  mkdir -p "$CASE/clockbin"
+  cat >"$CASE/clockbin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = +%s%3N ]; then
+  n=$(cat "$SHIM_STATE/date-readings" 2>/dev/null || echo 0)
+  echo $((n + 1)) >"$SHIM_STATE/date-readings"
+  t=$EPOCHREALTIME
+  t=$(( ${t%[.,]*}${t#*[.,]} / 1000 ))
+  if [ "$n" -ge 2 ]; then t=$((t - 90000)); fi
+  echo "$t"
+  exit 0
+fi
+exec "$SHIM_REAL_DATE" "$@"
+SH
+  chmod +x "$CASE/clockbin/date"
+  NO_BASH_CLOCK=1 run_update "$CASE/clockbin"
+  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 2 ))" 1
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no negative duration" eq "$(grep -c '"duration_sec": -' "$RESULT")" 0
+  check "no half-negative duration" eq "$(grep -c '[0-9]\.-' "$RESULT")" 0
+  check "the run's duration reads 0" eq "$(field duration_sec)" 0.000
+  check "so does the preflight's" step_is_timed preflight 0.000
+  end_case
+}
+
+# A date(1) like uutils 0.8.0's, Ubuntu 26.04's coreutils: +%s%3N ignores
+# the 3 and prints the nanoseconds unpadded ("1790745144" then "1476483"),
+# 11 to 19 digits in all. Every call is counted.
+write_uutils_date() {
+  mkdir -p "$1"
+  cat >"$1/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = +%s%3N ]; then
+  echo x >>"$SHIM_STATE/uutils-3n-calls"
+  t=$EPOCHREALTIME
+  echo "${t%[.,]*}$(( 10#${t#*[.,]} * 1000 + RANDOM % 1000 ))"
+  exit 0
+fi
+exec "$SHIM_REAL_DATE" "$@"
+SH
+  chmod +x "$1/date"
+}
+
+case_uutils_date_leaves_the_durations_alone() {
+  new_case uutils_date_leaves_the_durations_alone
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  write_uutils_date "$CASE/uutilsbin"
+  local t0=$SECONDS
+  run_update "$CASE/uutilsbin"
+  local wall=$((SECONDS - t0 + 1))
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the run is timed by bash's clock, not date +%s%3N" eq "$(wc -l 2>/dev/null <"$STATE/uutils-3n-calls" || echo 0)" 0
+  check "every duration is real" durations_within "$wall" 4
+  end_case
+}
+
+case_uutils_date_without_bash_clock_falls_back_to_seconds() {
+  new_case uutils_date_without_bash_clock_falls_back_to_seconds
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  write_uutils_date "$CASE/uutilsbin"
+  local t0=$SECONDS
+  NO_BASH_CLOCK=1 run_update "$CASE/uutilsbin"
+  local wall=$((SECONDS - t0 + 1))
+  check "status ok" eq "$(field status)" '"ok"'
+  check "date +%s%3N was asked" eq "$(( $(wc -l 2>/dev/null <"$STATE/uutils-3n-calls" || echo 0) > 2 ))" 1
+  check "every duration is real" durations_within "$wall" 4
+  check "and in whole seconds" eq "$(grep -o '"duration_sec": [0-9]*\.[0-9]*' "$RESULT" | grep -vc '\.000$')" 0
+  end_case
+}
+
+# now_ms and fmt_sec on their own, out of the script.
+case_timing_helpers() {
+  new_case timing_helpers
+  mkdir -p "$CASE/fakebin"
+  cat >"$CASE/fakebin/date" <<'SH'
+#!/usr/bin/env bash
+case "${1-}" in
+  +%s%3N) printf '%s\n' "$FAKE_MS" ;;
+  +%s) echo 1790745144 ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$CASE/fakebin/date"
+  local out
+  out=$(
+    eval "$(sed -n '/^now_ms() {/,/^}/p;/^fmt_sec() {/,/^}/p' "$SCRIPT")"
+    PATH=$CASE/fakebin:$PATH
+    FAKE_MS=1
+    export FAKE_MS
+    [[ $(now_ms) =~ ^[0-9]{13}$ ]] && echo "bash clock: 13 digits"
+    # Unset, it is an ordinary variable, and each value below is kept.
+    unset EPOCHREALTIME
+    for EPOCHREALTIME in 1790745131.686341 1790745131,686341 1790745131.000999 1790745131.5; do
+      echo "EPOCHREALTIME=$EPOCHREALTIME: $(now_ms)"
+    done
+    unset EPOCHREALTIME
+    for FAKE_MS in 1790745131686 17907451441476483 1790745131688765458 179074513168 1790745131%3N ''; do
+      echo "date +%s%3N=$FAKE_MS: $(now_ms)"
+    done
+    for ms in 0 7 1234 101766 -90412 -1 abc ''; do echo "fmt_sec $ms: $(fmt_sec "$ms")"; done
+  )
+  check "now_ms and fmt_sec" eq "$out" "bash clock: 13 digits
+EPOCHREALTIME=1790745131.686341: 1790745131686
+EPOCHREALTIME=1790745131,686341: 1790745131686
+EPOCHREALTIME=1790745131.000999: 1790745131000
+EPOCHREALTIME=1790745131.5: 1790745144000
+date +%s%3N=1790745131686: 1790745131686
+date +%s%3N=17907451441476483: 1790745144000
+date +%s%3N=1790745131688765458: 1790745144000
+date +%s%3N=179074513168: 1790745144000
+date +%s%3N=1790745131%3N: 1790745144000
+date +%s%3N=: 1790745144000
+fmt_sec 0: 0.000
+fmt_sec 7: 0.007
+fmt_sec 1234: 1.234
+fmt_sec 101766: 101.766
+fmt_sec -90412: 0.000
+fmt_sec -1: 0.000
+fmt_sec abc: 0.000
+fmt_sec : 0.000"
+  end_case
+}
+
 case_venv_from_the_core_unit() {
   new_case venv_from_the_core_unit
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -1004,6 +1170,10 @@ case_backups_pruned
 case_noop_health_failure_reports
 case_rollback_that_cannot_get_healthy
 case_sync_failure_output_stays_valid_utf8
+case_clock_stepped_back_keeps_the_result_valid
+case_uutils_date_leaves_the_durations_alone
+case_uutils_date_without_bash_clock_falls_back_to_seconds
+case_timing_helpers
 case_venv_from_the_core_unit
 case_venv_ignores_a_non_venv_interpreter
 case_venv_not_writable_aborts
