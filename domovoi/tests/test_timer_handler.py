@@ -292,6 +292,8 @@ def _offered(transcript: str) -> list[str]:
         "You have a timer running in the kitchen.",
         "You've set a timer for the pasta already.",
         "Why didn't the timer go off?",
+        "Why is the timer beeping?",
+        "Who didn't hear the timer?",
     ],
 )
 def test_talk_about_a_timer_is_not_offered_the_timer_tool(transcript: str) -> None:
@@ -311,6 +313,11 @@ def test_talk_about_a_timer_is_not_offered_the_timer_tool(transcript: str) -> No
         "Is the timer still running?",
         "You set a timer for ten minutes.",
         "I set a timer for ten minutes.",
+        # a where/who question about a timer asks for its status: an
+        # ordinary routed turn (test_routing_corpus pins "where's the timer")
+        "Where's the timer?",
+        "Where is my timer?",
+        "Who set the timer?",
     ],
 )
 def test_timer_commands_keep_the_timer_tool(transcript: str) -> None:

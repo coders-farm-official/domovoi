@@ -266,12 +266,13 @@ def test_gated_tools_are_offered_last() -> None:
 
 def test_tools_offered_only_on_request_are_appended_after_the_usual_ones() -> None:
     """double_check and news are offered only when asked for; they go after
-    calculator and library (on offer unless ruled out), so asking for one
-    APPENDS a tool: the router re-reads that schema, not the ~900 tokens
-    of calculator and library behind it, and the next ordinary turn finds
-    its cached prefix intact."""
+    the gated tools that are on offer unless ruled out (reminder, calculator,
+    timer, library, in band order), so asking for one APPENDS a tool: the
+    router re-reads that schema, not the ~900 tokens of calculator and
+    library behind it, and the next ordinary turn finds its cached prefix
+    intact."""
     usual = _offered("play some jazz in the kitchen")
-    assert usual[-2:] == ["calculator", "library"]
+    assert usual[-4:] == ["reminder", "calculator", "timer", "library"]
     for utterance, extra in (
         ("fact check what you just said", ["double_check"]),
         ("what's happening in the world today", ["news"]),

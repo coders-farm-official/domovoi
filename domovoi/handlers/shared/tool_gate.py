@@ -162,8 +162,17 @@ TIMER_STATEMENT_RE = re.compile(
     # "hi, set a reminder ..." / "can you set a timer ...".
     r"|(?:you(?:'ve| have| had| got| gave me)|(?:i|we)(?:'ve| have| had| got))"
     rf"(?: got)? (?!to\b)(?:[a-z'-]+ ){{0,3}}?{_TIMER_NOUN}"
-    # "why didn't my reminder go off", "where did my timers go"
-    rf"|(?:why|where|who|whose|whom)\b.*?\b{_TIMER_NOUN}"
+    # "why didn't my reminder go off", "why is the timer beeping": a why
+    # question about a timer or reminder asks for no action. Nor does a
+    # where/who one about what did, or didn't, happen: "where did my timers
+    # go", "who didn't hear the reminder". "where's the timer", "where are
+    # my reminders", "who set the timer" ask for its status or the list:
+    # ordinary routed turns, offered the whole list.
+    rf"|why\b.*?\b{_TIMER_NOUN}"
+    r"|(?:where|who|whose|whom) (?:did|didn't|didnt|don't|dont|doesn't|doesnt|"
+    r"wasn't|wasnt|weren't|werent|won't|wont|isn't|isnt|aren't|arent|"
+    r"hasn't|hasnt|haven't|havent|hadn't|hadnt)(?![a-z'-])"
+    rf".*?\b{_TIMER_NOUN}"
     # "i set a reminder for 10 minutes and it never went off"
     rf"|.*?\b{_TIMER_NOUN}.*?\b(?:didn't|didnt|did not|never|doesn't|doesnt|"
     r"does not|won't|wont|wasn't|wasnt|failed to)"

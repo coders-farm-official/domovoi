@@ -695,6 +695,9 @@ def test_statements_about_a_reminder_are_not_offered_the_tool(transcript: str) -
         "change my reminder to 10 minutes",
         "snooze the reminder for 10 minutes",
         "the reminder should say call mom",
+        # a where/who question asks for the list, not about a failure
+        "where are my reminders",
+        "who set that reminder",
     ],
 )
 def test_reminder_commands_keep_the_tool(transcript: str) -> None:
