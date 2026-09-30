@@ -90,8 +90,149 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete }) => (
 
 /* ─── Messages ──────────────────────────────────────────────────────────── */
 
-const ChatMessage = ({ m }) => {
+/* Copy a message. The dashboard is usually opened over plain http on the
+ * LAN, where browsers withhold navigator.clipboard (secure contexts only),
+ * so the old hidden-textarea copy is the fallback, not dead code. */
+const chatCopyText = async (text) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall back below */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+};
+
+/* Who sent a user message, as the details show it. */
+const chatDeviceLabel = (m) => {
+  if (m.device) return m.device;
+  const mine = typeof DeviceIdentity !== 'undefined' && m.device_id && m.device_id === DeviceIdentity.id();
+  return mine ? 'this browser' : (m.device_name || m.device_id || null);
+};
+
+/* The copy / details menu, at the pointer (right-click or long press) or
+ * under the "more" button. Closes on a click elsewhere, Escape or scroll. */
+const ChatMessageMenu = ({ at, canCopy, onCopy, onDetails, onClose }) => {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const key = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('pointerdown', away, true);
+    document.addEventListener('keydown', key);
+    window.addEventListener('scroll', onClose, true);
+    window.addEventListener('resize', onClose);
+    return () => {
+      document.removeEventListener('pointerdown', away, true);
+      document.removeEventListener('keydown', key);
+      window.removeEventListener('scroll', onClose, true);
+      window.removeEventListener('resize', onClose);
+    };
+  }, [onClose]);
+  // Kept on screen: a press near the right or bottom edge opens inward.
+  const left = Math.max(8, Math.min(at.x, window.innerWidth - 168));
+  const top = Math.max(8, Math.min(at.y, window.innerHeight - 100));
+  const item = (icon, label, run, disabled) => (
+    <button type="button" className="chat-menu-item" disabled={disabled} role="menuitem"
+            onClick={() => { onClose(); run(); }}>
+      <Icon name={icon} size={14}/><span>{label}</span>
+    </button>
+  );
+  return (
+    <div ref={ref} className="chat-menu" role="menu" style={{ left, top }}>
+      {item('copy', 'copy', onCopy, !canCopy)}
+      {item('info', 'details', onDetails, false)}
+    </div>
+  );
+};
+
+const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
+  React.useEffect(() => {
+    const key = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  }, [onClose]);
+  const rows = ChatDetails.rows({ ...m, device: chatDeviceLabel(m) }, threadId);
+  return (
+    <div className="chat-details-bg" onClick={onClose}>
+      <div className="chat-details" role="dialog" aria-modal="true" aria-label="message details"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="chat-details-head">
+          <Icon name="info" size={16}/><strong>message details</strong>
+          <span style={{ flex: 1 }}/>
+          <IconButton name="x" title="close" onClick={onClose}/>
+        </div>
+        <dl className="chat-details-rows">
+          {rows.map(([label, value]) => (
+            <React.Fragment key={label}>
+              <dt>{label}</dt>
+              <dd className={label === 'error' ? 'err' : ''}>{value}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+        <div className="chat-details-foot">
+          <Button icon="copy" onClick={onCopy}>copy text</Button>
+          <Button variant="primary" onClick={onClose}>close</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// A touch held this long opens the menu (iOS fires no contextmenu event).
+const CHAT_LONG_PRESS_MS = 500;
+
+const ChatMessage = ({ m, threadId, onCopy }) => {
   const isUser = m.role === 'user';
+  const [menuAt, setMenuAt] = React.useState(null);
+  const [details, setDetails] = React.useState(false);
+  const press = React.useRef(null);
+  const closeMenu = React.useCallback(() => setMenuAt(null), []);
+  const closeDetails = React.useCallback(() => setDetails(false), []);
+
+  // Right-click (and Android's long press, which arrives as the same
+  // event). With text selected, the browser's own menu stays, so part of
+  // a message can still be copied the ordinary way.
+  const onContextMenu = (e) => {
+    const sel = window.getSelection && String(window.getSelection());
+    if (sel) return;
+    e.preventDefault();
+    setMenuAt({ x: e.clientX, y: e.clientY });
+  };
+  const cancelPress = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  };
+  const onPointerDown = (e) => {
+    if (e.pointerType !== 'touch') return;
+    const { clientX: x, clientY: y } = e;
+    cancelPress();
+    press.current = { x, y, timer: setTimeout(() => { press.current = null; setMenuAt({ x, y }); }, CHAT_LONG_PRESS_MS) };
+  };
+  const onPointerMove = (e) => {
+    const p = press.current;
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) cancelPress();
+  };
+  const bubbleEvents = {
+    onContextMenu, onPointerDown, onPointerMove,
+    onPointerUp: cancelPress, onPointerCancel: cancelPress, onPointerLeave: cancelPress,
+  };
+  const openFromButton = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenuAt({ x: isUser ? r.right - 160 : r.left, y: r.bottom + 4 });
+  };
+
+  const stamp = ChatDetails.stamp(m.created_at);
+  const line = [stamp, !isUser && !m.pending ? m.model : null].filter(Boolean).join(' · ');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
                   alignItems: isUser ? 'flex-end' : 'stretch', gap: 4 }}>
@@ -108,7 +249,8 @@ const ChatMessage = ({ m }) => {
         </div>
       )}
       {isUser ? (
-        <div style={{ maxWidth: '76%', padding: '9px 13px', fontSize: 13, lineHeight: 1.55,
+        <div {...bubbleEvents}
+             style={{ maxWidth: '76%', padding: '9px 13px', fontSize: 13, lineHeight: 1.55,
                       background: 'var(--card)', border: '1px solid var(--border)',
                       borderRadius: 'var(--r-md)', whiteSpace: 'pre-wrap',
                       overflowWrap: 'break-word' }}>
@@ -117,7 +259,8 @@ const ChatMessage = ({ m }) => {
       ) : (
         <div style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
-          <div style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
+          <div {...bubbleEvents}
+               style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
             {m.error && (
@@ -125,13 +268,25 @@ const ChatMessage = ({ m }) => {
                 {m.error}
               </div>
             )}
-            {m.model && !m.pending && (
-              <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginTop: 4 }}>
-                {m.model}
-              </div>
-            )}
           </div>
         </div>
+      )}
+      {!m.pending && (
+        <div className={`chat-stamp${isUser ? ' mine' : ''}`}>
+          {line && <span className="mono">{line}</span>}
+          <button type="button" className="chat-more" title="message actions" aria-label="message actions"
+                  aria-haspopup="menu" onClick={openFromButton}>
+            <Icon name="ellipsis" size={14}/>
+          </button>
+        </div>
+      )}
+      {menuAt && (
+        <ChatMessageMenu at={menuAt} canCopy={!!m.content} onClose={closeMenu}
+                         onCopy={() => onCopy(m.content)} onDetails={() => setDetails(true)}/>
+      )}
+      {details && (
+        <ChatDetailsDialog m={m} threadId={threadId} onClose={closeDetails}
+                           onCopy={() => { onCopy(m.content); closeDetails(); }}/>
       )}
     </div>
   );
@@ -141,6 +296,7 @@ const ChatMessage = ({ m }) => {
 
 const ChatPage = () => {
   const [fire, toastNode] = useToast();
+  const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
   const { data: modelsInfo } = useApiObject('/api/chat/models');
@@ -232,11 +388,14 @@ const ChatPage = () => {
     setSending(true);
     setMessages((cur) => [
       ...cur,
-      { id: `u-${Date.now()}`, role: 'user', content, images },
+      { id: `u-${Date.now()}`, role: 'user', content, images,
+        created_at: new Date().toISOString(), device: 'this browser' },
       { id: 'pending', role: 'assistant', content: '', pending: true },
     ]);
     try {
-      const { done, errorDetail } = await chatSendStream(id, { content, images }, (delta) => {
+      // device_id: which install sent it, for the message's details (V017).
+      const body = { content, images, device_id: DeviceIdentity.id() };
+      const { done, errorDetail } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
       });
@@ -307,7 +466,7 @@ const ChatPage = () => {
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
                    sub="chats run on your own hardware — attach an image and the vision model reads it"/>
-          ) : messages.map((m) => <ChatMessage key={m.id} m={m}/>)}
+          ) : messages.map((m) => <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage}/>)}
         </div>
 
         {/* composer */}
