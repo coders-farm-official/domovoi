@@ -220,6 +220,62 @@ async def test_admin_music_play_tracks_casts_ordered_queue() -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_admin_music_play_tracks_starts_at_start_sec() -> None:
+    """A phone or browser hands over mid-song: the room starts on the FIRST
+    id, ``start_sec`` into it (2026-09-30: the phone's cast always restarted
+    the room at its queue's first track, from the top). A first id that is
+    no longer in the library drops the position: it belongs to that song."""
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.clients.mpd import MPDStubClient
+
+    stub = MPDStubClient()
+    mpd_module._clients = {"kitchen": stub}
+
+    async with engine.begin() as conn:
+        ids = []
+        for title in ("Current", "Next"):
+            rid = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO library_tracks (file_path, title, added_via) "
+                        "VALUES (:fp, :t, 'manual') RETURNING id"
+                    ),
+                    {"fp": f"/music/{title}.mp3", "t": title},
+                )
+            ).scalar_one()
+            ids.append(int(rid))
+
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/v1/admin/music/play-tracks",
+                json={"room_id": "kitchen", "track_ids": ids, "start_sec": 73.6},
+            )
+            assert r.status_code == 200, r.text
+            assert stub._song is not None
+            assert stub._song["title"] == "Current"
+            assert stub._song["_elapsed"] == 73.0
+
+            # The first id is gone: the room starts "Next" from its top.
+            r = await client.post(
+                "/v1/admin/music/play-tracks",
+                json={"room_id": "kitchen", "track_ids": [999999, ids[1]], "start_sec": 73},
+            )
+            assert r.status_code == 200, r.text
+            assert stub._song is not None
+            assert stub._song["title"] == "Next"
+            assert "_elapsed" not in stub._song
+
+            r = await client.post(
+                "/v1/admin/music/play-tracks",
+                json={"room_id": "kitchen", "track_ids": ids, "start_sec": -1},
+            )
+            assert r.status_code == 422
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_admin_music_play_tracks_404_for_unknown_ids() -> None:
     from domovoi.clients import mpd as mpd_module
     from domovoi.clients.mpd import MPDStubClient

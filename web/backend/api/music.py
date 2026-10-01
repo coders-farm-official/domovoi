@@ -1343,10 +1343,14 @@ async def play_tracks(body: CastTracksRequest, request: Request):
     """Cast an arbitrary ordered queue of library tracks into a room's MPD
     (the browser player's Spotify-Connect-style hand-off). Proxies to the
     Domovoi server's ``/v1/admin/music/play-tracks``; from there, the existing
-    pause/resume/skip/now-playing routes drive the room."""
+    pause/resume/skip/now-playing routes drive the room. ``start_sec`` goes
+    along only when set, so a plain cast reads exactly as it always has."""
+    payload_out: dict = {"room_id": body.room_id, "track_ids": body.track_ids}
+    if body.start_sec > 0:
+        payload_out["start_sec"] = body.start_sec
     status, payload = await post_admin(
         "/v1/admin/music/play-tracks",
-        {"room_id": body.room_id, "track_ids": body.track_ids},
+        payload_out,
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)

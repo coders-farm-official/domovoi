@@ -335,6 +335,20 @@ const itemFromBook = (book) => ({
  * outside the shell in a test) don't crash — they see `available:false`
  * and hide the browser-player affordances. */
 const _noop = () => {};
+
+/* Casting to a room hands the server library track ids; a room plays from the
+ * domovoi's own library, so podcasts and audiobooks (no library id) stay in
+ * the browser. The room starts on the FIRST id sent, so callers pass the
+ * queue from the current item on, never the whole queue. An error carrying
+ * `castRefused` says why nothing went, in words for the person. */
+const _castTrackIds = (items) => (items || [])
+  .filter((it) => it && it.kind === 'library' && it.trackId != null)
+  .map((it) => it.trackId);
+const _castRefused = () => {
+  const e = new Error('only library songs can be cast to a room — nothing from here on is in the library');
+  e.castRefused = true;
+  return e;
+};
 const PlaybackContext = React.createContext({
   available: false,
   queue: [], index: -1, current: null, status: 'stopped',
@@ -684,8 +698,10 @@ const PlaybackProvider = ({ children }) => {
     if (target.kind === 'browser') {
       loadAndPlay(items[startIndex]);
     } else {
-      // Remote: re-cast the new queue.
-      castRoomLoad(target.roomId, items);
+      // Remote: re-cast the new queue FROM the picked item. Casting the whole
+      // list started the room on its first track whichever one was tapped.
+      castRoomLoad(target.roomId, items.slice(Math.max(0, startIndex)))
+        .catch((e) => console.warn('re-cast to room failed', e));
     }
   }, [loadAndPlay, target]);
 
@@ -770,7 +786,7 @@ const PlaybackProvider = ({ children }) => {
     if (i < 0 || i >= queue.length) return;
     setIndex(i);
     if (target.kind === 'browser') loadAndPlay(queue[i]);
-    else castRoomJump(target.roomId, i);
+    else castRoomJump(target.roomId, i).catch((e) => console.warn('re-cast to room failed', e));
   }, [queue, loadAndPlay, target]);
 
   function play() {
@@ -924,11 +940,17 @@ const PlaybackProvider = ({ children }) => {
   }, [toggle, next, prev, seekBy, setVolume, volume]);
 
   // ── Casting (Spotify-Connect-style hand-off) ───────────────────────
-  const castRoomLoad = React.useCallback(async (roomId, items) => {
-    const trackIds = (items || []).filter((it) => it.kind === 'library' && it.trackId != null)
-      .map((it) => it.trackId);
-    if (!trackIds.length) throw new Error('only library tracks can be cast to a room');
-    await apiPost('/api/music/play-tracks', { room_id: roomId, track_ids: trackIds });
+  // `startSec`: how far into items[0] the room should start (the listener's
+  // place in the current song). Sent only when items[0] is itself the first
+  // id, i.e. a library track: otherwise it belongs to a song not sent.
+  const castRoomLoad = React.useCallback(async (roomId, items, startSec = 0) => {
+    const trackIds = _castTrackIds(items);
+    if (!trackIds.length) throw _castRefused();
+    const body = { room_id: roomId, track_ids: trackIds };
+    const first = (items || [])[0];
+    const at = Math.floor(Number(startSec) || 0);
+    if (at >= 2 && first && first.kind === 'library' && first.trackId === trackIds[0]) body.start_sec = at;
+    await apiPost('/api/music/play-tracks', body);
   }, []);
   const castRoomJump = React.useCallback(async (roomId, i) => {
     // Re-cast from the chosen index onward so "play this queue item" works remotely.
@@ -939,11 +961,19 @@ const PlaybackProvider = ({ children }) => {
   const castTo = React.useCallback(async (nextTarget) => {
     // browser → room: stop local, load queue into room, enter remote mode.
     if (nextTarget.kind === 'room') {
+      const items = queue.slice(Math.max(0, index));
+      // Nothing a room can play: say so before touching playback, and never
+      // switch the target to a room that was sent nothing.
+      if (!_castTrackIds(items).length) throw _castRefused();
+      // From this browser the room picks up where the listener is. From
+      // another room it starts the track from the top: the position then is
+      // that room's, and its track may be past `index` by now.
+      const liveEl = target.kind === 'browser' ? activeEl() : null;
+      const startSec = liveEl ? liveEl.currentTime : 0;
       const g = graphRef.current;
-      const resumeAt = index;
       if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
       try {
-        await castRoomLoad(nextTarget.roomId, queue.slice(Math.max(0, index)));
+        await castRoomLoad(nextTarget.roomId, items, startSec);
         setTarget(nextTarget);
         setStatus('playing');
       } catch (e) {
@@ -1454,7 +1484,8 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
       // connection refused), and a silent catch made the button look dead.
       console.warn('cast failed', e);
       const msg = String((e && e.message) || e);
-      setErr(t.kind === 'room'
+      setErr(e && e.castRefused ? msg
+        : t.kind === 'room'
         ? `Couldn't cast to ${t.roomId} — its speaker isn't reachable ` +
           `(is the ${t.roomId} satellite online?).`
         : `Couldn't switch playback here: ${msg.slice(0, 80)}`);

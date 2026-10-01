@@ -363,7 +363,7 @@ Everything in this table is on the **Device** tier (`X-Device-Token` or an admin
 |---|---|---|
 | `POST /v1/admin/music/play` | `{room_id, query}` | Route `"play <query>"` through the full pipeline; dispatches the music-start frame to the room's Pi. Returns `{text, matched_handler, matched_path, music_action, online}`. |
 | `POST /v1/admin/music/play-track` | `{room_id, track_id}` | Play one `library_tracks` row directly via MPD (tag → filename → basename lookup). `404` unknown/unfindable track, `502` MPD error. |
-| `POST /v1/admin/music/play-tracks` | `{room_id, track_ids: [..]}` (≤500) | Load an ordered queue of library tracks into the room's MPD and start playback (the browser player's "cast to room"). |
+| `POST /v1/admin/music/play-tracks` | `{room_id, track_ids: [..], start_sec?}` (≤500) | Load an ordered queue of library tracks into the room's MPD and start playback (the browser and phone players' "cast to room"). The room starts on the first id, `start_sec` into it when given (dropped if that id or its file is missing); clients send their CURRENT track first. |
 | `POST /v1/admin/music/play-playlist` | `{room_id, playlist_id, shuffle?}` | Start a playlist (`playlist_id` 0 = the virtual Favorites). Ordered mode resumes from the saved position; stamps in-room playlist state so "next" stays in-playlist. |
 | `POST /v1/admin/music/{action}/{room_id}` | — | Transport controls; `action` ∈ `pause`, `resume`, `stop`, `skip`, `next`, `previous` (routed as the spoken equivalents). `400` for anything else. |
 | `GET /v1/admin/music/queue/{room_id}` | — | The room's live MPD queue in order: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec}], current_song_id}`. `502` MPD error. |
@@ -464,7 +464,7 @@ household device token instead of a caller's credential.
 | `POST /api/music/now-playing/{room_id}/favorite` | **Device** | — | Heart whatever the room is playing (re-searches by title into the library/queue). |
 | `POST /api/music/play` | **Device** | `{room_id, query}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). |
 | `POST /api/music/play-track` | **Device** | `{room_id, track_id}` | Proxy → core direct-play (no conversation log, no external fallback). |
-| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids}` | Proxy → core queue cast. |
+| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids, start_sec?}` | Proxy → core queue cast (`start_sec` forwarded only when > 0). |
 | `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?}` | Proxy → core playlist start. |
 | `POST /api/music/add-by-query` | **Device** | `{room_id, query, artist?, attach_to_playlist_id?}` | Proxy → core acquisition enqueue. |
 | `POST /api/music/add-by-url` | **Outbound-fetch (core decides)** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Proxy with credentials + source address forwarded; the core's verdict passes back verbatim. |

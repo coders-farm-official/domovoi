@@ -43,8 +43,13 @@ class MPDClient(Protocol):
     # filename substring → basename). Returns the songs it actually queued,
     # in order. Leaves MPD paused on the first track like the other
     # ``prepare_*`` variants so the streaming layer's music_ready handshake
-    # applies unchanged.
-    async def prepare_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]: ...
+    # applies unchanged. ``start_sec`` > 0 leaves it paused that far into
+    # the first track instead (a phone or browser handing over mid-song),
+    # but only when the first spec resolved: a skipped first spec means the
+    # position belongs to a song that is not there.
+    async def prepare_tracks(
+        self, specs: list[dict[str, str]], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]: ...
     # ── Queue editing (the dashboard/app room-queue surface) ──────────────
     # These operate on the EXISTING queue rather than replacing it, which is
     # what separates them from every `play_*`/`prepare_*` method above (all
@@ -159,14 +164,19 @@ class MPDStubClient:
             for spec in specs
         ]
 
-    async def prepare_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
+    async def prepare_tracks(
+        self, specs: list[dict[str, str]], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]:
         # Replaces the queue (the cast hand-off), so ids restart from wherever
-        # the counter is — never reused, matching MPD.
+        # the counter is — never reused, matching MPD. The stub resolves
+        # every spec, so the first queued song is always the first spec.
         queued = self._assign_ids(self._songs_for(specs))
         self._queue = list(queued)
         if queued:
             self._song = queued[0]
             self._state = "pause"
+            if start_sec > 0:
+                self._song["_elapsed"] = float(int(start_sec))
         return queued
 
     # ── Queue editing ──────────────────────────────────────────────────
@@ -512,28 +522,51 @@ class RealMPDClient:
                 return results[0]
         return None
 
-    async def prepare_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
+    async def prepare_tracks(
+        self, specs: list[dict[str, str]], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]:
         """Clear the queue, resolve+add each spec in order, leave MPD paused
         on the first track. Skips specs MPD can't find (a stale/renamed file
-        shouldn't abort the whole cast); returns the songs actually queued."""
+        shouldn't abort the whole cast); returns the songs actually queued.
+
+        ``start_sec`` > 0 starts the first track that far in (``seek 0 <t>``
+        plays queue entry 0 from ``t``), still ending paused. Only when the
+        first queued song IS the first spec; and a seek MPD refuses (past
+        the end of the file, a format that can't seek) falls back to the
+        top of the track rather than failing the cast."""
         if not specs:
             return []
         async with self._connect() as c:
             await c.clear()
             queued: list[dict[str, Any]] = []
-            for spec in specs:
+            first_spec_queued = False
+            for i, spec in enumerate(specs):
                 song = await self._resolve_track(c, spec)
                 if song is None:
                     continue
                 try:
                     await c.add(song["file"])
                     queued.append(dict(song))
+                    if i == 0:
+                        first_spec_queued = True
                 except Exception as e:
                     log.warning("MPD prepare_tracks add %r failed: %s", song.get("file"), e)
             if queued:
                 # Start then immediately pause to land on the first queued
                 # track in the paused state — same trick prepare_url uses.
-                await c.play()
+                started = False
+                offset = int(start_sec) if start_sec and start_sec > 0 else 0
+                if offset and first_spec_queued:
+                    try:
+                        await c.seek(0, str(offset))
+                        started = True
+                    except Exception as e:
+                        log.warning(
+                            "MPD prepare_tracks: start at %ss refused (%s); "
+                            "starting the track from the top", offset, e,
+                        )
+                if not started:
+                    await c.play()
                 await c.pause(1)
             return queued
 
