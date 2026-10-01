@@ -568,6 +568,64 @@ async def test_a_closed_socket_drops_its_held_start(room) -> None:
     assert room.starts() == []
 
 
+async def _wait_for_py311(fut, timeout):
+    """`asyncio.wait_for` as Python 3.11 runs it (requires-python is 3.11):
+    the awaitable in a task of its own, a cancel of the caller passed on to
+    it unless it has already finished."""
+    loop = asyncio.get_running_loop()
+    fut = asyncio.ensure_future(fut)
+    waiter = loop.create_future()
+
+    def release(*_a) -> None:
+        if not waiter.done():
+            waiter.set_result(None)
+
+    handle = loop.call_later(timeout, release)
+    fut.add_done_callback(release)
+    try:
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            if fut.done():
+                return fut.result()
+            fut.remove_done_callback(release)
+            fut.cancel()
+            await asyncio.gather(fut, return_exceptions=True)
+            raise
+        if fut.done():
+            return fut.result()
+        fut.remove_done_callback(release)
+        fut.cancel()
+        await asyncio.gather(fut, return_exceptions=True)
+        raise TimeoutError
+    finally:
+        handle.cancel()
+
+
+async def test_a_held_start_is_sent_by_its_own_task(room, monkeypatch) -> None:
+    """The send drops the hold it was made for (`_safe_send_text`), which
+    must find the hold's own task doing it and let it finish. Bounded with
+    Python 3.11's `asyncio.wait_for`, the send ran in a task of its own:
+    the hold cancelled itself mid-send and the start never went out."""
+    monkeypatch.setattr(asyncio, "wait_for", _wait_for_py311)
+    send = room.ws.send_text
+
+    async def send_after_a_yield(data: str) -> None:
+        await asyncio.sleep(0)              # the socket yields before the write lands
+        await send(data)
+
+    room.ws.send_text = send_after_a_yield  # type: ignore[method-assign]
+    room.reply = OFFER
+    await room.turn()
+    assert room.sess._music_hold_task is not None
+    room.sess._followup_hold_until = 0.0    # nobody answered; no capture came
+    await _until(lambda: room.starts() != [])
+    await _settle(0.1)
+    assert room.starts() == [{"type": "music_start", "stream_url": URL}]
+    assert room.app.state.pending_music_start[ROOM]["url"] == URL
+    assert room.sess._music_hold_task is None
+
+
 async def test_a_held_start_gives_up_after_a_long_while(room, monkeypatch, caplog) -> None:
     monkeypatch.setattr(streaming, "MUSIC_HOLD_MAX_SEC", 0.1)
     room.sess.conversational_mode = True

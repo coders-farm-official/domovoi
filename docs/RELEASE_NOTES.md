@@ -50,7 +50,10 @@ player is ever found running under a capture.
 * Satellite: the release a reply's `response_end` defers until its audio
   has played out (the follow-up capture, the ring) fired when the reply's
   first chunk opened the output, whenever `response_end` was handled
-  first. It fires when the audio has played out.
+  first. It fires when the audio has played out. A reply whose output
+  could not be opened at all (the sound card still busy) also leaves the
+  speaker marked free again: it stayed marked busy, and the music after
+  that turn waited out its 10 s and never came back.
 * Satellite: if its own music player is ever running while a capture is
   open, it is stopped at the next frame and the log says so at ERROR
   (`this satellite's own music player is running while the microphone is

@@ -4988,14 +4988,20 @@ class StreamSession:
                 if not mine():
                     return
                 try:
-                    sent = await asyncio.wait_for(
-                        send_music_start(
+                    # Bounded in THIS task (`asyncio.timeout`), never in one
+                    # of its own: the send drops this hold
+                    # (`_safe_send_text` → `_drop_music_hold`), which lets
+                    # the hold's own task finish and cancels any other.
+                    # `asyncio.wait_for` runs its awaitable in a new task
+                    # before Python 3.12 (requires-python is 3.11), so
+                    # wrapped in it the hold cancelled itself mid-send and
+                    # the start was lost.
+                    async with asyncio.timeout(bound):
+                        sent = await send_music_start(
                             app, self, self.room_id, url,
                             still_wanted=lambda: mine() and self.music_block() is None,
-                        ),
-                        timeout=bound,
-                    )
-                except asyncio.TimeoutError:
+                        )
+                except TimeoutError:
                     log.warning(
                         "music: held music_start for room=%s gave up after %.1f s",
                         self.room_id, bound,

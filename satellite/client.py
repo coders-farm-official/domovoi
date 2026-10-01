@@ -2591,6 +2591,15 @@ class Satellite:
                 stream_rate = None
                 resampler = None  # a new response gets a fresh filter state
                 self._playback_idle.set()
+            elif release and self._post_playback_state is not None:
+                # The release of a reply that never got a stream (the device
+                # refused it), with nothing more queued: this thread holds
+                # no device, so say so. `response_start` cleared the flag,
+                # and only the branch above sets it again: left cleared,
+                # every music_start after a reply the device refused waited
+                # out its speaker wait and was dropped — the music never
+                # came back.
+                self._playback_idle.set()
             if not release:
                 # A reset before the next chunk's stream opens (a new rate,
                 # or the first chunk of a reply): more audio is about to

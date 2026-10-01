@@ -874,6 +874,26 @@ def test_the_player_gets_a_process_group_of_its_own(room_factory):
     assert room.popen_kwargs[0].get("start_new_session") is True
 
 
+def test_a_wake_while_the_network_is_down_leaves_no_turn_open(room_factory):
+    """The wake word with the socket down plays the canned "network issues"
+    clip and goes straight back to listening, inside `_wait_for_wake`: no
+    turn is left open behind it, or a music_start after the reconnect would
+    be held until the next wake word."""
+    room = room_factory()
+    room.sat._network_degraded.set()
+    room.sat._ws_disconnected_since = time.monotonic()
+    played: list = []
+    room.sat._play_canned_mp3 = lambda *a: played.append(a)
+    room.start()
+    room.say([WAKE] * 6)
+    room.wait_until(lambda: played, 10)
+    time.sleep(0.2)
+    turn_open = room.sat._turn_open
+    room.stop()
+    assert not turn_open
+    assert room.captures == []
+
+
 # ─── the pieces, without threads ──────────────────────────────────────────
 
 
@@ -1117,6 +1137,51 @@ def test_a_reply_the_device_refused_is_still_released(monkeypatch):
     assert sat.playback_q.empty()
 
 
+def test_a_reply_the_device_refused_leaves_the_speaker_free(monkeypatch):
+    """The reply's response_start marked the speaker busy; no stream ever
+    opened, so nothing marked it free again — and every music_start after
+    it waited out its speaker wait and was dropped."""
+    sat = _playback_sat(monkeypatch, RefusingOut)
+    sat._playback_idle.clear()                          # response_start
+    for _ in range(3):
+        sat.playback_q.put((16000, b"\x01\x00" * 1600))
+    sat._post_playback_state = "idle"                   # response_end: deferred
+    t = threading.Thread(target=sat._playback_thread_run, daemon=True)
+    t.start()
+    try:
+        assert sat.response_done.wait(3)
+        assert sat._playback_idle.wait(1)
+    finally:
+        sat.shutdown_event.set()
+        t.join(3)
+
+
+def test_the_music_comes_back_after_a_reply_the_device_refused(room_factory):
+    """End to end: music playing; wake; the reply's output stream cannot be
+    opened (the device still held — by the old player's buffer, say); the
+    core's auto-resume after it plays once the turn is over."""
+    room = room_factory()
+    room.sat.MUSIC_SPEAKER_WAIT_SEC = client.Satellite.MUSIC_SPEAKER_WAIT_SEC / SPEED
+    refuse = {"on": False}
+    real_out = client.sd.RawOutputStream
+
+    def out(*a, **k):
+        if refuse["on"]:
+            raise OSError("Device unavailable")
+        return real_out(*a, **k)
+
+    client.sd.RawOutputStream = out
+    room.start()
+    play_music(room)
+    refuse["on"] = True
+    room.on_end[1] = reply(followup=False, music_after_end=True)
+    room.say(WAKE_AND_COMMAND)
+    room.wait_until(lambda: len(room.ends()) == 1, 30)
+    room.wait_until(lambda: len(room.music) == 2, 10)
+    room.stop()
+    assert room.music[1].spawned >= room.captures[0]["end"]
+
+
 # ─── stopping the player and what it forked ──────────────────────────────
 
 
@@ -1153,3 +1218,30 @@ def test_without_a_group_the_player_alone_is_stopped(monkeypatch):
     stand_in = _Proc()                                   # no pid at all
     client._signal_player(stand_in, kill=True)
     assert stand_in.calls == ["kill"]
+
+
+def test_stopping_the_music_signals_the_players_whole_group(monkeypatch):
+    """`_stop_music` goes through `_signal_player`, not the process alone."""
+    sat = _music_sat(monkeypatch)
+
+    def popen(argv, **kw):
+        p = FakeMusic(argv, "plays")
+        p.pid = 4321 + len(sat.procs)
+        sat.procs.append(p)
+        return p
+
+    monkeypatch.setattr(client.subprocess, "Popen", popen)
+    sent: list[tuple[int, int]] = []
+
+    def killpg(pid, sig):
+        sent.append((pid, sig))
+        for p in sat.procs:
+            if p.pid == pid:
+                p.terminate()
+
+    monkeypatch.setattr(client.os, "killpg", killpg, raising=False)
+    sat._start_music(URL)
+    assert sat.procs and sat.procs[0].alive()
+    sat._stop_music()
+    assert sent == [(4321, client.signal.SIGTERM)]
+    assert not sat.procs[0].alive()
