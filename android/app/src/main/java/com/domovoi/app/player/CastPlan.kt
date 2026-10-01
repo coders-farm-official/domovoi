@@ -78,6 +78,28 @@ object CastPlanner {
         return CastPlan(ids, startIndex, startSec, phoneOnly, notInLibrary)
     }
 
+    /**
+     * What a cast right now would send, given the player's state. On this
+     * device: from the current item at the phone's position. While casting
+     * to a room: from where THAT room has got to ([followRoom]), at the
+     * room's elapsed time when the room is on that very item, else from its
+     * top; the phone's own position is stale by then and never used. A
+     * [remote] reading for some other room is ignored.
+     */
+    fun planFor(
+        queue: List<PlayItem>,
+        index: Int,
+        positionSec: Double,
+        target: PlayTarget,
+        remote: RemoteNowPlaying?,
+    ): CastPlan {
+        if (target !is PlayTarget.Room) return plan(queue, index, positionSec)
+        val r = remote?.takeIf { it.roomId == target.roomId }
+        val at = followRoom(queue, index, r?.title)
+        val pos = if (r != null && queue.getOrNull(at)?.title == r.title) r.elapsedSec else 0.0
+        return plan(queue, at, pos)
+    }
+
     /** Whole seconds to start a track at, from a player position. */
     fun resumeSec(positionSec: Double): Int {
         if (!positionSec.isFinite()) return 0

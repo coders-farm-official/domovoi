@@ -153,6 +153,49 @@ class CastPlanTest {
         assertEquals(0, CastPlanner.followRoom(emptyList(), 0, "Two"))
     }
 
+    // ── what the player would send (PlayerController.castPlan) ─────────────
+
+    private val office = PlayTarget.Room("office")
+
+    private fun playing(room: String, title: String?, elapsed: Double) =
+        RemoteNowPlaying(room, "play", title, "artist", elapsed, 200.0)
+
+    @Test fun onThisDeviceTheCastStartsAtThePhonesItemAndPosition() {
+        val q = listOf(lib(1, "One"), lib(2, "Two"), lib(3, "Three"))
+        val plan = CastPlanner.planFor(q, 1, 42.7, PlayTarget.Local, playing("office", "Three", 9.0))
+        assertEquals(listOf(2L, 3L), plan.trackIds)
+        assertEquals(42, plan.startSec)
+    }
+
+    @Test fun roomToRoomStartsWhereTheRoomHasGotAtItsElapsedTime() {
+        // 2026-09-30 verify: cast to den, den moved on to "Three" and sits
+        // 37 s in; casting on to office starts office there, not at "One"
+        // where the phone stopped, and not at the phone's stale position.
+        val q = listOf(lib(1, "One"), lib(2, "Two"), lib(3, "Three"), lib(4, "Four"))
+        val plan = CastPlanner.planFor(q, 0, 120.0, office, playing("office", "Three", 37.4))
+        assertEquals(listOf(3L, 4L), plan.trackIds)
+        assertEquals(2, plan.startIndex)
+        assertEquals(37, plan.startSec)
+    }
+
+    @Test fun aRoomStillOnThePhonesItemCarriesTheRoomsPositionNotThePhones() {
+        val q = listOf(lib(1, "One"), lib(2, "Two"))
+        val plan = CastPlanner.planFor(q, 0, 120.0, office, playing("office", "One", 12.0))
+        assertEquals(listOf(1L, 2L), plan.trackIds)
+        assertEquals(12, plan.startSec)
+    }
+
+    @Test fun whileCastingAnUnknownRoomTitleStartsThePhonesItemFromTheTop() {
+        val q = listOf(lib(1, "One"), lib(2, "Two"))
+        // Nothing polled yet, a title not in the queue, or a reading for
+        // another room: the phone's index, and never its stale position.
+        for (remote in listOf(null, playing("office", "Elsewhere", 50.0), playing("den", "Two", 50.0))) {
+            val plan = CastPlanner.planFor(q, 0, 120.0, office, remote)
+            assertEquals(listOf(1L, 2L), plan.trackIds)
+            assertEquals(0, plan.startSec)
+        }
+    }
+
     @Test fun followRoomSkipsPhoneSongsWithTheSameTitle() {
         val q = listOf(phone(50, "Same"), lib(2, "Same"))
         assertEquals(1, CastPlanner.followRoom(q, 0, "Same"))

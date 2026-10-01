@@ -397,19 +397,11 @@ class PlayerController(
     /**
      * What a cast right now would send: the library tracks from the current
      * one on, starting at the current position. While already casting, from
-     * where that room has got to rather than where the phone stopped.
+     * where that room has got to rather than where the phone stopped
+     * ([CastPlanner.planFor], JVM-tested).
      */
-    fun castPlan(): CastPlan {
-        val q = _queue.value
-        val t = _target.value
-        if (t is PlayTarget.Room) {
-            val r = _remote.value?.takeIf { it.roomId == t.roomId }
-            val at = CastPlanner.followRoom(q, _index.value, r?.title)
-            val pos = if (r != null && q.getOrNull(at)?.title == r.title) r.elapsedSec else 0.0
-            return CastPlanner.plan(q, at, pos)
-        }
-        return CastPlanner.plan(q, _index.value, _positionSec.value)
-    }
+    fun castPlan(): CastPlan =
+        CastPlanner.planFor(_queue.value, _index.value, _positionSec.value, _target.value, _remote.value)
 
     /**
      * Hand the queue to a satellite room (see [CastPlan]), or with null come
