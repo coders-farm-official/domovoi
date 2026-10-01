@@ -116,9 +116,10 @@ for an answer or fire a side effect.
 * **Music coordination** rides the same turn. A `music_action="start"`
   response sends `music_start {stream_url}` and arms the `music_ready`
   handshake; music suppressed by wake capture auto-resumes after a non-music
-  turn; `expect_followup` suppresses resume for one turn so the respawned
-  player can't saturate the mic while the Pi is listening for the reply.
-  Details in [media-and-library.md](media-and-library.md).
+  turn; `expect_followup` holds the resume until the follow-up window has
+  closed, so the respawned player can't saturate the mic while the Pi is
+  listening for the reply, and no `music_start` goes to a room with a
+  capture open. Details in [media-and-library.md](media-and-library.md).
 * **Utterance cap.** Audio buffering stops at 60 s of PCM per utterance;
   overflow is dropped with a log rather than growing without bound.
 * **Unknown-voice buffering.** When the speaker is unknown (and not

@@ -514,6 +514,10 @@ _ANNOUNCE_MUSIC_RESTART_MARGIN_SEC = 2.0
 # timer delivery's own cap) it keeps waiting.
 _ANNOUNCE_MUSIC_QUEUE_POLL_SEC = 0.1
 _ANNOUNCE_MUSIC_QUEUE_MARGIN_SEC = 30.0
+# Same for a room's held music_start (StreamSession.hold_music_start): the
+# session forgets it the moment anything supersedes it, its own send
+# included, while it may still be running.
+_MUSIC_HOLDS: set[asyncio.Task[None]] = set()
 
 
 def _is_missing_pairing_table(exc: Exception) -> bool:
@@ -564,6 +568,21 @@ ANNOUNCE_CONNECTING_SEC = 3.0
 ANNOUNCE_FOLLOWUP_HOLD_SEC = 9.0
 # A beat after any playback ends before the next announcement starts.
 ANNOUNCE_SETTLE_SEC = 1.0
+
+# A music_start a room cannot take yet is HELD, not dropped, and sent once
+# the room is free (StreamSession.hold_music_start, music_block): a capture
+# is open, a turn is being answered, a question's follow-up window is open
+# (the reply asked something and the satellite is listening for the answer
+# without a wake word), an announcement is on its way, or the room is in a
+# call, chat mode or a wake-word recording. mpg123 started under an open
+# capture is heard by it as continuous speech, so the capture runs to
+# `max_record_seconds` and the lyrics get answered (dining room,
+# 2026-09-30). Checked this often...
+MUSIC_HOLD_POLL_SEC = 0.25
+# ...and given up on after this long: a room busy for ten minutes (a long
+# chat, a wake-word recording session) has moved on, and its next turn
+# auto-resumes the music anyway.
+MUSIC_HOLD_MAX_SEC = 600.0
 
 # The turns a server may end early: a command after the wake word, or the
 # answer to a question it just asked. Never a chat turn (Letta, long
@@ -804,6 +823,11 @@ async def send_music_start(
     decided (the restart after an announcement runs on its own): asked after
     the stream wait, with nothing awaited between it and the send, and a
     False sends nothing and arms nothing. Returns whether the frame went.
+
+    This sends; it does not decide whether the room can take the frame now.
+    Everything but a turn's own start at the end of its reply goes through
+    `StreamSession.start_music` / `hold_music_start`, which hold a start
+    while the room is listening, answering or asking (`music_block`).
     """
     from domovoi.clients.mpd import ensure_stream_serving
 
@@ -1320,6 +1344,11 @@ class StreamSession:
         # `_announce_lock`, and any queued behind it or still synthesizing
         # its first sentence. A music restart waits while there are any.
         self._announce_callers = 0
+        # The room's one held music_start (`hold_music_start`): a start the
+        # room could not take when it was decided, sent once nothing here is
+        # listening, answering or asking (`music_block`). Any music frame
+        # that goes out to the room supersedes it (`_safe_send_text`).
+        self._music_hold_task: asyncio.Task[None] | None = None
         # ── Two-way drop-in (Feature 4) ──────────────────────────────
         # When paired, `dropin_peer` is the live StreamSession on the
         # other end of the call. While it's set (and no utterance is
@@ -1544,6 +1573,8 @@ class StreamSession:
         finally:
             if self._response_task and not self._response_task.done():
                 self._response_task.cancel()
+            # A music_start held for this socket has nobody to go to.
+            self._drop_music_hold()
             # Nobody is left to use a speculative transcript.
             self._discard_speculation()
             self._committed = None
@@ -3685,18 +3716,22 @@ class StreamSession:
         # mpg123 on the Pi, the response has no music_action, and
         # without resume the music would stay dead.
         #
-        # `expect_followup` SUPPRESSES every music_start emission (both
-        # the explicit start and the auto-resume) for this turn. The
-        # bot just asked the user a question and the satellite is about
-        # to capture the wake-word-free reply; respawning mpg123 in
-        # that window saturates the Pi's mic, trips noisy_capture, and
-        # traps the user in a "having trouble hearing you" loop. The
-        # 2026-05-08 12:35 incident: "Add that to my library" → "should
-        # I add it too?" → music auto-resumed → mic saturated → 4 noisy
-        # retries before the user gave up. Music_stop still fires under
-        # expect_followup because that's the safe direction. The URL
-        # is still recorded in `resumable` so the followup turn (which
-        # will NOT carry expect_followup itself) auto-resumes normally.
+        # `expect_followup` HOLDS every music_start emission (both the
+        # explicit start and the auto-resume) for this turn. The bot just
+        # asked the user a question and the satellite is about to capture
+        # the wake-word-free reply; respawning mpg123 in that window
+        # saturates the Pi's mic, trips noisy_capture, and traps the user
+        # in a "having trouble hearing you" loop. The 2026-05-08 12:35
+        # incident: "Add that to my library" → "should I add it too?" →
+        # music auto-resumed → mic saturated → 4 noisy retries before the
+        # user gave up. Music_stop still fires under expect_followup
+        # because that's the safe direction. The URL stays in `resumable`,
+        # so a followup turn (which will NOT carry expect_followup itself)
+        # auto-resumes normally; and the start is held for the room
+        # (`hold_music_start`) until the follow-up window has closed, so a
+        # question nobody answers — the satellite's follow-up capture times
+        # out with no utterance_end, and no turn follows — still gets the
+        # music back (it used to stay off until the next wake word).
         # Drop-in turns are excluded entirely: while a call is live
         # (`dropin_peer` set) the Pi's output belongs to the relay, and a
         # turn that starts/ends a call (`dropin_action` set) has its music
@@ -3732,12 +3767,15 @@ class StreamSession:
                         self.ws.app, self, self.room_id, response.music_stream_url,
                     )
                 else:
-                    # No music_start to the satellite means no music_ready
-                    # is coming. Resume MPD immediately so the next non-
-                    # followup turn auto-resumes mpg123 against a stream
+                    # No music_start to the satellite now means no
+                    # music_ready either. Resume MPD immediately so the next
+                    # non-followup turn auto-resumes mpg123 against a stream
                     # that's actually emitting song frames instead of an
                     # indefinitely-paused queue.
                     await _resume_mpd_for_room(self.room_id)
+                    # And bring the player back once the question's
+                    # follow-up window has closed with no turn to do it.
+                    self.hold_music_start(response.music_stream_url, "followup")
                 # See _admin_dispatch_music for the symmetric comment:
                 # now-playing stamps / current_playlist aren't cleared
                 # on start because matched_handler isn't a reliable
@@ -3776,6 +3814,10 @@ class StreamSession:
                 await send_music_start(
                     self.ws.app, self, self.room_id, resumable[self.room_id],
                 )
+            elif self.room_id in resumable:
+                # The turn asked a question: the same resume, held until
+                # its follow-up window has closed (see above).
+                self.hold_music_start(resumable[self.room_id], "followup")
 
         # Intercom fan-out — synthesize the announcement once and inject
         # it into every target room's WebSocket. The originating Pi
@@ -4813,6 +4855,168 @@ class StreamSession:
         stays True until the next wake word."""
         return self.utterance_active and now - self._last_audio_at < ANNOUNCE_CAPTURE_FRESH_SEC
 
+    def _announcement_coming(self) -> bool:
+        """Another announcement is on its way to this room: an `announce`
+        call queued on the room's lock or still synthesizing its first
+        sentence (`_announce_callers`), a drop-in prompt holding the lock, or
+        a timer or reminder the delivery is still to announce here
+        (`TimerDelivery.announcing_to`). Its own end restarts the music."""
+        if self._announce_callers or self._announce_lock.locked():
+            return True
+        delivery = getattr(self.ws.app.state, "timer_delivery", None)
+        coming = getattr(delivery, "announcing_to", None)
+        return bool(coming is not None and coming(self.room_id))
+
+    def music_block(self, now: float | None = None) -> str | None:
+        """Why a music_start must not go to this room right now, or None
+        when it may.
+
+        The satellite starts its player as soon as its speaker is free, and
+        a satellite older than the music hold (satellite/client.py
+        `_music_hold_reason`) does so whatever else it is doing — into an
+        open capture, which then hears the music as one long sentence. So
+        the room is busy while: it is in a call (the call's end restores
+        the music), recording wake-word clips, or in chat mode; a capture
+        is live (a follow-up nobody answered sends no utterance_end — its
+        audio stopping ends it); a turn is being answered (its end makes
+        its own music decision); another announcement is on its way (its
+        end restarts the music); or a reply asked a question and its answer
+        may still start (`_followup_hold_until`, which the answer's
+        utterance_start clears). Called from a task: the turn that asks is
+        not "busy" to itself."""
+        if now is None:
+            now = time.monotonic()
+        if self.dropin_peer is not None:
+            return "in_call"
+        if self.wake_recording is not None:
+            return "recording"
+        if self.conversational_mode:
+            return "chat"
+        if self._capturing(now):
+            return "capturing"
+        turn = self._response_task
+        if turn is not None and not turn.done() and turn is not asyncio.current_task():
+            return "responding"
+        if self._announcement_coming():
+            return "announcing"
+        if now < self._followup_hold_until:
+            return "followup"
+        return None
+
+    async def start_music(self, url: str) -> bool:
+        """A music_start decided outside this room's turns — a dashboard or
+        app cast (`main._admin_dispatch_music`), a drop-in's restore: sent
+        now when the room is free (`music_block`), held for when it is
+        otherwise (`hold_music_start`). The room's `resumable_music` entry
+        must already be ``url``. Returns whether it went now."""
+        reason = self.music_block()
+        if reason is None:
+            if await send_music_start(
+                self.ws.app, self, self.room_id, url,
+                still_wanted=lambda: self.music_block() is None,
+            ):
+                return True
+            # Busy again by the time its stream was ready.
+            reason = self.music_block() or "busy"
+        self.hold_music_start(url, reason)
+        return False
+
+    def hold_music_start(self, url: str, reason: str = "busy") -> None:
+        """Send ``url``'s music_start once this room is free (`music_block`)
+        instead of now; replaces any start already held here.
+
+        Held, never dropped: a question's follow-up that nobody answers ends
+        on the satellite with no utterance_end and no turn, so nothing else
+        would ever bring the music back. Superseded by anything that decides
+        the room's music in the meantime — a turn's own music_start or
+        music_stop, a cast, a call (`_safe_send_text` drops the hold for
+        every music frame) — and dropped when the room's resume intent is
+        gone or changed (a stop), the socket is replaced or closed, or after
+        `MUSIC_HOLD_MAX_SEC`."""
+        self._drop_music_hold()
+        task = asyncio.create_task(
+            self._send_held_music(url, reason), name=f"music-hold-{self.room_id}",
+        )
+        self._music_hold_task = task
+        _MUSIC_HOLDS.add(task)
+        task.add_done_callback(_MUSIC_HOLDS.discard)
+
+    def _drop_music_hold(self) -> None:
+        """Forget the start held for this room, if any (see
+        `hold_music_start`). Safe from the held task itself: it is then
+        let finish, not cancelled."""
+        task, self._music_hold_task = self._music_hold_task, None
+        if task is None or task.done():
+            return
+        try:
+            me = asyncio.current_task()
+        except RuntimeError:
+            me = None
+        if task is not me:
+            task.cancel()
+
+    async def _send_held_music(self, url: str, reason: str) -> None:
+        """The held start's task: wait until the room is free, then send it
+        through `send_music_start`, which asks again last thing before the
+        frame; busy again by then, it holds on."""
+        app = self.ws.app
+        me = asyncio.current_task()
+
+        def mine() -> bool:
+            return (
+                self._music_hold_task is me
+                and app.state.resumable_music.get(self.room_id) == url
+                and app.state.active_sessions.get(self.room_id) is self
+            )
+
+        log.info(
+            "music: room=%s is busy (%s); its music_start waits until it is free",
+            self.room_id, reason,
+        )
+        give_up = time.monotonic() + MUSIC_HOLD_MAX_SEC
+        bound = settings.music_stream_ready_timeout_sec + _ANNOUNCE_MUSIC_RESTART_MARGIN_SEC
+        try:
+            while True:
+                while mine() and self.music_block() is not None:
+                    if time.monotonic() >= give_up:
+                        log.warning(
+                            "music: room=%s stayed busy for %.0f s; its held "
+                            "music_start is dropped", self.room_id, MUSIC_HOLD_MAX_SEC,
+                        )
+                        return
+                    await asyncio.sleep(MUSIC_HOLD_POLL_SEC)
+                if not mine():
+                    return
+                try:
+                    # Bounded in THIS task (`asyncio.timeout`), never in one
+                    # of its own: the send drops this hold
+                    # (`_safe_send_text` → `_drop_music_hold`), which lets
+                    # the hold's own task finish and cancels any other.
+                    # `asyncio.wait_for` runs its awaitable in a new task
+                    # before Python 3.12 (requires-python is 3.11), so
+                    # wrapped in it the hold cancelled itself mid-send and
+                    # the start was lost.
+                    async with asyncio.timeout(bound):
+                        sent = await send_music_start(
+                            app, self, self.room_id, url,
+                            still_wanted=lambda: mine() and self.music_block() is None,
+                        )
+                except TimeoutError:
+                    log.warning(
+                        "music: held music_start for room=%s gave up after %.1f s",
+                        self.room_id, bound,
+                    )
+                    return
+                if sent or not mine():
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — nobody awaits this task
+            log.warning("music: held music_start for room=%s failed: %s", self.room_id, e)
+        finally:
+            if self._music_hold_task is me:
+                self._music_hold_task = None
+
     def announce_block(self, now: float | None = None) -> tuple[str, bool] | None:
         """Why an out-of-turn announcement should wait right now, as
         ``(reason, hard)``, or None when the room can take one. Hard
@@ -5149,16 +5353,19 @@ class StreamSession:
 
         Running after `announce` has returned, it can find the room moved
         on by the time the stream is ready, so it asks last thing before
-        the frame (`send_music_start`'s ``still_wanted``) and sends nothing
-        when: the room was stopped (its resume intent is gone or changed);
-        a turn is in flight there — a live capture or a response, whose end
-        auto-resumes the music itself, where a music_start now would spawn
-        mpg123 over the capture (a capture whose audio stopped arriving is
-        over: a follow-up nobody answered sends no utterance_end); a
-        drop-in call owns the speaker (its end restores the music); this
-        socket was replaced or closed; or a later announcement here started
-        a restart of its own. Another announcement that began while the
-        stream was readied is waited for again, as above.
+        the frame (`send_music_start`'s ``still_wanted``). It sends nothing
+        when the room was stopped (its resume intent is gone or changed),
+        this socket was replaced or closed, or a later announcement here
+        started a restart of its own. Another announcement that began while
+        the stream was readied is waited for again, as above. And when the
+        room is otherwise busy (`music_block`) — a live capture, a turn
+        being answered, a question's follow-up window, a call, chat mode — a
+        music_start now would spawn mpg123 over the capture (a capture whose
+        audio stopped arriving is over: a follow-up nobody answered sends no
+        utterance_end), so the start is held for the room instead
+        (`hold_music_start`): a turn's own music decision or the call's
+        restore supersedes it, and a capture that ends with no turn — the
+        follow-up nobody answered — gets the music back.
         """
         app = self.ws.app
         self._announce_music_seq += 1
@@ -5171,22 +5378,10 @@ class StreamSession:
                 and app.state.active_sessions.get(self.room_id) is self
             )
 
-        def another_announcement_coming() -> bool:
-            if self._announce_callers or self._announce_lock.locked():
-                return True
-            delivery = getattr(app.state, "timer_delivery", None)
-            coming = getattr(delivery, "announcing_to", None)
-            return bool(coming is not None and coming(self.room_id))
+        another_announcement_coming = self._announcement_coming
 
         def still_wanted() -> bool:
-            turn = self._response_task
-            return (
-                current()
-                and not another_announcement_coming()
-                and not self._capturing(time.monotonic())
-                and (turn is None or turn.done())
-                and self.dropin_peer is None
-            )
+            return current() and self.music_block() is None
 
         bound = settings.music_stream_ready_timeout_sec + _ANNOUNCE_MUSIC_RESTART_MARGIN_SEC
 
@@ -5204,6 +5399,12 @@ class StreamSession:
                         return
                     await asyncio.sleep(_ANNOUNCE_MUSIC_QUEUE_POLL_SEC)
                 if not current():
+                    return
+                busy = self.music_block()
+                if busy is not None:
+                    # A capture, a turn, a question, a call or a chat has
+                    # the room: its start waits for it (see above).
+                    self.hold_music_start(url, busy)
                     return
                 try:
                     sent = await asyncio.wait_for(
@@ -5223,10 +5424,11 @@ class StreamSession:
                         "intercom: music restart for room=%s failed: %s", self.room_id, e,
                     )
                     return
-                if sent or not (current() and another_announcement_coming()):
+                if sent or not current():
                     return
-                # Another announcement began while the stream was readied:
-                # wait for it as above.
+                # The room got busy while its stream was readied: another
+                # announcement began (waited for as above), or something
+                # else that the start is held for (the check above).
 
         task = asyncio.create_task(restart(), name=f"announce-music-{self.room_id}")
         _ANNOUNCE_MUSIC_RESTARTS.add(task)
@@ -5240,6 +5442,11 @@ class StreamSession:
         # silently disarm the guard for that path.
         if payload.get("type") == "response_start":
             self._last_spoken_text = str(payload.get("text") or "")
+        if payload.get("type") in ("music_start", "music_stop"):
+            # Whatever music this room gets now supersedes a start held for
+            # it (`hold_music_start`) — dropped BEFORE the send, so the held
+            # one cannot go out behind this frame.
+            self._drop_music_hold()
         try:
             await self.ws.send_text(json.dumps(payload))
         except Exception:
@@ -5737,6 +5944,10 @@ class StreamSession:
         # ring's turn, brings the music back. (A phone peer has neither.)
         if isinstance(getattr(target, "_announce_music_seq", None), int):
             target._announce_music_seq += 1
+        # So does a start held for the room (`hold_music_start`).
+        drop_hold = getattr(target, "_drop_music_hold", None)
+        if drop_hold is not None:
+            drop_hold()
         if target.room_id in resumable:
             await target._safe_send_text({"type": "music_stop"})
             # Cancel any pending music_ready handshake so a late resume
@@ -5750,11 +5961,17 @@ class StreamSession:
 
     async def _restore_music_for(self, target: "StreamSession") -> None:
         """Resume music on the target Pi if it had something playing before
-        the call (mirrors announce()'s music-resume tail). Best-effort."""
+        the call (mirrors announce()'s music-resume tail). Best-effort.
+        Through `start_music`: a room that is listening (its "hang up"
+        command, a follow-up) or answering gets it once it is free."""
         resumable: dict[str, str] = self.ws.app.state.resumable_music
         url = resumable.get(target.room_id)
         if url:
-            await send_music_start(self.ws.app, target, target.room_id, url)
+            start = getattr(target, "start_music", None)
+            if start is not None:
+                await start(url)
+            else:
+                await send_music_start(self.ws.app, target, target.room_id, url)
 
     async def prompt_dropin(self, text: str) -> None:
         """Confirm-mode invite to the target. Like ``announce()`` but (a)

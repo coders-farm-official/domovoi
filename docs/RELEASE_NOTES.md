@@ -4,6 +4,82 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-01 — Music no longer plays into the microphone
+
+### Do this once, after upgrading
+
+**Restart the core**, then **upgrade each satellite** (Satellites → the
+satellite → Overview → **Upgrade satellite**). Either one alone already
+keeps the music out of the follow-up after a question and out of a
+capture a dashboard cast lands in. You need the satellite for the rest: a
+music start that crosses a wake word on the way, the follow-up starting
+before the question has finished, and the stop when the satellite's own
+player is ever found running under a capture.
+
+### What changes for the people in the house
+
+* **Talking over music works again.** The satellite could start its
+  music player while it was listening — after a reply that asked a
+  question ("Want me to check that online?"), or when music was started
+  from the dashboard or the app during a command. The microphone then
+  heard the music as one long sentence: it listened until its 30 s limit
+  and the lyrics were answered (dining room, 2026-09-30, "it seems to be
+  listening forever").
+* **The music comes back after a question nobody answers.** It used to
+  stay off until the next wake word; now it returns a moment after the
+  satellite stops listening for the answer.
+* **The satellite listens for the answer to its question only once the
+  question has finished playing.** About half the time it started about
+  two seconds early, while the question was still being asked.
+* Music started from the dashboard or the app while someone is talking to
+  the room, or while it waits for the answer to a question, starts once
+  that is over instead of at once.
+
+### What changed
+
+* Satellite: a `music_start` that arrives while a turn is in progress —
+  the wake acknowledgement, a capture, the reply, a follow-up window, from
+  the wake word until the satellite is listening for the next one — or
+  during chat mode, a drop-in call or a wake-word recording, is held, not
+  played, and not dropped. It plays once that is over (log: `music:
+  holding <url> until the turn is over (...)`, then `music: the turn is
+  over; starting <url>`). A `music_stop`, a wake word, a barge-in or the
+  reply's `response_start` still drops it, and the core decides the music
+  again after that reply. The 10 s wait for the speaker now counts only
+  once nothing else holds the start.
+* Satellite: the release a reply's `response_end` defers until its audio
+  has played out (the follow-up capture, the ring) fired when the reply's
+  first chunk opened the output, whenever `response_end` was handled
+  first. It fires when the audio has played out. A reply whose output
+  could not be opened at all (the sound card still busy) also leaves the
+  speaker marked free again: it stayed marked busy, and the music after
+  that turn waited out its 10 s and never came back.
+* Satellite: if its own music player is ever running while a capture is
+  open, it is stopped at the next frame and the log says so at ERROR
+  (`this satellite's own music player is running while the microphone is
+  open`), so a capture can no longer run 30 s on the satellite's own
+  music. mpg123 now runs in a process group of its own and is stopped as
+  a group: its `-b` output buffer runs in a forked child process.
+* Core: a `music_start` is sent only to a room that can take it
+  (`StreamSession.music_block`): no capture live, no turn being answered,
+  no announcement on its way, not in a call, chat mode or a wake-word
+  recording, and no question waiting for its answer. Otherwise it is held
+  and sent once the room is free (log: `music: room=<room> is busy (...);
+  its music_start waits until it is free`); a turn's own `music_start` or
+  `music_stop`, a call, a stop or a closed socket supersedes it, and it is
+  given up after 10 minutes. This covers the auto-resume after a reply
+  that asks a question (it used to be suppressed until the next turn),
+  dashboard and app casts, a drop-in's restore, and the restart after an
+  announcement (it used to be dropped when a capture was open).
+* A question's follow-up window closes when the answer's capture ends (the
+  answer's turn decides the music), when the satellite gives up listening
+  (its audio stops for 1.5 s; it sends no `utterance_end`), or 9 s after
+  the question's estimated end when no capture comes.
+* Older satellites and cores work with the new ones in both directions.
+  An older satellite gets every core-side hold. An older core's
+  auto-resume after a question still sends nothing, so with it a
+  question's music comes back at the next turn, as before.
+
 ## 2026-09-30 — Upgrading to this release, in order
 
 The five 2026-09-30 entries below each say what they need. Done in this

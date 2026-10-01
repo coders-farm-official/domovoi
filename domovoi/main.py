@@ -2768,10 +2768,18 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
             # serve first (a cast is very often the first play since the
             # room's MPD daemon started, which is exactly when it doesn't),
             # then the music_start, then the prepare/resume handshake so
-            # admin "Play in {room}" clicks don't stutter either.
-            await send_music_start(
-                app, sess, room_id, response.music_stream_url,
-            )
+            # admin "Play in {room}" clicks don't stutter either. Through
+            # the session's `start_music`: a room that is listening (a
+            # capture, a question's follow-up window) or answering gets the
+            # start once it is free instead of now — a player started under
+            # an open capture is heard as one long sentence.
+            start = getattr(sess, "start_music", None)
+            if start is not None:
+                await start(response.music_stream_url)
+            else:
+                await send_music_start(
+                    app, sess, room_id, response.music_stream_url,
+                )
         else:
             # No Pi connected to consume the stream. The handler queued
             # MPD paused; without a satellite to send music_ready, the

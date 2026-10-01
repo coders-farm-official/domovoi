@@ -178,8 +178,18 @@ Around that happy path:
 * **Wake capture kills the Pi's player**, so after a non-music turn ("what
   time is it?" mid-song) the server auto-resends `music_start` from its
   `resumable_music` memory — unless the response carries `expect_followup`,
-  in which case resume is suppressed for one turn so the player can't
-  saturate the mic while the Pi listens for the reply.
+  in which case the resume is held until the question's follow-up window
+  has closed, so the player can't saturate the mic while the Pi listens
+  for the reply: the answer's own turn decides the music, and a question
+  nobody answers gets it back once the Pi stops listening.
+* **Music never starts under a capture.** A player started while the Pi
+  listens is heard as one long sentence: the capture runs to its 30 s
+  limit and the lyrics get answered. So every `music_start` the room
+  can't take yet — a cast during a command, an announcement's restart, a
+  drop-in's restore — is held by the server until the room is free
+  (`StreamSession.music_block`, `hold_music_start`), and a current Pi
+  holds one that still reaches it during a turn until the turn is over
+  (`_music_hold_reason`).
 * **"Stop"** sends `music_stop`, clears the room's resumable entry and its
   now-playing stamp.
 * **The playback-state sweeper** (a core poll worker) clears now-playing
