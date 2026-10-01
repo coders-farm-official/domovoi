@@ -559,13 +559,31 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
 };
 
 /* ---- Tabs (page-level helper) ------------------------------ */
+// Keeps the active tab visible in a strip that has scrolled sideways.
+// Moves only the strip's own scrollLeft — scrollIntoView would also
+// scroll the page vertically.
+const revealTab = (el) => {
+  const strip = el && el.parentElement;
+  if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+  const left = el.offsetLeft - strip.offsetLeft;
+  if (left < strip.scrollLeft) strip.scrollLeft = left;
+  else if (left + el.offsetWidth > strip.scrollLeft + strip.clientWidth)
+    strip.scrollLeft = left + el.offsetWidth - strip.clientWidth;
+};
+
+// A strip wider than its card (Music's six tabs at 375px) scrolls
+// sideways inside the card instead of pushing the page wider.
 const Tabs = ({ tabs, value, onChange, padX = 0 }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border)',
-                padding: `0 ${padX}px` }}>
+  // The baseline is an inset shadow, not a border-bottom: a scrolling
+  // box clips at its padding edge, which would cut the active tab's
+  // underline where it overlaps a real border.
+  <div className="tabs-strip" style={{ display: 'flex', alignItems: 'center', gap: 0,
+                boxShadow: 'inset 0 -1px 0 var(--border)',
+                padding: `0 ${padX}px`, overflowX: 'auto' }}>
     {tabs.map(t => {
       const active = t.id === value;
       return (
-        <button key={t.id} onClick={() => onChange(t.id)}
+        <button key={t.id} onClick={() => onChange(t.id)} ref={active ? revealTab : undefined}
           // Icon-only mode (set `icon` on a tab) keeps a row of many tabs from
           // overflowing — the label rides as a native hover tooltip. Tabs
           // without `icon` render their text label exactly as before.
@@ -575,7 +593,8 @@ const Tabs = ({ tabs, value, onChange, padX = 0 }) => (
                    background: 'transparent', border: 'none', cursor: 'pointer',
                    padding: t.icon ? '12px 13px' : '12px 14px', color: active ? 'var(--fg)' : 'var(--fg-muted)',
                    borderBottom: `2px solid ${active ? 'var(--brand)' : 'transparent'}`,
-                   marginBottom: '-1px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                   display: 'inline-flex', alignItems: 'center', gap: 6,
+                   flexShrink: 0, whiteSpace: 'nowrap' }}>
           {t.icon ? <Icon name={t.icon} size={17}/> : t.label}
           {t.count != null && <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>{t.count}</span>}
         </button>

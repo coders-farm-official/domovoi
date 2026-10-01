@@ -504,6 +504,11 @@ html.mp-docked { --player-h: 64px; }
   .np-eq-presets { flex-wrap: wrap; }
 }
 
+/* Shared <Tabs/> strip (components.jsx): scrolls sideways when the tabs
+   outgrow the card, with no scrollbar drawn under the underline. */
+.tabs-strip { scrollbar-width: none; }
+.tabs-strip::-webkit-scrollbar { display: none; }
+
 /* The Music page's Library table. The action icons sit on one line; on a
    phone six of them (212px) left the stacked track cell 87px at 375px,
    so they fold into two rows of three and the cells pad tighter. */
