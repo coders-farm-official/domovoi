@@ -880,6 +880,53 @@ async def test_a_socket_closed_before_the_first_frame_goes_back_to_pending() -> 
 
 
 @pytest.mark.asyncio
+async def test_a_delivery_still_synthesizing_at_the_stop_is_heard_after_the_restart() -> None:
+    """SIGTERM a millisecond after a pop (seen in the Linux repro): the room
+    is claimed and its first sentence is still synthesizing when the
+    teardown stops the delivery. uvicorn has closed the socket by then, so
+    the first frame fails and the row goes back to pending. Cancelled
+    there instead, the task left the row 'sending' with not one frame
+    sent, and the next boot recorded failed/core_restarted: a timer nobody
+    ever heard."""
+    h = House("garage")
+    synthesizing = asyncio.Event()
+    socket_closed = asyncio.Event()
+
+    class _Synthesizing(FakeRoom):
+        async def announce(self, text: str, **kwargs) -> None:
+            self.calls += 1
+            synthesizing.set()
+            await socket_closed.wait()          # the first sentence is rendering...
+            await asyncio.sleep(0.05)           # ...a little past the close
+            h.sessions.pop(self.room_id, None)  # announce() evicts it
+            raise AnnounceNotStarted("socket closed before the announcement started",
+                                     reason="send_failed")
+
+    h.sessions["garage"] = _Synthesizing("garage", h.clock)
+    await h.fire(due(1, "garage"))
+    await asyncio.wait_for(synthesizing.wait(), 1)
+    assert h.outcome(-1, "garage")[0] == "sending"
+
+    lifecycle.signal_shutdown("SIGTERM")
+    socket_closed.set()                         # uvicorn closes every satellite socket
+    await h.d.shutdown()
+    assert h.outcome(-1, "garage")[0] == "pending"
+
+    d2 = _restarted(h)
+    await d2.tick()
+    d2.set_accepting()
+    garage = h.connect("garage")                # tells the OLD coordinator: closed, no-op
+    d2.on_room_connected("garage")
+    for _ in range(100):
+        await _yield()
+        if not d2._tasks and not d2._aux:
+            break
+    assert garage.texts == ["Your 10 minute timer is done."]
+    assert h.outcome(-1, "garage")[0] == "spoken"
+    await d2.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_does_not_wait_on_a_task_that_eats_the_cancel(caplog) -> None:
     h = House("garage")
     release = asyncio.Event()

@@ -1491,15 +1491,29 @@ class TimerDelivery:
 
     async def shutdown(self, *, grace_sec: float = 1.0) -> None:
         """Stop every task. Rows stay pending/sending for the next boot's
-        :meth:`resume_unsettled`. A cancelled task gets ``grace_sec`` to
+        :meth:`resume_unsettled`.
+
+        The tasks first get ``grace_sec`` to end ON THEIR OWN, and only
+        then are cancelled. By the time the lifespan teardown calls this,
+        the core is shutting down (no delivery claims a room any more) and
+        uvicorn has closed every satellite socket, so a delivery caught
+        between its claim and its first frame — still synthesizing the
+        first sentence — fails that frame (``AnnounceNotStarted``) and puts
+        the room back to pending, to be heard after the restart. Cancelled
+        there instead, it left the row 'sending' with not one frame sent,
+        and the next boot recorded failed/core_restarted: a timer nobody
+        ever heard (seen 2026-09-30 with SIGTERM landing 1 ms after a pop).
+        A cancelled task then gets at most ``min(grace_sec, 0.5)`` s to
         unwind (a ledger write in flight); one that takes longer is left
         behind rather than waited on."""
         self._closed = True
         tasks = [*self._tasks.values(), *self._aux]
-        for task in tasks:
-            task.cancel()
         if tasks:
             _done, late = await asyncio.wait(tasks, timeout=grace_sec)
+            for task in late:
+                task.cancel()
+            if late:
+                _done, late = await asyncio.wait(late, timeout=min(grace_sec, 0.5))
             if late:
                 log.warning("timer delivery: %d task(s) still unwinding at shutdown", len(late))
         self._tasks.clear()
