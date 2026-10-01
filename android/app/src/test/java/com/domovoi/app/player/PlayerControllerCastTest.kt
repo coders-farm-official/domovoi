@@ -642,6 +642,25 @@ class PlayerControllerCastTest {
         rig.awaitLog("GET /api/music/now-playing")
     }
 
+    @Test fun aTappedRowsRecastOutlivesTheTabThatStartedIt() {
+        // A queue row's re-cast runs in the player tab's scope too. Cut off
+        // mid-POST, office would be on Lantern Hum while the phone's queue
+        // still pointed at Old Barrels (castFrom is NonCancellable as well).
+        castingToOffice()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        runBlocking {
+            val tab = launch { player.castFrom(3) }
+            onTheWire("POST /api/music/play-tracks")
+            tab.cancel()
+            tab.join()
+        }
+
+        assertEquals("office", rig.roomTarget)
+        assertEquals(3, player.index.value)
+        assertTrue(rig.actions().toString(), rig.actions().contains("exo.seekTo(3, 0) [target=office]"))
+    }
+
     // ---- a cast from a paused player waits paused ----------------------------------
 
     @Test fun aCastFromAPausedPhoneStartsTheRoomPausedThere() {
@@ -682,6 +701,22 @@ class PlayerControllerCastTest {
             ),
         )
         assertEquals("casting to den, paused · paused office", outcome.note)
+    }
+
+    @Test fun aRoomThatCantBeReadAtAllIsTakenToBePlaying() {
+        // Office never answered now-playing (no reading now, none from a
+        // poll): the cast to den carries on playing, as every cast did
+        // before start_paused, rather than leaving den silent.
+        playingOnThePhone()
+        rig.failing["/api/music/now-playing"] = 502
+        runBlocking { player.castTo("office") }
+        rig.log.clear()
+
+        val outcome = runBlocking { player.castTo("den") } as CastOutcome.ToRoom
+
+        val sent = rig.actions().first { it.startsWith("POST /api/music/play-tracks") }
+        assertTrue(sent, sent.contains("\"room_id\":\"den\"") && !sent.contains("start_paused"))
+        assertFalse(outcome.paused)
     }
 
     // ---- a control the room says didn't happen --------------------------------------
