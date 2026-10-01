@@ -24,8 +24,8 @@ class MainThreadWatchdog(
     private val onFreeze: (blockedMs: Long, mainStack: List<String>) -> Unit,
     private val onRecovered: (totalBlockedMs: Long) -> Unit,
     private val thresholdMs: Long = FREEZE_THRESHOLD_MS,
-    private val checkEveryMs: Long = 250,
-    private val pingEveryMs: Long = 1_000,
+    private val checkEveryMs: Long = CHECK_EVERY_MS,
+    private val pingEveryMs: Long = PING_EVERY_MS,
 ) {
     @Volatile private var thread: Thread? = null
 
@@ -85,6 +85,19 @@ class MainThreadWatchdog(
         /** Long enough that a slow first frame of a debug build is not
          *  reported; short of the 5 s input timeout behind an ANR kill. */
         const val FREEZE_THRESHOLD_MS = 3_000L
+
+        /**
+         * How often a ping goes out while the main thread is idle: one
+         * check, then this pause. A freeze is timed from the first ping
+         * posted after it began, so up to one ping interval of it goes
+         * unseen. At a ping a second, a 3.5 s freeze (the 2026-09-30
+         * player-tab freeze on the emulator) measured as little as 2.3 s
+         * and went unrecorded most of the time; at a ping every quarter
+         * second it always counts. A ping is a Runnable that stores a
+         * timestamp, and it runs only while the app is on screen.
+         */
+        const val CHECK_EVERY_MS = 100L
+        const val PING_EVERY_MS = 150L
     }
 }
 
