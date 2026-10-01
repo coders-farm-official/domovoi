@@ -4,6 +4,185 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-01 — Upgrading to this release, in order
+
+Everything since the 2026-09-30 release comes in this one update: the core
+stops when it is asked to, casting from the app and the dashboard works
+like a remote for the room, music stays out of the microphone, the app's
+player no longer freezes on a long queue, and Settings → Advanced appears
+after a sign-in. There is nothing to migrate: no Flyway step and no new
+dependency. The entries below say what each part does. In this order:
+
+1. **Pick a quiet moment**: no timer or reminder due in the next five
+   minutes, and nothing playing that you mind stopping for a minute.
+2. **Sign in as admin** on the dashboard. Upgrading a satellite needs it.
+3. **Pull the update** (Settings → Configuration → Version → Check for
+   updates → Pull the latest).
+4. **Press "Restart to apply changes", and expect this one stop to be
+   slow.** The core that is running is still the old one, and it ignores
+   the request to stop. The update waits 40 s for it, then stops it by
+   force, and the update step's detail in the version panel says so
+   (`still stopping after 40s: SIGKILLed by this script`). That is
+   expected this once. Without the update unit, `sudo systemctl restart
+   domovoi-core` waits systemd's 90 s once instead. After this, a restart
+   or an update stops the core in under a second, and the satellites are
+   back on the new core within about 5 s.
+5. **Optional, Linux: give the core's unit the new stop settings.** The fix
+   does not need them. They make systemd wait 30 s instead of 90 if a stop
+   ever hangs, and let the core's helper process finish tidying up instead
+   of being killed in the middle. A unit written from today's
+   [LINUX_HOST.md](LINUX_HOST.md) has them already. For a unit installed
+   before, run this over SSH. It takes effect at the next stop, with no
+   restart needed:
+
+   ```bash
+   sudo mkdir -p /etc/systemd/system/domovoi-core.service.d
+   printf '[Service]\nTimeoutStopSec=30\nKillMode=control-group\n' \
+     | sudo tee /etc/systemd/system/domovoi-core.service.d/stop.conf
+   sudo systemctl daemon-reload
+   systemctl show domovoi-core -p TimeoutStopUSec -p KillMode
+   ```
+
+   The last line should print `TimeoutStopUSec=30s` and
+   `KillMode=control-group`. `domovoi-web` can take the same
+   `TimeoutStopSec=30` the same way (its own `domovoi-web.service.d`).
+6. **Check it came back**: `GET /v1/admin/version` shows `running_sha` =
+   `checkout_sha` = the new commit, `restart_required` false and
+   `last_update.status` `ok`.
+7. **Upgrade every satellite** (Satellites → the satellite → Overview →
+   Upgrade satellite). Its half of keeping music out of the microphone is
+   in this update ([below](#2026-10-01--music-no-longer-plays-into-the-microphone)).
+8. **Install the new Android app.** The debug build
+   (`android/app/build/outputs/apk/debug/app-debug.apk`) installs over the
+   old app as an update. If Android refuses it (a different signature),
+   uninstall the old app, install the new one, and pair the phone again.
+   On its first launch, Settings → About → Problem reports also lists the
+   freezes and crashes of the app it replaced, if Android kept a record of
+   them.
+9. **Reload every open dashboard**, the kitchen tablet included.
+10. **Try it.** Play a library song on the phone, a minute in, and cast it
+    to a room: the room starts on that song at that point. Press next: the
+    room plays the next song you had queued, not a random one. Press
+    previous: back one song. Pick "this device": the room pauses and the
+    phone carries on from where the room was. Then press Restart on the
+    dashboard once more: the satellites should be back within seconds.
+
+## 2026-10-01 — Restarts and updates no longer wait 90 seconds
+
+### What changes for the people in the house
+
+* **A restart or an update is over in seconds.** Each one used to leave
+  the house without voice control for about a minute and a half. The core
+  ignored the request to stop, so Linux waited 90 s and then killed it.
+  It now stops in under a second, and the satellites are back on the new
+  core within about 5 s.
+* **A timer or reminder that comes due as the core stops is announced once
+  it is back.** One caught at the moment of the stop could be recorded as
+  failed without anyone hearing it. One already cut off part-way through
+  is still not repeated: nothing is announced twice.
+
+### What changed
+
+* Core: a stop request (systemd's SIGTERM, the dashboard's Restart, Ctrl+C)
+  starts the web server's own shutdown again. The core had replaced that
+  handler with its own (the cause of the 90 s), so the shutdown never ran
+  in production. Every satellite now gets a clean close (1012) and
+  reconnects. The shutdown has limits: `SHUTDOWN_GRACE_SEC` (5) for open
+  connections, `SHUTDOWN_TEARDOWN_SEC` (10) for unloading plugins and
+  stopping workers, and at `SHUTDOWN_DEADLINE_SEC` (20) the core writes
+  every thread's stack to its log and exits. A stop that hangs therefore
+  says where in the journal, instead of ending in a silent kill.
+* Plugins: each plugin's workers are stopped together under one deadline,
+  not one after another. A plugin's `on_disable` gets 5 s.
+* Update script (`scripts/linux/apply-update.sh`): the stop step waits at
+  most `DOMOVOI_UPDATE_STOP_TIMEOUT` (40 s) and then forces whatever is
+  still stopping. Its detail says how long each unit took and how it
+  ended.
+* [LINUX_HOST.md](LINUX_HOST.md): both Python units get
+  `TimeoutStopSec=30`, and the core gets `KillMode=control-group`, with the
+  reasons and the drop-in above for units already installed.
+
+## 2026-10-01 — Casting works like a remote for the room
+
+### Do this once, after upgrading
+
+**Restart the core, install the new Android app and reload every
+dashboard.** Mixed versions still cast. An older app or dashboard casts
+as it always did. This app against an older core gets a room that starts
+the song from the top, and plays even when the phone was paused.
+
+### What changes for the people in the house
+
+* **A cast starts the room where you are**: on the song that is playing,
+  at the point you have reached, then the rest of your queue. It used to
+  start at the first song of the queue, from the top.
+* **Songs saved only on the phone say they can't go to a room.** The room
+  plays from the domovoi's library and can't read the phone. The app used
+  to say "casting to office" while office stayed silent. A mixed queue
+  sends its library songs and says how many were left out.
+* **Next follows what you cast.** Next, from the app, the dashboard, the
+  lock screen or by voice, plays the next song of the queue you cast. It
+  used to replace that queue with one random library song. After the last
+  song the room stops and says "That was the last song in the queue."
+  A room playing a single song (a spoken "play …", a playlist, a song
+  streamed from a search) still gets another song on next, as before.
+* **Previous works while casting**: on the phone, the dashboard, the lock
+  screen and the room cards on the app's Music page. It goes back one
+  song; on the first song it starts that song again. It used to be greyed
+  out, and on the dashboard it moved the room forward.
+* **A paused phone or browser casts paused.** The room takes the queue and
+  waits at that point until someone presses play ("casting to office,
+  paused"). It used to start playing.
+* **Changing where it plays hands over properly.** Back to "this device"
+  or "this browser": the room is paused and the phone or browser carries
+  on from where the room had got to. Room to room: the new room starts
+  where the old one was, and the old one is paused. Playing something on
+  the phone or browser while casting ends the cast and pauses the room.
+  Two picks in quick succession are done one after the other, so two
+  rooms never end up playing.
+* **The lock screen and a headset drive the room while casting**, and the
+  notification shows the room's song ("Handoff Band · in den").
+* **A control that didn't work says so.** A pause the room never got used
+  to count as done, so a hand-off could leave the room playing. You now
+  see "couldn't pause office, it may still be playing".
+* **A failed cast says which part failed.** The room's music player runs
+  on the domovoi server: "its music player on the domovoi server isn't
+  answering (try again in a minute; if it keeps failing, restart the
+  domovoi)". Every failure used to ask whether the room's satellite was
+  online, even when the satellite was fine.
+* **A skip on a room whose music player is down answers in about 5 s**
+  ("I couldn't reach the music player."), not 10-15.
+* **Skip or previous right after a paused cast no longer kills the room's
+  music player.** The player (MPD 0.23) crashed on it, came back playing an
+  old song, and the skip reported an error.
+
+### What changed
+
+For anything else that talks to the API ([API_REFERENCE.md](API_REFERENCE.md)):
+
+* `POST /v1/admin/music/{action}/{room_id}` (and the web's
+  `/api/music/{pause|resume|stop|skip}` that pass it on) answers 200 with
+  `ok: true` only when the control happened. Otherwise it answers 502 (the
+  room's music player didn't answer), 409 (nothing is playing) or 503 (no
+  satellite has ever connected). These used to be a 200 carrying the
+  spoken apology. The 502 and 503 bodies carry `failed`: `music_player`
+  or `satellite`. Dashboard pages that report a refused call (Display,
+  Home, Music, Satellites) now show an error where they used to stay
+  silent.
+* `POST /v1/admin/music/play-tracks` (web `/api/music/play-tracks`) takes
+  `start_sec` (seconds into the first song) and `start_paused`, and its
+  failures carry the same `failed`. An older core ignores both fields.
+* New: `POST /api/music/previous/{room_id}` (device tier).
+* Skip: a room whose queue holds two songs or more uses MPD's next. The
+  smart skip (another song) is kept for one-song queues. The tool model's
+  "next" now goes through the same skip. "stop" then "skip" on a queue of
+  several songs answers "Nothing is playing right now." (it used to start
+  a random song).
+* Next and previous end a person's pause. On a paused room the core now
+  unpauses MPD (`pause 0`) before next or previous: MPD 0.23.12 crashed on
+  a next or previous while paused on a song it had not started playing,
+  which is where a paused cast leaves it.
+
 ## 2026-10-01 — Music no longer plays into the microphone
 
 ### Do this once, after upgrading
@@ -79,6 +258,78 @@ player is ever found running under a capture.
   An older satellite gets every core-side hold. An older core's
   auto-resume after a question still sends nothing, so with it a
   question's music comes back at the next turn, as before.
+
+## 2026-10-01 — The app's player no longer freezes on a long queue
+
+### Do this once, after upgrading
+
+**Install the new Android app.** Nothing on the server.
+
+### What changes for the people in the house
+
+* **The player tab opens at once, whatever is queued.** With thousands of
+  songs in the phone's queue it froze for seconds, taps piled up and then
+  went through all at once, and with about 5,000 it crashed (the
+  2026-09-30 report). Tapping a song in the phone's own music list queued
+  every song on the phone, and that list shows up whenever the server
+  hasn't answered for 10 s. Only the rows on screen are built now: the
+  player tab, a room's queue and a playlist all work this way.
+* **Playing from a long list queues up to 500 songs around the one you
+  tapped** (the 50 before it, then what follows). That is also the most a
+  cast can send to a room.
+* **The app keeps a record when something goes wrong.** Settings → About
+  → Problem reports lists the last 10 crashes, "not responding" closes and
+  freezes of 3.5 s or more on that phone, each with the code that was
+  running at the time. You can copy, share or clear them. They are never
+  uploaded and never shown on the lock screen; they stay on the phone, out
+  of its backups. A report can name the server's address.
+
+## 2026-10-01 — Settings → Advanced shows after you sign in
+
+### Do this once, after upgrading
+
+**Reload every open dashboard.** Nothing else.
+
+### What changes for the people in the house
+
+* **Signing in shows Advanced straight away.** Settings → Configuration
+  said Advanced needed an admin sign-in, and Advanced still didn't appear
+  after you signed in, signed out or reloaded. The page now reads its
+  settings again after every sign-in and sign-out, with no reload.
+* **The page says when a reload has left you view only.** The admin
+  sign-in lives only in that browser tab, by design. After a reload the
+  Admin card says **signed in (view only after reload)** and offers
+  **sign in again**. The note on Settings → Configuration has its own
+  **sign in** button.
+* **Sign out really signs out.** On a reloaded page it asks for the
+  password once (the box says why), then ends the session. It used to do
+  nothing there, and the next reload was signed in again. Signing out
+  also takes the Advanced values and unmasked secrets off the screen at
+  once.
+* A save that is refused says "Save cancelled — not signed in. Your
+  changes are still here." instead of a raw 403.
+* The same rule covers the other pages whose content depends on who is
+  signed in: the Models tab, Home's timers, and a satellite's timers.
+  They read again when you sign in, sign out, pair or unpair.
+
+## 2026-10-01 — Music library: a tidier table, and tabs that fit a phone
+
+### Do this once, after upgrading
+
+**Reload every open dashboard.**
+
+### What changes for the people in the house
+
+* **Music → Library has fewer columns.** Each song's title, artist and
+  album share one cell, with the length beside the buttons. The added,
+  via and source columns are gone from the table. A new info button at
+  the end of each row (or a click on the row) opens the song's details,
+  where they still are. On a phone the row's six buttons fold into two
+  rows of three, so the title has room.
+* **Tabs fit a phone.** A row of tabs wider than the screen (Music's,
+  Settings') used to push the page sideways, with the last tabs off the
+  edge. The tabs now scroll sideways inside their own strip, and picking
+  one brings it into view. Nothing changes on a wide screen.
 
 ## 2026-09-30 — Upgrading to this release, in order
 
