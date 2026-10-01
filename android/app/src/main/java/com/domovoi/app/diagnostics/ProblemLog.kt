@@ -52,6 +52,7 @@ object ProblemKind {
     const val START_FAILED = "failed to start"
     const val RESOURCES = "killed for resource use"
     const val FROZEN_KILL = "killed while frozen"
+    const val KILLED = "ended abruptly"
 }
 
 /** The stored log: newest first. */
@@ -109,11 +110,14 @@ data class ExitRecord(
     val rssKb: Long,
     /** The ANR trace text for an ANR; null otherwise. */
     val trace: String? = null,
+    /** ApplicationExitInfo.getStatus: the signal number for a signalled exit. */
+    val status: Int = 0,
 )
 
 /** ApplicationExitInfo.REASON_* values (stable platform constants; the
  *  newer ones are not in every SDK this compiles against). */
 object ExitReason {
+    const val SIGNALED = 2
     const val LOW_MEMORY = 3
     const val CRASH = 4
     const val CRASH_NATIVE = 5
@@ -136,6 +140,12 @@ fun exitKind(reason: Int, importance: Int): String? = when (reason) {
     ExitReason.INITIALIZATION_FAILURE -> ProblemKind.START_FAILED
     ExitReason.EXCESSIVE_RESOURCE_USAGE -> ProblemKind.RESOURCES
     ExitReason.FREEZER -> ProblemKind.FROZEN_KILL
+    // Killed by a signal nobody in Android asked for: in practice a crash
+    // that could not report itself. An OutOfMemoryError off the main thread
+    // cannot even log, so the crash handler's last resort kills the process
+    // and Android records reason 2, status 9, not a crash (seen on the
+    // emulator with the 2026-09-30 long-queue crash).
+    ExitReason.SIGNALED -> ProblemKind.KILLED
     // Reclaiming a cached app is routine; killing one in use is not.
     ExitReason.LOW_MEMORY -> if (importance <= IMPORTANCE_IN_USE) ProblemKind.LOW_MEMORY else null
     else -> null
@@ -166,6 +176,9 @@ fun ExitRecord.toProblem(): Problem? {
             ProblemKind.LOW_MEMORY -> "Android closed the app while it was in use, to free memory"
             ProblemKind.START_FAILED -> "The app failed to start"
             ProblemKind.RESOURCES -> "Android closed the app for using too many resources"
+            ProblemKind.KILLED -> "The app ended abruptly" +
+                (if (status > 0) " (signal $status)" else "") +
+                ", usually a crash it could not report, such as running out of memory"
             else -> "Android closed the app while it was frozen"
         },
         description = details,
@@ -196,7 +209,8 @@ fun ProblemLog.importingExits(exits: List<ExitRecord>): ProblemLog {
         val savedByApp = log.problems.any {
             it.source == SOURCE_APP && it.kind == ProblemKind.CRASH && it.pid == exit.pid &&
                 abs(it.atMs - exit.timestampMs) <= SAME_DEATH_WINDOW_MS &&
-                (p.kind == ProblemKind.CRASH || p.kind == ProblemKind.NATIVE_CRASH)
+                (p.kind == ProblemKind.CRASH || p.kind == ProblemKind.NATIVE_CRASH ||
+                    p.kind == ProblemKind.KILLED)
         }
         if (!savedByApp) log = log.with(p)
     }

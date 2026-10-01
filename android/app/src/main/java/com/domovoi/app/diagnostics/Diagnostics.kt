@@ -120,6 +120,7 @@ object Diagnostics {
                     // Only an ANR carries a readable text trace (a native
                     // crash's is a tombstone protobuf).
                     trace = if (info.reason == ApplicationExitInfo.REASON_ANR) readTrace(info) else null,
+                    status = info.status,
                 )
             }
     }

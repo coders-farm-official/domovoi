@@ -17,9 +17,11 @@ class ProblemLogTest {
 
     private fun freeze(at: Long) = Problem(ProblemKind.FREEZE, at, "froze", pid = 1)
 
-    private fun exit(reason: Int, at: Long, pid: Int = 200, importance: Int = 100, trace: String? = null) =
+    private fun exit(
+        reason: Int, at: Long, pid: Int = 200, importance: Int = 100, trace: String? = null, status: Int = 0,
+    ) =
         ExitRecord(reason, at, pid, description = "desc $reason", importance = importance,
-            pssKb = 150_000, rssKb = 245_760, trace = trace)
+            pssKb = 150_000, rssKb = 245_760, trace = trace, status = status)
 
     // ── Retention ─────────────────────────────────────────────────────
 
@@ -66,8 +68,30 @@ class ProblemLogTest {
         assertEquals(ProblemKind.LOW_MEMORY, exitKind(ExitReason.LOW_MEMORY, 100))
         assertEquals(ProblemKind.LOW_MEMORY, exitKind(ExitReason.LOW_MEMORY, 125))
         assertNull(exitKind(ExitReason.LOW_MEMORY, 400))
-        // Swiped away (10), signalled (2), exited normally (1), app updated (15): not problems.
-        listOf(0, 1, 2, 10, 11, 13, 15).forEach { assertNull("reason $it", exitKind(it, 100)) }
+        // Killed by a signal: a crash that could not report itself, wherever the app was.
+        assertEquals(ProblemKind.KILLED, exitKind(ExitReason.SIGNALED, 100))
+        assertEquals(ProblemKind.KILLED, exitKind(ExitReason.SIGNALED, 400))
+        // Swiped away (10), exited normally (1), app updated (15): not problems.
+        listOf(0, 1, 10, 11, 13, 15).forEach { assertNull("reason $it", exitKind(it, 100)) }
+    }
+
+    @Test fun outOfMemoryThatCouldNotReportItselfStillShows() {
+        // An OutOfMemoryError off the main thread cannot even be logged; the
+        // crash handler's last resort kills the process and Android records
+        // reason 2 (signalled), status 9, instead of a crash.
+        val p = exit(ExitReason.SIGNALED, 1_000, pid = 9_049, status = 9).toProblem()!!
+        assertEquals(ProblemKind.KILLED, p.kind)
+        assertTrue(p.summary, p.summary.startsWith("The app ended abruptly (signal 9)"))
+        assertTrue(p.description!!.contains("(Android exit reason 2)"))
+        val log = ProblemLog().importingExits(listOf(exit(ExitReason.SIGNALED, 1_000, status = 9)))
+        assertEquals(listOf(ProblemKind.KILLED), log.problems.map { it.kind })
+    }
+
+    @Test fun appSavedCrashWinsOverAndroidsSignalledRecordOfTheSameDeath() {
+        val saved = crash(at = 10_000, pid = 9_049)
+        val log = ProblemLog().with(saved)
+            .importingExits(listOf(exit(ExitReason.SIGNALED, 10_300, pid = 9_049, status = 9)))
+        assertEquals(listOf(saved), log.problems)
     }
 
     @Test fun anrExitBecomesAProblemWithItsMainThread() {
