@@ -1,9 +1,12 @@
 package com.domovoi.app
 
 import android.app.Application
+import android.content.pm.ApplicationInfo
+import android.os.StrictMode
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.domovoi.app.alerts.TimerNotifier
+import com.domovoi.app.diagnostics.Diagnostics
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -11,10 +14,32 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a crash anywhere below is recorded too.
+        Diagnostics.install(this)
+        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
         container = AppContainer(this)
         container.bus.start()
         container.alerts.start()
+        // Earlier crashes and Android's exit history, read off the main thread.
+        Diagnostics.onLaunch(this)
+    }
+
+    /**
+     * Debug builds only: log (never crash on) network and disk work on the
+     * main thread, so a blocking call that sneaks back onto it shows up in
+     * logcat as a StrictMode line while it is being developed. Release
+     * builds never install this.
+     */
+    private fun watchMainThreadIo() {
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectNetwork()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .penaltyLog()
+                .build(),
+        )
     }
 
     /**

@@ -53,7 +53,7 @@ import com.domovoi.app.ui.theme.Domovoi
 internal enum class SettingsTab(val label: String, val sub: String) {
     Connection("Connection", "Which server this app talks to, and who's listening."),
     Server("Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
-    About("About", "What Domovoi is — and a link to the user manual."),
+    About("About", "What Domovoi is, a link to the user manual, and this phone's problem reports."),
 }
 
 @Composable
@@ -237,5 +237,6 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                 }
             }
         }
+        item { ProblemReportsCard() }
     }
 }

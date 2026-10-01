@@ -329,6 +329,13 @@ fun MusicScreen() {
         "stats",
     )
 
+    // The player and room-queue tabs emit a lazy item per row, so the state
+    // their item lists are built from is collected here, only while open.
+    val playerModel = if (ui.tab == 1) rememberPlayerTabModel() else null
+    val roomQueue = if (ui.tab == 2) {
+        rememberRoomQueue(rooms, npList.firstOrNull { it.state == "play" }?.roomId)
+    } else null
+
     // ── Layout ────────────────────────────────────────────────────────
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -422,13 +429,10 @@ fun MusicScreen() {
                     onPlayNext = onPlayNext,
                     onSaveToDevice = onSaveToDevice,
                 )
-                1 -> item(key = "player") {
-                    PlayerPanel(rooms, onSaveQueue = { ui.saveQueueOpen = true })
+                1 -> if (playerModel != null) {
+                    playerTab(playerModel, rooms, onSaveQueue = { ui.saveQueueOpen = true })
                 }
-                2 -> queueTab(
-                    rooms = rooms,
-                    playingRoom = npList.firstOrNull { it.state == "play" }?.roomId,
-                )
+                2 -> if (roomQueue != null) queueTab(rooms, roomQueue)
                 3 -> playlistsTab(
                     playlists = playlists,
                     onSelect = { ui.openPlaylist = it },
@@ -473,6 +477,8 @@ fun MusicScreen() {
             )
         }
     }
+
+    roomQueue?.let { RoomQueueDialogs(it) }
 
     if (ui.saveQueueOpen) {
         PromptDialog(

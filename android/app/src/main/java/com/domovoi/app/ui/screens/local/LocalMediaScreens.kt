@@ -52,6 +52,7 @@ import com.domovoi.app.data.LocalMedia
 import com.domovoi.app.data.LocalTrack
 import com.domovoi.app.data.LocalVideo
 import com.domovoi.app.player.PlayItem
+import com.domovoi.app.player.QueueWindow
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.fmtDur
@@ -121,19 +122,25 @@ private fun LocalMusicList() {
     }
 
     val q = filter.trim().lowercase()
-    val shown = tracks.orEmpty().filter {
-        q.isBlank() || it.title.lowercase().contains(q)
-            || it.artist?.lowercase()?.contains(q) == true
-            || it.album?.lowercase()?.contains(q) == true
+    val shown = remember(tracks, q) {
+        tracks.orEmpty().filter {
+            q.isBlank() || it.title.lowercase().contains(q)
+                || it.artist?.lowercase()?.contains(q) == true
+                || it.album?.lowercase()?.contains(q) == true
+        }
     }
 
+    // The tapped track plus its neighbours, not every track on the phone: a
+    // whole-device queue (thousands of songs) stalled playback start and,
+    // later, the Music page's player tab. See player/QueueWindow.kt.
     fun play(track: LocalTrack) {
-        val items = shown.map {
+        val window = QueueWindow.around(shown, shown.indexOf(track).coerceAtLeast(0))
+        val items = window.items.map {
             PlayItem.fromDeviceAudio(
                 it.id, it.title, it.artist, it.album, it.durationSec, it.uri, it.albumArtUri,
             )
         }
-        app.player.playItems(items, shown.indexOf(track).coerceAtLeast(0))
+        app.player.playItems(items, window.index)
     }
 
     Column(Modifier.fillMaxSize()) {

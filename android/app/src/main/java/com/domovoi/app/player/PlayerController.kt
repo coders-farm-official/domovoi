@@ -176,13 +176,18 @@ class PlayerController(
     }
 
     // ---- queue ------------------------------------------------------------
+    /** Replace the queue and play. A list longer than [QueueWindow.MAX] is
+     *  cut to a window around [startIndex]: every item costs a MediaItem
+     *  built here on the main thread, and the media session publishes them
+     *  all. */
     fun playItems(items: List<PlayItem>, startIndex: Int = 0, resumeSec: Double = 0.0, speed: Float? = null) {
         if (items.isEmpty()) return
+        val window = QueueWindow.around(items, startIndex)
         ensureService()
         _target.value = PlayTarget.Local
-        _queue.value = items
-        _index.value = startIndex
-        exoPlayer.setMediaItems(items.map(::mediaItemFor), startIndex, (resumeSec * 1000).toLong())
+        _queue.value = window.items
+        _index.value = window.index
+        exoPlayer.setMediaItems(window.items.map(::mediaItemFor), window.index, (resumeSec * 1000).toLong())
         speed?.let { exoPlayer.setPlaybackSpeed(it) }
         exoPlayer.prepare()
         exoPlayer.play()
