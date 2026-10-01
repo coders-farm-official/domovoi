@@ -349,6 +349,26 @@ const _castRefused = () => {
   e.castRefused = true;
   return e;
 };
+/* Where a room playing this queue has got to: from `index` on, the first
+ * library item whose title is the room's now-playing title (`np` is the
+ * room's /api/music/now-playing row), at the room's elapsed time when the
+ * room is on that very item. Without a usable reading: `index`, from its top
+ * (`known: false`). The Android app's CastPlanner.followRoom / handBack. */
+const _castFollowRoom = (queue, index, np) => {
+  const q = queue || [];
+  const from = Math.max(0, Math.min(index, q.length - 1));
+  const title = np && np.song && np.song.title;
+  if (title) {
+    for (let i = from; i < q.length; i++) {
+      const it = q[i];
+      if (it && it.kind === 'library' && it.title === title) {
+        const sec = Number(np.elapsed_sec);
+        return { at: i, sec: Number.isFinite(sec) && sec > 0 ? sec : 0, known: true };
+      }
+    }
+  }
+  return { at: from, sec: 0, known: false };
+};
 const PlaybackContext = React.createContext({
   available: false,
   queue: [], index: -1, current: null, status: 'stopped',
@@ -433,6 +453,8 @@ const PlaybackProvider = ({ children }) => {
   const sleepTimerRef = React.useRef(null);
   const sleepEndOfTrackRef = React.useRef(false);
   const remotePollRef = React.useRef(null);
+  const remoteNpRef = React.useRef(null);       // the cast room's last now-playing row
+  const heldRef = React.useRef(null);           // { uid, sec }: where this browser stopped to cast
   const lastPosSaveRef = React.useRef(0);      // throttle spoken-audio position saves
   const sleepEndOfChapterRef = React.useRef(false);
 
@@ -690,39 +712,75 @@ const PlaybackProvider = ({ children }) => {
     return () => cancelAnimationFrame(rafRef.current);
   }, [status, index, queue, target, advanceTo, preloadNext, saveSpokenPosition]);
 
+  /* Load `item` PAUSED at `sec`: a hand-back from a room that wasn't playing
+   * waits here where the room was, and play() starts it there. An element
+   * with no metadata yet keeps the time as its default playback start
+   * position (HTMLMediaElement), which play() honours. */
+  const cueAt = React.useCallback((item, sec) => {
+    const g = buildGraph();
+    if (!g || !item) return;
+    const el = activeEl();
+    try { el.pause(); } catch {}
+    el.src = item.src;
+    el.playbackRate = playbackRate;
+    if (sec > 0 && item.seekable) { try { el.currentTime = sec; } catch {} }
+    setPositionSec(sec > 0 ? sec : 0);
+    setStatus('paused');
+    updateMediaSession(item);
+  }, [buildGraph, playbackRate]);
+
+  /* ── Leaving a room ────────────────────────────────────────────────────
+   * The hand-off rules (2026-10-01), the same in the Android app
+   * (PlayerController): a room that is LEFT — for this browser, for another
+   * room, or by a "play here" while casting — is paused, never left playing
+   * unheard. Paused rather than stopped: a person's pause holds against every
+   * automatic restart (a voice turn's auto-resume, an announcement's restart:
+   * domovoi/music_pause.py), so it cannot come back on by itself; the room
+   * keeps its queue and place for someone there to resume; a later cast back
+   * to it is a new start, which clears the hold. Stop would throw the place
+   * away and tear down the satellite's music stream for nothing. */
+  const leaveRoom = React.useCallback(() => {
+    if (target.kind !== 'room' || !target.roomId) return null;
+    const room = target.roomId;
+    apiPost(`/api/music/pause/${room}`).catch((e) => console.warn(`pausing ${room} failed`, e));
+    remoteNpRef.current = null;
+    setTarget({ kind: 'browser' });
+    return room;
+  }, [target]);
+
   /* ═══ Public actions ═══════════════════════════════════════════════ */
+  /* Replace the queue and play it IN THIS BROWSER. Every caller is a "play
+   * here" (a library row's "play in this browser", a station, a podcast or
+   * an audiobook), so while casting this ends the cast — the room is paused
+   * and no longer watched (leaveRoom) — rather than sending the list to the
+   * room. It used to re-cast: the toast said "playing in this browser" over
+   * a room, and a station (nothing a room can play) replaced the queue and
+   * played nowhere. Starting a room is the cast picker's job; a queue row
+   * picked while casting (jumpTo) still re-casts. Same rule as the Android
+   * app's PlayerController.playItems. Returns the room it left, if any. */
   const playItems = React.useCallback((items, startIndex = 0) => {
-    if (!items || !items.length) return;
+    if (!items || !items.length) return null;
+    const at = Math.max(0, Math.min(startIndex, items.length - 1));
+    const left = leaveRoom();
     setQueue(items);
-    setIndex(startIndex);
-    if (target.kind === 'browser') {
-      loadAndPlay(items[startIndex]);
-    } else {
-      // Remote: re-cast the new queue FROM the picked item. Casting the whole
-      // list started the room on its first track whichever one was tapped.
-      castRoomLoad(target.roomId, items.slice(Math.max(0, startIndex)))
-        .catch((e) => console.warn('re-cast to room failed', e));
-    }
-  }, [loadAndPlay, target]);
+    setIndex(at);
+    loadAndPlay(items[at]);
+    return left;
+  }, [loadAndPlay, leaveRoom]);
 
   /* Play a single spoken-audio item (podcast episode / audiobook), resuming
    * from a saved position + speed. The page fetches the position first and
    * passes it here; we set the queue, seek on load, and apply the remembered
-   * playbackRate. Casting to a room hands off to the satellite (which resumes
-   * from its own per-(device×person) position via the SpokenAudioHandler). */
+   * playbackRate. A room can't play spoken audio, so while casting this
+   * ends the cast like playItems — it used to play here while the room
+   * played on. */
   const playSpoken = React.useCallback((item, { resumeSec = 0, speed = 1 } = {}) => {
+    leaveRoom();
     setQueue([item]);
     setIndex(0);
     if (speed && speed !== playbackRate) setPlaybackRateState(Math.max(0.5, Math.min(3, speed)));
-    if (target.kind === 'browser') {
-      loadAndPlay(item, { resumeSec });
-    } else {
-      // Remote: the satellite resumes from its own saved position; just cast
-      // the (library-castable) queue isn't possible for spoken audio yet, so
-      // fall back to browser playback for now.
-      loadAndPlay(item, { resumeSec });
-    }
-  }, [loadAndPlay, target, playbackRate]);
+    loadAndPlay(item, { resumeSec });
+  }, [loadAndPlay, leaveRoom, playbackRate]);
 
   const enqueue = React.useCallback((items) => {
     const add = Array.isArray(items) ? items : [items];
@@ -784,9 +842,12 @@ const PlaybackProvider = ({ children }) => {
 
   const jumpTo = React.useCallback((i) => {
     if (i < 0 || i >= queue.length) return;
-    setIndex(i);
-    if (target.kind === 'browser') loadAndPlay(queue[i]);
-    else castRoomJump(target.roomId, i).catch((e) => console.warn('re-cast to room failed', e));
+    if (target.kind === 'browser') { setIndex(i); loadAndPlay(queue[i]); return; }
+    // While casting: the room restarts on that row. The highlight moves only
+    // once it has (a row a room can't play is refused and moves nothing).
+    castRoomJump(target.roomId, i)
+      .then(() => setIndex(i))
+      .catch((e) => console.warn('re-cast to room failed', e));
   }, [queue, loadAndPlay, target]);
 
   function play() {
@@ -958,37 +1019,98 @@ const PlaybackProvider = ({ children }) => {
     await castRoomLoad(roomId, items);
   }, [castRoomLoad]);
 
+  /* A room's now-playing row, read now; null when it can't be read. */
+  const readRoom = async (roomId) => {
+    try {
+      const all = await apiGet('/api/music/now-playing');
+      return (all || []).find((r) => r && r.room_id === roomId) || null;
+    } catch { return null; }
+  };
+
+  /* Where playback goes: a room, or back to this browser. Resolves to what
+   * happened — { kind, roomId?, startIndex, startSec, left, leftPaused,
+   * playing? } — so the picker can say when a room it left would not pause.
+   *
+   *   browser → room   the room starts on the current track at this
+   *                    browser's position; it is told first, and this
+   *                    browser goes quiet only once it has taken the queue.
+   *   room → room      the new room starts where the old one had got to
+   *                    (_castFollowRoom on a fresh reading), then the old
+   *                    room is paused.
+   *   room → browser   the room is paused first, then this browser picks up
+   *                    on the room's track at the room's time — playing only
+   *                    if the room was playing and took the pause, else
+   *                    waiting there, paused.
+   * A queue with nothing a room can play is refused before anything
+   * changes, with an error carrying `castRefused`. */
   const castTo = React.useCallback(async (nextTarget) => {
-    // browser → room: stop local, load queue into room, enter remote mode.
     if (nextTarget.kind === 'room') {
-      const items = queue.slice(Math.max(0, index));
+      const from = target.kind === 'room' ? target.roomId : null;
+      let at = Math.max(0, index);
+      let startSec = 0;
+      const liveEl = from ? null : activeEl();
+      if (from) {
+        ({ at, sec: startSec } = _castFollowRoom(queue, index, (await readRoom(from)) || remoteNpRef.current));
+      } else if (liveEl) {
+        startSec = liveEl.currentTime || 0;
+      }
+      const items = queue.slice(at);
       // Nothing a room can play: say so before touching playback, and never
       // switch the target to a room that was sent nothing.
       if (!_castTrackIds(items).length) throw _castRefused();
-      // From this browser the room picks up where the listener is. From
-      // another room it starts the track from the top: the position then is
-      // that room's, and its track may be past `index` by now.
-      const liveEl = target.kind === 'browser' ? activeEl() : null;
-      const startSec = liveEl ? liveEl.currentTime : 0;
-      const g = graphRef.current;
-      if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
       try {
         await castRoomLoad(nextTarget.roomId, items, startSec);
-        setTarget(nextTarget);
-        setStatus('playing');
       } catch (e) {
+        // The room refused: this browser (or the old room) plays on.
         console.warn('cast to room failed', e);
         throw e;
       }
-    } else {
-      // room → browser: resume local from the current queue position.
-      if (target.kind === 'room' && target.roomId) {
-        apiPost(`/api/music/pause/${target.roomId}`).catch(() => {});
+      // Only now that the room has it: silence this browser.
+      const g = graphRef.current;
+      if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
+      if (liveEl && queue[at]) heldRef.current = { uid: queue[at].uid, sec: startSec };
+      remoteNpRef.current = null;
+      setIndex(at);
+      setTarget(nextTarget);
+      setStatus('playing');
+      const left = from && from !== nextTarget.roomId ? from : null;
+      let leftPaused = false;
+      if (left) {
+        try { await apiPost(`/api/music/pause/${left}`); leftPaused = true; }
+        catch (e) { console.warn(`pausing ${left} failed`, e); }
       }
-      setTarget({ kind: 'browser' });
-      if (current) loadAndPlay(current, { resumeSec: 0 });
+      return { kind: 'room', roomId: nextTarget.roomId, startIndex: at, startSec, left, leftPaused };
     }
-  }, [queue, index, current, castRoomLoad, loadAndPlay, target]);
+    if (target.kind !== 'room' || !target.roomId) {
+      return { kind: 'browser', left: null, playing: status === 'playing' };
+    }
+    const room = target.roomId;
+    // Where the room is (the last poll's row if it can't be read now), and
+    // whether it was playing; then pause it BEFORE this browser makes a sound.
+    const np = (await readRoom(room)) || remoteNpRef.current;
+    const wasPlaying = !!(np && np.state === 'play');
+    let leftPaused = true;
+    try { await apiPost(`/api/music/pause/${room}`); }
+    catch (e) { leftPaused = false; console.warn(`pausing ${room} failed`, e); }
+    const follow = _castFollowRoom(queue, index, np);
+    const item = queue[follow.at] || null;
+    // The room's track unknown (stopped, or playing something not in this
+    // queue): where this browser was when it cast, if it is that item.
+    const held = heldRef.current;
+    const sec = follow.known ? follow.sec : (held && item && held.uid === item.uid ? held.sec : 0);
+    remoteNpRef.current = null;
+    setTarget({ kind: 'browser' });
+    const playing = !!(item && wasPlaying && leftPaused);
+    if (item) {
+      setIndex(follow.at);
+      if (playing) loadAndPlay(item, { resumeSec: sec });
+      else cueAt(item, sec);
+    } else {
+      setStatus('stopped');
+    }
+    return { kind: 'browser', left: room, leftPaused, leftWasPlaying: wasPlaying, playing,
+             startIndex: follow.at, startSec: sec };
+  }, [queue, index, status, castRoomLoad, loadAndPlay, cueAt, target]);
 
   // Remote-mode poller: mirror the room's now-playing into our state.
   React.useEffect(() => {
@@ -996,11 +1118,16 @@ const PlaybackProvider = ({ children }) => {
       if (remotePollRef.current) { clearInterval(remotePollRef.current); remotePollRef.current = null; }
       return;
     }
+    // A reading that lands after the target moved on (back here, or to
+    // another room) is dropped: it would mark this browser paused while it
+    // plays, or hand the next cast the old room's place.
+    let live = true;
     const poll = async () => {
       try {
         const all = await apiGet('/api/music/now-playing');
         const np = (all || []).find((r) => r.room_id === target.roomId);
-        if (np) {
+        if (np && live) {
+          remoteNpRef.current = np;
           setStatus(np.state === 'play' ? 'playing' : np.state === 'pause' ? 'paused' : 'stopped');
           setPositionSec(np.elapsed_sec || 0);
           setDurationSec(np.song?.duration_sec || 0);
@@ -1009,7 +1136,10 @@ const PlaybackProvider = ({ children }) => {
     };
     poll();
     remotePollRef.current = setInterval(poll, 2000);
-    return () => { if (remotePollRef.current) { clearInterval(remotePollRef.current); remotePollRef.current = null; } };
+    return () => {
+      live = false;
+      if (remotePollRef.current) { clearInterval(remotePollRef.current); remotePollRef.current = null; }
+    };
   }, [target]);
 
   const getAnalyser = React.useCallback(() => (graphRef.current ? graphRef.current.analyser : null), []);
@@ -1477,7 +1607,16 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
   const pick = async (t) => {
     setErr(null);
     setBusy(t.kind === 'room' ? t.roomId : 'browser');
-    try { await p.castTo(t); if (onPicked) onPicked(); }
+    try {
+      const r = await p.castTo(t);
+      // The room this left would not pause: it may still be playing, so say
+      // so (and stay open) instead of closing as if all went well.
+      if (r && r.left && !r.leftPaused) {
+        setErr(`Couldn't pause ${r.left} — it may still be playing.`);
+        return;
+      }
+      if (onPicked) onPicked();
+    }
     catch (e) {
       // Surface the failure instead of swallowing it — a cast to a room whose
       // MPD instance isn't up returns 502 (domovoi: WinError 1225,
