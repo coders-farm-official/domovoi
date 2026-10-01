@@ -109,6 +109,9 @@ window.AudioContext = function () {
   };
   apiGet = (p) => {
     __note('GET ' + p);
+    if (window.__fail.includes(p)) {
+      return Promise.reject(Object.assign(new Error('502 Bad Gateway'), { status: 502 }));
+    }
     // window.__holdNext: the next now-playing read waits for
     // window.__release(rows) — a poll that lands late.
     if (window.__holdNext && p === '/api/music/now-playing') {
@@ -216,6 +219,47 @@ SCENARIOS = {
         "return { err, acts: acts(), state: state() };",
         api=OFFICE_AT("play", "Track 3", 42.4),
     ),
+    # office's reading can't be had now: the last poll's row stands in.
+    "room_to_room_when_the_room_cant_be_read": _scenario(
+        "await castingToOffice(); W().__fail.push('/api/music/now-playing');"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'den' });"
+        "return { r, err, acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 3", 42.4),
+    ),
+    "room_to_the_same_room": _scenario(
+        "await castingToOffice();"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { r, err, acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 3", 20.0),
+    ),
+    # Two picks, the second made before the first had answered (one
+    # render's castTo, called twice without waiting).
+    "two_rooms_picked_in_a_row": _scenario(
+        "await playing(W().__q(), 1, 7.6); const p = P();"
+        "const a = p.castTo({ kind: 'room', roomId: 'office' });"
+        "const b = p.castTo({ kind: 'room', roomId: 'den' });"
+        "let ra = null, rb = null; try { ra = await a; } catch (e) { ra = String(e); }"
+        "try { rb = await b; } catch (e) { rb = String(e); }"
+        "await step();"
+        "return { ra, rb, acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
+    "a_pick_after_a_refused_one": _scenario(
+        "await playing(W().__q(), 1, 7.6); W().__fail.push('/api/music/play-tracks#office');"
+        "const first = await castTo({ kind: 'room', roomId: 'office' });"
+        "const second = await castTo({ kind: 'room', roomId: 'den' });"
+        "return { first: first.err, second: second.r, err: second.err, state: state() };",
+    ),
+    "here_picked_while_a_cast_is_on_its_way": _scenario(
+        "await playing(W().__q(), 1, 7.6); const p = P();"
+        "const a = p.castTo({ kind: 'room', roomId: 'office' });"
+        "const b = p.castTo({ kind: 'browser' });"
+        "let ra = null, rb = null; try { ra = await a; } catch (e) { ra = String(e); }"
+        "try { rb = await b; } catch (e) { rb = String(e); }"
+        "await step();"
+        "return { ra, rb, acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
     "room_to_room_old_room_wont_pause": _scenario(
         "await castingToOffice(); W().__fail.push('/api/music/pause/office');"
         "const { r } = await castTo({ kind: 'room', roomId: 'den' });"
@@ -236,6 +280,12 @@ SCENARIOS = {
         "clear(); P().play(); await step();"
         "return { r, waited, play: acts(), after: state() };",
         api=OFFICE_AT("pause", "Track 3", 30.0),
+    ),
+    "back_when_the_room_cant_be_read": _scenario(
+        "await castingToOffice(); W().__fail.push('/api/music/now-playing');"
+        "const { r } = await castTo({ kind: 'browser' });"
+        "return { r, acts: acts(), state: state(), at: el0().currentTime, src: el0().src };",
+        api=OFFICE_AT("play", "Track 3", 30.0),
     ),
     "back_when_the_room_wont_pause": _scenario(
         "await castingToOffice(); W().__fail.push('/api/music/pause/office');"
@@ -270,6 +320,12 @@ SCENARIOS = {
         "await castingToOffice();"
         "P().playSpoken(W().__pod(5), { resumeSec: 120 }); await step();"
         "return { acts: acts(), state: state(), at: el0().currentTime };",
+        api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
+    "previous_while_casting": _scenario(
+        "await castingToOffice();"
+        "P().prev(); await step();"
+        "return { acts: acts(), state: state() };",
         api=OFFICE_AT("play", "Track 2", 9.0),
     ),
     "queue_row_while_casting": _scenario(
@@ -438,6 +494,57 @@ def test_a_first_room_that_wont_pause_is_reported(driven):
     assert out["r"]["left"] == "office" and out["r"]["leftPaused"] is False
 
 
+def test_room_to_room_when_the_room_cant_be_read_follows_the_last_poll(driven):
+    out = driven["room_to_room_when_the_room_cant_be_read"]
+    assert out["err"] is None
+    assert 'POST /api/music/play-tracks {"room_id":"den","track_ids":[3,4],"start_sec":42}' in out["acts"]
+    assert out["r"]["left"] == "office"
+
+
+def test_picking_the_room_already_cast_to_restarts_it_there_and_pauses_nothing(driven):
+    out = driven["room_to_the_same_room"]
+    assert out["err"] is None
+    assert 'POST /api/music/play-tracks {"room_id":"office","track_ids":[3,4],"start_sec":20}' in out["acts"]
+    assert not any("pause/office" in a for a in out["acts"]), "paused the room it had just started"
+    assert out["r"]["left"] is None
+    assert out["state"]["kind"] == "room" and out["state"]["room"] == "office"
+
+
+# ── a second pick while a cast is on its way ───────────────────────────────
+# Before 2026-10-01 both picks started from the target as it was (this
+# browser): office then den left BOTH rooms playing, office never paused;
+# office then "This browser" was a no-op and the cast to office landed after.
+
+
+def test_a_second_room_picked_before_the_first_answered_waits_then_pauses_the_first(driven):
+    out = driven["two_rooms_picked_in_a_row"]
+    acts = out["acts"]
+    office = _index(acts, 'POST /api/music/play-tracks {"room_id":"office"')
+    den = _index(acts, 'POST /api/music/play-tracks {"room_id":"den"')
+    pause = _index(acts, "POST /api/music/pause/office")
+    assert office < den < pause, acts
+    assert out["state"]["kind"] == "room" and out["state"]["room"] == "den"
+    assert out["rb"]["left"] == "office" and out["rb"]["leftPaused"] is True
+
+
+def test_this_browser_picked_before_a_cast_answered_comes_back_from_that_room(driven):
+    out = driven["here_picked_while_a_cast_is_on_its_way"]
+    acts = out["acts"]
+    assert _index(acts, 'POST /api/music/play-tracks {"room_id":"office"') < _index(
+        acts, "POST /api/music/pause/office"
+    )
+    assert out["state"]["kind"] == "browser"
+    assert out["rb"]["left"] == "office" and out["rb"]["playing"] is True
+
+
+def test_a_refused_cast_does_not_hold_up_the_next_pick(driven):
+    out = driven["a_pick_after_a_refused_one"]
+    assert out["first"] is not None
+    assert out["err"] is None, out["err"]
+    assert out["second"]["roomId"] == "den" and out["second"]["left"] is None
+    assert out["state"]["kind"] == "room" and out["state"]["room"] == "den"
+
+
 # ── room → this browser ────────────────────────────────────────────────────
 
 
@@ -463,6 +570,13 @@ def test_back_from_a_paused_room_waits_here_paused_at_the_rooms_place(driven):
     # Play then starts it there, not from the top of another track.
     assert out["play"] == ["el0.play /a/3 @30"]
     assert out["after"]["status"] == "playing"
+
+
+def test_back_when_the_room_cant_be_read_follows_the_last_poll(driven):
+    out = driven["back_when_the_room_cant_be_read"]
+    assert out["acts"][0] == "POST /api/music/pause/office"
+    assert out["src"] == "/a/3" and out["at"] == 30
+    assert out["r"]["playing"] is True and out["state"]["kind"] == "browser"
 
 
 def test_a_room_that_wont_pause_keeps_this_browser_quiet(driven):
@@ -504,6 +618,14 @@ def test_a_podcast_while_casting_ends_the_cast_too(driven):
     assert "POST /api/music/pause/office" in out["acts"]
     assert out["state"]["kind"] == "browser" and out["state"]["status"] == "playing"
     assert out["at"] == 120
+
+
+def test_previous_while_casting_touches_neither_the_room_nor_this_browser(driven):
+    # It used to POST /api/music/skip: previous moved the room FORWARD (and
+    # the core's skip swaps a cast queue for a random library track).
+    out = driven["previous_while_casting"]
+    assert out["acts"] == [], out["acts"]
+    assert out["state"]["kind"] == "room" and out["state"]["room"] == "office"
 
 
 def test_a_queue_row_while_casting_recasts_from_that_row(driven):

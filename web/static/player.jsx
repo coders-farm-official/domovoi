@@ -433,6 +433,12 @@ const PlaybackProvider = ({ children }) => {
     () => localStorage.getItem('domovoi-player-eq-on') === '1');
   const [playbackRate, setPlaybackRateState] = React.useState(1);
   const [target, setTarget] = React.useState({ kind: 'browser' });
+  // The target as of the last change, read at once. A cast picked while
+  // another is still on its way runs after it (castTo) and has to start from
+  // where that one left things, which this render's `target` doesn't show.
+  // Every change of target goes through moveTarget.
+  const targetRef = React.useRef(target);
+  const moveTarget = (t) => { targetRef.current = t; setTarget(t); };
   const [sleepRemainingSec, setSleepRemainingSec] = React.useState(null);
   const [recent, setRecent] = React.useState(() => {
     try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; }
@@ -740,13 +746,14 @@ const PlaybackProvider = ({ children }) => {
    * to it is a new start, which clears the hold. Stop would throw the place
    * away and tear down the satellite's music stream for nothing. */
   const leaveRoom = React.useCallback(() => {
-    if (target.kind !== 'room' || !target.roomId) return null;
-    const room = target.roomId;
+    const t = targetRef.current;
+    if (t.kind !== 'room' || !t.roomId) return null;
+    const room = t.roomId;
     apiPost(`/api/music/pause/${room}`).catch((e) => console.warn(`pausing ${room} failed`, e));
     remoteNpRef.current = null;
-    setTarget({ kind: 'browser' });
+    moveTarget({ kind: 'browser' });
     return room;
-  }, [target]);
+  }, []);
 
   /* ═══ Public actions ═══════════════════════════════════════════════ */
   /* Replace the queue and play it IN THIS BROWSER. Every caller is a "play
@@ -878,7 +885,13 @@ const PlaybackProvider = ({ children }) => {
   }, [index, queue, advanceTo, target]);
 
   const prev = React.useCallback(() => {
-    if (target.kind === 'room') { apiPost(`/api/music/skip/${target.roomId}`).catch(() => {}); return; }
+    // A room has no "previous" here (the web proxies pause, resume, stop and
+    // skip only). This posted skip, so previous moved the room FORWARD, and
+    // the core's skip drops a cast queue for a random library track. Its
+    // buttons are disabled while casting; the media session's previoustrack
+    // and the p / shift+left keys land here and do nothing. Same as the
+    // Android app (PlayerController.prev, CastAwarePlayer).
+    if (target.kind === 'room') return;
     // Restart current if >3s in, else go to previous.
     const el = activeEl();
     if (el && el.currentTime > 3) { el.currentTime = 0; return; }
@@ -1042,8 +1055,12 @@ const PlaybackProvider = ({ children }) => {
    *                    if the room was playing and took the pause, else
    *                    waiting there, paused.
    * A queue with nothing a room can play is refused before anything
-   * changes, with an error carrying `castRefused`. */
-  const castTo = React.useCallback(async (nextTarget) => {
+   * changes, with an error carrying `castRefused`.
+   *
+   * One change of target at a time: castTo below queues this behind any
+   * cast still on its way, and it reads where playback is from targetRef. */
+  const castToNow = React.useCallback(async (nextTarget) => {
+    const target = targetRef.current;
     if (nextTarget.kind === 'room') {
       const from = target.kind === 'room' ? target.roomId : null;
       let at = Math.max(0, index);
@@ -1071,7 +1088,7 @@ const PlaybackProvider = ({ children }) => {
       if (liveEl && queue[at]) heldRef.current = { uid: queue[at].uid, sec: startSec };
       remoteNpRef.current = null;
       setIndex(at);
-      setTarget(nextTarget);
+      moveTarget(nextTarget);
       setStatus('playing');
       const left = from && from !== nextTarget.roomId ? from : null;
       let leftPaused = false;
@@ -1099,7 +1116,7 @@ const PlaybackProvider = ({ children }) => {
     const held = heldRef.current;
     const sec = follow.known ? follow.sec : (held && item && held.uid === item.uid ? held.sec : 0);
     remoteNpRef.current = null;
-    setTarget({ kind: 'browser' });
+    moveTarget({ kind: 'browser' });
     const playing = !!(item && wasPlaying && leftPaused);
     if (item) {
       setIndex(follow.at);
@@ -1110,7 +1127,22 @@ const PlaybackProvider = ({ children }) => {
     }
     return { kind: 'browser', left: room, leftPaused, leftWasPlaying: wasPlaying, playing,
              startIndex: follow.at, startSec: sec };
-  }, [queue, index, status, castRoomLoad, loadAndPlay, cueAt, target]);
+  }, [queue, index, status, castRoomLoad, loadAndPlay, cueAt]);
+
+  /* A cast takes seconds (the room readies its stream first), and the
+   * picker can be closed and opened again meanwhile, so a second pick can
+   * come while the first is on its way. Before 2026-10-01 both started from
+   * the target as it was: office then den from this browser left BOTH rooms
+   * playing, office never paused or watched again; office then "This
+   * browser" did nothing and the cast to office landed after. Now each pick
+   * waits for the one before it and starts from where it left things. Same
+   * rule as the Android app's PlayerController.castTo. */
+  const castChainRef = React.useRef(Promise.resolve());
+  const castTo = React.useCallback((nextTarget) => {
+    const run = castChainRef.current.then(() => castToNow(nextTarget));
+    castChainRef.current = run.catch(() => {});
+    return run;
+  }, [castToNow]);
 
   // Remote-mode poller: mirror the room's now-playing into our state.
   React.useEffect(() => {
@@ -1342,7 +1374,7 @@ const MiniPlayer = () => {
         {/* center: transport + progress */}
         <div className="mp-center">
           <div className="mp-transport">
-            <button className="btn btn-ghost btn-icon mp-desk" onClick={p.prev} title="previous" aria-label="previous">
+            <button className="btn btn-ghost btn-icon mp-desk" onClick={p.prev} disabled={p.target.kind === 'room'} title="previous" aria-label="previous">
               <Icon name="skip-back" size={14}/>
             </button>
             <button className="btn btn-primary btn-icon mp-play" onClick={p.toggle}
@@ -1451,7 +1483,7 @@ const PlayerSheet = ({ p, onClose }) => {
           <span className="mono">{it.seekable ? fmtDur(dur) : 'live'}</span>
         </div>
         <div className="mp-sheet-transport">
-          <button className="btn btn-ghost btn-icon" onClick={p.prev} title="previous" aria-label="previous">
+          <button className="btn btn-ghost btn-icon" onClick={p.prev} disabled={p.target.kind === 'room'} title="previous" aria-label="previous">
             <Icon name="skip-back" size={20}/>
           </button>
           <button className="btn btn-primary btn-icon mp-sheet-play" onClick={p.toggle}
