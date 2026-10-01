@@ -918,6 +918,32 @@ def _music_exit_reason(rc: int | None, stderr_tail: str) -> str:
     return f"mpg123 exited with status {rc}"
 
 
+def _signal_player(proc: Any, *, kill: bool = False) -> None:
+    """Terminate (or kill) a music player and everything it forked.
+
+    mpg123's `-b` output buffer runs in a forked child process, which goes
+    on playing what it holds when only mpg123 itself is signalled. The
+    player is started as the leader of its own process group
+    (`start_new_session`), so the whole group is signalled — even after
+    mpg123 itself is gone, which is when an orphaned buffer would still be
+    playing. Falls back to the process alone where there is no such group
+    (no POSIX process groups, a stand-in without a pid): never anything
+    else's group, since a pid that is not a group leader names none."""
+    sig = getattr(signal, "SIGKILL" if kill else "SIGTERM", None)
+    pid = getattr(proc, "pid", None)
+    killpg = getattr(os, "killpg", None)
+    if sig is not None and killpg is not None and isinstance(pid, int) and pid > 0:
+        try:
+            killpg(pid, sig)
+            return
+        except OSError:
+            pass
+    if kill:
+        proc.kill()
+    else:
+        proc.terminate()
+
+
 # ─── Satellite ────────────────────────────────────────────────────────────
 
 class Satellite:
@@ -1760,10 +1786,11 @@ class Satellite:
     # Bumped ONLY by a stop (`_stop_music`: music_stop, a wake word, a
     # barge-in, a response, a drop-in, chat, shutdown) — never by a start.
     # A music_start snapshots it when its frame arrives; if it has moved by
-    # the time the speaker is free, something stopped the music while the
-    # start waited, and the start is dropped instead of spawning mpg123
-    # over the capture. `_music_gen` cannot do this job: a newer start
-    # bumps it too, so two starts in a row would cancel each other.
+    # the time the turn is over and the speaker is free, something stopped
+    # the music while the start waited, and the start is dropped instead of
+    # spawning mpg123 over the capture. `_music_gen` cannot do this job: a
+    # newer start bumps it too, so two starts in a row would cancel each
+    # other.
     _music_stop_gen: int = 0
     # The run `_music_proc` belongs to (exit status, who reports its exit).
     _music_run: _MusicRun | None = None
@@ -1789,17 +1816,78 @@ class Satellite:
     # with the wake-word model starts mpg123 slower, and a longer grace
     # costs nothing (a refusal inside it is retried, not reported).
     MUSIC_CONNECT_GRACE_SEC = 1.0
+    # How long a music_start waits for the speaker once no turn holds it
+    # (`_music_hold_reason`): the last sentence of an announcement still
+    # playing. Past it the playback thread is taken to be stuck and the
+    # start is dropped.
+    MUSIC_SPEAKER_WAIT_SEC = 10.0
+    # How often a waiting music_start looks again.
+    MUSIC_HOLD_POLL_SEC = 0.05
+
+    # From the wake word until the mic thread is back listening for the
+    # next one: the acknowledgement, the capture, the wait for the reply,
+    # its playback, and every follow-up capture and reply after it. Written
+    # by the mic thread only; set BEFORE the wake's `_stop_music`, cleared
+    # at the top of `_wait_for_wake`. See `_music_hold_reason`.
+    _turn_open: bool = False
+
+    def _music_hold_reason(self) -> str | None:
+        """Why the music must not start right now, or None when it may.
+
+        mpg123 plays into the same room the microphone listens to, and
+        nothing makes the array's echo cancellation take it out: a capture
+        with music under it hears one long sentence, never finds the silence
+        that ends it, and runs to `max_record_seconds` — then the lyrics
+        are transcribed and answered (dining room, 2026-09-30). So no music
+        while a turn is open (`_turn_open`: a wake acknowledgement, a
+        capture, the reply, a follow-up window), a capture of any kind is
+        running (`_capture_utt`), or the room is in chat mode, a drop-in
+        call or a wake-word recording. A music_start that arrives then is
+        held, not dropped (`_start_music_when_idle`).
+
+        Read without locks (plain attribute and Event reads), from the
+        music-defer thread, once more under `_music_lock` right before the
+        spawn: the wake path marks the turn open BEFORE its `_stop_music`,
+        which takes that lock, so a start either sees the turn and waits, or
+        spawned just before and is stopped by that very `_stop_music`."""
+        if self._turn_open:
+            return "a turn is in progress"
+        if self._capture_utt is not None:
+            return "a capture is open"
+        if getattr(self, "_ack_proc", None) is not None:
+            return "the wake acknowledgement is playing"
+        for name, what in (
+            ("chat_active", "chat mode"),
+            ("dropin_active", "a drop-in call"),
+            ("wake_recording", "a wake-word recording"),
+        ):
+            flag = getattr(self, name, None)
+            if flag is not None and flag.is_set():
+                return what
+        return None
 
     def _start_music_when_idle(self, url: str, stop_gen: int | None = None) -> None:
-        """Wait until the playback thread releases the ALSA device, then spawn mpg123.
+        """Wait until the turn is over and the playback thread releases the
+        ALSA device, then spawn mpg123.
 
-        Pi OS Lite has no software ALSA mixer (see project memory), so the
-        satellite's TTS output stream and mpg123 cannot hold the card at the
-        same time. The playback thread sets `_playback_idle` AFTER its
-        `out_stream.stop()` returns — that's the signal that PortAudio has
-        drained its internal buffer and ALSA is genuinely free. Polling on
-        `playback_q.empty()` alone is not enough: bytes handed to PortAudio
-        keep clocking out for seconds after the queue is empty.
+        First the turn (`_music_hold_reason`): a music_start that arrives
+        while a capture, a follow-up window, a wake acknowledgement or a
+        reply is in progress is HELD until the mic thread is back listening
+        for the wake word — however long that takes, because the core sends
+        it for a reason (a dashboard cast, an announcement's restart, the
+        auto-resume after a reply). It used to spawn at once whenever the
+        speaker was free, and the speaker frees itself in the same instant
+        as a follow-up capture opens.
+
+        Then the speaker. Pi OS Lite has no software ALSA mixer (see project
+        memory), so the satellite's TTS output stream and mpg123 cannot hold
+        the card at the same time. The playback thread sets `_playback_idle`
+        AFTER its `out_stream.stop()` returns — that's the signal that
+        PortAudio has drained its internal buffer and ALSA is genuinely
+        free. Polling on `playback_q.empty()` alone is not enough: bytes
+        handed to PortAudio keep clocking out for seconds after the queue is
+        empty. At most `MUSIC_SPEAKER_WAIT_SEC` of this wait, counted only
+        while no turn holds the start.
 
         After mpg123 is up, `_supervise_music` waits `music_prime_sec` for
         the ALSA devbuffer to fill against MPD's always-on silence stream,
@@ -1809,20 +1897,54 @@ class Satellite:
         there too.
 
         ``stop_gen`` is `_music_stop_gen` as it was when the music_start
-        frame arrived (the receiver takes it; taken here when None). The
-        wait for the speaker can be up to 10 s — the last TTS sentence still
-        playing — and a music_stop, a wake word or a barge-in inside it
-        means the music is no longer wanted: `_start_music` then spawns
-        nothing. A newer music_start does not count; it takes over instead.
+        frame arrived (the receiver takes it; taken here when None). A
+        music_stop, a wake word, a barge-in or a reply's response_start
+        inside either wait means the music is no longer wanted: nothing is
+        spawned. So a start held through a turn is dropped when that turn
+        gets a reply (the core decides the music again at its end) and plays
+        when it gets none — a follow-up nobody answered. A newer music_start
+        does not count; it takes over instead.
         """
         if stop_gen is None:
             stop_gen = self._music_stop_gen
-        if not self._playback_idle.wait(timeout=10.0):
-            log.warning("playback thread didn't release output stream in 10s; skipping music")
-            return
-        if self.shutdown_event.is_set():
-            return
-        gen = self._start_music(url, stop_gen=stop_gen)
+        held: str | None = None
+        speaker_waited = 0.0
+        gen: int | None = None
+        while True:
+            if self.shutdown_event.is_set():
+                return
+            if stop_gen != self._music_stop_gen:
+                log.info("music: not starting %s; it was stopped while it waited", url)
+                return
+            reason = self._music_hold_reason()
+            if reason is not None:
+                if held is None:
+                    log.info("music: holding %s until the turn is over (%s)", url, reason)
+                held = reason
+                self.shutdown_event.wait(self.MUSIC_HOLD_POLL_SEC)
+                continue
+            if not self._playback_idle.is_set():
+                if speaker_waited >= self.MUSIC_SPEAKER_WAIT_SEC:
+                    log.warning(
+                        "playback thread didn't release output stream in %.0fs; "
+                        "skipping music", self.MUSIC_SPEAKER_WAIT_SEC,
+                    )
+                    return
+                t0 = time.monotonic()
+                self._playback_idle.wait(timeout=self.MUSIC_HOLD_POLL_SEC)
+                speaker_waited += time.monotonic() - t0
+                continue
+            with self._music_lock:
+                # Again under the lock every stop takes (see
+                # `_music_hold_reason`): a turn that opened since is waited
+                # for; one that opens after this is the one whose
+                # `_stop_music` stops what this spawns.
+                if self._music_hold_reason() is not None:
+                    continue
+                if held is not None:
+                    log.info("music: the turn is over; starting %s", url)
+                gen = self._start_music_locked(url, stop_gen)
+            break
         # None: nothing was spawned — the music was stopped while this
         # start waited, or the subprocess could not be spawned at all
         # (mpg123 not installed). Nothing to supervise, and no point
@@ -1851,30 +1973,34 @@ class Satellite:
         spawn and stops it.
         """
         with self._music_lock:
-            if stop_gen is not None and stop_gen != self._music_stop_gen:
-                log.info("music: not starting %s; it was stopped while it waited", url)
-                return None
-            if self._music_proc is not None and self._music_proc.poll() is None:
-                run = self._music_run
-                if self._music_url == url and run is not None and run.proc is self._music_proc:
-                    # Same stream already playing. This request takes it
-                    # over (a fresh prepare on the server wants its own
-                    # music_ready); a supervisor still running for an older
-                    # request sees the new generation and steps aside.
-                    self._music_gen += 1
-                    run.supervised = True
-                    return self._music_gen
-                self._stop_music_locked()
-            self._music_gen += 1
-            if not self._spawn_music_locked(url, attempt=1):
-                return None
-            # Lively "music playing" LED look (rainbow on the XVF ring;
-            # a no-op on backends without a music state). A wake word or
-            # TTS will overwrite this with listening/speaking; the
-            # music_stop frame returns the ring to idle, and so does giving
-            # up on a stream that never played (`_give_up_music_locked`).
-            self._leds.set_state("music")
-            return self._music_gen
+            return self._start_music_locked(url, stop_gen)
+
+    def _start_music_locked(self, url: str, stop_gen: int | None) -> int | None:
+        """`_start_music`'s body; the caller holds `_music_lock`."""
+        if stop_gen is not None and stop_gen != self._music_stop_gen:
+            log.info("music: not starting %s; it was stopped while it waited", url)
+            return None
+        if self._music_proc is not None and self._music_proc.poll() is None:
+            run = self._music_run
+            if self._music_url == url and run is not None and run.proc is self._music_proc:
+                # Same stream already playing. This request takes it
+                # over (a fresh prepare on the server wants its own
+                # music_ready); a supervisor still running for an older
+                # request sees the new generation and steps aside.
+                self._music_gen += 1
+                run.supervised = True
+                return self._music_gen
+            self._stop_music_locked()
+        self._music_gen += 1
+        if not self._spawn_music_locked(url, attempt=1):
+            return None
+        # Lively "music playing" LED look (rainbow on the XVF ring;
+        # a no-op on backends without a music state). A wake word or
+        # TTS will overwrite this with listening/speaking; the
+        # music_stop frame returns the ring to idle, and so does giving
+        # up on a stream that never played (`_give_up_music_locked`).
+        self._leds.set_state("music")
+        return self._music_gen
 
     def _spawn_music_locked(self, url: str, *, attempt: int) -> bool:
         """Start one mpg123 run against ``url`` and its watcher. Caller
@@ -1893,11 +2019,18 @@ class Satellite:
         try:
             # Two separate buffers, each guarding against a different
             # source of stutter:
-            #   `-b 1024`         — 1 MB pre-buffer between network
-            #                       and decoder. ~40 s of MP3 at MPD's
-            #                       192 kbps. Absorbs WiFi blips on the
-            #                       Pi Zero 2 W's 2.4 GHz radio that
-            #                       would otherwise starve the decoder.
+            #   `-b 1024`         — mpg123's output buffer, 1 MiB of
+            #                       decoded audio (about 6 s). Absorbs
+            #                       WiFi blips on the Pi Zero 2 W's
+            #                       2.4 GHz radio that would otherwise
+            #                       starve the output. mpg123 runs it in
+            #                       a forked child process, which is why
+            #                       the player gets a process group of
+            #                       its own (`start_new_session`) and is
+            #                       stopped as a group (`_signal_player`):
+            #                       signalled alone, the child could play
+            #                       out what it holds into the next
+            #                       capture.
             #   `--devbuffer 1.0` — 1 s buffer between decoder and ALSA
             #                       hardware. mpg123's default device
             #                       buffer is tens of ms; on a CPU-
@@ -1920,6 +2053,7 @@ class Satellite:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError:
             log.error("mpg123 not installed on this Pi (sudo apt install mpg123)")
@@ -1964,7 +2098,10 @@ class Satellite:
         music_stop, a newer music_start, a wake, a response or a drop-in all
         stop the music through `_stop_music` or `_start_music`, which bump
         it, and this request then leaves quietly — no respawn over the mic
-        or the TTS, no music_ready, no failure report.
+        or the TTS, no music_ready, no failure report. A retry also leaves
+        when a turn has opened (`_music_hold_reason`) without anything
+        stopping the music, which should not happen; it stops the music
+        then rather than respawn it into the capture.
 
         Two windows per mpg123 run, both counted from when this request
         starts watching it: `music_prime_sec`, at the end of which a run
@@ -2039,6 +2176,12 @@ class Satellite:
                 return
             with self._music_lock:
                 if self._music_gen != gen or self._music_run is not run:
+                    return
+                if self._music_hold_reason() is not None:
+                    # Every path that opens a turn stops the music first, so
+                    # this should not happen; never respawn into it.
+                    log.warning("music: not retrying %s; a turn is in progress", url)
+                    self._stop_music_locked()
                     return
                 attempts += 1
                 if not self._spawn_music_locked(url, attempt=attempts):
@@ -2118,19 +2261,24 @@ class Satellite:
         # retry, music_ready or failure report still on its way is stale.
         self._music_gen += 1
         self._music_run = None
-        if self._music_proc is None:
+        proc = self._music_proc
+        if proc is None:
             return
-        if self._music_proc.poll() is None:
-            log.info("stopping music")
-            try:
-                self._music_proc.terminate()
+        try:
+            if proc.poll() is None:
+                log.info("stopping music")
+                _signal_player(proc)
                 try:
-                    self._music_proc.wait(timeout=2.0)
+                    proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
-                    self._music_proc.kill()
-                    self._music_proc.wait(timeout=1.0)
-            except Exception as e:
-                log.warning("music stop failed: %s", e)
+                    _signal_player(proc, kill=True)
+                    proc.wait(timeout=1.0)
+            else:
+                # mpg123 itself has gone; the output buffer it forked may
+                # not have (see `_signal_player`).
+                _signal_player(proc)
+        except Exception as e:
+            log.warning("music stop failed: %s", e)
         self._music_proc = None
         self._music_url = None
 
@@ -2428,7 +2576,7 @@ class Satellite:
         out_stream: sd.RawOutputStream | None = None
         resampler: StreamingResampler | None = None
 
-        def close_stream() -> None:
+        def close_stream(release: bool = True) -> None:
             nonlocal out_stream, current_sr, stream_rate, resampler
             if out_stream is not None:
                 try:
@@ -2443,6 +2591,16 @@ class Satellite:
                 stream_rate = None
                 resampler = None  # a new response gets a fresh filter state
                 self._playback_idle.set()
+            if not release:
+                # A reset before the next chunk's stream opens (a new rate,
+                # or the first chunk of a reply): more audio is about to
+                # play, so whatever response_end deferred until the drain
+                # is not due yet. Released here, it opened the follow-up
+                # capture while the question was still being asked whenever
+                # the reply's response_end was handled before its first
+                # chunk was taken (a short reply in one burst; a prebuffer
+                # flushed by response_end).
+                return
             # If `response_end` deferred its LED + response_done release
             # because audio was still draining, fire it now — `out_stream.stop()`
             # has just blocked until the speaker actually clocked out the
@@ -2539,12 +2697,23 @@ class Satellite:
                     # (gaps when the other side is silent), so releasing the
                     # card between chunks would thrash the device open/closed
                     # for the whole call. Keep it open until the call ends.
+                    #
+                    # This is also where a release response_end deferred
+                    # until the drain fires (`close_stream`): everything has
+                    # played. Not while anything is queued — a response_end
+                    # that flushed the receiver's prebuffer may have just
+                    # queued its audio — and with no stream open too, when
+                    # the reply never got one (the device refused it), so the
+                    # turn never waits on a drain that is not coming.
                     if (
-                        out_stream is not None
-                        and not self.playback_active.is_set()
+                        not self.playback_active.is_set()
                         and not self.dropin_active.is_set()
                     ):
-                        close_stream()
+                        if self.playback_q.empty() and (
+                            out_stream is not None
+                            or self._post_playback_state is not None
+                        ):
+                            close_stream()
                     elif out_stream is not None and self.playback_active.is_set():
                         # Direct evidence of TTS chop: stream is open,
                         # playback_active is still set (response_end
@@ -2568,7 +2737,7 @@ class Satellite:
                     continue
 
                 if sr != current_sr:
-                    close_stream()
+                    close_stream(release=False)
                     if not open_stream(sr):
                         continue  # device unavailable; drop this chunk
 
@@ -3802,6 +3971,10 @@ class Satellite:
         a separate sampling pass — cheap continuous adaptation to
         seasonal HVAC, evening TV, etc.
         """
+        # Back to listening for the wake word: whatever turn there was is
+        # over, and a music_start held for it may play now
+        # (`_music_hold_reason`).
+        self._turn_open = False
         self._drain_mic()
         # Safety: the acknowledgement is waited out before every capture, so
         # nothing should still be playing; a player that is, is stopped.
@@ -3870,6 +4043,11 @@ class Satellite:
                     woke_at = time.monotonic()
                     # For the capture's `utterance_start` (`wake_ms`).
                     self._woke_at = woke_at
+                    # A turn is open from here until this thread is back at
+                    # the top of this method: no music starts in it. Marked
+                    # BEFORE the `_stop_music` below, which is what makes the
+                    # hold race-free (see `_music_hold_reason`).
+                    self._turn_open = True
                     log.info("wake word detected")
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
@@ -3912,6 +4090,7 @@ class Satellite:
                             # echo as primed wake context.
                             _reset_wake_model(oww)
                             self._drain_mic()
+                            self._turn_open = False
                             continue  # back to listening
                     # Flip the LED to "listening" immediately so the
                     # user gets feedback the moment we detect them —
@@ -4005,6 +4184,33 @@ class Satellite:
             self._turn_capturing = False
             with self._capture_lock:
                 self._capture_utt = None
+
+    def _stop_own_music_under_capture(self, utt: int) -> bool:
+        """The bound on a capture this satellite itself is filling with
+        sound: if its music player is running while a capture is open, stop
+        it now, loudly. Checked before every frame of a capture.
+
+        Nothing should start music during a capture — a music_start is held
+        until the turn is over (`_music_hold_reason`) and every path that
+        opens a capture stops the music first — so this firing is a bug. But
+        what it guards against is a capture that hears the music as one
+        long sentence: it never finds the silence that ends it and runs to
+        `max_record_seconds` (30 s), and the lyrics are transcribed and
+        answered. Stopped here (with whatever the player forked, see
+        `_signal_player`), the room goes quiet and the capture ends on its
+        own silence. Returns whether it stopped anything."""
+        proc = getattr(self, "_music_proc", None)
+        if proc is None or proc.poll() is not None:
+            return False
+        log.error(
+            "capture %s: this satellite's own music player is running while "
+            "the microphone is open — it would hear the music as speech until "
+            "max_record_seconds. Stopping it. This should not happen (a "
+            "music_start is held until the turn is over); please report it "
+            "with this log.", utt,
+        )
+        self._stop_music()
+        return True
 
     def _reply_may_be_playing(self, since: int) -> bool:
         """Whether a reply that started after `since` (a `_response_starts`
@@ -4128,6 +4334,7 @@ class Satellite:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
                 continue
+            self._stop_own_music_under_capture(utt)
             d = _frame_dbfs(frame)
             capture_dbfs.append(d)
             loud = d >= self.cfg.noise_gate_dbfs
@@ -5479,11 +5686,14 @@ class Satellite:
                         "attempts": 0,
                     })
             elif stream_url:
-                # Defer to a worker thread so we can wait for any in-flight
-                # TTS playback to drain (see _start_music_when_idle) without
-                # blocking the asyncio receiver loop. The server emits
-                # music_start immediately after response_end, but bytes from
-                # the last TTS sentence are usually still in playback_q.
+                # Defer to a worker thread so we can wait for the turn in
+                # progress to end and any in-flight TTS playback to drain
+                # (see _start_music_when_idle) without blocking the asyncio
+                # receiver loop. The server emits music_start immediately
+                # after response_end, but bytes from the last TTS sentence
+                # are usually still in playback_q — and a music_start that
+                # lands during a capture, a follow-up window or a wake
+                # acknowledgement must not play into the microphone.
                 # The stop count as of THIS frame goes with it: a stop that
                 # lands during that wait cancels the start. Read without the
                 # lock (a plain int read) so a stop busy terminating mpg123

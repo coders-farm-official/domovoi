@@ -17,7 +17,8 @@ the stream check replaced by a timed stand-in):
   the music still comes back once its stream is ready;
 * the restart runs after `announce` returned, so it checks the room last
   thing before its music_start and sends nothing when the room was
-  stopped, a turn started there, or a later announcement took over;
+  stopped or a later announcement took over — and holds it for the room
+  when a turn or a call started there;
 * another announcement already on its way to the room (queued on its lock
   or still synthesizing) plays first: the music comes back once, after
   the last one — or after the first, when the next one gives up silent;
@@ -107,6 +108,8 @@ def house(monkeypatch):
     yield h
     for entry in h.app.state.pending_music_start.values():
         entry["task"].cancel()
+    for task in list(streaming._MUSIC_HOLDS):
+        task.cancel()
 
 
 async def restarts_done() -> list:
@@ -208,10 +211,13 @@ def _call(sess) -> None:
 async def test_a_turn_or_call_that_started_meanwhile_owns_the_music(house, meanwhile) -> None:
     """A wake word in that room (its capture, then its reply), or a drop-in
     call: a music_start now would spawn mpg123 into the capture, over the
-    reply, or into the call. The turn's end auto-resumes the music, and the
-    call's end restores it."""
+    reply, or into the call. It is held for the room instead: the turn's
+    end decides the music itself, the call's end restores it, and a capture
+    that ends with no turn — a follow-up nobody answered — gets it back
+    (test_music_under_capture.py)."""
     await _announce_then(house, meanwhile)
     assert "music_start" not in house.frames("office")
+    assert house.app.state.active_sessions["office"]._music_hold_task is not None
 
 
 class _SlowAfterFirstTTS(_FakeTTS):
