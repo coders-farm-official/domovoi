@@ -46,6 +46,10 @@ internal class CastRig : AutoCloseable {
     /** Paths that answer with an error status instead of 200. */
     val failing = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    /** Paths that answer only after this many ms: a room readying its
+     *  stream, so a second pick can land while a cast is on its way. */
+    val delays = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     val exo = StatefulExoPlayer(log)
 
     private val server = MockWebServer().apply {
@@ -55,6 +59,7 @@ internal class CastRig : AutoCloseable {
                 val body = request.body.readUtf8()
                 log += "${request.method} $path" + (if (body.isNotBlank() && body != "{}") " $body" else "") +
                     if (request.method == "POST") targetTag() else ""
+                delays[path]?.let { Thread.sleep(it) }
                 failing[path]?.let { return MockResponse().setResponseCode(it).setBody("""{"detail":"refused"}""") }
                 if (request.method == "GET" && path == "/api/music/now-playing") {
                     return MockResponse().setBody(JsonArray(rooms.values.toList()).toString())

@@ -5,6 +5,8 @@ import com.domovoi.app.testing.CastRig
 import com.domovoi.app.testing.field
 import com.domovoi.app.testing.libraryQueue
 import com.domovoi.app.testing.phoneSong
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,6 +55,15 @@ class PlayerControllerCastTest {
         runBlocking { player.castTo("office") }
         rig.awaitRemote("office")
         rig.log.clear()
+    }
+
+    /** Suspend (not block: the cast runs on this same loop) until [prefix] is logged. */
+    private suspend fun onTheWire(prefix: String) {
+        val until = System.currentTimeMillis() + 5_000
+        while (rig.log.none { it.startsWith(prefix) }) {
+            assertTrue("nothing starting with \"$prefix\" in ${rig.log}", System.currentTimeMillis() < until)
+            delay(10)
+        }
     }
 
     private fun indexOf(prefix: String): Int {
@@ -226,6 +237,99 @@ class PlayerControllerCastTest {
         assertTrue(outcome.note, outcome.note.endsWith("couldn't pause office, it may still be playing"))
     }
 
+    @Test fun pickingTheRoomAlreadyCastToRestartsItThereAndPausesNothing() {
+        castingToOffice()
+        rig.room("office", "play", "Quiet Jars", 20.0)
+
+        val outcome = runBlocking { player.castTo("office") } as CastOutcome.ToRoom
+
+        assertEquals(
+            listOf(
+                """POST /api/music/play-tracks {"room_id":"office","track_ids":[103,104],"start_sec":20} [target=office]""",
+                "exo.pause [target=office]",
+                "exo.seekTo(2, 20000) [target=office]",
+            ),
+            rig.actions(),
+        )
+        assertEquals("office", rig.roomTarget)
+        assertNull("the room just started was named as left", outcome.left)
+        assertEquals("casting to office", outcome.note)
+    }
+
+    // ---- a second pick while a cast is on its way ---------------------------------
+
+    @Test fun aSecondRoomPickedWhileTheFirstCastIsOnItsWayWaitsThenPausesTheFirst() {
+        // Picked office, then den before office had answered: before
+        // 2026-10-01 both casts started from the phone, so both rooms played
+        // and office was never paused or watched again.
+        playingOnThePhone()
+        rig.room("office", "play", "Old Barrels", 9.0)
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val (first, second) = runBlocking {
+            val office = async { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            val den = async { player.castTo("den") }
+            office.await() as CastOutcome.ToRoom to den.await() as CastOutcome.ToRoom
+        }
+
+        assertEquals(
+            listOf(
+                """POST /api/music/play-tracks {"room_id":"office","track_ids":[102,103,104],"start_sec":7} [target=phone]""",
+                "exo.pause [target=phone]",
+                """POST /api/music/play-tracks {"room_id":"den","track_ids":[102,103,104],"start_sec":9} [target=office]""",
+                "exo.pause [target=office]",
+                "POST /api/music/pause/office [target=den]",
+            ),
+            rig.actions(),
+        )
+        assertEquals("den", rig.roomTarget)
+        assertNull(first.left)
+        assertEquals("casting to den · paused office", second.note)
+    }
+
+    @Test fun thisDevicePickedWhileACastIsOnItsWayComesBackFromThatRoom() {
+        // Before 2026-10-01 "this device" found the target still the phone,
+        // said "playing on this device", and the cast then landed anyway.
+        playingOnThePhone()
+        rig.room("office", "play", "Old Barrels", 9.0)
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val back = runBlocking {
+            val office = async { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            val here = async { player.castTo(null) }
+            office.await()
+            here.await() as CastOutcome.Here
+        }
+
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertEquals("office", back.left)
+        assertTrue(rig.actions().any { it.startsWith("POST /api/music/pause/office") })
+        assertTrue(rig.exo.playing)
+        assertEquals("playing on this device · paused office", back.note)
+    }
+
+    @Test fun thisDevicePickedWhileATappedRowIsOnItsWayStillEndsHere() {
+        castingToOffice()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        runBlocking {
+            val row = async { player.castFrom(3) }
+            onTheWire("POST /api/music/play-tracks")
+            val here = async { player.castTo(null) }
+            row.await()
+            here.await()
+        }
+
+        // The row's cast landed first, then the hand-back: the phone plays
+        // and the room is paused, rather than the row's cast landing last
+        // and pausing the phone the person had just picked.
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertTrue(rig.exo.playing)
+        assertTrue(indexOf("POST /api/music/pause/office") > indexOf("POST /api/music/play-tracks"))
+    }
+
     // ---- room -> this phone ---------------------------------------------------------
 
     @Test fun backFromAPlayingRoomPausesItThenPlaysThePhoneWhereTheRoomWas() {
@@ -266,8 +370,25 @@ class PlayerControllerCastTest {
         )
         assertFalse(rig.exo.playing)
         assertFalse(outcome.playing)
-        assertFalse(outcome.note, outcome.note.contains("playing on"))
+        assertEquals("back on this device, paused · office wasn't playing", outcome.note)
         assertEquals(PlayTarget.Local, player.target.value)
+    }
+
+    @Test fun backWhenTheRoomCantBeReadNowFollowsTheLastPoll() {
+        castingToOffice(title = "Quiet Jars", elapsed = 30.0)
+        rig.failing["/api/music/now-playing"] = 502
+
+        val outcome = runBlocking { player.castTo(null) } as CastOutcome.Here
+
+        assertEquals(
+            listOf(
+                "POST /api/music/pause/office [target=office]",
+                "exo.seekTo(2, 30000) [target=office]",
+                "exo.play [target=phone]",
+            ),
+            rig.actions(),
+        )
+        assertTrue(outcome.playing)
     }
 
     @Test fun aRoomThatWontPauseKeepsThePhoneSilent() {

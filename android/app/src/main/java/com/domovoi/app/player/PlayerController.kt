@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -477,8 +479,24 @@ class PlayerController(
      * afresh first), and the room being left is paused once the new one has
      * taken the queue.
      */
-    suspend fun castTo(roomId: String?): CastOutcome {
-        if (roomId == null) return castHere()
+    suspend fun castTo(roomId: String?): CastOutcome = castLock.withLock {
+        if (roomId == null) castHere() else castToRoom(roomId)
+    }
+
+    /**
+     * One change of target at a time. The cast menu closes as soon as a
+     * room is picked, and a cast takes seconds (the room readies its stream
+     * first), so a second pick can come while the first is still on its way.
+     * Before 2026-10-01 both then started from the target as it was: office
+     * then den from this phone started BOTH rooms, office playing on with
+     * nothing watching or pausing it; office then "this device" said
+     * "playing on this device" and then cast to office anyway. Now the
+     * second pick waits for the first and starts from where it left things:
+     * room to room (office is paused) or back here (office is paused).
+     */
+    private val castLock = Mutex()
+
+    private suspend fun castToRoom(roomId: String): CastOutcome {
         val from = (_target.value as? PlayTarget.Room)?.roomId
         if (from != null) readRoom(from)?.let { _remote.value = it }
         val plan = castPlan()
@@ -489,14 +507,14 @@ class PlayerController(
     }
 
     /** While casting: start the room on queue entry [i] (a tapped queue row). */
-    suspend fun castFrom(i: Int): CastPlan {
+    suspend fun castFrom(i: Int): CastPlan = castLock.withLock {
         val room = (_target.value as? PlayTarget.Room)?.roomId
             ?: throw NothingToCast("not casting to a room")
         val item = _queue.value.getOrNull(i) ?: throw NothingToCast("that queue entry is gone")
         CastPlanner.refusal(item)?.let { throw NothingToCast(it) }
         val plan = CastPlanner.plan(_queue.value, i, 0.0)
         sendCast(room, plan)
-        return plan
+        plan
     }
 
     /**
