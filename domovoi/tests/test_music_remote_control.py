@@ -265,6 +265,80 @@ async def test_the_stub_walks_its_queue() -> None:
     assert await mpd.state() == "stop"
 
 
+# ─── the real client unpauses before next / previous ─────────────────────
+# MPD 0.23.12 (the domovoi-mpd image) dies on next / previous / play N while
+# paused on a song it never decoded — a paused cast's state until someone
+# presses play. On ft (verifier, 2026-10-01) a skip after a paused cast
+# killed office's daemon 4 times in 4; Docker restarted it PLAYING an old
+# place and the skip answered 502. Raw, on den: play + pause 1 + next died;
+# play + pause 1 + pause 0 + next did not.
+
+
+class _Daemon:
+    """python-mpd2's asyncio client as RealMPDClient uses it, logging."""
+
+    def __init__(self, state: str) -> None:
+        self.state = state
+        self.log: list[str] = []
+
+    async def status(self) -> dict[str, str]:
+        self.log.append("status")
+        return {"state": self.state}
+
+    async def pause(self, value: int) -> None:
+        self.log.append(f"pause {value}")
+        if self.state != "stop":
+            self.state = "pause" if value else "play"
+
+    async def _move(self, cmd: str) -> None:
+        self.log.append(cmd)
+        if self.state == "stop":
+            raise RuntimeError(f"[55@0] {{{cmd}}} Not playing")
+        if self.state == "pause":
+            raise ConnectionError("Connection lost while reading line")  # the daemon died
+
+    async def next(self) -> None:
+        await self._move("next")
+
+    async def previous(self) -> None:
+        await self._move("previous")
+
+
+def _real_client(monkeypatch, daemon: _Daemon) -> mpd_module.RealMPDClient:
+    from contextlib import asynccontextmanager
+
+    client = mpd_module.RealMPDClient("127.0.0.1", 6600)
+
+    @asynccontextmanager
+    async def connect():
+        yield daemon
+
+    monkeypatch.setattr(client, "_connect", connect)
+    return client
+
+
+@pytest.mark.parametrize("action", ["next", "previous"])
+async def test_the_real_client_unpauses_before_moving(monkeypatch, action: str) -> None:
+    daemon = _Daemon("pause")
+    await getattr(_real_client(monkeypatch, daemon), action)()
+    assert daemon.log == ["status", "pause 0", action]
+
+
+@pytest.mark.parametrize("action", ["next", "previous"])
+async def test_the_real_client_moves_a_playing_daemon_as_it_is(monkeypatch, action: str) -> None:
+    daemon = _Daemon("play")
+    await getattr(_real_client(monkeypatch, daemon), action)()
+    assert daemon.log == ["status", action]
+
+
+@pytest.mark.parametrize("action", ["next", "previous"])
+async def test_the_real_client_still_reports_a_stopped_daemons_refusal(monkeypatch, action: str) -> None:
+    daemon = _Daemon("stop")
+    with pytest.raises(mpd_module.MPDNotPlaying):
+        await getattr(_real_client(monkeypatch, daemon), action)()
+    assert daemon.log == ["status", action]
+
+
 # ─── next / previous end a person's pause ────────────────────────────────
 
 
