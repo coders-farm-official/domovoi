@@ -200,4 +200,60 @@ class CastPlanTest {
         val q = listOf(phone(50, "Same"), lib(2, "Same"))
         assertEquals(1, CastPlanner.followRoom(q, 0, "Same"))
     }
+
+    // ── coming back to this phone (PlayerController.castTo(null)) ──────────
+
+    @Test fun handBackPicksUpOnTheRoomsTrackAtTheRoomsTime() {
+        val q = listOf(lib(1, "One"), lib(2, "Two"), lib(3, "Three"))
+        assertEquals(HandBack(2, 61.5), CastPlanner.handBack(q, 0, playing("office", "Three", 61.5)))
+        // Still on the track the cast started.
+        assertEquals(HandBack(0, 4.0), CastPlanner.handBack(q, 0, playing("office", "One", 4.0)))
+    }
+
+    @Test fun handBackWithoutAUsableReadingStaysWhereThePhoneWas() {
+        val q = listOf(lib(1, "One"), lib(2, "Two"))
+        // Nothing read, a song that isn't in the queue, a stopped room (no
+        // song), or a title only a phone song carries.
+        for (remote in listOf(
+            null,
+            playing("office", "Elsewhere", 50.0),
+            RemoteNowPlaying("office", "stop", null, null, 0.0, null),
+        )) {
+            assertEquals(HandBack(1, null), CastPlanner.handBack(q, 1, remote))
+        }
+        assertEquals(
+            HandBack(0, null),
+            CastPlanner.handBack(listOf(phone(9, "Two"), lib(2, "One")), 0, playing("office", "Two", 9.0)),
+        )
+        assertEquals(HandBack(3, null), CastPlanner.handBack(emptyList(), 3, playing("office", "One", 9.0)))
+    }
+
+    // ── what the toast says (CastOutcome.note) ─────────────────────────────
+
+    @Test fun theToastClaimsPlaybackOnlyWhenThePhoneIsPlaying() {
+        val playing = CastOutcome.Here(left = "office", playing = true, leftPaused = true, leftWasPlaying = true)
+        assertEquals("playing on this device · paused office", playing.note)
+        for (silent in listOf(
+            CastOutcome.Here(left = "office", playing = false, leftPaused = true, leftWasPlaying = false),
+            CastOutcome.Here(left = "office", playing = false, leftPaused = false, leftWasPlaying = true),
+            CastOutcome.Here(left = "office", playing = false, leftPaused = true, leftWasPlaying = true, queued = false),
+            CastOutcome.Here(left = null, playing = false),
+        )) {
+            assertFalse(silent.note, silent.note.contains("playing on"))
+        }
+        assertTrue(
+            CastOutcome.Here(left = "office", playing = false, leftPaused = false).note
+                .contains("couldn't pause office"),
+        )
+    }
+
+    @Test fun aRoomToRoomToastNamesTheRoomItLeft() {
+        val plan = CastPlanner.plan(listOf(lib(1)), 0, 0.0)
+        assertEquals("casting to den", CastOutcome.ToRoom(plan, "den").note)
+        assertEquals("casting to den · paused office", CastOutcome.ToRoom(plan, "den", "office", true).note)
+        assertEquals(
+            "casting to den · couldn't pause office, it may still be playing",
+            CastOutcome.ToRoom(plan, "den", "office", false).note,
+        )
+    }
 }

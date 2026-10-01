@@ -74,13 +74,17 @@ internal fun TrackDrawer(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var room by remember(track.id) { mutableStateOf(rooms.firstOrNull() ?: "kitchen") }
+    // The picked chip, else the first room the server reported; null with
+    // no room online (never a made-up "kitchen").
+    var picked by remember(track.id) { mutableStateOf<String?>(null) }
+    val room = picked?.takeIf { it in rooms } ?: rooms.firstOrNull()
     var alsoFile by remember(track.id) { mutableStateOf(false) }
     var confirmDelete by remember(track.id) { mutableStateOf(false) }
 
     fun saveToDevice() = saveTrackToDevice(context, app, toast, track)
 
     fun playInRoom() {
+        val room = room ?: return
         toast("playing \"${track.title ?: "track"}\" in $room…")
         // Close immediately so the tap feels responsive; failure still toasts.
         onClose()
@@ -180,20 +184,20 @@ internal fun TrackDrawer(
                 SectionLabel("play in room")
                 Spacer(Modifier.size(8.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    RoomPickRow(rooms, room) { room = it }
+                    RoomPickRow(rooms, room.orEmpty()) { picked = it }
                 }
                 Spacer(Modifier.size(12.dp))
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Button(onClick = { playInRoom() }) {
+                    Button(onClick = { playInRoom() }, enabled = room != null) {
                         Icon(
                             Icons.Filled.PlayArrow, contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.size(6.dp))
-                        Text("play in $room")
+                        Text(if (room != null) "play in $room" else "no rooms online")
                     }
                     OutlinedButton(onClick = { onBrowserPlay(track) }) {
                         Icon(

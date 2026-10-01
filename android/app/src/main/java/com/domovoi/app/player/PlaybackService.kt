@@ -9,10 +9,11 @@ import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.MainActivity
 
 /**
- * Foreground media service: exposes the shared ExoPlayer through a
+ * Foreground media service: exposes the shared player through a
  * MediaSession so playback survives backgrounding and shows the standard
  * media notification with transport controls (the Media Session API analog
- * of the web player).
+ * of the web player). While casting, those controls drive the room
+ * ([CastAwarePlayer]).
  */
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -20,7 +21,9 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val player = (application as DomovoiApplication).container.player.exoPlayer
+        // Not the ExoPlayer itself: while casting, the notification and the
+        // lock screen act on the room (CastAwarePlayer).
+        val player = (application as DomovoiApplication).container.player.sessionPlayer
         val openApp = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
