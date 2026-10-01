@@ -43,6 +43,21 @@ import com.domovoi.app.ui.components.toneForSlug
 import com.domovoi.app.ui.components.webLinkOrNull
 import com.domovoi.app.ui.theme.Domovoi
 
+/**
+ * A room card's transport buttons. Each is that room's own control,
+ * `POST /api/music/{action}/{room}`, sent through [control] (action, room):
+ * MusicScreen's roomCtl. Previous stayed greyed out on the cards until
+ * 2026-10-01, after rooms had gained a previous (`/api/music/previous`) and
+ * the player tab's previous already drove the room.
+ */
+internal class RoomTransport(private val control: (action: String, room: String) -> Unit) {
+    fun pause(room: String) = control("pause", room)
+    fun resume(room: String) = control("resume", room)
+    fun previous(room: String) = control("previous", room)
+    fun skip(room: String) = control("skip", room)
+    fun stop(room: String) = control("stop", room)
+}
+
 /** One card per provisioned room — web NPCard grid. Single column on
  *  phones, two columns on wider screens. */
 @Composable
@@ -50,10 +65,7 @@ internal fun NowPlayingStrip(
     nowPlaying: List<NowPlayingRoom>,
     tick: Int,
     onPlayRandom: (String) -> Unit,
-    onPause: (String) -> Unit,
-    onResume: (String) -> Unit,
-    onSkip: (String) -> Unit,
-    onStop: (String) -> Unit,
+    transport: RoomTransport,
     onFavorite: (String) -> Unit,
 ) {
     if (nowPlaying.isEmpty()) {
@@ -75,8 +87,7 @@ internal fun NowPlayingStrip(
                 row.forEach { np ->
                     NPCard(
                         np, tick, Modifier.weight(1f),
-                        onPlayRandom = onPlayRandom, onPause = onPause, onResume = onResume,
-                        onSkip = onSkip, onStop = onStop, onFavorite = onFavorite,
+                        onPlayRandom = onPlayRandom, transport = transport, onFavorite = onFavorite,
                     )
                 }
                 repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
@@ -91,10 +102,7 @@ private fun NPCard(
     tick: Int,
     modifier: Modifier,
     onPlayRandom: (String) -> Unit,
-    onPause: (String) -> Unit,
-    onResume: (String) -> Unit,
-    onSkip: (String) -> Unit,
-    onStop: (String) -> Unit,
+    transport: RoomTransport,
     onFavorite: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -168,14 +176,14 @@ private fun NPCard(
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
                 )
-                SmallIconButton(Icons.Filled.SkipPrevious, "previous", enabled = false) {}
+                SmallIconButton(Icons.Filled.SkipPrevious, "previous") { transport.previous(np.roomId) }
                 SmallIconButton(
                     if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     if (playing) "pause" else "resume",
                     tint = Domovoi.colors.fg,
-                ) { if (playing) onPause(np.roomId) else onResume(np.roomId) }
-                SmallIconButton(Icons.Filled.SkipNext, "skip") { onSkip(np.roomId) }
-                SmallIconButton(Icons.Filled.Stop, "stop") { onStop(np.roomId) }
+                ) { if (playing) transport.pause(np.roomId) else transport.resume(np.roomId) }
+                SmallIconButton(Icons.Filled.SkipNext, "skip") { transport.skip(np.roomId) }
+                SmallIconButton(Icons.Filled.Stop, "stop") { transport.stop(np.roomId) }
                 SmallIconButton(
                     if (np.favorited) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                     "favorite",

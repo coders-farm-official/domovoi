@@ -136,35 +136,7 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
 
             // ── Transport ─────────────────────────────────────────────────
             val effPlaying = if (isRemote) remote?.state == "play" else playing
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Live while casting too: the room's previous.
-                IconButton(onClick = { app.player.prev() }) {
-                    Icon(Icons.Filled.SkipPrevious, "previous", tint = Domovoi.colors.fg)
-                }
-                IconButton(
-                    onClick = { app.player.toggle() },
-                    modifier = Modifier
-                        .padding(horizontal = 10.dp)
-                        .size(56.dp)
-                        .background(Domovoi.colors.brand, RoundedCornerShape(999.dp)),
-                ) {
-                    Icon(
-                        if (effPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        "play/pause",
-                        tint = Domovoi.colors.brandFg,
-                    )
-                }
-                IconButton(onClick = { app.player.next() }) {
-                    Icon(Icons.Filled.SkipNext, "next", tint = Domovoi.colors.fg)
-                }
-                IconButton(onClick = { app.player.stop(); onDismiss() }) {
-                    Icon(Icons.Filled.Stop, "stop", tint = Domovoi.colors.fgMuted)
-                }
-            }
+            SheetTransport(playing = effPlaying, onDismiss = onDismiss)
 
             // ── Queue ─────────────────────────────────────────────────────
             Row(
@@ -221,6 +193,46 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The sheet's transport row. Every button takes a tap while casting too and
+ * acts on the room: PlayerController sends previous, play/pause and next to
+ * it. Previous was greyed out while casting until rooms had a previous
+ * (2026-10-01). [playing] is the room's state while casting. A composable
+ * of its own so a JVM test can compose it; the sheet is a dialog window.
+ */
+@Composable
+internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
+    val app = LocalApp.current
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { app.player.prev() }) {
+            Icon(Icons.Filled.SkipPrevious, "previous", tint = Domovoi.colors.fg)
+        }
+        IconButton(
+            onClick = { app.player.toggle() },
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .size(56.dp)
+                .background(Domovoi.colors.brand, RoundedCornerShape(999.dp)),
+        ) {
+            Icon(
+                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                "play/pause",
+                tint = Domovoi.colors.brandFg,
+            )
+        }
+        IconButton(onClick = { app.player.next() }) {
+            Icon(Icons.Filled.SkipNext, "next", tint = Domovoi.colors.fg)
+        }
+        IconButton(onClick = { app.player.stop(); onDismiss() }) {
+            Icon(Icons.Filled.Stop, "stop", tint = Domovoi.colors.fgMuted)
         }
     }
 }

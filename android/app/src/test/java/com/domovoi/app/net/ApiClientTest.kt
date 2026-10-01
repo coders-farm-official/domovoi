@@ -61,6 +61,23 @@ class ApiClientTest {
         assertEquals("/api/health", req.path)
     }
 
+    @Test fun aRefusalKeepsItsWholeBodyAndThePartTheServerNamed() = runBlocking {
+        // The core names what failed in `failed` (2026-10-01); a long
+        // detail before it must not cut it off, as the message's 200
+        // characters would.
+        val body = """{"detail":"${"x".repeat(300)}","failed":"music_player"}"""
+        server.enqueue(MockResponse().setResponseCode(502).setBody(body))
+        try {
+            api.post("/api/music/play-tracks")
+            fail("a 502 was not an error")
+        } catch (e: ApiException) {
+            assertEquals(502, e.status)
+            assertEquals(body, e.body)
+            assertEquals("music_player", e.failedPart)
+            assertFalse(e.message!!.contains("music_player"))
+        }
+    }
+
     @Test fun emptyBodyIsJsonNull() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(204))
         assertEquals(JsonNull, api.delete("/api/things/1"))

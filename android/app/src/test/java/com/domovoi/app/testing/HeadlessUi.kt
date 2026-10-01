@@ -144,6 +144,22 @@ internal class NodeTree : AbstractApplier<Any>(ROOT) {
         return count(ROOT)
     }
 
+    /** Every node in the tree, parents before their children. */
+    fun nodes(): List<Any> {
+        val out = mutableListOf<Any>()
+        fun walk(node: Any): Unit = children[node].orEmpty().forEach { out += it; walk(it) }
+        walk(ROOT)
+        return out
+    }
+
+    /** [node] and every node under it. */
+    fun subtree(node: Any): List<Any> {
+        val out = mutableListOf(node)
+        fun walk(n: Any): Unit = children[n].orEmpty().forEach { out += it; walk(it) }
+        walk(node)
+        return out
+    }
+
     private companion object {
         val ROOT = Any()
     }
