@@ -23,8 +23,10 @@ Whisper, TTS, route() and the stream check replaced):
 * A reply that asks nothing sends music_start in the same breath as its
   response_end (unchanged).
 * A dashboard/app cast and a drop-in's restore go out at once to a free
-  room, and are held while a capture is open, a turn is being answered or
-  a question's follow-up window is open — then sent.
+  room, and are held while a capture is open, a turn is being answered, a
+  question's follow-up window is open, an announcement is on its way or
+  wake-word clips are being recorded — then sent. A held start that finds
+  the room busy again once its stream is ready holds on.
 * The restart after an announcement steps aside for an open capture and
   is HELD, not dropped: a follow-up nobody answered gets its music back.
 * A held start is superseded by anything that decides the room's music
@@ -528,6 +530,122 @@ async def test_a_dropin_restore_waits_for_an_open_capture(room) -> None:
     assert room.starts() == []
     room.capture_goes_quiet()
     await _until(lambda: room.starts() != [])
+
+
+@pytest.mark.parametrize("coming", ["synthesizing", "queued", "timer"])
+async def test_a_cast_waits_for_an_announcement_on_its_way(room, admin_app, coming) -> None:
+    """An announcement is on its way to the room: one still synthesizing its
+    first sentence (`_announce_callers`), one queued on the room's lock (or
+    a drop-in ring holding it), or a timer the delivery has yet to announce
+    here (`TimerDelivery.announcing_to`). A music_start now would spawn the
+    player for the moment before the announcement's response_start stops it
+    again, and the announcement's own end restarts the music anyway. So a
+    cast is held until nothing more is coming, then sent."""
+    sess = room.sess
+    if coming == "synthesizing":
+        sess._announce_callers += 1
+
+        def done() -> None:
+            sess._announce_callers -= 1
+    elif coming == "queued":
+        await sess._announce_lock.acquire()
+        done = sess._announce_lock.release
+    else:
+        due = {ROOM}
+        room.app.state.timer_delivery = types.SimpleNamespace(
+            announcing_to=lambda room_id: room_id in due,
+        )
+        done = due.clear
+    await admin_app._admin_dispatch_music(CAST, ROOM)
+    await _settle(0.1)
+    assert room.starts() == []
+    assert sess.music_block() == "announcing"
+    assert sess._music_hold_task is not None
+    done()
+    await _until(lambda: room.starts() != [])
+    assert room.starts() == [{"type": "music_start", "stream_url": URL}]
+
+
+async def test_a_cast_made_while_an_announcement_is_synthesized_plays_after_it(
+    room, admin_app, monkeypatch,
+) -> None:
+    """End to end through `announce`: play is pressed while the timer's
+    announcement is still being synthesized. Nothing reaches the satellite
+    before the announcement has been sent (its response_end); the music
+    comes back after it."""
+    gate = asyncio.Event()
+    real_tts = streaming.get_tts_client()
+
+    class _SlowTTS:
+        async def synthesize(self, text, engine=None, voice=None):
+            await gate.wait()
+            return await real_tts.synthesize(text, engine=engine, voice=voice)
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: _SlowTTS())
+    said = asyncio.create_task(room.sess.announce("The pasta timer is done."))
+    await _until(lambda: room.sess._announce_lock.locked())
+    await admin_app._admin_dispatch_music(CAST, ROOM)
+    await _settle(0.1)
+    assert room.kinds() == []
+    gate.set()
+    await said
+    await _until(lambda: room.starts() != [])
+    ended = room.sent_at("response_end")
+    assert room.kinds()[:2] == ["response_start", "response_end"]
+    assert all(
+        t >= ended for t, k, f in room.ws.sent
+        if k == "text" and f["type"] == "music_start"  # type: ignore[index]
+    )
+
+
+async def test_a_cast_waits_while_the_room_records_wake_word_clips(room, admin_app) -> None:
+    """Recording wake-word clips (dashboard "Record on <room>"): every
+    capture is saved as training audio for the new wake word, and music
+    under it would be in every clip. A cast is held until the recording
+    stops."""
+    await room.sess.start_wake_recording(
+        wake_word_id=3, slug="hey_domo", clip_seconds=2.0, target_count=20,
+    )
+    await admin_app._admin_dispatch_music(CAST, ROOM)
+    await _settle(0.1)
+    assert room.starts() == []
+    assert room.sess.music_block() == "recording"
+    assert room.sess._music_hold_task is not None
+    await room.sess.stop_wake_recording()
+    await _until(lambda: room.starts() != [])
+    assert room.starts() == [{"type": "music_start", "stream_url": URL}]
+
+
+async def test_a_held_start_looks_again_after_readying_the_stream(room, monkeypatch) -> None:
+    """The room has come free, so the held start readies the stream first
+    (`ensure_stream_serving`: up to music_stream_ready_timeout_sec when the
+    stream is down). Someone says the wake word meanwhile. The start must
+    look at the room again right before the frame (`send_music_start`'s
+    still_wanted re-checks `music_block`) and hold on through the capture,
+    not spawn the player into it."""
+    room.reply = OFFER
+    await room.turn()
+    assert room.sess._music_hold_task is not None
+    readying = asyncio.Event()
+    ready = asyncio.Event()
+
+    async def slow_stream(room_id, stream_url=None, *, timeout=None):
+        readying.set()
+        await ready.wait()
+        return True
+
+    monkeypatch.setattr(mpd_module, "ensure_stream_serving", slow_stream)
+    room.sess._followup_hold_until = 0.0     # nobody answered; no capture came
+    await asyncio.wait_for(readying.wait(), 2.0)
+    await room.start_capture("wake_word", 2)
+    await room.frames(10)
+    ready.set()
+    await _settle(0.1)
+    assert room.starts() == []
+    assert room.sess._music_hold_task is not None
+    room.capture_goes_quiet()
+    await _until(lambda: room.starts() != [])
+    assert room.starts() == [{"type": "music_start", "stream_url": URL}]
 
 
 # ─── What supersedes or drops a held start ───────────────────────────────
