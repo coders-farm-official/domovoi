@@ -221,6 +221,20 @@ def _isolate_command_captures(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "command_captures_dir", str(tmp_path / "command-captures"))
 
 
+@pytest.fixture(autouse=True)
+def _not_shutting_down():
+    """No test starts inside a shutdown. A core lifespan teardown (every
+    TestClient that enters the app leaves it again) marks the process as
+    shutting down (domovoi/lifecycle.py), and from then on the timer
+    delivery pops nothing and claims no room — which is right for a core
+    that is stopping, and wrong for the next test in the same process."""
+    from domovoi import lifecycle
+
+    lifecycle.reset()
+    yield
+    lifecycle.reset()
+
+
 @pytest_asyncio.fixture
 async def db_session():
     """Fresh session per test, with all tables truncated first."""

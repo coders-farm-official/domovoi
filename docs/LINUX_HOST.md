@@ -413,6 +413,8 @@ Environment=HOME=/home/domovoi
 ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
@@ -435,6 +437,7 @@ Environment=HOME=/home/domovoi
 ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -446,7 +449,7 @@ unit runs from `domovoi/` where the compose file lives. Same split as the
 dev scripts. No venv activation is needed — `ExecStart` names the venv's
 interpreter directly, which is equivalent.
 
-Two details worth not skipping:
+Three details worth not skipping:
 
 - **`After=ollama.service`** keeps the core from starting before Ollama is
   listening. The core survives it either way, but the first routed turn
@@ -457,6 +460,40 @@ Two details worth not skipping:
   correctly without this, but a service quietly writing its state into the
   wrong home directory is a miserable thing to diagnose later. Set it and
   point it at the service user's real home.
+- **`TimeoutStopSec=30`** on both Python units, **`KillMode=control-group`**
+  on the core. A core stop takes well under a second: SIGTERM starts
+  uvicorn's own shutdown (every
+  satellite gets a 1012 close and reconnects to the next process), then
+  the teardown unloads plugins and stops the workers. The core bounds that
+  itself — `SHUTDOWN_GRACE_SEC` (5) for open sockets and requests,
+  `SHUTDOWN_TEARDOWN_SEC` (10) for the teardown, and at
+  `SHUTDOWN_DEADLINE_SEC` (20) after the signal it logs every thread's stack
+  and exits — so `TimeoutStopSec` is only systemd's backstop, and it has to
+  stay above that deadline or the journal gets a bare SIGKILL instead of
+  the stacks. Without it systemd waits 90 s. (Until 2026-09-30 the core
+  swallowed SIGTERM and every update and restart waited out exactly that.)
+
+  `control-group` is systemd's default, written out because `mixed` looks
+  tempting and is worse here. The core's one long-lived child is Python's
+  multiprocessing resource tracker — Python 3.14 starts one the first time
+  anything creates a multiprocessing lock, and loading the Whisper model
+  does (through its download progress bar). The tracker ignores SIGTERM by
+  design and exits by itself the moment the core does, after removing the
+  semaphore the core leaves in `/dev/shm`. `mixed` SIGKILLs it right then,
+  in the middle of that clean-up, on every stop; `control-group` lets it
+  finish in a few milliseconds, and the core's short-lived children
+  (ffmpeg, `rtl_fm`, git, docker, pip) take the SIGTERM as they should.
+
+  Already running units written before these lines? Add them without
+  touching the unit file; the next stop uses them, no restart needed:
+
+  ```bash
+  sudo mkdir -p /etc/systemd/system/domovoi-core.service.d
+  printf '[Service]\nTimeoutStopSec=30\nKillMode=control-group\n' \
+    | sudo tee /etc/systemd/system/domovoi-core.service.d/stop.conf
+  sudo systemctl daemon-reload
+  systemctl show domovoi-core -p TimeoutStopUSec -p KillMode
+  ```
 
 Enable and start:
 
@@ -509,7 +546,12 @@ instead of bouncing core and web, and each run does this:
    (`pre-<sha>-<time>.test.dump`) when that database exists: plugin
    migrations are applied to both. The newest 5 of each are kept. If either
    backup fails, the update stops there and nothing has been stopped.
-4. Stop `domovoi-web` and `domovoi-core`.
+4. Stop `domovoi-web` and `domovoi-core`, waiting at most 40 s
+   (`DOMOVOI_UPDATE_STOP_TIMEOUT`). A unit still stopping then is
+   SIGKILLed; one still up 10 s after that fails the step. The step's
+   detail says how long each unit took and how it ended, so a stop that
+   needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
+   in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv the way [Install](#install) builds it (CPU
    torch first, then `pip install -e ".[dev,real-clients,voice-profile]"`).
@@ -613,6 +655,8 @@ layout on this page, so you only need the file to change one:
 # 0 lets an update go ahead when the pre-update backup fails (then no restore is possible).
 # DOMOVOI_UPDATE_REQUIRE_BACKUP=1
 # DOMOVOI_UPDATE_HEALTH_TIMEOUT=120
+# How long the stop step waits for web and core before SIGKILLing what is still stopping.
+# DOMOVOI_UPDATE_STOP_TIMEOUT=40
 # DOMOVOI_CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
 # DOMOVOI_WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 # DOMOVOI_PG_CONTAINER=domovoi-postgres

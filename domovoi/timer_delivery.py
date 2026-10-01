@@ -39,6 +39,15 @@ The pieces:
   NOTHING, and only an announcement that never reached the satellite
   (``AnnounceNotStarted``) goes back to pending.
 
+* **A stop never loses one.** Once the core is shutting down
+  (:func:`domovoi.lifecycle.shutting_down`, true from the moment SIGTERM
+  lands) the watcher pops nothing more — due timers stay in ``timers`` for
+  the next boot — and no delivery claims a room: its row stays pending, and
+  the next boot resumes it (:meth:`TimerDelivery.resume_unsettled`) when the
+  room reconnects. An announcement whose socket closed before its first
+  frame is ``AnnounceNotStarted`` and goes back to pending the same way;
+  only one already playing is recorded as it ended.
+
 * **Acknowledged means done.** "Stop the timer" right after one went off
   (:func:`ack_recent_fire`) stamps the fire: no room that joins later is
   added, and no other room's waiting announcement starts — except the
@@ -76,6 +85,7 @@ from typing import Any, Callable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import lifecycle
 from domovoi.config import settings
 from domovoi.db.repositories import (
     TIMER_FIRES_CHANGED_CHANNEL,
@@ -138,8 +148,11 @@ class AnnounceNotStarted(RuntimeError):
     """``StreamSession.announce`` sent nothing to the satellite: the room
     started a turn (``reason='responding'``), started listening or a call
     (``'capturing'`` / ``'recording'`` / ``'in_call'``, for a caller that
-    defers to a capture), or the first sentence would not synthesize or
-    came out silent (``reason='tts_failed'``). Safe to try again."""
+    defers to a capture), the first sentence would not synthesize or
+    came out silent (``reason='tts_failed'``), or the socket was already
+    gone when the first frame went out (``reason='send_failed'`` — a core
+    shutdown closes every satellite socket before its teardown). Safe to
+    try again."""
 
     def __init__(self, message: str, *, reason: str) -> None:
         super().__init__(message)
@@ -853,8 +866,14 @@ class TimerDelivery:
         sleep: Callable[[float], Any] = asyncio.sleep,
         poll_sec: float = 0.25,
         events: EventBus | None = None,
+        shutting_down: Callable[[], bool] | None = None,
     ) -> None:
         self.app = app
+        # Read on every tick and before every claim (see the module
+        # docstring, "A stop never loses one").
+        self._shutting_down = (
+            shutting_down if shutting_down is not None else lifecycle.shutting_down
+        )
         self._ledger_factory = ledger_factory
         self._clock = clock
         self._wall = wall
@@ -1025,7 +1044,12 @@ class TimerDelivery:
 
     async def tick(self) -> int:
         """Pop and record every due timer, start its announcements, then
-        sweep. Returns how many fired."""
+        sweep. Returns how many fired. Nothing once the core is shutting
+        down: a timer due now stays in ``timers`` and the next boot fires
+        it, when its rooms are back, rather than this process popping it
+        into a house whose sockets are closing."""
+        if self._shutting_down():
+            return 0
         ledger = await self.ensure_ledger()
         if not self._resumed:
             try:
@@ -1207,6 +1231,11 @@ class TimerDelivery:
 
         try:
             while True:
+                if self._shutting_down():
+                    # Every satellite socket is being closed: whatever is
+                    # claimed now cannot be spoken. The row stays pending
+                    # and the next boot resumes it (resume_unsettled).
+                    return
                 forced: str | None = None
                 sess = self._sessions().get(room_id)
                 if sess is None:
@@ -1460,15 +1489,33 @@ class TimerDelivery:
         for room in list(sessions):
             self.on_room_connected(room)
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, grace_sec: float = 1.0) -> None:
         """Stop every task. Rows stay pending/sending for the next boot's
-        :meth:`resume_unsettled`."""
+        :meth:`resume_unsettled`.
+
+        The tasks first get ``grace_sec`` to end ON THEIR OWN, and only
+        then are cancelled. By the time the lifespan teardown calls this,
+        the core is shutting down (no delivery claims a room any more) and
+        uvicorn has closed every satellite socket, so a delivery caught
+        between its claim and its first frame — still synthesizing the
+        first sentence — fails that frame (``AnnounceNotStarted``) and puts
+        the room back to pending, to be heard after the restart. Cancelled
+        there instead, it left the row 'sending' with not one frame sent,
+        and the next boot recorded failed/core_restarted: a timer nobody
+        ever heard (seen 2026-09-30 with SIGTERM landing 1 ms after a pop).
+        A cancelled task then gets at most ``min(grace_sec, 0.5)`` s to
+        unwind (a ledger write in flight); one that takes longer is left
+        behind rather than waited on."""
         self._closed = True
         tasks = [*self._tasks.values(), *self._aux]
-        for task in tasks:
-            task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _done, late = await asyncio.wait(tasks, timeout=grace_sec)
+            for task in late:
+                task.cancel()
+            if late:
+                _done, late = await asyncio.wait(late, timeout=min(grace_sec, 0.5))
+            if late:
+                log.warning("timer delivery: %d task(s) still unwinding at shutdown", len(late))
         self._tasks.clear()
         self._coming.clear()
         self._aux.clear()

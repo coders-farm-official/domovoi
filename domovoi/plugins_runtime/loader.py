@@ -54,6 +54,11 @@ from domovoi.sdk.facade import PluginSDK, build_sdk
 
 log = logging.getLogger(__name__)
 
+# unload_plugin's bounds: one on_disable callback, and the plugin's workers
+# in all (WorkerRunner.stop_owner's default).
+_ON_DISABLE_SEC = 5.0
+_WORKER_STOP_SEC = 10.0
+
 
 def installed_root() -> Path:
     return Path.home() / ".domovoi" / "plugins" / "installed"
@@ -364,22 +369,34 @@ class PluginLoader:
         )
         return lp
 
-    async def unload_plugin(self, slug: str) -> None:
+    async def unload_plugin(
+        self, slug: str, *, worker_timeout: float = _WORKER_STOP_SEC,
+    ) -> None:
         """Full §3.4 teardown: routers (404 gate) → on_disable hooks →
         workers → handlers → SDK teardown (capabilities, subscriptions,
         stamps, open-enum values, canned sounds, state) → config. The gate
         closes first: the hooks and the worker stop await, and a request
-        let through meanwhile would run against a load being torn down."""
+        let through meanwhile would run against a load being torn down.
+
+        Bounded: each on_disable callback gets ``_ON_DISABLE_SEC`` and the
+        plugin's workers ``worker_timeout`` in all, so one plugin that
+        hangs on the way out cannot hold a disable, an upgrade or the
+        core's shutdown open."""
         set_plugin_enabled(slug, False)
         lp = self.loaded.pop(slug, None)
         if lp is None:
             return
         for cb in lp.context.disable_callbacks:
             try:
-                await cb()
+                await asyncio.wait_for(cb(), timeout=_ON_DISABLE_SEC)
+            except asyncio.TimeoutError:
+                log.warning(
+                    "plugin %s on_disable callback did not finish within %.0f s; "
+                    "moving on", slug, _ON_DISABLE_SEC,
+                )
             except Exception as e:  # noqa: BLE001 — teardown isolation
                 log.warning("plugin %s on_disable callback failed: %s", slug, e)
-        await WORKERS.stop_owner(slug)
+        await WORKERS.stop_owner(slug, timeout=worker_timeout)
         WORKERS.remove_owner(slug)
         for handler in lp.context.handlers:
             unregister_handler(handler)
@@ -389,9 +406,10 @@ class PluginLoader:
             del CONTEXT_PROVIDERS[key]
         log.info("plugin %s unloaded", slug)
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, worker_timeout: float = _WORKER_STOP_SEC) -> None:
+        """Unload every plugin (core shutdown)."""
         for slug in list(self.loaded):
-            await self.unload_plugin(slug)
+            await self.unload_plugin(slug, worker_timeout=worker_timeout)
 
     # ── upgrades staged for the next restart ─────────────────────────────────
 

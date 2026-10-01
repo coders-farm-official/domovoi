@@ -154,3 +154,113 @@ async def test_startup_hooks_order_and_status() -> None:
     # Names exposed for the §13.2 manifest cross-check.
     assert sorted(runner.hook_names("t6")) == ["broken", "first", "second"]
     await runner.stop_owner("t6")
+
+
+# ─── stop_owner is bounded (2026-09-30: a stop that hung until SIGKILL) ───
+
+
+class _SlowTick(Worker):
+    """A tick that takes a while once started (a feed fetch, an ICY poll)."""
+
+    interval_setting = "tick_interval"
+    stub_suppressed = False
+
+    def __init__(self, name: str, seconds: float) -> None:
+        self.name = name
+        self.seconds = seconds
+        self.started = asyncio.Event()
+        self.finished = 0
+
+    async def tick(self) -> None:
+        self.started.set()
+        await asyncio.sleep(self.seconds)
+        self.finished += 1
+
+
+class _Stubborn(Worker):
+    """A tick that swallows cancellation until told otherwise."""
+
+    name = "stubborn"
+    interval_setting = "tick_interval"
+    stub_suppressed = False
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def tick(self) -> None:
+        self.started.set()
+        while not self.release.is_set():
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue
+
+
+async def test_busy_workers_are_waited_for_together_not_in_turn() -> None:
+    """Three workers each mid-tick: the stop takes about one tick, not
+    three. (Each used to be awaited in turn, up to 10 s apiece.)"""
+    runner = WorkerRunner()
+    ws = [_SlowTick(f"slow{i}", 0.3) for i in range(3)]
+    for w in ws:
+        runner.add_worker(w, owner="s1", settings_source=_Settings())
+    await runner.start_owner("s1")
+    for w in ws:
+        await asyncio.wait_for(w.started.wait(), 1)
+    t0 = asyncio.get_running_loop().time()
+    await runner.stop_owner("s1", timeout=5)
+    took = asyncio.get_running_loop().time() - t0
+    assert took < 0.55, took
+    assert [w.finished for w in ws] == [1, 1, 1]      # each tick completed
+    assert {s["state"] for s in runner.status("s1")["workers"]} == {"stopped"}
+
+
+async def test_a_tick_past_the_deadline_is_cancelled() -> None:
+    runner = WorkerRunner()
+    w = _SlowTick("glacial", 3600)
+    runner.add_worker(w, owner="s2", settings_source=_Settings())
+    await runner.start_owner("s2")
+    await asyncio.wait_for(w.started.wait(), 1)
+    t0 = asyncio.get_running_loop().time()
+    await runner.stop_owner("s2", timeout=0.1)
+    assert asyncio.get_running_loop().time() - t0 < 0.5
+    assert w.finished == 0
+    assert runner.status("s2")["workers"][0]["state"] == "stopped"
+
+
+async def test_a_worker_that_swallows_the_cancel_is_left_behind(caplog, monkeypatch) -> None:
+    monkeypatch.setattr(workers_mod, "_CANCEL_GRACE_SEC", 0.1)
+    runner = WorkerRunner()
+    w = _Stubborn()
+    runner.add_worker(w, owner="s3", settings_source=_Settings())
+    await runner.start_owner("s3")
+    await asyncio.wait_for(w.started.wait(), 1)
+    t0 = asyncio.get_running_loop().time()
+    await runner.stop_owner("s3", timeout=0.1)
+    assert asyncio.get_running_loop().time() - t0 < 0.6
+    assert any("worker:s3:stubborn did not stop" in m and "left it running" in m
+               for m in caplog.messages), caplog.messages
+    w.release.set()                 # let the task end before the loop closes
+    await asyncio.sleep(0.1)
+
+
+async def test_running_startup_hooks_are_cancelled_with_their_owner() -> None:
+    """A boot hook still running (a long library index) goes with the
+    owner instead of outliving it."""
+    runner = WorkerRunner()
+    cancelled = asyncio.Event()
+
+    async def _long_index() -> None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    runner.add_startup_hook(_long_index, owner="s4", name="index")
+    await runner.start_owner("s4")
+    await asyncio.sleep(0.01)
+    t0 = asyncio.get_running_loop().time()
+    await runner.stop_owner("s4", timeout=1)
+    assert asyncio.get_running_loop().time() - t0 < 0.5
+    assert cancelled.is_set()

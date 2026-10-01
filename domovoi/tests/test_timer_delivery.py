@@ -32,6 +32,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
+from domovoi import lifecycle
 from domovoi import timer_delivery as td
 from domovoi.config import settings
 from domovoi.events import EventBus
@@ -747,6 +748,209 @@ async def test_resume_after_a_restart() -> None:
     await h.advance(121.0)
     await h.sweep()
     assert [s["fire_id"] for s in h.settled] == [-51, -50]
+
+
+# ─── C12b a stop with fires in flight (2026-09-30) ───────────────────────
+#
+# The core now really shuts down on SIGTERM (it used to be SIGKILLed after
+# 90 s): uvicorn closes every satellite socket, then the lifespan teardown
+# cancels what is left. Nothing may be lost to that, and nothing said twice.
+
+
+async def _no_wait(_dt: float) -> None:
+    await asyncio.sleep(0)
+
+
+def _restarted(h: House) -> TimerDelivery:
+    """The next process: the same ledger (the database), a fresh
+    coordinator, no satellites connected yet."""
+    lifecycle.reset()
+    h.sessions.clear()
+    return TimerDelivery(h.app, lambda: h.ledger, clock=h.clock, wall=h.clock.wall,
+                         sleep=_no_wait, events=h.bus)
+
+
+@pytest.mark.asyncio
+async def test_a_stopping_core_pops_nothing() -> None:
+    """A timer that comes due while the sockets are closing stays in
+    `timers`: the next boot fires it, once its rooms are back."""
+    h = House("garage", "kitchen")
+    lifecycle.signal_shutdown("SIGTERM")
+    assert await h.fire(due(1, "garage")) == 0
+    assert h.ledger._fires == {}
+    assert h.fired == []
+    assert len(h.ledger.due) == 1
+    assert h.room("garage").calls == 0
+
+
+@pytest.mark.asyncio
+async def test_a_room_still_waiting_at_the_stop_hears_it_after_the_restart() -> None:
+    h = House("garage", "kitchen")
+    h.room("kitchen").busy("responding", True, T0 + 3600)
+    await h.fire(due(1, "garage"))
+    await _yield()
+    assert h.room("garage").texts == ["Your 10 minute timer is done."]
+    assert h.outcome(-1, "kitchen")[0] == "pending"
+
+    lifecycle.signal_shutdown("SIGTERM")
+    await h.advance(1.0)
+    # The waiting delivery gave up without claiming the room.
+    assert not h.d._tasks
+    assert h.outcome(-1, "kitchen")[0] == "pending"
+    assert h.room("kitchen").calls == 0
+    await h.d.shutdown()
+
+    d2 = _restarted(h)
+    await d2.tick()                       # resumes before popping anything
+    d2.set_accepting()
+    kitchen = h.connect("kitchen")        # tells the OLD coordinator: closed, no-op
+    d2.on_room_connected("kitchen")
+    garage = FakeRoom("garage", h.clock)
+    h.sessions["garage"] = garage
+    d2.on_room_connected("garage")
+    for _ in range(100):
+        await _yield()
+        if not d2._tasks and not d2._aux:
+            break
+    assert kitchen.texts == ["From the garage: Your 10 minute timer is done."]
+    assert garage.texts == []             # spoken there before the stop: never twice
+    assert h.outcome(-1, "kitchen")[0] == "spoken"
+    await d2.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_an_announcement_cut_by_the_stop_is_never_repeated() -> None:
+    """Mid-announcement when the teardown cancels it: the row is left
+    'sending', and the next boot records failed/core_restarted — the room
+    may have heard part of it, so it is not said again."""
+    h = House("garage")
+    playing = asyncio.Event()
+
+    class _Playing(FakeRoom):
+        async def announce(self, text: str, **kwargs) -> None:
+            self.calls += 1
+            playing.set()
+            await asyncio.sleep(3600)
+
+    h.sessions["garage"] = _Playing("garage", h.clock)
+    await h.fire(due(1, "garage"))
+    await asyncio.wait_for(playing.wait(), 1)
+    assert h.outcome(-1, "garage")[0] == "sending"
+
+    lifecycle.signal_shutdown("SIGTERM")
+    await h.d.shutdown()
+    assert h.outcome(-1, "garage")[0] == "sending"
+
+    d2 = _restarted(h)
+    await d2.tick()
+    assert h.outcome(-1, "garage") == ("failed", "core_restarted")
+    garage = FakeRoom("garage", h.clock)
+    h.sessions["garage"] = garage
+    d2.set_accepting()
+    d2.on_room_connected("garage")
+    await _yield(40)
+    assert garage.calls == 0
+    await d2.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_a_socket_closed_before_the_first_frame_goes_back_to_pending() -> None:
+    """uvicorn closed the socket while the first sentence synthesized:
+    nothing was heard, so the room gets it when it reconnects."""
+    h = House("garage")
+
+    class _Closing(FakeRoom):
+        async def announce(self, text: str, **kwargs) -> None:
+            self.calls += 1
+            h.sessions.pop(self.room_id, None)       # announce() evicts it
+            raise AnnounceNotStarted("socket closed before the announcement started",
+                                     reason="send_failed")
+
+    closing = _Closing("garage", h.clock)
+    h.sessions["garage"] = closing
+    await h.fire(due(1, "garage"))
+    await _yield(40)
+    assert closing.calls == 1
+    assert h.outcome(-1, "garage")[0] == "pending"
+
+    garage = h.connect("garage")
+    await h.idle()
+    assert garage.texts == ["Your 10 minute timer is done."]
+    assert h.outcome(-1, "garage")[0] == "spoken"
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_still_synthesizing_at_the_stop_is_heard_after_the_restart() -> None:
+    """SIGTERM a millisecond after a pop (seen in the Linux repro): the room
+    is claimed and its first sentence is still synthesizing when the
+    teardown stops the delivery. uvicorn has closed the socket by then, so
+    the first frame fails and the row goes back to pending. Cancelled
+    there instead, the task left the row 'sending' with not one frame
+    sent, and the next boot recorded failed/core_restarted: a timer nobody
+    ever heard."""
+    h = House("garage")
+    synthesizing = asyncio.Event()
+    socket_closed = asyncio.Event()
+
+    class _Synthesizing(FakeRoom):
+        async def announce(self, text: str, **kwargs) -> None:
+            self.calls += 1
+            synthesizing.set()
+            await socket_closed.wait()          # the first sentence is rendering...
+            await asyncio.sleep(0.05)           # ...a little past the close
+            h.sessions.pop(self.room_id, None)  # announce() evicts it
+            raise AnnounceNotStarted("socket closed before the announcement started",
+                                     reason="send_failed")
+
+    h.sessions["garage"] = _Synthesizing("garage", h.clock)
+    await h.fire(due(1, "garage"))
+    await asyncio.wait_for(synthesizing.wait(), 1)
+    assert h.outcome(-1, "garage")[0] == "sending"
+
+    lifecycle.signal_shutdown("SIGTERM")
+    socket_closed.set()                         # uvicorn closes every satellite socket
+    await h.d.shutdown()
+    assert h.outcome(-1, "garage")[0] == "pending"
+
+    d2 = _restarted(h)
+    await d2.tick()
+    d2.set_accepting()
+    garage = h.connect("garage")                # tells the OLD coordinator: closed, no-op
+    d2.on_room_connected("garage")
+    for _ in range(100):
+        await _yield()
+        if not d2._tasks and not d2._aux:
+            break
+    assert garage.texts == ["Your 10 minute timer is done."]
+    assert h.outcome(-1, "garage")[0] == "spoken"
+    await d2.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_wait_on_a_task_that_eats_the_cancel(caplog) -> None:
+    h = House("garage")
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    class _Stubborn(FakeRoom):
+        async def announce(self, text: str, **kwargs) -> None:
+            started.set()
+            while not release.is_set():
+                try:
+                    await asyncio.sleep(0.02)
+                except asyncio.CancelledError:
+                    continue
+
+    h.sessions["garage"] = _Stubborn("garage", h.clock)
+    await h.fire(due(1, "garage"))
+    await asyncio.wait_for(started.wait(), 1)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await h.d.shutdown(grace_sec=0.1)
+    assert loop.time() - t0 < 0.5
+    assert any("still unwinding at shutdown" in m for m in caplog.messages)
+    release.set()
+    await asyncio.sleep(0.05)
 
 
 # ─── C13 V018 missing ────────────────────────────────────────────────────

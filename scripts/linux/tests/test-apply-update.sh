@@ -68,7 +68,37 @@ write_shims() {
 echo "systemctl $*" >>"$SHIM_STATE/calls.log"
 if [ "${1-}" = show ]; then
   case "$*" in *ExecStart*) cat "$SHIM_STATE/show-execstart" 2>/dev/null ;; esac
+  # How the unit's last stop went: show-<unit> holds Key=Value lines.
+  case "$*" in *Result*) cat "$SHIM_STATE/show-${2-}" 2>/dev/null ;; esac
   exit 0
+fi
+# stop-hangs lists units whose stop never finishes by itself: only a
+# SIGKILL (`systemctl kill`) ends it, and not even that for a unit also in
+# kill-fails.
+hangs() { grep -qxF -- "$1" "$SHIM_STATE/stop-hangs" 2>/dev/null; }
+still_up() {
+  hangs "$1" && { [ ! -f "$SHIM_STATE/killed-$1" ] \
+    || grep -qxF -- "$1" "$SHIM_STATE/kill-fails" 2>/dev/null; }
+}
+# Every unit runs until a stop finishes (stopped-<unit>) or a kill lands
+# (killed-<unit>); a start brings it back.
+if [ "${1-}" = is-active ]; then
+  if still_up "${2-}"; then echo deactivating; exit 0; fi
+  if [ -f "$SHIM_STATE/killed-${2-}" ]; then echo failed; exit 3; fi
+  if [ -f "$SHIM_STATE/stopped-${2-}" ]; then echo inactive; exit 3; fi
+  echo active; exit 0
+fi
+if [ "${1-}" = kill ]; then
+  : >"$SHIM_STATE/killed-${!#}"
+  exit 0
+fi
+if [ "${1-}" = stop ] && ! grep -qxF -- "$*" "$SHIM_STATE/fail-systemctl" 2>/dev/null; then
+  # systemd stops the units side by side: each is down as soon as its own
+  # stop is done, whatever happens to the client waiting on the others.
+  for u in "${@:2}"; do
+    while still_up "$u"; do sleep 0.1; done
+    : >"$SHIM_STATE/stopped-$u"
+  done
 fi
 if [ -f "$SHIM_STATE/fail-systemctl" ] && grep -qxF -- "$*" "$SHIM_STATE/fail-systemctl"; then
   echo "systemctl: forced failure for: $*" >&2; exit 1
@@ -118,6 +148,9 @@ if [ "${1-}" = start ] && [[ " $* " == *" domovoi-core.service "* ]]; then
     done <"$reg" >"$reg.new"
     mv "$reg.new" "$reg"
   fi
+fi
+if [ "${1-}" = start ]; then
+  for u in "${@:2}"; do rm -f "$SHIM_STATE/stopped-$u" "$SHIM_STATE/killed-$u"; done
 fi
 exit 0
 SH
@@ -368,6 +401,8 @@ run_update() {
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
     DOMOVOI_UPDATE_HEALTH_TIMEOUT=1 \
     DOMOVOI_UPDATE_HEALTH_INTERVAL=0.2 \
+    DOMOVOI_UPDATE_STOP_TIMEOUT="${STOP_TIMEOUT:-5}" \
+    DOMOVOI_UPDATE_STOP_KILL_WAIT=1 \
     DOMOVOI_UPDATE_KEEP_BACKUPS="${KEEP_BACKUPS:-5}" \
     "${run[@]}" >"$CASE/output.log" 2>&1 || RC=$?
   RESULT=$UPD/last-result.json
@@ -393,6 +428,13 @@ eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
 step_is() { grep -qF "{\"name\": \"$1\", \"status\": \"$2\"" "$RESULT"; }  # step_is NAME STATUS
 step_is_timed() { grep -qF "{\"name\": \"$1\", \"status\": \"ok\", \"duration_sec\": $2," "$RESULT"; }  # step_is_timed NAME SECONDS
 file_is() { [ -f "$1" ] && eq "$(tr -d '[:space:]' <"$1")" "$2"; }
+# step_took_under NAME SECONDS: the step's recorded duration is below SECONDS.
+step_took_under() {
+  local d
+  d=$(grep -o "{\"name\": \"$1\", \"status\": \"[a-z_]*\", \"duration_sec\": [0-9.]*" "$RESULT" \
+    | head -n 1 | sed 's/.*"duration_sec": //')
+  [ -n "$d" ] && [ "${d%.*}" -lt "$2" ] || { echo "      $1 took [$d], expected under ${2}s"; return 1; }
+}
 
 valid_json() {
   [ -n "${HARNESS_PYTHON:-}" ] || return 0
@@ -1144,6 +1186,89 @@ SH
   end_case
 }
 
+# ─── the stop step (2026-09-30: a core that swallowed SIGTERM cost every
+# update 90 s, recorded only as a slow stop-services step) ────────────────
+
+case_stop_detail_says_how_each_unit_stopped() {
+  new_case stop_detail_says_how_each_unit_stopped
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'Result=success\nActiveExitTimestampMonotonic=1000000\nInactiveEnterTimestampMonotonic=1412000\n' \
+    >"$STATE/show-domovoi-web.service"
+  printf 'Result=timeout\nActiveExitTimestampMonotonic=5000000\nInactiveEnterTimestampMonotonic=95457000\n' \
+    >"$STATE/show-domovoi-core.service"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "stop step ok" step_is stop-services ok
+  check "each unit's stop time, and systemd's kill, in the detail" grep -qF \
+    '"detail": "domovoi-web.service 0.412 s; domovoi-core.service 90.457 s (systemd SIGKILLed it after TimeoutStopSec)"' \
+    "$RESULT"
+  check "nothing killed by the script" not_called "systemctl kill"
+  end_case
+}
+
+case_a_unit_already_down_is_said_to_be() {
+  new_case a_unit_already_down_is_said_to_be
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/stopped-domovoi-web.service"
+  printf 'Result=success\nActiveExitTimestampMonotonic=1000000\nInactiveEnterTimestampMonotonic=1250000\n' \
+    >"$STATE/show-domovoi-core.service"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "detail" grep -qF \
+    '"detail": "domovoi-web.service was not running; domovoi-core.service 0.250 s"' "$RESULT"
+  end_case
+}
+
+case_a_hung_stop_is_killed_and_the_restart_goes_on() {
+  new_case a_hung_stop_is_killed_and_the_restart_goes_on
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo domovoi-core.service >"$STATE/stop-hangs"
+  STOP_TIMEOUT=1 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "stop step ok" step_is stop-services ok
+  check "SIGKILLs the core" called "systemctl kill --signal=SIGKILL domovoi-core.service"
+  check "leaves the web alone" not_called "systemctl kill --signal=SIGKILL domovoi-web.service"
+  check "says so in the detail" grep -qF \
+    'domovoi-core.service (still stopping after 1s: SIGKILLed by this script)' "$RESULT"
+  check "then migrates and starts" again_after "systemctl kill" "systemctl start domovoi-core.service domovoi-web.service"
+  check "the stop step is bounded" step_took_under stop-services 5
+  end_case
+}
+
+case_a_hung_stop_during_an_update_still_updates() {
+  new_case a_hung_stop_during_an_update_still_updates
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  local sha_b; sha_b=$(commit_all "B: migration")
+  echo domovoi-core.service >"$STATE/stop-hangs"
+  STOP_TIMEOUT=1 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "backed up first" before "pg_dump" "systemctl kill --signal=SIGKILL domovoi-core.service"
+  check "migrated after the kill" again_after "systemctl kill" "systemctl restart domovoi-db.service"
+  check "no rollback" not_called "reset --keep"
+  check "applied_sha moved" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_a_unit_that_survives_sigkill_fails_the_stop() {
+  new_case a_unit_that_survives_sigkill_fails_the_stop
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo domovoi-core.service >"$STATE/stop-hangs"
+  echo domovoi-core.service >"$STATE/kill-fails"
+  STOP_TIMEOUT=1 run_update
+  check "exit 1" eq "$RC" 1
+  check "status failed" eq "$(field status)" '"failed"'
+  check "stop step failed" step_is stop-services failed
+  check "error names the unit" grep -qF 'still running after SIGKILL: domovoi-core.service' "$RESULT"
+  check "still tries to bring the house back" called "systemctl start domovoi-core.service domovoi-web.service"
+  check "bounded even so" step_took_under stop-services 6
+  end_case
+}
+
 case_noop_restart
 case_noop_without_any_history
 case_deps_changed_as_root
@@ -1177,6 +1302,11 @@ case_timing_helpers
 case_venv_from_the_core_unit
 case_venv_ignores_a_non_venv_interpreter
 case_venv_not_writable_aborts
+case_stop_detail_says_how_each_unit_stopped
+case_a_unit_already_down_is_said_to_be
+case_a_hung_stop_is_killed_and_the_restart_goes_on
+case_a_hung_stop_during_an_update_still_updates
+case_a_unit_that_survives_sigkill_fails_the_stop
 
 echo "apply-update harness: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

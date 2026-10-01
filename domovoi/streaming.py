@@ -5067,17 +5067,33 @@ class StreamSession:
         ConnectionClosed / send error propagates to the caller. The
         `_safe_send_text` helper exists for the normal response path
         where swallowing makes sense (the response task is already
-        cleaning up); broadcasts don't have that luxury."""
+        cleaning up); broadcasts don't have that luxury.
+
+        A socket that is already gone when the FIRST frame goes out means
+        not one frame reached the satellite: that raises
+        ``AnnounceNotStarted(reason='send_failed')``, which a timer delivery
+        puts back to pending for the room's reconnect (or the next boot's
+        resume) instead of recording a failure nobody heard. A core
+        shutdown lands here: uvicorn closes every satellite socket before
+        the teardown, often while a first sentence is synthesizing."""
         tts = get_tts_client()
-        await self.ws.send_text(json.dumps({
-            "type": "response_start",
-            "text": text,
-            "matched_handler": "intercom",
-            "matched_path": "intercom_broadcast",
-            "session_id": None,
-            "online": True,
-            "audio_sample_rate": sr,
-        }))
+        try:
+            await self.ws.send_text(json.dumps({
+                "type": "response_start",
+                "text": text,
+                "matched_handler": "intercom",
+                "matched_path": "intercom_broadcast",
+                "session_id": None,
+                "online": True,
+                "audio_sample_rate": sr,
+            }))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — any send failure on a dead socket
+            raise AnnounceNotStarted(
+                f"room {self.room_id}: socket closed before the announcement started: {e}",
+                reason="send_failed",
+            ) from e
         for chunk in _iter_chunks(first_pcm):
             await self.ws.send_bytes(chunk)
             self._note_audio_sent(len(chunk), sr)
