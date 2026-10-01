@@ -293,10 +293,15 @@ class CastPlanTest {
     @Test fun aRefusedCastIsSaidPlainly() {
         // 2026-10-01: the toast read 'cast failed: 502 Bad Gateway:
         // {"detail":"MPD error: No response from server while reading MPD hello"}'.
-        val mpdDown = ApiException(502, "502 Bad Gateway: {\"detail\":\"MPD error: No response from server while reading MPD hello\"}")
+        val body = "{\"failed\":\"music_player\",\"detail\":\"the music player for office on the domovoi server isn't answering\"}"
+        val mpdDown = ApiException(502, "502 Bad Gateway: $body", body = body)
         val note = CastPlanner.failureNote(mpdDown, "office")
-        assertEquals("couldn't cast to office: its speaker isn't answering (is the office satellite online?)", note)
-        for (raw in listOf("{", "detail", "502", "MPD", "Bad Gateway")) assertFalse(note, note.contains(raw))
+        assertEquals(
+            "couldn't cast to office: its music player on the domovoi server isn't answering " +
+                "(try again in a minute; if it keeps failing, restart the domovoi)",
+            note,
+        )
+        for (raw in listOf("{", "detail", "502", "MPD", "Bad Gateway", "failed")) assertFalse(note, note.contains(raw))
 
         assertEquals(
             "couldn't cast to den: none of these songs are in the library now (try a library rescan)",
@@ -314,5 +319,47 @@ class CastPlanTest {
         assertEquals("couldn't switch back to this device", CastPlanner.failureNote(mpdDown, null))
         // A refusal already says why, in words.
         assertEquals("only library songs", CastPlanner.failureNote(PlayerController.NothingToCast("only library songs"), "den"))
+    }
+
+    // ── which part failed: the server's music player, or the satellite ─────
+
+    @Test fun aCastTheServersMusicPlayerFailedNeverBlamesTheSatellite() {
+        // ft, 2026-10-01: office's MPD (on the server) was frozen while the
+        // office satellite was connected; the toast asked whether the
+        // satellite was online.
+        val note = CastPlanner.failureNote(
+            ApiException(502, "502 Bad Gateway: {\"failed\":\"music_player\",\"detail\":\"x\"}"), "office",
+        )
+        assertTrue(note, note.contains("its music player on the domovoi server isn't answering"))
+        assertFalse(note, note.contains("satellite"))
+    }
+
+    @Test fun aCastWithNoSatelliteYetNamesTheSatellite() {
+        val body = "{\"failed\":\"satellite\",\"detail\":\"no satellite has connected to the domovoi yet\"}"
+        assertEquals(
+            "couldn't cast to den: no satellite has connected to the domovoi yet, so there's no speaker to play on",
+            CastPlanner.failureNote(ApiException(503, "503 Service Unavailable: $body", body = body), "den"),
+        )
+    }
+
+    @Test fun aServerThatNamesNoPartGetsNoGuess() {
+        // An older core ("MPD error: ..."), or the web without its core
+        // ("domovoi unreachable"): no part named, so no hint at one.
+        for (detail in listOf("MPD error: No response from server while reading MPD hello", "domovoi unreachable")) {
+            val body = "{\"detail\":\"$detail\"}"
+            val note = CastPlanner.failureNote(ApiException(502, "502 Bad Gateway: $body", body = body), "office")
+            assertEquals("couldn't cast to office: the domovoi couldn't start it (it said 502)", note)
+        }
+    }
+
+    @Test fun thePartIsReadFromTheWholeBodyOrTheMessage() {
+        // The message keeps 200 characters of the body; the part is read
+        // from the whole body when there is one.
+        val long = "{\"detail\":\"${"x".repeat(300)}\",\"failed\":\"music_player\"}"
+        assertEquals("music_player", ApiException(502, "502 Bad Gateway: ${long.take(200)}", body = long).failedPart)
+        assertEquals("satellite", ApiException(503, "503 X: {\"failed\":\"satellite\"}").failedPart)
+        assertEquals(null, ApiException(502, "502 Bad Gateway: <html>oops</html>", body = "<html>oops</html>").failedPart)
+        assertEquals(null, ApiException(502, "502 Bad Gateway: {\"failed\":7}").failedPart)
+        assertEquals(null, ApiException(502, "no body at all").failedPart)
     }
 }

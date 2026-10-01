@@ -392,10 +392,7 @@ fun MusicScreen() {
                     NowPlayingStrip(
                         npList, tick,
                         onPlayRandom = onPlayRandom,
-                        onPause = { roomCtl("pause", it, "pause") },
-                        onResume = { roomCtl("resume", it, "resume") },
-                        onSkip = { roomCtl("skip", it, "skip") },
-                        onStop = { roomCtl("stop", it, "stop") },
+                        transport = RoomTransport { action, room -> roomCtl(action, room, action) },
                         onFavorite = onFavoriteNp,
                     )
                 }

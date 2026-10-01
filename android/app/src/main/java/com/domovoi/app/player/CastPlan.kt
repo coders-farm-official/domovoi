@@ -173,17 +173,30 @@ object CastPlanner {
      * reply. Before 2026-10-01 the toast read 'cast failed: 502 Bad Gateway:
      * {"detail":"MPD error: No response from server while reading MPD
      * hello"}'. [room] is where it was going; null: back to this phone.
+     *
+     * The hint follows the part the core says failed ([ApiException.failedPart]):
+     * the room's music player, which runs on the domovoi server, or — no
+     * satellite has ever connected — the satellite. Every 5xx used to read
+     * "its speaker isn't answering (is the office satellite online?)", also
+     * when office's satellite was connected and the server's music player
+     * had frozen (ft, 2026-10-01). An older core names no part, and then
+     * neither does this. The dashboard says the same (player.jsx).
      */
     fun failureNote(e: Throwable, room: String?): String {
         if (e is PlayerController.NothingToCast) return e.message ?: "nothing here can play in a room"
         if (room == null) return "couldn't switch back to this device"
         return when {
+            e is ApiException && e.failedPart == "music_player" ->
+                "couldn't cast to $room: its music player on the domovoi server isn't answering " +
+                    "(try again in a minute; if it keeps failing, restart the domovoi)"
+            e is ApiException && e.failedPart == "satellite" ->
+                "couldn't cast to $room: no satellite has connected to the domovoi yet, so there's no speaker to play on"
             e is ApiException && e.deviceTokenRequired ->
                 "couldn't cast to $room: this phone needs pairing with the domovoi again"
             e is ApiException && e.status == 404 ->
                 "couldn't cast to $room: none of these songs are in the library now (try a library rescan)"
             e is ApiException && e.status in 500..599 ->
-                "couldn't cast to $room: its speaker isn't answering (is the $room satellite online?)"
+                "couldn't cast to $room: the domovoi couldn't start it (it said ${e.status})"
             e is ApiException -> "couldn't cast to $room (the domovoi said ${e.status})"
             e is IOException -> "couldn't cast to $room: the domovoi can't be reached (offline?)"
             else -> "couldn't cast to $room"

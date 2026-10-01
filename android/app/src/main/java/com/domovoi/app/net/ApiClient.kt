@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -38,7 +39,26 @@ class ApiException(
     /** The server asked this phone to pair, not to log in (see
      *  [isDeviceTokenRefusal]) — the UI routes to the pairing screen. */
     val deviceTokenRequired: Boolean = false,
-) : IOException(message)
+    /** The response body (its first 4,096 characters; the message keeps
+     *  200); empty when there was none. */
+    val body: String = "",
+) : IOException(message) {
+    /**
+     * The part of the house the server says failed, from `failed` in a JSON
+     * error body: "music_player" (a room's music player, on the domovoi
+     * server) or "satellite" (2026-10-01, the core's music controls and
+     * casts). Null when the server named none — an older core, or any other
+     * error. Read from [body], or from the message's copy of it.
+     */
+    val failedPart: String? by lazy {
+        val text = body.ifBlank { message?.substringAfter(": ", "").orEmpty() }
+        runCatching {
+            (DomovoiJson.parseToJsonElement(text) as? JsonObject)
+                ?.get("failed")?.let { it as? JsonPrimitive }
+                ?.takeIf { it.isString }?.content
+        }.getOrNull()
+    }
+}
 
 /**
  * Toast text for a failed mutation (CONVENTIONS rule 4). A non-2xx response is
@@ -173,6 +193,7 @@ class ApiClient(
                     if (pairing) _pairingRequired.value = true
                     throw ApiException(
                         resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
+                        body = text.take(4096),
                     )
                 }
                 if (_pairingRequired.value) _pairingRequired.value = false

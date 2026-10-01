@@ -71,11 +71,16 @@ class PlayHereToastTest {
     }
 
     @Test fun aRefusedCastIsToastedInWords() {
-        val note = castFailure(
-            ApiException(502, "502 Bad Gateway: {\"detail\":\"MPD error: No response from server while reading MPD hello\"}"),
-            "office",
+        // The core names the part that failed: here office's music player,
+        // on the server — not office's satellite (2026-10-01).
+        val body = "{\"failed\":\"music_player\",\"detail\":\"the music player for office on the domovoi server isn't answering\"}"
+        val note = castFailure(ApiException(502, "502 Bad Gateway: $body", body = body), "office")
+        assertEquals(
+            "couldn't cast to office: its music player on the domovoi server isn't answering " +
+                "(try again in a minute; if it keeps failing, restart the domovoi)",
+            note,
         )
-        assertEquals("couldn't cast to office: its speaker isn't answering (is the office satellite online?)", note)
         assertFalse(note.contains("detail"))
+        assertFalse(note.contains("satellite"))
     }
 }

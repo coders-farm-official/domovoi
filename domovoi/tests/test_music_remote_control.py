@@ -244,6 +244,97 @@ async def test_the_queue_place_is_read_by_songid_then_by_position() -> None:
     assert await handler._queue_place("kitchen") == (2, 3)
     mpd_module._clients = {"kitchen": _Real({})}
     assert await handler._queue_place("kitchen") is None
+    # A position the queue doesn't have (a songid from before the queue
+    # changed, then a stale pos) is no place in it: the skip must not take
+    # the room for one "in a queue" and send MPD's next on a guess.
+    for current in ({"pos": "3"}, {"pos": "7"}, {"pos": "-1"}, {"id": "99", "pos": "5"}):
+        mpd_module._clients = {"kitchen": _Real(current)}
+        assert await handler._queue_place("kitchen") is None, current
+
+
+# ─── a frozen music player costs the skip one timeout, not three ──────────
+
+
+class _Frozen(MPDStubClient):
+    """A room's MPD that never answers: refused, or frozen so python-mpd2
+    gives up on its hello after 5 s. Each attempt is logged — live, each
+    one is another 5 s before the room hears anything."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts: list[str] = []
+
+    def _gone(self, what: str) -> None:
+        self.attempts.append(what)
+        raise ConnectionError("No response from server while reading MPD hello")
+
+    async def queue_list(self):
+        self._gone("queue_list")
+
+    async def current_song(self):
+        self._gone("current_song")
+
+    async def next(self) -> None:
+        self._gone("next")
+
+    async def prepare_search(self, query):
+        self._gone("prepare_search")
+
+    async def prepare_filename(self, *substrings):
+        self._gone("prepare_filename")
+
+
+class _LocalPlaySession(_FakeSession):
+    """A voice turn's session whose last play was a library track."""
+
+    async def execute(self, stmt: Any, params: Any = None) -> _Result:
+        if "FROM sessions" in str(stmt):
+            return _Result(({"last_play_source": "local"},))
+        return await super().execute(stmt, params)
+
+
+async def test_a_skip_on_a_frozen_player_tries_it_once() -> None:
+    """The dashboard's and the app's skip (no session): on main the queue
+    read, the current-song check and MPD's next each waited it out (~15 s
+    live, verifier 2026-10-01). The words are what they always were."""
+    frozen = _Frozen()
+    mpd_module._clients = {"kitchen": frozen}
+
+    response = await MusicHandler()._smart_skip(_ctx(), _FakeSession())
+
+    assert (response.text, response.failure) == (UNREACHABLE, "unreachable")
+    assert frozen.attempts == ["queue_list"]
+
+
+async def test_a_spoken_skip_on_a_frozen_player_tries_it_once() -> None:
+    """A voice skip after a library play: the queue read, then the random
+    pick's search (~10.5 s live). Now one timeout, the same words."""
+    from uuid import uuid4
+
+    frozen = _Frozen()
+    mpd_module._clients = {"kitchen": frozen}
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True, app=_App)
+    session = _LocalPlaySession()
+
+    response = await MusicHandler()._smart_skip(ctx, session)
+
+    assert (response.text, response.failure) == (UNREACHABLE, "unreachable")
+    assert frozen.attempts == ["queue_list"]
+    assert not any("library_tracks" in s for s in session.statements), "a track was picked for a dead player"
+
+
+async def test_no_room_set_up_is_no_place_in_a_queue(monkeypatch) -> None:
+    """No satellite has connected (MPDNotProvisioned): not a player that
+    didn't answer. The skip goes on and the router says there are no
+    speakers yet, as before."""
+    import domovoi.handlers.music as music_mod
+    from domovoi.clients.mpd import MPDNotProvisioned
+
+    def _none_yet(_room):
+        raise MPDNotProvisioned("none yet")
+
+    monkeypatch.setattr(music_mod, "get_mpd_client_for", _none_yet)
+    assert await MusicHandler()._queue_place("kitchen") is None
 
 
 # ─── the stub moves through its queue the way the daemon does ─────────────
@@ -462,15 +553,15 @@ def _routed(response: Response, monkeypatch) -> list:
 
 
 @pytest.mark.parametrize(
-    ("failure", "status", "detail"),
+    ("failure", "status", "detail", "part"),
     [
-        ("unreachable", 502, "couldn't reach the music player in office"),
-        ("not_playing", 409, "nothing is playing in office"),
-        ("no_speakers", 503, "no satellite has connected"),
+        ("unreachable", 502, "the music player for office on the domovoi server isn't answering", "music_player"),
+        ("not_playing", 409, "nothing is playing in office", None),
+        ("no_speakers", 503, "no satellite has connected", "satellite"),
     ],
 )
 async def test_the_admin_control_answers_non_2xx_on_a_failure(
-    monkeypatch, failure: str, status: int, detail: str
+    monkeypatch, failure: str, status: int, detail: str, part: str | None
 ) -> None:
     text = "I can't play anything yet — no satellite has connected" if failure == "no_speakers" else UNREACHABLE
     _routed(Response(text=text, matched_handler="music", failure=failure), monkeypatch)
@@ -480,6 +571,100 @@ async def test_the_admin_control_answers_non_2xx_on_a_failure(
 
     assert e.value.status_code == status
     assert detail in e.value.detail
+    # Which part failed: the server's music player, or the satellite. A 409
+    # failed nothing (the player answered).
+    assert getattr(e.value, "failed", None) == part
+
+
+# ─── a failure names the part that failed (2026-10-01) ──────────────────────
+# The app read every 5xx from a cast as "its speaker isn't answering (is the
+# office satellite online?)"; on ft that 502 came from office's MPD on the
+# server, frozen, while office's satellite was connected.
+
+
+async def test_the_failure_body_carries_the_part_beside_the_words() -> None:
+    import json
+
+    exc = core_main._music_player_down("office")
+    response = await core_main._music_failure_body(_request(), exc)
+
+    assert response.status_code == 502
+    assert json.loads(response.body) == {
+        "failed": "music_player",
+        "detail": "the music player for office on the domovoi server isn't answering",
+    }
+    # The part leads, so a client that keeps only the head of a body has it.
+    assert response.body.startswith(b'{"failed":')
+    # And the app answers with it: the handler is registered for the class.
+    assert core_main.app.exception_handlers[core_main._MusicFailure] is core_main._music_failure_body
+
+
+class _Library:
+    """session_scope over a library holding ``rows`` (id, path, title, artist)."""
+
+    def __init__(self, *rows: tuple) -> None:
+        self.rows = list(rows)
+
+    def __call__(self):
+        from contextlib import asynccontextmanager
+
+        rows = self.rows
+
+        class _All:
+            def all(self) -> list:
+                return rows
+
+        class _S:
+            async def execute(self, stmt: Any, params: Any = None) -> _All:
+                return _All()
+
+        @asynccontextmanager
+        async def scope():
+            yield _S()
+
+        return scope()
+
+
+async def _cast_fails(monkeypatch, room_player: Any = None, *, provisioned: bool = True) -> HTTPException:
+    from domovoi.clients.mpd import MPDNotProvisioned
+    from domovoi.main import _AdminPlayTracksBody
+
+    async def _no_container(room_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(core_main, "session_scope", _Library((3, "/music/Long Road.mp3", "Long Road", "Band")))
+    monkeypatch.setattr(core_main, "_ensure_room_mpd", _no_container)
+    if provisioned:
+        mpd_module._clients = {"office": room_player}
+    else:
+        def _none_yet(_room):
+            raise MPDNotProvisioned("none yet")
+
+        monkeypatch.setattr(mpd_module, "get_mpd_client_for", _none_yet)
+    with pytest.raises(HTTPException) as e:
+        await core_main.admin_music_play_tracks(_AdminPlayTracksBody(room_id="office", track_ids=[3]))
+    return e.value
+
+
+async def test_a_cast_the_rooms_player_wont_take_names_the_music_player(monkeypatch) -> None:
+    class _FrozenCast(MPDStubClient):
+        async def prepare_tracks(self, specs, *, start_sec: float = 0.0):
+            raise ConnectionError("No response from server while reading MPD hello")
+
+    e = await _cast_fails(monkeypatch, _FrozenCast())
+
+    assert e.status_code == 502
+    assert e.failed == "music_player"
+    assert e.detail == "the music player for office on the domovoi server isn't answering"
+    assert "MPD" not in e.detail and "hello" not in e.detail, "the raw error is for the log"
+
+
+async def test_a_cast_with_no_satellite_ever_connected_names_the_satellite(monkeypatch) -> None:
+    e = await _cast_fails(monkeypatch, provisioned=False)
+
+    assert e.status_code == 503
+    assert e.failed == "satellite"
+    assert "no satellite has connected" in e.detail
 
 
 async def test_a_control_that_happened_answers_ok(monkeypatch) -> None:
@@ -653,9 +838,23 @@ def test_the_web_previous_is_on_the_device_tier() -> None:
 async def test_a_failed_control_passes_through_the_web(monkeypatch) -> None:
     import web.backend.api.music as music_api
 
-    _web_posts(monkeypatch, answer=(502, {"detail": "couldn't reach the music player in office"}))
+    _web_posts(monkeypatch, answer=(502, {"failed": "music_player", "detail": "the music player isn't answering"}))
     r = await music_api.pause("office", _request())
     assert r.status_code == 502
+
+
+async def test_a_failed_cast_keeps_its_part_through_the_web(monkeypatch) -> None:
+    """The app and the dashboard read ``failed`` off the web's answer."""
+    import json
+
+    import web.backend.api.music as music_api
+    from web.backend.schemas import CastTracksRequest
+
+    body = {"failed": "music_player", "detail": "the music player for office on the domovoi server isn't answering"}
+    _web_posts(monkeypatch, answer=(502, body))
+    r = await music_api.play_tracks(CastTracksRequest(room_id="office", track_ids=[3]), _request())
+    assert r.status_code == 502
+    assert json.loads(r.body) == body
 
 
 async def test_the_web_forwards_start_paused_only_when_set(monkeypatch) -> None:
@@ -711,7 +910,8 @@ async def test_a_pause_the_player_never_got_is_a_502_through_the_core() -> None:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post("/v1/admin/music/pause/kitchen")
             assert r.status_code == 502, r.text
-            assert "couldn't reach the music player" in r.json()["detail"]
+            assert "the music player for kitchen on the domovoi server" in r.json()["detail"]
+            assert r.json()["failed"] == "music_player"
             # The voice turn still says what it said.
             r = await client.post("/v1/intent", json={"transcript": "pause the music", "room_id": "kitchen"})
             assert r.status_code == 200, r.text

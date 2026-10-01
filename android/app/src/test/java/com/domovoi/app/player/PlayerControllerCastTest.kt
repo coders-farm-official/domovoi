@@ -1,5 +1,6 @@
 package com.domovoi.app.player
 
+import androidx.media3.common.Player
 import com.domovoi.app.net.ApiException
 import com.domovoi.app.testing.CastRig
 import com.domovoi.app.testing.field
@@ -686,6 +687,32 @@ class PlayerControllerCastTest {
 
         assertFalse(rig.actions().first().contains("start_paused"))
         assertFalse(outcome.paused)
+    }
+
+    // A phone whose player has run out (the last song ended: ExoPlayer keeps
+    // playWhenReady, in STATE_ENDED) or was stopped or failed (STATE_IDLE)
+    // plays nothing, so the room it hands over to waits paused too.
+    @Test fun aPhoneWhoseQueueHasEndedCastsPaused() {
+        playingOnThePhone()
+        rig.exo.state = Player.STATE_ENDED
+        assertTrue("the ended player still wants to play", rig.exo.playWhenReady)
+
+        val outcome = runBlocking { player.castTo("office") } as CastOutcome.ToRoom
+
+        val sent = rig.actions().first { it.startsWith("POST /api/music/play-tracks") }
+        assertTrue(sent, sent.contains("\"start_paused\":true"))
+        assertTrue(outcome.paused)
+    }
+
+    @Test fun aPhoneWhosePlayerHasStoppedCastsPaused() {
+        playingOnThePhone()
+        rig.exo.state = Player.STATE_IDLE
+
+        val outcome = runBlocking { player.castTo("office") } as CastOutcome.ToRoom
+
+        val sent = rig.actions().first { it.startsWith("POST /api/music/play-tracks") }
+        assertTrue(sent, sent.contains("\"start_paused\":true"))
+        assertTrue(outcome.paused)
     }
 
     @Test fun aCastFromAPausedRoomStartsTheNextRoomPaused() {

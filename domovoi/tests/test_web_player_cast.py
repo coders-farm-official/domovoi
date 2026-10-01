@@ -622,6 +622,57 @@ for name, left, paused in (("music_play_here_paused_office", "'office'", "true")
     )
 
 
+# ── polish (2026-10-01, wf/music-polish) ───────────────────────────────────
+SCENARIOS.update({
+    # A queue row tapped while a hand-back is on its way: by its turn this
+    # browser plays again, so there is no room to re-cast to.
+    "queue_row_during_a_hand_back": _scenario(
+        "await castingToOffice(); W().__holdPost = '/api/music/pause/office';"
+        "const a = P().castTo({ kind: 'browser' });"
+        "await onTheWire('POST /api/music/pause/office');"
+        "h.rerender(); P().jumpTo(3); await step(); const mark = log().length;"
+        "W().__releasePost(); const r = await settled(a); await step(); await step();"
+        "return { r, after: log().slice(mark).filter((l) => !l.startsWith('GET ')), state: state() };",
+        api=OFFICE_AT("play", "Track 3", 30.0),
+    ),
+    # A room that was STOPPED is not playing: a cast on from it waits paused.
+    "cast_from_a_stopped_room_to_another": _scenario(
+        "await castingToOffice();"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'den' });"
+        "return { r, err, acts: acts() };",
+        api=OFFICE_AT("stop", None, 0),
+    ),
+    # The picker, told the room's music player on the server didn't answer.
+    "picker_music_player_down": _scenario(
+        "h.render(); await h.click({ type: 'button', text: 'den' });"
+        "return { text: h.text(), picked: h.fnCalls.map((c) => c.name) };",
+        component="(props) => PlayerCastTargets({ ...props, p: window.__P(() => Promise.reject("
+                  "Object.assign(new Error('502 Bad Gateway: {}'),"
+                  " { status: 502, detail: { failed: 'music_player', detail: 'x' } }))) })",
+        api={"GET /api/music/now-playing": [_np("den", "stop", None, 0)]},
+        setup=_PICKER_P, fn_props=["onPicked"],
+    ),
+})
+
+# The words for each way a cast can fail, off the sandbox.
+SCENARIOS["cast_failure_notes"] = _scenario(
+    "const n = W().__note;"
+    "const err = (status, body, extra) => Object.assign(new Error(String(status)), { status, detail: body }, extra || {});"
+    "return {"
+    " player: n(err(502, { failed: 'music_player', detail: 'x' }), 'office'),"
+    " satellite: n(err(503, { failed: 'satellite', detail: 'x' }), 'office'),"
+    " older_core: n(err(502, { detail: 'MPD error: No response from server while reading MPD hello' }), 'office'),"
+    " web_lost_the_core: n(err(502, { detail: 'domovoi unreachable' }), 'office'),"
+    " not_found: n(err(404, { detail: 'none' }), 'office'),"
+    " pairing: n(err(401, { detail: 'x' }, { deviceTokenRequired: true }), 'office'),"
+    " conflict: n(err(409, { detail: 'x' }), 'office'),"
+    " offline: n(new TypeError('Failed to fetch'), 'office'),"
+    " refused: n(Object.assign(new Error('only library songs'), { castRefused: true }), 'office'),"
+    "};",
+    component="(window.__note = _castFailureNote, () => null)",
+)
+
+
 @pytest.fixture(scope="module")
 def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
@@ -1052,3 +1103,55 @@ def test_follow_room_matches_library_titles_from_the_current_item(driven):
     assert out["phone_copy_skipped"] == {"at": 1, "sec": 9, "known": True}
     assert out["no_reading"] == {"at": 1, "sec": 0, "known": False}
     assert out["stopped_room"] == {"at": 1, "sec": 0, "known": False}
+
+
+# ── polish (2026-10-01): the edges no test pinned ──────────────────────────
+
+
+def test_a_queue_row_tapped_during_a_hand_back_recasts_nothing(driven):
+    """jumpTo checks, at its turn, that it is still casting: here the
+    hand-back ended the cast first. Without that check it re-cast with no
+    room at all (room_id undefined), quietly."""
+    out = driven["queue_row_during_a_hand_back"]
+    assert out["r"]["kind"] == "browser" and out["r"]["left"] == "office"
+    assert not any(a.startswith("POST /api/music/play-tracks") for a in out["after"]), out["after"]
+    # Where the hand-back put it (office's Track 3), not the tapped row.
+    assert out["state"] == {"kind": "browser", "room": None, "index": 2, "status": "playing"}
+
+
+def test_a_cast_from_a_stopped_room_starts_the_next_room_paused(driven):
+    """A stopped room isn't playing: its queue goes on paused, as from a
+    paused one (a 'stop' reading counted as playing would start den)."""
+    out = driven["cast_from_a_stopped_room_to_another"]
+    assert out["err"] is None
+    casts = [a for a in out["acts"] if a.startswith("POST /api/music/play-tracks")]
+    assert casts == ['POST /api/music/play-tracks {"room_id":"den","track_ids":[2,3,4],"start_paused":true}'], out["acts"]
+    assert out["r"]["paused"] is True
+
+
+def test_the_picker_names_the_music_player_when_it_failed(driven):
+    out = driven["picker_music_player_down"]
+    assert any("its music player on the domovoi server isn't answering" in t for t in out["text"]), out["text"]
+    assert not any("satellite" in t for t in out["text"]), "a server fault was blamed on the satellite"
+    assert out["picked"] == []
+
+
+def test_each_cast_failure_says_what_failed(driven):
+    out = driven["cast_failure_notes"]
+    assert out["player"] == (
+        "Couldn't cast to office — its music player on the domovoi server isn't answering. "
+        "Try again in a minute; if it keeps failing, restart the domovoi."
+    )
+    assert out["satellite"] == (
+        "Couldn't cast to office — no satellite has connected to the domovoi yet, so there is no speaker to play on."
+    )
+    # An older core names no part: no guess at which, and no raw reply.
+    assert out["older_core"] == "Couldn't cast to office — the domovoi couldn't start it (it said 502)."
+    assert out["web_lost_the_core"] == out["older_core"]
+    assert out["not_found"] == "Couldn't cast to office — none of these songs are in the library now (try a library rescan)."
+    assert out["pairing"] == "Couldn't cast to office — this browser needs pairing with the domovoi again."
+    assert out["conflict"] == "Couldn't cast to office (the domovoi said 409)."
+    assert out["offline"] == "Couldn't cast to office — the domovoi can't be reached (offline?)."
+    assert out["refused"] == "only library songs"
+    for note in out.values():
+        assert "MPD" not in note and "{" not in note, note

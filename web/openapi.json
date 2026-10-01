@@ -1654,6 +1654,47 @@
         }
       }
     },
+    "/api/music/previous/{room_id}": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Previous",
+        "description": "Back one song in the room's queue (MPD's previous; on the queue's\nfirst song it starts that song again). The app's and the dashboard's\nprevious while casting; before 2026-10-01 there was no such proxy, and\nthe dashboard's previous posted skip \u2014 moving the room FORWARD.\n\nDevice tier, not open like the four above: the kiosk has no previous\nbutton, so nothing unattended needs it (docs/SECURITY_PRIVACY.md).",
+        "operationId": "previous_api_music_previous__room_id__post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/reindex": {
       "post": {
         "tags": [
@@ -1794,7 +1835,7 @@
           "music"
         ],
         "summary": "Play Tracks",
-        "description": "Cast an arbitrary ordered queue of library tracks into a room's MPD\n(the browser player's Spotify-Connect-style hand-off). Proxies to the\nDomovoi server's ``/v1/admin/music/play-tracks``; from there, the existing\npause/resume/skip/now-playing routes drive the room.",
+        "description": "Cast an arbitrary ordered queue of library tracks into a room's MPD\n(the browser player's Spotify-Connect-style hand-off). Proxies to the\nDomovoi server's ``/v1/admin/music/play-tracks``; from there, the existing\npause/resume/skip/now-playing routes drive the room. ``start_sec`` and\n``start_paused`` go along only when set, so a plain cast reads exactly\nas it always has. A cast the core couldn't make passes through as it\nanswered: ``failed`` names the part (``music_player`` on the server, or\n``satellite``) beside the ``detail`` in words.",
         "operationId": "play_tracks_api_music_play_tracks_post",
         "requestBody": {
           "content": {
@@ -11723,6 +11764,18 @@
             "maxItems": 500,
             "minItems": 1,
             "title": "Track Ids"
+          },
+          "start_sec": {
+            "type": "number",
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Start Sec",
+            "default": 0.0
+          },
+          "start_paused": {
+            "type": "boolean",
+            "title": "Start Paused",
+            "default": false
           }
         },
         "type": "object",
@@ -11731,7 +11784,7 @@
           "track_ids"
         ],
         "title": "CastTracksRequest",
-        "description": "Cast an arbitrary ordered queue of library tracks into a room.\n\nThe browser music player owns the queue order (it's whatever the user\nbuilt locally), so unlike ``PlayPlaylistRequest`` this ships the exact\n``track_id`` list rather than a playlist id. Proxied to the\nDomovoi server's ``/v1/admin/music/play-tracks``."
+        "description": "Cast an arbitrary ordered queue of library tracks into a room.\n\nThe browser music player owns the queue order (it's whatever the user\nbuilt locally), so unlike ``PlayPlaylistRequest`` this ships the exact\n``track_id`` list rather than a playlist id. Proxied to the\nDomovoi server's ``/v1/admin/music/play-tracks``.\n\nThe room starts on the first id: a client sends its CURRENT track first\n(not the top of its queue), with ``start_sec`` = how far into it the\nlistener is, so the hand-off carries on where the listener was.\n``start_paused``: the listener had it paused, so the room waits there,\npaused, until someone presses play."
       },
       "ClipMetrics": {
         "properties": {

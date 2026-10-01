@@ -12,6 +12,7 @@ from domovoi.capabilities import (
 )
 from domovoi.clients.mpd import (
     MPDNotPlaying,
+    MPDNotProvisioned,
     get_mpd_client_for,
     iter_mpd_clients,
     mpd_stream_url_for,
@@ -33,6 +34,12 @@ _LAST_STREAM_QUERY_KEY = "last_stream_query"
 _LAST_STREAM_TITLE_KEY = "last_stream_title"
 
 log = logging.getLogger(__name__)
+
+
+class _PlayerUnreachable(Exception):
+    """The room's music player didn't answer a queue read (see
+    ``MusicHandler._queue_place``): the skip says so without trying it
+    again in another way."""
 
 
 _PLAY_ARTIST_RE = re.compile(r"^play (.+?) (?:by|from) (.+)$")
@@ -627,8 +634,19 @@ class MusicHandler(Handler):
           has no session_id.
         * **Anything else** (unknown source) — fall through
           to ``mpd.next()`` via ``_simple_ack``.
+
+        **A room whose music player can't be reached is told so at once**
+        (``_PlayerUnreachable`` from the queue read): every branch below
+        needs that player too, and each would wait out another connection
+        timeout first. Before this, a skip on a frozen MPD took three
+        timeouts from the dashboard (~15 s) and two by voice (~10.5 s)
+        before it said the same "I couldn't reach the music player.".
         """
-        place = await self._queue_place(ctx.room_id)
+        try:
+            place = await self._queue_place(ctx.room_id)
+        except _PlayerUnreachable as e:
+            log.warning("smart_skip: the room's music player didn't answer: %s", e)
+            return self._unreachable(ctx)
         if place is not None and place[1] > 1:
             return await self._skip_in_queue(ctx, *place)
 
@@ -678,16 +696,29 @@ class MusicHandler(Handler):
 
     async def _queue_place(self, room_id: str | None) -> tuple[int, int] | None:
         """Where the room's MPD is in its queue: (position of the song it
-        is on, how many songs the queue holds). None when the queue can't
-        be read, is empty, or none of it is current (a stopped room)."""
+        is on, how many songs the queue holds). None when the queue is
+        empty, none of it is current (a stopped room), its current song
+        can't be read, or no room has a player yet (``MPDNotProvisioned``:
+        the smart skip goes on and the router answers it, as before).
+
+        Raises ``_PlayerUnreachable`` when the queue read itself fails: the
+        client answers a refused ``playlistinfo`` with an empty list, so a
+        raise here is the connection — refused, or a frozen daemon that
+        never sends its hello (python-mpd2 gives up after 5 s)."""
         try:
             mpd = get_mpd_client_for(room_id)
+        except MPDNotProvisioned:
+            return None
+        try:
             queue = await mpd.queue_list()
-            if not queue:
-                return None
+        except Exception as e:  # noqa: BLE001 — any failure to connect
+            raise _PlayerUnreachable(str(e)) from e
+        if not queue:
+            return None
+        try:
             current = (await mpd.current_song()) or {}
         except Exception as e:  # noqa: BLE001 — the smart skip still decides
-            log.debug("smart_skip: couldn't read the room's queue: %s", e)
+            log.debug("smart_skip: couldn't read the room's current song: %s", e)
             return None
         # By songid first: MPD's currentsong and playlistinfo both carry it.
         cur_id = current.get("id", current.get("Id"))
