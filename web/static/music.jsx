@@ -1315,9 +1315,15 @@ const MusicPage = () => {
   const onBrowserPlay = (track) => {
     if (!player.available) { fire('browser player not available'); return; }
     // "Play here" plays here, casting or not: a room being cast to is
-    // paused (player.jsx playItems), and the toast says which.
-    const left = player.playItems([window.itemFromTrack(track)]);
-    fire(`playing "${track.title || 'track'}" in this browser${left ? ` · paused ${left}` : ''}`);
+    // paused (player.jsx playItems), and the toast says which — once the
+    // room has answered, so it never says "paused" over a room whose pause
+    // didn't happen (the core's 502 for a player that never got it).
+    const playing = `playing "${track.title || 'track'}" in this browser`;
+    const left = player.playItems([window.itemFromTrack(track)], 0, {
+      onLeft: (room, paused) => fire(paused ? `${playing} · paused ${room}`
+        : `${playing} · couldn't pause ${room}, it may still be playing`),
+    });
+    if (!left) fire(playing);
   };
   const onQueueTrack = (track) => {
     if (!player.available) { fire('browser player not available'); return; }

@@ -83,11 +83,9 @@ class CastAwarePlayerTest {
         assertFalse(rig.exo.playing)
     }
 
-    @Test fun whileCastingPreviousAndSeekingAreNotOfferedAndDoNothing() {
+    @Test fun whileCastingSeekingIsNotOfferedAndDoesNothing() {
         casting()
 
-        session.seekToPrevious()
-        session.seekToPreviousMediaItem()
         session.seekTo(30_000)
         session.seekTo(0, 0)
         session.seekBack()
@@ -100,13 +98,26 @@ class CastAwarePlayerTest {
         assertTrue(session.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
         assertTrue(session.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
         for (c in listOf(
-            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
             Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_BACK,
             Player.COMMAND_SEEK_FORWARD, Player.COMMAND_SET_SPEED_AND_PITCH,
         )) assertFalse("command $c offered while casting", session.isCommandAvailable(c))
-        // Back on the phone, the player's own answer again.
-        runBlocking { rig.player.castTo(null) }
+    }
+
+    @Test fun whileCastingPreviousIsOfferedAndGoesToTheRoom() {
+        // Since 2026-10-01 the core's previous follows the room's queue, so
+        // the lock screen's previous is the room's (it was withheld).
+        casting()
+        // Whatever the phone's own player could do from where it stopped.
+        rig.exo.unavailable += listOf(Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+
         assertTrue(session.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS))
+        assertTrue(session.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM))
+        session.seekToPrevious()
+        session.seekToPreviousMediaItem()
+        awaitUntil(what = "two previous") {
+            rig.actions().count { it.startsWith("POST /api/music/previous/office") } == 2
+        }
+        assertTrue("the phone was moved: ${rig.actions()}", rig.actions().none { it.startsWith("exo.") })
     }
 
     @Test fun whileCastingItShowsTheRoom() {

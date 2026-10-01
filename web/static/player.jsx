@@ -369,6 +369,16 @@ const _castFollowRoom = (queue, index, np) => {
   }
   return { at: from, sec: 0, known: false };
 };
+/* A room's transport control (pause / resume / skip / previous), waited
+ * for: resolves when the room did it, rejects when it didn't. The core
+ * answers a control MPD never got with 502 / 409 / 503 since 2026-10-01
+ * (before, a 200 carrying "I couldn't reach the music player.", which every
+ * hand-off took for "paused"); a 2xx saying `ok: false` is refused too. */
+const _roomControl = async (verb, roomId) => {
+  const r = await apiPost(`/api/music/${verb}/${roomId}`);
+  if (r && r.ok === false) throw new Error(`${verb} didn't happen in ${roomId}`);
+  return r;
+};
 const PlaybackContext = React.createContext({
   available: false,
   queue: [], index: -1, current: null, status: 'stopped',
@@ -439,6 +449,12 @@ const PlaybackProvider = ({ children }) => {
   // Every change of target goes through moveTarget.
   const targetRef = React.useRef(target);
   const moveTarget = (t) => { targetRef.current = t; setTarget(t); };
+  // Counts the "play here"s (playItems / playSpoken). A cast picked before
+  // one and still on its way when it comes has lost: it does nothing more
+  // (castToNow), and a room that already took its queue is paused again.
+  // Before 2026-10-01 the cast landed after the play here and silenced it.
+  const playHereGenRef = React.useRef(0);
+  const statusRef = React.useRef(status); statusRef.current = status;
   const [sleepRemainingSec, setSleepRemainingSec] = React.useState(null);
   const [recent, setRecent] = React.useState(() => {
     try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; }
@@ -745,11 +761,16 @@ const PlaybackProvider = ({ children }) => {
    * keeps its queue and place for someone there to resume; a later cast back
    * to it is a new start, which clears the hold. Stop would throw the place
    * away and tear down the satellite's music stream for nothing. */
-  const leaveRoom = React.useCallback(() => {
+  /* `onLeft(room, paused)` hears how the room's pause went — `paused` false
+   * when it didn't happen (the core's 502 for a player that never answered),
+   * so the caller can say "couldn't pause office" instead of "paused". */
+  const leaveRoom = React.useCallback((onLeft) => {
     const t = targetRef.current;
     if (t.kind !== 'room' || !t.roomId) return null;
     const room = t.roomId;
-    apiPost(`/api/music/pause/${room}`).catch((e) => console.warn(`pausing ${room} failed`, e));
+    _roomControl('pause', room).then(
+      () => { if (onLeft) onLeft(room, true); },
+      (e) => { console.warn(`pausing ${room} failed`, e); if (onLeft) onLeft(room, false); });
     remoteNpRef.current = null;
     moveTarget({ kind: 'browser' });
     return room;
@@ -764,11 +785,16 @@ const PlaybackProvider = ({ children }) => {
    * a room, and a station (nothing a room can play) replaced the queue and
    * played nowhere. Starting a room is the cast picker's job; a queue row
    * picked while casting (jumpTo) still re-casts. Same rule as the Android
-   * app's PlayerController.playItems. Returns the room it left, if any. */
-  const playItems = React.useCallback((items, startIndex = 0) => {
+   * app's PlayerController.playItems. Returns the room it left, if any;
+   * `onLeft(room, paused)` hears whether that room's pause happened.
+   *
+   * A play here wins over a cast still on its way (playHereGenRef): that
+   * cast stops where it is, or pauses the room again if it took the queue. */
+  const playItems = React.useCallback((items, startIndex = 0, { onLeft } = {}) => {
     if (!items || !items.length) return null;
     const at = Math.max(0, Math.min(startIndex, items.length - 1));
-    const left = leaveRoom();
+    playHereGenRef.current += 1;
+    const left = leaveRoom(onLeft);
     setQueue(items);
     setIndex(at);
     loadAndPlay(items[at]);
@@ -782,6 +808,7 @@ const PlaybackProvider = ({ children }) => {
    * ends the cast like playItems — it used to play here while the room
    * played on. */
   const playSpoken = React.useCallback((item, { resumeSec = 0, speed = 1 } = {}) => {
+    playHereGenRef.current += 1;
     leaveRoom();
     setQueue([item]);
     setIndex(0);
@@ -852,9 +879,23 @@ const PlaybackProvider = ({ children }) => {
     if (target.kind === 'browser') { setIndex(i); loadAndPlay(queue[i]); return; }
     // While casting: the room restarts on that row. The highlight moves only
     // once it has (a row a room can't play is refused and moves nothing).
-    castRoomJump(target.roomId, i)
-      .then(() => setIndex(i))
-      .catch((e) => console.warn('re-cast to room failed', e));
+    // In line with the casts (castTo): it waits for one still on its way,
+    // and a "play here" that comes meanwhile wins — the re-cast is not sent,
+    // or the room that took it is paused again.
+    const gen = playHereGenRef.current;
+    const run = castChainRef.current.then(async () => {
+      // No longer casting by its turn (a play here, a hand-back): nothing to do.
+      const t = targetRef.current;
+      if (t.kind !== 'room') return;
+      await castRoomJump(t.roomId, i);
+      if (gen !== playHereGenRef.current) {
+        await _roomControl('pause', t.roomId).catch((e) => console.warn(`pausing ${t.roomId} failed`, e));
+        return;
+      }
+      setIndex(i);
+    });
+    castChainRef.current = run.catch(() => {});
+    run.catch((e) => console.warn('re-cast to room failed', e));
   }, [queue, loadAndPlay, target]);
 
   function play() {
@@ -878,6 +919,9 @@ const PlaybackProvider = ({ children }) => {
   const toggle = () => { (status === 'playing') ? pause() : play(); };
 
   const next = React.useCallback(() => {
+    // While casting: the room's next song. The core follows the queue the
+    // room was cast (since 2026-10-01; before, skip swapped it for one
+    // random library track).
     if (target.kind === 'room') { apiPost(`/api/music/skip/${target.roomId}`).catch(() => {}); return; }
     const ni = index + 1;
     if (ni < queue.length) advanceTo(ni, { crossfade: false });
@@ -885,13 +929,13 @@ const PlaybackProvider = ({ children }) => {
   }, [index, queue, advanceTo, target]);
 
   const prev = React.useCallback(() => {
-    // A room has no "previous" here (the web proxies pause, resume, stop and
-    // skip only). This posted skip, so previous moved the room FORWARD, and
-    // the core's skip drops a cast queue for a random library track. Its
-    // buttons are disabled while casting; the media session's previoustrack
-    // and the p / shift+left keys land here and do nothing. Same as the
-    // Android app (PlayerController.prev, CastAwarePlayer).
-    if (target.kind === 'room') return;
+    // While casting: back one song in the room's queue (/api/music/previous,
+    // the core's MPD previous; on the queue's first song it starts again).
+    // The buttons, the p / shift+left keys and the OS media controls'
+    // previoustrack all land here. It used to post skip — previous moved the
+    // room FORWARD — and then did nothing while there was no previous
+    // route. Same as the Android app (PlayerController.prev).
+    if (target.kind === 'room') { apiPost(`/api/music/previous/${target.roomId}`).catch(() => {}); return; }
     // Restart current if >3s in, else go to previous.
     const el = activeEl();
     if (el && el.currentTime > 3) { el.currentTime = 0; return; }
@@ -1017,13 +1061,17 @@ const PlaybackProvider = ({ children }) => {
   // `startSec`: how far into items[0] the room should start (the listener's
   // place in the current song). Sent only when items[0] is itself the first
   // id, i.e. a library track: otherwise it belongs to a song not sent.
-  const castRoomLoad = React.useCallback(async (roomId, items, startSec = 0) => {
+  // `paused`: the room takes the queue and waits there, paused, until play
+  // (`start_paused`) — a cast from a player that was paused. A core from
+  // before 2026-10-01 ignores it and plays, as every cast used to.
+  const castRoomLoad = React.useCallback(async (roomId, items, startSec = 0, { paused = false } = {}) => {
     const trackIds = _castTrackIds(items);
     if (!trackIds.length) throw _castRefused();
     const body = { room_id: roomId, track_ids: trackIds };
     const first = (items || [])[0];
     const at = Math.floor(Number(startSec) || 0);
     if (at >= 2 && first && first.kind === 'library' && first.trackId === trackIds[0]) body.start_sec = at;
+    if (paused) body.start_paused = true;
     await apiPost('/api/music/play-tracks', body);
   }, []);
   const castRoomJump = React.useCallback(async (roomId, i) => {
@@ -1042,7 +1090,8 @@ const PlaybackProvider = ({ children }) => {
 
   /* Where playback goes: a room, or back to this browser. Resolves to what
    * happened — { kind, roomId?, startIndex, startSec, left, leftPaused,
-   * playing? } — so the picker can say when a room it left would not pause.
+   * playing?, paused? } — so the picker can say when a room it left would
+   * not pause.
    *
    *   browser → room   the room starts on the current track at this
    *                    browser's position; it is told first, and this
@@ -1054,33 +1103,59 @@ const PlaybackProvider = ({ children }) => {
    *                    on the room's track at the room's time — playing only
    *                    if the room was playing and took the pause, else
    *                    waiting there, paused.
+   * The room starts the way the player it takes over from was: playing, or
+   * PAUSED at that place (`paused: true`, the core's start_paused) when
+   * this browser or the old room was paused — Spotify Connect's hand-off.
+   * Before 2026-10-01 a cast from a paused browser started the room playing.
    * A queue with nothing a room can play is refused before anything
    * changes, with an error carrying `castRefused`.
    *
    * One change of target at a time: castTo below queues this behind any
-   * cast still on its way, and it reads where playback is from targetRef. */
-  const castToNow = React.useCallback(async (nextTarget) => {
+   * cast still on its way, and it reads where playback is from targetRef.
+   * A "play here" made after the pick (`gen` is the play-here count at the
+   * pick) wins: what is left of this is not done, and a room that already
+   * took the queue is paused again — { kind: 'superseded', roomId, sent,
+   * undone }. */
+  const castToNow = React.useCallback(async (nextTarget, gen = playHereGenRef.current) => {
+    const superseded = () => gen !== playHereGenRef.current;
+    if (superseded()) return { kind: 'superseded', roomId: nextTarget.roomId || null, sent: false };
     const target = targetRef.current;
     if (nextTarget.kind === 'room') {
       const from = target.kind === 'room' ? target.roomId : null;
       let at = Math.max(0, index);
       let startSec = 0;
+      let sourcePlaying = true;
       const liveEl = from ? null : activeEl();
       if (from) {
-        ({ at, sec: startSec } = _castFollowRoom(queue, index, (await readRoom(from)) || remoteNpRef.current));
-      } else if (liveEl) {
-        startSec = liveEl.currentTime || 0;
+        const np = (await readRoom(from)) || remoteNpRef.current;
+        ({ at, sec: startSec } = _castFollowRoom(queue, index, np));
+        // A room that can't be read at all is taken to be playing, as before.
+        if (np) sourcePlaying = np.state === 'play';
+        if (superseded()) return { kind: 'superseded', roomId: nextTarget.roomId, sent: false };
+      } else {
+        if (liveEl) startSec = liveEl.currentTime || 0;
+        sourcePlaying = liveEl ? !liveEl.paused : statusRef.current === 'playing';
       }
       const items = queue.slice(at);
       // Nothing a room can play: say so before touching playback, and never
       // switch the target to a room that was sent nothing.
       if (!_castTrackIds(items).length) throw _castRefused();
+      const paused = !sourcePlaying;
       try {
-        await castRoomLoad(nextTarget.roomId, items, startSec);
+        await castRoomLoad(nextTarget.roomId, items, startSec, { paused });
       } catch (e) {
         // The room refused: this browser (or the old room) plays on.
         console.warn('cast to room failed', e);
         throw e;
+      }
+      if (superseded()) {
+        // A play here came while the room was taking the queue. It has
+        // already paused the room it left and is playing in this browser;
+        // the room that took this queue must not start it.
+        let undone = true;
+        try { await _roomControl('pause', nextTarget.roomId); }
+        catch (e) { undone = false; console.warn(`pausing ${nextTarget.roomId} failed`, e); }
+        return { kind: 'superseded', roomId: nextTarget.roomId, sent: true, undone };
       }
       // Only now that the room has it: silence this browser.
       const g = graphRef.current;
@@ -1089,14 +1164,14 @@ const PlaybackProvider = ({ children }) => {
       remoteNpRef.current = null;
       setIndex(at);
       moveTarget(nextTarget);
-      setStatus('playing');
+      setStatus(paused ? 'paused' : 'playing');
       const left = from && from !== nextTarget.roomId ? from : null;
       let leftPaused = false;
       if (left) {
-        try { await apiPost(`/api/music/pause/${left}`); leftPaused = true; }
+        try { await _roomControl('pause', left); leftPaused = true; }
         catch (e) { console.warn(`pausing ${left} failed`, e); }
       }
-      return { kind: 'room', roomId: nextTarget.roomId, startIndex: at, startSec, left, leftPaused };
+      return { kind: 'room', roomId: nextTarget.roomId, startIndex: at, startSec, left, leftPaused, paused };
     }
     if (target.kind !== 'room' || !target.roomId) {
       return { kind: 'browser', left: null, playing: status === 'playing' };
@@ -1107,8 +1182,10 @@ const PlaybackProvider = ({ children }) => {
     const np = (await readRoom(room)) || remoteNpRef.current;
     const wasPlaying = !!(np && np.state === 'play');
     let leftPaused = true;
-    try { await apiPost(`/api/music/pause/${room}`); }
+    try { await _roomControl('pause', room); }
     catch (e) { leftPaused = false; console.warn(`pausing ${room} failed`, e); }
+    // A play here came meanwhile: it paused the room and plays here already.
+    if (superseded()) return { kind: 'superseded', roomId: null, sent: false, left: room, leftPaused };
     const follow = _castFollowRoom(queue, index, np);
     const item = queue[follow.at] || null;
     // The room's track unknown (stopped, or playing something not in this
@@ -1136,10 +1213,13 @@ const PlaybackProvider = ({ children }) => {
    * playing, office never paused or watched again; office then "This
    * browser" did nothing and the cast to office landed after. Now each pick
    * waits for the one before it and starts from where it left things. Same
-   * rule as the Android app's PlayerController.castTo. */
+   * rule as the Android app's PlayerController.castTo. The play-here count
+   * is read at the PICK: a play here after it beats it, even while it
+   * waits its turn. */
   const castChainRef = React.useRef(Promise.resolve());
   const castTo = React.useCallback((nextTarget) => {
-    const run = castChainRef.current.then(() => castToNow(nextTarget));
+    const gen = playHereGenRef.current;
+    const run = castChainRef.current.then(() => castToNow(nextTarget, gen));
     castChainRef.current = run.catch(() => {});
     return run;
   }, [castToNow]);
@@ -1374,7 +1454,7 @@ const MiniPlayer = () => {
         {/* center: transport + progress */}
         <div className="mp-center">
           <div className="mp-transport">
-            <button className="btn btn-ghost btn-icon mp-desk" onClick={p.prev} disabled={p.target.kind === 'room'} title="previous" aria-label="previous">
+            <button className="btn btn-ghost btn-icon mp-desk" onClick={p.prev} title="previous" aria-label="previous">
               <Icon name="skip-back" size={14}/>
             </button>
             <button className="btn btn-primary btn-icon mp-play" onClick={p.toggle}
@@ -1483,7 +1563,7 @@ const PlayerSheet = ({ p, onClose }) => {
           <span className="mono">{it.seekable ? fmtDur(dur) : 'live'}</span>
         </div>
         <div className="mp-sheet-transport">
-          <button className="btn btn-ghost btn-icon" onClick={p.prev} disabled={p.target.kind === 'room'} title="previous" aria-label="previous">
+          <button className="btn btn-ghost btn-icon" onClick={p.prev} title="previous" aria-label="previous">
             <Icon name="skip-back" size={20}/>
           </button>
           <button className="btn btn-primary btn-icon mp-sheet-play" onClick={p.toggle}
@@ -1645,6 +1725,12 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
       // so (and stay open) instead of closing as if all went well.
       if (r && r.left && !r.leftPaused) {
         setErr(`Couldn't pause ${r.left} — it may still be playing.`);
+        return;
+      }
+      // A "play here" beat this pick. The room took the queue before it did
+      // and wouldn't pause again: it may be playing.
+      if (r && r.kind === 'superseded' && r.sent && !r.undone) {
+        setErr(`Played here instead, but ${r.roomId} couldn't be paused — it may be playing.`);
         return;
       }
       if (onPicked) onPicked();

@@ -233,13 +233,42 @@ class MPDStubClient:
     # The real daemon refuses these while stopped (ACK 55). The stub
     # refuses too, or stub-mode tests would prove a behaviour the
     # product does not have.
+    #
+    # On a queue (a cast's prepare_tracks, queue adds) they move through
+    # it as the daemon does: to the next / previous entry, playing it
+    # whether the player was paused or not; next after the last entry
+    # stops; previous on the first entry starts it again. A song that is
+    # not in the queue (the single-song plays above) is left alone.
+    def _queue_index(self) -> int | None:
+        if self._song is None or "id" not in self._song:
+            return None
+        for i, entry in enumerate(self._queue):
+            if entry.get("id") == self._song.get("id"):
+                return i
+        return None
+
     async def next(self) -> None:
         if self._state == "stop":
             raise MPDNotPlaying("next: nothing is playing")
+        i = self._queue_index()
+        if i is None:
+            return
+        if i + 1 < len(self._queue):
+            self._song = self._queue[i + 1]
+            self._song.pop("_elapsed", None)
+            self._state = "play"
+        else:
+            self._state = "stop"
 
     async def previous(self) -> None:
         if self._state == "stop":
             raise MPDNotPlaying("previous: nothing is playing")
+        i = self._queue_index()
+        if i is None:
+            return
+        self._song = self._queue[max(0, i - 1)]
+        self._song.pop("_elapsed", None)
+        self._state = "play"
 
     async def current_song(self) -> dict[str, Any] | None:
         if self._state == "stop":
@@ -690,9 +719,30 @@ class RealMPDClient:
         async with self._connect() as c:
             await c.stop()
 
+    @staticmethod
+    async def _unpause_before_moving(c: Any) -> None:
+        """Unpause a paused daemon before ``next`` / ``previous``.
+
+        MPD 0.23.12 (the domovoi-mpd image) DIES on ``next``, ``previous``
+        or ``play N`` while paused on a song it has not decoded yet: started
+        and paused at once, never unpaused. That is exactly how a paused cast
+        (play-tracks ``start_paused``) leaves a room until someone presses
+        play, so a skip there killed the daemon; Docker restarted it, the
+        state file put it back PLAYING an old place, and the skip answered
+        502 (ft 2026-10-01: office, 4 of 4 tries; den, raw ``play`` +
+        ``pause 1`` + ``next``). Unpausing first, on the same connection,
+        takes the player through a normal decode, after which both moves are
+        safe; the song moved to plays, as MPD's own next/previous from pause
+        always did. A stopped daemon is left alone, so its ACK 55 still
+        surfaces as MPDNotPlaying."""
+        status = await c.status()
+        if status.get("state") == "pause":
+            await c.pause(0)
+
     async def next(self) -> None:
         async with self._connect() as c:
             try:
+                await self._unpause_before_moving(c)
                 await c.next()
             except Exception as e:
                 if _is_not_playing(e):
@@ -702,6 +752,7 @@ class RealMPDClient:
     async def previous(self) -> None:
         async with self._connect() as c:
             try:
+                await self._unpause_before_moving(c)
                 await c.previous()
             except Exception as e:
                 if _is_not_playing(e):

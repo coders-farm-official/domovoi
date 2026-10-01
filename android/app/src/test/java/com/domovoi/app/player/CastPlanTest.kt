@@ -1,5 +1,6 @@
 package com.domovoi.app.player
 
+import com.domovoi.app.net.ApiException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -255,5 +256,63 @@ class CastPlanTest {
             "casting to den · couldn't pause office, it may still be playing",
             CastOutcome.ToRoom(plan, "den", "office", false).note,
         )
+    }
+
+    @Test fun aRoomThatWaitsPausedIsSaidToBePaused() {
+        val plan = CastPlanner.plan(listOf(lib(1)), 0, 0.0)
+        assertEquals("casting to den, paused", CastOutcome.ToRoom(plan, "den", paused = true).note)
+        val leftOut = CastPlanner.plan(listOf(lib(1), lib(2), phone(3)), 0, 0.0)
+        assertEquals(
+            "casting 2 songs to den, paused · left out 1 only on this phone",
+            CastPlanner.sentNote(leftOut, "den", paused = true),
+        )
+    }
+
+    @Test fun aCastAPlayHereBeatSaysWhatBecameOfTheRoom() {
+        assertEquals("playing on this device", CastOutcome.Superseded(null).note)
+        assertEquals("didn't cast to den · playing on this device instead", CastOutcome.Superseded("den").note)
+        assertEquals(
+            "cast to den cancelled · playing on this device instead",
+            CastOutcome.Superseded("den", sent = true, undone = true).note,
+        )
+        assertEquals(
+            "cast to den cancelled, but den couldn't be paused, it may be playing",
+            CastOutcome.Superseded("den", sent = true, undone = false).note,
+        )
+    }
+
+    @Test fun aPlayHereToastNamesTheRoomOnlyOnceItPaused() {
+        assertEquals("playing \"X\" on this device · paused office",
+            CastPlanner.playHereNote("playing \"X\" on this device", "office", true))
+        assertEquals("playing \"X\" on this device · couldn't pause office, it may still be playing",
+            CastPlanner.playHereNote("playing \"X\" on this device", "office", false))
+    }
+
+    // ── a refused cast in words, never the server's reply ─────────────────
+
+    @Test fun aRefusedCastIsSaidPlainly() {
+        // 2026-10-01: the toast read 'cast failed: 502 Bad Gateway:
+        // {"detail":"MPD error: No response from server while reading MPD hello"}'.
+        val mpdDown = ApiException(502, "502 Bad Gateway: {\"detail\":\"MPD error: No response from server while reading MPD hello\"}")
+        val note = CastPlanner.failureNote(mpdDown, "office")
+        assertEquals("couldn't cast to office: its speaker isn't answering (is the office satellite online?)", note)
+        for (raw in listOf("{", "detail", "502", "MPD", "Bad Gateway")) assertFalse(note, note.contains(raw))
+
+        assertEquals(
+            "couldn't cast to den: none of these songs are in the library now (try a library rescan)",
+            CastPlanner.failureNote(ApiException(404, "404 Not Found: {}"), "den"),
+        )
+        assertEquals(
+            "couldn't cast to den: this phone needs pairing with the domovoi again",
+            CastPlanner.failureNote(ApiException(401, "401", deviceTokenRequired = true), "den"),
+        )
+        assertEquals("couldn't cast to den (the domovoi said 409)",
+            CastPlanner.failureNote(ApiException(409, "409 Conflict: {\"detail\":\"x\"}"), "den"))
+        assertEquals("couldn't cast to den: the domovoi can't be reached (offline?)",
+            CastPlanner.failureNote(java.io.IOException("timeout"), "den"))
+        assertEquals("couldn't cast to den", CastPlanner.failureNote(IllegalStateException("boom"), "den"))
+        assertEquals("couldn't switch back to this device", CastPlanner.failureNote(mpdDown, null))
+        // A refusal already says why, in words.
+        assertEquals("only library songs", CastPlanner.failureNote(PlayerController.NothingToCast("only library songs"), "den"))
     }
 }

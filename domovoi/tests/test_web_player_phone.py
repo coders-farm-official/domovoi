@@ -381,6 +381,29 @@ SCENARIOS = {
         files=FILES + ["web/static/music_player_panel.jsx"],
         refs=False,
     ),
+    # While casting, previous is the room's (2026-10-01): every previous
+    # button stays live and calls the player's prev, which posts the room's
+    # /api/music/previous. They were disabled while previous could only
+    # move the room forward (or do nothing).
+    "casting_previous_buttons": _scenario(
+        "h.render(); const prevIn = (where) => (e) => e.type === 'button'"
+        " && e.props['aria-label'] === 'previous' && where(e);"
+        "const inBarBtns = h.findAll(prevIn(inBar)).map((e) => !!e.props.disabled);"
+        "await h.click(prevIn(inBar)); await openSheet();"
+        "const inSheetBtns = h.findAll(prevIn(inSheet)).map((e) => !!e.props.disabled);"
+        "await h.click(prevIn(inSheet));"
+        "return { bar: inBarBtns, sheet: inSheetBtns, acts: acts() };",
+        p=KITCHEN, api=ROOMS,
+    ),
+    "casting_previous_panel": _scenario(
+        "h.render(); const btn = h.find((e) => e.type === 'button' && iconOf(e) === 'skip-back');"
+        "const disabled = !!btn.props.disabled; await h.click((e) => e === btn);"
+        "return { disabled, acts: acts() };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1, **KITCHEN},
+        component="NowPlayingPanel",
+        files=FILES + ["web/static/music_player_panel.jsx"],
+        refs=False,
+    ),
 }
 
 
@@ -780,3 +803,15 @@ def test_the_player_tab_stacks_on_a_phone(driven) -> None:
     assert "flex-wrap: wrap;" in _rule(phone, ".np-eq-presets")
     assert _px(_rule(phone, ".np-transport .btn-icon"), "width") == [44]
     assert "gridTemplateColumns: '220px 1fr'" not in _src("music_player_panel.jsx")
+
+
+# ─── previous while casting ──────────────────────────────────────────────
+
+
+def test_every_previous_button_works_while_casting(driven) -> None:
+    out = driven["casting_previous_buttons"]
+    assert out["bar"] == [False] and out["sheet"] == [False], out
+    assert out["acts"] == [["prev"], ["prev"]], out["acts"]
+    panel = driven["casting_previous_panel"]
+    assert panel["disabled"] is False
+    assert panel["acts"] == [["prev"]]

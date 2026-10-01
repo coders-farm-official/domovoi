@@ -7,6 +7,7 @@ import com.domovoi.app.testing.libraryQueue
 import com.domovoi.app.testing.phoneSong
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -33,6 +34,12 @@ import org.junit.Test
  *    this phone pauses the room, follows its track and time, and plays only
  *    if the room was playing and took the pause; "play here" while casting
  *    ends the cast and pauses the room.
+ *  - 2026-10-01 (wf/music-remote): a "play here" while a change of target
+ *    is still on its way wins (the change stops; a room that took the queue
+ *    is paused again); a cast outlives the menu that started it; a cast
+ *    from a paused phone or room starts the room paused; a pause the room
+ *    says didn't happen (non-2xx or ok:false) is "couldn't pause"; previous
+ *    is the room's.
  */
 class PlayerControllerCastTest {
     private val rig = CastRig()
@@ -147,7 +154,7 @@ class PlayerControllerCastTest {
     @Test fun aTappedQueueRowRestartsTheRoomThereAndPausesNothing() {
         castingToOffice()
 
-        val plan = runBlocking { player.castFrom(3) }
+        val plan = (runBlocking { player.castFrom(3) } as CastOutcome.ToRoom).plan
 
         assertEquals(listOf(104L), plan.trackIds)
         assertEquals(
@@ -449,12 +456,295 @@ class PlayerControllerCastTest {
 
     // ---- the in-app transport while casting -----------------------------------------
 
-    @Test fun previousAndSeekWhileCastingLeaveThePhoneAlone() {
+    @Test fun previousWhileCastingIsTheRoomsAndSeekLeavesThePhoneAlone() {
         castingToOffice()
 
         player.prev()
+        rig.awaitLog("POST /api/music/previous/office")
         player.seekTo(30.0)
+        Thread.sleep(100)
 
-        assertEquals(emptyList<String>(), rig.actions())
+        assertEquals(listOf("POST /api/music/previous/office [target=office]"), rig.actions())
+    }
+
+    // ---- a "play here" while a change of target is on its way (2026-10-01) --------
+    // Before, a play here in the 3-5 s a room takes to ready its stream played
+    // here, then the cast landed: it paused the phone and moved the target to
+    // the room, and the play here was lost.
+
+    @Test fun aPlayHereDuringACastWinsAndTheRoomIsPausedAgain() {
+        playingOnThePhone()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val (left, outcome) = runBlocking {
+            val cast = async { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            val left = player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            left to cast.await()
+        }
+
+        assertNull("nothing was being cast to yet", left)
+        assertEquals(CastOutcome.Superseded("office", sent = true, undone = true), outcome)
+        assertEquals("cast to office cancelled · playing on this device instead", outcome.note)
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertTrue("the play here was silenced", rig.exo.playing)
+        assertNull("a room nobody casts to is watched", field(player, "remotePollJob"))
+        val playHere = indexOf("exo.setMediaItems")
+        assertTrue(rig.log.drop(playHere).none { it.startsWith("exo.pause") || it.startsWith("exo.seekTo") })
+        assertTrue(indexOf("POST /api/music/pause/office") > playHere)
+    }
+
+    @Test fun aPlayHereDuringARoomToRoomCastPausesBothRooms() {
+        castingToOffice()
+        rig.room("office", "play", "Quiet Jars", 42.0)
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val (left, outcome) = runBlocking {
+            val cast = async { player.castTo("den") }
+            onTheWire("POST /api/music/play-tracks")
+            val left = player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            left to cast.await()
+        }
+
+        assertEquals("office", left)
+        assertEquals(CastOutcome.Superseded("den", sent = true, undone = true), outcome)
+        rig.awaitLog("POST /api/music/pause/office")
+        assertTrue(indexOf("POST /api/music/pause/den") > indexOf("POST /api/music/play-tracks"))
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertTrue(rig.exo.playing)
+    }
+
+    @Test fun aPlayHereWhileTheOldRoomIsReadSendsTheNewRoomNothing() {
+        castingToOffice()
+        rig.delays["/api/music/now-playing"] = 400
+
+        val outcome = runBlocking {
+            val cast = async { player.castTo("den") }
+            delay(100) // den's cast is reading where office is
+            player.playItems(queue) // a library queue: a cast that went on would send it
+            cast.await()
+        }
+
+        assertEquals(CastOutcome.Superseded("den"), outcome)
+        assertTrue(rig.actions().toString(), rig.actions().none { it.startsWith("POST /api/music/play-tracks") })
+        assertEquals(PlayTarget.Local, player.target.value)
+    }
+
+    @Test fun aPickWaitingItsTurnIsNeverSentAfterAPlayHere() {
+        playingOnThePhone()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val (office, den) = runBlocking {
+            val office = async { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            val den = async { player.castTo("den") }
+            delay(50) // den is picked (and waits for the lock) before the play here
+            player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            office.await() to den.await()
+        }
+
+        assertEquals(CastOutcome.Superseded("office", sent = true, undone = true), office)
+        assertEquals(CastOutcome.Superseded("den"), den)
+        assertEquals("didn't cast to den · playing on this device instead", den.note)
+        assertTrue(rig.actions().none { "\"room_id\":\"den\"" in it })
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertTrue(rig.exo.playing)
+    }
+
+    @Test fun aPlayHereDuringAHandBackIsLeftAlone() {
+        castingToOffice()
+        rig.room("office", "play", "Quiet Jars", 30.0)
+        rig.delays["/api/music/pause/office"] = 400
+
+        val outcome = runBlocking {
+            val back = async { player.castTo(null) }
+            onTheWire("POST /api/music/pause/office")
+            player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            back.await()
+        }
+
+        assertEquals(CastOutcome.Superseded(null), outcome)
+        // The hand-back would have moved the phone to Quiet Jars, 30 s in.
+        val playHere = indexOf("exo.setMediaItems")
+        assertTrue(rig.log.drop(playHere).none { it.startsWith("exo.seekTo") || it.startsWith("exo.pause") })
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertEquals(1, player.queue.value.size)
+        assertTrue(rig.exo.playing)
+    }
+
+    @Test fun aTappedRowsRecastLosesToAPlayHere() {
+        castingToOffice()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val outcome = runBlocking {
+            val row = async { player.castFrom(3) }
+            onTheWire("POST /api/music/play-tracks")
+            player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            row.await()
+        }
+
+        assertEquals(CastOutcome.Superseded("office", sent = true, undone = true), outcome)
+        assertEquals(PlayTarget.Local, player.target.value)
+        assertTrue(rig.exo.playing)
+    }
+
+    @Test fun aTappedRowWaitingItsTurnDoesNothingAfterAPlayHere() {
+        castingToOffice()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        val (cast, row) = runBlocking {
+            val cast = async { player.castTo("den") }
+            onTheWire("POST /api/music/play-tracks")
+            val row = async { player.castFrom(3) }
+            delay(50) // the row is tapped (and waits for the lock) before the play here
+            player.playItems(queue)
+            cast.await() to row.await()
+        }
+
+        assertEquals(CastOutcome.Superseded("den", sent = true, undone = true), cast)
+        assertEquals(CastOutcome.Superseded(null), row)
+        assertEquals(1, rig.actions().count { it.startsWith("POST /api/music/play-tracks") })
+        assertEquals(PlayTarget.Local, player.target.value)
+    }
+
+    @Test fun aRoomThatTookTheQueueAndWontPauseAgainIsSaidSo() {
+        playingOnThePhone()
+        rig.delays["/api/music/play-tracks"] = 400
+        rig.failing["/api/music/pause/office"] = 502
+
+        val outcome = runBlocking {
+            val cast = async { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            player.playItems(listOf(phoneSong(9, "Pocket Tune")))
+            cast.await()
+        }
+
+        assertEquals(CastOutcome.Superseded("office", sent = true, undone = false), outcome)
+        assertEquals("cast to office cancelled, but office couldn't be paused, it may be playing", outcome.note)
+    }
+
+    @Test fun aCastOutlivesTheMenuThatStartedIt() {
+        // The cast menu's scope ends when the person leaves the player tab —
+        // often to "play here" from the library. A cast cut off mid-POST
+        // left the room playing with nothing watching or pausing it.
+        playingOnThePhone()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        runBlocking {
+            val menu = launch { player.castTo("office") }
+            onTheWire("POST /api/music/play-tracks")
+            menu.cancel()
+            menu.join()
+        }
+
+        assertEquals("office", rig.roomTarget)
+        assertFalse(rig.exo.playing)
+        rig.awaitLog("GET /api/music/now-playing")
+    }
+
+    @Test fun aTappedRowsRecastOutlivesTheTabThatStartedIt() {
+        // A queue row's re-cast runs in the player tab's scope too. Cut off
+        // mid-POST, office would be on Lantern Hum while the phone's queue
+        // still pointed at Old Barrels (castFrom is NonCancellable as well).
+        castingToOffice()
+        rig.delays["/api/music/play-tracks"] = 400
+
+        runBlocking {
+            val tab = launch { player.castFrom(3) }
+            onTheWire("POST /api/music/play-tracks")
+            tab.cancel()
+            tab.join()
+        }
+
+        assertEquals("office", rig.roomTarget)
+        assertEquals(3, player.index.value)
+        assertTrue(rig.actions().toString(), rig.actions().contains("exo.seekTo(3, 0) [target=office]"))
+    }
+
+    // ---- a cast from a paused player waits paused ----------------------------------
+
+    @Test fun aCastFromAPausedPhoneStartsTheRoomPausedThere() {
+        playingOnThePhone(sec = 151.5)
+        player.pause()
+        rig.log.clear()
+
+        val outcome = runBlocking { player.castTo("office") } as CastOutcome.ToRoom
+
+        assertEquals(
+            """POST /api/music/play-tracks {"room_id":"office","track_ids":[102,103,104],"start_sec":151,"start_paused":true} [target=phone]""",
+            rig.actions().first(),
+        )
+        assertTrue(outcome.paused)
+        assertEquals("casting to office, paused", outcome.note)
+        assertEquals("office", rig.roomTarget)
+    }
+
+    @Test fun aCastFromAPlayingPhoneSaysNothingOfPausing() {
+        playingOnThePhone()
+
+        val outcome = runBlocking { player.castTo("office") } as CastOutcome.ToRoom
+
+        assertFalse(rig.actions().first().contains("start_paused"))
+        assertFalse(outcome.paused)
+    }
+
+    @Test fun aCastFromAPausedRoomStartsTheNextRoomPaused() {
+        castingToOffice()
+        rig.room("office", "pause", "Quiet Jars", 42.4)
+
+        val outcome = runBlocking { player.castTo("den") } as CastOutcome.ToRoom
+
+        assertTrue(
+            rig.actions().toString(),
+            rig.actions().contains(
+                """POST /api/music/play-tracks {"room_id":"den","track_ids":[103,104],"start_sec":42,"start_paused":true} [target=office]""",
+            ),
+        )
+        assertEquals("casting to den, paused · paused office", outcome.note)
+    }
+
+    @Test fun aRoomThatCantBeReadAtAllIsTakenToBePlaying() {
+        // Office never answered now-playing (no reading now, none from a
+        // poll): the cast to den carries on playing, as every cast did
+        // before start_paused, rather than leaving den silent.
+        playingOnThePhone()
+        rig.failing["/api/music/now-playing"] = 502
+        runBlocking { player.castTo("office") }
+        rig.log.clear()
+
+        val outcome = runBlocking { player.castTo("den") } as CastOutcome.ToRoom
+
+        val sent = rig.actions().first { it.startsWith("POST /api/music/play-tracks") }
+        assertTrue(sent, sent.contains("\"room_id\":\"den\"") && !sent.contains("start_paused"))
+        assertFalse(outcome.paused)
+    }
+
+    // ---- a control the room says didn't happen --------------------------------------
+
+    @Test fun aHandBackWhosePauseTheRoomSaysDidntHappenKeepsThePhoneSilent() {
+        castingToOffice()
+        rig.room("office", "play", "Quiet Jars", 30.0)
+        rig.answers["/api/music/pause/office"] = """{"ok":false}"""
+
+        val outcome = runBlocking { player.castTo(null) } as CastOutcome.Here
+
+        assertFalse(outcome.leftPaused)
+        assertTrue(rig.actions().none { it.startsWith("exo.play") })
+        assertTrue(outcome.note, outcome.note.contains("couldn't pause office"))
+    }
+
+    @Test fun aPlayHereHearsWhetherTheRoomItLeftPaused() {
+        val heard = java.util.concurrent.CopyOnWriteArrayList<Pair<String, Boolean>>()
+        castingToOffice()
+        player.playItems(queue) { room, paused -> heard += room to paused }
+        com.domovoi.app.testing.awaitUntil(what = "the first pause answered") { heard.size == 1 }
+
+        rig.room("office", "play", "Old Barrels", 7.0)
+        runBlocking { player.castTo("office") }
+        rig.failing["/api/music/pause/office"] = 502
+        player.playItems(listOf(phoneSong(8, "Desk Hum"))) { room, paused -> heard += room to paused }
+        com.domovoi.app.testing.awaitUntil(what = "the second pause answered") { heard.size == 2 }
+
+        assertEquals(listOf("office" to true, "office" to false), heard.toList())
     }
 }

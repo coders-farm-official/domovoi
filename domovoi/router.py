@@ -460,6 +460,7 @@ def _no_speakers_yet(session_id: UUID | None, ctx: Context) -> Response:
         ),
         session_id=session_id,
         online=ctx.online,
+        failure="no_speakers",
     )
 
 

@@ -141,7 +141,8 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { app.player.prev() }, enabled = !isRemote) {
+                // Live while casting too: the room's previous.
+                IconButton(onClick = { app.player.prev() }) {
                     Icon(Icons.Filled.SkipPrevious, "previous", tint = Domovoi.colors.fg)
                 }
                 IconButton(
