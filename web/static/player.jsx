@@ -1708,6 +1708,34 @@ const QueuePanel = ({ p, onClose }) => (
   </>
 );
 
+/* A cast a room didn't take, in words for the person. The core names the
+ * part that failed (`failed` in the error body, 2026-10-01): the room's
+ * music player, which runs on the domovoi server, or — no satellite has
+ * ever connected — the satellite. Every failure used to read "its speaker
+ * isn't reachable (is the office satellite online?)", also when office's
+ * satellite was connected and the server's music player had frozen (ft).
+ * The app says the same (CastPlanner.failureNote). A refusal
+ * (`castRefused`) already says why, as itself. */
+const _castFailureNote = (e, roomId) => {
+  if (e && e.castRefused) return String(e.message || e);
+  const status = (e && e.status) || 0;
+  const body = e && e.detail && typeof e.detail === 'object' ? e.detail : null;
+  const part = body ? body.failed : null;
+  const head = `Couldn't cast to ${roomId}`;
+  if (part === 'music_player') {
+    return `${head} — its music player on the domovoi server isn't answering. ` +
+      'Try again in a minute; if it keeps failing, restart the domovoi.';
+  }
+  if (part === 'satellite') {
+    return `${head} — no satellite has connected to the domovoi yet, so there is no speaker to play on.`;
+  }
+  if (e && e.deviceTokenRequired) return `${head} — this browser needs pairing with the domovoi again.`;
+  if (status === 404) return `${head} — none of these songs are in the library now (try a library rescan).`;
+  if (status >= 500) return `${head} — the domovoi couldn't start it (it said ${status}).`;
+  if (status) return `${head} (the domovoi said ${status}).`;
+  return `${head} — the domovoi can't be reached (offline?).`;
+};
+
 /* Where the player plays — this browser, or a room. The desktop bar's
  * CastMenu floats it above the bar; the phone sheet lists it inline with
  * 48px rows (`big`). `onPicked` runs after a switch succeeds. */
@@ -1736,15 +1764,12 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
       if (onPicked) onPicked();
     }
     catch (e) {
-      // Surface the failure instead of swallowing it — a cast to a room whose
-      // MPD instance isn't up returns 502 (domovoi: WinError 1225,
-      // connection refused), and a silent catch made the button look dead.
+      // Surface the failure instead of swallowing it — a silent catch made
+      // the button look dead. In words (_castFailureNote), never the
+      // server's reply.
       console.warn('cast failed', e);
       const msg = String((e && e.message) || e);
-      setErr(e && e.castRefused ? msg
-        : t.kind === 'room'
-        ? `Couldn't cast to ${t.roomId} — its speaker isn't reachable ` +
-          `(is the ${t.roomId} satellite online?).`
+      setErr(t.kind === 'room' ? _castFailureNote(e, t.roomId)
         : `Couldn't switch playback here: ${msg.slice(0, 80)}`);
     } finally {
       setBusy(null);
