@@ -17,6 +17,7 @@ import com.domovoi.app.net.ApiClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -34,7 +36,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import androidx.core.net.toUri
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Where transport controls are pointed: this device, or a satellite room. */
 sealed class PlayTarget {
@@ -193,12 +198,27 @@ class PlayerController(
      * target quietly became this phone while the room played on and its
      * poll kept running, so two players were heard. Starting the room
      * somewhere else is the cast menu's job, and a queue row tapped while
-     * casting ([castFrom]) still re-casts. Returns the room that was left.
+     * casting ([castFrom]) still re-casts. Returns the room that was left;
+     * [onLeft] hears whether that room's pause happened (called on a
+     * background thread), so a toast can say "paused office" only once it
+     * has — the core answers a pause its player never got with a 502.
+     *
+     * A play here also wins over a change of target still on its way
+     * ([playHereGen]): a cast picked before it does nothing more, and a room
+     * that already took that cast's queue is paused again. Before
+     * 2026-10-01 such a cast landed after the play here and paused it.
      */
-    fun playItems(items: List<PlayItem>, startIndex: Int = 0, resumeSec: Double = 0.0, speed: Float? = null): String? {
+    fun playItems(
+        items: List<PlayItem>,
+        startIndex: Int = 0,
+        resumeSec: Double = 0.0,
+        speed: Float? = null,
+        onLeft: ((room: String, paused: Boolean) -> Unit)? = null,
+    ): String? {
         if (items.isEmpty()) return null
         val window = QueueWindow.around(items, startIndex)
-        val left = leaveRoom()
+        playHereGen.incrementAndGet()
+        val left = leaveRoom(onLeft)
         ensureService()
         _queue.value = window.items
         _index.value = window.index
@@ -312,9 +332,12 @@ class PlayerController(
     }
 
     fun prev() {
-        // A room has no "previous" here (the web proxies pause, resume, stop
-        // and skip only), and the phone's own player is not the one playing.
-        if (_target.value is PlayTarget.Room) return
+        // While casting: back one song in the ROOM's queue (the core's MPD
+        // previous, /api/music/previous; on the queue's first song it starts
+        // again). Until 2026-10-01 there was no previous for a room and this
+        // did nothing; the phone's own player is never the one moved.
+        val t = _target.value
+        if (t is PlayTarget.Room) return roomAction("previous", t.roomId)
         // Web behavior: restart if >3s in, else go to previous item.
         if (exoPlayer.currentPosition > 3000) exoPlayer.seekTo(0)
         else exoPlayer.seekToPreviousMediaItem()
@@ -435,24 +458,45 @@ class PlayerController(
         }
     }
 
-    /** The same, waited for: whether the room took it. */
-    private suspend fun roomActionNow(action: String, roomId: String): Boolean =
-        runCatching { api.post("/api/music/$action/$roomId") }.isSuccess
+    /**
+     * The same, waited for: whether the room DID it. A non-2xx is a no —
+     * since 2026-10-01 the core answers a control its player never got with
+     * 502 (409 nothing playing, 503 no speakers); before, it answered 200
+     * with "I couldn't reach the music player." and every hand-off took the
+     * room for paused — and so is a 2xx that says `ok: false`.
+     */
+    private suspend fun roomActionNow(action: String, roomId: String): Boolean = runCatching {
+        val answer = api.post("/api/music/$action/$roomId")
+        (answer as? JsonObject)?.get("ok")?.jsonPrimitive?.booleanOrNull != false
+    }.getOrDefault(false)
 
     /**
      * Stop casting without a hand-back (a "play here" while casting): stop
      * watching the room, point the controls at this phone, and pause the
-     * room in the background. Returns the room that was left, if any.
+     * room in the background; [onLeft] hears whether the pause happened.
+     * Returns the room that was left, if any.
      */
-    private fun leaveRoom(): String? {
+    private fun leaveRoom(onLeft: ((room: String, paused: Boolean) -> Unit)? = null): String? {
         val room = (_target.value as? PlayTarget.Room)?.roomId ?: return null
         remotePollJob?.cancel()
         remotePollJob = null
         _remote.value = null
         _target.value = PlayTarget.Local
-        roomAction("pause", room)
+        scope.launch(Dispatchers.IO) {
+            val paused = roomActionNow("pause", room)
+            onLeft?.invoke(room, paused)
+        }
         return room
     }
+
+    /**
+     * How many "play here"s ([playItems]) there have been. A change of
+     * target reads it when it is PICKED and again at each step that waits
+     * (the lock, a read, the cast's POST): if a play here came in between,
+     * the play here won and the change stops there ([CastOutcome.Superseded])
+     * — a room that already took its queue is paused again.
+     */
+    private val playHereGen = AtomicInteger(0)
 
     /** A cast that would send a room nothing. Its message is for the person. */
     class NothingToCast(message: String) : Exception(message)
@@ -477,10 +521,27 @@ class PlayerController(
      *
      * From another room, the plan follows where THAT room has got to (read
      * afresh first), and the room being left is paused once the new one has
-     * taken the queue.
+     * taken the queue. The room starts the way the player it takes over
+     * from was: playing, or PAUSED there when the phone (or the room left)
+     * was paused — Spotify Connect's hand-off. Before 2026-10-01 a cast from
+     * a paused phone started the room playing.
+     *
+     * Not cancelled with its caller: the cast menu's scope ends as soon as
+     * the person leaves the player tab — very often to "play here" from the
+     * library — and a cast cut off mid-POST left a room playing that nothing
+     * watched or paused. It runs to the end and then says what happened.
      */
-    suspend fun castTo(roomId: String?): CastOutcome = castLock.withLock {
-        if (roomId == null) castHere() else castToRoom(roomId)
+    suspend fun castTo(roomId: String?): CastOutcome {
+        val gen = playHereGen.get()
+        return withContext(NonCancellable) {
+            castLock.withLock {
+                when {
+                    playHereGen.get() != gen -> CastOutcome.Superseded(roomId)
+                    roomId == null -> castHere(gen)
+                    else -> castToRoom(roomId, gen)
+                }
+            }
+        }
     }
 
     /**
@@ -496,25 +557,50 @@ class PlayerController(
      */
     private val castLock = Mutex()
 
-    private suspend fun castToRoom(roomId: String): CastOutcome {
+    private suspend fun castToRoom(roomId: String, gen: Int): CastOutcome {
         val from = (_target.value as? PlayTarget.Room)?.roomId
-        if (from != null) readRoom(from)?.let { _remote.value = it }
+        if (from != null) {
+            readRoom(from)?.let { _remote.value = it }
+            if (playHereGen.get() != gen) return CastOutcome.Superseded(roomId)
+        }
         val plan = castPlan()
         CastPlanner.refusal(plan)?.let { throw NothingToCast(it) }
-        sendCast(roomId, plan)
-        val left = from?.takeIf { it != roomId } ?: return CastOutcome.ToRoom(plan, roomId)
-        return CastOutcome.ToRoom(plan, roomId, left, leftPaused = roomActionNow("pause", left))
+        val playing = if (from != null) {
+            // A room that can't be read at all is taken to be playing, as before.
+            _remote.value?.takeIf { it.roomId == from }?.let { it.state == "play" } ?: true
+        } else {
+            exoPlayer.playWhenReady &&
+                exoPlayer.playbackState != Player.STATE_ENDED && exoPlayer.playbackState != Player.STATE_IDLE
+        }
+        if (!sendCast(roomId, plan, startPaused = !playing, gen = gen)) {
+            return CastOutcome.Superseded(roomId, sent = true, undone = roomActionNow("pause", roomId))
+        }
+        val left = from?.takeIf { it != roomId } ?: return CastOutcome.ToRoom(plan, roomId, paused = !playing)
+        return CastOutcome.ToRoom(plan, roomId, left, leftPaused = roomActionNow("pause", left), paused = !playing)
     }
 
-    /** While casting: start the room on queue entry [i] (a tapped queue row). */
-    suspend fun castFrom(i: Int): CastPlan = castLock.withLock {
-        val room = (_target.value as? PlayTarget.Room)?.roomId
-            ?: throw NothingToCast("not casting to a room")
-        val item = _queue.value.getOrNull(i) ?: throw NothingToCast("that queue entry is gone")
-        CastPlanner.refusal(item)?.let { throw NothingToCast(it) }
-        val plan = CastPlanner.plan(_queue.value, i, 0.0)
-        sendCast(room, plan)
-        plan
+    /**
+     * While casting: start the room on queue entry [i] (a tapped queue row).
+     * Waits in line with the casts, and a play here meanwhile wins the same
+     * way ([CastOutcome.Superseded]).
+     */
+    suspend fun castFrom(i: Int): CastOutcome {
+        val gen = playHereGen.get()
+        return withContext(NonCancellable) {
+            castLock.withLock {
+                val room = (_target.value as? PlayTarget.Room)?.roomId
+                    ?: if (playHereGen.get() != gen) return@withLock CastOutcome.Superseded(null)
+                    else throw NothingToCast("not casting to a room")
+                val item = _queue.value.getOrNull(i) ?: throw NothingToCast("that queue entry is gone")
+                CastPlanner.refusal(item)?.let { throw NothingToCast(it) }
+                val plan = CastPlanner.plan(_queue.value, i, 0.0)
+                if (!sendCast(room, plan, startPaused = false, gen = gen)) {
+                    CastOutcome.Superseded(room, sent = true, undone = roomActionNow("pause", room))
+                } else {
+                    CastOutcome.ToRoom(plan, room)
+                }
+            }
+        }
     }
 
     /**
@@ -522,15 +608,18 @@ class PlayerController(
      * to where the room had got to (its track and elapsed time,
      * [CastPlanner.handBack]), and play on the phone only if the room was
      * playing AND took the pause — never two players at once, and never a
-     * "playing" toast over a silent phone ([CastOutcome.Here.note]).
+     * "playing" toast over a silent phone ([CastOutcome.Here.note]). A play
+     * here that came meanwhile has already done all of that its own way,
+     * and the phone is left to it.
      */
-    private suspend fun castHere(): CastOutcome.Here {
+    private suspend fun castHere(gen: Int): CastOutcome {
         val room = (_target.value as? PlayTarget.Room)?.roomId
             ?: return CastOutcome.Here(left = null, playing = exoPlayer.isPlaying)
         // Where the room is now; the last poll's reading if that fails.
         val reading = readRoom(room) ?: _remote.value?.takeIf { it.roomId == room }
         val wasPlaying = reading?.state == "play"
         val paused = roomActionNow("pause", room)
+        if (playHereGen.get() != gen) return CastOutcome.Superseded(null)
         remotePollJob?.cancel()
         remotePollJob = null
         val queue = _queue.value
@@ -556,7 +645,13 @@ class PlayerController(
         )
     }
 
-    private suspend fun sendCast(roomId: String, plan: CastPlan) {
+    /**
+     * Send [plan] to [roomId] and, once the room has taken it, make it the
+     * target. False — and nothing here touched — when a play here ([gen]
+     * moved on) came while the room was taking it; the caller pauses the
+     * room again.
+     */
+    private suspend fun sendCast(roomId: String, plan: CastPlan, startPaused: Boolean, gen: Int): Boolean {
         api.post("/api/music/play-tracks", buildJsonObject {
             put("room_id", roomId)
             put("track_ids", kotlinx.serialization.json.buildJsonArray {
@@ -565,7 +660,11 @@ class PlayerController(
             // A server from before start_sec ignores it and starts the
             // track from the top; the track itself is still the right one.
             if (plan.startSec > 0) put("start_sec", plan.startSec)
+            // The room waits paused there until play (a core from before
+            // 2026-10-01 ignores it and plays, as every cast used to).
+            if (startPaused) put("start_paused", true)
         })
+        if (playHereGen.get() != gen) return false
         // Only once the room has taken it: a failed cast leaves the phone
         // playing and the target where it was.
         exoPlayer.pause()
@@ -582,6 +681,7 @@ class PlayerController(
         if (_remote.value?.roomId != roomId) _remote.value = null
         _target.value = PlayTarget.Room(roomId)
         startRemotePoll(roomId)
+        return true
     }
 
     /** [roomId]'s now-playing row, read now; null when it can't be read. */

@@ -1,5 +1,7 @@
 package com.domovoi.app.player
 
+import com.domovoi.app.net.ApiException
+import java.io.IOException
 import kotlin.math.floor
 
 /**
@@ -147,16 +149,45 @@ object CastPlanner {
         else -> "\"${item.title}\" isn't in the library; only library songs can be cast."
     }
 
-    /** What to say once [plan] has gone to [room]. */
-    fun sentNote(plan: CastPlan, room: String): String {
+    /** What to say once [plan] has gone to [room]; [paused]: the room
+     *  waits paused there until play (the phone was paused). */
+    fun sentNote(plan: CastPlan, room: String, paused: Boolean = false): String {
         val n = plan.trackIds.size
         val left = buildList {
             if (plan.phoneOnly > 0) add("${plan.phoneOnly} only on this phone")
             if (plan.notInLibrary > 0) add("${plan.notInLibrary} not in the library")
         }
-        if (left.isEmpty()) return "casting to $room"
+        val there = if (paused) "$room, paused" else room
+        if (left.isEmpty()) return "casting to $there"
         val songs = if (n == 1) "1 song" else "$n songs"
-        return "casting $songs to $room · left out ${left.joinToString(", ")}"
+        return "casting $songs to $there · left out ${left.joinToString(", ")}"
+    }
+
+    /** The "play here" toast once the room it left has answered: [playing]
+     *  ("playing \"X\" on this device") and how [room]'s pause went. */
+    fun playHereNote(playing: String, room: String, paused: Boolean): String =
+        if (paused) "$playing · paused $room" else "$playing · couldn't pause $room, it may still be playing"
+
+    /**
+     * A cast that failed, in words for the person: never the server's raw
+     * reply. Before 2026-10-01 the toast read 'cast failed: 502 Bad Gateway:
+     * {"detail":"MPD error: No response from server while reading MPD
+     * hello"}'. [room] is where it was going; null: back to this phone.
+     */
+    fun failureNote(e: Throwable, room: String?): String {
+        if (e is PlayerController.NothingToCast) return e.message ?: "nothing here can play in a room"
+        if (room == null) return "couldn't switch back to this device"
+        return when {
+            e is ApiException && e.deviceTokenRequired ->
+                "couldn't cast to $room: this phone needs pairing with the domovoi again"
+            e is ApiException && e.status == 404 ->
+                "couldn't cast to $room: none of these songs are in the library now (try a library rescan)"
+            e is ApiException && e.status in 500..599 ->
+                "couldn't cast to $room: its speaker isn't answering (is the $room satellite online?)"
+            e is ApiException -> "couldn't cast to $room (the domovoi said ${e.status})"
+            e is IOException -> "couldn't cast to $room: the domovoi can't be reached (offline?)"
+            else -> "couldn't cast to $room"
+        }
     }
 
     /**
@@ -189,17 +220,37 @@ sealed class CastOutcome {
     abstract val note: String
 
     /** [plan] went to [room]. [left]: the room this cast moved away from,
-     *  null when the phone was the source or the room is the same one. */
+     *  null when the phone was the source or the room is the same one.
+     *  [paused]: [room] waits paused at the place until play, because the
+     *  player it took over from was paused. */
     data class ToRoom(
         val plan: CastPlan,
         val room: String,
         val left: String? = null,
         val leftPaused: Boolean = false,
+        val paused: Boolean = false,
     ) : CastOutcome() {
-        override val note: String get() = CastPlanner.sentNote(plan, room) + when {
+        override val note: String get() = CastPlanner.sentNote(plan, room, paused) + when {
             left == null -> ""
             leftPaused -> " · paused $left"
             else -> " · couldn't pause $left, it may still be playing"
+        }
+    }
+
+    /** A "play here" came while this change of target was on its way, and
+     *  won: the phone plays what was picked there. [room]: where this was
+     *  going (null: back to this phone). [sent]: the room had already taken
+     *  the queue; [undone]: and was paused again. */
+    data class Superseded(
+        val room: String?,
+        val sent: Boolean = false,
+        val undone: Boolean = true,
+    ) : CastOutcome() {
+        override val note: String get() = when {
+            room == null -> "playing on this device"
+            !sent -> "didn't cast to $room · playing on this device instead"
+            undone -> "cast to $room cancelled · playing on this device instead"
+            else -> "cast to $room cancelled, but $room couldn't be paused, it may be playing"
         }
     }
 

@@ -36,8 +36,10 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
+import com.domovoi.app.player.PlayerController
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.PromptDialog
@@ -154,10 +156,7 @@ fun MusicScreen() {
     )
 
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
-        // "Play here" plays here, casting or not: a room being cast to is
-        // paused (PlayerController.playItems).
-        val left = app.player.playItems(listOf(toItem(t)))
-        toast("playing \"${t.title ?: "track"}\" on this device" + (left?.let { " · paused $it" } ?: ""))
+        playHereAndSay(app.player, toItem(t), t.title ?: "track", toast) { scope.launch { it() } }
     }
     val onQueueTrack: (LibraryTrack) -> Unit = { t ->
         app.player.enqueue(listOf(toItem(t)))
@@ -539,4 +538,26 @@ private fun displayName(context: Context, uri: Uri): String {
         }
     }
     return uri.lastPathSegment ?: "upload"
+}
+
+/**
+ * "Play here" from the library: plays [item] on this phone, casting or not —
+ * a room being cast to is paused ([PlayerController.playItems]) — and toasts
+ * once: at once when no room was being cast to, else when the room it left
+ * has answered its pause, so it never says "paused office" over a pause the
+ * core says didn't happen. [onMain] brings that answer (heard on a
+ * background thread) back to the UI.
+ */
+internal fun playHereAndSay(
+    player: PlayerController,
+    item: PlayItem,
+    title: String,
+    toast: (String) -> Unit,
+    onMain: (() -> Unit) -> Unit,
+) {
+    val playing = "playing \"$title\" on this device"
+    val left = player.playItems(listOf(item)) { room, paused ->
+        onMain { toast(CastPlanner.playHereNote(playing, room, paused)) }
+    }
+    if (left == null) toast(playing)
 }

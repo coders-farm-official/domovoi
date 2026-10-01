@@ -60,12 +60,12 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.player.CastOutcome
 import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayTarget
-import com.domovoi.app.player.PlayerController
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
@@ -348,7 +348,8 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SmallIconButton(Icons.Filled.SkipPrevious, "previous", enabled = !isRemote) {
+        // Live while casting too: the room's previous (PlayerController.prev).
+        SmallIconButton(Icons.Filled.SkipPrevious, "previous") {
             app.player.prev()
         }
         IconButton(
@@ -389,7 +390,7 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                             // playing and was paused (CastOutcome.Here).
                             runCatching { app.player.castTo(null) }
                                 .onSuccess { toast(it.note) }
-                                .onFailure { toast("cast failed: ${it.message}") }
+                                .onFailure { toast(castFailure(it, null)) }
                         }
                     },
                 )
@@ -424,7 +425,7 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                             scope.launch {
                                 runCatching { app.player.castTo(r) }
                                     .onSuccess { toast(it.note) }
-                                    .onFailure { toast(castFailure(it)) }
+                                    .onFailure { toast(castFailure(it, r)) }
                             }
                         },
                     )
@@ -550,11 +551,11 @@ private fun PlayerQueueHeader(size: Int, canSave: Boolean, onSaveQueue: () -> Un
     }
 }
 
-/** A failed cast in words: a [PlayerController.NothingToCast] already says
- *  why; anything else is the server or the network. */
-private fun castFailure(e: Throwable): String =
-    if (e is PlayerController.NothingToCast) e.message ?: "nothing here can play in a room"
-    else "cast failed: ${e.message}"
+/** A failed cast in words for the person, never the server's raw reply
+ *  ([CastPlanner.failureNote]); [room] is where it was going. The cast menu
+ *  and the queue rows toast this; before 2026-10-01 a room that refused read
+ *  'cast failed: 502 Bad Gateway: {"detail":"MPD error: ..."}'. */
+internal fun castFailure(e: Throwable, room: String?): String = CastPlanner.failureNote(e, room)
 
 @Composable
 private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boolean, room: String?) {
@@ -574,8 +575,10 @@ private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boo
                 if (room != null) {
                     scope.launch {
                         runCatching { app.player.castFrom(i) }
-                            .onSuccess { toast("playing \"${item.title}\" in $room") }
-                            .onFailure { toast(castFailure(it)) }
+                            .onSuccess {
+                                toast(if (it is CastOutcome.ToRoom) "playing \"${item.title}\" in $room" else it.note)
+                            }
+                            .onFailure { toast(castFailure(it, room)) }
                     }
                 } else {
                     app.player.jumpTo(i)

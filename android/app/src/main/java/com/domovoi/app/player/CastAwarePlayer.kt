@@ -14,12 +14,14 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * On this phone it is the ExoPlayer, unchanged. While casting
  * ([PlayerController.target] is a room) it is the ROOM:
- *  - play / pause / next go to the room (resume, pause, skip) through the
- *    [PlayerController], never to the phone's own player, which stays paused
- *    under a room that is playing;
- *  - previous and seeking are not offered (a room has no "previous" or seek
- *    here), so the notification drops those buttons rather than showing ones
- *    that would do nothing — or move the phone;
+ *  - play / pause / next / previous go to the room (resume, pause, skip,
+ *    previous) through the [PlayerController], never to the phone's own
+ *    player, which stays paused under a room that is playing (previous joined
+ *    them 2026-10-01, when the core's skip and previous started following the
+ *    room's queue);
+ *  - seeking is not offered (a room has no seek here), so the notification
+ *    drops those controls rather than showing ones that would do nothing — or
+ *    move the phone;
  *  - what it reports is the room's: playing or not, the room's track (its
  *    artist line says which room), its elapsed time and duration.
  *
@@ -84,11 +86,11 @@ class CastAwarePlayer(
     }
 
     override fun seekToPrevious() {
-        if (room == null) super.seekToPrevious()
+        if (room != null) controller.prev() else super.seekToPrevious()
     }
 
     override fun seekToPreviousMediaItem() {
-        if (room == null) super.seekToPreviousMediaItem()
+        if (room != null) controller.prev() else super.seekToPreviousMediaItem()
     }
 
     override fun seekTo(positionMs: Long) {
@@ -207,17 +209,18 @@ class CastAwarePlayer(
     }
 
     internal companion object {
-        /** What a room can do from the notification: play/pause and next. */
+        /** What a room can do from the notification: play/pause, next and
+         *  previous. */
         val IN_A_ROOM: Set<Int> = setOf(
             Player.COMMAND_PLAY_PAUSE,
             Player.COMMAND_SEEK_TO_NEXT,
             Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
         )
 
         /** What the notification must not offer while casting. */
         val NOT_IN_A_ROOM: Set<Int> = setOf(
-            Player.COMMAND_SEEK_TO_PREVIOUS,
-            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
             Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
             Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
             Player.COMMAND_SEEK_TO_MEDIA_ITEM,

@@ -50,6 +50,10 @@ internal class CastRig : AutoCloseable {
      *  stream, so a second pick can land while a cast is on its way. */
     val delays = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
+    /** Paths that answer 200 with this body instead of {"ok":true}: a
+     *  control the room says it didn't do ({"ok":false}). */
+    val answers = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     val exo = StatefulExoPlayer(log)
 
     private val server = MockWebServer().apply {
@@ -61,6 +65,7 @@ internal class CastRig : AutoCloseable {
                     if (request.method == "POST") targetTag() else ""
                 delays[path]?.let { Thread.sleep(it) }
                 failing[path]?.let { return MockResponse().setResponseCode(it).setBody("""{"detail":"refused"}""") }
+                answers[path]?.let { return MockResponse().setBody(it) }
                 if (request.method == "GET" && path == "/api/music/now-playing") {
                     return MockResponse().setBody(JsonArray(rooms.values.toList()).toString())
                 }
@@ -177,6 +182,10 @@ internal class StatefulExoPlayer(private val log: MutableList<String>) {
     var state = Player.STATE_IDLE
     val listeners = CopyOnWriteArrayList<Player.Listener>()
 
+    /** Commands this player says it can't do now (an ExoPlayer on its
+     *  queue's first item has no previous item, say). */
+    val unavailable = mutableSetOf<Int>()
+
     val playing: Boolean get() = playWhenReady && state == Player.STATE_READY
 
     /** Appended to each logged call: what else was true at that moment. */
@@ -230,7 +239,7 @@ internal class StatefulExoPlayer(private val log: MutableList<String>) {
             "getPlaybackState" -> state
             "getDuration", "getContentDuration" -> androidx.media3.common.C.TIME_UNSET
             "getMediaMetadata" -> MediaMetadata.Builder().setTitle("phone item $index").build()
-            "isCommandAvailable" -> true
+            "isCommandAvailable" -> (a[0] as Int) !in unavailable
             "getAvailableCommands" -> Player.Commands.Builder().addAllCommands().build()
             "addListener" -> { listeners += a[0] as Player.Listener; null }
             "removeListener" -> { listeners -= a[0] as Player.Listener; null }
