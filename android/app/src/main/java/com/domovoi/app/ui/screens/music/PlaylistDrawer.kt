@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -161,140 +161,151 @@ internal fun PlaylistDrawer(
             eyebrow = (if (playlist.isVirtual) "virtual" else "playlist") + " · #${playlist.id}",
             onClose = onClose,
         )
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            // Identity block
-            Row(
-                Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                PlaylistCover(playlist, 56)
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        playlist.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Domovoi.colors.fg,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "${playlist.trackCount} track" + (if (playlist.trackCount == 1) "" else "s"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Domovoi.colors.fgMuted,
-                    )
-                    if (!playlist.description.isNullOrBlank()) {
-                        Text(
-                            playlist.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Domovoi.colors.fgMuted,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-            HorizontalDivider(color = Domovoi.colors.borderSoft)
-
-            // Play in room
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                SectionLabel("play in room")
-                Spacer(Modifier.size(8.dp))
-                Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    RoomPickRow(rooms, room) { room = it }
-                }
-                Spacer(Modifier.size(12.dp))
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Button(onClick = { play(shuffle = false) }) {
-                        Icon(
-                            Icons.Filled.PlayArrow, contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        Text("play")
-                    }
-                    OutlinedButton(onClick = { play(shuffle = true) }) {
-                        Icon(
-                            Icons.Filled.Shuffle, contentDescription = null,
-                            modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        Text(if (compactWidth()) "shuffle" else "shuffle all", color = Domovoi.colors.fg)
-                    }
-                    if (!playlist.isVirtual) {
-                        OutlinedButton(onClick = {
-                            if (editing) {
-                                editing = false
-                            } else {
-                                editName = playlist.name
-                                editDesc = playlist.description ?: ""
-                                editEmoji = playlist.coverEmoji ?: ""
-                                editing = true
-                            }
-                        }) {
-                            Icon(
-                                Icons.Filled.Edit, contentDescription = null,
-                                modifier = Modifier.size(14.dp), tint = Domovoi.colors.fg,
+        // A lazy list, a row per track: a long playlist (or a big Favorites)
+        // drawn all at once in a scrolling Column built every row on the main
+        // thread in one frame, the same freeze the player tab had.
+        val rows = items
+        LazyColumn(Modifier.weight(1f)) {
+            item(key = "playlist-head") {
+                Column {
+                    // Identity block
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        PlaylistCover(playlist, 56)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                playlist.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Domovoi.colors.fg,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Spacer(Modifier.size(6.dp))
-                            Text(if (editing) "cancel" else "edit", color = Domovoi.colors.fg)
+                            Text(
+                                "${playlist.trackCount} track" + (if (playlist.trackCount == 1) "" else "s"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Domovoi.colors.fgMuted,
+                            )
+                            if (!playlist.description.isNullOrBlank()) {
+                                Text(
+                                    playlist.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Domovoi.colors.fgMuted,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
-                }
-                if (editing && !playlist.isVirtual) {
-                    Spacer(Modifier.size(12.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = editName,
-                            onValueChange = { editName = it },
-                            placeholder = { Text("name", color = Domovoi.colors.fgSubtle) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(
-                            value = editDesc,
-                            onValueChange = { editDesc = it },
-                            placeholder = { Text("description (optional)", color = Domovoi.colors.fgSubtle) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                    HorizontalDivider(color = Domovoi.colors.borderSoft)
+
+                    // Play in room
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        SectionLabel("play in room")
+                        Spacer(Modifier.size(8.dp))
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            RoomPickRow(rooms, room) { room = it }
+                        }
+                        Spacer(Modifier.size(12.dp))
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                            Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            OutlinedTextField(
-                                value = editEmoji,
-                                onValueChange = { editEmoji = it.take(4) },
-                                placeholder = { Text("emoji", color = Domovoi.colors.fgSubtle) },
-                                singleLine = true,
-                                modifier = Modifier.width(110.dp),
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Button(onClick = { saveEdit() }, enabled = editName.isNotBlank()) {
-                                Text("save")
+                            Button(onClick = { play(shuffle = false) }) {
+                                Icon(
+                                    Icons.Filled.PlayArrow, contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text("play")
+                            }
+                            OutlinedButton(onClick = { play(shuffle = true) }) {
+                                Icon(
+                                    Icons.Filled.Shuffle, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(if (compactWidth()) "shuffle" else "shuffle all", color = Domovoi.colors.fg)
+                            }
+                            if (!playlist.isVirtual) {
+                                OutlinedButton(onClick = {
+                                    if (editing) {
+                                        editing = false
+                                    } else {
+                                        editName = playlist.name
+                                        editDesc = playlist.description ?: ""
+                                        editEmoji = playlist.coverEmoji ?: ""
+                                        editing = true
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Filled.Edit, contentDescription = null,
+                                        modifier = Modifier.size(14.dp), tint = Domovoi.colors.fg,
+                                    )
+                                    Spacer(Modifier.size(6.dp))
+                                    Text(if (editing) "cancel" else "edit", color = Domovoi.colors.fg)
+                                }
+                            }
+                        }
+                        if (editing && !playlist.isVirtual) {
+                            Spacer(Modifier.size(12.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = editName,
+                                    onValueChange = { editName = it },
+                                    placeholder = { Text("name", color = Domovoi.colors.fgSubtle) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = editDesc,
+                                    onValueChange = { editDesc = it },
+                                    placeholder = { Text("description (optional)", color = Domovoi.colors.fgSubtle) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedTextField(
+                                        value = editEmoji,
+                                        onValueChange = { editEmoji = it.take(4) },
+                                        placeholder = { Text("emoji", color = Domovoi.colors.fgSubtle) },
+                                        singleLine = true,
+                                        modifier = Modifier.width(110.dp),
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Button(onClick = { saveEdit() }, enabled = editName.isNotBlank()) {
+                                        Text("save")
+                                    }
+                                }
                             }
                         }
                     }
+                    HorizontalDivider(color = Domovoi.colors.borderSoft)
                 }
             }
-            HorizontalDivider(color = Domovoi.colors.borderSoft)
 
             // Track list
             when {
-                tracksState.loading && items.isEmpty() -> LoadingState()
-                items.isEmpty() -> EmptyState(
-                    "no tracks yet",
-                    if (playlist.isVirtual) "favorite a track to add it here"
-                    else "tap + on a library row to add tracks",
-                )
-                else -> Column {
-                    items.forEachIndexed { i, t ->
+                tracksState.loading && rows.isEmpty() -> item(key = "playlist-loading") { LoadingState() }
+                rows.isEmpty() -> item(key = "playlist-empty") {
+                    EmptyState(
+                        "no tracks yet",
+                        if (playlist.isVirtual) "favorite a track to add it here"
+                        else "tap + on a library row to add tracks",
+                    )
+                }
+                else -> items(
+                    count = rows.size,
+                    key = { "playlist-track-${rows[it].id}-$it" },
+                    contentType = { "playlist-track" },
+                ) { i ->
+                    val t = rows[i]
+                    Column {
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -333,14 +344,14 @@ internal fun PlaylistDrawer(
                                 ) { move(i, -1) }
                                 SmallIconButton(
                                     Icons.Filled.KeyboardArrowDown, "move down",
-                                    enabled = i < items.size - 1,
+                                    enabled = i < rows.size - 1,
                                 ) { move(i, 1) }
                             }
                             SmallIconButton(Icons.Filled.Close, "remove from playlist") {
                                 removeTrack(t)
                             }
                         }
-                        if (i < items.size - 1) {
+                        if (i < rows.size - 1) {
                             HorizontalDivider(color = Domovoi.colors.borderSoft)
                         }
                     }

@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.domovoi.app.alerts.EXTRA_ROUTE
+import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.ui.shell.AppShell
 import com.domovoi.app.ui.theme.DomovoiTheme
 
@@ -55,6 +56,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         routeFrom(intent)
+    }
+
+    // The freeze watchdog runs only while the app is on screen.
+    override fun onStart() {
+        super.onStart()
+        Diagnostics.watchdog.start()
+    }
+
+    override fun onStop() {
+        Diagnostics.watchdog.stop()
+        super.onStop()
     }
 
     override fun onResume() {

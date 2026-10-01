@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
+import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayTarget
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
@@ -79,8 +80,6 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
     val queue by app.player.queue.collectAsState()
     val index by app.player.index.collectAsState()
     val playing by app.player.isPlaying.collectAsState()
-    val pos by app.player.positionSec.collectAsState()
-    val dur by app.player.durationSec.collectAsState()
     val target by app.player.target.collectAsState()
     val remote by app.player.remote.collectAsState()
 
@@ -133,36 +132,7 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
             }
 
             // ── Seek ──────────────────────────────────────────────────────
-            val effPos = if (isRemote) remote?.elapsedSec ?: 0.0 else pos
-            val effDur = if (isRemote) remote?.durationSec ?: 0.0 else dur
-            var dragging by remember { mutableStateOf(false) }
-            var dragValue by remember { mutableFloatStateOf(0f) }
-            val seekable = !isRemote && current?.seekable != false
-            Slider(
-                value = if (dragging) dragValue
-                else if (effDur > 0) (effPos / effDur).toFloat().coerceIn(0f, 1f) else 0f,
-                onValueChange = { dragging = true; dragValue = it },
-                onValueChangeFinished = {
-                    if (seekable && effDur > 0) app.player.seekTo(dragValue * effDur)
-                    dragging = false
-                },
-                enabled = seekable,
-                colors = SliderDefaults.colors(
-                    thumbColor = Domovoi.colors.brand,
-                    activeTrackColor = Domovoi.colors.brand,
-                    inactiveTrackColor = Domovoi.colors.border,
-                ),
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            )
-            Row(Modifier.fillMaxWidth()) {
-                Text(fmtDur(effPos), style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgSubtle)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (current?.seekable == false) "live" else fmtDur(effDur),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Domovoi.colors.fgSubtle,
-                )
-            }
+            SheetSeek(current, isRemote)
 
             // ── Transport ─────────────────────────────────────────────────
             val effPlaying = if (isRemote) remote?.state == "play" else playing
@@ -251,6 +221,46 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** The seek bar and times: the only part of the sheet that follows the
+ *  500 ms position tick, so the tick does not rebuild the queue list. */
+@Composable
+private fun SheetSeek(current: PlayItem?, isRemote: Boolean) {
+    val app = LocalApp.current
+    val pos by app.player.positionSec.collectAsState()
+    val dur by app.player.durationSec.collectAsState()
+    val remote by app.player.remote.collectAsState()
+    val effPos = if (isRemote) remote?.elapsedSec ?: 0.0 else pos
+    val effDur = if (isRemote) remote?.durationSec ?: 0.0 else dur
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
+    val seekable = !isRemote && current?.seekable != false
+    Slider(
+        value = if (dragging) dragValue
+        else if (effDur > 0) (effPos / effDur).toFloat().coerceIn(0f, 1f) else 0f,
+        onValueChange = { dragging = true; dragValue = it },
+        onValueChangeFinished = {
+            if (seekable && effDur > 0) app.player.seekTo(dragValue * effDur)
+            dragging = false
+        },
+        enabled = seekable,
+        colors = SliderDefaults.colors(
+            thumbColor = Domovoi.colors.brand,
+            activeTrackColor = Domovoi.colors.brand,
+            inactiveTrackColor = Domovoi.colors.border,
+        ),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+    Row(Modifier.fillMaxWidth()) {
+        Text(fmtDur(effPos), style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgSubtle)
+        Spacer(Modifier.weight(1f))
+        Text(
+            if (current?.seekable == false) "live" else fmtDur(effDur),
+            style = MaterialTheme.typography.labelMedium,
+            color = Domovoi.colors.fgSubtle,
+        )
     }
 }
 
