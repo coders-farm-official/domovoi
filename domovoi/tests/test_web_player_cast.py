@@ -30,6 +30,20 @@ What is pinned:
 * the picker says so when the room a cast left would not pause, and shows
   the castRefused message as it is.
 
+Since 2026-10-01 (wf/music-remote):
+
+* a "play here" made while a cast is still on its way wins: the cast does
+  nothing more, and a room that already took the queue is paused again
+  (a pick still waiting its turn is never sent; a hand-back in flight
+  doesn't touch this browser; a queue row's re-cast neither);
+* a cast from a PAUSED browser, or from a paused room, starts the room
+  paused there (``start_paused``), and the player says paused;
+* previous while casting is the room's previous (``/api/music/previous``),
+  from the buttons, the keys and the OS media session's previoustrack;
+* a room control the core answers ``ok: false`` (or non-2xx) is a pause
+  that didn't happen, wherever a hand-off waits on one; and the Music
+  page's "play here" toast says "paused office" only once office did.
+
 No DB, never ``requires_db``; needs ``node`` and fails without it.
 """
 
@@ -105,6 +119,13 @@ window.AudioContext = function () {
     if (window.__fail.includes(p) || window.__fail.includes(key)) {
       return Promise.reject(Object.assign(new Error('502 Bad Gateway'), { status: 502 }));
     }
+    // window.__holdPost: the next POST to that path (or "path#room") is
+    // answered only on window.__releasePost() — a room still readying its
+    // stream, so a "play here" can come while the cast is on its way.
+    if (window.__holdPost && (window.__holdPost === p || window.__holdPost === key)) {
+      window.__holdPost = null;
+      return new Promise((res, rej) => { window.__releasePost = () => post(p, b).then(res, rej); });
+    }
     return post(p, b);
   };
   apiGet = (p) => {
@@ -127,6 +148,17 @@ window.__pod = (n) => ({ uid: 'p' + n, kind: 'podcast', itemId: n, trackId: null
   artist: 'Show', album: '', src: '/p/' + n, coverUrl: null, durationSec: 900, seekable: true,
   cacheable: true, meta: { itemType: 'podcast_episode' } });
 window.__q = () => [1, 2, 3, 4].map(window.__lib);
+"""
+
+# The OS media controls (lock screen, headset keys, the browser's media hub):
+# what player.jsx registers, by action.
+MEDIA_SESSION = r"""
+window.__ms = {};
+navigator.mediaSession = {
+  metadata: null, playbackState: 'none',
+  setActionHandler(a, h) { if (h) window.__ms[a] = h; else delete window.__ms[a]; },
+};
+window.MediaMetadata = function (o) { Object.assign(this, o); };
 """
 
 HELPERS = r"""
@@ -156,6 +188,12 @@ const castingToOffice = async () => {
 };
 // What the scenario returns: the log without the background reads.
 const acts = () => log().filter((l) => !l.startsWith('GET '));
+// Steps until `prefix` has been logged (a cast reaching the wire).
+const onTheWire = async (prefix) => {
+  for (let i = 0; i < 20 && !log().some((l) => l.startsWith(prefix)); i++) await step();
+  if (!log().some((l) => l.startsWith(prefix))) throw new Error('never sent: ' + prefix);
+};
+const settled = async (pr) => { try { return await pr; } catch (e) { return { error: String(e) }; } };
 """
 
 
@@ -324,9 +362,18 @@ SCENARIOS = {
     ),
     "previous_while_casting": _scenario(
         "await castingToOffice();"
-        "P().prev(); await step();"
-        "return { acts: acts(), state: state() };",
+        "P().prev(); await step(); const prev = acts(); clear();"
+        "P().next(); await step();"
+        "return { prev, next: acts(), state: state() };",
         api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
+    "previous_from_the_os_media_controls_while_casting": _scenario(
+        "await castingToOffice(); h.rerender(); await step();"
+        "const has = Object.keys(W().__ms).sort();"
+        "W().__ms.previoustrack(); await step(); const prev = acts(); clear();"
+        "W().__ms.nexttrack(); await step();"
+        "return { has, prev, next: acts() };",
+        api=OFFICE_AT("play", "Track 2", 9.0), setup=MEDIA_SESSION,
     ),
     "queue_row_while_casting": _scenario(
         "await castingToOffice();"
@@ -395,6 +442,184 @@ SCENARIOS.update({
         setup=_PICKER_P, fn_props=["onPicked"],
     ),
 })
+
+# ── a "play here" while a cast is still on its way (2026-10-01) ────────────
+SCENARIOS.update({
+    "play_here_during_a_cast_from_this_browser": _scenario(
+        "await playing(W().__q(), 1, 7.6); W().__holdPost = '/api/music/play-tracks';"
+        "const a = P().castTo({ kind: 'room', roomId: 'office' });"
+        "await onTheWire('POST /api/music/play-tracks');"
+        "const left = P().playItems([W().__lib(7)], 0); await step(); const mark = log().length;"
+        "W().__releasePost(); const r = await settled(a); await step();"
+        "return { r, left, acts: acts(), after: log().slice(mark), state: state(), src: el0().src,"
+        "         paused: el0().paused };",
+    ),
+    "play_here_during_a_room_to_room_cast": _scenario(
+        "await castingToOffice(); W().__holdPost = '/api/music/play-tracks#den';"
+        "const a = P().castTo({ kind: 'room', roomId: 'den' });"
+        "await onTheWire('POST /api/music/play-tracks {\"room_id\":\"den\"');"
+        "const left = P().playItems([W().__lib(7)], 0); await step();"
+        "W().__releasePost(); const r = await settled(a); await step();"
+        "return { r, left, acts: acts(), state: state(), src: el0().src };",
+        api=OFFICE_AT("play", "Track 3", 42.4),
+    ),
+    "play_here_while_a_pick_waits_its_turn": _scenario(
+        "await playing(W().__q(), 1, 7.6); W().__holdPost = '/api/music/play-tracks';"
+        "const a = P().castTo({ kind: 'room', roomId: 'office' });"
+        "const b = P().castTo({ kind: 'room', roomId: 'den' });"
+        "await onTheWire('POST /api/music/play-tracks');"
+        "P().playItems([W().__lib(7)], 0); await step();"
+        "W().__releasePost(); const ra = await settled(a); const rb = await settled(b); await step();"
+        "return { ra, rb, acts: acts(), state: state() };",
+    ),
+    "play_here_during_a_hand_back": _scenario(
+        "await castingToOffice(); W().__holdPost = '/api/music/pause/office';"
+        "const a = P().castTo({ kind: 'browser' });"
+        "await onTheWire('POST /api/music/pause/office');"
+        "P().playItems([W().__lib(7)], 0); await step(); const mark = log().length;"
+        "W().__releasePost(); const r = await settled(a); await step();"
+        "return { r, after: log().slice(mark), state: state(), src: el0().src };",
+        api=OFFICE_AT("play", "Track 3", 30.0),
+    ),
+    "play_here_during_a_queue_row_recast": _scenario(
+        "await castingToOffice(); W().__holdPost = '/api/music/play-tracks';"
+        "P().jumpTo(3);"
+        "await onTheWire('POST /api/music/play-tracks');"
+        "P().playItems([W().__lib(7)], 0); await step();"
+        "W().__releasePost(); await step(); await step();"
+        "return { acts: acts(), state: state(), src: el0().src };",
+        api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
+    "play_spoken_during_a_cast_from_this_browser": _scenario(
+        "await playing(W().__q(), 1, 7.6); W().__holdPost = '/api/music/play-tracks';"
+        "const a = P().castTo({ kind: 'room', roomId: 'office' });"
+        "await onTheWire('POST /api/music/play-tracks');"
+        "P().playSpoken(W().__pod(5), { resumeSec: 120 }); await step();"
+        "W().__releasePost(); const r = await settled(a); await step();"
+        "return { r, state: state(), src: el0().src };",
+    ),
+    # The play here comes while the cast still reads where the old room is.
+    "play_here_while_the_old_room_is_read": _scenario(
+        "await castingToOffice(); W().__holdNext = true;"
+        "const a = P().castTo({ kind: 'room', roomId: 'den' });"
+        "await step();"
+        "P().playItems([W().__lib(7)], 0); await step();"
+        "W().__release([{ room_id: 'office', state: 'play', elapsed_sec: 42, song: { title: 'Track 3' } }]);"
+        "const r = await settled(a); await step();"
+        "return { r, acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 3", 42.4),
+    ),
+    # A queue row tapped while a cast to den is on its way: it waits its
+    # turn, and then re-casts the room the controls point at by then.
+    "queue_row_during_a_cast": _scenario(
+        "await castingToOffice(); W().__holdPost = '/api/music/play-tracks#den';"
+        "const a = P().castTo({ kind: 'room', roomId: 'den' });"
+        "await onTheWire('POST /api/music/play-tracks {\"room_id\":\"den\"');"
+        "h.rerender(); P().jumpTo(3); await step();"
+        "W().__releasePost(); await settled(a); await step(); await step();"
+        "return { acts: acts(), state: state() };",
+        api=OFFICE_AT("play", "Track 3", 42.4),
+    ),
+    "play_here_during_a_cast_the_room_wont_undo": _scenario(
+        "await playing(W().__q(), 1, 7.6); W().__holdPost = '/api/music/play-tracks';"
+        "W().__fail.push('/api/music/pause/office');"
+        "const a = P().castTo({ kind: 'room', roomId: 'office' });"
+        "await onTheWire('POST /api/music/play-tracks');"
+        "P().playItems([W().__lib(7)], 0); await step();"
+        "W().__releasePost(); const r = await settled(a); await step();"
+        "return { r, state: state() };",
+    ),
+    # ── a cast from a paused player starts the room paused ──────────────────
+    "cast_from_a_paused_browser": _scenario(
+        "await playing(W().__q(), 1, 151.5); P().pause(); await step(); clear();"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'office' });"
+        "return { r, err, acts: acts(), state: state() };",
+    ),
+    "cast_from_a_paused_room_to_another": _scenario(
+        "await castingToOffice();"
+        "const { r, err } = await castTo({ kind: 'room', roomId: 'den' });"
+        "return { r, err, acts: acts() };",
+        api=OFFICE_AT("pause", "Track 3", 42.4),
+    ),
+    # ── a room control the core says didn't happen ───────────────────────────
+    "back_when_the_room_answers_not_paused": _scenario(
+        "await castingToOffice();"
+        "const { r } = await castTo({ kind: 'browser' });"
+        "return { r, acts: acts(), state: state() };",
+        api={**OFFICE_AT("play", "Track 3", 30.0), "POST /api/music/pause/office": {"ok": False}},
+    ),
+    "room_to_room_old_room_answers_not_paused": _scenario(
+        "await castingToOffice();"
+        "const { r } = await castTo({ kind: 'room', roomId: 'den' });"
+        "return { r };",
+        api={**OFFICE_AT("play", "Track 3", 42.4), "POST /api/music/pause/office": {"ok": False}},
+    ),
+    "play_here_hears_how_the_rooms_pause_went": _scenario(
+        "const heard = [];"
+        "await castingToOffice();"
+        "P().playItems([W().__lib(7)], 0, { onLeft: (room, paused) => heard.push([room, paused]) });"
+        "await step();"
+        "await castTo({ kind: 'room', roomId: 'office' }); W().__fail.push('/api/music/pause/office');"
+        "P().playItems([W().__lib(8)], 0, { onLeft: (room, paused) => heard.push([room, paused]) });"
+        "await step();"
+        "return { heard };",
+        api=OFFICE_AT("play", "Track 2", 9.0),
+    ),
+})
+
+# The picker, told a "play here" beat its pick.
+SCENARIOS.update({
+    "picker_superseded_room_still_playing": _scenario(
+        "h.render(); await h.click({ type: 'button', text: 'den' });"
+        "return { text: h.text(), picked: h.fnCalls.map((c) => c.name) };",
+        component="(props) => PlayerCastTargets({ ...props, p: window.__P(() => Promise.resolve("
+                  "{ kind: 'superseded', roomId: 'den', sent: true, undone: false })) })",
+        api={"GET /api/music/now-playing": [_np("den", "stop", None, 0)]},
+        setup=_PICKER_P, fn_props=["onPicked"],
+    ),
+    "picker_superseded_undone": _scenario(
+        "h.render(); await h.click({ type: 'button', text: 'den' });"
+        "return { text: h.text(), picked: h.fnCalls.map((c) => c.name) };",
+        component="(props) => PlayerCastTargets({ ...props, p: window.__P(() => Promise.resolve("
+                  "{ kind: 'superseded', roomId: 'den', sent: true, undone: true })) })",
+        api={"GET /api/music/now-playing": [_np("den", "stop", None, 0)]},
+        setup=_PICKER_P, fn_props=["onPicked"],
+    ),
+})
+
+# The Music page's "play here" toast, over a scripted player whose play here
+# left office and reports how office's pause went.
+_MUSIC_TRACK = {"id": 6, "title": "Warm Stones", "artist": "Hearth Ensemble", "album": "By The Hearth",
+                "duration_sec": 200, "file_path": "/music/hearth_06.mp3", "added_at": "2026-09-01T00:00:00Z",
+                "added_via": "manual", "favorited": False}
+_MUSIC_API = {"GET /api/playlists": [], "GET /api/music/library/stats": None,
+              "GET /api/acquisitions?limit=100": None, "GET /api/music/now-playing": [],
+              "GET /api/music/library": {"total": 1, "items": [_MUSIC_TRACK]}}
+_MUSIC_PLAYER = r"""
+window.__played = [];
+usePlayback = () => ({
+  available: true,
+  playItems: (items, at, opts) => {
+    window.__played.push(items.map((i) => i.title));
+    if (window.__left) Promise.resolve().then(() => opts && opts.onLeft && opts.onLeft('office', window.__leftPaused));
+    return window.__left;
+  },
+  enqueue() {}, playNext() {},
+});
+window.itemFromTrack = (t) => ({ title: t.title });
+"""
+_MUSIC_PLAY_HERE = (
+    "h.render(); await h.settle(); h.rerender();"
+    "await h.click({ type: 'button', title: 'play in this browser' }); await h.settle(); h.rerender();"
+    "return { text: h.text().filter((t) => t.includes('in this browser')), played: W().__played };"
+)
+for name, left, paused in (("music_play_here_paused_office", "'office'", "true"),
+                           ("music_play_here_office_wont_pause", "'office'", "false"),
+                           ("music_play_here_no_room", "null", "true")):
+    SCENARIOS[name] = _scenario(
+        _MUSIC_PLAY_HERE, files=["web/static/components.jsx", "web/static/music.jsx"], component="MusicPage",
+        api=_MUSIC_API, setup=_MUSIC_PLAYER + f"window.__left = {left}; window.__leftPaused = {paused};",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -620,12 +845,21 @@ def test_a_podcast_while_casting_ends_the_cast_too(driven):
     assert out["at"] == 120
 
 
-def test_previous_while_casting_touches_neither_the_room_nor_this_browser(driven):
-    # It used to POST /api/music/skip: previous moved the room FORWARD (and
-    # the core's skip swaps a cast queue for a random library track).
+def test_previous_while_casting_is_the_rooms_previous(driven):
+    # It used to POST /api/music/skip: previous moved the room FORWARD. Then
+    # (with no previous route) it did nothing. The core's previous follows
+    # the room's queue since 2026-10-01, and the web proxies it.
     out = driven["previous_while_casting"]
-    assert out["acts"] == [], out["acts"]
+    assert out["prev"] == ["POST /api/music/previous/office"], out["prev"]
+    assert out["next"] == ["POST /api/music/skip/office"], out["next"]
     assert out["state"]["kind"] == "room" and out["state"]["room"] == "office"
+
+
+def test_the_os_media_controls_previous_is_the_rooms_previous_while_casting(driven):
+    out = driven["previous_from_the_os_media_controls_while_casting"]
+    assert "previoustrack" in out["has"] and "nexttrack" in out["has"]
+    assert out["prev"] == ["POST /api/music/previous/office"], out["prev"]
+    assert out["next"] == ["POST /api/music/skip/office"], out["next"]
 
 
 def test_a_queue_row_while_casting_recasts_from_that_row(driven):
@@ -633,6 +867,157 @@ def test_a_queue_row_while_casting_recasts_from_that_row(driven):
     assert out["lib"]["acts"] == ['POST /api/music/play-tracks {"room_id":"office","track_ids":[4]}']
     assert out["lib"]["state"] == {"kind": "room", "room": "office", "index": 3, "status": "playing"}
     assert out["again"]["acts"] == ['POST /api/music/play-tracks {"room_id":"office","track_ids":[1,2,3,4]}']
+
+
+# ── a "play here" while a cast is still on its way ─────────────────────────
+# Before 2026-10-01 a play here during the 3-5 s a room takes to ready its
+# stream played here, then the cast landed: it paused this browser and moved
+# the target to the room, and the play here was lost.
+
+
+def test_a_play_here_during_a_cast_wins_and_the_room_is_paused_again(driven):
+    out = driven["play_here_during_a_cast_from_this_browser"]
+    assert out["r"] == {"kind": "superseded", "roomId": "office", "sent": True, "undone": True}
+    assert out["left"] is None  # the cast had not landed: nothing was being cast
+    assert out["state"] == {"kind": "browser", "room": None, "index": 0, "status": "playing"}
+    assert out["src"] == "/a/7" and out["paused"] is False
+    # After the room took the queue: office paused, this browser untouched.
+    assert out["after"] == ["POST /api/music/pause/office"], out["after"]
+
+
+def test_a_play_here_during_a_room_to_room_cast_pauses_both_rooms(driven):
+    out = driven["play_here_during_a_room_to_room_cast"]
+    acts = out["acts"]
+    assert out["left"] == "office"
+    assert out["r"]["kind"] == "superseded" and out["r"]["roomId"] == "den" and out["r"]["undone"] is True
+    assert _index(acts, 'POST /api/music/play-tracks {"room_id":"den"') < _index(acts, "POST /api/music/pause/den")
+    assert "POST /api/music/pause/office" in acts
+    assert out["state"]["kind"] == "browser" and out["src"] == "/a/7"
+
+
+def test_a_pick_still_waiting_its_turn_is_never_sent_after_a_play_here(driven):
+    out = driven["play_here_while_a_pick_waits_its_turn"]
+    assert out["ra"]["kind"] == "superseded" and out["ra"]["sent"] is True
+    assert out["rb"] == {"kind": "superseded", "roomId": "den", "sent": False}
+    assert not any('"room_id":"den"' in a for a in out["acts"]), out["acts"]
+    assert out["state"]["kind"] == "browser" and out["state"]["status"] == "playing"
+
+
+def test_a_play_here_during_a_hand_back_is_left_alone(driven):
+    out = driven["play_here_during_a_hand_back"]
+    assert out["r"]["kind"] == "superseded"
+    # The hand-back would have loaded office's track (Track 3) here.
+    assert not any(a.startswith("el0.src=") or a.startswith("el1.src=") for a in out["after"]), out["after"]
+    assert out["src"] == "/a/7"
+    assert out["state"] == {"kind": "browser", "room": None, "index": 0, "status": "playing"}
+
+
+def test_a_queue_rows_recast_loses_to_a_play_here(driven):
+    out = driven["play_here_during_a_queue_row_recast"]
+    acts = out["acts"]
+    assert acts.count("POST /api/music/pause/office") == 2, acts  # the play here's, and the undo
+    assert _index(acts, "POST /api/music/play-tracks") < len(acts) - 1 - acts[::-1].index("POST /api/music/pause/office")
+    assert out["state"] == {"kind": "browser", "room": None, "index": 0, "status": "playing"}
+
+
+def test_a_podcast_played_here_during_a_cast_wins_too(driven):
+    out = driven["play_spoken_during_a_cast_from_this_browser"]
+    assert out["r"]["kind"] == "superseded" and out["r"]["undone"] is True
+    assert out["state"]["kind"] == "browser" and out["state"]["status"] == "playing"
+    assert out["src"] == "/p/5"
+
+
+def test_a_play_here_while_the_old_room_is_read_sends_the_new_room_nothing(driven):
+    out = driven["play_here_while_the_old_room_is_read"]
+    assert out["r"] == {"kind": "superseded", "roomId": "den", "sent": False}
+    assert not any('"room_id":"den"' in a for a in out["acts"]), out["acts"]
+    assert "POST /api/music/pause/office" in out["acts"]
+    assert out["state"]["kind"] == "browser"
+
+
+def test_a_queue_row_tapped_during_a_cast_waits_its_turn(driven):
+    out = driven["queue_row_during_a_cast"]
+    casts = [a for a in out["acts"] if a.startswith("POST /api/music/play-tracks")]
+    assert casts == [
+        'POST /api/music/play-tracks {"room_id":"den","track_ids":[3,4],"start_sec":42}',
+        'POST /api/music/play-tracks {"room_id":"den","track_ids":[4]}',
+    ], out["acts"]
+    assert out["state"]["room"] == "den" and out["state"]["index"] == 3
+
+
+def test_a_room_that_took_the_queue_and_wont_pause_again_is_reported(driven):
+    out = driven["play_here_during_a_cast_the_room_wont_undo"]
+    assert out["r"] == {"kind": "superseded", "roomId": "office", "sent": True, "undone": False}
+    assert out["state"]["kind"] == "browser"
+
+
+def test_the_picker_says_when_a_superseded_cast_left_a_room_playing(driven):
+    out = driven["picker_superseded_room_still_playing"]
+    assert any("den couldn't be paused" in t for t in out["text"]), out["text"]
+    assert out["picked"] == []
+    ok = driven["picker_superseded_undone"]
+    assert ok["picked"] == ["onPicked"]
+
+
+# ── a cast from a paused player waits paused ───────────────────────────────
+
+
+def test_a_cast_from_a_paused_browser_starts_the_room_paused_there(driven):
+    out = driven["cast_from_a_paused_browser"]
+    assert out["err"] is None
+    assert out["acts"][0] == (
+        'POST /api/music/play-tracks {"room_id":"office","track_ids":[2,3,4],"start_sec":151,"start_paused":true}'
+    )
+    assert out["r"]["paused"] is True
+    assert out["state"]["kind"] == "room" and out["state"]["status"] == "paused"
+
+
+def test_a_cast_from_a_playing_browser_says_nothing_of_pausing(driven):
+    out = driven["browser_to_room"]
+    assert "start_paused" not in out["acts"][0]
+    assert out["r"]["paused"] is False
+
+
+def test_a_cast_from_a_paused_room_starts_the_next_room_paused(driven):
+    out = driven["cast_from_a_paused_room_to_another"]
+    assert out["err"] is None
+    assert (
+        'POST /api/music/play-tracks {"room_id":"den","track_ids":[3,4],"start_sec":42,"start_paused":true}'
+        in out["acts"]
+    ), out["acts"]
+    assert out["r"]["paused"] is True
+
+
+# ── a control the room says didn't happen ──────────────────────────────────
+
+
+def test_a_hand_back_whose_pause_answered_not_done_keeps_this_browser_quiet(driven):
+    out = driven["back_when_the_room_answers_not_paused"]
+    assert out["r"]["leftPaused"] is False and out["r"]["playing"] is False
+    assert not any(a.startswith("el0.play") for a in out["acts"])
+
+
+def test_a_room_to_room_whose_old_room_answered_not_paused_says_so(driven):
+    out = driven["room_to_room_old_room_answers_not_paused"]
+    assert out["r"]["left"] == "office" and out["r"]["leftPaused"] is False
+
+
+def test_play_here_hears_whether_the_room_it_left_paused(driven):
+    assert driven["play_here_hears_how_the_rooms_pause_went"]["heard"] == [
+        ["office", True], ["office", False],
+    ]
+
+
+def test_the_music_pages_play_here_toast_waits_for_the_rooms_answer(driven):
+    paused = driven["music_play_here_paused_office"]
+    assert paused["played"] == [["Warm Stones"]]
+    assert paused["text"] == ['playing "Warm Stones" in this browser · paused office'], paused["text"]
+    wont = driven["music_play_here_office_wont_pause"]
+    assert wont["text"] == [
+        'playing "Warm Stones" in this browser · couldn\'t pause office, it may still be playing'
+    ], wont["text"]
+    alone = driven["music_play_here_no_room"]
+    assert alone["text"] == ['playing "Warm Stones" in this browser'], alone["text"]
 
 
 def test_a_queue_row_a_room_cannot_play_moves_nothing(driven):
