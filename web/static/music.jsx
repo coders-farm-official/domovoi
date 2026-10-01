@@ -1314,8 +1314,10 @@ const MusicPage = () => {
   const player = usePlayback();
   const onBrowserPlay = (track) => {
     if (!player.available) { fire('browser player not available'); return; }
-    player.playItems([window.itemFromTrack(track)]);
-    fire(`playing "${track.title || 'track'}" in this browser`);
+    // "Play here" plays here, casting or not: a room being cast to is
+    // paused (player.jsx playItems), and the toast says which.
+    const left = player.playItems([window.itemFromTrack(track)]);
+    fire(`playing "${track.title || 'track'}" in this browser${left ? ` · paused ${left}` : ''}`);
   };
   const onQueueTrack = (track) => {
     if (!player.available) { fire('browser player not available'); return; }

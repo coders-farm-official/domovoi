@@ -271,7 +271,7 @@ const NowPlayingPanel = () => {
 
           {/* transport */}
           <div className="np-transport" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <IconButton name="skip-back" onClick={p.prev}/>
+            <IconButton name="skip-back" onClick={p.prev} disabled={remote}/>
             <button className="btn btn-primary btn-icon" onClick={p.toggle} style={{ width: 44, height: 44, borderRadius: '50%' }}>
               <Icon name={p.status === 'playing' ? 'pause' : 'play'} size={20}/>
             </button>

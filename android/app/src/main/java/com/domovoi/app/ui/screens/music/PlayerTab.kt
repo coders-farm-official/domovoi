@@ -384,12 +384,27 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                     onClick = {
                         castOpen = false
                         scope.launch {
+                            // The toast is what happened: "playing" only when
+                            // the phone took over from a room that was
+                            // playing and was paused (CastOutcome.Here).
                             runCatching { app.player.castTo(null) }
-                                .onSuccess { toast("playing on this device") }
+                                .onSuccess { toast(it.note) }
                                 .onFailure { toast("cast failed: ${it.message}") }
                         }
                     },
                 )
+                if (rooms.isEmpty()) {
+                    // Only rooms that answered now-playing are listed; with
+                    // none, say so rather than offer a room that isn't there.
+                    Text(
+                        "no rooms online — connect a satellite",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                        modifier = Modifier
+                            .widthIn(max = 260.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
                 if (refusal != null && rooms.isNotEmpty()) {
                     Text(
                         refusal,
@@ -408,9 +423,7 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                             castOpen = false
                             scope.launch {
                                 runCatching { app.player.castTo(r) }
-                                    .onSuccess { plan ->
-                                        toast(plan?.let { CastPlanner.sentNote(it, r) } ?: "casting to $r")
-                                    }
+                                    .onSuccess { toast(it.note) }
                                     .onFailure { toast(castFailure(it)) }
                             }
                         },

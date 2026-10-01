@@ -158,4 +158,69 @@ object CastPlanner {
         val songs = if (n == 1) "1 song" else "$n songs"
         return "casting $songs to $room · left out ${left.joinToString(", ")}"
     }
+
+    /**
+     * Where coming back to this phone from a room picks up: the queue item
+     * the room is on ([followRoom]) at the room's elapsed time, when the
+     * room's track is in the queue. Otherwise the phone stays where it was
+     * (null position: keep the player's own), which is where the cast
+     * started, since a cast moves the phone's queue position there.
+     */
+    fun handBack(queue: List<PlayItem>, index: Int, remote: RemoteNowPlaying?): HandBack {
+        if (queue.isEmpty()) return HandBack(index, null)
+        val at = followRoom(queue, index, remote?.title)
+        val item = queue.getOrNull(at)
+        val onIt = remote != null && item != null && item.kind == PlayKind.Library &&
+            item.title == remote.title
+        val pos = if (onIt) remote!!.elapsedSec.takeIf { it.isFinite() }?.coerceAtLeast(0.0) else null
+        return HandBack(at.coerceIn(0, queue.lastIndex), pos)
+    }
+}
+
+/** See [CastPlanner.handBack]. */
+data class HandBack(val index: Int, val positionSec: Double?)
+
+/**
+ * What a change of target did, so the toast says what happened and never
+ * claims playback that isn't. A room that is left (for this phone or for
+ * another room) is PAUSED, not stopped — see PlayerController.leaveRoom.
+ */
+sealed class CastOutcome {
+    abstract val note: String
+
+    /** [plan] went to [room]. [left]: the room this cast moved away from,
+     *  null when the phone was the source or the room is the same one. */
+    data class ToRoom(
+        val plan: CastPlan,
+        val room: String,
+        val left: String? = null,
+        val leftPaused: Boolean = false,
+    ) : CastOutcome() {
+        override val note: String get() = CastPlanner.sentNote(plan, room) + when {
+            left == null -> ""
+            leftPaused -> " · paused $left"
+            else -> " · couldn't pause $left, it may still be playing"
+        }
+    }
+
+    /** Back on this phone. [left]: the room that was playing the queue
+     *  (null: the phone was already the target). [playing]: the phone
+     *  is playing now; it resumes only when the room was playing AND the
+     *  room was paused, so the two are never heard at once. */
+    data class Here(
+        val left: String?,
+        val playing: Boolean,
+        val leftPaused: Boolean = false,
+        val leftWasPlaying: Boolean = false,
+        val queued: Boolean = true,
+    ) : CastOutcome() {
+        override val note: String get() = when {
+            left == null -> if (playing) "playing on this device" else "on this device"
+            !leftPaused -> "back on this device, paused · couldn't pause $left, it may still be playing"
+            playing -> "playing on this device · paused $left"
+            !queued -> "back on this device · nothing queued · paused $left"
+            !leftWasPlaying -> "back on this device, paused · $left wasn't playing"
+            else -> "back on this device, paused · paused $left"
+        }
+    }
 }

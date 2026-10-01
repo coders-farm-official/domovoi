@@ -61,6 +61,15 @@ import java.net.URLEncoder
 
 private const val PAGE_SIZE = 12
 
+/**
+ * The rooms the cast menu and the "play in room" pickers offer: the ones the
+ * server reported in now-playing, and no others. A made-up "kitchen" used to
+ * stand in when none answered (or before the first read), so the cast menu
+ * offered a room that wasn't there.
+ */
+internal fun castRooms(nowPlaying: List<NowPlayingRoom>): List<String> =
+    nowPlaying.map { it.roomId }.filter { it.isNotBlank() }.distinct()
+
 /** Music page — Android parity build of web/static/music.jsx:
  *  now-playing strip, Library / Player / Playlists / Stats tabs, track +
  *  playlist drawers, uploads. Provider search/download surfaces are
@@ -132,7 +141,7 @@ fun MusicScreen() {
     LaunchedEffect(nowPlaying.data) { tick = 0 }
 
     val npList = nowPlaying.data.orEmpty()
-    val rooms = if (npList.isNotEmpty()) npList.map { it.roomId } else listOf("kitchen")
+    val rooms = castRooms(npList)
     val realPlaylists = playlists.data.orEmpty().filter { !it.isVirtual }
 
     // ── Local playback (this device) ──────────────────────────────────
@@ -145,8 +154,10 @@ fun MusicScreen() {
     )
 
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
-        app.player.playItems(listOf(toItem(t)))
-        toast("playing \"${t.title ?: "track"}\" on this device")
+        // "Play here" plays here, casting or not: a room being cast to is
+        // paused (PlayerController.playItems).
+        val left = app.player.playItems(listOf(toItem(t)))
+        toast("playing \"${t.title ?: "track"}\" on this device" + (left?.let { " · paused $it" } ?: ""))
     }
     val onQueueTrack: (LibraryTrack) -> Unit = { t ->
         app.player.enqueue(listOf(toItem(t)))
@@ -301,8 +312,9 @@ fun MusicScreen() {
     }
 
     // ── Playlists actions ─────────────────────────────────────────────
-    val onPlayPlaylist: (Playlist) -> Unit = { p ->
-        val room = rooms.first()
+    val onPlayPlaylist: (Playlist) -> Unit = play@{ p ->
+        val room = rooms.firstOrNull()
+            ?: return@play toast("no rooms online — connect a satellite to play ${p.name}")
         toast("playing ${p.name} in $room…")
         scope.launch {
             runCatching {

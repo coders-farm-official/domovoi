@@ -75,7 +75,10 @@ internal fun PlaylistDrawer(
         eventTypes = setOf("playlists.changed", "library.indexer.changed"),
     ) { it.api.get("/api/playlists/${playlist.id}/tracks").decode<List<LibraryTrack>>() }
 
-    var room by remember(playlist.id) { mutableStateOf(rooms.firstOrNull() ?: "kitchen") }
+    // The picked chip, else the first room the server reported; null with
+    // no room online (never a made-up "kitchen").
+    var picked by remember(playlist.id) { mutableStateOf<String?>(null) }
+    val room = picked?.takeIf { it in rooms } ?: rooms.firstOrNull()
     var editing by remember(playlist.id) { mutableStateOf(false) }
     var editName by remember(playlist.id) { mutableStateOf("") }
     var editDesc by remember(playlist.id) { mutableStateOf("") }
@@ -86,6 +89,7 @@ internal fun PlaylistDrawer(
     val items = localOrder ?: tracksState.data.orEmpty()
 
     fun play(shuffle: Boolean) {
+        val room = room ?: return
         toast((if (shuffle) "shuffling" else "playing") + " ${playlist.name} in $room…")
         scope.launch {
             runCatching {
@@ -203,17 +207,17 @@ internal fun PlaylistDrawer(
 
                     // Play in room
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                        SectionLabel("play in room")
+                        SectionLabel(if (rooms.isEmpty()) "play in room · no rooms online" else "play in room")
                         Spacer(Modifier.size(8.dp))
                         Row(Modifier.horizontalScroll(rememberScrollState())) {
-                            RoomPickRow(rooms, room) { room = it }
+                            RoomPickRow(rooms, room.orEmpty()) { picked = it }
                         }
                         Spacer(Modifier.size(12.dp))
                         Row(
                             Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Button(onClick = { play(shuffle = false) }) {
+                            Button(onClick = { play(shuffle = false) }, enabled = room != null) {
                                 Icon(
                                     Icons.Filled.PlayArrow, contentDescription = null,
                                     modifier = Modifier.size(16.dp),
@@ -221,7 +225,7 @@ internal fun PlaylistDrawer(
                                 Spacer(Modifier.size(6.dp))
                                 Text("play")
                             }
-                            OutlinedButton(onClick = { play(shuffle = true) }) {
+                            OutlinedButton(onClick = { play(shuffle = true) }, enabled = room != null) {
                                 Icon(
                                     Icons.Filled.Shuffle, contentDescription = null,
                                     modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
