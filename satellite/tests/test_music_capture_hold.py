@@ -984,6 +984,27 @@ def test_a_held_start_is_dropped_by_a_stop(monkeypatch):
     assert not t.is_alive() and sat.procs == []
 
 
+def test_a_held_start_a_stop_dropped_ends_its_wait_at_once(monkeypatch, caplog):
+    """Dropped by a stop, a held start gives up as soon as it next looks
+    (its own stop count check), not when the turn is over: a chat or a
+    string of follow-ups can hold a turn open for minutes, and every
+    music_start of it would otherwise keep a thread polling until then."""
+    caplog.set_level(logging.INFO, logger=client.log.name)
+    sat = _music_sat(monkeypatch)
+    sat._turn_open = True
+    t = _start(sat)
+    time.sleep(0.05)
+    sat._stop_music()
+    t.join(1.0)
+    try:
+        assert not t.is_alive(), "the dropped start still waits for the turn"
+        assert "music: not starting %s; it was stopped while it waited" % URL in caplog.text
+    finally:
+        sat._turn_open = False
+        t.join(3)
+    assert sat.procs == []
+
+
 def test_a_long_turn_does_not_use_up_the_wait_for_the_speaker(monkeypatch):
     """The speaker wait (`MUSIC_SPEAKER_WAIT_SEC`) counts only once no turn
     holds the start: a turn longer than it — a 30 s capture, a long answer
@@ -1116,6 +1137,61 @@ def test_a_reply_ended_before_its_first_chunk_is_released_after_it_plays(monkeyp
         sat.shutdown_event.set()
         t.join(3)
     assert sum(n for _, n in RecordingOut.written) == 5 * len(chunk)
+    assert sat.response_done.sets[0] >= RecordingOut.written[-1][0]
+    assert sat._leds.state == "listening"
+
+
+class _RaceQueue(queue.Queue):
+    """playback_q whose first get on an empty queue runs ``on_empty`` just
+    before it reports Empty: the receiver handling response_end in the
+    instant between the playback thread's get timing out and its next look
+    at the queue."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.on_empty = None
+
+    def get(self, block=True, timeout=None):
+        hook = self.on_empty
+        if hook is not None and self.empty():
+            self.on_empty = None
+            hook()
+            raise queue.Empty
+        return super().get(block, timeout)
+
+
+def test_a_prebuffer_response_end_flushed_as_the_queue_ran_dry_plays_before_the_release(
+    monkeypatch,
+):
+    """A short reply never reaches the prebuffer target, so all of its
+    audio sits in the receiver until response_end flushes it into the queue
+    and defers the release until it has played. When that lands just as the
+    playback thread found the queue empty (no stream opened yet), the idle
+    branch must see the audio now queued and play it first: released there,
+    the follow-up capture opened before the question was heard."""
+    RecordingOut.written = []
+    sat = _playback_sat(monkeypatch, RecordingOut)
+    q = _RaceQueue()
+    sat.playback_q = q
+    sat.playback_active.set()                       # response_start
+    chunk = b"\x01\x00" * 1600                      # 0.1 s at 16 kHz
+
+    def response_end() -> None:                     # the receiver's order
+        for _ in range(5):
+            q.put((16000, chunk))                   # _flush_prebuffer
+        sat._post_playback_state = "listening"      # expect_followup: deferred
+        sat.playback_active.clear()
+
+    q.on_empty = response_end
+    t = threading.Thread(target=sat._playback_thread_run, daemon=True)
+    t.start()
+    try:
+        assert sat.response_done.wait(3)
+        played = sum(n for _, n in RecordingOut.written)
+    finally:
+        sat.shutdown_event.set()
+        t.join(3)
+    assert played == 5 * len(chunk), "the turn was released before its reply had played"
     assert sat.response_done.sets[0] >= RecordingOut.written[-1][0]
     assert sat._leds.state == "listening"
 
