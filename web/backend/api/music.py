@@ -1360,7 +1360,9 @@ async def play_tracks(body: CastTracksRequest, request: Request):
     Domovoi server's ``/v1/admin/music/play-tracks``; from there, the existing
     pause/resume/skip/now-playing routes drive the room. ``start_sec`` and
     ``start_paused`` go along only when set, so a plain cast reads exactly
-    as it always has."""
+    as it always has. A cast the core couldn't make passes through as it
+    answered: ``failed`` names the part (``music_player`` on the server, or
+    ``satellite``) beside the ``detail`` in words."""
     payload_out: dict = {"room_id": body.room_id, "track_ids": body.track_ids}
     if body.start_sec > 0:
         payload_out["start_sec"] = body.start_sec

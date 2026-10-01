@@ -23,6 +23,7 @@ from pathlib import Path  # noqa: E402
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.responses import Response as FastAPIResponse  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
@@ -3047,7 +3048,11 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     """
     import time
 
-    from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
+    from domovoi.clients.mpd import (
+        MPDNotProvisioned,
+        get_mpd_client_for,
+        mpd_stream_url_for,
+    )
     from domovoi.db.repositories import IntentLogRepository
     from domovoi.handlers.shared.play_history import record_media_play
 
@@ -3087,12 +3092,24 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     ]
 
     await _ensure_room_mpd(body.room_id)
-    mpd = get_mpd_client_for(body.room_id)
+    # A cast that fails names the part that failed (``_MusicFailure``): the
+    # room's music player on this server, or — no room has one because no
+    # satellite has ever connected — the satellite. The room's satellite
+    # being offline fails nothing here: the room's player takes the queue
+    # and the satellite joins its stream when it connects.
+    try:
+        mpd = get_mpd_client_for(body.room_id)
+    except MPDNotProvisioned as e:
+        raise _MusicFailure(
+            503,
+            "no satellite has connected to the domovoi yet, so no room has a speaker",
+            "satellite",
+        ) from e
     try:
         queued = await mpd.prepare_tracks(specs, start_sec=start_sec)
     except Exception as e:
         log.warning("admin play-tracks MPD raised: %s", e)
-        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+        raise _music_player_down(body.room_id) from e
 
     if not queued:
         raise HTTPException(
@@ -4247,10 +4264,57 @@ _MUSIC_FAILURE_STATUS = {
     "no_speakers": 503,   # no room has a music player yet
 }
 
+# Which part of the house a music control or a cast that didn't happen
+# failed on, by ``Response.failure``: ``failed`` in the error body, beside
+# the ``detail`` in words. Nothing failed for a 409 (the player answered).
+_MUSIC_FAILED_PART = {
+    "unreachable": "music_player",
+    "no_speakers": "satellite",
+}
+
+
+class _MusicFailure(HTTPException):
+    """A room's music control or a cast that didn't happen, naming the part
+    that failed (``failed`` in the body; ``_music_failure_body``):
+
+    * ``music_player`` — the room's music player, which runs on the domovoi
+      server (one MPD daemon per room), didn't answer: refused, gone, or
+      frozen. The room's satellite has nothing to do with it.
+    * ``satellite`` — no satellite has connected yet, so no room has a
+      speaker to play on.
+
+    The app and the dashboard pick their hint from it. Before 2026-10-01 the
+    app read every 5xx from a cast as "its speaker isn't answering (is the
+    office satellite online?)" while office's satellite was connected and
+    the server's music player was the one that had frozen (ft)."""
+
+    def __init__(self, status_code: int, detail: str, failed: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.failed = failed
+
+
+@app.exception_handler(_MusicFailure)
+async def _music_failure_body(request: Request, exc: _MusicFailure) -> JSONResponse:
+    # ``failed`` first: a client that keeps only the head of an error body
+    # (the app's message keeps 200 characters) still has it.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"failed": exc.failed, "detail": exc.detail},
+    )
+
+
+def _music_player_detail(room_id: str) -> str:
+    return f"the music player for {room_id} on the domovoi server isn't answering"
+
+
+def _music_player_down(room_id: str) -> _MusicFailure:
+    """The room's music player on the server didn't answer (502)."""
+    return _MusicFailure(502, _music_player_detail(room_id), "music_player")
+
 
 def _music_failure_detail(failure: str, room_id: str, response: Response) -> str:
     if failure == "unreachable":
-        return f"couldn't reach the music player in {room_id}"
+        return _music_player_detail(room_id)
     if failure == "not_playing":
         return f"nothing is playing in {room_id}"
     return response.text
@@ -4271,7 +4335,9 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     2026-10-01 a pause MPD never got answered 200 "I couldn't reach the
     music player.", and the app and the dashboard, handing playback off,
     took the room for paused (ft, office's MPD frozen). A 200 carries
-    ``ok: true``. A voice turn says what it always said."""
+    ``ok: true``. A 502 or 503 also names the part that failed
+    (``failed``: ``music_player`` or ``satellite``, ``_MusicFailure``). A
+    voice turn says what it always said."""
     transcript = _MUSIC_ACTIONS.get(action)
     if transcript is None:
         raise HTTPException(
@@ -4282,10 +4348,12 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     await _admin_dispatch_music(response, room_id)
     failure = response.failure
     if failure is not None:
-        raise HTTPException(
-            status_code=_MUSIC_FAILURE_STATUS.get(failure, 502),
-            detail=_music_failure_detail(failure, room_id, response),
-        )
+        status = _MUSIC_FAILURE_STATUS.get(failure, 502)
+        detail = _music_failure_detail(failure, room_id, response)
+        part = _MUSIC_FAILED_PART.get(failure)
+        if part is not None:
+            raise _MusicFailure(status, detail, part)
+        raise HTTPException(status_code=status, detail=detail)
     return {"ok": True, **_admin_response_dict(response)}
 
 
