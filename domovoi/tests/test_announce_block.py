@@ -331,6 +331,26 @@ async def test_a_dead_socket_still_raises_and_evicts(tts) -> None:
     assert "kitchen" not in ws.app.state.active_sessions
 
 
+@pytest.mark.asyncio
+async def test_a_socket_gone_before_the_first_frame_is_not_started(tts) -> None:
+    """A core shutdown closes every satellite socket before its teardown,
+    often while a first sentence is synthesizing. Nothing reached the
+    satellite, so this is AnnounceNotStarted (a timer delivery puts the
+    room back to pending for its reconnect or the next boot), not a
+    failure nobody heard. The dead session is still evicted."""
+    sess, ws = _session()
+
+    async def _closed(_t):
+        raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+    ws.send_text = _closed  # type: ignore[method-assign]
+    with pytest.raises(AnnounceNotStarted) as exc:
+        await sess.announce("Reminder: call mom", defer_to_capture=True)
+    assert exc.value.reason == "send_failed"
+    assert ws.frames == []
+    assert "kitchen" not in ws.app.state.active_sessions
+
+
 def test_the_room_connected_hook_runs_after_ready(monkeypatch) -> None:
     """A satellite that (re)connects gets every unsettled fire it should
     still hear: StreamSession.run() tells the coordinator after `ready`."""

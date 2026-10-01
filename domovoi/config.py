@@ -296,6 +296,23 @@ class Settings(BaseSettings):
     ws_ping_interval_sec: float = 10.0
     ws_ping_timeout_sec: float = 5.0
 
+    # How long a stop (SIGTERM from systemd, Ctrl+C) may take, in three
+    # nested bounds (domovoi/lifecycle.py). A stop that used to be SIGKILLed
+    # after systemd's 90 s now takes about a second:
+    #   * shutdown_grace_sec — uvicorn's timeout_graceful_shutdown: after
+    #     every connection is told to close (satellites get a 1012 close and
+    #     reconnect to the next process), requests and sockets still open
+    #     this long are cancelled.
+    #   * shutdown_teardown_sec — the lifespan teardown (plugins, workers,
+    #     timer delivery, probe), step by step, in all.
+    #   * shutdown_deadline_sec — counted from the signal: if the process is
+    #     still here, it logs every thread's stack and exits. Keep it below
+    #     the unit's TimeoutStopSec (docs/LINUX_HOST.md: 30), so the journal
+    #     says what hung instead of showing a bare SIGKILL. 0 turns it off.
+    shutdown_grace_sec: float = 5.0
+    shutdown_teardown_sec: float = 10.0
+    shutdown_deadline_sec: float = 20.0
+
     timer_watcher_interval_sec: float = 1.0
 
     # ─── Timers & reminders: house-wide delivery (V018) ────────────────

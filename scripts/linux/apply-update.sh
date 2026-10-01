@@ -25,7 +25,8 @@
 #      migrations are applied to both). The newest
 #      DOMOVOI_UPDATE_KEEP_BACKUPS of each are kept. A failed backup aborts
 #      the update before anything is stopped.
-#   3. Stop domovoi-web and domovoi-core.
+#   3. Stop domovoi-web and domovoi-core: at most DOMOVOI_UPDATE_STOP_TIMEOUT
+#      seconds, then SIGKILL whatever is still stopping (stop_services).
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
@@ -77,6 +78,13 @@ KEEP_BACKUPS=${DOMOVOI_UPDATE_KEEP_BACKUPS:-5}
 REQUIRE_BACKUP=${DOMOVOI_UPDATE_REQUIRE_BACKUP:-1}
 HEALTH_TIMEOUT=${DOMOVOI_UPDATE_HEALTH_TIMEOUT:-120}
 HEALTH_INTERVAL=${DOMOVOI_UPDATE_HEALTH_INTERVAL:-2}
+# How long the stop step waits for web and core before it SIGKILLs whatever
+# is still stopping, and then how long for that to land. Above the units'
+# documented TimeoutStopSec (30), so normally systemd's own kill comes first;
+# well under systemd's 90 s default, which is what a unit without the
+# setting gets (docs/LINUX_HOST.md).
+STOP_TIMEOUT=${DOMOVOI_UPDATE_STOP_TIMEOUT:-40}
+STOP_KILL_WAIT=${DOMOVOI_UPDATE_STOP_KILL_WAIT:-10}
 CORE_HEALTH_URL=${DOMOVOI_CORE_HEALTH_URL:-http://127.0.0.1:6370/v1/health}
 WEB_HEALTH_URL=${DOMOVOI_WEB_HEALTH_URL:-http://127.0.0.1:6369/api/health}
 PG_CONTAINER=${DOMOVOI_PG_CONTAINER:-domovoi-postgres}
@@ -132,6 +140,8 @@ TEST_BACKUP_FILE=""
 DB_RESTORED=0
 TEST_DB_RESTORED=0
 STEPS=()
+# A step function may leave a note here for its step's detail on success.
+STEP_DETAIL=""
 LAST_ERROR=""
 RESULT_READY=0
 FINAL_WRITTEN=0
@@ -284,13 +294,15 @@ run_step() {
   t0=$(now_ms)
   out=$(mktemp)
   log "step $name"
+  STEP_DETAIL=""
   set +e
   "$@" >"$out" 2>&1
   rc=$?
   set -e
   sed 's/^/    /' "$out"
   if [ "$rc" -eq 0 ]; then
-    add_step "$name" ok "$t0" ""
+    add_step "$name" ok "$t0" "$STEP_DETAIL"
+    if [ -n "$STEP_DETAIL" ]; then log "step $name: $STEP_DETAIL"; fi
   else
     add_step "$name" failed "$t0" "$(tail_lines "$out" 15 300)"
     LAST_ERROR="$name failed (exit $rc): $(trunc "$(tail -n 3 "$out" | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
@@ -429,7 +441,101 @@ paths_changed() {
 
 # ─── The steps ───────────────────────────────────────────────────────────
 
-stop_services() { systemctl stop "$WEB_UNIT" "$CORE_UNIT"; }
+# Whether UNIT is down: inactive, or failed (a unit systemd had to kill ends
+# up failed, and that is still stopped).
+unit_stopped() {
+  case $(systemctl is-active "$1" 2>/dev/null) in
+    inactive|failed|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# What happened to UNIT's last stop, for the step detail: "<unit> 0.412 s"
+# when it stopped by itself, plus how it ended when it did not: systemd's
+# SIGKILL after TimeoutStopSec, this script's SIGKILL, or an error exit (the
+# core's own shutdown deadline, domovoi/lifecycle.py).
+stop_note() {
+  local unit=$1 killed_here=$2 line key val result="" t_exit="" t_in="" note=$1
+  if [ "${3-}" = down ]; then
+    printf '%s was not running' "$unit"
+    return
+  fi
+  while IFS= read -r line; do
+    key=${line%%=*}; val=${line#*=}
+    case $key in
+      Result) result=$val ;;
+      ActiveExitTimestampMonotonic) t_exit=$val ;;
+      InactiveEnterTimestampMonotonic) t_in=$val ;;
+    esac
+  done < <(systemctl show "$unit" -p Result -p ActiveExitTimestampMonotonic \
+             -p InactiveEnterTimestampMonotonic 2>/dev/null)
+  if [[ $t_exit =~ ^[0-9]+$ ]] && [[ $t_in =~ ^[0-9]+$ ]] && [ "$t_exit" -gt 0 ] \
+      && [ "$t_in" -ge "$t_exit" ]; then
+    note+=" $(fmt_sec $(((t_in - t_exit) / 1000))) s"
+  fi
+  if [ "$killed_here" = 1 ]; then
+    note+=" (still stopping after ${STOP_TIMEOUT}s: SIGKILLed by this script)"
+  else
+    case $result in
+      success|"") ;;
+      timeout) note+=" (systemd SIGKILLed it after TimeoutStopSec)" ;;
+      exit-code) note+=" (exited with an error while stopping)" ;;
+      *) note+=" (result: $result)" ;;
+    esac
+  fi
+  printf '%s' "$note"
+}
+
+# Stop web and core, bounded. A bare `systemctl stop` waits out each unit's
+# TimeoutStopSec and then SIGKILLs it: on 2026-09-30 that cost every update
+# 90 s (the core swallowed SIGTERM) and showed only as a slow step. Here the
+# wait is at most STOP_TIMEOUT; a unit still stopping then is SIGKILLed, and
+# one that is still up STOP_KILL_WAIT later fails the step (the update then
+# rolls back, as for any failed stop). The step's detail says how long each
+# unit took and how it ended, so a slow stop shows in the version panel.
+stop_services() {
+  local rc=0 unit waited=0 notes="" k
+  local -a units=("$WEB_UNIT" "$CORE_UNIT") killed=() still=() down=()
+  for unit in "${units[@]}"; do
+    if unit_stopped "$unit"; then down+=("$unit"); fi
+  done
+  timeout "$STOP_TIMEOUT" systemctl stop "${units[@]}" || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    for unit in "${units[@]}"; do
+      if ! unit_stopped "$unit"; then
+        echo "$unit still stopping after ${STOP_TIMEOUT}s; sending SIGKILL"
+        systemctl kill --signal=SIGKILL "$unit" || true
+        killed+=("$unit")
+      fi
+    done
+    while [ "$waited" -lt "$((STOP_KILL_WAIT * 2))" ]; do
+      still=()
+      for unit in ${killed[@]+"${killed[@]}"}; do
+        unit_stopped "$unit" || still+=("$unit")
+      done
+      [ "${#still[@]}" -eq 0 ] && break
+      sleep 0.5
+      waited=$((waited + 1))
+    done
+  elif [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  for unit in "${units[@]}"; do
+    k=0
+    if [[ " ${killed[*]-} " == *" $unit "* ]]; then k=1; fi
+    if [[ " ${down[*]-} " == *" $unit "* ]]; then
+      notes+="${notes:+; }$(stop_note "$unit" "$k" down)"
+    else
+      notes+="${notes:+; }$(stop_note "$unit" "$k")"
+    fi
+  done
+  STEP_DETAIL=$notes
+  if [ "${#still[@]}" -gt 0 ]; then
+    echo "still running after SIGKILL: ${still[*]}"
+    return 1
+  fi
+  return 0
+}
 
 start_services() { systemctl start "$CORE_UNIT" "$WEB_UNIT"; }
 

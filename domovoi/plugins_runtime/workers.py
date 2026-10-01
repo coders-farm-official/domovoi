@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 _LONGRUN_BACKOFF_INITIAL = 1.0
 _LONGRUN_BACKOFF_CAP = 60.0
 _LONGRUN_HEALTHY_RESET_SEC = 600.0
+# stop_owner: how long an owner's running ticks get to finish in all, and
+# how long a cancelled one then gets to unwind before it is left behind.
+_STOP_TIMEOUT_SEC = 10.0
+_CANCEL_GRACE_SEC = 0.5
 
 
 @dataclass
@@ -80,6 +84,7 @@ class WorkerRunner:
         self._workers: dict[str, list[_WorkerEntry]] = {}   # owner → entries
         self._hooks: dict[str, list[StartupHook]] = {}      # owner → hooks
         self._hook_done: dict[str, asyncio.Event] = {}      # full name → done
+        self._hook_tasks: dict[str, set[asyncio.Task[None]]] = {}  # owner → running
 
     # ── registration ───────────────────────────────────────────────────────
 
@@ -142,20 +147,43 @@ class WorkerRunner:
         for entry in self._workers.get(owner, []):
             self._start_entry(entry)
         for hook in self._hooks.get(owner, []):
-            self._fire_hook(hook)
+            self._fire_hook(hook, owner)
 
-    async def stop_owner(self, owner: str) -> None:
-        """Reverse-order shutdown of one owner's workers; hooks are dropped."""
-        for entry in reversed(self._workers.get(owner, [])):
+    async def stop_owner(self, owner: str, *, timeout: float = _STOP_TIMEOUT_SEC) -> None:
+        """Stop one owner's workers and its startup hooks that are still
+        running, within ``timeout`` in all.
+
+        Every worker is told to stop first (in reverse registration order),
+        so none starts another tick; then the running ones are awaited
+        TOGETHER under the one deadline. A worker still busy at the
+        deadline is cancelled and given ``_CANCEL_GRACE_SEC`` to unwind; one
+        that swallows the cancel is logged and left behind, never waited
+        on. (Until 2026-09-30 each worker was awaited in turn for up to 10 s
+        and a cancelled one was never awaited at all: the core's nine
+        workers alone could hold a stop for 90 s.)"""
+        entries = list(reversed(self._workers.get(owner, [])))
+        for entry in entries:
             entry.stop.set()
-            if entry.task is not None:
-                try:
-                    await asyncio.wait_for(entry.task, timeout=10)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    entry.task.cancel()
-                except Exception:  # noqa: BLE001 — task exceptions already logged
-                    pass
-                entry.task = None
+        tasks = {e.task: e for e in entries if e.task is not None and not e.task.done()}
+        hook_tasks = {t for t in self._hook_tasks.pop(owner, set()) if not t.done()}
+        for task in hook_tasks:
+            # A boot hook (a library index, an import) has no stop signal of
+            # its own; the plugin (or the process) is going away.
+            task.cancel()
+        waiting = set(tasks) | hook_tasks
+        if waiting:
+            _done, late = await asyncio.wait(waiting, timeout=timeout)
+            if late:
+                for task in late:
+                    task.cancel()
+                _done, stuck = await asyncio.wait(late, timeout=_CANCEL_GRACE_SEC)
+                for task in late:
+                    log.warning(
+                        "%s did not stop within %.1f s; %s", task.get_name(), timeout,
+                        "left it running" if task in stuck else "cancelled it",
+                    )
+        for entry in entries:
+            entry.task = None
             entry.state = "stopped"
         for hook in self._hooks.get(owner, []):
             self._hook_done.pop(hook.name, None)
@@ -301,7 +329,7 @@ class WorkerRunner:
         probe = current_probe()
         return True if probe is None else bool(probe.online)
 
-    def _fire_hook(self, hook: StartupHook) -> None:
+    def _fire_hook(self, hook: StartupHook, owner: str) -> None:
         async def _run() -> None:
             try:
                 if hook.after:
@@ -332,7 +360,10 @@ class WorkerRunner:
             finally:
                 self._hook_done.setdefault(hook.name, asyncio.Event()).set()
 
-        asyncio.create_task(_run(), name=f"startup-hook:{hook.name}")
+        task = asyncio.create_task(_run(), name=f"startup-hook:{hook.name}")
+        running = self._hook_tasks.setdefault(owner, set())
+        running.add(task)
+        task.add_done_callback(running.discard)
 
 
 WORKERS = WorkerRunner()

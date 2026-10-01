@@ -54,6 +54,7 @@ from domovoi.config import settings  # noqa: E402
 from domovoi.connectivity import ConnectivityProbe  # noqa: E402
 from domovoi.db.session import session_scope  # noqa: E402
 from domovoi.handlers import HANDLERS  # noqa: E402
+from domovoi import lifecycle  # noqa: E402
 from domovoi.lifecycle import install_signal_handlers, signal_shutdown  # noqa: E402
 from domovoi.models import MAX_CONFIG_CHANGES, MAX_ROOM_ID_CHARS  # noqa: E402
 from domovoi.models import (  # noqa: E402
@@ -213,8 +214,18 @@ def _register_core_reapply_hooks() -> None:
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
 
 
+# At shutdown, how long a worker owner's (a plugin's, the core's) running
+# ticks get to finish once told to stop, before they are cancelled.
+_STOP_WORKERS_SEC = 3.0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # A fresh start, then SIGTERM/SIGINT flip the shutdown event the moment
+    # they land — wrapped around uvicorn's own handlers, never in their
+    # place: replacing them is what kept every stop hanging until systemd's
+    # SIGKILL (domovoi/lifecycle.py).
+    lifecycle.reset()
     install_signal_handlers()
     _register_core_reapply_hooks()
 
@@ -618,33 +629,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        signal_shutdown()
-        await cancel_warm_up()
-        await cancel_speech_warm_up()
-        # Plugins first (reverse of startup: they loaded last), then the
-        # core worker set in reverse registration order, then the probe.
-        try:
-            await LOADER.shutdown()
-        except Exception as e:
-            log.warning("plugin runtime shutdown raised: %s", e)
-        try:
-            await WORKERS.stop_owner("core")
-        except Exception as e:
-            log.warning("core worker shutdown raised: %s", e)
-        # Announcements still in flight stop here; their rows stay
-        # pending/sending and the next boot resumes them.
-        try:
-            await app.state.timer_delivery.shutdown()
-        except Exception as e:
-            log.warning("timer delivery shutdown raised: %s", e)
-        # Drop the core registrations so a re-entered lifespan (tests
-        # enter it repeatedly in one process) registers a fresh set
-        # instead of accumulating duplicates.
-        WORKERS.remove_owner("core")
-        fast_lane.shutdown()
-        await probe.stop()
+        # By now uvicorn has closed every satellite socket (1012) and waited
+        # out, or cancelled, what was in flight (shutdown_grace_sec). This
+        # teardown is bounded as a whole (shutdown_teardown_sec) and step by
+        # step: a step that overruns is cancelled and left behind, so no
+        # plugin or worker can hold the stop open (domovoi/lifecycle.py).
+        signal_shutdown("lifespan teardown")  # no-op after a signal
+        teardown_started = asyncio.get_running_loop().time()
+        await lifecycle.run_teardown(
+            [
+                ("LLM warm-up", cancel_warm_up, 1.0),
+                ("speech warm-up", cancel_speech_warm_up, 1.0),
+                # Plugins first (reverse of startup: they loaded last), then
+                # the core worker set, then the probe.
+                ("plugins", lambda: LOADER.shutdown(worker_timeout=_STOP_WORKERS_SEC),
+                 _STOP_WORKERS_SEC + 1.0),
+                ("core workers", lambda: WORKERS.stop_owner("core", timeout=_STOP_WORKERS_SEC),
+                 _STOP_WORKERS_SEC + 1.0),
+                # Announcements still in flight stop here; their rows stay
+                # pending/sending and the next boot resumes them.
+                ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
+                # Drop the core registrations so a re-entered lifespan (tests
+                # enter it repeatedly in one process) registers a fresh set
+                # instead of accumulating duplicates.
+                ("core registrations", lambda: WORKERS.remove_owner("core"), 1.0),
+                ("fast lane", fast_lane.shutdown, 1.0),
+                ("connectivity probe", probe.stop, 1.0),
+            ],
+            budget_sec=float(settings.shutdown_teardown_sec),
+        )
         connectivity_mod.set_current_probe(None)
-        log.info("domovoi stopped")
+        log.info(
+            "domovoi stopped (teardown %.1f s)",
+            asyncio.get_running_loop().time() - teardown_started,
+        )
 
 
 app = FastAPI(title="Voice Domovoi", lifespan=lifespan)
@@ -4415,26 +4433,35 @@ def main() -> None:
 
     import uvicorn
 
-    uvicorn.run(
-        "domovoi.main:app",
-        host="0.0.0.0",
-        port=6370,
-        log_level=settings.log_level.lower(),
-        # Ping each Pi's WebSocket every ws_ping_interval_sec; if no
-        # pong comes back within ws_ping_timeout_sec, uvicorn closes
-        # the WS, which trips StreamSession's receiver-loop
-        # finally block and evicts the stale session from
-        # `active_sessions`. Without this, dead WSes accumulated under
-        # flaky wifi and broadcast/intercom writes vanished silently.
-        ws_ping_interval=settings.ws_ping_interval_sec,
-        ws_ping_timeout=settings.ws_ping_timeout_sec,
-        # CORE-7: over this many concurrent connections uvicorn answers
-        # 503 instead of accepting work it has no memory for. Every
-        # satellite WebSocket holds an utterance buffer and a frame
-        # buffer for as long as it is open, so "accept everything" is a
-        # promise this box cannot keep.
-        limit_concurrency=settings.max_concurrent_connections,
-    )
+    # From a SIGTERM on, the process gets shutdown_deadline_sec to be gone,
+    # whatever hangs (domovoi/lifecycle.py) — below the unit's
+    # TimeoutStopSec, so the journal gets the stacks, not a bare SIGKILL.
+    with lifecycle.exit_watchdog(float(settings.shutdown_deadline_sec)):
+        uvicorn.run(
+            "domovoi.main:app",
+            host="0.0.0.0",
+            port=6370,
+            log_level=settings.log_level.lower(),
+            # Once shutdown begins, requests and sockets still open after
+            # this are cancelled and the lifespan teardown runs. Without it
+            # uvicorn waits for every connection to finish on its own, which
+            # a satellite that stopped answering never does.
+            timeout_graceful_shutdown=float(settings.shutdown_grace_sec),
+            # Ping each Pi's WebSocket every ws_ping_interval_sec; if no
+            # pong comes back within ws_ping_timeout_sec, uvicorn closes
+            # the WS, which trips StreamSession's receiver-loop
+            # finally block and evicts the stale session from
+            # `active_sessions`. Without this, dead WSes accumulated under
+            # flaky wifi and broadcast/intercom writes vanished silently.
+            ws_ping_interval=settings.ws_ping_interval_sec,
+            ws_ping_timeout=settings.ws_ping_timeout_sec,
+            # CORE-7: over this many concurrent connections uvicorn answers
+            # 503 instead of accepting work it has no memory for. Every
+            # satellite WebSocket holds an utterance buffer and a frame
+            # buffer for as long as it is open, so "accept everything" is a
+            # promise this box cannot keep.
+            limit_concurrency=settings.max_concurrent_connections,
+        )
 
 
 if __name__ == "__main__":
