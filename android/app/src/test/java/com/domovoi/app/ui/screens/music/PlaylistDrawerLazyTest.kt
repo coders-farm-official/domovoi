@@ -8,6 +8,7 @@ import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.net.WsEvent
+import com.domovoi.app.testing.Bytecode
 import com.domovoi.app.testing.HeadlessUi
 import com.domovoi.app.testing.NodeTree
 import com.domovoi.app.testing.allocateWithoutConstructor
@@ -42,7 +43,9 @@ import java.util.concurrent.TimeUnit
  * The drawer is composed for real on the JVM ([HeadlessUi]: no window, so
  * nothing is measured) against a MockWebServer serving the playlist, and
  * the nodes it emitted are counted: a 2,000-track playlist must build no
- * more than a one-track one.
+ * more than a one-track one. That count cannot see inside the lazy list,
+ * so the compiled drawer is also read ([Bytecode]): its tracks must be
+ * lazy items of their own.
  */
 class PlaylistDrawerLazyTest {
 
@@ -131,6 +134,21 @@ class PlaylistDrawerLazyTest {
         val many = nodesWith(2_000)
         assertTrue("the drawer composed nothing", one >= 10)
         assertEquals("the drawer built its rows up front, not lazily", one, many)
+    }
+
+    @Test fun eachTrackIsALazyItemOfItsOwn() {
+        // What the count above cannot tell apart: nothing is measured, so no
+        // lazy item is ever composed, and every track row inside ONE item
+        // (`item { rows.forEach { … } }`, all of them built the moment the
+        // list is measured) counts the same as an item per track. So the
+        // drawer must hand its tracks to the list through `items(count, …)`,
+        // which `items(list)` and `itemsIndexed` inline to as well.
+        val calls = Bytecode.callers(
+            fileFacade = "com.domovoi.app.ui.screens.music.PlaylistDrawerKt",
+            owner = "androidx/compose/foundation/lazy/LazyListScope",
+            names = setOf("items", "items\$default"),
+        )
+        assertTrue("the drawer's tracks are not lazy items of their own", calls.isNotEmpty())
     }
 
     @Test fun theServedTracksAreWhatTheDrawerDecodes() {
