@@ -190,6 +190,17 @@ class Response(BaseModel):
     # empty until the caller has spoken it and called its ``finish``, which
     # records the turn and returns the final response. Never serialized.
     qa_stream: Any = Field(default=None, exclude=True)
+    # Why the thing asked for did NOT happen, for a caller that is not a
+    # person listening: ``text`` says it to the room ("I couldn't reach the
+    # music player."), this says it to code. "unreachable" (the room's
+    # music player didn't answer), "not_playing" (it answered, but nothing
+    # was playing to act on), "no_speakers" (no room has a player yet).
+    # The dashboard's and the app's room controls go through
+    # main.admin_music_action, which answers non-2xx on it — before
+    # 2026-10-01 a pause MPD never got answered 200, and both clients took
+    # the room for paused. A voice turn says ``text`` as it always did.
+    # Never serialized.
+    failure: str | None = Field(default=None, exclude=True)
 
 
 class ConnectivityState(BaseModel):

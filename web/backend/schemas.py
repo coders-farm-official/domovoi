@@ -674,10 +674,13 @@ class CastTracksRequest(BaseModel):
 
     The room starts on the first id: a client sends its CURRENT track first
     (not the top of its queue), with ``start_sec`` = how far into it the
-    listener is, so the hand-off carries on where the listener was."""
+    listener is, so the hand-off carries on where the listener was.
+    ``start_paused``: the listener had it paused, so the room waits there,
+    paused, until someone presses play."""
     room_id: str
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
     start_sec: float = Field(0.0, ge=0, le=86400)
+    start_paused: bool = False
 
 
 class PlayPlaylistRequest(BaseModel):

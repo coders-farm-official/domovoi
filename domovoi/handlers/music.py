@@ -296,7 +296,12 @@ class MusicHandler(Handler):
         if action == "stop":
             return await self._simple_ack("stop", ctx)
         if action == "next":
-            return await self._simple_ack("next", ctx)
+            # The same skip as the spoken "next" / "skip" fast path: a room
+            # playing a queue goes on to the queue's next song (see
+            # _smart_skip). This used to be MPD's bare next, so a "next" the
+            # tool model routed ended a single-song play where the fast
+            # path's "next" picked another track.
+            return await self._smart_skip(ctx, session)
         if action == "previous":
             return await self._simple_ack("previous", ctx)
         if action == "now_playing":
@@ -366,11 +371,7 @@ class MusicHandler(Handler):
             song = await mpd.prepare_search(query)
         except Exception as e:
             log.warning("MPD play failed: %s", e)
-            return Response(
-                text="I couldn't reach the music player.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            return self._unreachable(ctx)
         q_display = " by ".join(v for v in (query.get("title"), query.get("artist")) if v) or query.get("any", "")
         if not song:
             # Tag-based search missed. Many libraries (especially manually
@@ -549,11 +550,7 @@ class MusicHandler(Handler):
                     song = await mpd.prepare_filename(basename)
         except Exception as e:
             log.warning("MPD random play failed: %s", e)
-            return Response(
-                text="I couldn't reach the music player.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            return self._unreachable(ctx)
         if not song:
             return Response(
                 text=(
@@ -592,9 +589,24 @@ class MusicHandler(Handler):
         )
 
     async def _smart_skip(self, ctx: Context, session: AsyncSession) -> Response:
-        """Voice "next" / "skip this / it / this one / this song / this track."
+        """"next" / "skip this / it / this one / this song / this track",
+        spoken or tapped: the voice fast path, the tool model's "next", and
+        the dashboard's and the app's skip (``/v1/admin/music/skip``).
 
-        Four cases, in order:
+        **A room whose MPD queue holds two songs or more follows that
+        queue** (``_skip_in_queue``): MPD's own next, and after the last
+        song the queue is over. Such a queue was built by someone — a cast
+        from the app or the dashboard (play-tracks), songs added to the
+        room's queue — and "next" means its next song. Before 2026-10-01
+        every skip of a library track took the "local library" branch
+        below and swapped a cast queue for ONE random library track
+        (office, ft run: Long Road, queue of 4 → Damp Steps, queue of 1).
+
+        **The smart skip is for a room whose queue holds one song (or
+        none)**, which is how every other start leaves it — a spoken
+        "play X" or "play something", a play-track click, a playlist
+        (core plays one song at a time and advances it here), a
+        provider's stream. MPD's next would just end the music there, so:
 
         * **An external stream from a registered streaming-search
           provider is active** (``last_play_source`` matches the
@@ -616,6 +628,10 @@ class MusicHandler(Handler):
         * **Anything else** (unknown source) — fall through
           to ``mpd.next()`` via ``_simple_ack``.
         """
+        place = await self._queue_place(ctx.room_id)
+        if place is not None and place[1] > 1:
+            return await self._skip_in_queue(ctx, *place)
+
         if ctx.session_id:
             try:
                 ctx_data = await SessionRepository(session).get_context(ctx.session_id) or {}
@@ -659,6 +675,83 @@ class MusicHandler(Handler):
         if local_play:
             return await self._play_random(ctx, session)
         return await self._simple_ack("next", ctx)
+
+    async def _queue_place(self, room_id: str | None) -> tuple[int, int] | None:
+        """Where the room's MPD is in its queue: (position of the song it
+        is on, how many songs the queue holds). None when the queue can't
+        be read, is empty, or none of it is current (a stopped room)."""
+        try:
+            mpd = get_mpd_client_for(room_id)
+            queue = await mpd.queue_list()
+            if not queue:
+                return None
+            current = (await mpd.current_song()) or {}
+        except Exception as e:  # noqa: BLE001 — the smart skip still decides
+            log.debug("smart_skip: couldn't read the room's queue: %s", e)
+            return None
+        # By songid first: MPD's currentsong and playlistinfo both carry it.
+        cur_id = current.get("id", current.get("Id"))
+        if cur_id is not None:
+            for i, entry in enumerate(queue):
+                if str(entry.get("id")) == str(cur_id):
+                    return i, len(queue)
+        raw = current.get("pos", current.get("Pos"))
+        try:
+            pos = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return (pos, len(queue)) if 0 <= pos < len(queue) else None
+
+    async def _skip_in_queue(self, ctx: Context, pos: int, length: int) -> Response:
+        """Skip within the queue the room is playing: MPD's own next. After
+        the queue's last song that ends it — MPD stops — and the room's
+        player is told to stop too (``music_action="stop"``), as a spoken
+        "stop" would: the queue someone built is over, and nothing replaces
+        it with a song they didn't pick."""
+        mpd = get_mpd_client_for(ctx.room_id)
+        try:
+            await mpd.next()
+        except MPDNotPlaying:
+            return self._not_playing(ctx)
+        except Exception as e:
+            log.warning("MPD next (queue) failed: %s", e)
+            return self._unreachable(ctx)
+        # MPD plays the song it moved to, paused or not, so a person's
+        # pause no longer describes the room.
+        note_paused_by_person(ctx.app, ctx.room_id, False)
+        if pos >= length - 1:
+            return Response(
+                text="That was the last song in the queue.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+                music_action="stop",
+            )
+        return Response(
+            text="Next track.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            data={"queue_pos": pos + 1, "queue_length": length},
+        )
+
+    def _unreachable(self, ctx: Context) -> Response:
+        """The room's music player didn't answer. Said to the room as it
+        always was; ``failure`` lets the dashboard's and the app's
+        controls report it (main.admin_music_action)."""
+        return Response(
+            text="I couldn't reach the music player.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            failure="unreachable",
+        )
+
+    def _not_playing(self, ctx: Context) -> Response:
+        """The player answered and refused: nothing is playing (MPD ACK 55)."""
+        return Response(
+            text="Nothing is playing right now.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            failure="not_playing",
+        )
 
     async def _maybe_skip_in_playlist(
         self, ctx: Context, session: AsyncSession
@@ -744,7 +837,7 @@ class MusicHandler(Handler):
                     song = await mpd.prepare_filename(basename)
         except Exception as e:
             log.warning("smart_skip playlist play failed: %s", e)
-            return self._reply(ctx, "I couldn't reach the music player.")
+            return self._unreachable(ctx)
         if not song:
             return self._reply(
                 ctx,
@@ -985,25 +1078,23 @@ class MusicHandler(Handler):
             # here blamed the player for a stopped room and sent whoever
             # was debugging after a connection that was never broken
             # (F-V021). Same wording the now-playing path already uses.
-            return Response(
-                text="Nothing is playing right now.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            return self._not_playing(ctx)
         except Exception as e:
             log.warning("MPD %s failed: %s", action, e)
-            return Response(
-                text="I couldn't reach the music player.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            # Said to the room as before; marked, so a pause the dashboard
+            # or the app asked for is reported as not done rather than as
+            # an HTTP 200 both clients read as "paused" (2026-10-01).
+            return self._unreachable(ctx)
         # A person's pause holds until a person resumes, stops or starts
         # something: the music_ready handshake that follows every
         # music_start (a turn's auto-resume, an announcement's restart)
         # leaves this room's MPD paused meanwhile (domovoi/music_pause.py).
+        # Next and previous count as a start: MPD plays the song it moves
+        # to whether it was paused or not, so the hold would otherwise keep
+        # a playing room paused after the next voice turn.
         if action == "pause":
             note_paused_by_person(ctx.app, ctx.room_id, True)
-        elif action in ("resume", "stop"):
+        elif action in ("resume", "stop", "next", "previous"):
             note_paused_by_person(ctx.app, ctx.room_id, False)
         # "stop" tears down the Pi's music subprocess; pause/resume keep the
         # HTTP stream open (MPD just stops sending audio frames during pause)
@@ -1022,11 +1113,7 @@ class MusicHandler(Handler):
             song = await mpd.current_song()
         except Exception as e:
             log.warning("MPD current_song failed: %s", e)
-            return Response(
-                text="I couldn't reach the music player.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            return self._unreachable(ctx)
         if not song:
             return Response(
                 text="Nothing is playing right now.",

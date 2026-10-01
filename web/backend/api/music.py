@@ -993,6 +993,21 @@ async def skip(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
+@router.post("/previous/{room_id}", dependencies=DEVICE)
+async def previous(room_id: str, request: Request):
+    """Back one song in the room's queue (MPD's previous; on the queue's
+    first song it starts that song again). The app's and the dashboard's
+    previous while casting; before 2026-10-01 there was no such proxy, and
+    the dashboard's previous posted skip — moving the room FORWARD.
+
+    Device tier, not open like the four above: the kiosk has no previous
+    button, so nothing unattended needs it (docs/SECURITY_PRIVACY.md)."""
+    status, payload = await post_admin(
+        f"/v1/admin/music/previous/{room_id}", headers=auth_forward_headers(request)
+    )
+    return bridge_response(status, payload)
+
+
 @router.post("/library/reindex", dependencies=ADMIN)
 async def reindex(request: Request):
     """Re-walk the music library. Admin tier at both hops — the core
@@ -1343,11 +1358,14 @@ async def play_tracks(body: CastTracksRequest, request: Request):
     """Cast an arbitrary ordered queue of library tracks into a room's MPD
     (the browser player's Spotify-Connect-style hand-off). Proxies to the
     Domovoi server's ``/v1/admin/music/play-tracks``; from there, the existing
-    pause/resume/skip/now-playing routes drive the room. ``start_sec`` goes
-    along only when set, so a plain cast reads exactly as it always has."""
+    pause/resume/skip/now-playing routes drive the room. ``start_sec`` and
+    ``start_paused`` go along only when set, so a plain cast reads exactly
+    as it always has."""
     payload_out: dict = {"room_id": body.room_id, "track_ids": body.track_ids}
     if body.start_sec > 0:
         payload_out["start_sec"] = body.start_sec
+    if body.start_paused:
+        payload_out["start_paused"] = True
     status, payload = await post_admin(
         "/v1/admin/music/play-tracks",
         payload_out,

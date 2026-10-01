@@ -233,13 +233,42 @@ class MPDStubClient:
     # The real daemon refuses these while stopped (ACK 55). The stub
     # refuses too, or stub-mode tests would prove a behaviour the
     # product does not have.
+    #
+    # On a queue (a cast's prepare_tracks, queue adds) they move through
+    # it as the daemon does: to the next / previous entry, playing it
+    # whether the player was paused or not; next after the last entry
+    # stops; previous on the first entry starts it again. A song that is
+    # not in the queue (the single-song plays above) is left alone.
+    def _queue_index(self) -> int | None:
+        if self._song is None or "id" not in self._song:
+            return None
+        for i, entry in enumerate(self._queue):
+            if entry.get("id") == self._song.get("id"):
+                return i
+        return None
+
     async def next(self) -> None:
         if self._state == "stop":
             raise MPDNotPlaying("next: nothing is playing")
+        i = self._queue_index()
+        if i is None:
+            return
+        if i + 1 < len(self._queue):
+            self._song = self._queue[i + 1]
+            self._song.pop("_elapsed", None)
+            self._state = "play"
+        else:
+            self._state = "stop"
 
     async def previous(self) -> None:
         if self._state == "stop":
             raise MPDNotPlaying("previous: nothing is playing")
+        i = self._queue_index()
+        if i is None:
+            return
+        self._song = self._queue[max(0, i - 1)]
+        self._song.pop("_elapsed", None)
+        self._state = "play"
 
     async def current_song(self) -> dict[str, Any] | None:
         if self._state == "stop":

@@ -2727,8 +2727,17 @@ def _admin_response_dict(response: Response) -> dict[str, Any]:
     }
 
 
-async def _admin_dispatch_music(response: Response, room_id: str) -> None:
+async def _admin_dispatch_music(
+    response: Response, room_id: str, *, start_paused: bool = False,
+) -> None:
     """Deliver the music_start / music_stop frame to the room's Pi.
+
+    ``start_paused`` (a cast from a phone or browser that was paused): the
+    satellite's player still gets its music_start and joins the stream, but
+    MPD stays paused where the handler left it — recorded as a person's
+    pause (domovoi/music_pause.py), so neither the music_ready handshake,
+    its fallback, nor a later turn's auto-resume starts it. The person's
+    play (``resume``) does, and is heard at once.
 
     Voice turns get this for free in ``StreamSession._send_response`` —
     the frame rides the same WebSocket the utterance came in on. The
@@ -2751,8 +2760,10 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
     sess = sessions.get(room_id)
     if response.music_action == "start" and response.music_stream_url:
         resumable[room_id] = response.music_stream_url
-        # Something new was asked for: a pause from before no longer holds.
-        note_paused_by_person(app, room_id, False)
+        # Something new was asked for: a pause from before no longer holds
+        # — unless what was asked for is to wait paused (`start_paused`),
+        # recorded BEFORE the frame goes so its music_ready finds it.
+        note_paused_by_person(app, room_id, start_paused)
         # No now-playing stamp clear on start: matched_handler can't be
         # trusted here — "play creep" routes through MusicHandler,
         # which may delegate to a streaming provider that overwrites
@@ -2780,11 +2791,12 @@ async def _admin_dispatch_music(response: Response, room_id: str) -> None:
                 await send_music_start(
                     app, sess, room_id, response.music_stream_url,
                 )
-        else:
+        elif not start_paused:
             # No Pi connected to consume the stream. The handler queued
             # MPD paused; without a satellite to send music_ready, the
             # song would sit paused indefinitely. Resume now so the
-            # next reconnect's auto-resume joins a live stream.
+            # next reconnect's auto-resume joins a live stream. (Asked to
+            # wait paused, it waits.)
             await _resume_mpd_for_room(room_id)
     elif response.music_action == "stop":
         resumable.pop(room_id, None)
@@ -3003,6 +3015,12 @@ class _AdminPlayTracksBody(BaseModel):
     # and position). Ignored when the first id is not in the library or MPD
     # could not find its file, since the position belongs to that song.
     start_sec: float = Field(0.0, ge=0, le=86400)
+    # The listener had it PAUSED: the room takes the queue and waits there,
+    # paused at ``start_sec``, until someone presses play (resume) — what a
+    # Spotify Connect hand-off does. Before 2026-10-01 a cast from a paused
+    # phone or browser started the room playing. Absent (an older client):
+    # the room plays, as it always has.
+    start_paused: bool = False
 
 
 @app.post(
@@ -3111,13 +3129,14 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
         music_action="start",
         music_stream_url=mpd_stream_url_for(body.room_id),
     )
-    await _admin_dispatch_music(response, body.room_id)
+    await _admin_dispatch_music(response, body.room_id, start_paused=body.start_paused)
 
     return {
         "played": True,
         "queued": len(queued),
         "requested": len(body.track_ids),
         "latency_ms": latency_ms,
+        "paused": body.start_paused,
     }
 
 
@@ -4221,12 +4240,38 @@ _MUSIC_ACTIONS = {
 }
 
 
+# What a control that did not happen answers, by ``Response.failure``.
+_MUSIC_FAILURE_STATUS = {
+    "unreachable": 502,   # the room's music player didn't answer
+    "not_playing": 409,   # it answered: nothing is playing to act on
+    "no_speakers": 503,   # no room has a music player yet
+}
+
+
+def _music_failure_detail(failure: str, room_id: str, response: Response) -> str:
+    if failure == "unreachable":
+        return f"couldn't reach the music player in {room_id}"
+    if failure == "not_playing":
+        return f"nothing is playing in {room_id}"
+    return response.text
+
+
 @app.post(
     "/v1/admin/music/{action}/{room_id}",
     # Device tier: pause / resume / stop / skip in a room.
     dependencies=[Depends(require_device)],
 )
 async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
+    """A room's transport control (the dashboard's, the app's and the
+    kiosk's buttons), routed as its spoken equivalent.
+
+    A control that did not happen answers non-2xx (``Response.failure``:
+    502 the room's player didn't answer, 409 nothing was playing, 503 no
+    room has a player), never a 200 carrying the spoken apology. Before
+    2026-10-01 a pause MPD never got answered 200 "I couldn't reach the
+    music player.", and the app and the dashboard, handing playback off,
+    took the room for paused (ft, office's MPD frozen). A 200 carries
+    ``ok: true``. A voice turn says what it always said."""
     transcript = _MUSIC_ACTIONS.get(action)
     if transcript is None:
         raise HTTPException(
@@ -4235,7 +4280,13 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
         )
     response = await _admin_route_intent(transcript, room_id)
     await _admin_dispatch_music(response, room_id)
-    return _admin_response_dict(response)
+    failure = response.failure
+    if failure is not None:
+        raise HTTPException(
+            status_code=_MUSIC_FAILURE_STATUS.get(failure, 502),
+            detail=_music_failure_detail(failure, room_id, response),
+        )
+    return {"ok": True, **_admin_response_dict(response)}
 
 
 @app.post(
