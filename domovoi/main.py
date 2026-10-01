@@ -2998,6 +2998,11 @@ class _AdminPlayTracksBody(BaseModel):
     # built, handed off to a room. Capped so a runaway client can't ask MPD
     # to resolve an unbounded list in one request.
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
+    # Seconds into the FIRST track to start at: the client hands over a
+    # song it is part-way through (the phone's or browser's current track
+    # and position). Ignored when the first id is not in the library or MPD
+    # could not find its file, since the position belongs to that song.
+    start_sec: float = Field(0.0, ge=0, le=86400)
 
 
 @app.post(
@@ -3017,6 +3022,10 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     — a cast isn't conversation) and records the first track as a play in
     the Recently-played tab. Subsequent in-queue advancement is MPD's own
     queue, so no ``current_playlist`` stamping is needed.
+
+    The room starts on the first id, ``start_sec`` into it: a client hands
+    over from where its listener is, so it sends its current track first
+    (not the top of its queue) and its position with it.
     """
     import time
 
@@ -3046,6 +3055,9 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
             detail="none of the requested track_ids exist in library_tracks",
         )
     ordered = [by_id[tid] for tid in body.track_ids if tid in by_id]
+    # The position is for the first REQUESTED track; when that one is gone
+    # from the library the room starts the next one from its top.
+    start_sec = body.start_sec if body.track_ids[0] in by_id else 0.0
 
     specs = [
         {
@@ -3059,7 +3071,7 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     await _ensure_room_mpd(body.room_id)
     mpd = get_mpd_client_for(body.room_id)
     try:
-        queued = await mpd.prepare_tracks(specs)
+        queued = await mpd.prepare_tracks(specs, start_sec=start_sec)
     except Exception as e:
         log.warning("admin play-tracks MPD raised: %s", e)
         raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e

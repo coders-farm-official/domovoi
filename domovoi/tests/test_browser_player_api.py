@@ -201,6 +201,32 @@ def test_play_tracks_proxies_to_domovoi(monkeypatch):
 
 
 @requires_db
+def test_play_tracks_carries_start_sec(monkeypatch):
+    """The listener's place in the current song goes through to the core;
+    a cast without one reads exactly as it always has (above)."""
+    captured = {}
+
+    async def _fake_post_admin(path, body=None, headers=None):
+        captured["body"] = body
+        return 200, {"played": True, "queued": 2, "requested": 2}
+
+    monkeypatch.setattr(music_api, "post_admin", _fake_post_admin)
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
+        r = client.post(
+            "/api/music/play-tracks",
+            json={"room_id": "kitchen", "track_ids": [7, 3], "start_sec": 73},
+        )
+        assert r.status_code == 200
+        assert captured["body"] == {"room_id": "kitchen", "track_ids": [7, 3], "start_sec": 73}
+
+        r = client.post(
+            "/api/music/play-tracks",
+            json={"room_id": "kitchen", "track_ids": [7], "start_sec": -2},
+        )
+        assert r.status_code == 422
+
+
+@requires_db
 def test_play_tracks_domovoi_unreachable_502(monkeypatch):
     async def _down(path, body=None, headers=None):
         return 0, None

@@ -209,6 +209,9 @@ class PlayerController(
     }
 
     fun jumpTo(i: Int) {
+        // While casting, a jump is a re-cast (castFrom), never local
+        // playback under a room that is still playing.
+        if (_target.value is PlayTarget.Room) return
         if (i in _queue.value.indices) {
             if (exoPlayer.playbackState == Player.STATE_IDLE) {
                 ensureService()
@@ -388,23 +391,68 @@ class PlayerController(
         }
     }
 
-    /** Hand the current queue (library tracks only) to a satellite room. */
-    suspend fun castTo(roomId: String?) {
+    /** A cast that would send a room nothing. Its message is for the person. */
+    class NothingToCast(message: String) : Exception(message)
+
+    /**
+     * What a cast right now would send: the library tracks from the current
+     * one on, starting at the current position. While already casting, from
+     * where that room has got to rather than where the phone stopped
+     * ([CastPlanner.planFor], JVM-tested).
+     */
+    fun castPlan(): CastPlan =
+        CastPlanner.planFor(_queue.value, _index.value, _positionSec.value, _target.value, _remote.value)
+
+    /**
+     * Hand the queue to a satellite room (see [CastPlan]), or with null come
+     * back to this device. Throws [NothingToCast] when the queue has nothing
+     * a room can play, and then leaves the target alone: the player never
+     * reads "casting" for a room that was sent nothing.
+     */
+    suspend fun castTo(roomId: String?): CastPlan? {
         if (roomId == null) {
             _target.value = PlayTarget.Local
             remotePollJob?.cancel()
             _remote.value = null
-            return
+            return null
         }
-        val trackIds = _queue.value.filter { it.kind == PlayKind.Library }.map { it.id }
-        if (trackIds.isNotEmpty()) {
-            api.post("/api/music/play-tracks", buildJsonObject {
-                put("room_id", roomId)
-                put("track_ids", kotlinx.serialization.json.buildJsonArray {
-                    trackIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
-                })
+        val plan = castPlan()
+        CastPlanner.refusal(plan)?.let { throw NothingToCast(it) }
+        sendCast(roomId, plan)
+        return plan
+    }
+
+    /** While casting: start the room on queue entry [i] (a tapped queue row). */
+    suspend fun castFrom(i: Int): CastPlan {
+        val room = (_target.value as? PlayTarget.Room)?.roomId
+            ?: throw NothingToCast("not casting to a room")
+        val item = _queue.value.getOrNull(i) ?: throw NothingToCast("that queue entry is gone")
+        CastPlanner.refusal(item)?.let { throw NothingToCast(it) }
+        val plan = CastPlanner.plan(_queue.value, i, 0.0)
+        sendCast(room, plan)
+        return plan
+    }
+
+    private suspend fun sendCast(roomId: String, plan: CastPlan) {
+        api.post("/api/music/play-tracks", buildJsonObject {
+            put("room_id", roomId)
+            put("track_ids", kotlinx.serialization.json.buildJsonArray {
+                plan.trackIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
             })
-            exoPlayer.pause()
+            // A server from before start_sec ignores it and starts the
+            // track from the top; the track itself is still the right one.
+            if (plan.startSec > 0) put("start_sec", plan.startSec)
+        })
+        // Only once the room has taken it: a failed cast leaves the phone
+        // playing and the target where it was.
+        exoPlayer.pause()
+        // The phone's queue position follows the room's start, so the
+        // highlighted row is the one the room is on, and coming back to this
+        // device picks up from there.
+        if (plan.startIndex >= 0 && plan.startIndex != exoPlayer.currentMediaItemIndex &&
+            plan.startIndex < exoPlayer.mediaItemCount
+        ) {
+            exoPlayer.seekTo(plan.startIndex, plan.startSec * 1000L)
         }
         _target.value = PlayTarget.Room(roomId)
         startRemotePoll(roomId)

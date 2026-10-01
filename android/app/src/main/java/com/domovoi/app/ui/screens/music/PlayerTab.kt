@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -59,10 +60,12 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayTarget
+import com.domovoi.app.player.PlayerController
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
@@ -196,7 +199,10 @@ internal fun LazyListScope.playerTab(
             key = { playerQueueKey(it, queue[it]) },
             contentType = { "player-queue-row" },
         ) { i ->
-            PlayerQueueRow(i, queue[i], isCurrent = i == index, last = i == queue.lastIndex)
+            PlayerQueueRow(
+                i, queue[i],
+                isCurrent = i == index, last = i == queue.lastIndex, room = model.roomTarget?.roomId,
+            )
         }
     }
 }
@@ -367,6 +373,12 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                 tint = if (isRemote) Domovoi.colors.brand else Domovoi.colors.fgMuted,
             ) { castOpen = true }
             DropdownMenu(expanded = castOpen, onDismissRequest = { castOpen = false }) {
+                // What a cast would send, worked out as the menu opens (its
+                // content leaves composition when it closes). A queue with
+                // nothing a room can play (songs saved on this phone) gets
+                // its rooms greyed out and the reason, instead of a "casting"
+                // label over a silent room.
+                val refusal = remember { CastPlanner.refusal(app.player.castPlan()) }
                 DropdownMenuItem(
                     text = { Text("this device") },
                     onClick = {
@@ -378,15 +390,28 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                         }
                     },
                 )
+                if (refusal != null && rooms.isNotEmpty()) {
+                    Text(
+                        refusal,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                        modifier = Modifier
+                            .widthIn(max = 260.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
                 rooms.forEach { r ->
                     DropdownMenuItem(
                         text = { Text(r) },
+                        enabled = refusal == null,
                         onClick = {
                             castOpen = false
                             scope.launch {
                                 runCatching { app.player.castTo(r) }
-                                    .onSuccess { toast("casting to $r") }
-                                    .onFailure { toast("cast failed: ${it.message}") }
+                                    .onSuccess { plan ->
+                                        toast(plan?.let { CastPlanner.sentNote(it, r) } ?: "casting to $r")
+                                    }
+                                    .onFailure { toast(castFailure(it)) }
                             }
                         },
                     )
@@ -512,9 +537,17 @@ private fun PlayerQueueHeader(size: Int, canSave: Boolean, onSaveQueue: () -> Un
     }
 }
 
+/** A failed cast in words: a [PlayerController.NothingToCast] already says
+ *  why; anything else is the server or the network. */
+private fun castFailure(e: Throwable): String =
+    if (e is PlayerController.NothingToCast) e.message ?: "nothing here can play in a room"
+    else "cast failed: ${e.message}"
+
 @Composable
-private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boolean) {
+private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boolean, room: String?) {
     val app = LocalApp.current
+    val toast = LocalToast.current
+    val scope = rememberCoroutineScope()
     Row(
         Modifier
             .fillMaxWidth()
@@ -522,7 +555,19 @@ private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boo
                 if (isCurrent) Domovoi.colors.brandSoft else Color.Transparent,
                 RoundedCornerShape(6.dp),
             )
-            .clickable { app.player.jumpTo(i) }
+            .clickable {
+                // While casting, a tapped row starts the ROOM there; playing
+                // it on the phone would put two players on at once.
+                if (room != null) {
+                    scope.launch {
+                        runCatching { app.player.castFrom(i) }
+                            .onSuccess { toast("playing \"${item.title}\" in $room") }
+                            .onFailure { toast(castFailure(it)) }
+                    }
+                } else {
+                    app.player.jumpTo(i)
+                }
+            }
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -670,9 +670,14 @@ class CastTracksRequest(BaseModel):
     The browser music player owns the queue order (it's whatever the user
     built locally), so unlike ``PlayPlaylistRequest`` this ships the exact
     ``track_id`` list rather than a playlist id. Proxied to the
-    Domovoi server's ``/v1/admin/music/play-tracks``."""
+    Domovoi server's ``/v1/admin/music/play-tracks``.
+
+    The room starts on the first id: a client sends its CURRENT track first
+    (not the top of its queue), with ``start_sec`` = how far into it the
+    listener is, so the hand-off carries on where the listener was."""
     room_id: str
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
+    start_sec: float = Field(0.0, ge=0, le=86400)
 
 
 class PlayPlaylistRequest(BaseModel):
