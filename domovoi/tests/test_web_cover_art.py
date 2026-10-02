@@ -80,6 +80,30 @@ const logs = () => h.global('__logs');
 """
 
 
+# Every <img> any render produced, transient ones included: the tree a
+# scenario reads is only the LAST render, and a src that is in the DOM for a
+# single commit is still a request the browser makes.
+RECORD_IMGS = r"""
+globalThis.__imgs = [];
+const __createElement = React.createElement;
+React.createElement = (type, p, ...c) => {
+  if (type === 'img' && p) globalThis.__imgs.push({ src: p.src, opacity: (p.style || {}).opacity });
+  return __createElement(type, p, ...c);
+};
+"""
+
+# One CoverArt that stays mounted while its src changes (the bar, a room
+# card), beside a second one that has track 6's cover on its own.
+SWAP = r"""(() => function CoverSwap() {
+  const [src, setSrc] = React.useState('/api/music/library/7/cover');
+  return React.createElement('div', null,
+    React.createElement('button', { title: 'to-6', onClick: () => setSrc('/api/music/library/6/cover') }),
+    React.createElement('button', { title: 'to-8', onClick: () => setSrc('/api/music/library/8/cover') }),
+    React.createElement(CoverArt, { src, size: 44 }),
+    React.createElement(CoverArt, { src: '/api/music/library/6/cover', size: 72 }));
+})()"""
+
+
 def music(script: str, api: dict | None = None) -> dict:
     return {"files": MUSIC, "component": "MusicPage", "api": api or page_api(),
             "setup": QUIET, "script": HELPERS + script}
@@ -167,6 +191,37 @@ SCENARIOS = {
         "files": PLAYER, "component": "CoverTile", "setup": QUIET,
         "props": {"item": {"coverUrl": None, "seekable": False}, "size": 44},
         "script": HELPERS + "h.render(); return { imgs: imgs().length, covers: covers() };",
+    },
+    # A tile that stays mounted while its src changes — the bar, the Player
+    # tab or a room card moving to the next track. The new src starts over
+    # in the render that brings it: a known miss never reaches an <img>
+    # (no second request, no second 404 line on the console), and a new
+    # picture is never drawn at full opacity under the last one's "shown".
+    "swap_to_known_miss": {
+        "files": [MUSIC[0]], "component": SWAP, "setup": QUIET + RECORD_IMGS,
+        "script": HELPERS + r"""
+            h.render();
+            await load('/api/music/library/7/cover');      // the 44px tile shows track 7
+            await fail('/api/music/library/6/cover');      // the 72px tile: track 6 has none
+            h.global('__imgs').length = 0;
+            await h.click({ type: 'button', title: 'to-6' });
+            return { imgs6: h.global('__imgs').filter((i) => String(i.src).endsWith('/6/cover')).length,
+                     covers: covers(), logs: logs() };
+        """,
+    },
+    "swap_to_new_cover": {
+        "files": [MUSIC[0]], "component": SWAP, "setup": QUIET + RECORD_IMGS,
+        "script": HELPERS + r"""
+            h.render();
+            await load('/api/music/library/7/cover');
+            h.global('__imgs').length = 0;
+            await h.click({ type: 'button', title: 'to-8' });
+            const first = h.global('__imgs').find((i) => String(i.src).endsWith('/8/cover'));
+            const mid = covers().find((c) => c.size === 44);
+            await load('/api/music/library/8/cover');
+            return { firstOpacity: first ? first.opacity : null, mid: mid.state,
+                     after: covers().find((c) => c.size === 44).state };
+        """,
     },
 }
 
@@ -270,6 +325,24 @@ def test_player_tile_for_a_stream_asks_for_nothing(driven):
     assert c["icons"] == ["radio"] and c["bg"] == "var(--sunken)"
 
 
+def test_a_tile_moving_to_a_known_missing_cover_never_asks_for_it(driven):
+    r = driven["swap_to_known_miss"]
+    assert r["imgs6"] == 0                                 # not even for one commit
+    assert {c["size"]: c["state"] for c in r["covers"]} == {44: "none", 72: "none"}
+    assert r["logs"] == []
+
+
+def test_a_tile_moving_to_a_new_cover_starts_over_invisible(driven):
+    r = driven["swap_to_new_cover"]
+    assert r["firstOpacity"] == 0                          # not drawn under the last picture's "shown"
+    assert (r["mid"], r["after"]) == ("loading", "shown")
+
+
 def test_media_session_never_offers_a_known_missing_cover():
     src = (REPO_ROOT / "web/static/player.jsx").read_text(encoding="utf-8")
     assert "item.coverUrl && !coverMisses.has(item.coverUrl)" in src
+    # ...and declares no type: a library cover is whatever the file carries
+    # (JPEG, PNG, WebP), so a hard-coded image/jpeg would mislabel most PNGs.
+    block = src[src.index("const updateMediaSession"):]
+    block = block[:block.index("new window.MediaMetadata")]
+    assert "type:" not in block.split("const artwork", 1)[1]

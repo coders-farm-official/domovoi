@@ -80,6 +80,45 @@ def bare_flac() -> bytes:
     return b"fLaC" + b"\x80" + len(info).to_bytes(3, "big") + info
 
 
+def _ogg(packets: list[tuple[bytes, int]]) -> bytes:
+    """One logical Ogg stream, a packet per page (mutagen writes the CRCs)."""
+    from mutagen.ogg import OggPage
+
+    out = b""
+    for seq, (packet, granule) in enumerate(packets):
+        page = OggPage()
+        page.serial, page.sequence, page.position = 0x0D0E, seq, granule
+        page.first, page.last = seq == 0, seq == len(packets) - 1
+        page.packets = [packet]
+        out += page.write()
+    return out
+
+
+def bare_ogg(kind: str) -> bytes:
+    """An Opus or a Vorbis stream: identification header, an empty comment
+    header (and Vorbis' setup header), then one audio packet."""
+    if kind == "opus":
+        head = b"OpusHead" + bytes([1, 1]) + struct.pack("<HIhB", 312, 48000, 0, 0)
+        tags = b"OpusTags" + struct.pack("<I", 4) + b"test" + struct.pack("<I", 0)
+        return _ogg([(head, 0), (tags, 0), (b"\xf8\xff\xfe", 960)])
+    ident = b"\x01vorbis" + struct.pack("<IBIiii", 0, 1, 44100, 0, 128000, 0) + bytes([0xB8, 1])
+    comment = b"\x03vorbis" + struct.pack("<I", 4) + b"test" + struct.pack("<I", 0) + b"\x01"
+    return _ogg([(ident, 0), (comment, 0), (b"\x05vorbis" + b"\x00" * 8, 0), (b"\x00" * 4, 44100)])
+
+
+def tagged_ogg(path: Path, kind: str, comments: dict[str, list[str]]) -> Path:
+    from mutagen.oggopus import OggOpus
+    from mutagen.oggvorbis import OggVorbis
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bare_ogg(kind))
+    f = (OggOpus if kind == "opus" else OggVorbis)(str(path))
+    for field, values in comments.items():
+        f[field] = values
+    f.save()
+    return path
+
+
 def tagged_mp3(path: Path, pictures: list[tuple[int, str, bytes]]) -> Path:
     from mutagen.id3 import APIC, ID3
 
@@ -232,6 +271,37 @@ def test_flac_picture_block(library):
 
 
 @needs_mutagen
+@pytest.mark.parametrize("kind", ["opus", "vorbis"])
+def test_ogg_metadata_block_picture(library, kind):
+    """Ogg Opus / Vorbis carry the cover as a base64 FLAC picture block in
+    METADATA_BLOCK_PICTURE (the live library has .ogg files)."""
+    import base64
+
+    from mutagen.flac import Picture
+
+    back, front = Picture(), Picture()
+    back.type, back.mime, back.data = 4, "image/jpeg", BACK_JPEG
+    front.type, front.mime, front.data = 3, "image/png", PNG
+    blocks = [base64.b64encode(p.write()).decode("ascii") for p in (back, front)]
+    path = tagged_ogg(library.root / "Ogg" / f"01.{'opus' if kind == 'opus' else 'ogg'}", kind,
+                      {"metadata_block_picture": blocks})
+    r = get(library.add(path))
+    assert (r.status_code, r.headers["content-type"], r.content) == (200, "image/png", PNG)
+
+
+@needs_mutagen
+def test_ogg_legacy_coverart_field(library):
+    """The older bare-base64 COVERART comment, still written by some taggers;
+    an unreadable METADATA_BLOCK_PICTURE beside it is skipped, not fatal."""
+    import base64
+
+    path = tagged_ogg(library.root / "Ogg" / "02.ogg", "vorbis",
+                      {"metadata_block_picture": ["!!not base64!!"], "coverart": [base64.b64encode(JPEG).decode()]})
+    r = get(library.add(path))
+    assert (r.status_code, r.headers["content-type"], r.content) == (200, "image/jpeg", JPEG)
+
+
+@needs_mutagen
 def test_embedded_art_wins_over_the_folder_image(library):
     mp3 = tagged_mp3(library.root / "Album" / "t.mp3", [(3, "image/jpeg", JPEG)])
     (mp3.parent / "cover.png").write_bytes(PNG)
@@ -301,6 +371,33 @@ def test_a_folder_image_that_is_not_an_image_is_skipped(library):
     (album / "folder.jpg").write_bytes(JPEG)
     r = get(library.add(album / "t.mp3"))
     assert (r.status_code, r.content) == (200, JPEG)
+
+
+def test_a_folder_image_that_is_not_a_regular_file_is_never_opened(library, monkeypatch):
+    """A cover.jpg that is a FIFO (or a device) would block the worker
+    thread on open() forever; only regular files are read. Faked so it runs
+    where mkfifo doesn't exist."""
+    album = library.root / "Album"
+    album.mkdir()
+    (album / "t.mp3").write_bytes(silent_mp3())
+    (album / "cover.jpg").write_bytes(JPEG)              # stands in for the FIFO
+    (album / "folder.png").write_bytes(PNG)
+    real_stat, real_open = Path.stat, Path.open
+
+    def stat(self, *a, **kw):
+        st = real_stat(self, *a, **kw)
+        if self.name == "cover.jpg":
+            return os.stat_result((0o010644, *tuple(st)[1:6], 4096, *tuple(st)[7:10]))
+        return st
+
+    def open_(self, *a, **kw):
+        assert self.name != "cover.jpg", "opened a FIFO"
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "open", open_)
+    found = music_api._folder_image(album / "t.mp3", library.root.resolve())
+    assert found is not None and found[0].name == "folder.png"
 
 
 # ── no art ───────────────────────────────────────────────────────────

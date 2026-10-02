@@ -288,10 +288,17 @@ const libraryCoverUrl = (trackId) => (trackId == null ? null
   : `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`);
 const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
                     background = 'var(--sunken)', iconColor = 'var(--fg-faint)' }) => {
-  const want = !!src && !coverMisses.has(src);
-  // 'loading' (the <img> is in, still invisible) · 'shown' · 'none'
-  const [state, setState] = React.useState(want ? 'loading' : 'none');
-  React.useEffect(() => { setState(src && !coverMisses.has(src) ? 'loading' : 'none'); }, [src]);
+  // 'loading' (the <img> is in, still invisible) · 'shown' · 'none', held
+  // with the src it belongs to. A tile that stays mounted while its src
+  // changes (the player bar, a room card moving to the next track) starts
+  // over in the very render that brings the new src — not one commit later
+  // from an effect, which drew the new URL under the last picture's 'shown'
+  // and put a known-missing cover into an <img> (a second request and a
+  // second 404 line on the console).
+  const fresh = src && !coverMisses.has(src) ? 'loading' : 'none';
+  const [held, setHeld] = React.useState({ src, state: fresh });
+  if (held.src !== src) setHeld({ src, state: fresh });
+  const state = held.src === src ? held.state : fresh;
   const shown = state === 'shown';
   return (
     <span data-cover={state}
@@ -302,8 +309,8 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
       {!shown && icon && <Icon name={icon} size={Math.max(10, Math.round(size * 0.4))}/>}
       {state !== 'none' && (
         <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
-             onLoad={() => setState('shown')}
-             onError={() => { coverMisses.add(src); setState('none'); }}
+             onLoad={() => setHeld({ src, state: 'shown' })}
+             onError={() => { coverMisses.add(src); setHeld({ src, state: 'none' }); }}
              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                       objectFit: 'cover', opacity: shown ? 1 : 0 }}/>
       )}
