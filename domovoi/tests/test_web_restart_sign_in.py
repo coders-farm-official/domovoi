@@ -51,7 +51,11 @@ enough times, optionally answering 401 for a while on the way back up:
   "wrong password", and — for a server that is down before the sign-in —
   words that say so, never "Failed to fetch";
 * one sign-in per press, Enter or no Enter; a prompt that comes back is a
-  fresh form;
+  fresh form, and one that opens while a sign-in is still finishing is left
+  standing until the restart takes the server away;
+* the button does not offer the restart again before the card's own
+  re-read of the new version lands;
+* a 2xx sign-in answer that carries no session stays in the modal;
 * the Plugins page's "restart to finish the upgrade" is the same restart.
 
 No DB, never ``requires_db``; needs ``node`` and fails without it.
@@ -149,6 +153,8 @@ const __route = (method, path, c, body) => {
   if (method === 'POST' && bare === '/api/auth/login') {
     let pw = null;
     try { pw = JSON.parse(body || '{}').password; } catch {}
+    // A 2xx that hands over no session (a broken proxy, an older server).
+    if (pw === '__no_token__') return __answer(200, { ok: true });
     if (pw !== __PASSWORD) return __answer(401, { detail: 'wrong password' });
     srv.n += 1;
     const token = `session-${srv.n}`;
@@ -228,7 +234,17 @@ RECORD = ("(() => { let last = Auth.modalOpen; const rec = () => { if (Auth.moda
           " last = Auth.modalOpen; window.__events.push({ open: last, sent: window.__fetches.length }); } };"
           " (Auth.subscribeModal || Auth.subscribe).call(Auth, rec); })()")
 
-VERSION = ("(window.__Auth = Auth, " + RECORD + ", function VersionWithModal() { return React.createElement("
+# Counts how often the modal HOST (<AuthModalHost/>, which subscribes after
+# RECORD) is told about a change on the modal channel. The harness renders
+# the whole tree on every step, so a host that never heard the early close
+# would still look closed here; in a browser it stays on screen until the
+# household-token fetch returns. This is what pins the host's channel.
+HOST_TAP = ("(() => { const orig = Auth.subscribeModal; window.__hostTold = 0; if (!orig) return;"
+            " Auth.subscribeModal = function (fn) { return orig.call(Auth, () => { window.__hostTold += 1; fn(); }); };"
+            " })()")
+
+VERSION = ("(window.__Auth = Auth, " + RECORD + ", " + HOST_TAP
+           + ", function VersionWithModal() { return React.createElement("
            "React.Fragment, null, React.createElement(VersionSection), React.createElement(AuthModalHost)); })")
 
 PLUGIN_CARD = ("(window.__Auth = Auth, " + RECORD + ", function PluginCardWithModal() {"
@@ -247,6 +263,14 @@ PROBE = ("(window.__Auth = Auth, " + RECORD + ", function ProbeWithModal() {"
          " const line = o.loading ? 'loading' : (o.error ? `error ${o.error.status}` : (o.data ? o.data.who : 'empty'));"
          " return React.createElement(React.Fragment, null,"
          "  React.createElement('div', { className: 'probe' }, line), React.createElement(AuthModalHost)); })")
+
+# The same read through useApiList.
+PROBE_LIST = ("(window.__Auth = Auth, " + RECORD + ", function ProbeListWithModal() {"
+              " const o = useApiList('/api/needs-bearer', { pickItems: (x) => (x ? [x] : []) });"
+              " const line = o.loading ? 'loading' : (o.error ? `error ${o.error.status}`"
+              " : (o.items.length ? o.items[0].who : 'empty'));"
+              " return React.createElement(React.Fragment, null,"
+              "  React.createElement('div', { className: 'probe' }, line), React.createElement(AuthModalHost)); })")
 
 # What every scenario looks at.
 HELPERS = r"""
@@ -313,9 +337,11 @@ await h.type(password, __PW);
 // The household-token fetch that follows a sign-in is held: the server has
 // accepted the password, the rest of the sign-in has not happened yet.
 w.__hold['GET /api/auth/device-token'] = 1;
+const toldBefore = w.__hostTold;
 const signingIn = press(modalButton('log in')); await step();
 out.signedIn = { modal: A.modalOpen, onScreen: modalOnScreen(), err: modalErr(), bearer: A.isLoggedIn(),
                  restarts: restarts() };
+out.hostToldAtClose = w.__hostTold - toldBefore;
 w.__release(); await signingIn; await step();
 // The replay went out: the server took it and is going away.
 await pumpUntil(() => underwayNote());
@@ -403,6 +429,82 @@ SCENARIOS["stale_refusal"] = scenario(
              reads: w.__fetches.filter((f) => f.path === '/api/needs-bearer').map((f) => f.who) };
     """.replace("__PW", json.dumps(PASSWORD)),
     component=PROBE,
+)
+# The same, read through useApiList.
+SCENARIOS["stale_refusal_list"] = dict(SCENARIOS["stale_refusal"], component=PROBE_LIST)
+
+# A prompt opens AGAIN while the sign-in is still finishing (the household
+# token fetch is out): it is a new prompt, and neither the sign-in's tail nor
+# the first form's close takes it down. The restart, once the server takes
+# it, does — nothing can check a password on a server on its way down.
+SCENARIOS["prompt_reopened_during_sign_in"] = scenario(
+    r"""
+    await start();
+    const out = {};
+    const flow = press(restartButton); await step();
+    await h.type(password, __PW);
+    w.__hold['GET /api/auth/device-token'] = 1;
+    w.__hold['POST /api/config/version/restart'] = 1;
+    const signingIn = press(modalButton('log in')); await step();
+    const seq1 = A.modalSeq;
+    out.signedIn = { modal: A.modalOpen };
+    A.requestLogin(); await step();
+    out.reopened = { modal: A.modalOpen, seqMoved: A.modalSeq !== seq1, pw: pwValue(), err: modalErr() };
+    w.__release(); await signingIn; await step();
+    out.afterSignIn = { modal: A.modalOpen, onScreen: modalOnScreen(), pw: pwValue(),
+                        heldRestart: w.__held.map((x) => x.key) };
+    w.__release(); await step();
+    await pumpUntil(() => underwayNote());
+    out.underway = { modal: A.modalOpen, onScreen: modalOnScreen(), note: underwayNote() };
+    letBack();
+    const result = await flow; await step();
+    out.after = { result, modal: A.modalOpen, toasts: toasts() };
+    return out;
+    """.replace("__PW", json.dumps(PASSWORD)),
+)
+
+# Once the server is back, the poll's read and then the card's own re-read
+# answer; the second is held. Until it lands the button must not offer the
+# restart again on the version the card read before it.
+SCENARIOS["no_restart_offer_before_the_re_read"] = scenario(
+    r"""
+    await start();
+    const flow = press(restartButton); await step();
+    await h.type(password, __PW);
+    await press(modalButton('log in')); await step();
+    await pumpUntil(() => underwayNote());
+    w.__hold['GET /api/config/version'] = 2;
+    letBack();
+    await pumpUntil(() => w.__held.length === 1);
+    w.__release(); await step();
+    await pumpUntil(() => w.__held.length === 1);
+    const during = { buttons: pageButtons(), held: w.__held.map((x) => x.key) };
+    w.__release();
+    const result = await flow; await step();
+    return { during, after: { result, buttons: pageButtons(), toasts: toasts() } };
+    """.replace("__PW", json.dumps(PASSWORD)),
+)
+
+# A 2xx sign-in answer that carries no session signed nobody in.
+SCENARIOS["answer_without_a_session"] = scenario(
+    r"""
+    await start();
+    A.openModal(); await step();
+    await h.type(password, '__no_token__');
+    await press(modalButton('log in')); await step();
+    return { modal: A.modalOpen, onScreen: modalOnScreen(), err: modalErr(), bearer: A.isLoggedIn() };
+    """,
+)
+
+# What Auth.login() rejects with when the server is not there.
+SCENARIOS["login_unreachable"] = scenario(
+    r"""
+    await start();
+    w.__srv.phase = 'down';
+    let e = null;
+    try { await A.login(__PW); } catch (x) { e = x; }
+    return { status: e && e.status, unreachable: !!(e && e.unreachable), bearer: A.isLoggedIn() };
+    """.replace("__PW", json.dumps(PASSWORD)),
 )
 
 # A genuine failure: the wrong password, then the right one.
@@ -556,6 +658,8 @@ def test_the_modal_comes_down_as_soon_as_the_password_is_accepted(driven, name) 
     to stay up until all of that, and the replay it launched, had run."""
     o = driven[name]["signedIn"]
     assert o == {"modal": False, "onScreen": False, "err": None, "bearer": True, "restarts": ["cookie"]}
+    # ...and the modal host itself was told, so a browser takes it down now.
+    assert driven[name]["hostToldAtClose"] >= 1
     events = driven[name]["events"]
     # Opened once, closed once — the close before the replay was sent.
     assert [e["open"] for e in events] == [True, False]
@@ -624,8 +728,9 @@ def test_a_sign_in_tried_while_the_server_restarts_says_so(driven) -> None:
     assert RESTARTED in o["after"]["toasts"]
 
 
-def test_a_read_refused_for_the_credential_a_sign_in_replaced_is_read_again(driven) -> None:
-    o = driven["stale_refusal"]
+@pytest.mark.parametrize("name", ["stale_refusal", "stale_refusal_list"])
+def test_a_read_refused_for_the_credential_a_sign_in_replaced_is_read_again(driven, name) -> None:
+    o = driven[name]
     assert o["before"]["modal"] is False
     assert o["signedIn"]["modal"] is False
     # Refused for the cookie it carried, AFTER the sign-in: no prompt, and
@@ -634,6 +739,47 @@ def test_a_read_refused_for_the_credential_a_sign_in_replaced_is_read_again(driv
     assert o["after"]["events"] == []
     assert o["after"]["view"] == "bearer"
     assert o["reads"] == ["cookie", "bearer"]
+
+
+def test_a_prompt_opened_again_during_the_sign_in_is_left_alone(driven) -> None:
+    """The first form came down when the password was accepted; a prompt
+    that opens while the household-token fetch is still out is a NEW one
+    (a fresh form), and neither the end of that sign-in nor the first
+    form's own close takes it down."""
+    o = driven["prompt_reopened_during_sign_in"]
+    assert o["signedIn"] == {"modal": False}
+    assert o["reopened"] == {"modal": True, "seqMoved": True, "pw": "", "err": None}
+    assert o["afterSignIn"]["modal"] is True and o["afterSignIn"]["onScreen"] is True
+    assert o["afterSignIn"]["pw"] == ""
+    # The replayed restart went out under the sign-in that finished.
+    assert o["afterSignIn"]["heldRestart"] == ["POST /api/config/version/restart"]
+
+
+def test_a_prompt_still_standing_comes_down_when_the_restart_is_under_way(driven) -> None:
+    o = driven["prompt_reopened_during_sign_in"]
+    assert o["underway"] == {"modal": False, "onScreen": False, "note": True}
+    assert o["after"]["result"] is True and o["after"]["modal"] is False
+    assert RESTARTED in o["after"]["toasts"]
+
+
+def test_the_button_does_not_offer_the_restart_again_before_the_re_read(driven) -> None:
+    o = driven["no_restart_offer_before_the_re_read"]
+    assert o["during"]["held"] == ["GET /api/config/version"]
+    assert "Restart to apply changes" not in o["during"]["buttons"], o["during"]["buttons"]
+    assert "Updating… [disabled]" in o["during"]["buttons"]
+    assert o["after"]["result"] is True
+    assert "Check for updates" in o["after"]["buttons"]
+    assert RESTARTED in o["after"]["toasts"]
+
+
+def test_a_sign_in_answer_without_a_session_stays_in_the_modal(driven) -> None:
+    o = driven["answer_without_a_session"]
+    assert o == {"modal": True, "onScreen": True, "bearer": False,
+                 "err": "the server answered without a session — try again"}
+
+
+def test_a_sign_in_to_a_server_that_is_not_there_rejects_as_unreachable(driven) -> None:
+    assert driven["login_unreachable"] == {"status": 0, "unreachable": True, "bearer": False}
 
 
 # ─── a real failure still shows in the modal ─────────────────────────────
