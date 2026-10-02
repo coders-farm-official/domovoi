@@ -593,8 +593,9 @@ class MediaLibrary:
 
 
 # Core libraries, resolved from settings. (id, label, icon, settings-attr,
-# editable, importable, reindex_kind, doc_editing). cover_art_dir is
-# deliberately absent — it is an internal cache, not a Files library.
+# editable, importable, reindex_kind, doc_editing). The derived caches
+# (video posters, image thumbnails) are deliberately absent — they are
+# internal, not Files libraries.
 CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
     ("core:music", "Music", "music", "music_dir", True, True, "music", False),
     ("core:audiobooks", "Audiobooks", "book-open", "audiobooks_dir", True, True, "audiobooks", False),

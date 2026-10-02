@@ -518,8 +518,8 @@ to a Domovoi server, re-flashing invalidates its pairing token. See
    reminders, library metadata, play history, plugin data, admin
    credentials. Lives in the Docker volume `domovoi-pgdata`.
 2. **`~/.domovoi/` on the server** — Piper voices, chime sounds, trained
-   wake-word models and their training clips, cover art, podcasts and
-   audiobooks.
+   wake-word models and their training clips, podcasts and audiobooks.
+   (Cover art isn't here: it is read from the music files themselves.)
 3. **`domovoi/.env`** — every setting you changed from the dashboard.
 
 Set up a backup of all three *now*, while the system is small and you

@@ -16,15 +16,17 @@ at ``/api/acquisitions``.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
+import stat
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -1032,9 +1034,9 @@ async def enrich(request: Request):
 # ─── Browser music player (client-side playback) ────────────────────────────
 # These back the dashboard's in-browser Web-Audio player. Unlike the action
 # endpoints above (which drive server-side MPD in a room), these stream the
-# raw library file / its embedded cover art to the
+# raw library file / its cover art to the
 # browser so it can play locally. All served paths are containment-checked
-# inside MUSIC_DIR / COVER_ART_DIR. No play-count or intents_log writes —
+# inside MUSIC_DIR. No play-count or intents_log writes —
 # browser playback history is deliberately ephemeral (client-side only).
 
 # Content types for the audio Range endpoint, keyed by lowercase suffix.
@@ -1204,153 +1206,307 @@ async def _iter_file(path: Path, start: int, end: int):
             yield chunk
 
 
-# Embedded-art extraction. mutagen ships in the ``[real-clients]`` extra; we
-# import it lazily so the web process boots even without it (the endpoint
-# then just reports "no art" and the frontend renders its gradient tile).
-_COVER_MIME_EXT = {
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-}
+# ─── Cover art, read from the file on request ───────────────────────────────
+# Owner decision 2026-10-02: a library track's cover comes from the file
+# itself — the picture built into it, else an image in its album folder —
+# read whenever a request isn't answered by the client's own cache. No online
+# lookup, no extraction job, no table, no stored copies. (Until then this
+# route kept id-keyed copies and "no art" sentinel files under a cover-art
+# directory: a stale sentinel hid art forever, and a track id reused after a
+# library rebuild would have been served the old track's picture.)
+#
+# What keeps that cheap is HTTP caching rather than a cache of our own. The
+# response carries a strong ETag built from the audio file's path, mtime and
+# size plus the album-folder image's, so re-tagging the file or swapping its
+# cover.jpg changes it, and Cache-Control lets the client keep the picture
+# for a day. A request whose If-None-Match still matches is a 304 answered
+# from a stat and one directory listing, before any tag is parsed.
+
+# A picture bigger than this is ignored (an embedded print scan, a poster
+# someone dropped in the folder): the dashboard draws covers at 40-220 px,
+# and embedded bytes sit in memory while they are sent.
+COVER_MAX_BYTES = 8 * 1024 * 1024
+# Album-folder image names, in order of preference, matched in any case.
+_COVER_FOLDER_STEMS = ("cover", "folder", "front", "album")
+_COVER_FOLDER_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+# ID3 / FLAC / ASF picture types: 3 is "Cover (front)", 0 is "Other" — what
+# a tagger that doesn't ask writes for the cover. Anything else (back cover,
+# leaflet, artist photo, a 32x32 file icon) is only a last resort.
+_FRONT_COVER = 3
+_OTHER_PICTURE = 0
+_COVER_CACHE_CONTROL = "public, max-age=86400"
+# "No cover" is cacheable briefly, so a re-render or a page flip back doesn't
+# ask the disk again, while a cover.jpg dropped into the folder still shows
+# up within minutes.
+_COVER_MISS_CACHE_CONTROL = "public, max-age=300"
+# Part of every ETag: bump it when what this route would serve for the same
+# files changes, so clients holding an old ETag fetch again.
+_COVER_ETAG_VERSION = b"cover-v1"
 
 
-def _extract_embedded_cover(path: Path) -> tuple[bytes, str] | None:
-    """Return ``(image_bytes, mime)`` for a file's embedded cover art, or
-    None when there's none (or mutagen isn't installed). Handles the common
-    containers: ID3 APIC (mp3), FLAC pictures, MP4/M4A ``covr``, and
-    Vorbis ``metadata_block_picture`` (ogg/opus)."""
-    try:
-        import mutagen
-    except Exception as e:  # pragma: no cover - env without mutagen
-        log.debug("mutagen not importable for cover extraction: %s", e)
-        return None
-
-    try:
-        # ID3 (mp3) — APIC frames.
-        from mutagen.id3 import ID3
-
-        try:
-            tags = ID3(str(path))
-            apics = tags.getall("APIC")
-            if apics:
-                pic = apics[0]
-                return pic.data, (pic.mime or "image/jpeg")
-        except Exception:
-            pass
-
-        f = mutagen.File(str(path))
-        if f is None:
-            return None
-
-        # FLAC (and anything exposing .pictures).
-        pics = getattr(f, "pictures", None)
-        if pics:
-            pic = pics[0]
-            return bytes(pic.data), (pic.mime or "image/jpeg")
-
-        tags = getattr(f, "tags", None)
-        if tags is None:
-            return None
-
-        # MP4 / M4A cover atoms.
-        covr = None
-        try:
-            covr = tags.get("covr")
-        except Exception:
-            covr = None
-        if covr:
-            data = bytes(covr[0])
-            fmt = getattr(covr[0], "imageformat", None)
-            # 14 == PNG per mutagen's MP4Cover.FORMAT_PNG, else JPEG.
-            mime = "image/png" if fmt == 14 else "image/jpeg"
-            return data, mime
-
-        # Vorbis comments (ogg/opus): metadata_block_picture (base64 FLAC pic).
-        import base64
-
-        from mutagen.flac import Picture
-
-        mbp = None
-        try:
-            mbp = tags.get("metadata_block_picture")
-        except Exception:
-            mbp = None
-        if mbp:
-            raw = mbp[0] if isinstance(mbp, list) else mbp
-            try:
-                pic = Picture(base64.b64decode(raw))
-                return bytes(pic.data), (pic.mime or "image/jpeg")
-            except Exception:
-                return None
-    except Exception as e:
-        log.debug("cover extraction failed for %s: %s", path, e)
-        return None
+def _sniff_image_type(head: bytes) -> str | None:
+    """The content type of an image from its first bytes, or None when it
+    isn't a raster image a browser and the phone can both draw. The bytes
+    decide, never a name: tag MIME strings are free text ("image/jpg",
+    "JPG", "", or "-->" for a link) and a folder's cover.jpg can hold
+    anything — and this route must never answer with SVG or HTML."""
+    if head[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
     return None
 
 
-@router.get("/library/{track_id}/cover")
-async def track_cover(track_id: int):
-    """Serve a library track's embedded album art, extracted once and cached
-    under COVER_ART_DIR (keyed by track id). Returns 404 when the file has
-    no embedded art — the browser player then renders its emoji/color
-    gradient tile fallback. A ``<track_id>.none`` sentinel records the
-    negative result so artless files aren't re-probed each request."""
-    from domovoi.config import settings as core_settings
+def _tag_values(tags: Any, key: str) -> list:
+    """``tags[key]`` as a list for the dict-like tag types (MP4, Vorbis,
+    ASF), or [] — a key a format rejects outright is just absent."""
+    try:
+        values = tags.get(key)
+    except Exception:
+        return []
+    if values is None:
+        return []
+    return list(values) if isinstance(values, (list, tuple)) else [values]
 
-    cover_dir = Path(core_settings.cover_art_dir).expanduser()
-    # Serve a previously-extracted image if present.
-    for ext in (".jpg", ".png", ".webp", ".gif"):
-        cached = cover_dir / f"{track_id}{ext}"
-        if cached.is_file():
-            data = cached.read_bytes()
-            return Response(
-                content=data,
-                media_type=_ext_to_mime(ext),
-                headers={"Cache-Control": "public, max-age=604800"},
-            )
-    if (cover_dir / f"{track_id}.none").is_file():
-        raise HTTPException(status_code=404, detail="no embedded cover art")
 
-    # Not cached yet — resolve the source file (containment-checked) and
-    # probe it.
-    target = await _library_file_path(track_id)
-    extracted = _extract_embedded_cover(target)
+def _asf_picture(raw: bytes) -> tuple[int | None, bytes] | None:
+    """Unpack a WMA ``WM/Picture`` value: picture type (1 byte), data length
+    (uint32 LE), MIME type and description (each UTF-16LE, NUL-terminated),
+    then the image bytes."""
+    if len(raw) < 5:
+        return None
+    ptype = raw[0]
+    size = int.from_bytes(raw[1:5], "little")
+    pos = 5
+    for _ in range(2):  # skip the MIME type, then the description
+        while pos + 1 < len(raw) and raw[pos:pos + 2] != b"\x00\x00":
+            pos += 2
+        pos += 2
+    data = raw[pos:pos + size]
+    return (ptype, data) if size and len(data) == size else None
+
+
+def _embedded_pictures(path: Path) -> list[tuple[int | None, bytes]]:
+    """Every picture mutagen finds in ``path``, as ``(picture type, bytes)``
+    in file order. The type is None where the container has no such notion
+    (MP4 ``covr``, a legacy Vorbis ``COVERART``). Empty when the file has
+    none, won't parse, or mutagen isn't installed — it ships in the
+    ``[real-clients]`` extra, and the album-folder image still works
+    without it."""
+    try:
+        import mutagen
+    except ImportError:  # pragma: no cover - env without mutagen
+        return []
 
     try:
-        cover_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        log.warning("could not create cover_art_dir %s: %s", cover_dir, e)
-
-    if extracted is None:
-        # Record the negative so we don't re-probe on every request.
+        audio = mutagen.File(str(path))
+    except Exception:
+        audio = None
+    tags = getattr(audio, "tags", None)
+    if tags is None:
+        # A file mutagen couldn't identify, or a format whose class carries
+        # no tags of its own (raw ADTS .aac), can still start with ID3.
         try:
-            (cover_dir / f"{track_id}.none").write_bytes(b"")
-        except OSError:
-            pass
-        raise HTTPException(status_code=404, detail="no embedded cover art")
+            from mutagen.id3 import ID3
 
-    data, mime = extracted
-    ext = _COVER_MIME_EXT.get(mime.lower(), ".jpg")
+            tags = ID3(str(path))
+        except Exception:
+            tags = None
+
+    pics: list[tuple[int | None, bytes]] = []
+    # FLAC metadata-block pictures.
+    for pic in getattr(audio, "pictures", None) or ():
+        pics.append((pic.type, bytes(pic.data)))
+    if tags is None:
+        return pics
+    if hasattr(tags, "getall"):
+        # ID3 (mp3, wav, aiff). mutagen upgrades a v2.2 PIC frame to APIC
+        # when it loads the tag.
+        for frame in tags.getall("APIC"):
+            pics.append((frame.type, bytes(frame.data)))
+        return pics
+    # MP4 / M4A cover atoms.
+    for cover in _tag_values(tags, "covr"):
+        pics.append((None, bytes(cover)))
+    # WMA.
+    for attr in _tag_values(tags, "WM/Picture"):
+        unpacked = _asf_picture(bytes(getattr(attr, "value", b"") or b""))
+        if unpacked:
+            pics.append(unpacked)
+    # Vorbis comments (ogg, opus): base64 FLAC picture blocks, then the
+    # older bare-base64 COVERART field.
+    import base64
+    import binascii
+
+    from mutagen.flac import Picture
+
+    for raw in _tag_values(tags, "metadata_block_picture"):
+        try:
+            pic = Picture(base64.b64decode(raw))
+        except (binascii.Error, ValueError, TypeError, mutagen.MutagenError):
+            continue
+        pics.append((pic.type, bytes(pic.data)))
+    for raw in _tag_values(tags, "coverart"):
+        try:
+            pics.append((None, base64.b64decode(raw)))
+        except (binascii.Error, ValueError, TypeError):
+            continue
+    return pics
+
+
+def _read_embedded_cover(path: Path) -> tuple[bytes, str] | None:
+    """The picture built into the file as ``(bytes, content type)``: its
+    front cover when it marks one, else an untyped or "Other" picture, else
+    whatever it has, in tag order within each; pictures over
+    COVER_MAX_BYTES or that aren't a drawable image don't count. Blocking —
+    run it in a worker thread. Only the chosen picture's bytes outlive the
+    call; the parsed tags are dropped with it."""
+    usable: list[tuple[int | None, bytes, str]] = []
     try:
-        (cover_dir / f"{track_id}{ext}").write_bytes(data)
-    except OSError as e:
-        log.debug("could not cache cover for track %s: %s", track_id, e)
-    return Response(
-        content=data,
-        media_type=_ext_to_mime(ext),
-        headers={"Cache-Control": "public, max-age=604800"},
+        pictures = _embedded_pictures(path)
+    except Exception as e:  # a tag mutagen chokes on halfway through
+        log.debug("cover: could not read embedded pictures from %s: %s", path, e)
+        return None
+    for ptype, data in pictures:
+        if not data or len(data) > COVER_MAX_BYTES:
+            continue
+        mime = _sniff_image_type(data[:16])
+        if mime is not None:
+            usable.append((ptype, data, mime))
+    if not usable:
+        return None
+
+    def rank(u: tuple[int | None, bytes, str]) -> int:
+        return 0 if u[0] == _FRONT_COVER else 1 if u[0] in (None, _OTHER_PICTURE) else 2
+
+    _, data, mime = min(usable, key=rank)  # min keeps the first of equals
+    return data, mime
+
+
+def _folder_image(audio: Path, music_root: Path) -> tuple[Path, os.stat_result, str] | None:
+    """The album-folder image for ``audio`` as ``(path, stat, content
+    type)``: a file in the track's own folder named cover / folder / front /
+    album with a .jpg / .jpeg / .png / .webp extension (any case), taken in
+    that order of preference. It must resolve inside MUSIC_DIR — a cover.jpg
+    symlinked out of the library is not followed — and be a regular,
+    non-empty file no bigger than COVER_MAX_BYTES whose first bytes are an
+    image. Blocking — run it in a worker thread."""
+    found: list[tuple[tuple[int, int, str], str]] = []
+    try:
+        with os.scandir(audio.parent) as entries:
+            for entry in entries:
+                stem, ext = os.path.splitext(entry.name)
+                stem, ext = stem.lower(), ext.lower()
+                if stem in _COVER_FOLDER_STEMS and ext in _COVER_FOLDER_EXTS:
+                    rank = (_COVER_FOLDER_STEMS.index(stem), _COVER_FOLDER_EXTS.index(ext), entry.name)
+                    found.append((rank, entry.path))
+    except OSError:
+        return None
+    for _, candidate in sorted(found):
+        resolved = Path(candidate).resolve(strict=False)
+        try:
+            resolved.relative_to(music_root)
+            st = resolved.stat()
+        except (ValueError, OSError):
+            continue
+        if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= COVER_MAX_BYTES:
+            continue
+        try:
+            with resolved.open("rb") as f:
+                mime = _sniff_image_type(f.read(16))
+        except OSError:
+            continue
+        if mime is not None:
+            return resolved, st, mime
+    return None
+
+
+def _probe_cover(
+    audio: Path, music_root: Path
+) -> tuple[str, tuple[Path, os.stat_result, str] | None] | None:
+    """``(ETag, folder image or None)`` for a track — everything a
+    conditional request needs, from stats and one directory listing, no tag
+    parsing. None when the audio file vanished. Blocking — run it in a
+    worker thread."""
+    try:
+        st = audio.stat()
+    except OSError:
+        return None
+    folder = _folder_image(audio, music_root)
+    h = hashlib.sha256(_COVER_ETAG_VERSION)
+    h.update(b"\0" + os.fsencode(str(audio)) + b"\0%d\0%d" % (st.st_mtime_ns, st.st_size))
+    if folder is not None:
+        fpath, fst, _ = folder
+        h.update(b"\0" + os.fsencode(str(fpath)) + b"\0%d\0%d" % (fst.st_mtime_ns, fst.st_size))
+    return f'"{h.hexdigest()[:32]}"', folder
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 If-None-Match: weak comparison against any listed tag."""
+    if not if_none_match:
+        return False
+    for tag in if_none_match.split(","):
+        tag = tag.strip()
+        if tag == "*" or (tag[2:] if tag.startswith("W/") else tag) == etag:
+            return True
+    return False
+
+
+def _no_cover() -> JSONResponse:
+    return JSONResponse(
+        {"detail": "no cover art"},
+        status_code=404,
+        headers={"Cache-Control": _COVER_MISS_CACHE_CONTROL},
     )
 
 
-def _ext_to_mime(ext: str) -> str:
-    return {
-        ".jpg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }.get(ext, "image/jpeg")
+@router.get("/library/{track_id}/cover")
+async def track_cover(track_id: int, request: Request):
+    """A library track's cover art, read from the file on request: the
+    picture built into it (ID3 APIC — the front cover when it marks one —
+    MP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or
+    ``COVERART``, WMA ``WM/Picture``), else the first image in the track's
+    own folder named cover / folder / front / album (.jpg / .jpeg / .png /
+    .webp, any case). Served as-is with its real content type, a strong
+    ``ETag`` (the audio file's path, mtime and size, plus the folder
+    image's) and ``Cache-Control`` so clients keep it; ``304`` when
+    ``If-None-Match`` still matches; ``404`` when there is none (or only
+    pictures over 8 MiB).
+
+    Open, like the library listing it decorates: an ``<img>`` tag and the
+    phone's lock screen can't send a credential. The id resolves the path
+    from the database, containment-checked inside MUSIC_DIR (400 outside
+    it, as for ``/audio``); nothing is stored."""
+    import anyio
+
+    from domovoi.config import settings as core_settings
+
+    target = await _library_file_path(track_id)
+    music_root = Path(core_settings.music_dir).expanduser().resolve(strict=False)
+    probe = await anyio.to_thread.run_sync(_probe_cover, target, music_root)
+    if probe is None:
+        return _no_cover()
+    etag, folder = probe
+    headers = {"ETag": etag, "Cache-Control": _COVER_CACHE_CONTROL}
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+
+    embedded = await anyio.to_thread.run_sync(_read_embedded_cover, target)
+    if embedded is not None:
+        data, mime = embedded
+        return Response(content=data, media_type=mime, headers=headers)
+    if folder is not None:
+        path, fst, mime = folder
+        return StreamingResponse(
+            _iter_file(path, 0, fst.st_size - 1),
+            media_type=mime,
+            headers={**headers, "Content-Length": str(fst.st_size)},
+        )
+    return _no_cover()
 
 
 @router.post("/play-tracks", dependencies=DEVICE)
