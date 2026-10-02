@@ -162,7 +162,12 @@ const createRuntime = ({ refs = false } = {}) => {
         out.push(leaf); parentOf.set(leaf, parentEl);
         return;
       }
-      const key = `${pathKey}/${name}`;
+      // A `key` is part of the instance's identity, as in React: a new key
+      // at the same place is a new instance with fresh state (the login
+      // modal is keyed on each opening so a prompt that comes back is a
+      // fresh form).
+      const ownKey = node.props && node.props.key != null ? `#${node.props.key}` : '';
+      const key = `${pathKey}/${name}${ownKey}`;
       let f = fibers.get(key);
       if (!f) { f = { hooks: [], pending: [], alive: true }; fibers.set(key, f); }
       f.alive = true;

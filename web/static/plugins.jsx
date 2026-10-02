@@ -467,6 +467,8 @@ const PHASE_LABEL = { load: 'failed to load in your browser', render: 'crashed w
  * as Settings → Version. */
 const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
   const [restarting, setRestarting] = React.useState(false);
+  // The server took the restart and is away on purpose (onUnderway → onSettled).
+  const [underway, setUnderway] = React.useState(false);
   if (!pending.length) return null;
   const capable = !!(version && version.restart_capable);
   const updateUnit = !!(version && version.restart_mode === 'update');
@@ -474,8 +476,9 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
     core: version, fire,
     question: 'Restart the Domovoi services to finish the plugin upgrade?',
     onStart: () => setRestarting(true),
-    onSettled,
-  }).finally(() => setRestarting(false));
+    onUnderway: () => setUnderway(true),
+    onSettled: () => { setUnderway(false); return onSettled ? onSettled() : undefined; },
+  }).finally(() => { setUnderway(false); setRestarting(false); });
   return (
     <Card title="restart to finish the upgrade"
           sub="installed and migrated — the new version loads when the Domovoi services restart">
@@ -486,6 +489,7 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
             <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
               {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to finish the upgrade'}
             </Button>
+            {underway && <div style={{ marginTop: 8 }}><RestartUnderwayNote updating={updateUnit}/></div>}
           </div>
         ) : (
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
@@ -651,7 +655,8 @@ const PluginsPage = () => {
     '/api/config/version', { eventTypes: ['plugins.changed'], quiet: true });
   const waiting = pendingRestart(version).plugins;
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
-  const refresh = () => { refreshList(); refreshVersion(); };
+  // Returns the re-reads, so the restart card can wait for them (onSettled).
+  const refresh = () => Promise.all([refreshList(), refreshVersion()]);
   const flow = useInstallFlow(fire, refresh);
   const [ghUrl, setGhUrl] = React.useState('');
   const [uninstalling, setUninstalling] = React.useState(null);
