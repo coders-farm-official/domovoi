@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
@@ -26,13 +25,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
+import com.domovoi.app.player.CoverArt
 import com.domovoi.app.player.PlayTarget
+import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
@@ -78,12 +76,7 @@ fun MiniPlayer(onOpenPlayer: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!isRemote && current?.coverPath != null) {
-                    AsyncImage(
-                        model = app.api.absolute(current.coverPath),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)),
-                    )
+                    CoverImage(CoverArt.model(current.coverPath, app.api::absolute), 36.dp, corner = 6.dp)
                 }
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(
