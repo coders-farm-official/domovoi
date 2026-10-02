@@ -124,11 +124,14 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
   const elapsed = (playing || paused) ? (np.elapsed_sec ?? 0) + (playing ? tick : 0) : 0;
   const progress = songDur > 0 ? Math.min(100, (elapsed / songDur) * 100) : 0;
   const sourceHref = webHref(np.source_url);  // http(s) only, else no pill
+  // A library file the room plays has a cover; now-playing maps MPD's
+  // current file to its track id. A stream, or nothing, keeps the plain tile.
+  const coverSrc = (playing || paused) && np.track_id != null ? libraryCoverUrl(np.track_id) : null;
   return (
     <div className="card" style={{ padding: 0 }}>
       <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: '52px 1fr', gap: 12, alignItems: 'center' }}>
-        <div style={{ width: 52, height: 52, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                      background: (playing || paused) ? 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))' : 'var(--sunken)' }}/>
+        <CoverArt src={coverSrc} size={52} icon={null}
+                  background={(playing || paused) ? 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))' : 'var(--sunken)'}/>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <RoomChip name={np.room_id} online/>
@@ -268,8 +271,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrows
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
-          <div style={{ width: 72, height: 72, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                        background: 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))' }}/>
+          <CoverArt src={libraryCoverUrl(track.id)} size={72}/>
           {editing ? (
             <div style={{ minWidth: 0, flex: 1, display: 'grid', gap: 6 }}>
               {TRACK_TAG_FIELDS.map(tagInput)}
@@ -455,14 +457,28 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
             {items.map(t => (
               <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => onSelect(t)}>
                 <td onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSel(t.id)}/></td>
-                <td onClick={e => e.stopPropagation()}><IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/></td>
-                {/* Title, artist and album stack in one cell so each gets
-                    the full column width. Added / via / source live in
-                    the track drawer (row click or the info button). */}
+                {/* On a phone the cover moves here, under the play button,
+                    so the track cell keeps every pixel it had (styles.css,
+                    "Library table"); the copy that isn't shown never loads. */}
+                <td onClick={e => e.stopPropagation()}>
+                  <span className="lib-play">
+                    <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id)} size={32} icon={null}/></span>
+                    <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
+                  </span>
+                </td>
+                {/* The cover, then title, artist and album stacked in one
+                    cell so each gets the full column width. Added / via /
+                    source live in the track drawer (row click or the info
+                    button). */}
                 <td style={{ paddingTop: 8, paddingBottom: 8 }}>
-                  <div style={{ fontWeight: 500 }}>{t.title || '—'}</div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{t.artist || '—'}</div>
-                  <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{t.album || '—'}</div>
+                  <div className="lib-track">
+                    <span className="lib-cover-desk"><CoverArt src={libraryCoverUrl(t.id)} size={40}/></span>
+                    <div className="lib-track-text">
+                      <div style={{ fontWeight: 500 }}>{t.title || '—'}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{t.artist || '—'}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{t.album || '—'}</div>
+                    </div>
+                  </div>
                 </td>
                 <td className="mono">{fmtDur(t.duration_sec)}</td>
                 <td className="actions" onClick={e => e.stopPropagation()}>

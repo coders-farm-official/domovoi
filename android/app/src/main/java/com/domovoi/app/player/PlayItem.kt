@@ -31,7 +31,7 @@ data class PlayItem(
                 uid = "lib-$id", kind = PlayKind.Library, id = id,
                 title = title, artist = artist, album = album,
                 src = "/api/music/library/$id/audio",
-                coverPath = "/api/music/library/$id/cover",
+                coverPath = CoverArt.libraryPath(id),
                 durationSec = durationSec,
             )
 

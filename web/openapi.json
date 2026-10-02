@@ -1794,7 +1794,7 @@
           "music"
         ],
         "summary": "Track Cover",
-        "description": "Serve a library track's embedded album art, extracted once and cached\nunder COVER_ART_DIR (keyed by track id). Returns 404 when the file has\nno embedded art \u2014 the browser player then renders its emoji/color\ngradient tile fallback. A ``<track_id>.none`` sentinel records the\nnegative result so artless files aren't re-probed each request.",
+        "description": "A library track's cover art, read from the file on request: the\npicture built into it (ID3 APIC \u2014 the front cover when it marks one \u2014\nMP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or\n``COVERART``, WMA ``WM/Picture``), else the first image in the track's\nown folder named cover / folder / front / album (.jpg / .jpeg / .png /\n.webp, any case). Served as-is with its real content type, a strong\n``ETag`` (the audio file's path, mtime and size, plus the folder\nimage's) and ``Cache-Control`` so clients keep it; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none (or only\npictures over 8 MiB).\n\nOpen, like the library listing it decorates: an ``<img>`` tag and the\nphone's lock screen can't send a credential. The id resolves the path\nfrom the database, containment-checked inside MUSIC_DIR (400 outside\nit, as for ``/audio``); nothing is stored.",
         "operationId": "track_cover_api_music_library__track_id__cover_get",
         "parameters": [
           {

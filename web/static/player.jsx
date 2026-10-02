@@ -1003,8 +1003,10 @@ const PlaybackProvider = ({ children }) => {
   const updateMediaSession = (item) => {
     if (!('mediaSession' in navigator) || !item) return;
     try {
-      const artwork = item.coverUrl
-        ? [{ src: item.coverUrl, sizes: '512x512', type: 'image/jpeg' }] : [];
+      // No `type`: a library cover is whatever the file carries (JPEG,
+      // PNG, WebP). A cover the page already knows is missing isn't offered.
+      const artwork = item.coverUrl && !coverMisses.has(item.coverUrl)
+        ? [{ src: item.coverUrl, sizes: '512x512' }] : [];
       navigator.mediaSession.metadata = new window.MediaMetadata({
         title: item.title || 'unknown',
         artist: item.artist || '',
@@ -1610,24 +1612,16 @@ const PlayerSheet = ({ p, onClose }) => {
   );
 };
 
-/* Cover tile — real embedded art with graceful fallback to a gradient
- * tile keyed by title (the emoji/color-equivalent placeholder). */
+/* Cover tile — the item's cover (a library track's comes from the file
+ * itself, see CoverArt in components.jsx) over the player's own fallback:
+ * the warm gradient for a track, a sunken tile with a radio glyph for a
+ * live stream. A cover that 404s stays on the fallback, quietly. */
 const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
-  const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => { setFailed(false); }, [item && item.coverUrl]);
+  const live = !!item && item.seekable === false;
   const grad = 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))';
-  if (item && item.coverUrl && !failed) {
-    return <img src={item.coverUrl} alt="" onError={() => setFailed(true)}
-                style={{ width: size, height: size, borderRadius: radius, objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }}/>;
-  }
-  return (
-    <div style={{ width: size, height: size, borderRadius: radius, border: '1px solid var(--border)',
-                  background: item && item.seekable === false ? 'var(--sunken)' : grad, flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Icon name={item && item.seekable === false ? 'radio' : 'music'} size={size * 0.4}
-            className="" />
-    </div>
-  );
+  return <CoverArt src={(item && item.coverUrl) || null} size={size} radius={radius}
+                   icon={live ? 'radio' : 'music'} background={live ? 'var(--sunken)' : grad}
+                   iconColor="inherit"/>;
 };
 
 /* The queue's rows — drag to reorder, tap to jump, x to remove — shared by

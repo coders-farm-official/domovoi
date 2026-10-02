@@ -270,6 +270,54 @@ const IconButton = ({ name, ...rest }) => (
   </button>
 );
 
+/* ---- Cover art ---------------------------------------------- */
+/* GET /api/music/library/{id}/cover (web/backend/api/music.py
+ * track_cover) answers with the picture built into the file, else the
+ * album folder's cover / folder / front / album image, read on request,
+ * or a 404 when there is neither. <CoverArt> draws any cover URL at a
+ * fixed size — width and height set up front, so a row never jumps when
+ * the picture lands — lazily and decoded off the main thread, over a quiet
+ * placeholder that simply stays when there is nothing to show.
+ *
+ * A URL that failed is remembered for the life of the page (coverMisses),
+ * so a re-render, a page flipped back to, or the same track in another
+ * row never asks again: one request per artless track per visit, not one
+ * per render, and nothing logged from here. */
+const coverMisses = new Set();
+const libraryCoverUrl = (trackId) => (trackId == null ? null
+  : `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`);
+const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
+                    background = 'var(--sunken)', iconColor = 'var(--fg-faint)' }) => {
+  // 'loading' (the <img> is in, still invisible) · 'shown' · 'none', held
+  // with the src it belongs to. A tile that stays mounted while its src
+  // changes (the player bar, a room card moving to the next track) starts
+  // over in the very render that brings the new src — not one commit later
+  // from an effect, which drew the new URL under the last picture's 'shown'
+  // and put a known-missing cover into an <img> (a second request and a
+  // second 404 line on the console).
+  const fresh = src && !coverMisses.has(src) ? 'loading' : 'none';
+  const [held, setHeld] = React.useState({ src, state: fresh });
+  if (held.src !== src) setHeld({ src, state: fresh });
+  const state = held.src === src ? held.state : fresh;
+  const shown = state === 'shown';
+  return (
+    <span data-cover={state}
+          style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                   width: size, height: size, flexShrink: 0, overflow: 'hidden', verticalAlign: 'middle',
+                   borderRadius: radius, border: '1px solid var(--border)',
+                   background: shown ? 'transparent' : background, color: iconColor }}>
+      {!shown && icon && <Icon name={icon} size={Math.max(10, Math.round(size * 0.4))}/>}
+      {state !== 'none' && (
+        <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
+             onLoad={() => setHeld({ src, state: 'shown' })}
+             onError={() => { coverMisses.add(src); setHeld({ src, state: 'none' }); }}
+             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
+                      objectFit: 'cover', opacity: shown ? 1 : 0 }}/>
+      )}
+    </span>
+  );
+};
+
 /* ---- Delete confirmation ------------------------------------ */
 /* The one confirm every destructive delete in the dashboard goes
  * through. Files shipped its own while Settings had none at all — the
@@ -1908,4 +1956,5 @@ Object.assign(window, {
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn,
   TimerFireAlerts,
+  CoverArt, libraryCoverUrl, coverMisses,
 });

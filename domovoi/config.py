@@ -711,22 +711,16 @@ class Settings(BaseSettings):
     # Host path. MPD container mounts this read-only as /music.
     music_dir: str = os.path.expanduser("~/Music")
 
-    # ─── Album-art cache (browser music player) ─────────────────────────
-    # Where the web backend caches album art extracted from library files
-    # (mutagen) so the browser player and Media Session can render real
-    # cover images. Mirrors ``music_dir`` as a plain host path; the web
-    # process owns writes here (source files in ``music_dir`` are only
-    # ever read). Files are keyed by ``<track_id>`` with the embedded
-    # image's native extension; a ``<track_id>.none`` sentinel records
-    # "checked, no embedded art" so artless tracks aren't re-probed on
-    # every request. The GET /api/music/library/{id}/cover endpoint reads
-    # and writes this dir; nothing else in the core touches it.
-    cover_art_dir: str = os.path.expanduser("~/.domovoi/cover_art")
+    # ─── Library cover art ──────────────────────────────────────────────
+    # No setting: GET /api/music/library/{id}/cover reads the picture from
+    # the file, or its album folder, on request and stores nothing (owner
+    # decision 2026-10-02). A COVER_ART_DIR left in an .env is ignored, and
+    # an old ~/.domovoi/cover_art directory is safe to delete.
 
     # ─── Video poster cache (browser/Android Videos tab) ────────────────
-    # Mirrors cover_art_dir: the web backend caches one ffmpeg-extracted
-    # poster frame per video here, keyed by a hash of (library, path,
-    # mtime, size) with a ``.none`` sentinel for files ffmpeg can't read,
+    # The web backend caches one ffmpeg-extracted poster frame per video
+    # here, keyed by a hash of (library, path, mtime, size) with a
+    # ``.none`` sentinel for files ffmpeg can't read,
     # so unplayable/artless files aren't re-probed on every request. The
     # GET /api/videos/poster endpoint owns this dir; nothing else touches it.
     video_posters_dir: str = os.path.expanduser("~/.domovoi/video_posters")

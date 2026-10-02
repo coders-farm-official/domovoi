@@ -3,8 +3,9 @@
 Covers the additions in ``web/backend/api/music.py``:
   * ``GET /api/music/library/{id}/audio`` — HTTP Range / 206 serving and
     the MUSIC_DIR containment guard.
-  * ``GET /api/music/library/{id}/cover`` — negative-cache behavior when a
-    file has no embedded art.
+  * ``GET /api/music/library/{id}/cover`` — a 404 when a file has no art,
+    with nothing written anywhere (the full cover suite, DB-free, is
+    ``test_library_cover_art.py``).
   * ``POST /api/music/play-tracks`` — the cast proxy to the core.
 
 Lives under ``domovoi/tests`` for the test-DB fixtures + conftest
@@ -155,16 +156,15 @@ def test_stream_audio_missing_row_404(monkeypatch):
 
 
 @requires_db
-def test_cover_no_embedded_art_404_and_negative_cache(tmp_path, monkeypatch):
-    """A file with no embedded art returns 404 and drops a ``.none``
-    sentinel so it isn't re-probed."""
+def test_cover_no_art_404_and_nothing_stored(tmp_path, monkeypatch):
+    """A file with no art (and no folder image) is a 404 end to end through
+    a real row, and the route writes nothing: cover art is read from the
+    file on request (owner decision 2026-10-02) — no sentinel, no copy."""
     from domovoi.config import settings
 
     music_dir = tmp_path / "music"
     music_dir.mkdir()
-    cover_dir = tmp_path / "covers"
     monkeypatch.setattr(settings, "music_dir", str(music_dir), raising=False)
-    monkeypatch.setattr(settings, "cover_art_dir", str(cover_dir), raising=False)
 
     audio = music_dir / "plain.mp3"
     audio.write_bytes(b"no id3 art here")  # not a valid tagged file
@@ -173,7 +173,11 @@ def test_cover_no_embedded_art_404_and_negative_cache(tmp_path, monkeypatch):
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = client.get(f"/api/music/library/{track_id}/cover")
     assert r.status_code == 404
-    assert (cover_dir / f"{track_id}.none").is_file()
+    # (The app's startup writes its config dir under tmp too — so the
+    # check is the library folder, and no cover-shaped file anywhere.)
+    assert [p.name for p in music_dir.iterdir()] == ["plain.mp3"]
+    assert not [p for p in tmp_path.rglob("*")
+                if p.name.startswith(f"{track_id}.") or "cover" in p.name.lower()]
 
 
 # ─── play-tracks cast proxy ─────────────────────────────────────────────────

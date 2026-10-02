@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -50,22 +49,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.player.CastOutcome
 import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.Chapter
+import com.domovoi.app.player.CoverArt
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayTarget
+import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
@@ -232,32 +230,14 @@ private fun PlayerHead(current: PlayItem?, roomTarget: PlayTarget.Room?, rooms: 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            val cover = if (isRemote) null else current?.coverPath
-            if (cover != null) {
-                AsyncImage(
-                    // Server covers are paths; on-device covers are already
-                    // content:// URIs and must not get the server prefixed.
-                    model = if (cover.startsWith("/")) app.api.absolute(cover) else cover,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(112.dp).clip(RoundedCornerShape(10.dp)),
-                )
-            } else {
-                Box(
-                    Modifier
-                        .size(112.dp)
-                        .background(
-                            Brush.linearGradient(listOf(Color(0xFFF2CD8C), Color(0xFFDD8A2E))),
-                            RoundedCornerShape(10.dp),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.MusicNote, contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(44.dp),
-                    )
-                }
-            }
+            // Server covers are paths; on-device covers are already content://
+            // URIs (CoverArt.model). No cover, or a 404, keeps the gradient.
+            CoverImage(
+                CoverArt.model(if (isRemote) null else current?.coverPath, app.api::absolute), 112.dp,
+                corner = 10.dp,
+                placeholder = Brush.linearGradient(listOf(Color(0xFFF2CD8C), Color(0xFFDD8A2E))),
+                iconTint = Color.White.copy(alpha = 0.85f), iconSize = 44.dp,
+            )
             Column(Modifier.weight(1f)) {
                 Text(
                     (if (isRemote) remote?.title else current?.title) ?: "—",

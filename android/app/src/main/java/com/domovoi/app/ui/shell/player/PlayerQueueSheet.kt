@@ -46,13 +46,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.domovoi.app.LocalApp
+import com.domovoi.app.player.CoverArt
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayTarget
+import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
@@ -97,12 +97,7 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
             // ── Now playing header ────────────────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!isRemote && current?.coverPath != null) {
-                    AsyncImage(
-                        model = app.api.absolute(current.coverPath),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-                    )
+                    CoverImage(CoverArt.model(current.coverPath, app.api::absolute), 56.dp)
                     Spacer(Modifier.width(14.dp))
                 }
                 Column(Modifier.weight(1f)) {

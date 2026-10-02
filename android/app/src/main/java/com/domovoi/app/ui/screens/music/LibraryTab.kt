@@ -38,7 +38,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.LocalApp
 import com.domovoi.app.net.ApiState
+import com.domovoi.app.player.CoverArt
+import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
@@ -287,6 +290,7 @@ private fun LibraryRow(
     onPlayNext: () -> Unit,
     onSaveToDevice: () -> Unit,
 ) {
+    val app = LocalApp.current
     Column(
         Modifier
             .fillMaxWidth()
@@ -298,7 +302,13 @@ private fun LibraryRow(
             SmallIconButton(Icons.Filled.PlayArrow, "play on this device", tint = Domovoi.colors.fg) {
                 onBrowserPlay()
             }
-            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+            // The track's cover, read from its file by the server (404 →
+            // the quiet placeholder stays). Same box either way.
+            CoverImage(
+                CoverArt.model(CoverArt.libraryPath(t.id), app.api::absolute), 40.dp,
+                modifier = Modifier.padding(start = 2.dp), corner = 6.dp,
+            )
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
                 Text(
                     t.title ?: "—",
                     style = MaterialTheme.typography.titleSmall,

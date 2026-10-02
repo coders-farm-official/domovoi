@@ -511,11 +511,30 @@ html.mp-docked { --player-h: 64px; }
 
 /* The Music page's Library table. The action icons sit on one line; on a
    phone six of them (212px) left the stacked track cell 87px at 375px,
-   so they fold into two rows of three and the cells pad tighter. */
+   so they fold into two rows of three and the cells pad tighter.
+
+   The cover (CoverArt, components.jsx) leads the track cell at 40px. On a
+   phone that cell is ~95px and the cover would halve it, so there the
+   cover moves into the play column instead — 32px, the play button laid
+   over it on a light scrim — and the track cell keeps its whole width.
+   Each width draws one copy; the hidden copy is display:none, so its lazy
+   <img> is never fetched. */
 .lib-acts { display: flex; justify-content: flex-end; white-space: nowrap; }
+.lib-track { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lib-track-text { min-width: 0; }
+.lib-cover-desk { display: inline-flex; flex-shrink: 0; }
+.lib-cover-phone { display: none; }
+.lib-play { position: relative; display: inline-flex; }
 @media (max-width: 760px) {
   table.lib-tbl thead th, table.lib-tbl tbody td { padding-left: 6px; padding-right: 6px; }
   .lib-acts { display: grid; grid-template-columns: repeat(3, auto); }
+  .lib-cover-desk { display: none; }
+  .lib-cover-phone { display: inline-flex; }
+  .lib-play .btn-icon {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border-radius: var(--r-sm); color: #fff; background: oklch(0 0 0 / 0.3);
+  }
+  .lib-play:has([data-cover="none"]) .btn-icon { color: var(--fg-muted); background: transparent; }
 }
 
 /* ================================================================

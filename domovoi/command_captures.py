@@ -206,7 +206,6 @@ _SERVED_SETTINGS = (
     "pictures_dir",
     "podcasts_dir",
     "audiobooks_dir",
-    "cover_art_dir",
     "video_posters_dir",
     "image_thumbs_dir",
     "sounds_dir",
