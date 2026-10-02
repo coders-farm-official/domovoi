@@ -402,6 +402,54 @@ const _authToken = () => {
   catch { return null; }
 };
 
+// Which credential this browser holds, as a number that moves on every
+// sign-in, sign-out, pairing and unpairing (auth.js credentialVersion).
+const _credentialVersion = () => {
+  try { return typeof Auth !== 'undefined' ? Auth.credentialVersion : null; }
+  catch { return null; }
+};
+
+/* ── A restart this dashboard asked for ──────────────────────────────
+ *
+ * restartDomovoiServer (components.jsx) opens this window once the
+ * server has accepted a restart (or the connection dropped mid-request,
+ * which is the same restart cutting the answer off) and closes it when
+ * the wait for the server is over, whichever way. Inside it the server
+ * is going away ON PURPOSE, so:
+ *   * a READ refused 401/403/501 opens no sign-in or pair prompt — nobody
+ *     pressed anything, no password can be checked by a server that is
+ *     on its way down, and the restart's own progress is the story on
+ *     screen (2026-10-01: the owner signed in to restart, the restart ran,
+ *     and an admin login modal was on screen through it saying "Failed to
+ *     fetch");
+ *   * the login modal, if something a person pressed opens one anyway,
+ *     says the server is restarting instead of "can't reach the server".
+ * Counted, not a flag: two restart buttons (Settings, Plugins) share it. */
+const ServerRestart = (() => {
+  let open = 0;
+  const listeners = new Set();
+  const notify = () => listeners.forEach((fn) => { try { fn(); } catch {} });
+  return {
+    active: () => open > 0,
+    // Returns the function that closes this window (idempotent).
+    begin() {
+      open += 1;
+      notify();
+      let closed = false;
+      return () => {
+        if (closed) return;
+        closed = true;
+        open = Math.max(0, open - 1);
+        notify();
+      };
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+})();
+
 const _signInAgain = async (refusedToken) => {
   try {
     if (typeof Auth === 'undefined') return false;
@@ -454,10 +502,22 @@ const _maybeRequestPairing = () => {
 // minutes (DeviceIdentity). A refused one opens nothing and replays
 // nothing — it just fails, and the next attempt tries again. Every other
 // mutation leaves it unset.
+//
+// Two more refusals open NO prompt (and are not `loginPrompted`, so the
+// caller's own error shows):
+//   * one sent under a credential this browser no longer holds — a read in
+//     flight while the operator signed in, refused for the cookie it
+//     carried, lands just after the sign-in succeeded. Answering it with
+//     the login modal again is a prompt nobody can satisfy (the sign-in
+//     already happened) standing in front of whatever the sign-in was for.
+//     The hooks below re-read it under the new credential instead.
+//   * a READ while a restart this dashboard asked for is under way
+//     (ServerRestart, above).
 const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } = {}) => {
   const quietRead = (!!quiet && !_isMutation(method)) || !!noPrompt;
   const refusedToken = _authToken();
   const refusedDeviceToken = _deviceToken();
+  const sentUnder = _credentialVersion();
   let r = await send();
   let promptedHere = false;
   let signInDismissed = false;
@@ -485,8 +545,13 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     if (text === null) text = await r.text().catch(() => '');
     // Never re-open a modal we have just come back from — that is the
     // loop. And never open one at all for a device block: no credential
-    // this dashboard can collect will lift it.
-    if (!promptedHere && !deviceBlock && !quietRead) {
+    // this dashboard can collect will lift it. Nor for a refusal of a
+    // credential since replaced, nor for a read while the server is
+    // restarting on purpose (above).
+    const staleRefusal = !promptedHere && _isAuthStatus(r.status) && sentUnder !== _credentialVersion();
+    const restartQuiet = !_isMutation(method) && ServerRestart.active();
+    const prompts = !promptedHere && !deviceBlock && !quietRead && !staleRefusal && !restartQuiet;
+    if (prompts) {
       if (_isDeviceTokenRefusal(r.status, text)) _maybeRequestPairing();
       else _maybeRequestLogin(r.status);
     }
@@ -505,8 +570,10 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     // 401 that came back against the fresh credential: no modal was
     // re-opened for it, so the caller's error toast is the only thing
     // the operator will see.
-    err.loginPrompted = signInDismissed
-      || (!promptedHere && !deviceBlock && !quietRead && _isAuthStatus(r.status));
+    err.loginPrompted = signInDismissed || (prompts && _isAuthStatus(r.status));
+    // Refused for a credential this browser has since replaced: the hooks
+    // read again under the new one (useApiObject / useApiList).
+    if (staleRefusal) err.staleCredential = true;
     err.deviceTokenRequired = _isDeviceTokenRefusal(r.status, text);
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
@@ -904,11 +971,6 @@ const useRetryAfterCredential = (refusal, retry) => {
  *     when it lands: the re-read under the current one owns the state.
  * Opt-in, not the default: a read that is merely allowed-or-refused gains
  * nothing from re-reading on every change. */
-const _credentialVersion = () => {
-  try { return typeof Auth !== 'undefined' ? Auth.credentialVersion : null; }
-  catch { return null; }
-};
-
 // What this browser holds right now, as far as a re-read cares.
 const _credentialState = () => {
   try {
@@ -970,6 +1032,10 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
     // Sent under a credential this browser no longer holds: the re-read
     // under the current one owns the state (refetchOnAuth, above).
     if (refetchOnAuth && sentUnder !== _credentialVersion()) return;
+    // Refused for the credential it carried, which a sign-in (or a
+    // pairing) replaced while it was in flight. No prompt was opened for
+    // it (_sendWithAuthRetry), so read again now, under the new one.
+    if (failed && failed.staleCredential) { load(quietRead); return; }
     if (failed) {
       console.warn(`fetch ${path}:`, failed);
       setError(failed);
@@ -1060,6 +1126,9 @@ const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = fa
     // Sent under a credential this browser no longer holds: the re-read
     // under the current one owns the state (refetchOnAuth, above useApiList).
     if (refetchOnAuth && sentUnder !== _credentialVersion()) return;
+    // Refused for a credential replaced while it was in flight: read
+    // again under the new one (as useApiList does).
+    if (failed && failed.staleCredential) { load(quietRead); return; }
     if (failed) {
       console.warn(`fetch ${path}:`, failed);
       setError(failed);
@@ -1415,7 +1484,7 @@ Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
-  stateBus, ServerStore, DeviceIdentity, apiErrorText, isAuthFailure,
+  stateBus, ServerStore, ServerRestart, DeviceIdentity, apiErrorText, isAuthFailure,
   mutationErrorText, reportMutationFailure, deviceBlockReason, clipSentence,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,

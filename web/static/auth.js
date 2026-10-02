@@ -37,6 +37,10 @@
 const Auth = (() => {
   let token = null;              // in-memory bearer (never persisted)
   let modalOpen = false;
+  // Which opening of the login modal this is. <AuthModalHost/> keys the
+  // modal on it, so every opening is a fresh form — a prompt that comes
+  // back never shows the password or the error of the one before it.
+  let modalSeq = 0;
   let pairModalOpen = false;
   // Why the login modal is up, when it is not the usual "an admin action
   // needs you": 'sign-out' (logout, below). The modal says so.
@@ -48,7 +52,16 @@ const Auth = (() => {
   // changed since my 401" from "the modal merely opened".
   let credentialVersion = 0;
   const listeners = new Set();
-  const notify = () => listeners.forEach((fn) => { try { fn(); } catch {} });
+  // The modal host's own channel (subscribeModal): told about EVERY
+  // change, like any listener, and also — alone — the moment a sign-in
+  // succeeds, before the household-token fetch and before the flows
+  // waiting on ensureLoggedIn hear about it (signedIn, below).
+  const modalListeners = new Set();
+  const notifyModal = () => modalListeners.forEach((fn) => { try { fn(); } catch {} });
+  const notify = () => {
+    listeners.forEach((fn) => { try { fn(); } catch {} });
+    notifyModal();
+  };
 
   const DEVICE_TOKEN_HEADER = 'X-Device-Token';
   const DEVICE_TOKEN_KEY = 'domovoi-device-token';
@@ -106,6 +119,12 @@ const Auth = (() => {
   // Login, setup and password change are writes like any other, so they
   // carry the preflight-forcing header too (data.js REQUESTED_WITH; the
   // value is spelled out here because auth.js loads first).
+  //
+  // A request that never got an answer (the server is down, restarting,
+  // or unreachable from here) rejects with the browser's own words —
+  // "Failed to fetch", "NetworkError when attempting to fetch resource" —
+  // which read as "your password failed". It is re-thrown as `unreachable`
+  // so the login modal can say what actually happened.
   const post = async (path, body) => {
     if (!trusted()) {
       const err = new Error('this server has not been trusted yet — pick it in the server switcher first');
@@ -113,12 +132,21 @@ const Auth = (() => {
       err.untrusted = true;
       throw err;
     }
-    const r = await fetch(`${base()}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-      credentials: 'include', // receive/carry the GET-state cookie
-      body: JSON.stringify(body || {}),
-    });
+    let r;
+    try {
+      r = await fetch(`${base()}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'include', // receive/carry the GET-state cookie
+        body: JSON.stringify(body || {}),
+      });
+    } catch (e) {
+      const err = new Error('the Domovoi server did not answer');
+      err.status = 0;
+      err.unreachable = true;
+      err.cause = e;
+      throw err;
+    }
     let data = null;
     try { data = await r.json(); } catch {}
     if (!r.ok) {
@@ -158,10 +186,56 @@ const Auth = (() => {
     return false;
   };
 
+  // The bearer a 2xx login/setup answer carries. An answer without one
+  // signed nobody in, and says so in the modal rather than closing it on
+  // a sign-in that did not happen.
+  const sessionToken = (data) => {
+    if (data && typeof data.token === 'string' && data.token) return data.token;
+    const err = new Error('the server answered without a session — try again');
+    err.status = 0;
+    throw err;
+  };
+
+  // The rest of a sign-in, once the server has handed over a bearer.
+  //
+  // THE SIGN-IN IS DONE when the bearer arrives, so the login modal comes
+  // down HERE — before the household-token fetch, before anyone is told,
+  // and so before data.js replays the request the prompt was opened for.
+  // What that request does next is its own business: a replayed restart
+  // takes this very server away a second later, and nothing that happens
+  // after this line may land in the login modal as if the password had
+  // failed (2026-10-01: the owner signed in to restart, the restart went
+  // ahead, and the modal stayed up saying "Failed to fetch"). Nothing
+  // after this point throws: once the server has said yes, login() and
+  // setup() resolve, whatever the token fetch or the replay meets.
+  //
+  // Only the modal host hears about it at once (notifyModal): the flows
+  // waiting on ensureLoggedIn are told after the household token has been
+  // fetched, as before, so a replayed request still carries both. The one
+  // exception is "sign in as an admin instead" (signInInstead), where the
+  // pair modal waits underneath: closing the login first would flash that
+  // prompt for the length of the token fetch, so both come down together
+  // once autoPair has answered it. A login modal opened AGAIN meanwhile
+  // (a new opening, modalSeq) is a new prompt and is left alone.
+  const signedIn = async (newToken) => {
+    token = newToken;
+    status = { setup_complete: true, authenticated: true };
+    credentialVersion += 1;
+    const opening = modalSeq;
+    if (modalOpen && !pairModalOpen) {
+      modalOpen = false;
+      notifyModal();
+    }
+    try { await autoPair(); } catch { /* best effort, as autoPair says */ }
+    if (modalSeq === opening) modalOpen = false;
+    notify();
+  };
+
   return {
     get token() { return token; },
     isLoggedIn: () => !!token,
     get modalOpen() { return modalOpen; },
+    get modalSeq() { return modalSeq; },
     get loginReason() { return loginReason; },
     get pairModalOpen() { return pairModalOpen; },
     get status() { return status; },
@@ -205,11 +279,18 @@ const Auth = (() => {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
+    // For <AuthModalHost/> only: every change subscribe() hears, plus the
+    // modal coming down the moment a sign-in succeeds (signedIn).
+    subscribeModal(fn) {
+      modalListeners.add(fn);
+      return () => modalListeners.delete(fn);
+    },
 
     // Called by data.js on a 401/403 — pops the login modal once.
     requestLogin() {
       if (modalOpen) return;
       modalOpen = true;
+      modalSeq += 1;
       notify();
     },
 
@@ -239,6 +320,7 @@ const Auth = (() => {
     signInInstead() {
       if (modalOpen) return;
       modalOpen = true;
+      modalSeq += 1;
       notify();
     },
 
@@ -283,7 +365,11 @@ const Auth = (() => {
         });
       });
     },
-    openModal() { modalOpen = true; notify(); },
+    openModal() {
+      if (!modalOpen) modalSeq += 1;
+      modalOpen = true;
+      notify();
+    },
     closeModal() { modalOpen = false; notify(); },
     closePairModal() { pairModalOpen = false; notify(); },
 
@@ -300,13 +386,10 @@ const Auth = (() => {
       const data = await post('/api/auth/setup', {
         setup_code: setupCode, password,
       });
-      token = data.token || null;
-      status = { setup_complete: true, authenticated: !!token };
-      credentialVersion += 1;
       // Setup ROTATES the household token: whatever this browser held
-      // from the pre-setup window is stale now. Fetch the fresh one.
-      await autoPair();
-      notify();
+      // from the pre-setup window is stale now. signedIn fetches the
+      // fresh one (autoPair).
+      await signedIn(sessionToken(data));
       return data;
     },
 
@@ -314,12 +397,8 @@ const Auth = (() => {
       const data = await post('/api/auth/login', {
         password, label: label || 'dashboard',
       });
-      token = data.token || null;
-      status = { setup_complete: true, authenticated: !!token };
-      credentialVersion += 1;
-      // An admin login pairs the browser without a prompt.
-      await autoPair();
-      notify();
+      // An admin login pairs the browser without a prompt (autoPair).
+      await signedIn(sessionToken(data));
       return data;
     },
 

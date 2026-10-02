@@ -471,10 +471,21 @@ const pluginUpgradeLabel = (p) => `${p.slug} ${p.from_version} → ${p.to_versio
  *             last_update)
  *   question  the confirm's first line; the default is the pulled-code one
  *   onStart   the operator said yes and the restart is being asked for
+ *   onUnderway the server took it (or went away answering): from here
+ *             until onSettled it is restarting, and the caller says so
  *   onSettled the wait is over, whichever way — re-read what you show
  *
- * Resolves true once the server reports restart_required cleared. */
-const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, onSettled = () => {} }) => {
+ * Resolves true once the server reports restart_required cleared.
+ *
+ * A view-only tab (reloaded, so it holds the cookie and no admin sign-in)
+ * is refused the restart and data.js pops the login modal; the modal comes
+ * down the moment the sign-in succeeds (auth.js signedIn) and data.js
+ * replays the restart. Everything after that is THIS flow's to report:
+ * the server going away mid-answer is the restart working, every poll
+ * while it is away is quiet, and no read refused while it is coming back
+ * opens a prompt (ServerRestart, data.js). */
+const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, onUnderway = () => {},
+                                      onSettled = () => {} }) => {
   const updating = !!(core && core.restart_mode === 'update');
   if (!window.confirm(updating
     ? `${question || 'Apply the pulled code?'}\n\n` +
@@ -490,8 +501,31 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
   const kind = updating ? 'update' : 'restart';
   const previousRun = core && core.last_update ? core.last_update.started_at : null;
 
+  // From the moment the server takes the restart until the wait is over:
+  // reads that are refused while it comes back open no prompt, and a login
+  // modal still standing (one that opened between the press and the
+  // answer) comes down — no password can be checked by a server on its way
+  // down, and the progress here is what the operator needs to see.
+  let endWindow = () => {};
+  const underway = () => {
+    try { endWindow = ServerRestart.begin(); } catch { /* data.js without it */ }
+    try { if (typeof Auth !== 'undefined' && Auth.modalOpen) Auth.closeModal(); } catch {}
+    try { onUnderway(); } catch {}
+  };
+  // Waits for the caller's re-read (onSettled may return a promise), so
+  // the button does not offer the restart again for a moment on the
+  // version the panel read before it.
+  const settled = async () => {
+    endWindow();
+    endWindow = () => {};
+    try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
+  };
+
   // After the bounce the server is briefly gone; a failed poll is the
-  // expected middle of a successful restart, not an error to report.
+  // expected middle of a successful restart, not an error to report — and
+  // so is any other answer a server still coming up gives (a 502 from a
+  // web whose core is still booting, say). The poll is quiet: it never
+  // opens a prompt.
   //
   // With the update unit the wait is longer (a backup, maybe a dependency
   // sync, a migration and a health check), and it ends early when the unit
@@ -503,27 +537,27 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
       try {
-        const v = await apiGet('/api/config/version');
+        const v = await apiGet('/api/config/version', { quiet: true });
         const run = v && v.last_update;
         const newRun = run && run.started_at !== previousRun && run.status !== 'running';
         if (mode === 'update' && newRun && run.status !== 'ok') {
-          onSettled();
+          await settled();
           // The script's error already says what happened ("update to … failed
           // at health and was rolled back to …").
           fire(run.error || `update ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
           return false;
         }
         if (v && !v.restart_required && (mode !== 'update' || newRun)) {
-          onSettled();
+          await settled();
           fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
           return true;
         }
-      } catch (e) { /* still down — keep waiting */ }
+      } catch (e) { /* still down, or not all the way up — keep waiting */ }
     }
     fire(mode === 'update'
       ? 'the update is taking longer than expected — check journalctl -u domovoi-update'
       : 'restart is taking longer than expected — check the service by hand');
-    onSettled();
+    await settled();
     return false;
   };
 
@@ -531,6 +565,7 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
   try {
     const res = await apiPost('/api/config/version/restart', {});
     if (res && res.ok) {
+      underway();
       fire(kind === 'update' ? 'updating…' : 'restarting…');
       return await waitForServer(res.mode || kind);
     }
@@ -551,12 +586,26 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
     } else if (e && e.status) {
       reportMutationFailure(fire, 'restart', e);
     } else {
+      underway();
       fire(kind === 'update' ? 'updating…' : 'restarting…');
       return await waitForServer(kind);
     }
     return false;
   }
 };
+
+/* The line a restart button's card shows while restartDomovoiServer
+ * waits for the server (between onUnderway and onSettled): the server is
+ * away on purpose, and the card says so instead of leaving a spinning
+ * button and a two-second toast to explain a dashboard that stopped
+ * answering. */
+const RestartUnderwayNote = ({ updating }) => (
+  <div className="restart-underway" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+    {updating
+      ? 'Updating — backing up, applying and restarting the Domovoi services. The dashboard can’t reach the server meanwhile (usually under a minute); this shows the new version when it answers.'
+      : 'Restarting — the dashboard can’t reach the Domovoi server for a few seconds; this shows the new version when it answers.'}
+  </div>
+);
 
 /* ---- Tabs (page-level helper) ------------------------------ */
 // Keeps the active tab visible in a strip that has scrolled sideways.
@@ -1158,7 +1207,34 @@ const Stat = ({ label, value, sub }) => (
  * Minimal v1 wiring: pops on any 401/403 (data.js calls
  * Auth.requestLogin()) or on demand from the Settings page. The
  * bearer token lives in JS memory only (auth.js); the cookie the
- * login endpoint sets just renders GET state after a reload. */
+ * login endpoint sets just renders GET state after a reload.
+ *
+ * What this modal reports is the SIGN-IN and nothing else. It comes down
+ * the moment the server accepts the password (auth.js signedIn), before
+ * data.js replays whatever the prompt was opened for; that action's
+ * outcome is its own to show. A sign-in that could not reach the server
+ * says so in words — "Failed to fetch" read as "wrong password" on
+ * 2026-10-01, while the restart the owner had signed in for was running. */
+
+// The sentence for a sign-in that did not happen.
+const loginErrorText = (e) => {
+  const restarting = (() => {
+    try { return typeof ServerRestart !== 'undefined' && ServerRestart.active(); } catch { return false; }
+  })();
+  const status = e && e.status;
+  if (e && (e.unreachable || e instanceof TypeError)) {
+    return restarting
+      ? 'The Domovoi server is restarting, so it can’t check the password yet. Sign in again once it’s back.'
+      : 'Couldn’t reach the Domovoi server — check that it’s running, then try again.';
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return restarting
+      ? 'The Domovoi server is restarting, so it can’t check the password yet. Sign in again once it’s back.'
+      : `The Domovoi server isn’t answering right now (${status}) — it may be restarting. Try again in a moment.`;
+  }
+  return String((e && e.message) || e);
+};
+
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
   const [code, setCode] = useState('');
@@ -1166,9 +1242,25 @@ const LoginModal = ({ onClose }) => {
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  // Enter in the field submits too, and the button's `disabled` does not
+  // reach the keyboard: one sign-in at a time.
+  const busyRef = React.useRef(false);
+  // Which opening of the modal this is (Auth.modalSeq): after a sign-in
+  // succeeds, onClose runs only if no NEW prompt has opened since.
+  const openingRef = React.useRef(Auth.modalSeq);
+  // A restart this dashboard asked for is under way (data.js).
+  const [restarting, setRestarting] = useState(() => {
+    try { return typeof ServerRestart !== 'undefined' && ServerRestart.active(); } catch { return false; }
+  });
 
   useEffect(() => {
     if (!status) Auth.refreshStatus().then(setStatus);
+  }, []);
+  useEffect(() => {
+    try {
+      if (typeof ServerRestart === 'undefined') return undefined;
+      return ServerRestart.subscribe(() => setRestarting(ServerRestart.active()));
+    } catch { return undefined; }
   }, []);
 
   const needsSetup = status && status.setup_complete === false;
@@ -1179,21 +1271,30 @@ const LoginModal = ({ onClose }) => {
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
 
   const submit = async () => {
+    if (busyRef.current) return;
     setErr(null);
     if (needsSetup) {
       if (password.length < 10) { setErr('password must be at least 10 characters'); return; }
       if (password !== confirm) { setErr('passwords do not match'); return; }
     }
+    busyRef.current = true;
     setBusy(true);
+    let failed = null;
     try {
       if (needsSetup) await Auth.setup(code.trim(), password);
       else await Auth.login(password);
-      onClose();
     } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setBusy(false);
+      failed = e;
     }
+    busyRef.current = false;
+    setBusy(false);
+    // Only the sign-in's own refusal lands here: login()/setup() reject
+    // only when the server did not say yes.
+    if (failed) { setErr(loginErrorText(failed)); return; }
+    // Signed in: auth.js has already taken the modal down. A host whose
+    // onClose does more than that still hears about it — unless a NEW
+    // prompt opened meanwhile, which is not this one to close.
+    if (Auth.modalSeq === openingRef.current) onClose();
   };
 
   return (
@@ -1237,6 +1338,12 @@ const LoginModal = ({ onClose }) => {
             </div>
           )}
           {err && <div className="err">{err}</div>}
+          {restarting && !err && (
+            <div className="hint login-restarting">
+              The Domovoi server is restarting. Sign in once it’s back —
+              Settings → Configuration → Version says when.
+            </div>
+          )}
           {signingOut ? (
             <div className="hint login-sign-out-why">
               This page was reloaded, so this tab no longer holds the admin
@@ -1356,8 +1463,12 @@ const PairModal = ({ onClose }) => {
  * Exactly one modal is ever on screen. */
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
-  useEffect(() => Auth.subscribe(force), []);
-  if (Auth.modalOpen) return <LoginModal onClose={() => Auth.closeModal()}/>;
+  // subscribeModal: every change, plus the login modal coming down the
+  // moment a sign-in succeeds (auth.js signedIn).
+  useEffect(() => (Auth.subscribeModal ? Auth.subscribeModal(force) : Auth.subscribe(force)), []);
+  // Keyed on the opening: a prompt that comes back is a fresh form, never
+  // the last one's typed password and error.
+  if (Auth.modalOpen) return <LoginModal key={`login-${Auth.modalSeq || 0}`} onClose={() => Auth.closeModal()}/>;
   if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
   return null;
 };

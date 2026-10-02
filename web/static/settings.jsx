@@ -521,6 +521,8 @@ const VersionSection = () => {
   const [checking, setChecking] = React.useState(false);
   const [pulling, setPulling] = React.useState(false);
   const [restarting, setRestarting] = React.useState(false);
+  // The server took the restart and is away on purpose (onUnderway → onSettled).
+  const [underway, setUnderway] = React.useState(false);
   const [status, setStatus] = React.useState(null);   // result of /version/check
 
   const check = async () => {
@@ -574,8 +576,9 @@ const VersionSection = () => {
   const restart = () => restartDomovoiServer({
     core, fire,
     onStart: () => setRestarting(true),
-    onSettled: () => { refreshCore(); setStatus(null); },
-  }).finally(() => setRestarting(false));
+    onUnderway: () => setUnderway(true),
+    onSettled: () => { setUnderway(false); setStatus(null); return refreshCore(); },
+  }).finally(() => { setUnderway(false); setRestarting(false); });
 
   const webVer = cfg && cfg.web_version;
   // `sha` is the RUNNING code (captured at the core's boot), not whatever is
@@ -696,6 +699,11 @@ const VersionSection = () => {
           </span>
         )}
       </div>
+      {underway && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <RestartUnderwayNote updating={updateUnit}/>
+        </div>
+      )}
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           Pull updates the host files only — this panel will then offer the restart that loads them.
