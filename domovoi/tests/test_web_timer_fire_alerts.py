@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -612,7 +613,10 @@ def test_the_shell_renders_the_alerts_once() -> None:
     html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert html.count("<TimerFireAlerts/>") == 1
     comps = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
-    assert "  TimerFireAlerts,\n});" in comps
+    # Exported to the other Babel scripts: a name in the closing
+    # Object.assign(window, {...}) block, wherever it sits in that list.
+    exports = comps[comps.rindex("Object.assign(window, {"):]
+    assert re.search(r"\bTimerFireAlerts\s*,", exports)
 
 
 def test_the_stack_sits_above_the_dock_and_under_the_dialogs_and_toasts() -> None:
