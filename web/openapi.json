@@ -1008,7 +1008,7 @@
           "music"
         ],
         "summary": "Patch Track",
-        "description": "Partial update of a library_tracks row: ``favorited`` and, from\nthe track drawer's edit mode (F-024), title / artist / album. Column\nnames come from the schema's fields only, values are bound. A\nmetadata edit stamps ``enriched_at`` so the enricher (unenriched\nrows only) leaves the hand correction alone.",
+        "description": "Partial update of a library_tracks row: ``favorited`` and, from\nthe track drawer's edit mode (F-024), title / artist / album. Column\nnames come from the schema's fields only, values are bound. A\nmetadata edit stamps ``enriched_at`` so the enricher (unenriched\nrows only) leaves the hand correction alone, and records the\noutcome ``manual`` (V020) so the enricher's one-off recovery of\nrows stamped without an answer never requeues it either.",
         "operationId": "patch_track_api_music_library__track_id__patch",
         "parameters": [
           {
@@ -3873,7 +3873,7 @@
           "satellite-media"
         ],
         "summary": "Media Cache Refresh",
-        "description": "Synchronous-ish cache refresh (wheels are the slow part; the call\ncan take minutes on a cold cache \u2014 the card shows a spinner).",
+        "description": "Synchronous-ish cache refresh (wheels are the slow part; the call\ncan take minutes on a cold cache \u2014 the card shows a spinner).\n\n409 under ``INTERNET_ACCESS=never``: every bucket downloads. Preparing\na card (``/prepare``) stays allowed and uses what is cached.",
         "operationId": "media_cache_refresh_api_satellites_media_cache_refresh_post",
         "responses": {
           "200": {
@@ -5731,7 +5731,7 @@
           "config"
         ],
         "summary": "Patch Editable Config",
-        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected}``. The web process never mutates\nits own settings copy \u2014 every write fans out to :6370.",
+        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
         "operationId": "patch_editable_config_api_config_editable_patch",
         "requestBody": {
           "required": true,
@@ -5759,6 +5759,26 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/internet": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Internet",
+        "description": "Settings \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
+        "operationId": "get_internet_api_config_internet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -6420,7 +6440,7 @@
           "voices"
         ],
         "summary": "Register Edge Voice",
-        "description": "Register a Microsoft Edge cloud voice by its voice id (e.g.\n``en-US-AriaNeural``). No file \u2014 the engine downloads on demand.",
+        "description": "Register a Microsoft Edge cloud voice by its voice id (e.g.\n``en-US-AriaNeural``). No file \u2014 the engine downloads on demand.\n409 under ``INTERNET_ACCESS=never``: the voice could never speak.",
         "operationId": "register_edge_voice_api_voices_edge_post",
         "requestBody": {
           "content": {
@@ -8710,7 +8730,7 @@
           "podcasts"
         ],
         "summary": "Subscribe",
-        "description": "Subscribe by RSS URL, or by name via iTunes discovery (network).\n\nDevice tier: ``X-Device-Token`` or an admin Bearer. The feed URL \u2014\ntyped in or returned by discovery \u2014 must be an http(s) URL outside\nthe house's own address space.",
+        "description": "Subscribe by RSS URL, or by name via iTunes discovery (network).\n\nDevice tier: ``X-Device-Token`` or an admin Bearer. The feed URL \u2014\ntyped in or returned by discovery \u2014 must be an http(s) URL outside\nthe house's own address space.\n\nThe show's artwork \u2014 the directory's, for a name lookup or a feed a\ndiscovery search returned in this process \u2014 is stored as the source\nand fetched in the background; the response's ``artwork`` is the\nserver path once it is in (usually null here).",
         "operationId": "subscribe_api_podcasts_subscriptions_post",
         "requestBody": {
           "content": {
@@ -8794,6 +8814,47 @@
         }
       }
     },
+    "/api/podcasts/subscriptions/{sub_id}/artwork": {
+      "get": {
+        "tags": [
+          "podcasts"
+        ],
+        "summary": "Subscription Artwork",
+        "description": "The show's artwork as the server stored it (JPEG, PNG, WebP or\nGIF), or 404. Open, like episode audio: an ``<img>`` can't send\nheaders, and it is only the show's cover.",
+        "operationId": "subscription_artwork_api_podcasts_subscriptions__sub_id__artwork_get",
+        "parameters": [
+          {
+            "name": "sub_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Sub Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions/{sub_id}/episodes": {
       "get": {
         "tags": [
@@ -8847,7 +8908,7 @@
           "podcasts"
         ],
         "summary": "Discover",
-        "description": "iTunes Search podcast discovery (keyless, rate-limited).",
+        "description": "iTunes Search podcast discovery (keyless, rate-limited). Each\nresult's ``artwork`` is a server path for a thumbnail the server\nfetches on first request (a key minted here), never iTunes' URL.",
         "operationId": "discover_api_podcasts_discover_get",
         "parameters": [
           {
@@ -8874,6 +8935,47 @@
                   },
                   "title": "Response Discover Api Podcasts Discover Get"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/podcasts/discover/artwork/{key}": {
+      "get": {
+        "tags": [
+          "podcasts"
+        ],
+        "summary": "Discover Artwork",
+        "description": "A discovery result's thumbnail, for a key a ``/discover`` answer in\nthis process minted; 404 for any other key (the server never fetches a\nURL a client chose). With internet access turned off only an image\nalready stored is served.",
+        "operationId": "discover_artwork_api_podcasts_discover_artwork__key__get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -10515,7 +10617,7 @@
           "models"
         ],
         "summary": "Start Pull",
-        "description": "Start (or attach to) a background pull for ``model``. Idempotent per\nmodel: if a pull is already in flight the existing job is returned rather\nthan starting a duplicate transfer (enforced by the partial unique\nindex).\n\nAdmin tier, and a model reference that names its own registry host is\nchecked against the outbound-URL rules first.",
+        "description": "Start (or attach to) a background pull for ``model``. Idempotent per\nmodel: if a pull is already in flight the existing job is returned rather\nthan starting a duplicate transfer (enforced by the partial unique\nindex).\n\nAdmin tier, and a model reference that names its own registry host is\nchecked against the outbound-URL rules first.\n\n409 under ``INTERNET_ACCESS=never`` before any job row is written and\nbefore Ollama is asked: Ollama is local, but its pull goes to the\nregistry. A reference to a registry inside the house (a LAN host) is\nthe one pull that stays allowed.",
         "operationId": "start_pull_api_models_pull_post",
         "requestBody": {
           "content": {
@@ -10902,7 +11004,7 @@
           "news"
         ],
         "summary": "Validate Feed",
-        "description": "Re-check a feed's validity by parsing it now; update the validity\ndot. Device tier \u2014 it fetches the feed.",
+        "description": "Re-check a feed's validity by parsing it now; update the validity\ndot. Device tier \u2014 it fetches the feed.\n\n409 under ``INTERNET_ACCESS=never``, before anything is read or\nwritten: the feed's ``valid`` flag must not flip because the box is\nset to stay off the internet.",
         "operationId": "validate_feed_api_news_feeds__feed_id__validate_post",
         "parameters": [
           {
@@ -11098,7 +11200,7 @@
           "news"
         ],
         "summary": "Poll Now",
-        "description": "Trigger a fetch pass immediately (the 'poll now' button). Fetches the\nhouse scopes always; also this person's topics + briefing when\n``person_id`` is given. Network \u2014 best-effort; runs in the web process.",
+        "description": "Trigger a fetch pass immediately (the 'poll now' button). Fetches the\nhouse scopes always; also this person's topics + briefing when\n``person_id`` is given. Network \u2014 best-effort; runs in the web process.\n\n409 under ``INTERNET_ACCESS=never``: every feed fetch would be refused,\nand a refused fetch must not mark the feeds dead.",
         "operationId": "poll_now_api_news_poll_post",
         "parameters": [
           {
@@ -12314,6 +12416,17 @@
             ],
             "title": "Home Problems Visibility",
             "default": "everyone"
+          },
+          "internet_access": {
+            "type": "string",
+            "enum": [
+              "",
+              "always",
+              "sometimes",
+              "never"
+            ],
+            "title": "Internet Access",
+            "default": ""
           }
         },
         "type": "object",
@@ -12333,6 +12446,14 @@
             "type": "object",
             "maxProperties": 500,
             "title": "Changes"
+          },
+          "follow_internet": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Follow Internet"
           }
         },
         "type": "object",

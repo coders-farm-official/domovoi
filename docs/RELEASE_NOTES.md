@@ -4,53 +4,81 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## UNRELEASED — Tell Domovoi whether it has the internet
-
-<!-- internet-build: the integrator sets the date and deletes every internet-build marker line -->
+## 2026-10-03 — Tell Domovoi whether it has the internet
 
 ### Upgrading
 
-<!-- internet-build B1 upgrading: builder 1 writes directly below this line -->
-
-* **Nothing changes until someone answers.** An existing install (the
-  Beelink included) has no `INTERNET_ACCESS` yet, and an unanswered box
-  behaves exactly as it did before this update: same defaults, same
-  connectivity check, nothing refused. An admin's Home page shows one row,
-  **"Tell Domovoi whether this box has internet"**, until the question is
-  answered; it opens **Settings → Internet**.
-* **Answering is one click** in Settings → Internet (admin sign-in): "Yes,
-  always", "Sometimes" or "No, keep everything in the house". Saving needs
-  no restart for the answer itself; the page lists the few defaults that
-  follow after a restart ("restart required"), and a move into or out of
-  "No" also lists the Hugging Face setting.
-* **Settings you set by hand stay put.** Any key already in your
-  `domovoi/.env` (the Beelink's was copied from `.env.example`, so it
-  likely pins `SEED_VOICE_CATALOG=true` and `LIBRARY_ENRICHER_ENABLED=true`)
-  or exported in the service environment wins over the answer. Settings →
-  Internet shows each one as "set by you", with **"follow the answer
-  again"**, which comments the line out of `.env` (it is never deleted, and
-  carries the date it was commented).
-* An answer exported in the server's environment (`INTERNET_ACCESS=` in a
-  unit file) is shown read-only in the dashboard: change it where it is
-  set. A fresh checkout can answer at bootstrap:
-  `python -m domovoi.env_bootstrap --internet always|sometimes|never`
-  (an existing `.env` is never touched).
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B2 upgrading: builder 2 writes directly below this line -->
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B3 upgrading: builder 3 writes directly below this line -->
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B4 upgrading: builder 4 writes directly below this line -->
+1. **Pull the update and restart** as usual. **Flyway V020** adds
+   `library_tracks.enrich_outcome` (what song recognition concluded for each
+   track) and marks every track that already has a MusicBrainz id as
+   matched; nothing else changes, and the update's backup and rollback cover
+   it.
+2. **Nothing else changes until someone answers.** An existing install (the
+   Beelink included) has no `INTERNET_ACCESS` yet, and an unanswered box
+   behaves exactly as it did before this update: same defaults, same
+   connectivity check, nothing refused. An admin's Home page shows one row,
+   **"Tell Domovoi whether this box has internet"**, until the question is
+   answered; it opens **Settings → Internet**.
+3. **Answering is one click** in Settings → Internet (admin sign-in): "Yes,
+   always", "Sometimes" or "No, keep everything in the house". Saving needs
+   no restart for the answer itself; the page lists the few defaults that
+   follow after a restart ("restart required"), and a move into or out of
+   "No" also lists the Hugging Face setting.
+   * **Settings you set by hand stay put.** Any key already in your
+     `domovoi/.env` (the Beelink's was copied from `.env.example`, so it
+     likely pins `SEED_VOICE_CATALOG=true` and `LIBRARY_ENRICHER_ENABLED=true`)
+     or exported in the service environment wins over the answer. Settings →
+     Internet shows each one as "set by you", with **"follow the answer
+     again"**, which comments the line out of `.env` (it is never deleted,
+     and carries the date it was commented).
+   * An answer exported in the server's environment (`INTERNET_ACCESS=` in a
+     unit file) is shown read-only in the dashboard: change it where it is
+     set. A fresh checkout can answer at bootstrap:
+     `python -m domovoi.env_bootstrap --internet always|sometimes|never`
+     (an existing `.env` is never touched).
+4. **The search helper (SearXNG) now follows the answer.** Saving **Yes,
+   always** or **Sometimes** starts the `searxng` container in the
+   background (the first start downloads its image, now pinned by digest:
+   `searxng/searxng:2026.5.6-a9909c497`, about 375 MB); **No** stops it; an
+   unanswered box leaves it as it is. On a Linux box with the update unit,
+   every healthy update and restart also brings it in step with the answer,
+   as a new last step that can only warn, never fail the update. `dev.sh` /
+   `dev.ps1` start it for Yes and Sometimes. `DOMOVOI_MANAGE_SEARXNG=0` (in
+   the core's environment, or in `/etc/default/domovoi-update`) leaves the
+   container alone. Nothing touches it at core boot.
+5. **Song recognition gets one honest second pass.** On the Beelink all
+   5,232 tracks were stamped done without a MusicBrainz id because no
+   AcoustID key or Shazam add-on was ever set up. They stay as they are
+   until one exists: add an AcoustID **application** key
+   (https://acoustid.org/new-application — a user key is refused) or
+   install the Shazam add-on, and the next song-recognition run queues them
+   once and identifies them for real, filling only empty tags (a title
+   corrected by hand is never overwritten). No SQL needed. If AcoustID
+   refuses the key, the run stops after five failed lookups, marks nothing,
+   and the log names the key it needs.
+6. **Voices: nothing to do.** A greeting clip that an earlier version
+   rendered in the wrong voice still carries that voice's tag, so it is not
+   redone by itself. To redo one voice's clips, delete
+   `~/.domovoi/sounds/voices/<voice name>` (the name in lower case, e.g.
+   `voices/ryan`) on the server and restart the core.
+7. **Whisper no longer asks huggingface.co on every start.** A model already
+   downloaded loads from the local cache, so the version you have keeps
+   loading. A missing model downloads once, as before, except when the
+   answer is No: then the load fails and the Models page says why. The
+   `HF_HUB_OFFLINE` drop-in the internet docs suggested for a box without
+   internet is no longer needed: answering No sets it for the core. An
+   existing drop-in does no harm.
+8. **The radio plugin is 1.3.0 and needs SDK 1.4** (it ships with the core,
+   so nothing to do). Its settings still live in
+   `~/.domovoi/plugins/radio.env`. **The core's own `RADIO_*` settings are
+   gone:** nothing read them, and the three dashboard rows they drove
+   ("Radio sampler worker", "Default sample interval", "Re-download
+   cooldown") did nothing. `RADIO_*` lines left in `domovoi/.env` are
+   ignored.
+9. Podcast artwork is stored under `~/.domovoi/podcast_artwork`
+   (`PODCAST_ARTWORK_DIR`).
 
 ### What changes
-
-<!-- internet-build B1 changes: builder 1 writes directly below this line -->
 
 * **One question: "Will this Domovoi have internet?"** It is asked by
   first-run setup in the dashboard (after the admin password, with "Decide
@@ -75,42 +103,97 @@ a way that would otherwise get reported as a bug.
   the server. Machines on your network (satellites, the router, a NAS,
   Ollama) are still reached. Refusals read "internet access is turned off
   for this box (Settings → Internet)".
+* **Under No, nothing of these goes out:** version check and pull (no git
+  runs), plugin installs from GitHub (a zip whose Python packages are
+  already installed still installs; pip runs with `--no-index`), the
+  satellite media **Refresh caches** (Prepare still works from the cache),
+  Ollama model installs (a registry on the house network still works),
+  building the music container image when it's missing, news feed add /
+  re-check / **poll now** (the feed is never marked invalid for it),
+  podcast search, subscribe-by-name and **poll now** (subscribing by RSS
+  URL still works), registering or sampling a Microsoft voice, the
+  fast-lane model download, wake-word training (the word is marked failed,
+  "training needs the internet the first time it runs"), and the radio
+  plugin's search, simulcast lookup, FCC import, internet-station play and
+  stream. The API answers `409` with `X-Domovoi-Refusal: internet-off`
+  (plugin installs keep their `422` with code `internet_off`). FM over an
+  RTL-SDR keeps working, and the radio sampler samples only house-network
+  streams, against your library.
 * **Controls that need the internet are greyed, not hidden**, under "No",
   with "needs internet · Settings → Internet": the online settings on the
   Configuration tab (and the Microsoft choice of TTS engine), "Check for
   updates" and "Pull the latest" (restarting still works), registering,
-  sampling and choosing a Microsoft voice, and training a wake word.
-* The Configuration tab shows the answer as one line pointing at Settings →
-  Internet; settings whose default follows the answer are tagged "follows
-  the internet answer".
+  sampling and choosing a Microsoft voice, training a wake word, and the
+  online controls on the Podcasts, News, Radio, Models, Plugins and
+  Satellites pages.
+* **Microsoft voices are never a silent fallback.** A Piper voice that
+  failed used to make Domovoi speak through Microsoft's Edge voice, which
+  sent the reply text to Microsoft. Edge now speaks only when it is the
+  chosen engine (`TTS_ENGINE=edge`, or a room's voice is an Edge voice) and
+  the answer isn't No. Otherwise it is Piper, then the system voice
+  (espeak-ng on Linux, SAPI on Windows). On Linux, install `espeak-ng` so a
+  broken Piper voice still has a voice under it.
+* **Greetings stay in the right voice.** Each clip records the voice that
+  actually rendered it, and is redone once the real voice works. While
+  Microsoft voices can't be reached, their missing clips use the default
+  Piper voice and nothing waits on Microsoft.
+* **No Microsoft voice is added unasked.** `TTS_EDGE_VOICE` joins the voice
+  list only when the extra-voices catalog is on or `TTS_ENGINE=edge`. Under
+  No, no Microsoft voice is added at all. Voices already in the list stay.
+* **"I checked online but couldn't find…" is only said after a search ran.**
+  With the search helper stopped, web answers and "double-check that" now
+  say "I can't search the web right now — my search helper isn't running"
+  (and the core logs once how to start it); a SearXNG error says "I couldn't
+  reach my search helper just now. Try again in a moment."; a box answered
+  **No** says "I'm set to stay off the internet, so I can't check that."
+  The router's offline answer to a weather/news-type question, the news
+  handler's offline lead-in and the cloud-voice refusal use the turned-off
+  wording under **No** too; unanswered and plain-offline wording is
+  unchanged.
+* **Song recognition marks a track done only when AcoustID or Shazam
+  actually answered**; a network error, a refused key or no provider leaves
+  it waiting. Without a key or the add-on the startup run does nothing.
+  "Enrich my library" and the Music page's button (web and phone) say why
+  they can't start (internet off or down, no key, switched off, already
+  running). A tag edit in the dashboard counts as a hand edit.
+* **Podcasts:** "subscribe to …" promises downloads only when automatic
+  downloads are on; a download cut off by the internet waits and retries
+  instead of failing; the poller skips its rounds offline.
+* **Podcast artwork now comes from Domovoi.** The server downloads each
+  show's artwork itself (on subscribe and at each poll; JPEG/PNG/WebP/GIF,
+  at most 5 MB), and the dashboard and the Android app load it only from
+  Domovoi, so phones and browsers no longer contact podcast publishers.
+  Existing subscriptions get theirs the first time the Podcasts page lists
+  them.
+* **The video satellite's kiosk browser** starts with Chromium's background
+  traffic off (`--disable-background-networking`,
+  `--disable-component-update`, `--no-pings`,
+  `--disable-domain-reliability`), on every answer. Video satellites pick
+  it up with their next code update, at the next kiosk start.
 * `.env.example` no longer pins `SEED_VOICE_CATALOG` or
   `LIBRARY_ENRICHER_ENABLED` (a fresh box that leaves the question
   unanswered gets the same values as before), documents `INTERNET_ACCESS`,
   and now asks for an AcoustID **application** key
   (https://acoustid.org/new-application) — the personal "user API key" is
   rejected by the lookup.
-* API: `GET /v1/connectivity` adds `policy` and `reason` (`connected`,
+* **API:** `GET /v1/connectivity` adds `policy` and `reason` (`connected`,
   `offline`, `turned_off`); a turned-off transition is logged as `offline`
   with target `turned_off`. `GET /v1/admin/config` rows add
   `choice_labels`, `needs_internet`, `needs_internet_choices`,
   `internet_profile`, `follows_internet` and `set_in_environment`;
   `POST /v1/admin/config` accepts `follow_internet` and answers `followed`.
   New: `GET /v1/admin/internet` (and `GET /api/config/internet`);
-  `GET /api/config` carries `internet_access`. The plugin SDK is **1.4.0**:
+  `GET /api/config` carries `internet_access`. `POST /v1/admin/library/enrich`
+  answers `409` under No and otherwise `{queued: false, reason: disabled |
+  offline | no_provider | running}` when it can't start. New:
+  `GET /api/podcasts/subscriptions/{id}/artwork` and
+  `GET /api/podcasts/discover/artwork/{key}`; `artwork` in the podcast
+  answers is now a server path or null. The plugin SDK is **1.4.0**:
   `sdk.egress`, `connectivity.policy` / `.reason` / `.internet_allowed`, and
   `sdk.http` clients refuse non-local requests under "No".
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B2 changes: builder 2 writes directly below this line -->
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B3 changes: builder 3 writes directly below this line -->
-
-<!-- internet-build spacer -->
-
-<!-- internet-build B4 changes: builder 4 writes directly below this line -->
+* **Docs:** `docs/INTERNET.md` now explains the three answers and what each
+  switches; the FAQ, troubleshooting, security, API, plugin-development,
+  Linux, runbook and README pages follow it.
 
 ## 2026-10-03 — "Play" finds a name by how it sounds, asks when it isn't sure, and learns other names
 
