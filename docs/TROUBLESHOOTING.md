@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptom → cause → fix, grouped by area. Start with [Which logs to check](#which-logs-to-check) if you're not sure where the problem lives. Terms are defined in the [Glossary](GLOSSARY.md); setup steps live in the [README](../README.md) and `satellite/PROVISIONING.md`.
+Symptom → cause → fix, grouped by area. Start with [Which logs to check](#which-logs-to-check) if you're not sure where the problem lives. Terms are defined in the [Glossary](GLOSSARY.md); setup steps live in the [README](../README.md) and `satellite/PROVISIONING.md`. Running without internet on purpose, or only sometimes? [INTERNET.md](INTERNET.md) says what is expected not to work, and what to download first.
 
 - [Satellite won't connect](#satellite-wont-connect)
 - [No TTS audio / Domovoi is silent](#no-tts-audio--domovoi-is-silent)
@@ -34,7 +34,7 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 
 ## No TTS audio / Domovoi is silent
 
-The TTS engine chain is **edge → piper → system**: a per-engine failure (network drop, missing voice, or an engine "succeeding" with a zero-length WAV) falls through to the next, so total silence is usually playback-side, not synthesis-side.
+The TTS engine chain is **piper → edge → system** (**edge → piper → system** if you chose Edge): a per-engine failure (network drop, missing voice, or an engine "succeeding" with a zero-length WAV) falls through to the next, so total silence is usually playback-side, not synthesis-side.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -183,7 +183,7 @@ Compose commands run from the `domovoi/` directory (where `docker-compose.yml` l
 | Music in one room stopped once right after upgrading the core; log says `recreating it bound to 127.0.0.1` | That room's MPD container was created before the control port moved to loopback; port bindings can't be edited, so the core recreated it once | Nothing to do — the data volume carried over and the new container never trips this again. Say "play" to resume |
 | Tables missing after a fresh setup | Migrations never ran | `docker compose run --rm flyway` (prod DB) and `docker compose run --rm flyway-test` (test DB) — they exit after migrating; that's normal |
 | `pytest` refuses to run / can't find `domovoi_test` | Test DB missing on a pre-existing volume | The `domovoi_test` DB is only auto-created on a *fresh* Postgres volume; on an existing one create it manually, then `docker compose run --rm flyway-test`. The test suite hard-refuses any non-`_test` database by design |
-| "Double-check" always says it can't search | SearXNG container not running | `docker compose up -d searxng` — it's localhost-only on port 6888, reachable solely from the server itself |
+| Web answers ("check that online", the weather) always come back "I checked online but couldn't find a clear answer to that", and "double-check that" with "I couldn't find anything about that to confirm or deny it" | SearXNG container not running: nothing starts it for you | `docker compose up -d searxng` once; Docker restarts it after reboots. It's localhost-only on port 6888, reachable solely from the server itself. See [INTERNET.md](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on) for the other online extras |
 | MPD containers won't start after changing `MUSIC_DIR` or Docker Desktop file-sharing | Stale mounts / unshared drive | Share the drive in Docker Desktop settings; remove the `domovoi-mpd-*` containers so the provisioner recreates them with current paths |
 | Chat mode won't start | Letta container not up | Chat mode is off by default; enabling `CHAT_MODE_ENABLED` assumes `docker compose up letta` and the required Ollama models (including the embedding model) are pulled |
 

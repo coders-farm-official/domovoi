@@ -32,7 +32,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 
 Two honest nuances, so you can decide for yourself:
 
-1. **Edge TTS sends response *text* out — but it's off by default.** Text-to-speech defaults to `piper`, fully local neural TTS, so out of the box nothing Domovoi says leaves the house. Microsoft's Edge neural voices are available in the settings gear if you prefer them, and they sound better — but switching means the *text Domovoi speaks back to you* (not your voice, not your audio) goes to a Microsoft service. Worth choosing on purpose rather than inheriting.
+1. **Edge TTS sends response *text* out — but it's off by default.** Text-to-speech defaults to `piper`, fully local neural TTS, so out of the box Domovoi's replies are spoken on your own hardware. (Two exceptions on a server with internet, both fixed or rare text rather than what you said: a reply Piper fails to speak falls back to Edge, and the clips of the one Edge voice the registry always holds are rendered by Microsoft. See [What goes out](INTERNET.md#what-goes-out).) Microsoft's Edge neural voices are available in the settings gear if you prefer them, and they sound better — but switching means the *text Domovoi speaks back to you* (not your voice, not your audio) goes to a Microsoft service. Worth choosing on purpose rather than inheriting.
 2. **Song identification sends short audio clips out — but not from your microphone.** The bundled radio plugin can sample short clips of *radio streams* you've favorited, and the library enricher can fingerprint *your music files*, sending those to online identification services (Shazam via `shazamio`, optionally AcoustID/MusicBrainz). Radio-stream audio and library files, never mic audio. Both are switchable off (see the table below).
 
 ## What touches the internet, and how do I turn each thing off?
@@ -41,18 +41,22 @@ Every optional outbound touchpoint, sourced from the code:
 
 | Feature | What goes out | Where | How to disable |
 |---|---|---|---|
-| Edge TTS — **opt-in, not the default** | Response text | Microsoft Edge TTS service | Nothing to disable: the default engine is `piper` (fully local). This row applies only if you switch to `edge` yourself (Settings gear → TTS engine, or `TTS_ENGINE=edge`) |
-| Connectivity probe | A TCP dial, no payload | `1.1.1.1:443` every 30 s | Change `CONNECTIVITY_PROBE_TARGET` to a LAN host (the probe is how Domovoi knows it's offline — don't remove it, repoint it) |
-| Model downloads | One-time fetches | Whisper models, Piper voices (Hugging Face), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | Nothing recurring — happens at setup / first use of a new model or voice |
+| Edge TTS — **opt-in, not the default** | Response text | Microsoft Edge TTS service | Nothing to disable: the default engine is `piper` (fully local). This row applies only if you switch to `edge` yourself (Settings gear → TTS engine, or `TTS_ENGINE=edge`) — or if Piper fails to speak a reply, because the fallback order from `piper` is `piper → edge → system` |
+| Clips for the registered Edge voice | Fixed text, once per clip: the "trouble reaching the network" notice, the voice sample and the wake greetings (including ones you wrote in Settings → Greetings) | Microsoft Edge TTS, at startup when a clip is missing or its text changed | No setting yet: the configured Edge voice (`TTS_EDGE_VOICE`) is always registered. `SEED_VOICE_CATALOG=false` keeps it to that one voice instead of 19. Can't happen without internet |
+| Connectivity probe | A TCP connection, no payload | `1.1.1.1:443` every 30 s | Can't be switched off. **Leave `CONNECTIVITY_PROBE_TARGET` on an internet address**, also on a server without internet: the failing dial is how Domovoi knows it's offline. Pointed at a LAN host (your router), it reports online when the internet isn't there, and online features fail slowly instead of saying they can't. If your network blocks `1.1.1.1`, use another public `host:443` (e.g. `9.9.9.9:443`) |
+| Model downloads | Model files; for Whisper, also a check at every start | Hugging Face (Whisper models, Piper voices), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | Piper voices, Ollama pulls and the fast lane are one-time. **Whisper is not:** each time the core starts it asks huggingface.co whether the model changed, and downloads it again if it did. Stop that once the model is downloaded with `HF_HUB_OFFLINE=1` in the core's process environment — not `.env` ([how](INTERNET.md#stop-the-whisper-check)) |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching; `NEWS_AUTO_FETCH` (topic feeds) is already off by default |
-| "Double-check that" / web answers | Search queries | Your own SearXNG container (localhost-only, port 6888), which queries public search engines | Don't start the `searxng` container — the handler degrades gracefully and says it can't check |
+| "Double-check that" / web answers (weather, scores, "check that online") | Search queries | Your own SearXNG container (localhost-only, port 6888), which queries public search engines | Off unless you started it (`docker compose up -d searxng`); nothing starts it for you. Without it the searches come back empty: "I checked online but couldn't find a clear answer to that", or for a claim "I couldn't find anything about that to confirm or deny it" |
 | Radio plugin: station directory | Station-name searches | radio-browser.info | Disable or uninstall the radio plugin from the dashboard's Plugins page |
 | Radio plugin: FCC station import | One bulk query on demand | transition.fcc.gov | Off unless you click "Import FCC" (or set `RADIO_FCC_IMPORT_ON_BOOT=true`) |
-| Radio plugin: song detection | Short clips of favorited radio *streams*; ICY metadata polls | Shazam; the stations themselves | `RADIO_SAMPLER_ENABLED=false`, `RADIO_ICY_POLLER_ENABLED=false` |
-| Library enricher | Audio fingerprints of your library files | AcoustID (only if you set `ACOUSTID_API_KEY`) and Shazam; metadata lookups to MusicBrainz | `LIBRARY_ENRICHER_ENABLED=false` |
-| Podcasts | Feed polls + episode downloads | Feeds you subscribe to | Already off by default (`PODCAST_FEED_POLLER_ENABLED=false`) |
+| Radio plugin: song detection | Short clips of favorited radio *streams*; ICY metadata polls | Shazam; the stations themselves | `RADIO_SAMPLER_ENABLED=false`, `RADIO_ICY_POLLER_ENABLED=false` in the plugin's own file, `~/.domovoi/plugins/radio.env` (restart the core) |
+| Library enricher | Audio fingerprints of your library files | AcoustID (only if you set `ACOUSTID_API_KEY`) and Shazam (only with the `shazam` extra installed); metadata lookups to MusicBrainz | `LIBRARY_ENRICHER_ENABLED=false` |
+| Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover | Feeds you subscribe to; Apple's iTunes search | Downloads are off by default (`PODCAST_FEED_POLLER_ENABLED=false`); search runs only when you ask. Show artwork is loaded **by your browser or phone** straight from the publisher, not by the server |
+| Extra voices | Downloads of the catalog's Piper voices (about 0.7 GB), and the Edge clips above for 18 more Edge voices | Hugging Face; Microsoft | On in a fresh `.env` (`SEED_VOICE_CATALOG=true`); set it `false` before the first start |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
+
+Setting up a whole server one way or the other? [Will your Domovoi have internet?](INTERNET.md) says what to turn on when it has internet, and what to download before it doesn't.
 
 ## What hardware do I need?
 
@@ -85,6 +89,8 @@ What that looks like in practice with the internet down:
 - **Degrades:** TTS falls back down its chain (Edge online → Piper local → system voice), so Domovoi keeps talking, just in a different voice. Radio needs the stream, but its handler degrades per-command.
 - **Says so honestly:** web-backed answers ("double-check that", news fetches) reply that they can't check right now instead of guessing.
 - **Satellite-side:** if a satellite loses the *server* for 30+ seconds, the next wake word plays a locally cached "having trouble reaching the network" clip instead of silence.
+
+Running with no internet at all, for good? It works, but a few things can only be downloaded online, and the first time Domovoi needs one is usually the day the line is down. Do [Before you disconnect](INTERNET.md#before-you-disconnect) first.
 
 ## How do I add rooms?
 

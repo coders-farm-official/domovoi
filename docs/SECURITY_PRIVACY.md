@@ -943,7 +943,7 @@ create outbound traffic:
 
 | Traffic | When | Off switch |
 |---|---|---|
-| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box nothing Domovoi says leaves the network. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. |
+| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box replies are spoken on your hardware. Two exceptions on a server with internet: a reply Piper fails to speak falls back to Edge (the order is `piper → edge → system`), and at startup the core renders the fixed clips of every registered voice (the network notice, the voice sample, the wake greetings), and the registry always holds the configured Edge voice (`tts_edge_voice`), so that fixed text goes to Microsoft once per clip. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
@@ -957,7 +957,14 @@ create outbound traffic:
 | **Wake-word base models** — one-time openWakeWord model download during satellite provisioning | Provisioning a Pi | One-time, on the Pi, at build time. |
 
 Turn off Edge TTS, news, and the enricher, skip provider plugins, and
-Domovoi's steady-state outbound traffic is **zero**.
+Domovoi's steady-state outbound traffic is **zero**, apart from the
+connectivity probe (a TCP connection with no payload to
+`CONNECTIVITY_PROBE_TARGET` every 30 s) and the radio plugin's detectors
+while you have favorited internet stations. The
+[FAQ table](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
+lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
+server that has internet, one that only sometimes does, and one that never
+does.
 
 ## Server identity (which core a satellite belongs to)
 
