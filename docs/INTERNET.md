@@ -84,7 +84,7 @@ In rough order of payoff.
 
    *Why:* new episodes of the shows you subscribe to download by
    themselves: every subscription is checked every 30 minutes and the
-   newest 5 per show are kept (`PODCAST_KEEP_N`). It is off by default,
+   newest 5 per show are kept. It is off by default,
    and until you turn it on a voice "subscribe to …" subscribes but
    downloads nothing, although the reply says "I'll download new episodes
    as they come out".
@@ -126,9 +126,10 @@ In rough order of payoff.
    RADIO_FCC_IMPORT_ON_BOOT=true
    ```
 
-   with your own two-letter state and city, then restart the core. Instead
-   of the last line you can press **Import FCC FM** once on the radio
-   plugin's Stations page (admin sign-in), after the restart.
+   with your own two-letter state and city, then restart the core. The
+   last line downloads your state's FM list again at every start. To do it
+   just once instead, leave that line out and press **Import FCC FM** on
+   the radio plugin's Stations page (admin sign-in) after the restart.
 
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
