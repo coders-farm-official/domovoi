@@ -345,3 +345,42 @@ async def test_web_internet_proxy_and_follow_internet_forwarding(box, monkeypatc
         r = await c.patch("/api/config/editable", headers=bearer(TOKEN),
                           json={"changes": {}, "follow_internet": ["x"] * 17})
         assert r.status_code == 422
+
+
+# ─── A real lifespan under never (D14: the probe starts before the seed) ──
+
+from domovoi.tests.conftest import requires_db  # noqa: E402
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_core_booted_under_never_never_dials_and_says_so(monkeypatch) -> None:
+    import domovoi.main as main_mod
+    from domovoi import connectivity
+
+    real_open = asyncio.open_connection
+    dialled: list = []
+
+    async def guarded(host=None, port=None, *a, **k):
+        if (host, port) == ("1.1.1.1", 443):
+            dialled.append((host, port))
+            raise AssertionError("the probe dialled 1.1.1.1 under never")
+        return await real_open(host, port, *a, **k)
+
+    monkeypatch.setattr(asyncio, "open_connection", guarded)
+    real_seed = main_mod.seed_voices
+    seen_at_seed: dict = {}
+
+    async def seed(*a, **k):
+        probe = connectivity.current_probe()
+        seen_at_seed["probe"] = None if probe is None else (probe.online, probe.reason)
+        return await real_seed(*a, **k)
+
+    monkeypatch.setattr(main_mod, "seed_voices", seed)
+    with egress.override_policy("never"):
+        async with main_mod.app.router.lifespan_context(main_mod.app):
+            async with _core() as c:
+                body = (await c.get("/v1/connectivity")).json()
+    assert dialled == []
+    assert seen_at_seed == {"probe": (False, "turned_off")}       # started before the voice seed
+    assert body["policy"] == "never" and body["reason"] == "turned_off" and body["online"] is False
