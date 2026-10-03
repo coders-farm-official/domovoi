@@ -453,7 +453,7 @@ MPD text search that was always there.
   (exact table + one rapidfuzz pool per type, de-duplicated), plus one
   "title artist" phrase per title for requests whose "by" Whisper dropped.
   Forms of three letters or fewer match exactly only (TI, U2). ~0.3 s to build
-  for 5,232 tracks; queries p50 ≈ 17 ms / p95 ≈ 50 ms there.
+  for 5,232 tracks; queries p50 ≈ 10 ms / p95 ≈ 25 ms there (gate run, dev i9).
 * **The scorer** is the 2026-10-02 audit's untuned ranker with fixed
   constants: exact spoken form = 1.0, else 0.6 × spelling + 0.4 × sound; an
   entity that leaves a content word of the request unexplained is never played
@@ -495,9 +495,14 @@ MPD text search that was always there.
   Y?" accepts yes, "the first / second / other one", plain no ("OK."), "no,
   play Z" and a bare name (`library_match.match_reply` — a parked title or
   album is also named by its artist); anything else drops the question and
-  routes normally. The router checks an in-memory set of sessions with a
-  parked choice, so ordinary turns gain no DB read. Never asked from the
-  dashboard's play box or chat mode (`Context.answerable`).
+  routes normally. The mechanism is generic and core-only: a handler lists
+  the confirmation kinds whose reply may be free text in `choice_kinds` and
+  answers them in `handle_choice_reply`; `route()` checks a parked choice
+  FIRST, then the yes/no pre-empt, then the fast paths (so "no, play X" is
+  not read as a plain "no"). The router checks an in-memory set of sessions
+  with a parked choice (`confirmations.CHOICE_PARKED`), so ordinary turns
+  gain no DB read. Never asked from the dashboard's play box or chat mode
+  (`Context.answerable`).
 * **Household aliases** ("also called", V019 `library_aliases`): one row per
   name → target, so an artist, album or song has any number of names; a
   unique `alias_key` means each name means ONE thing household-wide (re-using

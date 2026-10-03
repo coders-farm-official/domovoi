@@ -373,3 +373,57 @@ async def test_the_tool_call_does_the_same(voice) -> None:
     assert r.text == "Hearth Ensemble is also called gramps."
     r = await h.execute_from_tool({"action": "forget", "alias": "gramps"}, ctx, voice.db)
     assert r.text == "OK — gramps doesn't mean Hearth Ensemble anymore."
+
+
+# ─── On the REAL resolver (spoken-match integration) ──────────────────────
+#
+# The real ``library_match.speak_for`` says an entity by a household name
+# that sounds like it ("SBTRKT" is said "subtract" once the household
+# taught that name) — right for "Playing …" and "Did you mean …?". A reply
+# ABOUT that very name must say the target by its own name instead, or it
+# reads "when you say subtract, I'll play subtract". Found by the vt.py
+# battery on the merged branch (the fake resolver above can't show it).
+
+HEDGE = [(41, "BRMBL/Hedge Songs/01 Thorn Path.mp3", "Thorn Path", "BRMBL", "Hedge Songs")]
+
+
+@pytest_asyncio.fixture
+async def voice_real(db_session):
+    """``voice`` without the fakes: V019, a one-track library, the
+    process-wide resolver index reset around the test."""
+    from domovoi.tests.library_aliases_testkit import apply_v019
+
+    await apply_v019()
+    library_match.reset_for_tests()
+    for tid, rel, title, artist, album in HEDGE:
+        await db_session.execute(
+            text("INSERT INTO library_tracks (id, file_path, title, artist, album) VALUES (:i, :f, :t, :a, :al)"),
+            {"i": tid, "f": str(MUSIC / rel), "t": title, "a": artist, "al": album},
+        )
+    await db_session.commit()
+    sessions: dict[str, object] = {}
+
+    async def say(utterance: str, room: str = "kitchen"):
+        ctx = Context(room_id=room, session_id=sessions.get(room), online=True)
+        resp = await route(Intent(transcript=utterance, room_id=room), ctx, db_session)
+        sessions[room] = resp.session_id
+        return resp
+
+    say.db = db_session
+    yield say
+    library_match.reset_for_tests()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_name_that_sounds_like_its_target_is_not_read_back_as_the_target(voice_real) -> None:
+    r = await voice_real("when i say bramble i mean brmbl")
+    assert (r.matched_handler, r.matched_path) == ("music_alias", "fast")
+    assert r.text == "Got it — when you say bramble, I'll play BRMBL."
+    assert (await voice_real("when i say bramble i mean brmbl")).text == "Bramble already means BRMBL."
+    assert (await voice_real("what else is brmbl called")).text == "BRMBL is also called bramble."
+    # Everywhere else the household's name IS how the target is said.
+    res = await library_match.resolve_request(voice_real.db, {"any": "brmbl"})
+    assert res.decision == "play" and res.best is not None and res.best.speak == "bramble"
+    r = await voice_real("forget the name bramble")
+    assert r.text == "OK — bramble doesn't mean BRMBL anymore."

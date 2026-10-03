@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import PurePath
 from typing import Any
 
@@ -201,22 +202,30 @@ class MusicAliasHandler(Handler):
         return repo.Actor(kind="voice", room_id=ctx.room_id, person_id=ctx.person_id)
 
     @staticmethod
-    async def _speak(session: AsyncSession, ref: EntityRef) -> str:
+    async def _speak(session: AsyncSession, ref: EntityRef, avoid: frozenset[str] = frozenset()) -> str:
         try:
             said = await library_match.speak_for(session, ref)
         except Exception as e:  # noqa: BLE001 — a reply never fails on its wording
             log.warning("speak_for(%s) failed: %s", ref, e)
             said = ""
+        # speak_for says an entity by a household or MusicBrainz name that
+        # sounds like it ("SBTRKT" → "subtract"). A reply ABOUT that very
+        # name says the target by its own name instead — never "when you
+        # say subtract, I'll play subtract".
+        if said and alias_key(said) in avoid:
+            said = ""
         return said or speakable(ref.label)
 
     async def _phrase(self, session: AsyncSession, target: repo.Target, *, folder: str | None = None,
-                      ref: EntityRef | None = None) -> str:
-        """How to SAY a target in a reply."""
-        said = await self._speak(session, ref or _ref_for_target(target, folder))
+                      ref: EntityRef | None = None, avoid: Iterable[str] = ()) -> str:
+        """How to SAY a target in a reply — by none of the names in
+        ``avoid`` (the names the reply is about)."""
+        keys = frozenset(k for k in (alias_key(a) for a in avoid) if k)
+        said = await self._speak(session, ref or _ref_for_target(target, folder), keys)
         if target.type == "track":
             if target.artist_name:
                 by = await self._speak(session, EntityRef(
-                    type="artist", key=alias_key(target.artist_name), label=target.artist_name))
+                    type="artist", key=alias_key(target.artist_name), label=target.artist_name), keys)
                 return f"{said} by {by}"
             return said
         if target.type == "album":
@@ -387,7 +396,7 @@ class MusicAliasHandler(Handler):
         outcome = await repo.add_alias(
             session, alias=alias, target=target, actor=self._actor(ctx), source="voice", replace=replace
         )
-        phrase = await self._phrase(session, target, folder=folder, ref=ref)
+        phrase = await self._phrase(session, target, folder=folder, ref=ref, avoid=(alias,))
         if outcome.status == "invalid":
             if outcome.code == "already_its_name":
                 return self._reply(ctx, f"That's already what {phrase} is called.")
@@ -398,7 +407,7 @@ class MusicAliasHandler(Handler):
         if outcome.status == "taken":
             existing = outcome.existing
             assert existing is not None
-            other = await self._phrase(session, await self._row_target(session, existing))
+            other = await self._phrase(session, await self._row_target(session, existing), avoid=(alias,))
             prompt = f"{_cap(alias)} already means {other}. Replace it?"
             if ctx.session_id is not None:
                 await request_confirmation(
@@ -435,7 +444,7 @@ class MusicAliasHandler(Handler):
         if outcome.status == "forbidden":
             return self._reply(ctx, "Only an admin can remove that one — someone else added it.")
         library_match.invalidate()
-        phrase = await self._phrase(session, await self._row_target(session, row))
+        phrase = await self._phrase(session, await self._row_target(session, row), avoid=(row.alias,))
         return self._reply(ctx, f"OK — {row.alias} doesn't mean {phrase} anymore.",
                            data={"alias_id": row.id, "status": outcome.status})
 
@@ -483,14 +492,14 @@ class MusicAliasHandler(Handler):
                 return self._reply(ctx, f"I couldn't find {said} in your library.")
             target, ref, track_ids = maybe, best.ref, tuple(best.track_ids)
         rows = await repo.aliases_for_target(session, target, track_ids=track_ids)
-        phrase = _cap(await self._phrase(session, target, ref=ref))
-        if not rows:
-            return self._reply(ctx, f"{phrase} doesn't have any other names yet.",
-                               data={"aliases": [], "target": target.to_dict()})
         names: list[str] = []
         for r in rows:
             if r.alias not in names:
                 names.append(r.alias)
+        phrase = _cap(await self._phrase(session, target, ref=ref, avoid=names))
+        if not rows:
+            return self._reply(ctx, f"{phrase} doesn't have any other names yet.",
+                               data={"aliases": [], "target": target.to_dict()})
         spoken = names[:MAX_LISTED]
         return self._reply(ctx, f"{phrase} is also called {_and_join(spoken)}.",
                            data={"aliases": names, "target": target.to_dict()})
