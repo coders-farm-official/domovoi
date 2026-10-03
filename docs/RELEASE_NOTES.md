@@ -4,6 +4,114 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## UNRELEASED — Tell Domovoi whether it has the internet
+
+<!-- internet-build: the integrator sets the date and deletes every internet-build marker line -->
+
+### Upgrading
+
+<!-- internet-build B1 upgrading: builder 1 writes directly below this line -->
+
+* **Nothing changes until someone answers.** An existing install (the
+  Beelink included) has no `INTERNET_ACCESS` yet, and an unanswered box
+  behaves exactly as it did before this update: same defaults, same
+  connectivity check, nothing refused. An admin's Home page shows one row,
+  **"Tell Domovoi whether this box has internet"**, until the question is
+  answered; it opens **Settings → Internet**.
+* **Answering is one click** in Settings → Internet (admin sign-in): "Yes,
+  always", "Sometimes" or "No, keep everything in the house". Saving needs
+  no restart for the answer itself; the page lists the few defaults that
+  follow after a restart ("restart required"), and a move into or out of
+  "No" also lists the Hugging Face setting.
+* **Settings you set by hand stay put.** Any key already in your
+  `domovoi/.env` (the Beelink's was copied from `.env.example`, so it
+  likely pins `SEED_VOICE_CATALOG=true` and `LIBRARY_ENRICHER_ENABLED=true`)
+  or exported in the service environment wins over the answer. Settings →
+  Internet shows each one as "set by you", with **"follow the answer
+  again"**, which comments the line out of `.env` (it is never deleted, and
+  carries the date it was commented).
+* An answer exported in the server's environment (`INTERNET_ACCESS=` in a
+  unit file) is shown read-only in the dashboard: change it where it is
+  set. A fresh checkout can answer at bootstrap:
+  `python -m domovoi.env_bootstrap --internet always|sometimes|never`
+  (an existing `.env` is never touched).
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B2 upgrading: builder 2 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B3 upgrading: builder 3 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B4 upgrading: builder 4 writes directly below this line -->
+
+### What changes
+
+<!-- internet-build B1 changes: builder 1 writes directly below this line -->
+
+* **One question: "Will this Domovoi have internet?"** It is asked by
+  first-run setup in the dashboard (after the admin password, with "Decide
+  later"), by the Windows installer, and lives in **Settings → Internet**,
+  its own tab. The answer only sets **defaults**:
+
+  | Setting | Yes, always | Sometimes | No |
+  |---|---|---|---|
+  | Daily news briefing (`NEWS_ENABLED`) | on | on | off |
+  | Find artists by the names people say (`MUSIC_ALIAS_FETCH_ENABLED`) | on | on | off |
+  | Automatic podcast downloads (`PODCAST_FEED_POLLER_ENABLED`) | on | off | off |
+  | Song recognition (`LIBRARY_ENRICHER_ENABLED`) | on with an AcoustID key or Shazam | same | off |
+  | Extra voices at startup (`SEED_VOICE_CATALOG`) | off | off | off |
+
+  Topic news (`NEWS_AUTO_FETCH`) stays a personal opt-in on every answer,
+  and Microsoft voices stay your own choice: neither follows the answer.
+* **"No" really keeps everything in the house.** The connectivity check no
+  longer dials 1.1.1.1 at all (it reports "turned off"); every fetch that
+  would leave your network is refused before a name is even looked up —
+  in the server, the dashboard's server side, and plugins that use the
+  SDK's HTTP client or the shared URL check; `HF_HUB_OFFLINE=1` is set for
+  the server. Machines on your network (satellites, the router, a NAS,
+  Ollama) are still reached. Refusals read "internet access is turned off
+  for this box (Settings → Internet)".
+* **Controls that need the internet are greyed, not hidden**, under "No",
+  with "needs internet · Settings → Internet": the online settings on the
+  Configuration tab (and the Microsoft choice of TTS engine), "Check for
+  updates" and "Pull the latest" (restarting still works), registering,
+  sampling and choosing a Microsoft voice, and training a wake word.
+* The Configuration tab shows the answer as one line pointing at Settings →
+  Internet; settings whose default follows the answer are tagged "follows
+  the internet answer".
+* `.env.example` no longer pins `SEED_VOICE_CATALOG` or
+  `LIBRARY_ENRICHER_ENABLED` (a fresh box that leaves the question
+  unanswered gets the same values as before), documents `INTERNET_ACCESS`,
+  and now asks for an AcoustID **application** key
+  (https://acoustid.org/new-application) — the personal "user API key" is
+  rejected by the lookup.
+* API: `GET /v1/connectivity` adds `policy` and `reason` (`connected`,
+  `offline`, `turned_off`); a turned-off transition is logged as `offline`
+  with target `turned_off`. `GET /v1/admin/config` rows add
+  `choice_labels`, `needs_internet`, `needs_internet_choices`,
+  `internet_profile`, `follows_internet` and `set_in_environment`;
+  `POST /v1/admin/config` accepts `follow_internet` and answers `followed`.
+  New: `GET /v1/admin/internet` (and `GET /api/config/internet`);
+  `GET /api/config` carries `internet_access`. The plugin SDK is **1.4.0**:
+  `sdk.egress`, `connectivity.policy` / `.reason` / `.internet_allowed`, and
+  `sdk.http` clients refuse non-local requests under "No".
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B2 changes: builder 2 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B3 changes: builder 3 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B4 changes: builder 4 writes directly below this line -->
+
 ## 2026-10-03 — "Play" finds a name by how it sounds, asks when it isn't sure, and learns other names
 
 ### Upgrading

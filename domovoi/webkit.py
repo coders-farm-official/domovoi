@@ -25,6 +25,12 @@ deliberately tiny surface:
   shared outbound-URL check and its safe fetchers, so a plugin web module
   that fetches a caller-chosen URL goes through the same gate the core
   does.
+* :mod:`domovoi.egress` (re-exported as ``webkit.egress``) — the
+  household's internet answer (``INTERNET_ACCESS``) and its gate:
+  ``egress.policy()``, ``egress.require_destination(url)``,
+  ``egress.async_client()`` and the 409 ``egress.http_exception()``. Under
+  ``never`` a plugin web route that would reach the internet refuses with
+  it rather than trying.
 
 Everything else in ``domovoi.*`` is refused at runtime in the web
 process by a ``sys.meta_path`` guard (``web.backend.plugin_host``), so
@@ -44,7 +50,7 @@ from typing import Any, Callable, Iterable, Literal
 import httpx
 from fastapi import HTTPException, Request
 
-from domovoi import net_safety, route_markers
+from domovoi import egress, net_safety, route_markers
 from domovoi.admin_auth import (
     DEVICE_TOKEN_HEADER,
     check_admin_request,
@@ -56,6 +62,7 @@ from domovoi.db.session import SessionLocal, engine, session_scope
 __all__ = [
     "SessionLocal",
     "engine",
+    "egress",
     "net_safety",
     "session_scope",
     "CoreClient",

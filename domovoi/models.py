@@ -214,6 +214,12 @@ class ConnectivityState(BaseModel):
     last_checked_at: datetime | None = None
     last_online_at: datetime | None = None
     target: str
+    # The household's internet answer (INTERNET_ACCESS): "" = not answered.
+    policy: Literal["", "always", "sometimes", "never"] = ""
+    # Why `online` says what it says: the last dial reached the target
+    # (connected), it didn't (offline), or the answer is "never" and the
+    # probe doesn't dial at all (turned_off).
+    reason: Literal["connected", "offline", "turned_off"] = "connected"
 
 
 class HandlerInfo(BaseModel):

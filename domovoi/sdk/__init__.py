@@ -21,7 +21,10 @@ from __future__ import annotations
 #        of a caller-chosen URL goes through).
 # 1.3.0: added device_endpoint (a plugin route on the household device
 #        tier — any paired device — instead of the admin default).
-API_VERSION = "1.3.0"
+# 1.4.0: added egress (the internet-access policy gate),
+#        connectivity.policy / .reason / .internet_allowed; sdk.http refuses
+#        non-local requests when the answer is never.
+API_VERSION = "1.4.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -34,6 +37,7 @@ from domovoi.handlers.base import (  # noqa: E402,F401
     HandlerDisplay,
 )
 from domovoi import net_safety  # noqa: E402,F401
+from domovoi import egress  # noqa: E402,F401
 from domovoi.models import Context, Intent, Response  # noqa: E402,F401
 from domovoi.sdk.assets import AssetAPI, CannedSound  # noqa: E402,F401
 from domovoi.sdk.coreconfig import CoreConfigView  # noqa: E402,F401
@@ -86,6 +90,7 @@ __all__ = [
     "MediaCandidate",
     "NowPlayingView",
     "net_safety",
+    "egress",
     "PlaybackAPI",
     "PluginDB",
     "PluginSDK",
