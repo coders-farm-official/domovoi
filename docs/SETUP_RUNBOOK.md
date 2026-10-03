@@ -39,7 +39,7 @@ per-Pi checklist) · [Running without an NVIDIA GPU](CPU_HOST.md) ·
 
 ## Step 0 — Before you touch anything
 
-Three decisions that are annoying to reverse:
+Four decisions that are annoying to reverse:
 
 **Room names.** A room *is* a satellite, and its `room_id` becomes the
 name of its MPD container, its database row, and the word you say out
@@ -58,6 +58,21 @@ all default models (less if you're following [CPU_HOST.md](CPU_HOST.md) and
 running smaller ones). Your music, podcasts, and audiobooks sit on top of
 that with no ceiling. Work out where that lives before you fill the boot
 drive. See the README's [Disk footprint](../README.md#disk-footprint).
+
+**Will the server have internet after setup?** Setup itself needs it:
+packages, Docker images and models all download. After that Domovoi works
+with or without it, and your voice never leaves the house either way. But
+the answer changes what you do in Step 3:
+
+- *Yes, always:* turn on the online extras: the search helper behind web
+  answers, local news, podcast downloads, song recognition.
+- *Sometimes:* download everything it will need while it's online, then
+  turn on only the small extras.
+- *No:* download everything first, then switch off what can't work.
+
+The part that's hard to undo is the downloading: the first time Domovoi
+needs something it can only fetch online is usually the day the line is
+down. The lists, with the exact settings, are in [INTERNET.md](INTERNET.md).
 
 Then inventory what you actually have, because it changes which path you
 take:
@@ -184,9 +199,12 @@ Two things `dev.ps1` deliberately leaves out:
 
 - `docker compose run --rm flyway-test` — migrates the **test** database.
   You only need it to run `pytest`, so it's not part of a normal boot.
-- `docker compose up -d searxng` — the metasearch proxy behind
-  "double-check that" claim verification. Bound to `127.0.0.1:6888`, so
-  the LAN can't reach it. Start it if you want that feature.
+- `docker compose up -d searxng` — the metasearch proxy behind web
+  answers: the weather, scores, prices and current events ("Want me to
+  check that online?"), "double-check that", and news feed discovery.
+  Bound to `127.0.0.1:6888`, so the LAN can't reach it. **On a server with
+  internet, start it**; Docker brings it back after reboots by itself
+  (`restart: unless-stopped`).
 
 Also note the core builds the `domovoi-mpd:latest` image lazily on first
 startup, so your first boot is slower than every subsequent one.
@@ -224,6 +242,22 @@ which follows the device, so setting `device = cpu` is enough.
 
 Whisper settings are restart-tier: change them, then restart the core.
 Ollama model settings are hot and take effect on the next turn.
+
+### Tell it about the internet
+
+Act on your Step 0 answer now, before you add music or build satellites:
+
+- **Internet:** go through
+  [If your Domovoi will have internet, turn these on](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on).
+  Most items are one line in `domovoi/.env` or one setting in the
+  dashboard. Do the AcoustID key (item 6) before you add your media
+  library in Step 8: the library enricher looks at each track only once.
+  If your music was already in place at the first start, item 6 has the
+  one-line reset.
+- **Sometimes, or no:** work through
+  [Before you disconnect](INTERNET.md#before-you-disconnect) while the
+  line is still there, then
+  [switch off what can't work](INTERNET.md#then-switch-off-what-cant-work).
 
 ---
 
@@ -334,10 +368,15 @@ There are two routes.
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
 **Satellites → prepare satellite media**. It writes a first-boot overlay
-and a fully offline payload (wheels, packages, the satellite code from
-this machine, plugin payloads) to the card. Boot the Pi, plug it into the
-server's USB port, and adopt it from the Satellites page — name and Wi-Fi,
-done.
+and an offline payload (wheels, packages, the satellite code from this
+machine, plugin payloads) to the card. The payload comes from the
+server's caches, which the server fills while it has internet (**Refresh
+caches**; [INTERNET.md](INTERNET.md#before-you-disconnect) has the order).
+If a cache is incomplete the build warns, and the Pi fetches the rest over
+its own connection; its second boot also runs `apt` online to settle
+package dependencies, and tries again on later boots if it can't. Boot the
+Pi, plug it into the server's USB port, and adopt it from the Satellites
+page — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -461,6 +500,13 @@ Some fleet-level things worth doing once you have two or more rooms:
 
 Optional, in rough order of payoff:
 
+**If your Domovoi has internet, turn on the extras.** Start the search
+helper so web answers work, set your town for local news, turn on podcast
+downloads, add a free AcoustID key for badly tagged music, and set your
+radio market for "play 97.5 FM". The full list, with the exact settings
+and why each one helps:
+[If your Domovoi will have internet, turn these on](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on).
+
 **Train a custom wake word.** The default is the built-in `hey_jarvis`.
 The documented path is to record clips through a satellite's own mic,
 train on the server, and push to the room — all from the dashboard, no
@@ -540,5 +586,10 @@ confirming the house comes back without you logging in.
 **Test the power cut.** Pull power from the server. Bring it back. Does
 everything return — Docker, Postgres, both processes, every satellite —
 without a human? That's the difference between a demo and an appliance.
+
+**A server with no internet, or only sometimes?** Check that everything in
+[Before you disconnect](INTERNET.md#before-you-disconnect) is done while
+the line is still there: the music image, both Whisper models, the Ollama
+models, the satellite media cache and the time zone.
 
 *May your stove stay warm and your wake word never misfire.* 🐈

@@ -38,8 +38,9 @@ them.
 
 ### 1. The system-voice fallback needs a package installed
 
-TTS routes `edge → piper → system`. The `system` rung is the OS's own
-synthesizer — pyttsx3/SAPI on Windows, and **`espeak-ng` on Linux**. It's
+TTS falls back through `piper → edge → system` (`edge → piper → system` if
+you chose Edge). The `system` rung is the OS's own synthesizer —
+pyttsx3/SAPI on Windows, and **`espeak-ng` on Linux**. It's
 robotic, and that's the point: it's the floor that still talks when the
 network is down *and* the Piper voice is missing or broken.
 
@@ -358,8 +359,38 @@ and in a second terminal, from the repo root:
 python -m web.backend.main
 ```
 
-From here, rejoin the [setup runbook at Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)
+From here, answer [the internet question](#will-your-domovoi-have-internet)
+below, then rejoin the [setup runbook at Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)
 to claim admin and apply your [CPU host settings](CPU_HOST.md).
+
+### Will your Domovoi have internet?
+
+Installing needed it. After this point it's your choice, and the answer
+changes what you do next. [INTERNET.md](INTERNET.md) has the whole list for
+each answer; on Linux it comes down to this:
+
+- **Yes, always.** Start the search helper once, from `domovoi/`:
+
+  ```bash
+  docker compose up -d searxng
+  ```
+
+  Docker brings it back after every reboot (`restart: unless-stopped`);
+  none of the units below start it, and without it web answers (weather,
+  scores, "check that online", news feed discovery) come back empty. Then
+  go through [the online extras](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on):
+  local news, podcast downloads, song recognition. Put `ACOUSTID_API_KEY`
+  in `domovoi/.env` **before** the server first sees your music.
+- **Sometimes, or no.** While the box is still online, work through
+  [Before you disconnect](INTERNET.md#before-you-disconnect): the Whisper
+  fallback model, the Ollama models, the satellite media cache, and the
+  time zone (`timedatectl` should show yours, not UTC; without internet,
+  point `systemd-timesyncd` at a LAN time server if you have one). Then
+  [switch off what can't work](INTERNET.md#then-switch-off-what-cant-work),
+  and once the units below are in, add the `HF_HUB_OFFLINE=1` drop-in from
+  [Internet or not](#internet-or-not). Leave `CONNECTIVITY_PROBE_TARGET` on
+  an internet address: pointed at the router, the probe tells Domovoi it is
+  online when it isn't.
 
 ---
 
@@ -515,6 +546,43 @@ tell you so.
 whole house returns — Docker, Postgres, both services, every satellite —
 without you logging in. That's the difference between a demo and an
 appliance, and it's the thing Linux makes genuinely easy.
+
+### Internet or not
+
+Two optional drop-ins, depending on your answer to
+[Will your Domovoi have internet?](#will-your-domovoi-have-internet)
+
+**No internet, or sometimes:** stop the core asking huggingface.co about
+its Whisper model at every start. It has to be the unit's environment:
+Domovoi reads `domovoi/.env` itself and doesn't pass it on to the
+libraries.
+
+```bash
+sudo mkdir -p /etc/systemd/system/domovoi-core.service.d
+printf '[Service]\nEnvironment=HF_HUB_OFFLINE=1\n' \
+  | sudo tee /etc/systemd/system/domovoi-core.service.d/offline.conf
+```
+
+Download every Whisper model you'll use first
+([Before you disconnect](INTERNET.md#before-you-disconnect)): with this set
+the core can't fetch one.
+
+**Internet:** Docker restarts the `searxng` container after every reboot by
+itself. If you'd rather the database unit (re)create it as well, add it in
+a drop-in, with the leading `-`:
+
+```bash
+sudo mkdir -p /etc/systemd/system/domovoi-db.service.d
+printf '[Service]\nExecStart=-/usr/bin/docker compose up -d searxng\n' \
+  | sudo tee /etc/systemd/system/domovoi-db.service.d/searxng.conf
+```
+
+The `-` lets `domovoi-db` succeed when that line fails, for instance when
+the image can't be pulled because the line is down. Without it the failure
+fails `domovoi-db`, and the core, which `Requires=` it, doesn't start.
+
+Either way, `sudo systemctl daemon-reload` and a restart of that unit pick
+it up.
 
 ---
 
