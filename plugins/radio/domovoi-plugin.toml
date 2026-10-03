@@ -1,12 +1,13 @@
 [plugin]
 slug = "radio"
 name = "Radio"
-version = "1.2.0"
+version = "1.3.0"
 publisher = "Coders Farm"
 license = "MIT"
 description = "Internet radio + FM via RTL-SDR: station search, play-or-favorite, recents, live tuning, passive song detection."
 homepage = "https://github.com/coders-farm-official/domovoi"
-domovoi_api = ">=1.3,<2.0"
+# 1.4: sdk.egress and connectivity.policy (the INTERNET_ACCESS answer).
+domovoi_api = ">=1.4,<2.0"
 
 [entry_points]
 core = "domovoi_plugin_radio.core"

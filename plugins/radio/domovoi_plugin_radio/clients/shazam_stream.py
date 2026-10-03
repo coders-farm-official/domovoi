@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from domovoi.sdk import net_safety
+from domovoi.sdk import egress, net_safety
 
 log = logging.getLogger(__name__)
 
@@ -129,8 +129,15 @@ async def grab_to_tempfile(
     sampler is grabbing several streams at once.
 
     Returns None without spawning anything when ``url`` is not an
-    http(s) URL the server may fetch.
+    http(s) URL the server may fetch, or when it is on the internet and
+    the box is set to stay off it (``INTERNET_ACCESS=never``).
     """
+    if egress.check_destination(url) is not None:
+        try:
+            egress.require_internet("song recognition")
+        except egress.InternetTurnedOff:
+            log.debug("radio: not sampling %s — internet access is turned off", url)
+            return None
     reason = await net_safety.acheck_outbound_url(url)
     if reason is not None:
         log.warning("radio: refusing to sample %s — %s", url, reason)
@@ -218,6 +225,12 @@ def _safe_unlink(path: str) -> None:
 
 
 async def _shazam_recognize(file_path: Path) -> TrackIdentity | None:
+    try:
+        # Shazam is an internet service: nothing goes out under
+        # INTERNET_ACCESS=never.
+        egress.require_internet("song recognition")
+    except egress.InternetTurnedOff:
+        return None
     try:
         from shazamio import Shazam
     except ImportError:

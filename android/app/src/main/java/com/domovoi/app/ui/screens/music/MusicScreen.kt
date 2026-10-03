@@ -262,7 +262,7 @@ fun MusicScreen() {
     val onEnrich: () -> Unit = {
         scope.launch {
             runCatching { app.api.post("/api/music/library/enrich") }
-                .onSuccess { toast("enrich started") }
+                .onSuccess { toast(enrichReplyText(it)) }
                 .onFailure { toast("enrich failed: ${it.message}") }
         }
     }

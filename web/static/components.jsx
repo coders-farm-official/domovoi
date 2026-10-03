@@ -197,6 +197,135 @@ const useAdminSignedIn = () => {
   } catch { return false; }
 };
 
+/* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
+ * The household says once whether this box has internet: '' (not
+ * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
+ * Under 'never' the server refuses everything that would reach the
+ * internet (409, INTERNET_OFF_MESSAGE) and the dashboard GREYS — never
+ * hides — the controls that need it, so a household can find them and
+ * change its mind:
+ *   * the control gets `disabled` when `off` is true,
+ *   * and `title={NEEDS_INTERNET_TEXT}`,
+ *   * a <NeedsInternetNote compact/> sits beside it (or one per card),
+ *   * a refused request where isInternetOffError(e) toasts
+ *     INTERNET_OFF_MESSAGE, never a raw JSON body.
+ * useInternetPolicy() is ONE shared read of /api/config for the whole
+ * page (a module-level cache plus subscribers, re-read every 60 s and on
+ * INTERNET_CHANGED_EVENT) — never one fetch per component. */
+const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
+const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
+const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
+const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEvent, detail {tab}
+const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
+const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
+
+/* The answer from a /api/config read a page already makes (useApiObject):
+ * a page that reads it anyway greys from that, with no second request. */
+const internetOffIn = (cfg) => !!(cfg && cfg.internet_access === 'never');
+
+const InternetPolicyStore = (() => {
+  let state = { access: '', loaded: false };
+  const subs = new Set();
+  let inflight = null;
+  let started = false;
+  const notify = () => subs.forEach((fn) => { try { fn(state); } catch { /* one bad subscriber */ } });
+  const set = (access) => {
+    const a = INTERNET_ANSWERS.includes(access) ? access : '';
+    if (state.loaded && state.access === a) return;
+    state = { access: a, loaded: true };
+    notify();
+  };
+  const refresh = () => {
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        // quiet: an unasked background read never opens a prompt.
+        const cfg = await apiGet('/api/config', { quiet: true });
+        set((cfg && cfg.internet_access) || '');
+      } catch { /* keep the last answer we heard */ }
+      finally { inflight = null; }
+    })();
+    return inflight;
+  };
+  const onChanged = (e) => {
+    const d = e && e.detail;
+    if (d && typeof d.access === 'string') set(d.access);
+    refresh();
+  };
+  const start = () => {
+    if (started) return;
+    started = true;
+    try { window.addEventListener(INTERNET_CHANGED_EVENT, onChanged); } catch { /* no window events */ }
+    try { setInterval(() => { if (subs.size) refresh(); }, INTERNET_POLICY_REFRESH_MS); } catch { /* no timers */ }
+  };
+  return {
+    get: () => state,
+    set,
+    refresh,
+    subscribe(fn) {
+      subs.add(fn);
+      start();
+      if (!state.loaded) refresh();
+      return () => { subs.delete(fn); };
+    },
+  };
+})();
+
+const useInternetPolicy = () => {
+  const [s, setS] = useState(InternetPolicyStore.get());
+  useEffect(() => InternetPolicyStore.subscribe(setS), []);
+  return {
+    access: s.access,
+    off: s.access === 'never',
+    unanswered: s.loaded && s.access === '',
+    loaded: s.loaded,
+    refresh: InternetPolicyStore.refresh,
+  };
+};
+
+/* Tell every page the answer changed (Settings → Internet, the first-run
+ * step): the shared read takes the new value at once and re-reads. */
+const announceInternetChange = (access) => {
+  InternetPolicyStore.set(access);
+  try { window.dispatchEvent(new CustomEvent(INTERNET_CHANGED_EVENT, { detail: { access } })); }
+  catch { /* no CustomEvent (old browser, test sandbox) — the set() above is enough */ }
+};
+
+/* Open Settings on a tab. The shell maps one hash to one page (#settings),
+ * so the tab rides sessionStorage; a Settings page already on screen
+ * hears SETTINGS_TAB_EVENT instead. */
+const openSettingsTab = (tab) => {
+  try { sessionStorage.setItem('domovoi.settings.tab', tab); } catch { /* storage blocked */ }
+  try { window.dispatchEvent(new CustomEvent(SETTINGS_TAB_EVENT, { detail: { tab } })); } catch { /* no CustomEvent */ }
+  try { window.location.hash = 'settings'; } catch { /* no location */ }
+};
+
+/* "needs internet · Settings → Internet", the link opening that tab. */
+const NeedsInternetNote = ({ compact = false }) => (
+  <span className={`needs-internet${compact ? ' compact' : ''}`} title={INTERNET_OFF_MESSAGE}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                 fontSize: compact ? 11 : 12, color: 'var(--fg-muted)' }}>
+    <Icon name="wifi-off" size={compact ? 12 : 13}/>
+    <span>needs internet · </span>
+    <a href="#settings" className="needs-internet-link"
+       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('internet'); }}>
+      Settings → Internet
+    </a>
+  </span>
+);
+
+/* Was this rejected apiFetch the server refusing because the internet is
+ * turned off? 409 with INTERNET_OFF_MESSAGE as the detail — or the plugin
+ * installer's coded envelope, code `internet_off`. */
+const isInternetOffError = (err) => {
+  if (!err) return false;
+  const nested = err.detail && err.detail.detail;
+  if (nested && typeof nested === 'object' && nested.error && nested.error.code === 'internet_off') return true;
+  if (err.status !== 409) return false;
+  const text = (typeof nested === 'string' && nested) || String(err.message || '');
+  return text.includes(INTERNET_OFF_MESSAGE);
+};
+
 /* ---- Avatar (deterministic colour from initial) ------------- */
 const avaPalette = {
   K: ['oklch(0.86 0.05 75)',  'oklch(0.72 0.12 60)'],
@@ -968,11 +1097,18 @@ const _cfgInput = {
   background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
 };
 
-const ConfigField = ({ f, value, onChange }) => {
+const ConfigField = ({ f, value, onChange, internetOff = false }) => {
+  // Under INTERNET_ACCESS=never a field that needs the internet is greyed —
+  // never hidden — with "needs internet"; so is each choice that does
+  // (tts_engine's "edge"), unless it is the value already set.
+  const greyed = !!internetOff && !!f.needs_internet;
+  const greyChoices = internetOff ? (f.needs_internet_choices || []) : [];
+  const greyTitle = greyed ? NEEDS_INTERNET_TEXT : undefined;
   let input;
   if (f.type === 'bool')
     input = <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)}
-                   style={{ width: 16, height: 16, cursor: 'pointer' }}/>;
+                   disabled={greyed} title={greyTitle}
+                   style={{ width: 16, height: 16, cursor: greyed ? 'not-allowed' : 'pointer' }}/>;
   else if (f.type === 'choice') {
     // choice_labels: words for a value that isn't any ("greeting" → "Spoken
     // greeting, then listen"). A value that is none of the choices shows as
@@ -981,14 +1117,22 @@ const ConfigField = ({ f, value, onChange }) => {
     const choices = f.choices || [];
     const labels = f.choice_labels || {};
     const known = choices.includes(value);
-    input = <select value={known ? value : ''} onChange={e => onChange(e.target.value)} style={{ ..._cfgInput, minWidth: 150 }}>
+    input = <select value={known ? value : ''} onChange={e => onChange(e.target.value)}
+                    disabled={greyed} title={greyTitle} style={{ ..._cfgInput, minWidth: 150 }}>
       {!known && <option value="" disabled>{value == null || value === '' ? '(not set)' : String(value)}</option>}
-      {choices.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}
+      {choices.map(c => {
+        const off = greyChoices.includes(c);
+        return (
+          <option key={c} value={c} disabled={off && c !== value} title={off ? NEEDS_INTERNET_TEXT : undefined}>
+            {labels[c] || c}{off ? ' · needs internet' : ''}
+          </option>
+        );
+      })}
     </select>;
   }
   else if (f.type === 'int' || f.type === 'float')
     input = <input type="number" value={value ?? ''} min={f.min ?? undefined} max={f.max ?? undefined}
-                   step={f.type === 'int' ? 1 : 'any'}
+                   step={f.type === 'int' ? 1 : 'any'} disabled={greyed} title={greyTitle}
                    onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
                    style={{ ..._cfgInput, width: 110, textAlign: 'right' }}/>;
   else if (f.masked)
@@ -999,6 +1143,7 @@ const ConfigField = ({ f, value, onChange }) => {
                    style={{ ..._cfgInput, minWidth: 240, color: 'var(--fg-faint)' }}/>;
   else
     input = <input type="text" value={value ?? ''} onChange={e => onChange(e.target.value)}
+                   disabled={greyed} title={greyTitle}
                    style={{ ..._cfgInput, minWidth: 240 }}/>;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)' }}>
@@ -1009,6 +1154,11 @@ const ConfigField = ({ f, value, onChange }) => {
         </span>
         {f.tier === 'restart' && <Pill tone="warn">restart</Pill>}
         {f.masked && <Pill>hidden</Pill>}
+        {f.follows_internet && (
+          <span className="config-follows-internet" title="its default follows the answer in Settings → Internet; saving a value here pins it"
+                style={{ fontSize: 11, color: 'var(--fg-muted)' }}>follows the internet answer</span>
+        )}
+        {greyed && <NeedsInternetNote compact/>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {input}
@@ -1339,6 +1489,9 @@ const LoginModal = ({ onClose }) => {
     // Only the sign-in's own refusal lands here: login()/setup() reject
     // only when the server did not say yes.
     if (failed) { setErr(loginErrorText(failed)); return; }
+    // First-run setup done: ask the internet question next, when nobody
+    // (the Windows installer, env_bootstrap) has answered it yet.
+    if (needsSetup) InternetAsk.offer();
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -1509,15 +1662,109 @@ const PairModal = ({ onClose }) => {
  * load-bearing: "sign in as an admin instead" leaves the pair modal
  * open behind the login so that cancelling the login returns to it.
  * Exactly one modal is ever on screen. */
+/* ---- First-run: "Will this Domovoi have internet?" -----------------
+ * The third step of first-run setup, after the admin password: the same
+ * three answers as Settings → Internet, plus "Decide later" (which leaves
+ * the Home row asking). Offered only when /api/config says nobody has
+ * answered — the Windows installer and `env_bootstrap --internet` answer
+ * before the dashboard ever opens. The save is the same PATCH Settings →
+ * Internet makes, with the Bearer the setup just minted. */
+const INTERNET_FIRST_RUN_CHOICES = [
+  { value: 'always', label: 'Yes, always', summary: "It's on our home internet." },
+  { value: 'sometimes', label: 'Sometimes', summary: "The connection comes and goes, or it's slow or metered." },
+  { value: 'never', label: 'No, keep everything in the house', summary: "There's no internet here, or I don't want Domovoi to use it." },
+];
+
+const InternetAsk = (() => {
+  let open = false;
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  return {
+    get open() { return open; },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    close() { open = false; notify(); },
+    // Ask only when the server says nobody has answered ('' — a server
+    // from before the question has no `internet_access` at all).
+    async offer() {
+      try {
+        const cfg = await apiGet('/api/config', { quiet: true });
+        if (cfg && cfg.internet_access === '') { open = true; notify(); }
+      } catch { /* the Home row will ask instead */ }
+    },
+  };
+})();
+
+const InternetFirstRunStep = ({ onClose }) => {
+  const [choice, setChoice] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const save = async () => {
+    if (!choice || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { internet_access: choice } });
+      const refused = res && res.rejected && res.rejected.internet_access;
+      if (refused) { setErr(`not saved — ${refused}`); setBusy(false); return; }
+      announceInternetChange(choice);
+      onClose();
+    } catch (e) {
+      const text = typeof mutationErrorText === 'function'
+        ? mutationErrorText(e, 'Save', { kept: false }) : apiErrorText(e);
+      if (text) setErr(text);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="cal-modal-bg">
+      <div className="cal-modal internet-first-run" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-head">
+          <div className="ttl">will this Domovoi have internet?</div>
+          <IconButton name="x" onClick={onClose}/>
+        </div>
+        <div className="cal-modal-body">
+          <div className="hint">
+            Domovoi understands everything you say right here on this box either way.
+            The internet only adds extras — web answers, podcast downloads, finding
+            artists by the names people say. Change it any time in Settings → Internet.
+          </div>
+          {INTERNET_FIRST_RUN_CHOICES.map((c) => (
+            <label key={c.value} className={`internet-choice${choice === c.value ? ' on' : ''}`} data-choice={c.value}
+                   style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' }}>
+              <input type="radio" name="internet-first-run" value={c.value}
+                     checked={choice === c.value} onChange={() => setChoice(c.value)}/>
+              <span>
+                <span style={{ fontWeight: 600 }}>{c.label}</span>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-muted)' }}>{c.summary}</span>
+              </span>
+            </label>
+          ))}
+          <div className="hint">
+            Your voice and recordings never leave this box, whatever you answer.
+          </div>
+          {err && <div className="err">{err}</div>}
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={onClose}>Decide later</Button>
+          <Button variant="primary" onClick={save} disabled={busy || !choice}>
+            {busy ? 'saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // subscribeModal: every change, plus the login modal coming down the
   // moment a sign-in succeeds (auth.js signedIn).
   useEffect(() => (Auth.subscribeModal ? Auth.subscribeModal(force) : Auth.subscribe(force)), []);
+  useEffect(() => InternetAsk.subscribe(force), []);
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.
   if (Auth.modalOpen) return <LoginModal key={`login-${Auth.modalSeq || 0}`} onClose={() => Auth.closeModal()}/>;
   if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
+  if (InternetAsk.open) return <InternetFirstRunStep onClose={() => InternetAsk.close()}/>;
   return null;
 };
 

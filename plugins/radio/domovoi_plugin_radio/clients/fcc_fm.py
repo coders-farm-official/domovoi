@@ -34,6 +34,8 @@ import logging
 from dataclasses import dataclass
 from typing import Iterator, Protocol
 
+from domovoi.sdk import egress
+
 from domovoi_plugin_radio import USER_AGENT
 
 log = logging.getLogger(__name__)
@@ -65,13 +67,11 @@ class RealFccFmClient:
             log.warning("fcc_fm: invalid state %r", state_code)
             return []
 
-        import httpx
-
         params = {"state": state_code.upper(), "list": "4"}
         try:
             # The CGI endpoint is slow; this only ever runs as a
             # background job / startup hook, so a long timeout is fine.
-            async with httpx.AsyncClient(
+            async with egress.async_client(
                 timeout=60.0, headers={"User-Agent": USER_AGENT}
             ) as client:
                 response = await client.get(self._base_url, params=params)

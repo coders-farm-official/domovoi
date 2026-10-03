@@ -127,3 +127,58 @@ def test_a_bootstrapped_env_carries_the_examples_strict_pairing() -> None:
             k, _, v = line.partition("=")
             values[k.strip()] = v.strip()
     assert values.get("SATELLITE_PAIRING_STRICT") == "true"
+
+
+# ─── The internet answer (INTERNET_ACCESS) ─────────────────────────────────
+#
+# The example must not pin the settings whose default follows the answer:
+# env_bootstrap copies it into every fresh .env, and an uncommented line
+# there is "set by hand" — the answer could never move it.
+
+
+def test_the_example_documents_the_internet_answer() -> None:
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "# INTERNET_ACCESS=" in text
+    for word in ("always", "sometimes", "never", "Settings → Internet", "docs/INTERNET.md"):
+        assert word in text, word
+    assert "INTERNET_ACCESS" not in _example_values(), "the example must leave the answer unset"
+
+
+def test_the_example_does_not_pin_the_answers_followers() -> None:
+    from domovoi.config import PROFILE_DEFAULTS
+
+    values = _example_values()
+    for pd in PROFILE_DEFAULTS:
+        assert pd.name.upper() not in values, f".env.example pins {pd.name.upper()}"
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "# SEED_VOICE_CATALOG=true" in text
+    assert "# LIBRARY_ENRICHER_ENABLED=true" in text
+
+
+def test_the_example_asks_for_an_acoustid_application_key() -> None:
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "https://acoustid.org/new-application" in text
+    assert "https://acoustid.org/api-key" not in text
+
+
+def test_an_unanswered_fresh_install_behaves_as_before() -> None:
+    """With the two lines commented, an unanswered box gets the field
+    defaults — which are exactly what the uncommented lines used to say."""
+    assert Settings.model_fields["seed_voice_catalog"].default is True
+    assert Settings.model_fields["library_enricher_enabled"].default is True
+
+
+def test_a_bootstrapped_env_with_an_answer_still_carries_strict_pairing() -> None:
+    from domovoi.env_bootstrap import render_fresh_env
+
+    rendered = render_fresh_env(
+        ENV_EXAMPLE.read_text(encoding="utf-8"), "a-random-password", internet="never"
+    )
+    values = {}
+    for raw in rendered.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            values[k.strip()] = v.strip()
+    assert values.get("SATELLITE_PAIRING_STRICT") == "true"
+    assert values.get("INTERNET_ACCESS") == "never"

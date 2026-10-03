@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
+from datetime import date
 from pathlib import Path
 
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
@@ -113,3 +115,76 @@ def write_env_values(
         except OSError:
             pass
         raise
+
+
+def env_file_keys(env_path: Path | None = None) -> set[str]:
+    """The UPPER-cased keys of every uncommented ``KEY=...`` line in the
+    ``.env`` (empty when the file is missing or unreadable). Together with
+    the process environment this is what "set by hand" means for a
+    setting whose default follows the internet answer: a dashboard save
+    writes a line here, and "follow the answer again" comments it out."""
+    path = env_path or _ENV_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    keys: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key.lower().startswith("export "):
+            key = key[len("export "):].strip()
+        if key:
+            keys.add(key.upper())
+    return keys
+
+
+def remove_env_keys(names: Iterable[str], env_path: Path | None = None) -> list[str]:
+    """COMMENT OUT — never delete — every uncommented ``KEY=...`` line whose
+    key matches one of ``names`` (case-insensitively). Each becomes
+    ``# KEY=value  (follows INTERNET_ACCESS since <YYYY-MM-DD>)``, so the
+    old value stays visible to whoever reads the file and is one edit away
+    from coming back. Same atomic temp-file + ``os.replace`` write as
+    :func:`write_env_values`; the file's own line endings are kept.
+
+    Returns the UPPER keys commented out. A missing file is a no-op that
+    returns []."""
+    wanted = {str(n).upper() for n in names if str(n).strip()}
+    path = env_path or _ENV_FILE
+    if not wanted or not path.exists():
+        return []
+    raw = path.read_bytes().decode("utf-8")
+    lines = raw.splitlines(keepends=True)
+    stamp = date.today().isoformat()
+    out: list[str] = []
+    removed: list[str] = []
+    for line in lines:
+        body = line.rstrip("\r\n")
+        ending = line[len(body):]
+        stripped = body.lstrip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            bare = key[len("export "):].strip() if key.lower().startswith("export ") else key
+            if bare.upper() in wanted:
+                out.append(f"# {stripped}  (follows INTERNET_ACCESS since {stamp}){ending}")
+                if bare.upper() not in removed:
+                    removed.append(bare.upper())
+                continue
+        out.append(line)
+    if not removed:
+        return []
+    content = "".join(out)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return removed

@@ -381,7 +381,7 @@ const PullJob = ({ j, onCancel }) => {
 
 const _ROLE_TAG = { qa: 'Q&A', tool: 'tool', both: 'Q&A · tool', embedding: 'embedding', stt: 'STT', vision: 'vision' };
 
-const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
+const CatalogCard = ({ m, hw, installedNames, pulling, onInstall, internetOff }) => {
   const isInstalled = installedNames.has(m.name);
   const isPulling = pulling.has(m.name);
   return (
@@ -403,7 +403,8 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
       <div style={{ marginTop: 2 }}>
         {isInstalled
           ? <Pill tone="ok">installed</Pill>
-          : <Button variant="primary" icon="download" disabled={isPulling}
+          : <Button variant="primary" icon="download" disabled={isPulling || internetOff}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                     onClick={() => onInstall(m.name)}>{isPulling ? 'installing…' : 'Install'}</Button>}
       </div>
     </div>
@@ -417,12 +418,17 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
 const _resolveCompute = (compute, device) =>
   (!compute || compute === 'auto') ? (device === 'cpu' ? 'int8' : 'float16') : compute;
 
-const SttRow = ({ m, hw, active, onSelect }) => {
+const SttRow = ({ m, hw, active, onSelect, internetOff }) => {
   // `active` is the stt role row: model plus the device/compute pair (an
   // older core sends no pair, and then the name alone decides).
   const isActive = !!active && active.model === m.name
     && (active.compute_type == null
         || _resolveCompute(m.compute, active.device) === _resolveCompute(active.compute_type, active.device));
+  // `cached` (the catalog's own check of this host's model cache): a size
+  // that isn't downloaded can't load while the box stays off the internet
+  // (the core would fall back to another model after the restart).
+  const notOnDisk = m.cached === false;
+  const blocked = notOnDisk && internetOff && !isActive;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
@@ -431,11 +437,43 @@ const SttRow = ({ m, hw, active, onSelect }) => {
             title={m.compute === 'auto' ? 'float16 on a GPU, int8 on the CPU' : undefined}>{m.compute}</span>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', flex: 1, minWidth: 140 }}>{m.accuracy}</span>
       <FitBadge estGb={m.est_vram_gb} hw={hw}/>
+      {notOnDisk && !isActive && (
+        <span className="mono stt-not-cached" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+              title="downloads the first time it loads">not downloaded</span>
+      )}
       {isActive
         ? <Pill tone="live">active</Pill>
-        : <Button variant="secondary" onClick={() => onSelect(m)}>Use (restart)</Button>}
+        : <Button variant="secondary" onClick={() => onSelect(m)} disabled={blocked}
+                  title={blocked ? NEEDS_INTERNET_TEXT : undefined}>Use (restart)</Button>}
+      {blocked && <NeedsInternetNote compact/>}
     </div>
   );
+};
+
+/* Under "never" a pull from a registry inside the house stays allowed
+ * (web/backend/api/models.py _local_registry): the reference names a host
+ * ("nas.local/library/llama3", "192.168.1.5:5000/m") that is on this
+ * network. Mirrors domovoi.egress.is_local_host, no DNS. */
+const _MODELS_LOCAL_SUFFIXES = ['.local', '.localhost', '.lan', '.home.arpa', '.internal', '.localdomain'];
+const _modelsLanRegistryRef = (ref) => {
+  const s = String(ref || '').trim().toLowerCase();
+  if (!s.includes('/')) return false;
+  let head = s.split('/')[0];
+  if (!head || (!head.includes('.') && !head.includes(':') && head !== 'localhost')) return false;
+  if (head.startsWith('[')) head = head.slice(1, head.indexOf(']') > 0 ? head.indexOf(']') : undefined);
+  else if ((head.match(/:/g) || []).length === 1) head = head.split(':')[0];
+  if (head === 'localhost' || head === 'host.docker.internal') return true;
+  if (_MODELS_LOCAL_SUFFIXES.some((x) => head.endsWith(x))) return true;
+  const v4 = head.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+      || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (head.includes(':')) {
+    return head === '::1' || head.startsWith('fc') || head.startsWith('fd') || head.startsWith('fe80');
+  }
+  return !head.includes('.');
 };
 
 /* (Image-generation model management lives on the Image Generation
@@ -470,6 +508,13 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
  * the page header. */
 const ModelsPanel = () => {
   const [fire, node] = useToast();
+  // Installing a model pulls it from the Ollama registry: greyed while the
+  // box is set to stay off the internet (Settings → Internet).
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
 
   const { data: hwData, loading: hwLoading, refresh: refreshHw } =
     useApiObject('/api/models/hardware');
@@ -530,7 +575,7 @@ const ModelsPanel = () => {
       if (okMsg) fire(typeof okMsg === 'function' ? okMsg(r) : okMsg);
       return r;
     } catch (e) {
-      fire(`failed: ${e.message || e}`);
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
     }
   };
 
@@ -622,17 +667,22 @@ const ModelsPanel = () => {
               style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center',
                        flexWrap: 'wrap', borderBottom: '1px solid var(--border-soft)' }}>
           <input value={pullName} onChange={(e) => setPullName(e.target.value)}
-                 placeholder="Pull by name (e.g. qwen2.5:7b)"
+                 placeholder={internetOff ? 'Pull from a registry in the house (e.g. nas.local/library/qwen2.5:7b)'
+                                          : 'Pull by name (e.g. qwen2.5:7b)'}
+                 title={internetOff ? 'only a registry on this network while the internet is off' : undefined}
                  style={{ font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
                           border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
                           flex: 1, minWidth: 220 }}/>
-          <Button variant="primary" icon="download" type="submit">Install</Button>
+          <Button variant="primary" icon="download" type="submit"
+                  disabled={internetOff && !_modelsLanRegistryRef(pullName)}
+                  title={internetOff && !_modelsLanRegistryRef(pullName) ? NEEDS_INTERNET_TEXT : undefined}>Install</Button>
+          {internetOff && !_modelsLanRegistryRef(pullName) && <NeedsInternetNote compact/>}
         </form>
         <div style={{ padding: 14, display: 'grid',
                       gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 10 }}>
           {catOllama.map((m) => (
             <CatalogCard key={m.name} m={m} hw={hw} installedNames={installedNames}
-                         pulling={pulling} onInstall={install}/>
+                         pulling={pulling} onInstall={install} internetOff={internetOff}/>
           ))}
         </div>
       </Card>
@@ -643,6 +693,7 @@ const ModelsPanel = () => {
                            loading={speechTimingsLoading}/>
         {catWhisper.map((m, i) => (
           <SttRow key={`${m.name}-${m.compute}-${i}`} m={m} hw={hw} active={sttActive}
+                  internetOff={internetOff}
                   onSelect={(row) => switchModel({ role: 'stt' }, row.name, row.compute)}/>
         ))}
       </Card>

@@ -27,6 +27,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
+from domovoi import egress
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
@@ -161,6 +162,11 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
     voice = next((v for v in rows if v["id"] == voice_id), None)
     if voice is None:
         raise HTTPException(status_code=404, detail=f"voice {voice_id} not found")
+    # A Microsoft Edge voice is synthesized by Microsoft: under
+    # INTERNET_ACCESS=never the sample is refused here, before the core is
+    # asked (it would otherwise answer in a Piper stand-in voice).
+    if voice["engine"] == "edge" and egress.internet_turned_off():
+        raise egress.http_exception("Microsoft Edge voices")
 
     status, audio, headers = await post_admin_bytes(
         "/v1/admin/voices/sample",
@@ -188,7 +194,10 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
 )
 async def register_edge_voice(payload: EdgeVoiceCreate, request: Request) -> Voice:
     """Register a Microsoft Edge cloud voice by its voice id (e.g.
-    ``en-US-AriaNeural``). No file — the engine downloads on demand."""
+    ``en-US-AriaNeural``). No file — the engine downloads on demand.
+    409 under ``INTERNET_ACCESS=never``: the voice could never speak."""
+    if egress.internet_turned_off():
+        raise egress.http_exception("Microsoft Edge voices")
     name = payload.name.strip()
     voice_id = payload.voice_id.strip()
     try:

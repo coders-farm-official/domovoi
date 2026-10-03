@@ -41,6 +41,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
+from domovoi import egress
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -339,12 +340,19 @@ class HttpMusicBrainzClient:
         self, path: str, params: dict[str, str], timeout: float
     ) -> tuple[int, dict[str, Any] | None]:
         """(HTTP status, parsed JSON or None). Raises
-        :class:`MusicBrainzUnavailable` when no answer came back."""
+        :class:`MusicBrainzUnavailable` when no answer came back —
+        including when internet access is turned off for this box, so the
+        alias fetch backs off instead of recording a verdict."""
         import requests
 
+        url = f"{self.BASE}/{path}"
+        try:
+            egress.require_destination(url)
+        except egress.InternetTurnedOff as e:
+            raise MusicBrainzUnavailable("internet off") from e
         try:
             r = requests.get(
-                f"{self.BASE}/{path}",
+                url,
                 params=params,
                 headers={"User-Agent": self.USER_AGENT, "Accept": "application/json"},
                 timeout=timeout,

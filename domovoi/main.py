@@ -213,6 +213,24 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
+    # Saving the internet answer starts the local search helper (SearXNG)
+    # for always / sometimes and stops it for never, in the background
+    # (domovoi/searxng_service.py). Never run at boot: no docker call can
+    # slow or break a start.
+    from domovoi import searxng_service
+
+    reapply.on_reapply(
+        "internet_access", searxng_service.schedule_reconcile, key="searxng"
+    )
+    # Saving never also stops a room that is playing an internet station
+    # and takes internet streams out of every room's queue: MPD fetches
+    # them itself and resumes them after any container restart
+    # (domovoi/mpd_internet.py).
+    from domovoi import mpd_internet
+
+    reapply.on_reapply(
+        "internet_access", mpd_internet.schedule_purge, key="mpd_internet"
+    )
 
 
 # At shutdown, how long a worker owner's (a plugin's, the core's) running
@@ -255,6 +273,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth_mod.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # The connectivity probe starts here — before the voice seed and the
+    # boot clip render, which ask it whether Microsoft voices are usable
+    # (contract D14). One ≤ 2 s dial at boot; none at all when the
+    # household answered INTERNET_ACCESS=never (it reports turned_off).
+    probe = ConnectivityProbe()
+    await probe.start()
+    app.state.probe = probe
+    # Module-level probe registration so the SDK's ConnectivityView and
+    # connectivity-gated startup hooks can read it without an app ref.
+    from domovoi import connectivity as connectivity_mod
+
+    connectivity_mod.set_current_probe(probe)
 
     # Pre-warm the clients so first-request latency is bounded.
     # In stub mode these are instant; with real clients this blocks for
@@ -353,6 +384,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # (timer, QA, library metadata) should still work even if
             # docker is misbehaving.
             log.warning("MPD startup warm failed: %s", e)
+        # Under INTERNET_ACCESS=never: a room's MPD resumes whatever its
+        # state file holds after a container restart, internet stations
+        # included. Take those out of every queue, in the background
+        # (a no-op for any other answer; domovoi/mpd_internet.py).
+        from domovoi import mpd_internet
+
+        mpd_internet.schedule_boot_purge()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -479,15 +517,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the socket closes; a ringing caller is NOT in active_dropins,
     # because no bridge exists yet.
     app.state.pending_dropins = {}
-
-    probe = ConnectivityProbe()
-    await probe.start()
-    app.state.probe = probe
-    # Module-level probe registration so the SDK's ConnectivityView and
-    # connectivity-gated startup hooks can read it without an app ref.
-    from domovoi import connectivity as connectivity_mod
-
-    connectivity_mod.set_current_probe(probe)
 
     # ── Core background work — the declarative worker registry (§4.5) ──
     # Worker start/stop is data, not hand-wired code: every core
@@ -903,12 +932,28 @@ async def handlers() -> list[HandlerInfo]:
 
 @app.get("/v1/connectivity", response_model=ConnectivityState)
 async def connectivity() -> ConnectivityState:
+    """The probe's view, plus the household's internet answer (``policy``)
+    and why ``online`` says what it says (``reason``: connected / offline /
+    turned_off — the last when the answer is ``never`` and the probe
+    doesn't dial). The gate applies the moment the answer changes; the
+    probe's own state catches up on its re-check."""
+    from domovoi import egress
+
     probe: ConnectivityProbe = app.state.probe
+    turned_off = egress.internet_turned_off()
+    if turned_off:
+        reason = "turned_off"
+    elif getattr(probe, "reason", None) in ("connected", "offline"):
+        reason = probe.reason
+    else:
+        reason = "connected" if probe.online else "offline"
     return ConnectivityState(
-        online=probe.online,
+        online=bool(probe.online) and not turned_off,
         last_checked_at=probe.last_checked_at,
         last_online_at=probe.last_online_at,
         target=probe.target,
+        policy=egress.policy(),
+        reason=reason,
     )
 
 
@@ -1075,7 +1120,9 @@ async def satellite_code_file(path: str) -> FileResponse:
 async def satellite_plugins_manifest() -> dict[str, Any]:
     """``{"files": {"<slug>/<rel>": sha256}, "meta": {slug: {version,
     apt_packages, pip_requirements, pip_lockfile, post_install}}}`` for
-    every enabled plugin declaring a [satellite] payload."""
+    every enabled plugin declaring a [satellite] payload. Under
+    ``INTERNET_ACCESS=never`` each slug also carries ``"offline": true``:
+    the satellite installs its apt packages from local caches only."""
     from domovoi.satellite_payload import build_channel_manifest
 
     return await build_channel_manifest()
@@ -3779,6 +3826,10 @@ async def admin_get_config(
 
     ``advanced_available`` tells the page which of those it got.
     """
+    import os
+
+    from domovoi import internet_profile
+    from domovoi.config import PROFILE_FIELD_NAMES
     from domovoi.config_schema import EDITABLE_FIELDS, mask_secret
 
     wants = (section or "").strip().lower() or None
@@ -3799,6 +3850,12 @@ async def admin_get_config(
             ),
         )
 
+    # The internet answer: which rows follow it right now (in the profile,
+    # the answer set, nobody pinned the key by hand) and which keys the
+    # process environment pins (read-only in the dashboard).
+    answered = bool(settings.internet_access)
+    hand_set = internet_profile.hand_set_fields()
+    environ_keys = {k.upper() for k in os.environ}
     fields = []
     for spec in EDITABLE_FIELDS:
         if wants is not None and spec.section != wants:
@@ -3806,6 +3863,7 @@ async def admin_get_config(
         if spec.section == "advanced" and not advanced_ok:
             continue
         value = getattr(settings, spec.name, None)
+        in_profile = spec.name in PROFILE_FIELD_NAMES
         fields.append(
             {
                 "name": spec.name,
@@ -3825,6 +3883,15 @@ async def admin_get_config(
                 # letting someone save the mask back over the real value.
                 "masked": bool(spec.secret and not full_read),
                 "value": value if (full_read or not spec.secret) else mask_secret(value),
+                "choice_labels": spec.choice_labels,
+                # Greyed with "needs internet" under INTERNET_ACCESS=never.
+                "needs_internet": spec.needs_internet,
+                "needs_internet_choices": list(spec.needs_internet_choices),
+                # Its default follows the internet answer (config.PROFILE_DEFAULTS)…
+                "internet_profile": in_profile,
+                # …and right now it does: answered, and not pinned by hand.
+                "follows_internet": in_profile and answered and spec.name not in hand_set,
+                "set_in_environment": spec.name.upper() in environ_keys,
             }
         )
     # One group per plugin (design §4.6): FieldSpec rows joined with the
@@ -3909,6 +3976,10 @@ class _AdminConfigUpdateBody(BaseModel):
     # values validate through the plugin model, persist to
     # ~/.domovoi/plugins/<slug>.env, and run registered reapply hooks.
     plugin: str | None = None
+    # Settings whose default follows the internet answer and that someone
+    # pinned by hand: "follow the answer again" comments their .env line
+    # out (never deletes it) and re-derives them (Settings → Internet).
+    follow_internet: list[str] = Field(default_factory=list, max_length=16)
 
 
 @app.post(
@@ -3923,9 +3994,18 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
     changes. 'hot'/'reapply' fields mutate the live settings singleton now;
     'restart' fields are written to .env but returned in restart_required.
     Unknown or out-of-range fields are rejected and nothing is applied for
-    them. Serialized behind app.state.config_apply_lock."""
+    them. Serialized behind app.state.config_apply_lock.
+
+    The internet answer (``internet_access``) is saved on its own, after
+    the other changes: refused when the process environment pins
+    INTERNET_ACCESS; reverted and refused when ``.env`` can't be written
+    (both processes read the answer from there); otherwise every setting
+    that follows it is re-derived (``internet_profile.apply_answer``) and
+    its reapply hooks run. ``follow_internet`` lets hand-set followers
+    follow the answer again; the response lists them in ``followed``."""
     import time
 
+    from domovoi import internet_profile
     from domovoi import reapply as reapply_registry
     from domovoi.config_env_writer import write_env_values
     from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
@@ -3967,16 +4047,29 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
                     "rejected": {"__plugin__": str(e)},
                 }
 
+    internet_answer: str | None = None
+    internet_saved = False
+    followed: list[str] = []
+    normalized: dict[str, str] = {}
+
     async with app.state.config_apply_lock:
         for name, raw in (body.changes or {}).items():
             spec = FIELD_BY_NAME.get(name)
             if spec is None:
                 rejected[name] = "not an editable setting"
                 continue
+            if name == "internet_access" and internet_profile.answer_locked():
+                rejected[name] = internet_profile.ANSWER_LOCKED
+                continue
             try:
                 coerced = coerce_and_validate(spec, raw)
             except ValueError as e:
                 rejected[name] = str(e)
+                continue
+            if name == "internet_access":
+                # Saved on its own below, once the other changes are in
+                # .env (so a follower pinned in this same write stays put).
+                internet_answer = str(coerced)
                 continue
             persist[name] = coerced
             if spec.tier == "restart":
@@ -3989,7 +4082,7 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
                 reapply_fields.append(name)
 
         # Cross-field: a Whisper device + compute type that can't load.
-        normalized = _guard_whisper_pair(persist, restart_required, rejected)
+        normalized.update(_guard_whisper_pair(persist, restart_required, rejected))
 
         # Persist every accepted change (incl. restart-tier) to .env.
         if persist:
@@ -3999,6 +4092,43 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
                 log.warning("config save: .env write failed: %s", e)
                 rejected["__persist__"] = f".env write failed: {e}"
 
+        # The internet answer. .env is where BOTH processes read it
+        # (egress.policy), so an answer that can't be written there is not
+        # an answer: revert the live value and refuse.
+        if internet_answer is not None:
+            old_answer = settings.internet_access
+            setattr(settings, "internet_access", internet_answer)
+            try:
+                write_env_values({"internet_access": internet_answer})
+            except Exception as e:
+                setattr(settings, "internet_access", old_answer)
+                log.warning("config save: internet answer not saved, .env write failed: %s", e)
+                rejected["internet_access"] = f".env write failed: {e}"
+            else:
+                internet_saved = True
+                applied.append("internet_access")
+                reapply_fields.append("internet_access")
+                outcome = internet_profile.apply_answer(old_answer, internet_answer)
+                applied.extend(n for n in outcome.applied if n not in applied)
+                restart_required.extend(
+                    n for n in outcome.restart_required if n not in restart_required
+                )
+                normalized.update(outcome.notes)
+
+        # "Follow the internet answer again" for settings pinned by hand.
+        if body.follow_internet:
+            try:
+                followed, refused, follow_restart = internet_profile.follow_again(
+                    list(body.follow_internet)
+                )
+            except Exception as e:
+                log.warning("config save: follow-the-answer failed: %s", e)
+                for name in body.follow_internet:
+                    rejected[name] = f".env write failed: {e}"
+            else:
+                rejected.update(refused)
+                restart_required.extend(n for n in follow_restart if n not in restart_required)
+
         # tier="reapply" — run the registered hooks (§4.6). The registry
         # dedupes shared callbacks (tts_engine + tts_speed reset the TTS
         # client once) and isolates hook failures from the write.
@@ -4007,12 +4137,13 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
             if ran:
                 log.info("config save: reapply hooks ran: %s", ", ".join(ran))
 
-        if persist:
+        logged = set(persist) | set(followed) | ({"internet_access"} if internet_saved else set())
+        if logged:
             latency_ms = int((time.monotonic() - started) * 1000)
             async with session_scope() as s:
                 await IntentLogRepository(s).log(
                     room_id="",
-                    transcript=f"[ui] update config {','.join(sorted(persist))}",
+                    transcript=f"[ui] update config {','.join(sorted(logged))}",
                     matched_handler="config",
                     matched_path=None,
                     online=True,
@@ -4023,10 +4154,61 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
         "applied": applied,
         "restart_required": restart_required,
         "rejected": rejected,
-        # Accepted-but-adjusted fields and why (today only the Whisper
-        # compute type following a device change); {} when nothing was.
+        # Accepted-but-adjusted fields and why (the Whisper compute type
+        # following a device change; the internet answer's Hugging Face
+        # note); {} when nothing was.
         "normalized": normalized,
+        # Settings that follow the internet answer again (follow_internet).
+        "followed": followed,
     }
+
+
+# ─── Settings → Internet ──────────────────────────────────────────────────
+
+
+@app.get(
+    "/v1/admin/internet",
+    # A read, like the config read it sits beside: the dashboard cookie
+    # renders it, a Bearer is accepted. Writes go through POST
+    # /v1/admin/config (internet_access, follow_internet) — one write path.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_internet() -> dict[str, Any]:
+    """The household's internet answer and what follows from it — the
+    document behind Settings → Internet: the answer and where it is set
+    (locked when the process environment pins it), the three choices in
+    the installer's words, the privacy note, connectivity (reason
+    ``turned_off`` under ``never``), and every setting whose default
+    follows the answer — its live value, what the next boot will use, who
+    set it, and what a restart would change. Never carries a key."""
+    from domovoi import internet_profile
+
+    return internet_profile.status(settings, getattr(app.state, "probe", None))
+
+
+@app.post(
+    "/v1/admin/internet/search-helper",
+    # An admin mutation (it starts or stops a container), not a config
+    # write: nothing is saved.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_internet_search_helper() -> dict[str, Any]:
+    """Settings → Internet's "start it again": run the search helper's
+    start/stop for the CURRENT answer in the background — the same thing
+    saving the answer does (``domovoi/searxng_service.py``). For a first
+    start that failed or timed out, or a helper somebody stopped by hand.
+    Returns at once with the helper's state (``starting`` while docker
+    works); the page polls ``GET /v1/admin/internet``. A no-op while the
+    answer is unset or ``DOMOVOI_MANAGE_SEARXNG=0``."""
+    from domovoi import egress, searxng_service
+
+    scheduled = False
+    if searxng_service.managed() and egress.policy() in egress.POLICIES:
+        searxng_service.schedule_reconcile()
+        scheduled = True
+        # Let the task take the lock, so the state reads "starting".
+        await asyncio.sleep(0)
+    return {"scheduled": scheduled, "search_helper": searxng_service.status()}
 
 
 @app.get("/v1/admin/hardware")
@@ -4477,10 +4659,29 @@ async def admin_library_enrich() -> dict[str, Any]:
     Shazam), so this can take ~13 minutes for a fresh 750-track
     library. Voice path replies with an ETA + final announcement;
     the web caller doesn't get the announcement, just the queued ack.
-    """
-    from domovoi.workers.library_enricher import enrich_library
 
-    asyncio.create_task(enrich_library(), name="admin-library-enrich")
+    It is only queued when it can do something (fix B3): under
+    ``INTERNET_ACCESS=never`` the answer is the 409 internet-off
+    refusal; disabled, offline, no provider (no AcoustID key and no
+    Shazam add-on) or a sweep already running answer
+    ``{"queued": false, "reason": ...}`` and start nothing.
+    """
+    from domovoi import egress
+    from domovoi.workers import library_enricher
+
+    if egress.internet_turned_off():
+        raise egress.http_exception("library song recognition")
+    if not settings.library_enricher_enabled:
+        return {"queued": False, "reason": "disabled"}
+    probe = getattr(app.state, "probe", None)
+    if probe is not None and not probe.online:
+        return {"queued": False, "reason": "offline"}
+    if not library_enricher.provider_available():
+        return {"queued": False, "reason": "no_provider"}
+    if library_enricher.enrich_running():
+        return {"queued": False, "reason": "running"}
+
+    asyncio.create_task(library_enricher.enrich_library(), name="admin-library-enrich")
     return {"queued": True, "worker": "library_enricher"}
 
 

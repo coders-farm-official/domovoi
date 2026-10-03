@@ -193,3 +193,57 @@ def test_cli_reports_and_never_fails(fresh, monkeypatch, capsys) -> None:
     assert "created" in capsys.readouterr().out
     assert env_bootstrap.main() == 0
     assert "left untouched" in capsys.readouterr().out
+
+
+# ─── --internet: the household's answer, in a NEW .env only ───────────────
+
+
+def _cli(fresh, monkeypatch):
+    env_path, example = fresh
+    monkeypatch.setattr(env_bootstrap, "ENV_FILE", env_path)
+    monkeypatch.setattr(env_bootstrap, "ENV_EXAMPLE", example)
+    monkeypatch.setattr(env_bootstrap, "_pgdata_volume_exists", _no_volume)
+    return env_path
+
+
+@pytest.mark.parametrize("given, stored", [("always", "always"), ("Sometimes", "sometimes"),
+                                           ("offline", "never"), ("no", "never")])
+def test_internet_flag_writes_the_answer_into_a_fresh_env(fresh, monkeypatch, capsys, given, stored) -> None:
+    env_path = _cli(fresh, monkeypatch)
+    assert env_bootstrap.main(["--internet", given]) == 0
+    text = env_path.read_text(encoding="utf-8")
+    assert _kv(text)["INTERNET_ACCESS"] == stored
+    assert "Settings → Internet" in text
+    assert "written by `python -m domovoi.env_bootstrap --internet`" in text
+    assert f"INTERNET_ACCESS={stored}" in capsys.readouterr().out
+    # the rest of the bootstrap is unchanged
+    assert _kv(text)["POSTGRES_PASSWORD"] != DEFAULT_PASSWORD
+    from domovoi import egress
+
+    assert egress.read_policy(env_path=env_path, environ={}) == stored
+
+
+def test_internet_flag_never_touches_an_existing_env(fresh, monkeypatch, capsys) -> None:
+    env_path = _cli(fresh, monkeypatch)
+    env_path.write_bytes(b"BOT_NAME=Kept\r\n")
+    assert env_bootstrap.main(["--internet", "never"]) == 0
+    assert env_path.read_bytes() == b"BOT_NAME=Kept\r\n"
+    out = capsys.readouterr().out
+    assert "exists; left untouched (change the internet answer in Settings → Internet)" in out
+
+
+def test_internet_flag_refuses_a_value_that_is_not_an_answer(fresh, monkeypatch, capsys) -> None:
+    env_path = _cli(fresh, monkeypatch)
+    assert env_bootstrap.main(["--internet", "maybe"]) == 2
+    assert not env_path.exists()
+    assert "usage:" in capsys.readouterr().err
+    assert env_bootstrap.main(["--internet", ""]) == 2
+    assert not env_path.exists()
+
+
+def test_without_the_flag_no_answer_is_written(fresh, monkeypatch) -> None:
+    env_path = _cli(fresh, monkeypatch)
+    assert env_bootstrap.main([]) == 0
+    assert "INTERNET_ACCESS" not in _kv(env_path.read_text(encoding="utf-8"))
+    assert render_fresh_env(ENV_EXAMPLE.read_text(encoding="utf-8"), "pw", internet="") == render_fresh_env(
+        ENV_EXAMPLE.read_text(encoding="utf-8"), "pw")

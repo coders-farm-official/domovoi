@@ -114,6 +114,11 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.webkit",
     "domovoi.config",
     "domovoi.net_safety",
+    # The internet answer (INTERNET_ACCESS): net_safety consults it lazily
+    # on every check, the config proxy reports it, and the egress module
+    # reads .env through config_env_writer.
+    "domovoi.egress",
+    "domovoi.config_env_writer",
     "domovoi.db.session",
     "domovoi.db.repositories",
     "domovoi.admin_auth",
@@ -298,15 +303,19 @@ class WebPluginContext:
         self.db_session_scope = _ScopedSession
 
     def http(self, **kwargs):
-        """UA-preset httpx.AsyncClient factory (mirror of ``sdk.http``)."""
-        import httpx
+        """UA-preset httpx.AsyncClient factory (mirror of ``sdk.http``),
+        with the internet-answer hook (``egress.async_request_hook``)
+        first in ``event_hooks["request"]``: under INTERNET_ACCESS=never a
+        request to a host that is not on this network raises
+        ``egress.InternetTurnedOff`` before anything is sent."""
+        from domovoi import egress
 
         headers = kwargs.pop("headers", {}) or {}
         headers.setdefault(
             "User-Agent",
             "domovoi (+github.com/coders-farm-official/domovoi)",
         )
-        return httpx.AsyncClient(headers=headers, **kwargs)
+        return egress.async_client(headers=headers, **kwargs)
 
     def add_router(self, router: APIRouter) -> None:
         self.routers.append(router)

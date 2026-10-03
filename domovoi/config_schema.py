@@ -21,6 +21,16 @@ Tiers — how a saved change takes effect:
                   is read once at startup). The API returns it in
                   ``restart_required`` and the UI shows a badge.
 
+Internet: a field marked ``needs_internet`` (or a choice listed in
+``needs_internet_choices``) is greyed in the dashboard with "needs
+internet" when the household's internet answer is ``never``
+(INTERNET_ACCESS, Settings → Internet) — greyed, never hidden, so a
+household can find it and change its mind. The answer itself is the
+``internet_access`` row (its own group, "Internet", which the
+Configuration tab shows as a single line pointing at Settings →
+Internet). The fields whose DEFAULT follows the answer are listed in
+``domovoi.config.PROFILE_DEFAULTS``.
+
 Sections:
   * ``common``   — shown by default. Safe to tune.
   * ``advanced`` — folded behind a warning. Infra knobs (DB, ports,
@@ -76,6 +86,10 @@ class FieldSpec:
     unit: str | None = None
     pattern: str | None = None      # str fields: full-match regex the value must satisfy
     pattern_help: str | None = None  # the user-facing "expected ..." when it doesn't
+    # Greyed with "needs internet" in the dashboard when the internet
+    # answer is "never": the whole field, or only these choice values.
+    needs_internet: bool = False
+    needs_internet_choices: tuple[str, ...] = ()
 
     @property
     def secret(self) -> bool:
@@ -137,6 +151,23 @@ WHISPER_COMPUTE_TYPE_CHOICES = (
 
 # Order here is the display order within each group.
 EDITABLE_FIELDS: list[FieldSpec] = [
+    # ─── Internet (its own tab: Settings → Internet) ───────────────────
+    FieldSpec(
+        "internet_access", "Will this box use the internet?", "Internet",
+        "Yes, always: the online extras are on (web answers, finding "
+        "artists by the names people say, podcast downloads) and pause "
+        "by themselves when the internet drops. Sometimes: small lookups "
+        "run whenever the internet is up; big automatic downloads stay "
+        "off. No: Domovoi never contacts the internet, and the online "
+        "extras are greyed with 'needs internet'. The answer only sets "
+        "DEFAULTS — anything you set by hand wins. Your voice never "
+        "leaves this box on any answer. Applies immediately; a few "
+        "defaults follow after a restart.",
+        "choice", tier="reapply",
+        choices=["always", "sometimes", "never"],
+        choice_labels={"always": "Yes, always", "sometimes": "Sometimes",
+                       "never": "No, keep everything in the house"},
+    ),
     # ─── Identity ──────────────────────────────────────────────────────
     FieldSpec(
         "bot_name", "Bot name", "Identity",
@@ -285,6 +316,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "(espeak-ng on Linux, SAPI on Windows), robotic but always there. "
         "Falls through the chain if the preferred one fails.",
         "choice", tier="reapply", choices=["piper", "edge", "system"],
+        needs_internet_choices=("edge",),
     ),
     FieldSpec(
         "tts_speed", "Speaking rate", "Voice & speech",
@@ -337,21 +369,6 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.3, max=0.95,
     ),
 
-    # ─── Radio ─────────────────────────────────────────────────────────
-    FieldSpec(
-        "radio_dedup_window_sec", "Re-download cooldown", "Radio",
-        "Don't auto-queue the same detected song again within this many "
-        "seconds — stops a song on heavy rotation from queueing repeatedly.",
-        "int", min=60, max=86400, unit="sec",
-    ),
-    FieldSpec(
-        "radio_default_sample_interval_sec", "Default sample interval", "Radio",
-        "For a newly favorited station, how often to sample its audio to "
-        "identify the current song. Only affects stations favorited AFTER "
-        "the change.",
-        "int", min=30, max=3600, unit="sec",
-    ),
-
     # ─── Library ───────────────────────────────────────────────────────
     FieldSpec(
         "library_enricher_acoustid_min_score", "AcoustID match floor", "Library",
@@ -390,7 +407,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "an hour and a half the first time for ~2,000 artists, then only new "
         "artists), and only while the server is online. Legal names are "
         "filtered out. Off by default. Applies immediately.",
-        "bool", tier="hot",
+        "bool", tier="hot", needs_internet=True,
     ),
     FieldSpec(
         "music_match_play_threshold", "Play-without-asking score", "Library",
@@ -452,7 +469,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "the daily background job. Off = only the general local/national/"
         "global briefing is pre-fetched; topic feeds are pulled only when "
         "someone asks and confirms. Does NOT authorize verbal fetches.",
-        "bool",
+        "bool", needs_internet=True,
     ),
     FieldSpec(
         "news_items_per_ask", "Stories per ask", "News",
@@ -466,7 +483,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "City or region used to build the 'local' news scope. Empty = the "
         "general briefing skips the local block. Used to discover/select the "
         "local RSS feed.",
-        "str",
+        "str", needs_internet=True,
     ),
     FieldSpec(
         "news_retention_days", "News retention", "News",
@@ -511,12 +528,6 @@ EDITABLE_FIELDS: list[FieldSpec] = [
 
     # ─── Workers (restart to apply) ────────────────────────────────────
     FieldSpec(
-        "radio_sampler_enabled", "Radio sampler worker", "Workers",
-        "Enable passive song detection on favorited stations. Off = no "
-        "now-playing detection. Takes effect after a restart.",
-        "bool", tier="restart",
-    ),
-    FieldSpec(
         "memory_extractor_enabled", "Memory extractor worker", "Workers",
         "Enable the worker that mines conversations for long-term memories. "
         "Off = no new memories are inferred. Takes effect after a restart.",
@@ -527,7 +538,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Enable the daily news fetcher (general briefing + feed discovery + "
         "retention sweep). Off = no background news fetching. Takes effect "
         "after a restart.",
-        "bool", tier="restart",
+        "bool", tier="restart", needs_internet=True,
     ),
     FieldSpec(
         "memory_extractor_loop_sec", "Memory extractor interval", "Workers",
@@ -554,7 +565,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "searxng_url", "SearxNG URL", "Connections",
         "Where the SearxNG metasearch instance lives (powers 'check that "
         "online'). Takes effect after a restart.",
-        "str", section="advanced", tier="restart",
+        "str", section="advanced", tier="restart", needs_internet=True,
     ),
     FieldSpec(
         "mpd_host", "MPD host", "Connections",

@@ -1,9 +1,14 @@
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The internet answer's gate (no cycle: egress never imports this module).
+from domovoi import egress
 
 # .env lives next to config.py (in domovoi/), but `python -m
 # domovoi.main` is typically run from the repo root, where
@@ -78,6 +83,91 @@ def normalize_think_setting(value: object) -> str:
     if text in ("false", "0", "no", "off"):
         return "false"
     raise ValueError(f"expected default, true or false, got {value!r}")
+
+
+# ─── The internet answer: what each answer turns on ───────────────────────
+#
+# INTERNET_ACCESS (always | sometimes | never; unset = today's behaviour)
+# only sets DEFAULTS. Each row below is a setting whose default follows the
+# answer; a value set by hand — in the process environment, in .env, or by
+# a dashboard save (which writes .env) — always wins, and an unanswered box
+# keeps every field's own default. The gate half of "never" (no probe dial,
+# every outbound path refused) is domovoi/egress.py, not this table.
+#
+# Deliberately NOT here:
+#   * NEWS_AUTO_FETCH — topic news stays a personal opt-in on every answer;
+#   * TTS_ENGINE — Microsoft Edge voices are an informed opt-in, never a
+#     default (your voice never leaves the box);
+#   * SearXNG — a container, not a setting: started or stopped when the
+#     answer is saved.
+
+
+@dataclass(frozen=True)
+class ProfileDefault:
+    """One setting whose default follows the internet answer."""
+
+    name: str                                   # Settings field
+    label: str                                  # how Settings → Internet names it
+    always: object
+    sometimes: object
+    never: object
+    applies: Literal["live", "restart"]         # live = read per tick/call; restart = read at boot
+    # "enricher_provider": a True default needs an ACOUSTID_API_KEY or
+    # shazamio installed (shazam_installed()); otherwise the default is
+    # False — without either, the enricher has nothing to ask.
+    requires: Literal["", "enricher_provider"] = ""
+
+
+PROFILE_DEFAULTS: tuple[ProfileDefault, ...] = (
+    ProfileDefault("news_enabled", "Daily news briefing", True, True, False, "restart"),
+    ProfileDefault("music_alias_fetch_enabled", "Find artists by the names people say (MusicBrainz)", True, True, False, "live"),
+    ProfileDefault("podcast_feed_poller_enabled", "Automatic podcast downloads", True, False, False, "restart"),
+    ProfileDefault("library_enricher_enabled", "Song recognition (AcoustID / Shazam)", True, True, False, "restart", requires="enricher_provider"),
+    ProfileDefault("seed_voice_catalog", "Extra voices at startup", False, False, False, "restart"),
+    # LRCLIB synced lyrics: not built yet. When the settings exist, add:
+    # ProfileDefault("lyrics_lrclib_enabled", "Synced lyrics (LRCLIB)", True, True, False, "live"),
+    # ProfileDefault("lyrics_write_lrc", "Save lyrics as .lrc files", True, True, False, "live"),
+)
+PROFILE_FIELD_NAMES: frozenset[str] = frozenset(pd.name for pd in PROFILE_DEFAULTS)
+PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFAULTS}
+
+# What Settings → Internet says a `requires` condition needs (never the key).
+PROFILE_CONDITIONS: dict[str, str] = {
+    "enricher_provider": "needs an AcoustID key or the Shazam add-on",
+}
+
+
+def shazam_installed() -> bool:
+    """Whether the optional ``shazamio`` add-on is importable (without
+    importing it — it pulls in a large dependency tree)."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("shazamio") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def profile_condition_met(pd: ProfileDefault, s: object) -> bool | None:
+    """Whether ``pd``'s ``requires`` condition holds for settings ``s``;
+    None when the row has no condition."""
+    if pd.requires == "enricher_provider":
+        key = str(getattr(s, "acoustid_api_key", "") or "").strip()
+        return bool(key) or shazam_installed()
+    return None
+
+
+def profile_value(pd: ProfileDefault, answer: str, s: object) -> object | None:
+    """The default ``pd`` takes under ``answer`` for settings ``s``: None
+    when the answer is unset (the field keeps its own default), else the
+    row's value for that answer with its ``requires`` condition applied."""
+    answer = egress.normalize_policy(answer)
+    if not answer:
+        return None
+    value = getattr(pd, answer)
+    if value is True and pd.requires and not profile_condition_met(pd, s):
+        return False
+    return value
 
 
 class Settings(BaseSettings):
@@ -236,6 +326,23 @@ class Settings(BaseSettings):
     connectivity_probe_target: str = "1.1.1.1:443"
     connectivity_probe_interval_sec: float = 30.0
     connectivity_probe_timeout_sec: float = 2.0
+
+    # The household's answer to "Will this box use the internet?":
+    # "always", "sometimes" or "never"; empty = not answered yet, which is
+    # exactly the behaviour every install had before the question existed
+    # (the dashboard's Home page asks an admin once). It sets the DEFAULTS
+    # of the online extras (PROFILE_DEFAULTS above) — a setting you set by
+    # hand wins — and "never" also closes every outbound path: no
+    # connectivity probe, no fetches beyond this network (domovoi/egress.py,
+    # which both processes read the answer through). Changed in Settings →
+    # Internet; docs/INTERNET.md explains the answers. Aliases (yes/no/
+    # offline/metered…) are accepted; anything else reads as unanswered.
+    internet_access: str = ""
+
+    @field_validator("internet_access", mode="before")
+    @classmethod
+    def _internet_access_known(cls, value: object) -> str:
+        return egress.normalize_policy(value)
 
     bot_name: str = "Domovoi"
     log_level: str = "INFO"
@@ -546,6 +653,8 @@ class Settings(BaseSettings):
     # each registered voice's greeting clips — a slow, one-time, bandwidth-
     # heavy boot (Piper models download, Edge clips synth). Turn off once
     # you've curated the list so deleted voices don't reappear on reboot.
+    # Follows INTERNET_ACCESS when not set by hand: off on every answer
+    # (the default below is what an unanswered box keeps).
     seed_voice_catalog: bool = True
 
     # ─── Custom wake words ──────────────────────────────────────
@@ -746,10 +855,11 @@ class Settings(BaseSettings):
     podcasts_dir: str = os.path.expanduser("~/.domovoi/podcasts")
     audiobooks_dir: str = os.path.expanduser("~/.domovoi/audiobooks")
 
-    # Podcast feed poller. OFF by default (toolchain-gated like the radio
-    # SDR / wake-word trainer): polling subscribed feeds needs network and a
-    # working download toolchain, so an unconfigured deployment doesn't spin the
-    # loop. When enabled, the poller walks podcast_subscriptions, records
+    # Podcast feed poller ("automatic podcast downloads"). OFF while the
+    # internet question is unanswered; otherwise its default follows the
+    # answer (PROFILE_DEFAULTS: on for always, off for sometimes and never),
+    # and a hand-set value wins. It needs the internet, so it skips its
+    # rounds while offline. When enabled, the poller walks podcast_subscriptions, records
     # new episodes, enqueues the newest-N for download, and LRU-evicts older
     # downloaded episodes past each sub's keep_n.
     podcast_feed_poller_enabled: bool = False
@@ -763,6 +873,10 @@ class Settings(BaseSettings):
     # doesn't set its own. LRU eviction removes downloaded episodes beyond
     # this window (the file is deleted, the row flips to 'skipped').
     podcast_keep_n: int = 5
+    # Podcast artwork the SERVER fetched (on subscribe and on each feed
+    # poll) and serves at /api/podcasts/subscriptions/{id}/artwork, so the
+    # browser and the phone never load a publisher's image themselves.
+    podcast_artwork_dir: str = os.path.expanduser("~/.domovoi/podcast_artwork")
     # Audiobook indexer cadence (like library_fingerprinter_inner_loop_sec).
     # Books are added rarely (drop an .m4b in, import a LibriVox title), so a
     # slow poll is fine; the startup sweep + a manual reindex endpoint cover
@@ -833,8 +947,15 @@ class Settings(BaseSettings):
     # identify each one via AcoustID (Chromaprint fingerprint → MusicBrainz)
     # and shazamio (Shazam's API). Updates title/artist/album/MB-ID
     # with the canonical values. See domovoi/workers/library_enricher.py.
+    # Follows INTERNET_ACCESS when not set by hand: on for always and
+    # sometimes only with an AcoustID key or shazamio installed (without
+    # either there is nothing to ask), off for never; an unanswered box
+    # keeps the default below.
     library_enricher_enabled: bool = True
-    # Free key from https://acoustid.org/api-key (10s to register).
+    # An AcoustID APPLICATION key — register one (free) at
+    # https://acoustid.org/new-application. pyacoustid's lookup needs the
+    # application key; the personal "user API key" on your AcoustID
+    # profile page is for submitting fingerprints and is rejected here.
     # Empty string = AcoustID is skipped, shazamio carries the load alone.
     acoustid_api_key: str = ""
     # Polite delay between API calls. AcoustID's free tier is "be
@@ -931,90 +1052,6 @@ class Settings(BaseSettings):
     # Minimum total audio across a cluster before we even bother running
     # the classifier — Resemblyzer-grade enrollment needs ~1.5 s.
     third_party_min_cluster_audio_sec: float = 1.2
-
-    # ─── Radio streaming + passive song detection ──────────────────────
-    # The radio feature has two halves: a background sampler that
-    # captures audio from favorited stations and IDs songs via dejavu
-    # (local fingerprint) → shazamio (online), and a voice/web surface
-    # for streaming a station to a satellite. Both halves are gated so
-    # an unconfigured deployment doesn't burn ffmpeg cycles on stations
-    # nobody favorited.
-    radio_sampler_enabled: bool = True
-    # Per-station "how often to sample" default. Voice / web override
-    # per-favorite. 180 s catches a typical 3-min song reliably without
-    # paying for back-to-back identifies of the same track.
-    radio_default_sample_interval_sec: int = 180
-    # How often the sampler's outer loop checks "any stations due?"
-    # The per-station interval is enforced via last_sampled_at; this
-    # is just the polling cadence. 30 s means a freshly-favorited
-    # station starts sampling within a half-minute.
-    radio_sampler_inner_loop_sec: float = 30.0
-    # Drop a detection if the same (station, artist, title) was
-    # written within this window. Stops one song playing on a station
-    # for 4 minutes from producing 4× the same detection at the 60 s
-    # sampler cadence.
-    radio_dedup_window_sec: int = 1800
-    # ffmpeg subprocess wall-clock limit per sample grab. Stream
-    # connect + 15 s of capture + transcode usually finishes in
-    # ~17 s; 20 s gives a small margin without leaving zombie
-    # subprocesses around.
-    radio_ffmpeg_timeout_sec: float = 20.0
-    # Concurrent stations the sampler will grab from at once. Each
-    # sample spawns one ffmpeg subprocess; capping at 5 keeps the host
-    # responsive even when the user has favorited 20+ stations on the
-    # same tick.
-    radio_sample_concurrency: int = 5
-    # ICY metadata poller — lighter-weight companion to the audio
-    # sampler. Reads SHOUTcast/Icecast ``StreamTitle`` headers off the
-    # stream every interval. Cheaper than ffmpeg+Shazam by orders of
-    # magnitude; the sampler stays in place as a fallback for stations
-    # that don't advertise ICY metadata.
-    radio_icy_poller_enabled: bool = True
-    # Outer-loop cadence for the poller. 30 s is short enough that a
-    # song transition lands in the UI within tens of seconds of the
-    # actual track change but doesn't hammer any one station.
-    radio_icy_poll_interval_sec: float = 30.0
-    # Concurrent HTTP fetches the poller will run at once. ICY polls
-    # are cheap (one HTTP GET each), so this can run much higher than
-    # the audio sampler — bottleneck is bandwidth, not CPU.
-    radio_icy_concurrency: int = 10
-    # Per-request timeout for one ICY fetch. Generous enough to ride
-    # out a slow TLS handshake on a distant station but tight enough
-    # that a hung station doesn't stall its semaphore slot.
-    radio_icy_request_timeout_sec: float = 6.0
-    # Configured location. Used to filter the FCC FM Query import to
-    # the user's actual market and to disambiguate bare frequency
-    # voice commands ("play 97.5 fm" → which 97.5 in this state?).
-    # Both empty = no FCC filter and frequency commands resolve via
-    # whichever 97.5 was imported first.
-    radio_market_city: str = ""
-    radio_market_state: str = ""           # 2-letter ('CO', 'WA', etc.)
-    # If true, the core triggers the FCC FM import once on
-    # startup. Off by default because the import hits the FCC for
-    # ~30 s and most deployments will trigger it manually from the
-    # dashboard's "Import FCC" button.
-    radio_fcc_import_on_boot: bool = False
-    # RTL-SDR hardware. Off until the dongle physically arrives + the
-    # WinUSB driver is installed. The core probes for the
-    # device on startup; absence logs a clear disabled-with-reason
-    # message rather than raising.
-    radio_sdr_enabled: bool = False
-    radio_sdr_device_index: int = 0
-    # Port the rtl_fm + ffmpeg pipeline exposes its HTTP audio stream
-    # on. Pi satellites pull from here via mpd.play_url(). 8090
-    # because the room-MPD HTTP ports start at 8050 and we want room
-    # for those to expand.
-    radio_sdr_http_port: int = 8090
-    # Base URL (scheme + host) the MPD client should connect to when
-    # playing the FM stream. The ffmpeg listener always binds to
-    # 0.0.0.0 (so any consumer on the LAN can reach it), but the URL
-    # we hand to MPD must resolve from MPD's perspective. For Docker
-    # Desktop on Windows the container's localhost != Domovoi's
-    # localhost, so 127.0.0.1 won't work — use this host's LAN name or
-    # address (the one MPD_HTTP_BASE=auto resolves to). Default keeps
-    # the simplest dev case (domovoi + MPD both on the host without
-    # Docker) working.
-    radio_sdr_stream_base: str = "http://127.0.0.1"
 
     # ─── Implicit memory extraction ────────────────────────
     # Background worker that walks ``conversation_log`` for known
@@ -1139,5 +1176,30 @@ class Settings(BaseSettings):
     # is reached at host.docker.internal (same as OLLAMA_BASE_URL), NOT localhost.
     letta_tool_callback_url: str = "http://host.docker.internal:6370"
 
+    @model_validator(mode="after")
+    def _apply_internet_profile(self) -> "Settings":
+        """Fill each PROFILE_DEFAULTS field that nobody set by hand from the
+        internet answer. Only when there IS an answer: unanswered, every
+        field keeps its own default. "Set by hand" at boot is exactly
+        ``model_fields_set`` — keys from the environment and from .env
+        land there, commented .env lines don't. The value is written with
+        object.__setattr__ so the filled value is NOT itself marked as
+        set (a later dashboard save, a real setattr, is)."""
+        answer = self.internet_access
+        if not answer:
+            return self
+        for pd in PROFILE_DEFAULTS:
+            if pd.name in self.model_fields_set:
+                continue
+            value = profile_value(pd, answer, self)
+            if value is not None:
+                object.__setattr__(self, pd.name, value)
+        return self
+
 
 settings = Settings()
+# Under INTERNET_ACCESS=never, HF_HUB_OFFLINE=1 for this process (unless set
+# by hand), before anything imports huggingface_hub (it reads it at import).
+# Remembered so Settings → Internet can tell a profile-set value from a
+# hand-set one when it works out whether a restart is due.
+HF_HUB_OFFLINE_SET_BY_PROFILE: bool = egress.apply_process_env()

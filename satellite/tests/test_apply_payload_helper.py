@@ -295,3 +295,31 @@ def test_no_request_is_a_quiet_success(device):
     proc = device["run"]()
     assert proc.returncode == 0
     assert "no pending payload" in proc.stderr
+
+
+def test_an_offline_request_installs_from_the_local_caches_only(device):
+    """Under the server's INTERNET_ACCESS=never the request marks a slug
+    offline: apt runs with --no-download (cache only), and a package that
+    would need a download fails the run and keeps the request for later."""
+    (device["mirror"] / "radio").mkdir()
+    device["pending"].write_text(json.dumps({
+        "slugs": {"radio": {"apt_packages": ["libfoo2"], "post_install": None,
+                            "version": "1.0.0", "offline": True}},
+    }), encoding="utf-8")
+    proc = device["run"]()
+    log = device["fixed"]["LOGFILE"].read_text(encoding="utf-8", errors="replace")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr, log)
+    calls = device["calls"].read_text(encoding="utf-8")
+    assert "apt-get install -y --no-download libfoo2" in calls
+    assert "local package caches only" in log
+
+
+def test_without_the_flag_apt_runs_as_before(device):
+    (device["mirror"] / "radio").mkdir()
+    device["pending"].write_text(json.dumps({
+        "slugs": {"radio": {"apt_packages": ["libfoo2"], "post_install": None, "version": "1.0.0"}},
+    }), encoding="utf-8")
+    proc = device["run"]()
+    assert proc.returncode == 0, proc.stderr
+    calls = device["calls"].read_text(encoding="utf-8")
+    assert "apt-get install -y libfoo2" in calls and "--no-download" not in calls

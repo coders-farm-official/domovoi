@@ -35,6 +35,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from domovoi import egress
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
@@ -331,9 +332,47 @@ def _pip_base_args(lockfile: Path) -> list[str]:
         "--require-hashes", "--only-binary=:all:",
         "-r", str(lockfile),
     ]
+    if egress.internet_turned_off():
+        # INTERNET_ACCESS=never: no index at all. A zip whose pinned
+        # dependencies are already installed still installs ("Requirement
+        # already satisfied"); anything missing fails with pip's "no
+        # matching distribution", which _pip_offline_error() turns into a
+        # readable internet_off refusal.
+        args += ["--no-index", "--no-input"]
+        return args
     # Pin the index (no implicit fallback — dependency-confusion door).
     args += ["--index-url", index_url(), "--no-input"]
     return args
+
+
+# pip's words for "this requirement isn't installed and there is nowhere
+# to download it from" (every pip since 20.x prints one of these).
+_PIP_NOT_FOUND_MARKERS = (
+    "no matching distribution found",
+    "could not find a version that satisfies",
+)
+
+
+def _pip_offline_error(stderr: str) -> InstallError | None:
+    """Under ``INTERNET_ACCESS=never``, a pip failure because a dependency
+    isn't installed yet → a readable ``internet_off`` InstallError (the
+    same 422 envelope as every other install refusal). None otherwise."""
+    if not egress.internet_turned_off():
+        return None
+    low = (stderr or "").lower()
+    if not any(m in low for m in _PIP_NOT_FOUND_MARKERS):
+        return None
+    missing = sorted(set(re.findall(
+        r"no matching distribution found for ([A-Za-z0-9_.\-\[\]=<>!~]+)",
+        stderr or "", flags=re.IGNORECASE,
+    )))
+    what = f" ({', '.join(missing)})" if missing else ""
+    return InstallError(
+        "internet_off",
+        f"this plugin needs the internet to download its Python packages"
+        f"{what}, and {egress.TURNED_OFF_REASON}",
+        {"pip": (stderr or "")[-2000:], "missing": missing},
+    )
 
 
 def pip_dry_run(lockfile: Path) -> dict[str, Any]:
@@ -350,6 +389,9 @@ def pip_dry_run(lockfile: Path) -> dict[str, Any]:
     )
     if proc.returncode != 0:
         stderr = (proc.stderr or proc.stdout or "").strip()
+        offline = _pip_offline_error(stderr)
+        if offline is not None:
+            raise offline
         if "sdist" in stderr.lower() or "--only-binary" in stderr:
             raise InstallError(
                 "requirements_sdist",
@@ -438,6 +480,9 @@ def pip_install(lockfile: Path) -> dict[str, Any]:
         encoding="utf-8", env=_pip_run_env(), timeout=1800
     )
     if proc.returncode != 0:
+        offline = _pip_offline_error((proc.stderr or "").strip())
+        if offline is not None:
+            raise offline
         raise InstallError(
             "pip_install_failed",
             f"pip install failed: {(proc.stderr or '').strip()[-2000:]}",
@@ -782,20 +827,24 @@ def _semver_cmp(a: str, b: str) -> int:
 
 async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     """Resolve + download a repo archive with a streaming size cap.
-    Returns (zip bytes, 'url@ref')."""
-    import httpx
+    Returns (zip bytes, 'url@ref').
 
+    Under ``INTERNET_ACCESS=never``: ``InstallError("internet_off")`` (the
+    usual 422 envelope) before any request. The client also carries the
+    egress hook, so no redirect hop can leave the house either."""
     m = _GITHUB_URL_RE.match(github_url.strip())
     if not m:
         raise InstallError(
             "github_url_invalid",
             "expected https://github.com/<owner>/<repo>[@ref]",
         )
+    if egress.internet_turned_off():
+        raise InstallError("internet_off", egress.TURNED_OFF_REASON)
     owner, repo, ref = m.group(1), m.group(2), m.group(3)
     headers = {
         "User-Agent": "domovoi/1.0.0 (+github.com/coders-farm-official/domovoi)"
     }
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+    async with egress.async_client(follow_redirects=True, timeout=60) as client:
         if not ref:
             api = f"https://api.github.com/repos/{owner}/{repo}"
             r = await client.get(api, headers=headers)

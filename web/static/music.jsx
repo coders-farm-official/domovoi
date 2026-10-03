@@ -1878,7 +1878,20 @@ const MusicPage = () => {
     }
   };
   const onEnrich = async () => {
-    try { await apiPost('/api/music/library/enrich'); fire('enrich started'); }
+    try {
+      const r = await apiPost('/api/music/library/enrich');
+      // The core starts a sweep only when it can do something; otherwise
+      // it says why (queued: false) instead of pretending (fix B3).
+      const notQueued = {
+        disabled: 'song recognition is turned off on the server',
+        offline: 'no internet right now — try again when it is back',
+        no_provider: 'song recognition needs a free AcoustID key or the Shazam add-on',
+        running: 'already identifying songs',
+      };
+      fire(r && r.queued === false
+        ? (notQueued[r.reason] || `enrich didn't start (${r.reason || 'unknown reason'})`)
+        : 'enrich started');
+    }
     catch (e) { reportMutationFailure(fire, 'enrich', e); }
   };
 

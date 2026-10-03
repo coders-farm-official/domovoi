@@ -65,7 +65,28 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
-from domovoi.config import settings
+# Contract D21, at import time too: the internet answer must not shape the
+# suite. ``domovoi.config`` builds ``settings`` (the followers of the answer,
+# and HF_HUB_OFFLINE under never) when it is first imported, from the
+# process environment and ``domovoi/.env`` — and an ft run in a worktree
+# writes ``INTERNET_ACCESS=never`` into that .env. So: drop any
+# INTERNET_ACCESS the shell exported, shadow the .env with an empty value
+# while settings are built, and drop it again, so nothing at runtime sees an
+# answer pinned in the environment (the autouse fixture below pins the
+# policy itself to unset for every test).
+for _key in [k for k in os.environ if k.upper() == "INTERNET_ACCESS"]:
+    os.environ.pop(_key, None)
+_hf_hub_offline_before = os.environ.get("HF_HUB_OFFLINE")
+os.environ["INTERNET_ACCESS"] = ""
+try:
+    from domovoi.config import settings
+finally:
+    os.environ.pop("INTERNET_ACCESS", None)
+if os.environ.get("HF_HUB_OFFLINE") != _hf_hub_offline_before:  # belt and braces
+    if _hf_hub_offline_before is None:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+    else:
+        os.environ["HF_HUB_OFFLINE"] = _hf_hub_offline_before
 from domovoi.db.session import SessionLocal, engine
 
 # Per-test truncation set for the fresh V001 baseline. This is the CHURNED
@@ -219,6 +240,21 @@ def _isolate_command_captures(tmp_path, monkeypatch):
     other test opted in must never write household-speech-shaped files
     into the developer's real ~/.domovoi/captures."""
     monkeypatch.setattr(settings, "command_captures_dir", str(tmp_path / "command-captures"))
+
+
+@pytest.fixture(autouse=True)
+def _internet_answer_unset():
+    """Every test starts with the internet answer UNSET (today's
+    behaviour), whatever the machine says: a stray ``domovoi/.env`` (an ft
+    run in a worktree writes one) or an ``INTERNET_ACCESS`` exported in
+    the developer's shell must never flip the suite (contract D21). A test
+    that wants an answer nests ``egress.override_policy("never")``; the
+    innermost wins. ``read_policy`` tests pass ``env_path=`` / ``environ=``
+    and bypass this."""
+    from domovoi import egress
+
+    with egress.override_policy(""):
+        yield
 
 
 @pytest.fixture(autouse=True)

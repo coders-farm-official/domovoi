@@ -49,7 +49,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import net_safety
+from domovoi import egress, net_safety, whisper_cache
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.clients import ollama as ollama_client
 from web.backend.db import session_scope
@@ -81,6 +81,8 @@ _CATALOG_PATH = Path(__file__).resolve().parent.parent / "model_catalog.json"
 # resumes/dedups a re-issued pull, so re-clicking install is safe.
 _pull_tasks: dict[int, asyncio.Task] = {}
 _cancelled: set[int] = set()
+# What a pull that was running when the box was switched to "never" says.
+PULL_CANCELLED_INTERNET_OFF = "cancelled: internet access was turned off"
 
 
 # ─── Catalog ────────────────────────────────────────────────────────────────
@@ -98,8 +100,18 @@ def _load_catalog() -> dict[str, Any]:
 async def get_catalog() -> dict[str, Any]:
     """The curated model catalog (static JSON). Works offline — powers the
     browse-and-install cards, the STT list, and every fit badge's VRAM
-    estimate."""
-    return _load_catalog()
+    estimate. Each Whisper row carries ``cached``: whether that model is
+    already in this host's Hugging Face cache (None when unknown), so the
+    page can grey a size that can't load while the box is set to stay off
+    the internet."""
+    catalog = _load_catalog()
+    for row in catalog.get("whisper") or []:
+        if isinstance(row, dict):
+            try:
+                row["cached"] = whisper_cache.whisper_model_cached(str(row.get("name") or ""))
+            except Exception:  # noqa: BLE001 — a hint, never a failure
+                row["cached"] = None
+    return catalog
 
 
 # ─── Installed / loaded ──────────────────────────────────────────────────────
@@ -291,8 +303,15 @@ async def start_pull(body: PullBody) -> dict[str, Any]:
     index).
 
     Admin tier, and a model reference that names its own registry host is
-    checked against the outbound-URL rules first."""
+    checked against the outbound-URL rules first.
+
+    409 under ``INTERNET_ACCESS=never`` before any job row is written and
+    before Ollama is asked: Ollama is local, but its pull goes to the
+    registry. A reference to a registry inside the house (a LAN host) is
+    the one pull that stays allowed."""
     model = body.model.strip()
+    if egress.internet_turned_off() and not _local_registry(model):
+        raise egress.http_exception("model download")
     await _check_registry_host(model)
     async with session_scope() as s:
         # Attach to an existing in-flight job for the same model.
@@ -382,6 +401,15 @@ def registry_host(model: str) -> str | None:
     return head
 
 
+def _local_registry(model: str) -> bool:
+    """Whether ``model`` names a registry inside the house. The default
+    registry (no host in the reference) is registry.ollama.ai."""
+    host = registry_host(model)
+    if host is None:
+        return False
+    return egress.is_local_host(host.rsplit(":", 1)[0] if host.count(":") == 1 else host)
+
+
 async def _check_registry_host(model: str) -> None:
     """400 when the model reference points the pull at a host the server
     must not fetch from."""
@@ -440,11 +468,19 @@ async def _run_pull(job_id: int, model: str) -> None:
     stream ends."""
     last_pct: int | None = None
     last_text: str | None = None
+    stream = None
     try:
         await _set_running(job_id)
-        async for chunk in ollama_client.pull_model(model):
+        stream = ollama_client.pull_model(model)
+        async for chunk in stream:
             if job_id in _cancelled:
                 raise asyncio.CancelledError()
+            # The box was switched to "never" while this pull ran: stop it
+            # (closing the stream makes Ollama abandon the transfer).
+            if egress.internet_turned_off() and not _local_registry(model):
+                egress.log_refusal("model download already running")
+                await _finish(job_id, "cancelled", error=PULL_CANCELLED_INTERNET_OFF)
+                return
             err = chunk.get("error")
             if err:
                 raise RuntimeError(str(err))
@@ -465,6 +501,11 @@ async def _run_pull(job_id: int, model: str) -> None:
         log.warning("model pull %s (%s) failed: %s", job_id, model, e)
         await _finish(job_id, "failed", error=str(e)[:500])
     finally:
+        if stream is not None and hasattr(stream, "aclose"):
+            try:
+                await stream.aclose()
+            except Exception:  # noqa: BLE001 — closing is best effort
+                pass
         _pull_tasks.pop(job_id, None)
         _cancelled.discard(job_id)
 

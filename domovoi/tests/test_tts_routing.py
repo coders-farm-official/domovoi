@@ -60,12 +60,14 @@ def test_engine_and_voice_override(monkeypatch):
 
 def test_voice_override_only_applies_to_preferred_engine(monkeypatch):
     calls = _spy(monkeypatch)
-    # Piper preferred but its synth returns None → falls back to edge, which
-    # must use ITS OWN default voice, not the piper override.
-    monkeypatch.setattr(tts_mod, "_synth_piper_sync", lambda *a, **k: None)
-    out = _client()._synth_blocking("hi", engine="piper", voice="en_US-ryan-high")
-    assert out == b"EDGE"
-    assert ("edge", "en-US-AriaNeural") in calls
+    # Edge preferred (with an Edge voice override) but its synth returns
+    # None → falls back to piper, which must use ITS OWN default voice, not
+    # the edge override. (Edge itself is never a fallback rung: B1, see
+    # test_tts_engine_order.py.)
+    monkeypatch.setattr(tts_mod, "_synth_edge_sync", lambda *a, **k: None)
+    out = _client()._synth_blocking("hi", engine="edge", voice="en-US-GuyNeural")
+    assert out == b"PIPER"
+    assert ("piper", "en_US-lessac-medium") in calls
 
 
 def test_all_engines_fail_returns_empty_wav(monkeypatch):

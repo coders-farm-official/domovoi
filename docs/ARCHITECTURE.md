@@ -168,9 +168,10 @@ prose:
    read for this check.
 5. **Routing** (`domovoi/router.py`) — the stages below.
 6. **TTS.** The response text is split into sentences and synthesized through
-   the engine chain **edge → piper → system** (per-sentence fallback; a
-   sentence rendered at a different native rate is resampled to the announced
-   rate). Sentence synthesis is pipelined so the Pi's playback buffer never
+   the engine chain **piper → system** (**edge → piper → system** only when
+   Edge is the chosen engine and the internet answer isn't `never`; Edge is
+   never a fallback rung) — per-sentence fallback; a sentence rendered at a
+   different native rate is resampled to the announced rate. Sentence synthesis is pipelined so the Pi's playback buffer never
    drains between sentences.
 7. **Post-turn coordination.** `response_end` carries `expect_followup` /
    `pi_action`; music suppressed by wake capture auto-resumes; intercom
@@ -629,6 +630,44 @@ installed to `~/.domovoi/config.toml` on the Pi). The dashboard edits it
 remotely: the server pushes a `set_config` frame; the Pi merges changes
 preserving comments, writes a `.bak`, and self-restarts.
 
+### The internet answer, and the egress choke point
+
+`INTERNET_ACCESS` (`always` | `sometimes` | `never`, unset by default;
+[INTERNET.md](INTERNET.md)) does two jobs.
+
+* **It sets defaults.** `config.PROFILE_DEFAULTS` lists the settings that
+  follow the answer (the news worker, MusicBrainz names, podcast
+  downloads, the library enricher, the extra voices). A model validator
+  fills each one only when nobody set it — not in the environment, not in
+  `.env` — so a hand-set value always wins; Settings → Internet can hand a
+  field back by commenting its `.env` line out. Unset fills nothing.
+* **It is a gate.** `domovoi/egress.py` is the one place the answer is read
+  (process environment, then `domovoi/.env`, cached on the file's mtime),
+  in both processes, so the core and the web process never disagree. Under
+  `never` every way out goes through it:
+  * `net_safety.check_outbound_url` asks it first, so every caller of the
+    outbound-URL check (feeds, streams, ICY, add-by-URL, a model registry)
+    refuses a non-local host before any DNS lookup;
+  * the SDK's and the web plugin host's HTTP clients carry its request
+    hook, so plugins are covered without an edit;
+  * the paths that never went through `net_safety` call it directly:
+    `egress.require_destination(url)` for a URL,
+    `egress.require_internet("what")` for egress without one (Edge speech,
+    a SearXNG search, `git fetch`, a docker build, pip). The connectivity
+    probe stops dialing (`reason: turned_off`), which closes every
+    `ctx.online` path too.
+
+  A refusal is `egress.InternetTurnedOff`, a subclass of
+  `net_safety.UnsafeOutboundURL`, so existing `except` clauses refuse rather
+  than crash; HTTP routes answer `egress.http_exception()` (`409`,
+  `X-Domovoi-Refusal: internet-off`). The rule that comes with it: a
+  refusal is never recorded as a permanent failure (no feed marked dead,
+  no track "no match"). "Local" means no DNS and no guessing: an IP literal
+  in a private, loopback or link-local range, `localhost`, a single-label
+  name, or a `.local`/`.lan`/`.home.arpa`/`.internal` name. The SearXNG
+  container follows the answer through the `internet_access` reapply hook
+  (`domovoi/searxng_service.py`), never at boot.
+
 ---
 
 ## 9. Invariants
@@ -642,6 +681,10 @@ bug even if nothing fails immediately.
   `domovoi/tests/test_registry.py`. The router consults `ctx.online` (fed by
   the connectivity probe) and applies the offline gate described above. The
   house keeps working when the internet doesn't.
+* **One way out.** Anything that can reach past the house network goes
+  through `domovoi/egress.py` (directly, or via `net_safety`, the SDK's
+  HTTP client or the probe), so `INTERNET_ACCESS=never` means none of it
+  leaves. A new outbound path that skips it is a bug.
 * **Intent logging is non-optional.** Every routed turn writes one
   `intents_log` row AND one `conversation_log` row, centrally in
   `router._persist_turn`. No routing path may skip it.

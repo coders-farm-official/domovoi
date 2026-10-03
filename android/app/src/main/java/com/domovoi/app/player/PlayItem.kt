@@ -46,12 +46,15 @@ data class PlayItem(
                 seekable = false,
             )
 
+        // `artwork` is the server path of the show's stored artwork; a
+        // remote URL is dropped (PodcastArtwork), so the media session never
+        // fetches a publisher's image.
         fun fromEpisode(id: Long, title: String, show: String?, durationSec: Double?, artwork: String?, chapters: List<Chapter>) =
             PlayItem(
                 uid = "pod-$id", kind = PlayKind.Podcast, id = id,
                 title = title, artist = show,
                 src = "/api/podcasts/episodes/$id/audio",
-                coverPath = artwork,
+                coverPath = PodcastArtwork.path(artwork),
                 durationSec = durationSec, chapters = chapters,
             )
 

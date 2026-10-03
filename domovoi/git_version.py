@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from domovoi import self_restart
+from domovoi import egress, self_restart
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -420,7 +420,12 @@ def load_last_update() -> tuple[dict | None, str | None]:
 async def fetch() -> dict:
     """`git fetch` so subsequent behind/ahead counts compare against the live
     upstream. Returns ``{"ok": bool, "error": str|None}`` — offline / no
-    remote surfaces as ``ok=False`` with the git stderr, never an exception."""
+    remote surfaces as ``ok=False`` with the git stderr, never an exception.
+
+    Under ``INTERNET_ACCESS=never`` it reports ``ok=False`` with the
+    turned-off reason and runs no git at all."""
+    if egress.internet_turned_off():
+        return {"ok": False, "error": egress.TURNED_OFF_REASON}
     try:
         proc = await asyncio.to_thread(_run, "fetch")
         if proc.returncode != 0:
@@ -442,7 +447,14 @@ async def commits_behind() -> dict:
     full SHA a pull would move to, which the version panel compares with a
     rolled-back ``bad_sha``. No tracking branch or an offline fetch →
     ``upstream=False`` plus an error string and zeroed counts. Never
-    raises."""
+    raises.
+
+    Under ``INTERNET_ACCESS=never``: ``upstream=False`` with the
+    turned-off reason, and no git runs (the counts against a stale
+    upstream would only mislead)."""
+    if egress.internet_turned_off():
+        return {"behind": 0, "ahead": 0, "upstream": False,
+                "upstream_sha": None, "error": egress.TURNED_OFF_REASON}
     fetched = await fetch()
     try:
         behind = await asyncio.to_thread(
@@ -492,7 +504,13 @@ async def pull() -> dict:
 
     A successful pull also records ``prev_sha``, the full SHA an update
     should roll back to, for the Linux update unit (see
-    :func:`_rollback_baseline`)."""
+    :func:`_rollback_baseline`).
+
+    Under ``INTERNET_ACCESS=never`` it reports ``pulled=False`` with the
+    turned-off reason and runs no git at all."""
+    if egress.internet_turned_off():
+        return {"pulled": False, "new_sha": None,
+                "error": egress.TURNED_OFF_REASON, "prev_sha": None}
     try:
         baseline = await asyncio.to_thread(_rollback_baseline)
     except Exception:  # noqa: BLE001 — the pull matters more than the record

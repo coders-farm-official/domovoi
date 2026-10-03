@@ -67,3 +67,29 @@ def test_clean_collapses_whitespace_after_stripping() -> None:
 async def test_stub_returns_none() -> None:
     client = MusicBrainzStubClient()
     assert await client.lookup(title="anything", artist="anyone") is None
+
+
+# ─── Internet access turned off (INTERNET_ACCESS=never) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_internet_off_is_unavailable_without_a_request(monkeypatch) -> None:
+    """Under never the client sends nothing and raises
+    MusicBrainzUnavailable("internet off"), so the alias fetch backs off
+    instead of recording "MusicBrainz has no such artist"."""
+    import requests
+
+    from domovoi import egress
+    from domovoi.clients.musicbrainz import HttpMusicBrainzClient, MusicBrainzUnavailable
+
+    def no_request(*_a, **_kw):  # pragma: no cover - reaching this IS the failure
+        raise AssertionError("MusicBrainz was called with internet access turned off")
+
+    monkeypatch.setattr(requests, "get", no_request)
+    client = HttpMusicBrainzClient()
+    monkeypatch.setattr(client, "MIN_INTERVAL_SEC", 0)
+    with egress.override_policy("never"):
+        with pytest.raises(MusicBrainzUnavailable, match="internet off"):
+            await client.search_artists("Tech N9ne")
+        # The best-effort lookup turns the refusal into "no match" (None).
+        assert await client.lookup(title="Creep", artist="Radiohead") is None

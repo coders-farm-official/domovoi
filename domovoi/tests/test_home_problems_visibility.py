@@ -124,10 +124,12 @@ def test_the_web_reads_the_live_value_and_falls_back_to_its_own(
 
 def test_api_config_exposes_this_and_no_other_setting() -> None:
     """The response is open. Its field set is pinned so a new key is a
-    decision, not a drive-by."""
+    decision, not a drive-by. ``internet_access`` was one (the internet
+    build, CONTRACT 5.7.5): the Home row and every page's greying read the
+    household's answer from here, and it is no secret."""
     assert set(ConfigResponse.model_fields) == {
         "bot_name", "tts_voice", "rooms", "web_version", "wake_word_min_clips",
-        "home_problems_visibility",
+        "home_problems_visibility", "internet_access",
     }
 
 

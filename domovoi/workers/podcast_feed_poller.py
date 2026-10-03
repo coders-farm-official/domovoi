@@ -25,10 +25,24 @@ feedparser open the URL itself, and an enclosure download stops at
 ``MAX_ENCLOSURE_BYTES``.
 
 ``requires network`` — the whole worker is gated OFF by default
-(``podcast_feed_poller_enabled``) and skipped under USE_STUBS, exactly like
-the radio sampler / wake-word trainer. Downloaded episodes still play fully
-offline (that's the SpokenAudioHandler's ``fallback_offline`` path); only
-polling/downloading needs the network.
+(``podcast_feed_poller_enabled``; it follows ``INTERNET_ACCESS`` when not
+set by hand), skipped under USE_STUBS, and ``requires_online``: it doesn't
+tick while the connectivity probe says offline (or internet access is
+turned off). Downloaded episodes still play fully offline (that's the
+SpokenAudioHandler's ``fallback_offline`` path); only polling/downloading
+needs the network.
+
+A download that fails because the internet is unreachable or turned off
+is not a verdict on the episode: it goes back to ``pending``, never
+``failed``, and the pass moves on to the next episode — one show's dead
+or slow host must not hold up every other show. The pass stops
+downloading only when the line itself is gone (internet access turned
+off, the probe reading offline after the failure, or three such failures
+in a row). A refused or broken URL, an HTTP error and an over-cap body
+are still ``failed``.
+
+Each poll also stores the show's artwork on the server
+(``domovoi.podcast_artwork``), which is what the clients display.
 """
 
 from __future__ import annotations
@@ -41,7 +55,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from domovoi import net_safety
+from domovoi import connectivity, egress, net_safety, podcast_artwork
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.workers.base import Worker
@@ -152,32 +166,41 @@ def _parse_feed_blocking(feed_url: str) -> Any:
 async def poll_subscription(session, sub: dict[str, Any]) -> int:
     """Fetch + parse one subscription's feed, upsert episodes. Returns the
     number of NEW episodes recorded. Network + parse happen off the event
-    loop. Feed metadata (title/author/artwork) is refreshed on the sub."""
+    loop. Feed metadata (title/author/artwork) is refreshed on the sub,
+    and its artwork is stored on the server (fetched again only when the
+    artwork URL changed)."""
     feed_url = sub["feed_url"]
     parsed = await asyncio.to_thread(_parse_feed_blocking, feed_url)
     feed = getattr(parsed, "feed", {}) or {}
 
     # Refresh subscription-level metadata.
-    await session.execute(
-        text(
-            """
-            UPDATE podcast_subscriptions
-               SET title = COALESCE(:title, title),
-                   author = COALESCE(:author, author),
-                   artwork = COALESCE(:artwork, artwork),
-                   description = COALESCE(:description, description),
-                   last_polled_at = now()
-             WHERE id = :id
-            """
-        ),
-        {
-            "id": sub["id"],
-            "title": feed.get("title"),
-            "author": feed.get("author"),
-            "artwork": (feed.get("image") or {}).get("href"),
-            "description": feed.get("subtitle") or feed.get("description"),
-        },
-    )
+    artwork_row = (
+        await session.execute(
+            text(
+                """
+                UPDATE podcast_subscriptions
+                   SET title = COALESCE(:title, title),
+                       author = COALESCE(:author, author),
+                       artwork = COALESCE(:artwork, artwork),
+                       description = COALESCE(:description, description),
+                       last_polled_at = now()
+                 WHERE id = :id
+             RETURNING artwork
+                """
+            ),
+            {
+                "id": sub["id"],
+                "title": feed.get("title"),
+                "author": feed.get("author"),
+                "artwork": (feed.get("image") or {}).get("href"),
+                "description": feed.get("subtitle") or feed.get("description"),
+            },
+        )
+    ).first()
+    # The feed's image, else the directory's artwork stored at subscribe.
+    artwork_url = artwork_row[0] if artwork_row is not None else None
+    if artwork_url:
+        await podcast_artwork.ensure_artwork(sub["id"], artwork_url)
 
     new_count = 0
     for entry in getattr(parsed, "entries", []) or []:
@@ -320,11 +343,34 @@ def _read_id3_chapters(path: Path) -> list[dict[str, Any]] | None:
     return chaps or None
 
 
-async def download_episode(session, episode: dict[str, Any]) -> bool:
+def is_transient_fetch_error(e: BaseException) -> bool:
+    """A failure that says nothing about the episode: internet access is
+    turned off for this box, or the line itself failed (no route, a name
+    that doesn't resolve while offline, a timeout, a dropped connection).
+    Such a download goes back to 'pending' — the durable-failure rule."""
+    import httpx
+
+    if isinstance(e, egress.InternetTurnedOff):
+        return True
+    if isinstance(e, net_safety.UnsafeOutboundURL):
+        # Offline, every name "does not resolve"; any other refusal (a
+        # house-local address, a bad scheme) is about the URL itself.
+        return str(getattr(e, "reason", "")).endswith("does not resolve")
+    if isinstance(
+        e,
+        (httpx.TimeoutException, httpx.NetworkError, httpx.ProxyError, httpx.RemoteProtocolError),
+    ):
+        return True
+    return isinstance(e, (ConnectionError, TimeoutError))
+
+
+async def download_episode(session, episode: dict[str, Any]) -> bool | None:
     """Download one episode's enclosure into ``podcasts_dir/<sub_slug>/``.
-    Updates the row to 'downloaded' (file_path set) or 'failed'. Returns
-    success. Chapters from the downloaded file's ID3 tags supersede any the
-    feed carried.
+    Updates the row to 'downloaded' (file_path set) and returns True, or
+    to 'failed' and returns False — or, when the failure is the line and
+    not the episode (:func:`is_transient_fetch_error`), back to 'pending'
+    and returns None, so the next pass retries it. Chapters from the
+    downloaded file's ID3 tags supersede any the feed carried.
 
     The enclosure URL comes from the feed, so it goes through the same
     outbound-URL check as the feed (redirects re-checked hop by hop) and
@@ -363,11 +409,18 @@ async def download_episode(session, episode: dict[str, Any]) -> bool:
                     async for chunk in net_safety.iter_capped(
                         r, MAX_ENCLOSURE_BYTES
                     ):
+                        # Switching the box to "never" stops a download
+                        # that is already running (back to pending).
+                        egress.require_destination(url)
                         fh.write(chunk)
             finally:
                 await r.aclose()
     except Exception as e:
-        log.warning("podcast download failed ep=%s url=%s: %s", ep_id, url, e)
+        transient = is_transient_fetch_error(e)
+        log.warning(
+            "podcast download %s ep=%s url=%s: %s",
+            "deferred (no internet)" if transient else "failed", ep_id, url, e,
+        )
         # A partial file from a refused or over-cap transfer must not be
         # left behind looking like an episode.
         try:
@@ -375,6 +428,13 @@ async def download_episode(session, episode: dict[str, Any]) -> bool:
                 dest.unlink()
         except OSError:
             pass
+        if transient:
+            # Not a verdict on the episode: the next pass retries it.
+            await session.execute(
+                text("UPDATE podcast_episodes SET download_status='pending', error=:e WHERE id=:id"),
+                {"id": ep_id, "e": str(e)[:2000]},
+            )
+            return None
         await session.execute(
             text("UPDATE podcast_episodes SET download_status='failed', error=:e WHERE id=:id"),
             {"id": ep_id, "e": str(e)[:2000]},
@@ -400,6 +460,59 @@ async def download_episode(session, episode: dict[str, Any]) -> bool:
     return True
 
 
+# A pass gives up on the rest of its downloads after this many transient
+# failures in a row (the line is probably down even if the probe hasn't
+# noticed yet). One dead host is not a down line: the others go on.
+MAX_TRANSIENT_FAILURES_IN_A_ROW = 3
+
+
+async def _line_is_down() -> bool:
+    """After a transient download failure: is the internet itself gone
+    (turned off for this box, or the connectivity probe now reads
+    offline), rather than this one episode's host?"""
+    if egress.internet_turned_off():
+        return True
+    probe = connectivity.current_probe()
+    if probe is None:
+        return False
+    try:
+        await probe.check_now()
+    except Exception as e:  # noqa: BLE001 — a probe failure says nothing
+        log.debug("podcast poller: probe re-check failed: %s", e)
+        return False
+    return not probe.online
+
+
+async def download_pending(session, pending: list[dict[str, Any]]) -> int:
+    """Download ``pending`` episodes in order; return how many finished.
+
+    A transient failure (:func:`is_transient_fetch_error`) leaves that
+    episode pending and moves on to the next one — one show's dead or
+    slow host must not starve every other show. The pass stops early only
+    when the line itself is gone: internet access turned off, the probe
+    reading offline after the failure, or
+    :data:`MAX_TRANSIENT_FAILURES_IN_A_ROW` transient failures in a row."""
+    downloaded = 0
+    transient_run = 0
+    for ep in pending:
+        ok = await download_episode(session, ep)
+        if ok:
+            downloaded += 1
+            transient_run = 0
+        elif ok is None:
+            transient_run += 1
+            if transient_run >= MAX_TRANSIENT_FAILURES_IN_A_ROW or await _line_is_down():
+                # Leave the rest pending for the next pass.
+                log.info(
+                    "podcast poller: the internet looks unavailable; leaving "
+                    "the remaining downloads for the next pass"
+                )
+                break
+        else:
+            transient_run = 0
+    return downloaded
+
+
 class PodcastFeedPoller(Worker):
     """Background worker: poll feeds, download newest-N, evict older.
 
@@ -411,11 +524,19 @@ class PodcastFeedPoller(Worker):
     enabled_setting = "podcast_feed_poller_enabled"
     interval_setting = "podcast_feed_poller_interval_sec"
     stub_suppressed = True
+    # Polling and downloading need the internet: skip ticks (keeping the
+    # cadence) while the probe says offline, instead of failing every feed.
+    requires_online = True
 
     async def tick(self) -> dict[str, int]:
         """One full pass: poll every subscription, enqueue+download newest-N,
-        evict older. Returns coarse counts for logging/tests."""
+        evict older. Returns coarse counts for logging/tests. Does nothing
+        when internet access is turned off for this box (the web's "poll
+        now" runs this directly, outside the worker's online gate)."""
         polled = new_eps = downloaded = evicted = 0
+        if egress.internet_turned_off():
+            log.info("podcast poller: internet access is turned off; not polling")
+            return {"polled": 0, "new": 0, "downloaded": 0, "evicted": 0}
         async with session_scope() as session:
             subs = (
                 await session.execute(
@@ -453,9 +574,7 @@ class PodcastFeedPoller(Worker):
                     )
                 )
             ).mappings().all()
-            for ep in pending:
-                if await download_episode(session, dict(ep)):
-                    downloaded += 1
+            downloaded += await download_pending(session, [dict(ep) for ep in pending])
 
             for sub in subs:
                 evicted += await enforce_keep_n(session, sub["id"], sub["keep_n"])

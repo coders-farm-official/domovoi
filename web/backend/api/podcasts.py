@@ -15,6 +15,18 @@ both sit on the device tier (``X-Device-Token`` or an admin Bearer) and
 every feed URL — typed in, or returned by discovery — goes through
 ``domovoi.net_safety``: http(s) only, and never an address inside the
 house or on the box.
+
+Artwork (fix B11): the ``artwork`` of a subscription row or a discovery
+result is a SERVER path (or null), never the publisher's URL — the server
+fetches and stores the image (``domovoi.podcast_artwork``) and serves it
+from ``/api/podcasts/subscriptions/{id}/artwork`` and
+``/api/podcasts/discover/artwork/{key}``. Those two are open GETs, like
+episode audio, because an ``<img>`` can't send headers.
+
+Internet access turned off (``INTERNET_ACCESS=never``): discovery,
+subscribe-by-name, "poll now" and a thumbnail that would need fetching
+answer the 409 internet-off refusal. Subscribing by feed URL still works:
+storing a URL resolves nothing.
 """
 
 from __future__ import annotations
@@ -24,11 +36,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from domovoi import net_safety
+# Imported here, at the top, on purpose: the web process refuses new
+# domovoi.* imports once it has started (plugin_host's import guard).
+from domovoi import egress, net_safety, podcast_artwork
 from domovoi.admin_auth import require_device
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
@@ -88,6 +102,22 @@ class PositionSave(BaseModel):
     speed: Optional[float] = None
 
 
+ARTWORK_CACHE_CONTROL = "max-age=86400"
+
+
+def _with_server_artwork(row: dict[str, Any]) -> dict[str, Any]:
+    """A subscription row with ``artwork`` swapped from the stored source
+    URL to the server path of the stored image (or None). A row whose
+    image isn't stored yet gets one background fetch per process, so a
+    subscription that never polled still shows its artwork."""
+    out = dict(row)
+    source = out.get("artwork")
+    out["artwork"] = podcast_artwork.api_path(out["id"], source) if source else None
+    if source and out["artwork"] is None:
+        podcast_artwork.schedule_fill_once(out["id"], source)
+    return out
+
+
 # ─── Subscriptions ──────────────────────────────────────────────────────
 @router.get("/subscriptions")
 async def list_subscriptions() -> list[dict[str, Any]]:
@@ -112,7 +142,7 @@ async def list_subscriptions() -> list[dict[str, Any]]:
                 )
             )
         ).mappings().all()
-    return [dict(r) for r in rows]
+    return [_with_server_artwork(dict(r)) for r in rows]
 
 
 @router.post("/subscriptions", dependencies=[Depends(require_device)])
@@ -121,33 +151,49 @@ async def subscribe(req: SubscribeRequest) -> dict[str, Any]:
 
     Device tier: ``X-Device-Token`` or an admin Bearer. The feed URL —
     typed in or returned by discovery — must be an http(s) URL outside
-    the house's own address space."""
+    the house's own address space.
+
+    The show's artwork — the directory's, for a name lookup or a feed a
+    discovery search returned in this process — is stored as the source
+    and fetched in the background; the response's ``artwork`` is the
+    server path once it is in (usually null here)."""
     feed_url = (req.feed_url or "").strip()
     title = None
+    artwork = None
     if not feed_url and req.query:
-        feed_url, title = await _itunes_lookup(req.query.strip())
+        if egress.internet_turned_off():
+            raise egress.http_exception("podcast search")
+        feed_url, title, artwork = await _itunes_lookup(req.query.strip())
         if not feed_url:
             raise HTTPException(status_code=404, detail=f"no podcast found for {req.query!r}")
     if not feed_url:
         raise HTTPException(status_code=400, detail="feed_url or query required")
     feed_url = await _checked_feed_url(feed_url)
+    if artwork is None:
+        artwork = podcast_artwork.discovered_artwork_for(feed_url)
 
     async with session_scope() as s:
         row = (
             await s.execute(
                 text(
                     """
-                    INSERT INTO podcast_subscriptions (feed_url, title, keep_n)
-                    VALUES (:url, :title, :keep)
-                    ON CONFLICT (feed_url) DO UPDATE SET keep_n = EXCLUDED.keep_n
-                    RETURNING id, feed_url, title, keep_n
+                    INSERT INTO podcast_subscriptions (feed_url, title, keep_n, artwork)
+                    VALUES (:url, :title, :keep, :artwork)
+                    ON CONFLICT (feed_url) DO UPDATE
+                       SET keep_n = EXCLUDED.keep_n,
+                           artwork = COALESCE(podcast_subscriptions.artwork, EXCLUDED.artwork)
+                    RETURNING id, feed_url, title, keep_n, artwork
                     """
                 ),
-                {"url": feed_url, "title": title, "keep": max(1, req.keep_n)},
+                {"url": feed_url, "title": title, "keep": max(1, req.keep_n), "artwork": artwork},
             )
         ).mappings().first()
         await s.execute(text("SELECT pg_notify('podcasts_changed', 'subscribe')"))
-    return dict(row)
+    out = dict(row)
+    if out.get("artwork"):
+        podcast_artwork.schedule_ensure(out["id"], out["artwork"])
+    out["artwork"] = podcast_artwork.api_path(out["id"], out["artwork"]) if out.get("artwork") else None
+    return out
 
 
 @router.delete(
@@ -163,7 +209,24 @@ async def unsubscribe(sub_id: int) -> dict[str, bool]:
         await s.execute(text("SELECT pg_notify('podcasts_changed', 'unsubscribe')"))
     if (result.rowcount or 0) == 0:
         raise HTTPException(status_code=404, detail=f"subscription {sub_id} not found")
+    podcast_artwork.forget(sub_id)
     return {"deleted": True}
+
+
+@router.get("/subscriptions/{sub_id}/artwork")
+async def subscription_artwork(sub_id: int) -> FileResponse:
+    """The show's artwork as the server stored it (JPEG, PNG, WebP or
+    GIF), or 404. Open, like episode audio: an ``<img>`` can't send
+    headers, and it is only the show's cover."""
+    path = podcast_artwork.cached_file(sub_id)
+    content_type = podcast_artwork.cached_content_type(sub_id)
+    if path is None or content_type is None:
+        raise HTTPException(status_code=404, detail="no artwork stored for this subscription")
+    return FileResponse(
+        path,
+        media_type=content_type,
+        headers={"Cache-Control": ARTWORK_CACHE_CONTROL},
+    )
 
 
 @router.get("/subscriptions/{sub_id}/episodes")
@@ -198,11 +261,13 @@ async def list_episodes(sub_id: int) -> list[dict[str, Any]]:
 # ─── Discovery (network) ────────────────────────────────────────────────
 @router.get("/discover")
 async def discover(q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
-    """iTunes Search podcast discovery (keyless, rate-limited)."""
-    import httpx
-
+    """iTunes Search podcast discovery (keyless, rate-limited). Each
+    result's ``artwork`` is a server path for a thumbnail the server
+    fetches on first request (a key minted here), never iTunes' URL."""
+    if egress.internet_turned_off():
+        raise egress.http_exception("podcast search")
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with egress.async_client(timeout=8.0) as client:
             r = await client.get(
                 "https://itunes.apple.com/search",
                 params={"term": q, "media": "podcast", "limit": 15},
@@ -220,20 +285,47 @@ async def discover(q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
         if feed_url and net_safety.is_safe_outbound_url(
             feed_url, require_resolution=False
         ):
+            # The big image is what a subscribe stores; the small one is
+            # the list's thumbnail.
+            podcast_artwork.remember_discovered(
+                feed_url, it.get("artworkUrl600") or it.get("artworkUrl100"),
+            )
             out.append({
                 "title": it.get("collectionName"),
                 "author": it.get("artistName"),
-                "artwork": it.get("artworkUrl600") or it.get("artworkUrl100"),
+                "artwork": podcast_artwork.discover_api_path(
+                    it.get("artworkUrl100") or it.get("artworkUrl600")
+                ),
                 "feed_url": feed_url,
             })
     return out
 
 
-async def _itunes_lookup(name: str) -> tuple[Optional[str], Optional[str]]:
-    import httpx
+@router.get("/discover/artwork/{key}")
+async def discover_artwork(key: str) -> Response:
+    """A discovery result's thumbnail, for a key a ``/discover`` answer in
+    this process minted; 404 for any other key (the server never fetches a
+    URL a client chose). With internet access turned off only an image
+    already stored is served."""
+    cached = podcast_artwork.discover_cached(key)
+    if cached is None:
+        if egress.internet_turned_off():
+            raise egress.http_exception("podcast artwork")
+        cached = await podcast_artwork.discover_artwork(key)
+    if cached is None:
+        raise HTTPException(status_code=404, detail="no such artwork")
+    data, content_type = cached
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": ARTWORK_CACHE_CONTROL},
+    )
 
+
+async def _itunes_lookup(name: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(feedUrl, collectionName, artworkUrl600) of the top iTunes hit."""
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with egress.async_client(timeout=8.0) as client:
             r = await client.get(
                 "https://itunes.apple.com/search",
                 params={"term": name, "media": "podcast", "limit": 1},
@@ -242,11 +334,16 @@ async def _itunes_lookup(name: str) -> tuple[Optional[str], Optional[str]]:
             data = r.json()
     except Exception as e:
         log.warning("itunes lookup failed for %r: %s", name, e)
-        return None, None
+        return None, None, None
     results = data.get("results") or []
     if not results:
-        return None, None
-    return results[0].get("feedUrl"), results[0].get("collectionName")
+        return None, None, None
+    top = results[0]
+    return (
+        top.get("feedUrl"),
+        top.get("collectionName"),
+        top.get("artworkUrl600") or top.get("artworkUrl100"),
+    )
 
 
 # ─── Manual poll trigger ────────────────────────────────────────────────
@@ -259,6 +356,8 @@ async def poll_now() -> dict[str, int]:
     Device tier: it makes the server fetch every subscribed feed now."""
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
 
+    if egress.internet_turned_off():
+        raise egress.http_exception("podcast poll")
     try:
         return await PodcastFeedPoller().tick()
     except Exception as e:

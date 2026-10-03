@@ -15,10 +15,22 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator, Callable, Protocol
 from urllib.parse import urlsplit
 
-from domovoi import lan_address
+from domovoi import egress, lan_address
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
+
+
+def refuses_stream_url(url: str) -> bool:
+    """True when ``url`` must not be queued in a room's MPD: the answer is
+    ``never`` and its host is not on this network. MPD fetches a queued
+    stream itself, out of sight of every in-process gate, so the check has
+    to happen before ``add``. The SDK's ``playback.play_url`` refuses first
+    with a spoken reply; this is the backstop for direct callers."""
+    if egress.check_destination(url) is None:
+        return False
+    egress.log_refusal(f"music stream {str(url)[:120]}")
+    return True
 
 
 class MPDClient(Protocol):
@@ -144,6 +156,8 @@ class MPDStubClient:
         return self._song
 
     async def play_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
+        if refuses_stream_url(url):
+            return False
         self._song = {"file": url, "title": title or "stream", "artist": artist or ""}
         self._state = "play"
         return True
@@ -515,6 +529,10 @@ class RealMPDClient:
         artist: str | None,
         start: bool,
     ) -> bool:
+        if refuses_stream_url(url):
+            # Under never the daemon would fetch this itself; leave the
+            # queue (and whatever it holds) exactly as it is.
+            return False
         try:
             await c.clear()
             song_id = await c.addid(url)

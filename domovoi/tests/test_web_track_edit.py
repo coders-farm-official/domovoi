@@ -9,9 +9,10 @@ be corrected from the dashboard (finding F-024, card MUS-10).
 Two DB-free halves (never ``requires_db``, never skips):
 
 * the API: ``TrackPatch`` takes the three tags; ``patch_track`` SETs the
-  fields it was sent (a metadata edit also stamps ``enriched_at`` so the
-  enricher's unenriched-rows sweep can't undo it; a favorite flip does
-  not) — checked against a fake session that records the SQL;
+  fields it was sent (a metadata edit also stamps ``enriched_at`` and the
+  outcome ``manual`` so the enricher's sweep and its one-off recovery
+  can't undo it; a favorite flip does not) — checked against a fake
+  session that records the SQL;
 * the page: web/static/music.jsx driven through
   domovoi/tests/jsx_interact_harness.js — open a row, click the pencil,
   change the title and artist, save, and read the one PATCH that went
@@ -102,7 +103,11 @@ def test_track_patch_takes_the_three_tags_and_nothing_else():
 async def test_patch_writes_only_the_changed_tags_and_pins_them(fake_session):
     out = await music_api.patch_track(6, TrackPatch(title="Warm Stones (live)", artist="Hearth"))
     sql, params = _update(fake_session)
-    assert _set_clause(sql) == "title = :title, artist = :artist, enriched_at = NOW()"
+    # The hand edit is stamped done AND marked 'manual' (V020), so neither the
+    # unenriched-rows sweep nor the enricher's one-off recovery redoes it.
+    assert _set_clause(sql) == (
+        "title = :title, artist = :artist, enriched_at = NOW(), enrich_outcome = 'manual'"
+    )
     assert params == {"id": 6, "title": "Warm Stones (live)", "artist": "Hearth"}
     assert (out.title, out.artist, out.album) == ("Warm Stones (live)", "Hearth", "By The Hearth")
     assert not any("pg_notify('playlists_changed'" in s for s, _ in fake_session.calls)

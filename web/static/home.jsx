@@ -335,7 +335,7 @@ const HomeHooks = (() => {
  * just repeat it, so they wait. Home never fixes anything itself — each
  * row links to the page that does. */
 const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
-                             approvals, pending, version, hardware }) => {
+                             approvals, pending, version, hardware, config }) => {
   const rows = [];
   const add = (r) => rows.push(r);
   if (viewer.unclaimed) {
@@ -463,6 +463,13 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
                 ? `a restart is pending · the ${restartWaiting.plugins[0].slug} upgrade isn't running yet`
                 : `a restart is pending · ${restartWaiting.plugins.length} plugin upgrades aren't running yet` });
       }
+    }
+    // Nobody has said whether this box has internet (INTERNET_ACCESS):
+    // until an admin answers, it behaves as it always has. '' is the
+    // unanswered answer; a server from before the question sends nothing.
+    if (config && config.internet_access === '') {
+      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings', tab: 'internet',
+            text: 'tell Domovoi whether this box has internet' });
     }
     const disk = hardware && hardware.disk;
     if (disk && typeof disk.percent === 'number' && disk.percent >= HOME_DISK_WARN) {
@@ -629,7 +636,14 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               </div>
             );
           }
-          return <a key={r.key} className={cls} data-key={r.key} href={r.href}>{body}</a>;
+          // A row may name a Settings tab (`tab`): the shell maps one hash to
+          // one page, so the tab rides openSettingsTab (sessionStorage).
+          return (
+            <a key={r.key} className={cls} data-key={r.key} href={r.href}
+               onClick={r.tab ? (e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab(r.tab); } : undefined}>
+              {body}
+            </a>
+          );
         })}
         {checking && <div className="home-att-quiet">checking…</div>}
         {/* A problem row must not hide that a check behind it failed: a
@@ -1207,7 +1221,7 @@ const HomePage = ({ counts, badges }) => {
     viewer, health: health.data, rooms, plugins: plugins.data,
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
     acq: acq.data, approvals: approvals.data, pending: pending.data,
-    version: version.data, hardware: hardware.data,
+    version: version.data, hardware: hardware.data, config: cfg.data,
   });
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so

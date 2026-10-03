@@ -451,14 +451,22 @@ identifies each track acoustically and writes back canonical metadata:
 ```
 
 `COALESCE` on UPDATE means the indexer's existing data is preserved
-when the API returns NULL for a field. Both success and "no match"
-stamp `enriched_at` so the same tracks don't get re-hammered on every
-restart. To force re-attempt of no-match tracks (e.g. after AcoustID's
-catalog grows):
+when the API returns NULL for a field. A match and a genuine "no match"
+both stamp `enriched_at` (and `enrich_outcome`, V020) so the same tracks
+don't get re-hammered on every restart. A network error, a refused key or
+the internet being turned off is **not** a "no match": the track is left
+for the next pass, and five errors in a row end the sweep. With neither an
+AcoustID key nor the Shazam add-on the sweep does nothing and stamps
+nothing. Tracks stamped by an older enricher that had no provider at all
+are re-queued once by themselves when a provider appears; for those, a
+match only fills fields that are empty, so names corrected by hand are
+kept. To force re-attempt of no-match tracks (e.g. after AcoustID's
+catalog grows) — only the ones a provider answered "no match" for, never
+a track whose tags were edited by hand (`manual`):
 
 ```sql
 UPDATE library_tracks SET enriched_at = NULL
-WHERE musicbrainz_recording_id IS NULL;
+WHERE enrich_outcome = 'no_match';
 ```
 
 **When it runs**:
@@ -466,7 +474,9 @@ WHERE musicbrainz_recording_id IS NULL;
 * **Once at domovoi startup** as a background task chained after
   the indexer. Skipped when the connectivity probe says we're offline
   — no point burning the polite rate limit window hitting failing
-  endpoints.
+  endpoints — and when the server is answered `never` to the internet
+  question (`INTERNET_ACCESS`, docs/INTERNET.md), where
+  `LIBRARY_ENRICHER_ENABLED` also defaults to off.
 * **On the voice "enrich my library" / "fingerprint my music" / "tag
   my library" command** — same worker, kicked from a fast path that
   returns immediately with a queued-count + ETA. When the worker
@@ -480,11 +490,17 @@ WHERE musicbrainz_recording_id IS NULL;
 
 **Setup (one-time)**:
 
-1. **Get a free AcoustID API key.** Register at
-   [acoustid.org/api-key](https://acoustid.org/api-key) (~30 seconds,
-   no payment / approval). Set `ACOUSTID_API_KEY=<your-key>` in
-   `domovoi/.env`. Without a key the enricher still works via
-   shazamio alone, but you skip the open / MusicBrainz-IDs path.
+1. **Get a free AcoustID application key.** Register an
+   *application* at
+   [acoustid.org/new-application](https://acoustid.org/new-application)
+   (~30 seconds, no payment / approval) and use **that application's API
+   key**: the key on your AcoustID user page is a *user* key, which the
+   lookup API refuses (the enricher logs "AcoustID refused the key — it
+   must be an APPLICATION key" and stops the sweep). Set
+   `ACOUSTID_API_KEY=<the application key>` in `domovoi/.env`. Without a
+   key the enricher still works via shazamio alone (the `shazam` extra),
+   but you skip the open / MusicBrainz-IDs path; with neither, it does
+   nothing.
 2. **Install Chromaprint's `fpcalc` binary.**
    - **Windows**: `choco install chromaprint`, OR download from
      [acoustid.org/chromaprint](https://acoustid.org/chromaprint),
@@ -663,7 +679,10 @@ verdict):
 - No session context yet → "I don't have anything recent to double-check."
 - Last response had no factual claim (e.g., "Got it, playing music") → "There's nothing in that response to fact-check."
 - SearxNG returns no results → "I couldn't find anything about that."
+- SearxNG isn't running (nothing listens at `SEARXNG_URL`) → "I can't search the web right now — my search helper isn't running." — never "I checked online", because no search ran. The core logs once how to start it.
+- SearxNG answers with an error → "I couldn't reach my search helper just now. Try again in a moment."
 - Offline (`requires_network="yes"` triggers `fallback_offline`) → "I can't check that right now — I don't have internet."
+- The server is answered `never` to the internet question → "I'm set to stay off the internet, so I can't check that." (no query is sent: SearxNG is local, but the engines it asks are not).
 
 **Risk callout**: the verifier prompt explicitly demands "AMBIGUOUS"
 for weak evidence to defend against the model rubber-stamping its
@@ -712,8 +731,13 @@ speakers never accumulate prefs and get the offer every time.
 ### SearxNG setup
 
 The DoubleCheckHandler depends on a locally-hosted SearxNG
-instance. Brought up via the `searxng` service in
-`domovoi/docker-compose.yml`:
+instance: the `searxng` service in `domovoi/docker-compose.yml`, its
+image pinned by digest. It follows the internet answer
+(`INTERNET_ACCESS`; `domovoi/searxng_service.py`): saving `always` or
+`sometimes` starts it in the background, `never` stops it, and
+`dev.sh` / `dev.ps1` and the Linux update unit start it for
+`always` / `sometimes` too. It is never touched at core boot.
+`DOMOVOI_MANAGE_SEARXNG=0` leaves it alone. By hand:
 
 ```bash
 cd domovoi
@@ -960,7 +984,8 @@ All config is env-driven via `.env` (see `.env.example`):
 | `POSTGRES_PASSWORD` | *(random, written on first bootstrap)* | Read by `docker-compose.yml` (not by the core) when Postgres initialises its volume and on every Flyway run; must match the password inside `DATABASE_URL`. Written by `python -m domovoi.env_bootstrap`, which `dev.sh`/`dev.ps1` run first and which never touches an existing `.env`. Absent → compose falls back to `domovoi`. Rotation: docs/LINUX_HOST.md |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `SEARXNG_URL` | `http://localhost:6888` | SearxNG (DoubleCheckHandler) |
-| `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s |
+| `INTERNET_ACCESS` | *(unset)* | `always` \| `sometimes` \| `never`: whether this box uses the internet, which sets the defaults of the online extras (docs/INTERNET.md). Unset = the behaviour before the setting existed. Settings → Internet in the dashboard |
+| `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s (not dialed at all under `INTERNET_ACCESS=never`). Keep it on an internet address |
 | `CONNECTIVITY_PROBE_INTERVAL_SEC` | `30` | Poll interval |
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |
 | `BOT_NAME` | `Domovoi` | Bot identity (used in responses) |

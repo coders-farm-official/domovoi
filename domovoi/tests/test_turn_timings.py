@@ -324,13 +324,15 @@ def fake_faster_whisper(monkeypatch):
 def test_threads_reach_faster_whisper_on_cpu_only(fake_faster_whisper) -> None:
     cpu = whisper_mod.FasterWhisperClient("small.en", "cpu", "int8")
     assert fake_faster_whisper.calls[-1] == (
-        "small.en", {"device": "cpu", "compute_type": "int8", "cpu_threads": 8},
+        "small.en",
+        {"local_files_only": True, "device": "cpu", "compute_type": "int8", "cpu_threads": 8},
     )
     assert cpu.cpu_threads == 8
-    # cuda loads exactly as it always did: no cpu_threads argument at all.
+    # cuda gets no cpu_threads argument at all. Both load from the local
+    # cache first (B6: local_files_only, no Hugging Face request).
     gpu = whisper_mod.FasterWhisperClient("large-v3", "cuda", "float16")
     assert fake_faster_whisper.calls[-1] == (
-        "large-v3", {"device": "cuda", "compute_type": "float16"},
+        "large-v3", {"local_files_only": True, "device": "cuda", "compute_type": "float16"},
     )
     assert gpu.cpu_threads is None
 

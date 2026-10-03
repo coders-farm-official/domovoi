@@ -38,8 +38,9 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import egress
 from domovoi.clients.ollama import get_ollama_client
-from domovoi.clients.searxng import SearchResult, get_searxng_client
+from domovoi.clients.searxng import SearchOutcome, SearchResult, get_searxng_client
 from domovoi.config import settings
 from domovoi.db.repositories import SessionRepository, WebSearchPrefsRepository
 from domovoi.confirmations import request_confirmation
@@ -52,6 +53,58 @@ from domovoi.models import Context, Intent, Response
 AUTO_SEARCH_OFFER_THRESHOLD = 3
 
 log = logging.getLogger(__name__)
+
+
+# ─── Replies when the search never ran ────────────────────────────────────
+# "I checked online but couldn't find ..." is only true when a search
+# actually ran and came back empty (status "no_results"). Before 2026-10 a
+# stopped SearXNG container produced that same sentence, which sent
+# households looking for an answer that was never searched for.
+_UNREACHABLE_REPLY = (
+    "I can't search the web right now — my search helper isn't running."
+)
+_ERROR_REPLY = (
+    "I couldn't reach my search helper just now. Try again in a moment."
+)
+# SearXNG answered, but the public engines behind it didn't (a CAPTCHA, a
+# timeout, the line just dropped): nothing was really searched.
+_ENGINES_FAILED_REPLY = (
+    "My search engines didn't answer just now. Try again in a moment."
+)
+_OFFLINE_REPLY = "I can't check that right now — I don't have internet."
+
+# The "start it" hint is logged once per process, not on every question.
+_UNREACHABLE_LOGGED = False
+
+
+def _offline_reply() -> str:
+    """The can't-check reply while there's no internet: today's wording,
+    or the turned-off one when the box is set to stay off the internet."""
+    if egress.internet_turned_off():
+        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+    return _OFFLINE_REPLY
+
+
+def _unsearched_reply(status: str) -> str | None:
+    """The reply for a search that never ran, or None when it did run
+    (``ok`` / ``no_results``: the caller's own wording applies)."""
+    if status == "internet_off":
+        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+    if status == "unreachable":
+        return _UNREACHABLE_REPLY
+    if status == "error":
+        return _ERROR_REPLY
+    if status == "engines_failed":
+        return _ENGINES_FAILED_REPLY
+    return None
+
+
+def _searched(response: Response) -> bool:
+    """Whether a web answer came from a search that really ran (results,
+    or a genuine nothing). A reply saying no search happened must not
+    carry the "do this automatically?" offer."""
+    status = (response.data or {}).get("search_status")
+    return status is None or status in ("ok", "no_results")
 
 
 # ─── Fast-path regexes ────────────────────────────────────────────────────
@@ -135,6 +188,20 @@ _REFERS_BACK_RE = re.compile(
     r"|\byour (?:last |previous )?(?:answer|response|reply)\b"
     r"|\b(?:the )?(?:last|previous) (?:answer|response|reply|thing you said)\b"
 )
+
+
+def _log_unreachable_once(client: object) -> None:
+    global _UNREACHABLE_LOGGED
+    if _UNREACHABLE_LOGGED:
+        return
+    _UNREACHABLE_LOGGED = True
+    url = getattr(client, "base_url", None) or settings.searxng_url
+    log.warning(
+        "SearXNG isn't answering at %s; start it with "
+        "`docker compose up -d searxng` (from domovoi/), or answer Yes or "
+        "Sometimes in Settings → Internet and Domovoi starts it",
+        url,
+    )
 
 
 def _claim_refers_back(claim: str) -> bool:
@@ -449,7 +516,7 @@ class DoubleCheckHandler(Handler):
         self, intent: Intent, ctx: Context, session: AsyncSession
     ) -> Response:
         return Response(
-            text="I can't check that right now — I don't have internet.",
+            text=_offline_reply(),
             session_id=ctx.session_id,
             matched_handler=self.name,
             matched_path="fast_offline",
@@ -548,7 +615,7 @@ class DoubleCheckHandler(Handler):
             # fall back to the standard offline message rather than
             # claiming to have searched.
             return Response(
-                text="I can't check that right now — I don't have internet.",
+                text=_offline_reply(),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -571,6 +638,7 @@ class DoubleCheckHandler(Handler):
             ctx.person_id is not None
             and category
             and new_yes_count >= AUTO_SEARCH_OFFER_THRESHOLD
+            and _searched(response)
         ):
             await self._maybe_offer_prefs_followup(category, ctx, session, response)
 
@@ -673,15 +741,17 @@ class DoubleCheckHandler(Handler):
     async def _answer_question_from_web(
         self, question: str, ctx: Context, session: AsyncSession
     ) -> Response:
-        results = await self._search(question)
+        outcome = await self._search(question)
+        results = outcome.results
         if not results:
             return Response(
-                text=(
+                text=_unsearched_reply(outcome.status) or (
                     "I checked online but couldn't find a clear answer to that."
                 ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
-                data={"question": question, "results": []},
+                data={"question": question, "results": [],
+                      "search_status": outcome.status},
             )
         answer, source = await self._answer_from_sources(question, results)
         return Response(
@@ -752,16 +822,18 @@ class DoubleCheckHandler(Handler):
     ) -> Response:
         """Tool-call entry point + the back half of the fast-path flow:
         we already have a claim, search and judge it."""
-        results = await self._search(claim)
+        outcome = await self._search(claim)
+        results = outcome.results
         if not results:
             return Response(
-                text=(
+                text=_unsearched_reply(outcome.status) or (
                     "I couldn't find anything about that to confirm or "
                     "deny it."
                 ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
-                data={"claim": claim, "results": []},
+                data={"claim": claim, "results": [],
+                      "search_status": outcome.status},
             )
 
         verdict, source, reason = await self._judge_claim(claim, results)
@@ -820,13 +892,25 @@ class DoubleCheckHandler(Handler):
         # Trim defensively in case the model ignored the system prompt.
         return cleaned[:300]
 
-    async def _search(self, claim: str) -> list[SearchResult]:
+    async def _search(self, claim: str) -> SearchOutcome:
+        """Search, and say why when nothing came back (SearchOutcome). A
+        client without ``search_detailed`` (an older test double or a
+        plugin's) is read as "the search ran": results → ok, none →
+        no_results."""
         client = get_searxng_client()
         try:
-            return await client.search(claim, max_results=5)
+            detailed = getattr(client, "search_detailed", None)
+            if detailed is not None:
+                outcome = await detailed(claim, max_results=5)
+            else:
+                results = await client.search(claim, max_results=5)
+                outcome = SearchOutcome(results, "ok" if results else "no_results")
         except Exception as e:
             log.warning("DoubleCheck: SearxNG search failed: %s", e)
-            return []
+            return SearchOutcome([], "error")
+        if outcome.status == "unreachable":
+            _log_unreachable_once(client)
+        return outcome
 
     async def _judge_claim(
         self, claim: str, results: list[SearchResult]

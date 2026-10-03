@@ -34,6 +34,23 @@ How it works:
    (see ``satellite/sound_sync.py``), so a voice/greeting change reaches
    the Pi with no manual rsync.
 
+The marker written is the voice that ACTUALLY rendered the clip (the
+TTS client's ``synthesize_detailed`` reports the rung), not the voice that
+was asked for. A clip that a fallback rung rendered — Piper standing in for
+an unreachable Edge voice, or the system voice for a broken Piper model —
+therefore never matches its voice's marker, and is rendered again on the
+next pass where the real engine works, instead of sticking forever.
+
+Microsoft Edge voices are only rendered when Edge is usable: the internet
+answer allows it (``INTERNET_ACCESS`` is not ``never``) and the
+connectivity probe, when there is one, says online. Otherwise an Edge
+voice's MISSING clip is rendered at once with the default Piper voice as a
+stand-in (tagged as Piper), and an existing clip whose text is current is
+kept as it is — no Edge attempt, and no network timeout per clip. The same
+keep rule covers a Piper voice whose model isn't on disk while the internet
+isn't usable, so an offline pass doesn't re-render its system-voice clips
+every boot.
+
 Failures are non-fatal: a missing dep / network drop / DB hiccup logs and
 continues, leaving whatever MP3 the Pi already has — better than silence.
 """
@@ -46,10 +63,15 @@ import logging
 import re
 import wave
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from domovoi import egress
 from domovoi.config import settings
 from domovoi.db.repositories import ClientGreetingsRepository, VoicesRepository
 from domovoi.db.session import session_scope
+
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from domovoi.clients.tts import SynthResult
 
 log = logging.getLogger(__name__)
 
@@ -165,32 +187,61 @@ def _wav_to_mp3(wav_bytes: bytes, *, bitrate: int = 128) -> bytes | None:
     return bytes(mp3) or None
 
 
-async def _synth_clip_mp3(text: str, engine: str, model_ref: str) -> bytes | None:
+async def _synth_detailed(text: str, engine: str, model_ref: str | None) -> "SynthResult":
+    """Render through the engine-aware TTS client and say which rung did it.
+
+    A client without ``synthesize_detailed`` (a test double) can't say, so
+    the requested voice is assumed — what every clip assumed before."""
+    from domovoi.clients.tts import SynthResult, get_tts_client
+
+    client = get_tts_client()
+    detailed = getattr(client, "synthesize_detailed", None)
+    if detailed is None:
+        wav = await client.synthesize(text, engine=engine, voice=model_ref)
+        return SynthResult(wav=wav, engine=engine, voice=model_ref)
+    return await detailed(text, engine=engine, voice=model_ref)
+
+
+def _rendered_marker(result: "SynthResult") -> str:
+    """The sidecar marker for what a render ACTUALLY produced."""
+    return _marker(result.engine, result.voice or "")
+
+
+async def _synth_clip_mp3(
+    text: str, engine: str, model_ref: str | None
+) -> tuple[bytes, str] | None:
     """Render ``text`` in a specific voice to MP3 bytes. Routes through the
     engine-aware TTS client (so the clip voice matches response voice) and
-    encodes the returned WAV to MP3. None on any failure."""
-    from domovoi.clients.tts import get_tts_client
-
+    encodes the returned WAV to MP3. Returns ``(mp3, marker)``, where the
+    marker names the voice that actually rendered it. None on any failure."""
     try:
-        wav = await get_tts_client().synthesize(text, engine=engine, voice=model_ref)
+        result = await _synth_detailed(text, engine, model_ref)
     except Exception as e:
         log.warning("clip synth failed (engine=%s voice=%s): %s", engine, model_ref, e)
         return None
-    return _wav_to_mp3(wav)
+    if not result.engine:
+        return None  # every rung failed: the WAV is empty
+    mp3 = _wav_to_mp3(result.wav)
+    if mp3 is None:
+        return None
+    return mp3, _rendered_marker(result)
 
 
-async def _synth_clip_wav(text: str, engine: str, model_ref: str) -> bytes | None:
+async def _synth_clip_wav(
+    text: str, engine: str, model_ref: str | None
+) -> tuple[bytes, str] | None:
     """Render ``text`` in a specific voice as the WAV the TTS client already
     returns — no encode step. Validated as readable 16-bit WAV so a broken
-    render never lands on a card as a file `aplay` will refuse. None on
-    any failure."""
-    from domovoi.clients.tts import get_tts_client
-
+    render never lands on a card as a file `aplay` will refuse. Returns
+    ``(wav, marker)`` like :func:`_synth_clip_mp3`. None on any failure."""
     try:
-        wav = await get_tts_client().synthesize(text, engine=engine, voice=model_ref)
+        result = await _synth_detailed(text, engine, model_ref)
     except Exception as e:
         log.warning("clip synth failed (engine=%s voice=%s): %s", engine, model_ref, e)
         return None
+    if not result.engine:
+        return None
+    wav = result.wav
     try:
         with wave.open(io.BytesIO(wav), "rb") as wf:
             if wf.getsampwidth() != 2 or wf.getnframes() == 0:
@@ -198,13 +249,130 @@ async def _synth_clip_wav(text: str, engine: str, model_ref: str) -> bytes | Non
     except (wave.Error, EOFError) as e:
         log.warning("clip WAV unreadable (engine=%s): %s", engine, e)
         return None
-    return wav
+    return wav, _rendered_marker(result)
 
 
 def _marker(engine: str, model_ref: str) -> str:
     """First sidecar line — identifies the rendering voice so an engine or
     model change re-renders."""
     return f"{engine}|{model_ref}"
+
+
+def edge_usable() -> bool:
+    """Whether a Microsoft Edge voice can render right now: the internet
+    answer allows it, and the connectivity probe (when the core has one
+    running) says online. Without a probe — a CLI render, or before the
+    probe starts — only the answer counts. The same test decides whether a
+    Piper voice that isn't on disk yet could be fetched."""
+    if not egress.internet_allowed():
+        return False
+    from domovoi import connectivity
+
+    probe = connectivity.current_probe()
+    return probe is None or bool(probe.online)
+
+
+def _recorded_text_hash(sidecar: Path) -> str | None:
+    try:
+        lines = sidecar.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    return lines[1].strip() if len(lines) >= 2 else None
+
+
+def _voice_can_render(engine: str, model_ref: str, *, edge_ok: bool) -> bool:
+    """Whether a voice's own engine can render right now, judged without
+    trying: an Edge voice needs Edge usable; a Piper voice needs its model
+    on disk, or the internet usable to fetch it (the same test as Edge)."""
+    eng = (engine or "").strip().lower()
+    if eng == "edge":
+        return edge_ok
+    if eng == "piper":
+        from domovoi.clients.tts import piper_voice_on_disk
+
+        return edge_ok or piper_voice_on_disk(model_ref)
+    return True
+
+
+def _render_voice(
+    engine: str,
+    model_ref: str,
+    clip: Path,
+    sidecar: Path,
+    text: str,
+    *,
+    edge_ok: bool,
+) -> tuple[str, str | None] | None:
+    """The ``(engine, model_ref)`` to render a clip that needs it with, or
+    None to keep the clip that is there.
+
+    A voice whose own engine can render now renders in it. One that can't
+    (:func:`_voice_can_render`) KEEPS its clip when the clip exists and its
+    text is current — a real render from earlier, or an earlier stand-in —
+    so a pass while offline re-renders nothing. A missing or out-of-date
+    clip is rendered at once: an Edge voice's with the default Piper voice
+    (``model_ref`` None) as a stand-in, with no Edge attempt; a Piper
+    voice's through the router, which falls to the system voice. Either
+    way the sidecar names the real renderer, so the first pass where the
+    voice's own engine works renders it again."""
+    if _voice_can_render(engine, model_ref, edge_ok=edge_ok):
+        return engine, model_ref
+    if clip.exists() and _recorded_text_hash(sidecar) == _hash(text):
+        return None
+    if (engine or "").strip().lower() == "edge":
+        return "piper", None
+    return engine, model_ref
+
+
+# Edge clips are decoded at 24 kHz (clients/tts.py) and encoded at that
+# rate; Piper renders at 22.05 kHz (some voices 16 kHz).
+EDGE_CLIP_SAMPLE_RATE = 24_000
+
+# MPEG audio sample rates by version bits (3 = MPEG-1, 2 = MPEG-2,
+# 0 = MPEG-2.5) and sample-rate index.
+_MPEG_RATES = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+
+
+def _mp3_sample_rate(path: Path) -> int | None:
+    """The sample rate of the first MPEG audio frame in ``path`` (skipping
+    an ID3v2 tag), or None when it can't be read."""
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(16384)
+    except OSError:
+        return None
+    i = 0
+    if data[:3] == b"ID3" and len(data) >= 10:
+        size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+        i = 10 + size
+    while i + 3 < len(data):
+        if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0:
+            version = (data[i + 1] >> 3) & 0x3
+            layer = (data[i + 1] >> 1) & 0x3
+            rate_index = (data[i + 2] >> 2) & 0x3
+            if version != 1 and layer != 0 and rate_index != 3:
+                return _MPEG_RATES[version][rate_index]
+        i += 1
+    return None
+
+
+def _misattributed_edge_clip(mp3: Path, sidecar: Path, marker: str) -> bool:
+    """An Edge-marked clip that Edge did not render. Before the sidecar
+    named the rung that actually rendered a clip, an Edge voice's clip
+    rendered by a Piper or system stand-in (Edge unreachable) was marked
+    as the Edge voice anyway, so it never re-rendered — the "wrong voice
+    sticks forever" symptom. Such a clip is not at Edge's 24 kHz; this
+    finds it so the first pass where Edge works renders it again, once."""
+    if not marker.lower().startswith("edge|") or not mp3.exists():
+        return False
+    try:
+        recorded = sidecar.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    if not recorded or recorded[0].strip() != marker:
+        return False
+    rate = _mp3_sample_rate(mp3)
+    return rate is not None and rate != EDGE_CLIP_SAMPLE_RATE
 
 
 def _needs_regen(mp3: Path, sidecar: Path, marker: str, text: str) -> bool:
@@ -252,6 +420,14 @@ async def regenerate_if_needed() -> None:
 
     greeting_entries = _greeting_entries(greeting_rows)
     keep_slugs: set[str] = set()
+    # Judged once per pass, so every clip of a pass agrees.
+    edge_ok = edge_usable()
+    if not edge_ok and any((v["engine"] or "").lower() == "edge" for v in voices):
+        log.info(
+            "clips: Microsoft Edge voices can't render right now (%s); their "
+            "missing clips use the default Piper voice until Edge works",
+            egress.TURNED_OFF_REASON if egress.internet_turned_off() else "offline",
+        )
 
     for v in voices:
         slug = voice_slug(v["name"])
@@ -264,11 +440,15 @@ async def regenerate_if_needed() -> None:
 
         # Canned + per-voice sample at the voice root.
         for mp3_name, sidecar_name, text in [*_CANNED, _sample_entry()]:
-            await _regen_entry(vdir, mp3_name, sidecar_name, text, marker, v)
+            await _regen_entry(
+                vdir, mp3_name, sidecar_name, text, marker, v, edge_ok=edge_ok
+            )
 
         # Greetings under the voice's greetings/ subdir.
         for mp3_name, sidecar_name, text in greeting_entries:
-            await _regen_entry(gdir, mp3_name, sidecar_name, text, marker, v)
+            await _regen_entry(
+                gdir, mp3_name, sidecar_name, text, marker, v, edge_ok=edge_ok
+            )
         _prune_greetings(gdir, {name for name, _, _ in greeting_entries})
 
     _prune_voice_dirs(keep_slugs)
@@ -281,28 +461,55 @@ async def _regen_entry(
     text: str,
     marker: str,
     voice: dict,
+    *,
+    edge_ok: bool = True,
 ) -> None:
     """Render one (mp3, sidecar, text) entry in ``directory`` for ``voice``
     if its sidecar marker is missing / disagrees. No-op when up to date;
-    failures are logged and non-fatal (the Pi keeps its old copy)."""
+    failures are logged and non-fatal (the Pi keeps its old copy). The
+    sidecar records the voice that actually rendered the clip (see the
+    module docstring); ``edge_ok`` is :func:`edge_usable` for this pass."""
     mp3_path = directory / mp3_name
     sidecar_path = directory / sidecar_name
     if not _needs_regen(mp3_path, sidecar_path, marker, text):
-        return
-    log.info(
-        "clip %s for voice %r (engine=%s) missing or changed; regenerating",
-        mp3_name, voice["name"], voice["engine"],
+        if not (edge_ok and _misattributed_edge_clip(mp3_path, sidecar_path, marker)):
+            return
+        log.info(
+            "clip %s for Edge voice %r was rendered by another voice by an "
+            "earlier version; rendering it again in its own voice",
+            mp3_name, voice["name"],
+        )
+    plan = _render_voice(
+        voice["engine"], voice["model_ref"], mp3_path, sidecar_path, text,
+        edge_ok=edge_ok,
     )
-    mp3_bytes = await _synth_clip_mp3(text, voice["engine"], voice["model_ref"])
-    if mp3_bytes is None:
+    if plan is None:
+        log.debug(
+            "clip %s for Edge voice %r kept until Edge is usable", mp3_name, voice["name"],
+        )
+        return
+    engine, model_ref = plan
+    log.info(
+        "clip %s for voice %r (engine=%s) missing or changed; regenerating%s",
+        mp3_name, voice["name"], voice["engine"],
+        "" if engine == voice["engine"] else f" with a {engine} stand-in",
+    )
+    rendered = await _synth_clip_mp3(text, engine, model_ref)
+    if rendered is None:
         log.warning(
             "clip %s for voice %r could not be regenerated; keeping existing copy",
             mp3_name, voice["name"],
         )
         return
+    mp3_bytes, actual = rendered
+    if actual != marker:
+        log.info(
+            "clip %s for voice %r rendered by %s, not %s; it renders again "
+            "once that voice works", mp3_name, voice["name"], actual, marker,
+        )
     try:
         mp3_path.write_bytes(mp3_bytes)
-        sidecar_path.write_text(f"{marker}\n{_hash(text)}\n", encoding="utf-8")
+        sidecar_path.write_text(f"{actual}\n{_hash(text)}\n", encoding="utf-8")
         log.info("clip %s regenerated (%d bytes)", mp3_path, len(mp3_bytes))
     except OSError as e:
         log.warning("failed to write clip %s: %s", mp3_path, e)
@@ -404,6 +611,9 @@ def default_voice() -> tuple[str, str]:
     ``tts_engine`` defaults to ``piper`` because local-first is the product
     promise; a household that has deliberately chosen the web engine is
     honoured here too, since prep runs on the server where the network is.
+    While Edge isn't usable (:func:`edge_usable`) the clips render with the
+    default Piper voice instead, tagged as Piper, and render again in Edge
+    on a later prep once it is.
     """
     engine = (settings.tts_engine or "piper").strip().lower()
     if engine == "edge":
@@ -426,19 +636,24 @@ async def render_setup_clips() -> tuple[int, list[str]]:
         _SETUP_DIR.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         return 0, [f"could not create {_SETUP_DIR}: {e}"]
+    edge_ok = edge_usable()
 
     for wav_name, text in SETUP_LINES:
         wav_path = _SETUP_DIR / wav_name
         sidecar = _SETUP_DIR / f"{wav_name.rsplit('.', 1)[0]}.voice"
         if not _needs_regen(wav_path, sidecar, marker, text):
             continue
-        wav_bytes = await _synth_clip_wav(text, engine, model_ref)
-        if wav_bytes is None:
+        plan = _render_voice(engine, model_ref, wav_path, sidecar, text, edge_ok=edge_ok)
+        if plan is None:
+            continue  # an Edge-voiced clip, kept until Edge is usable
+        rendered = await _synth_clip_wav(text, *plan)
+        if rendered is None:
             problems.append(wav_name)
             continue
+        wav_bytes, actual = rendered
         try:
             wav_path.write_bytes(wav_bytes)
-            sidecar.write_text(f"{marker}\n{_hash(text)}\n", encoding="utf-8")
+            sidecar.write_text(f"{actual}\n{_hash(text)}\n", encoding="utf-8")
             written += 1
         except OSError as e:
             problems.append(f"{wav_name}: {e}")

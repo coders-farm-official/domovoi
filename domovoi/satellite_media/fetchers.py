@@ -17,6 +17,11 @@ the device's stage-2 bootstrap pull that piece online):
 Prebuilt mic-board .dtbo overlays are cache-passthrough only: stage 1
 installs whatever ``cache/dtbo/`` holds; when empty, stage 2 falls back to
 the on-device compile the manual checklist documents.
+
+Under ``INTERNET_ACCESS=never`` every fetcher returns ``(False, <the
+turned-off reason>; using what is already cached)`` without running a
+subprocess or a download, so preparing a card from the cache keeps
+working and nothing leaves the house.
 """
 
 from __future__ import annotations
@@ -28,9 +33,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+from domovoi import egress
 from domovoi.satellite_media import cache
 
 log = logging.getLogger(__name__)
+
+
+def _turned_off(what: str) -> tuple[bool, str] | None:
+    """The fetchers' refusal under ``INTERNET_ACCESS=never``, or None."""
+    if not egress.internet_turned_off():
+        return None
+    log.info("satellite media: %s not refreshed — internet access is turned off", what)
+    return False, f"{egress.TURNED_OFF_REASON}; using what is already cached"
 
 # The satellite's base apt set (PROVISIONING §3) + the adoption-mode tools.
 BASE_APT_PACKAGES = (
@@ -111,6 +125,9 @@ def fetch_wheels(
     run=subprocess.run,
 ) -> tuple[bool, str]:
     """Populate the wheel cache for the target arch. (ok, message)."""
+    refused = _turned_off("wheels")
+    if refused:
+        return refused
     dest = cache.bucket("wheels", python_version)
     base_cmd = [
         sys.executable, "-m", "pip", "download",
@@ -170,6 +187,9 @@ def fetch_debs(
     run=subprocess.run,
 ) -> tuple[bool, str]:
     """arm64 .debs via an unprivileged container. (ok, message)."""
+    refused = _turned_off("debs")
+    if refused:
+        return refused
     if not docker_available(run=run):
         return False, "docker unavailable — deb cache skipped (stage 2 uses apt online)"
     dest = cache.bucket("debs", os_release)
@@ -311,6 +331,9 @@ def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
     before anything reaches the cache. Upstream's branch tip is never
     what ships.
     """
+    refused = _turned_off("xvf_host")
+    if refused:
+        return refused
     dest = cache.bucket("xvf_host")
     git = shutil.which("git")
     if git is None:
@@ -375,6 +398,9 @@ def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
 def fetch_oww_models() -> tuple[bool, str]:
     """openWakeWord base models into the cache, when the package is
     importable server-side. (ok, message)."""
+    refused = _turned_off("oww_models")
+    if refused:
+        return refused
     dest = cache.bucket("oww_models")
     try:
         from openwakeword import utils as oww_utils  # type: ignore
