@@ -12,19 +12,23 @@ Decide which of these fits the server, then do that section:
 |---|---|
 | **Yes, always.** It's on your home internet. | [Turn on the online extras](#if-your-domovoi-will-have-internet-turn-these-on) |
 | **Sometimes.** The line comes and goes, or it's slow or metered. | [Download ahead](#before-you-disconnect), then turn on [the small extras](#sometimes-connected-boxes) |
-| **No.** There's no internet there, or you don't want Domovoi to use it. | [Download ahead, then switch off what can't work](#running-domovoi-with-no-internet) |
+| **No.** There's no internet there, or you don't want Domovoi to use it. | [Download ahead, then switch off what can't work](#running-domovoi-with-no-internet). If the house does have internet, also read [Internet in the house, but Domovoi shouldn't use it](#internet-in-the-house-but-domovoi-shouldnt-use-it) |
 
 How to change a setting:
 
-- **`domovoi/.env`** is the file `python -m domovoi.env_bootstrap` writes
-  from `.env.example` on the first run (`dev.sh` / `dev.ps1` run it for
-  you). Edit it on the server, then restart the core.
+- **`domovoi/.env`** is Domovoi's settings file. The first run creates it
+  from `.env.example` (`dev.sh` / `dev.ps1` do that for you). Edit it on
+  the server, then restart the core.
 - **Settings → Configuration** in the dashboard needs the admin sign-in.
   It saves to the same `.env`. Some settings apply at once; the page says
   when one needs a restart.
 - **The radio plugin** reads its own file, `~/.domovoi/plugins/radio.env`,
   in the home of the user the core runs as. Restart the core after editing
   it.
+
+"Restart the core" means `sudo systemctl restart domovoi-core` if you
+installed the [Linux units](LINUX_HOST.md#make-it-an-appliance), or
+stopping `dev.sh` / `dev.ps1` and starting it again.
 
 Nothing here is permanent. Every item is a setting you can flip later.
 
@@ -123,8 +127,8 @@ In rough order of payoff.
    ```
 
    with your own two-letter state and city, then restart the core. Instead
-   of the last line you can press **Import FCC FM** on the radio plugin's
-   Stations page once (admin sign-in), after that restart.
+   of the last line you can press **Import FCC FM** once on the radio
+   plugin's Stations page (admin sign-in), after the restart.
 
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
@@ -236,8 +240,10 @@ needs something it can only download is usually the day the line is down.
       With the Linux units that is
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
 - [ ] **Pull every Ollama model you'll want** (`ollama pull <model>`, or
-      Settings → Models).
+      Settings → Models, which shows the model each role uses).
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
+- [ ] **Install the plugins you want** (the Plugins page). Installing one
+      from GitHub, and the Python packages it needs, takes the internet.
 - [ ] **Fill the satellite media cache** (item 8 above, `openwakeword`
       first). Prepare the satellites' cards after that. A card built from
       complete caches carries what the satellite needs; if a cache was
@@ -267,8 +273,9 @@ NEWS_ENABLED=false
 
 - `LIBRARY_ENRICHER_ENABLED=false`, so "enrich my library" can't mark
   your tracks as looked up when it can't look anything up.
-- `SEED_VOICE_CATALOG=false`, so the core doesn't try to fetch 9 voices
-  and 19 cloud-voice greetings it can't reach.
+- `SEED_VOICE_CATALOG=false`, so the core doesn't add the extra voices,
+  which it would try to download and render without the internet. (Voices
+  already added stay.)
 - `PODCAST_FEED_POLLER_ENABLED=false` is the default; it's written here so
   it stays that way. The poller doesn't wait for the internet: switched on,
   it would try every feed every 30 minutes.
@@ -345,6 +352,32 @@ online, then put it back.
 - Updates: **Pull the latest** needs GitHub, and the update unit needs
   PyPI when dependencies changed. Bring the server online for an update,
   and pull **and** restart in the same sitting.
+
+### Internet in the house, but Domovoi shouldn't use it
+
+Do everything above, with two changes: `NEWS_ENABLED=false` is not
+optional for you, and don't start the search helper (SearXNG). Even then,
+while the server can reach the internet, a few things still go out on
+their own:
+
+- the internet check: a connection that carries no data, to `1.1.1.1`
+  every 30 seconds;
+- the Edge voice's clips, rendered by Microsoft whenever one is missing or
+  its text changed (see [What goes out](#what-goes-out));
+- the Whisper check at each start, unless you [stop it](#stop-the-whisper-check);
+- the radio plugin, if you have favorite stations: it checks the internet
+  stations' "now playing" every 30 seconds, and at each start looks up an
+  internet stream for FM favorites that don't have one.
+
+Things you ask for also go out when you ask: a podcast or station search,
+a model or plugin install, an update.
+
+There is no single off switch for this yet. The sure way is to block the
+server's internet at your router once [Before you disconnect](#before-you-disconnect)
+is done. Domovoi then sees no internet and works as described above. The
+satellites use the house Wi-Fi too: if nothing in the system should reach
+out, block them as well once they are set up (they take their clock from
+the server).
 
 ---
 
