@@ -461,11 +461,12 @@ nothing. Tracks stamped by an older enricher that had no provider at all
 are re-queued once by themselves when a provider appears; for those, a
 match only fills fields that are empty, so names corrected by hand are
 kept. To force re-attempt of no-match tracks (e.g. after AcoustID's
-catalog grows):
+catalog grows) — only the ones a provider answered "no match" for, never
+a track whose tags were edited by hand (`manual`):
 
 ```sql
 UPDATE library_tracks SET enriched_at = NULL
-WHERE musicbrainz_recording_id IS NULL;
+WHERE enrich_outcome = 'no_match';
 ```
 
 **When it runs**:

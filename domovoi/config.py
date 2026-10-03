@@ -855,10 +855,11 @@ class Settings(BaseSettings):
     podcasts_dir: str = os.path.expanduser("~/.domovoi/podcasts")
     audiobooks_dir: str = os.path.expanduser("~/.domovoi/audiobooks")
 
-    # Podcast feed poller. OFF by default (toolchain-gated like the radio
-    # SDR / wake-word trainer): polling subscribed feeds needs network and a
-    # working download toolchain, so an unconfigured deployment doesn't spin the
-    # loop. When enabled, the poller walks podcast_subscriptions, records
+    # Podcast feed poller ("automatic podcast downloads"). OFF while the
+    # internet question is unanswered; otherwise its default follows the
+    # answer (PROFILE_DEFAULTS: on for always, off for sometimes and never),
+    # and a hand-set value wins. It needs the internet, so it skips its
+    # rounds while offline. When enabled, the poller walks podcast_subscriptions, records
     # new episodes, enqueues the newest-N for download, and LRU-evicts older
     # downloaded episodes past each sub's keep_n.
     podcast_feed_poller_enabled: bool = False

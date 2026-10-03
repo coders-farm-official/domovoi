@@ -168,9 +168,10 @@ prose:
    read for this check.
 5. **Routing** (`domovoi/router.py`) — the stages below.
 6. **TTS.** The response text is split into sentences and synthesized through
-   the engine chain **edge → piper → system** (per-sentence fallback; a
-   sentence rendered at a different native rate is resampled to the announced
-   rate). Sentence synthesis is pipelined so the Pi's playback buffer never
+   the engine chain **piper → system** (**edge → piper → system** only when
+   Edge is the chosen engine and the internet answer isn't `never`; Edge is
+   never a fallback rung) — per-sentence fallback; a sentence rendered at a
+   different native rate is resampled to the announced rate. Sentence synthesis is pipelined so the Pi's playback buffer never
    drains between sentences.
 7. **Post-turn coordination.** `response_end` carries `expect_followup` /
    `pi_action`; music suppressed by wake capture auto-resumes; intercom
