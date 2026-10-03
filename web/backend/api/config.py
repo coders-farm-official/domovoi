@@ -14,6 +14,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 
+# Imported at module top on purpose: the web import guard refuses a NEW
+# domovoi.* import once startup is done (web/backend/plugin_host.py).
+from domovoi import egress
 from domovoi.admin_auth import (
     require_admin_mutation,
     require_admin_read,
@@ -83,9 +86,14 @@ async def get_config() -> ConfigResponse:
         web_version=WEB_VERSION,
         wake_word_min_clips=core_settings.wake_word_min_clips,
         # Open on purpose, like the rest of this response: the Home page
-        # every browser lands on decides from it what to show. The one
-        # household setting exposed here; nothing else from the config is.
+        # every browser lands on decides from it what to show. One of the
+        # two household settings exposed here (internet_access, below, is
+        # the other); nothing else from the config is.
         home_problems_visibility=home_problems_visibility(),
+        # The internet answer, read the way both processes read it
+        # (environment, then domovoi/.env — egress.policy), so a save in
+        # Settings → Internet shows here on the next read.
+        internet_access=egress.policy(),
     )
 
 

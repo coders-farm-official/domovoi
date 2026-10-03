@@ -21,7 +21,7 @@ from typing import Any, AsyncIterator, Callable, MutableMapping
 from sqlalchemy import text as _sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import registered_values
+from domovoi import egress, registered_values
 from domovoi.acquisitions import (
     ACQUISITIONS,
     Acquisition,
@@ -141,14 +141,47 @@ class AcquisitionView:
 
 
 class ConnectivityView:
-    """Read view of the ConnectivityProbe (§4.10). With no live probe
-    (unit contexts) it reports online — matching the probe's own
-    optimistic pre-first-check default."""
+    """Read view of the ConnectivityProbe (§4.10) and of the household's
+    internet answer (SDK 1.4). With no live probe (unit contexts) it
+    reports online — matching the probe's own optimistic pre-first-check
+    default — unless the answer is ``never``."""
 
     @property
     def online(self) -> bool:
+        """Whether a plugin may expect the internet right now: the probe
+        says up AND the answer isn't ``never``."""
         probe = current_probe()
-        return True if probe is None else bool(probe.online)
+        up = True if probe is None else bool(probe.online)
+        return up and egress.internet_allowed()
+
+    @property
+    def policy(self) -> str:
+        """The household's answer: ``""`` (not answered), ``"always"``,
+        ``"sometimes"`` or ``"never"``. Plugins pick their own defaults
+        from it (e.g. big automatic downloads off on ``sometimes``)."""
+        return egress.policy()
+
+    @property
+    def reason(self) -> str:
+        """``"turned_off"`` under ``never``; otherwise ``"connected"`` when
+        online, else ``"offline"`` (the probe's own reason when it has
+        one)."""
+        if egress.internet_turned_off():
+            return "turned_off"
+        probe = current_probe()
+        if probe is not None:
+            own = getattr(probe, "reason", None)
+            if own in ("connected", "offline"):
+                return own
+            # No reason of its own, or a "turned_off" left over from an
+            # answer that has since changed (the re-check is on its way).
+            return "connected" if probe.online else "offline"
+        return "connected"
+
+    @property
+    def internet_allowed(self) -> bool:
+        """False only under ``never``."""
+        return egress.internet_allowed()
 
 
 class PluginDB:

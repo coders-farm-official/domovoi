@@ -222,6 +222,21 @@ def _isolate_command_captures(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _internet_answer_unset():
+    """Every test starts with the internet answer UNSET (today's
+    behaviour), whatever the machine says: a stray ``domovoi/.env`` (an ft
+    run in a worktree writes one) or an ``INTERNET_ACCESS`` exported in
+    the developer's shell must never flip the suite (contract D21). A test
+    that wants an answer nests ``egress.override_policy("never")``; the
+    innermost wins. ``read_policy`` tests pass ``env_path=`` / ``environ=``
+    and bypass this."""
+    from domovoi import egress
+
+    with egress.override_policy(""):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _not_shutting_down():
     """No test starts inside a shutdown. A core lifespan teardown (every
     TestClient that enters the app leaves it again) marks the process as

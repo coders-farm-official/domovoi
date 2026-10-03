@@ -4,6 +4,42 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## UNRELEASED — Tell Domovoi whether it has the internet
+
+<!-- internet-build: the integrator sets the date and deletes every internet-build marker line -->
+
+### Upgrading
+
+<!-- internet-build B1 upgrading: builder 1 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B2 upgrading: builder 2 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B3 upgrading: builder 3 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B4 upgrading: builder 4 writes directly below this line -->
+
+### What changes
+
+<!-- internet-build B1 changes: builder 1 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B2 changes: builder 2 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B3 changes: builder 3 writes directly below this line -->
+
+<!-- internet-build spacer -->
+
+<!-- internet-build B4 changes: builder 4 writes directly below this line -->
+
 ## 2026-10-03 — "Play" finds a name by how it sounds, asks when it isn't sure, and learns other names
 
 ### Upgrading

@@ -35,11 +35,21 @@ STORE a URL pass: a household offline (or a feed whose DNS is down) must
 still be able to save a subscription, and the fetch itself re-checks with
 resolution before a byte moves.
 
+The internet answer (``INTERNET_ACCESS``, :mod:`domovoi.egress`) sits in
+front of the address rules: under ``never`` a fetch of any host that is
+not on this network is refused with ``egress.TURNED_OFF_REASON`` BEFORE
+the name is resolved (a DNS query is egress too), and the store-only
+form judges the URL as written without resolving it, so a household can
+still save a feed address. Loopback, private and LAN names go on to the
+rules below exactly as before. So every caller of this module refuses
+under ``never`` with no code of its own.
+
 Importable by the web process (this module is re-exported through
 :mod:`domovoi.webkit` for plugin web modules and :mod:`domovoi.sdk` for
 plugin core modules) — so it depends on stdlib + httpx only, and reads
 :mod:`domovoi.config` lazily (inside :func:`configured_allow_hosts`,
-tolerating an ImportError) rather than at import time.
+tolerating an ImportError) rather than at import time. :mod:`domovoi.egress`
+imports this module, so this one imports it lazily, inside the functions.
 """
 
 from __future__ import annotations
@@ -378,7 +388,14 @@ def check_outbound_url(url: str, *, require_resolution: bool = True) -> str | No
     The one exception is an endpoint the operator put in
     ``OUTBOUND_ALLOW_HOSTS`` (empty by default) — see
     :func:`is_allowlisted_endpoint`. The scheme allowlist still applies to
-    it, and so does every other refusal here."""
+    it, and so does every other refusal here.
+
+    Under ``INTERNET_ACCESS=never`` (:mod:`domovoi.egress`) a host that is
+    not on this network is refused first, with
+    ``egress.TURNED_OFF_REASON`` and no DNS lookup — an allowlisted PUBLIC
+    name included (the allowlist can't punch through the answer). With
+    ``require_resolution=False`` (a store, not a fetch) such a host is
+    judged as written and allowed: nothing is resolved."""
     if not isinstance(url, str) or not url.strip():
         return "empty url"
     try:
@@ -396,6 +413,20 @@ def check_outbound_url(url: str, *, require_resolution: bool = True) -> str | No
     if not host:
         return "missing host"
     host = host.rstrip(".").lower()
+    # The internet answer comes first, before anything can resolve the
+    # name: under "never" only hosts on this network go on to the rules
+    # below (egress.is_local_host never touches DNS).
+    from domovoi import egress
+
+    if egress.internet_turned_off() and not egress.is_local_host(host):
+        if require_resolution:
+            egress._log_refusal(host)
+            return egress.TURNED_OFF_REASON
+        # Store-only: the scheme and host checks above have passed, the
+        # host is not localhost and not a private literal (it would be
+        # local), and nothing may be resolved — so it may be SAVED. The
+        # fetch re-checks, and refuses, before a byte moves.
+        return None
     # The operator's own allowlist, consulted on the host AS WRITTEN — a
     # deliberate, server-side "yes, that endpoint" that outranks the
     # address rules below (and only them).
@@ -428,11 +459,23 @@ async def acheck_outbound_url(
     )
 
 
+def _refusal(url: str, reason: str) -> UnsafeOutboundURL:
+    """The exception for a refused check: ``egress.InternetTurnedOff``
+    (a subclass of :class:`UnsafeOutboundURL`) when the reason is the
+    internet answer, so a caller can tell "turned off" from "unsafe"."""
+    from domovoi import egress
+
+    if reason == egress.TURNED_OFF_REASON:
+        return egress.InternetTurnedOff(url)
+    return UnsafeOutboundURL(url, reason)
+
+
 def require_safe_outbound_url(url: str, *, require_resolution: bool = True) -> None:
-    """Raise :class:`UnsafeOutboundURL` unless the check passes."""
+    """Raise :class:`UnsafeOutboundURL` unless the check passes
+    (``egress.InternetTurnedOff`` when the internet answer refused it)."""
     reason = check_outbound_url(url, require_resolution=require_resolution)
     if reason is not None:
-        raise UnsafeOutboundURL(url, reason)
+        raise _refusal(url, reason)
 
 
 async def arequire_safe_outbound_url(
@@ -440,7 +483,7 @@ async def arequire_safe_outbound_url(
 ) -> None:
     reason = await acheck_outbound_url(url, require_resolution=require_resolution)
     if reason is not None:
-        raise UnsafeOutboundURL(url, reason)
+        raise _refusal(url, reason)
 
 
 # ─── Fetchers: redirects re-checked per hop, bodies capped ────────────────

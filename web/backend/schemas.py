@@ -854,6 +854,11 @@ class ConfigResponse(BaseModel):
     # "summary" (household members see one neutral line) or "admins"
     # (only an admin sees any). HOME_PROBLEMS_VISIBILITY, admin-set.
     home_problems_visibility: Literal["everyone", "summary", "admins"] = "everyone"
+    # The household's internet answer (INTERNET_ACCESS, Settings → Internet):
+    # "" = not answered yet (today's behaviour; an admin's Home row asks),
+    # "always", "sometimes" or "never". Open like the rest of this
+    # response: the Home page and every "needs internet" greying read it.
+    internet_access: Literal["", "always", "sometimes", "never"] = ""
 
 
 class ConfigUpdateRequest(BaseModel):

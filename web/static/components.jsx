@@ -197,6 +197,130 @@ const useAdminSignedIn = () => {
   } catch { return false; }
 };
 
+/* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
+ * The household says once whether this box has internet: '' (not
+ * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
+ * Under 'never' the server refuses everything that would reach the
+ * internet (409, INTERNET_OFF_MESSAGE) and the dashboard GREYS — never
+ * hides — the controls that need it, so a household can find them and
+ * change its mind:
+ *   * the control gets `disabled` when `off` is true,
+ *   * and `title={NEEDS_INTERNET_TEXT}`,
+ *   * a <NeedsInternetNote compact/> sits beside it (or one per card),
+ *   * a refused request where isInternetOffError(e) toasts
+ *     INTERNET_OFF_MESSAGE, never a raw JSON body.
+ * useInternetPolicy() is ONE shared read of /api/config for the whole
+ * page (a module-level cache plus subscribers, re-read every 60 s and on
+ * INTERNET_CHANGED_EVENT) — never one fetch per component. */
+const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
+const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
+const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
+const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEvent, detail {tab}
+const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
+const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
+
+const InternetPolicyStore = (() => {
+  let state = { access: '', loaded: false };
+  const subs = new Set();
+  let inflight = null;
+  let started = false;
+  const notify = () => subs.forEach((fn) => { try { fn(state); } catch { /* one bad subscriber */ } });
+  const set = (access) => {
+    const a = INTERNET_ANSWERS.includes(access) ? access : '';
+    if (state.loaded && state.access === a) return;
+    state = { access: a, loaded: true };
+    notify();
+  };
+  const refresh = () => {
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        const cfg = await apiGet('/api/config', { quiet: true });
+        set((cfg && cfg.internet_access) || '');
+      } catch { /* keep the last answer we heard */ }
+      finally { inflight = null; }
+    })();
+    return inflight;
+  };
+  const onChanged = (e) => {
+    const d = e && e.detail;
+    if (d && typeof d.access === 'string') set(d.access);
+    refresh();
+  };
+  const start = () => {
+    if (started) return;
+    started = true;
+    try { window.addEventListener(INTERNET_CHANGED_EVENT, onChanged); } catch { /* no window events */ }
+    try { setInterval(() => { if (subs.size) refresh(); }, INTERNET_POLICY_REFRESH_MS); } catch { /* no timers */ }
+  };
+  return {
+    get: () => state,
+    set,
+    refresh,
+    subscribe(fn) {
+      subs.add(fn);
+      start();
+      if (!state.loaded) refresh();
+      return () => { subs.delete(fn); };
+    },
+  };
+})();
+
+const useInternetPolicy = () => {
+  const [s, setS] = useState(InternetPolicyStore.get());
+  useEffect(() => InternetPolicyStore.subscribe(setS), []);
+  return {
+    access: s.access,
+    off: s.access === 'never',
+    unanswered: s.loaded && s.access === '',
+    loaded: s.loaded,
+    refresh: InternetPolicyStore.refresh,
+  };
+};
+
+/* Tell every page the answer changed (Settings → Internet, the first-run
+ * step): the shared read takes the new value at once and re-reads. */
+const announceInternetChange = (access) => {
+  InternetPolicyStore.set(access);
+  try { window.dispatchEvent(new CustomEvent(INTERNET_CHANGED_EVENT, { detail: { access } })); }
+  catch { /* no CustomEvent (old browser, test sandbox) — the set() above is enough */ }
+};
+
+/* Open Settings on a tab. The shell maps one hash to one page (#settings),
+ * so the tab rides sessionStorage; a Settings page already on screen
+ * hears SETTINGS_TAB_EVENT instead. */
+const openSettingsTab = (tab) => {
+  try { sessionStorage.setItem('domovoi.settings.tab', tab); } catch { /* storage blocked */ }
+  try { window.dispatchEvent(new CustomEvent(SETTINGS_TAB_EVENT, { detail: { tab } })); } catch { /* no CustomEvent */ }
+  try { window.location.hash = 'settings'; } catch { /* no location */ }
+};
+
+/* "needs internet · Settings → Internet", the link opening that tab. */
+const NeedsInternetNote = ({ compact = false }) => (
+  <span className={`needs-internet${compact ? ' compact' : ''}`} title={INTERNET_OFF_MESSAGE}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                 fontSize: compact ? 11 : 12, color: 'var(--fg-muted)' }}>
+    <Icon name="wifi-off" size={compact ? 12 : 13}/>
+    <span>needs internet · </span>
+    <a href="#settings" className="needs-internet-link"
+       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('internet'); }}>
+      Settings → Internet
+    </a>
+  </span>
+);
+
+/* Was this rejected apiFetch the server refusing because the internet is
+ * turned off? 409 with INTERNET_OFF_MESSAGE as the detail — or the plugin
+ * installer's coded envelope, code `internet_off`. */
+const isInternetOffError = (err) => {
+  if (!err) return false;
+  const nested = err.detail && err.detail.detail;
+  if (nested && typeof nested === 'object' && nested.error && nested.error.code === 'internet_off') return true;
+  if (err.status !== 409) return false;
+  const text = (typeof nested === 'string' && nested) || String(err.message || '');
+  return text.includes(INTERNET_OFF_MESSAGE);
+};
+
 /* ---- Avatar (deterministic colour from initial) ------------- */
 const avaPalette = {
   K: ['oklch(0.86 0.05 75)',  'oklch(0.72 0.12 60)'],
