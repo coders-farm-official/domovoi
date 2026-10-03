@@ -1,18 +1,35 @@
-"""MusicBrainz lookup for cleaning up external-media metadata.
+"""MusicBrainz lookups: recording metadata cleanup, and artist search.
 
-Best-effort: returns None on any error (network, timeout, no match,
-malformed response, low score). Media-provider download pipelines call
-this after a successful download to enrich metadata, and never replaces the existing
-row when the lookup fails — the user always gets *some* metadata.
+Two callers, one client:
+
+* **Recording lookup** (:meth:`HttpMusicBrainzClient.lookup`) cleans up
+  external-media metadata. Best-effort: returns None on any error
+  (network, timeout, no match, malformed response, low score). Media-
+  provider download pipelines call this after a successful download to
+  enrich metadata, and never replace the existing row when the lookup
+  fails — the user always gets *some* metadata.
+* **Artist search** (:meth:`HttpMusicBrainzClient.search_artists`) feeds the
+  opt-in "also called" fetch (``domovoi/workers/library_alias_fetch.py``):
+  the spoken names people use for an artist ("Tec 9" for Tech N9ne).
+  Unlike the lookup it says WHY nothing came back — a rate limit
+  (:class:`MusicBrainzRateLimited`), an unreachable or failing server
+  (:class:`MusicBrainzUnavailable`: no answer, a 5xx, a 200 that is not
+  JSON) or a refused request (:class:`MusicBrainzRejected`: any other 4xx)
+  — so the fetch can back off instead of recording "MusicBrainz has no
+  such artist". Only a 200 with a JSON body is a verdict.
 
 Rate limiting: MusicBrainz's terms of use ask for ≤1 req/sec and a
-descriptive User-Agent. We honor both. Per-download lookups (not
-per-request) keep us comfortably under the cap.
+descriptive User-Agent. We honor both, process-wide: every request either
+method makes goes through the one client's lock (``get_musicbrainz_client``
+hands out a single instance), so the alias fetch and a download's lookup
+never add up to more than one request a second between them.
 
 The cleanup pass before sending the query strips common external-upload
 title noise ("(Official Music Video)", "[HD]", "feat. ..."). Without
 this the search score for a typical fan-upload title hovers around
 60–75 and we'd reject real matches.
+
+MusicBrainz data is CC0.
 """
 
 from __future__ import annotations
@@ -21,8 +38,8 @@ import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol
 
 from domovoi.config import settings
 
@@ -39,15 +56,62 @@ class MusicBrainzMatch:
     album: str | None
 
 
+@dataclass(frozen=True)
+class MbAlias:
+    """One alias of a MusicBrainz artist, as the search API returns it.
+    ``type`` is "Artist name", "Legal name", "Search hint" or None;
+    ``locale`` e.g. "en", "en_US", "ja" or None."""
+
+    name: str
+    type: str | None = None
+    locale: str | None = None
+    primary: bool = False
+
+
+@dataclass(frozen=True)
+class MbArtist:
+    """One artist hit of an artist search. ``score`` is MusicBrainz's own
+    0-100 relevance; ``type`` "Person", "Group", "Orchestra", "Choir",
+    "Character", "Other" or None (unknown)."""
+
+    id: str
+    name: str
+    sort_name: str | None
+    type: str | None
+    score: int
+    disambiguation: str | None = None
+    aliases: list[MbAlias] = field(default_factory=list)
+
+
+class MusicBrainzRateLimited(Exception):
+    """MusicBrainz answered 503 or 429: slow down."""
+
+
+class MusicBrainzUnavailable(Exception):
+    """MusicBrainz could not be reached (network error, timeout) or did not
+    answer properly (a 5xx other than 503, a 200 whose body is not JSON) —
+    a temporary failure, never "no such artist"."""
+
+
+class MusicBrainzRejected(Exception):
+    """MusicBrainz refused the request (a 4xx other than 429): an error to
+    retry later with a backoff, never "no such artist"."""
+
+
 class MusicBrainzClient(Protocol):
     async def lookup(self, *, title: str, artist: str | None) -> MusicBrainzMatch | None: ...
 
+    async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]: ...
+
 
 class MusicBrainzStubClient:
-    """Always returns None — used in USE_STUBS mode."""
+    """Always returns nothing — used in USE_STUBS mode."""
 
     async def lookup(self, *, title: str, artist: str | None) -> MusicBrainzMatch | None:
         return None
+
+    async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
+        return []
 
 
 _NOISE_PATTERNS = [
@@ -86,6 +150,57 @@ def _clean_media_title(title: str) -> tuple[str, str | None]:
     return t, extracted_artist
 
 
+def artist_search_query(name: str) -> str:
+    """The Lucene query for an artist search: the name as one quoted
+    phrase in the ``artist`` field. Inside a quoted phrase only ``\\`` and
+    ``"`` are special, so those two are escaped and nothing else is."""
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'artist:"{escaped}"'
+
+
+def _opt_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def parse_artist_search(data: Mapping[str, Any] | None) -> list[MbArtist]:
+    """The artists of an ``/ws/2/artist?query=…&fmt=json`` response, in the
+    order MusicBrainz ranked them. Malformed entries (no id or name) are
+    skipped; a malformed response is an empty list."""
+    if not isinstance(data, Mapping):
+        return []
+    out: list[MbArtist] = []
+    for raw in data.get("artists") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        artist_id, name = _opt_str(raw.get("id")), _opt_str(raw.get("name"))
+        if not artist_id or not name:
+            continue
+        try:
+            score = int(raw.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        aliases: list[MbAlias] = []
+        for a in raw.get("aliases") or []:
+            if not isinstance(a, Mapping) or not _opt_str(a.get("name")):
+                continue
+            aliases.append(MbAlias(
+                name=a["name"],
+                type=_opt_str(a.get("type")),
+                locale=_opt_str(a.get("locale")),
+                primary=bool(a.get("primary")),
+            ))
+        out.append(MbArtist(
+            id=artist_id,
+            name=name,
+            sort_name=_opt_str(raw.get("sort-name")),
+            type=_opt_str(raw.get("type")),
+            score=score,
+            disambiguation=_opt_str(raw.get("disambiguation")),
+            aliases=aliases,
+        ))
+    return out
+
+
 class HttpMusicBrainzClient:
     """Live MusicBrainz lookup over HTTP.
 
@@ -98,6 +213,8 @@ class HttpMusicBrainzClient:
     BASE = "https://musicbrainz.org/ws/2"
     MIN_INTERVAL_SEC = 1.0
     REQUEST_TIMEOUT_SEC = 5.0
+    # The search endpoint is slower than a lookup under load.
+    SEARCH_TIMEOUT_SEC = 10.0
     MIN_SCORE = 80  # MB score is 0–100; below 80 is not reliable enough to overwrite metadata
 
     def __init__(self) -> None:
@@ -156,20 +273,73 @@ class HttpMusicBrainzClient:
             album=album,
         )
 
-    async def _rate_limited_get(
-        self, path: str, params: dict[str, str]
-    ) -> dict[str, Any] | None:
+    async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
+        """Artists whose name matches ``name`` (MusicBrainz ranks them; the
+        caller verifies). Only a 200 with a JSON body answers — an empty
+        list then means MusicBrainz knows no such artist. Raises
+        :class:`MusicBrainzRateLimited` on HTTP 503/429,
+        :class:`MusicBrainzUnavailable` when the server cannot be reached,
+        answers another 5xx, or answers 200 without JSON (a proxy's HTML
+        page), and :class:`MusicBrainzRejected` on any other 4xx."""
+        if not name.strip():
+            return []
+        status, data = await self._rate_limited_fetch(
+            "artist",
+            {
+                "query": artist_search_query(name),
+                "fmt": "json",
+                "limit": str(max(1, min(int(limit), 25))),
+            },
+            timeout=self.SEARCH_TIMEOUT_SEC,
+        )
+        if status in (429, 503):
+            raise MusicBrainzRateLimited(f"HTTP {status}")
+        if status >= 500:
+            raise MusicBrainzUnavailable(f"HTTP {status}")
+        if status != 200:
+            raise MusicBrainzRejected(f"HTTP {status}")
+        if not isinstance(data, Mapping):
+            raise MusicBrainzUnavailable("not JSON")
+        return parse_artist_search(data)
+
+    async def _paced(self, fn, *args):
+        """Run one blocking request under the process-wide pacing lock:
+        at most one request per ``MIN_INTERVAL_SEC``, whoever asks."""
         async with self._lock:
             wait = self.MIN_INTERVAL_SEC - (time.monotonic() - self._last_request_at)
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
-                data = await asyncio.to_thread(self._sync_get, path, params)
+                return await asyncio.to_thread(fn, *args)
             finally:
                 self._last_request_at = time.monotonic()
-            return data
+
+    async def _rate_limited_get(
+        self, path: str, params: dict[str, str]
+    ) -> dict[str, Any] | None:
+        return await self._paced(self._sync_get, path, params)
+
+    async def _rate_limited_fetch(
+        self, path: str, params: dict[str, str], *, timeout: float
+    ) -> tuple[int, dict[str, Any] | None]:
+        return await self._paced(self._sync_fetch, path, params, timeout)
 
     def _sync_get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
+        try:
+            status, data = self._sync_fetch(path, params, self.REQUEST_TIMEOUT_SEC)
+        except MusicBrainzUnavailable as e:
+            log.debug("MusicBrainz request raised: %s", e)
+            return None
+        if status != 200:
+            log.debug("MusicBrainz returned status %d", status)
+            return None
+        return data
+
+    def _sync_fetch(
+        self, path: str, params: dict[str, str], timeout: float
+    ) -> tuple[int, dict[str, Any] | None]:
+        """(HTTP status, parsed JSON or None). Raises
+        :class:`MusicBrainzUnavailable` when no answer came back."""
         import requests
 
         try:
@@ -177,18 +347,16 @@ class HttpMusicBrainzClient:
                 f"{self.BASE}/{path}",
                 params=params,
                 headers={"User-Agent": self.USER_AGENT, "Accept": "application/json"},
-                timeout=self.REQUEST_TIMEOUT_SEC,
+                timeout=timeout,
             )
         except Exception as e:
-            log.debug("MusicBrainz request raised: %s", e)
-            return None
+            raise MusicBrainzUnavailable(type(e).__name__) from e
         if r.status_code != 200:
-            log.debug("MusicBrainz returned status %d", r.status_code)
-            return None
+            return r.status_code, None
         try:
-            return r.json()
+            return 200, r.json()
         except ValueError:
-            return None
+            return 200, None
 
 
 _client: MusicBrainzClient | None = None

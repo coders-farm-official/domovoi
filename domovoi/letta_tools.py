@@ -318,6 +318,8 @@ async def _dispatch_handler(name: str, args: dict[str, Any], *, app: Any) -> str
         log.warning("chat-mode handler dispatch failed (%s): %s", name, e)
         return f"I ran into a problem trying to {name} that."
 
+    if response is None:  # the tool declined the call
+        return f"I can't {name} that."
     return (response.text or "").strip() or "Done."
 
 

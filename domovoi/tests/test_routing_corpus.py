@@ -41,7 +41,7 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news", "library", "reminder", "timer"}
+GATED = {"calculator", "double_check", "news", "library", "reminder", "timer", "music_alias"}
 
 
 def _normalize(utterance: str) -> str:
@@ -80,6 +80,7 @@ def test_corpus_is_well_formed() -> None:
             f"{c['utterance']!r} expects unknown handler {c['handler']!r}"
         )
         assert c.get("path") in (None, "fast", "llm")
+        assert c.get("declined_by") is None or c["declined_by"] in HANDLER_BY_NAME
         assert c["tags"], f"{c['utterance']!r} has no tags"
     tags = {t for c in CORPUS for t in c["tags"]}
     assert {"qa", "calculator", "double_check", "action"} <= tags
@@ -94,6 +95,11 @@ def test_fast_path_expectations(case) -> None:
     must not be poached by ANOTHER handler's fast path; an explicit
     path='fast' case must actually hit its handler's fast path."""
     winner = _fast_path_winner(_normalize(case["utterance"]))
+    if case.get("declined_by"):
+        # Its pattern matches and the handler declines the turn when it
+        # runs (pinned in that handler's own tests): no fast path answers.
+        assert winner == case["declined_by"]
+        winner = None
     if case["handler"] is None:
         assert winner is None, f"fast path of {winner!r} poached a QA utterance"
     elif case.get("path") == "fast":
@@ -474,8 +480,9 @@ def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
 
 def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     """The gate withholds only on evidence — a command with a digit, a
-    verification word and a news word in it must see every tool."""
-    names = _offered("double check the latest news about the 3 timers i set")
+    verification word, a news word and a music-names cue ("other names",
+    music_alias's on-request tool) in it must see every tool."""
+    names = _offered("double check the latest news about the 3 timers i set and their other names")
     assert set(names) == {h.name for h in HANDLERS}
 
 

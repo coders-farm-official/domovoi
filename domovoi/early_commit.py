@@ -17,7 +17,11 @@ is lost ("set a timer for ten minutes … for the pasta" loses the label;
   extends, short hold) or ``"B"`` (phrases a pause can split: a duration,
   a number, a clock question; longer hold). Language-model turns and open
   slots (``play (.+)``) never commit early. Plugin fast paths never;
-* a complete yes/no answer to a parked confirmation, as tier ``"B"``;
+* a complete yes/no answer to a parked confirmation, as tier ``"B"`` —
+  but to a parked CHOICE (``Handler.choice_kinds``: "did you mean X?")
+  only a complete yes: there a bare "no" is the reply most often followed
+  by the correction ("no… play Pink Floyd"), so it runs to the
+  satellite's own silence timeout;
 * every one-word transcript is held as ``"B"`` whatever its path says —
   "stop" is also the start of "stop the timer", and lone words are what
   Whisper hears worst;
@@ -48,6 +52,12 @@ _COMPLETE_ANSWER_RE = re.compile(
     r"^(?:yes|yeah|yep|yup|sure|correct|right|that's right|exactly|affirmative|"
     r"that is right|that's correct|confirmed|"
     r"no|nope|nah|wrong|incorrect|that's wrong|not quite|not exactly)"
+    r"(?:,? (?:please|thanks|thank you))?$"
+)
+# The yes half of it: all a parked CHOICE commits early on.
+_COMPLETE_YES_RE = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|correct|right|that's right|exactly|affirmative|"
+    r"that is right|that's correct|confirmed)"
     r"(?:,? (?:please|thanks|thank you))?$"
 )
 
@@ -90,7 +100,10 @@ def early_commit_for(raw_transcript: str, *, pending: Any = None) -> EarlyCommit
     if plan is None or not plan.transcript or _DANGLING_TAIL_RE.search(plan.transcript):
         return None
     if plan.path == "confirmation":
-        tier = TIER_B if _COMPLETE_ANSWER_RE.match(plan.transcript) else None
+        whole = (
+            _COMPLETE_YES_RE if plan.kind in plan.handler.choice_kinds else _COMPLETE_ANSWER_RE
+        )
+        tier = TIER_B if whole.match(plan.transcript) else None
     elif plan.handler.plugin_slug is not None or plan.fast_path is None:
         tier = None
     else:

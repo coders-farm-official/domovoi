@@ -43,7 +43,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.models import Context, Intent, Response
 
-FastPathMethod = Callable[["Handler", re.Match[str], Context, AsyncSession], Awaitable[Response]]
+# A fast path answers the turn — or returns None to DECLINE it: the router
+# then routes the turn on (tool model, Q&A) as if the path had not matched.
+# For a pattern that cannot tell its own turns from others by their words
+# alone ("what else is X called" is a music-names question only when X is
+# in the library). plan_route() and early commit still see the match.
+FastPathMethod = Callable[
+    ["Handler", re.Match[str], Context, AsyncSession], Awaitable["Response | None"]
+]
 RequiresNetwork = Literal["no", "degraded", "yes"]
 
 
@@ -140,6 +147,13 @@ class Handler(ABC):
     # pending API (domovoi.confirmations) validates at set time; the router
     # dispatches only declared kinds.
     confirmation_kinds: tuple[str, ...] = ()
+    # The confirmation kinds whose reply may be FREE TEXT, not just yes/no —
+    # "did you mean X?" answered "no, play Y" or with a bare name. Must be a
+    # subset of ``confirmation_kinds`` (checked in test_registry). For a
+    # parked choice the router hands EVERY next reply to
+    # ``handle_choice_reply`` first (domovoi.confirmations.CHOICE_PARKED
+    # keeps that free for sessions without one). Core handlers only.
+    choice_kinds: tuple[str, ...] = ()
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).
     plugin_slug: str | None = None
@@ -156,7 +170,10 @@ class Handler(ABC):
 
     async def execute_from_tool(
         self, args: dict[str, Any], ctx: Context, session: AsyncSession
-    ) -> Response:
+    ) -> Response | None:
+        """Run a tool call the LLM router made. Return None to DECLINE it
+        (the call was not about what this tool does after all): the router
+        then answers the turn with the Q&A model."""
         raise NotImplementedError(
             f"{self.name} does not implement execute_from_tool (LLM tool-call routing)"
         )
@@ -200,5 +217,27 @@ class Handler(ABC):
         raise NotImplementedError(
             f"{self.name} declares no confirmation flow (confirmation_kinds="
             f"{self.confirmation_kinds!r}) but handle_confirmation was called "
+            f"with kind={kind!r}"
+        )
+
+    async def handle_choice_reply(
+        self,
+        kind: str,
+        data: dict[str, Any],
+        transcript: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """Answer the reply to a parked CHOICE (``kind`` is one of
+        ``self.choice_kinds``). ``data`` is the parked payload; the router
+        has already cleared it from the session, so the handler may park a
+        new one. ``transcript`` is the whole reply, normalized
+        (``router.normalize_transcript``) but NOT filler-stripped — "no,
+        play X" arrives whole. Return None when the reply is not about the
+        choice: the router then routes it as an ordinary turn (the choice
+        is dropped)."""
+        raise NotImplementedError(
+            f"{self.name} declares no choice flow (choice_kinds="
+            f"{self.choice_kinds!r}) but handle_choice_reply was called "
             f"with kind={kind!r}"
         )

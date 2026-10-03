@@ -47,6 +47,7 @@ from web.backend.api import greetings as greetings_api
 from web.backend.api import images as images_api
 from web.backend.api import models as models_api
 from web.backend.api import music as music_api
+from web.backend.api import music_aliases as music_aliases_api
 from web.backend.api import music_queue as music_queue_api
 from web.backend.api import news as news_api
 from web.backend.api import playlists as playlists_api
@@ -343,6 +344,9 @@ app.include_router(plugins_api.router)
 app.include_router(capabilities_api.router)
 app.include_router(acquisitions_api.router)
 app.include_router(music_api.router)
+# "Also called" names (V019): its own module so /api/music/aliases/* stays
+# clear of music_api's /library/{track_id} matchers.
+app.include_router(music_aliases_api.router)
 # Room-queue editing + the device blocklist. Its own module so the
 # /api/music/queue/{room_id} matcher stays clear of music_api's literal
 # paths, and so the blocks sit on a prefix no room id can shadow.

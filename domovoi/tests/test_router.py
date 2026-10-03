@@ -507,6 +507,12 @@ ORDERING_CORPUS: list[tuple[str, str]] = [
     ("play the chill playlist", "playlist"),
     ("shuffle the chill playlist", "playlist"),
     ("make a new playlist called chill", "playlist"),
+    # music_alias's anchored "also called" phrases (band 295) before
+    # music's ^play catch-all; memory's "forget that X" leaves it a bare
+    # "forget that name"
+    ("when i say gramps i mean hearth ensemble", "music_alias"),
+    ("forget that name", "music_alias"),
+    ("what else is hearth ensemble called", "music_alias"),
     # music owns the greedy catch-all + bare transport
     ("play the beatles", "music"),
     ("play creep by radiohead", "music"),

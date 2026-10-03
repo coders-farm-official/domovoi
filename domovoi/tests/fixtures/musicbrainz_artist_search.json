@@ -1,0 +1,775 @@
+{
+ "_about": "Recorded MusicBrainz artist-search responses (GET /ws/2/artist?query=artist:\"<name>\"&fmt=json), keyed by the searched name. MusicBrainz data is CC0. Recorded 2026-10-02 by the spoken-name study and trimmed to the fields the alias fetch reads: most searches keep only the top hit (P!nk keeps its three). Where the study did not keep an artist's type it is set to that artist's MusicBrainz type. Used by domovoi/tests/test_library_alias_fetch.py; no test makes a network request.",
+ "searches": {
+  "50 Cent": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "8e68819d-71be-4e7d-b41d-f1df81b01d3f",
+     "type": "Person",
+     "score": 100,
+     "name": "50 Cent",
+     "sort-name": "50 Cent",
+     "disambiguation": null,
+     "aliases": [
+      {
+       "name": ".50 Cents",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Fifty Cent",
+       "type": "Artist name",
+       "locale": "en",
+       "primary": null
+      },
+      {
+       "name": "Curtis/James/Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "C.Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Curtis James Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Curtis Jackson III",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "C. Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Curtis James Jackson III",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Curtis Jackson",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "50 Cents",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "50 Cent",
+       "type": "Artist name",
+       "locale": "en",
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "P!nk": {
+   "count": 3,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "f4d5cc07-3bc9-4836-9b15-88a08359bc63",
+     "type": "Person",
+     "score": 100,
+     "name": "P!nk",
+     "sort-name": "Pink",
+     "disambiguation": "American singer/songwriter",
+     "aliases": [
+      {
+       "name": "Alecia Moore",
+       "sort-name": "Moore, Alecia",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "ピンク",
+       "sort-name": "ピンク",
+       "type": "Artist name",
+       "locale": "ja",
+       "primary": true
+      },
+      {
+       "name": "Pink",
+       "sort-name": "Pink",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Alecia Beth Moore",
+       "sort-name": "Moore, Alecia Beth",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Alecia B. Moore",
+       "sort-name": "Moore, Alecia B.",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "P.nk",
+       "sort-name": "P.nk",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    },
+    {
+     "id": "de81491d-fbc1-498e-b9a4-efcb3f1a81a3",
+     "type": "Person",
+     "score": 65,
+     "name": "Mr. P!nk",
+     "sort-name": "P!nk, Mr.",
+     "disambiguation": "House DJ & producer, real name: Andreas Sampath Ellias",
+     "aliases": []
+    },
+    {
+     "id": "0419ee00-8d0a-4087-ace9-a21465628879",
+     "score": 65,
+     "name": "P!nk Panther",
+     "sort-name": "P!nk Panther",
+     "aliases": []
+    }
+   ]
+  },
+  "JAŸ-Z": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "f82bcf78-5b69-4622-a5ef-73800768d9ac",
+     "type": "Person",
+     "score": 100,
+     "name": "JAŸ-Z",
+     "sort-name": "JAŸ-Z",
+     "disambiguation": "US rapper",
+     "aliases": [
+      {
+       "name": "JAŸ‐Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "JAY‐Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "jay z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jay‐Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jaÿ‐Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "JAY:Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "JAY Z",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Shawn C Carter",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Shawn Carter",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "S. Carter",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Shawn Corey Carter",
+       "type": "Legal name",
+       "locale": "en",
+       "primary": null
+      },
+      {
+       "name": "Jayz",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Hova",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jay-Hova",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jigga",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jay Z",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jay - Z",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Hova da God",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "A$AP Rocky": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "25b7b584-d952-4662-a8b9-dd8cdfbfeb64",
+     "type": "Person",
+     "score": 100,
+     "name": "A$AP Rocky",
+     "sort-name": "ASAP Rocky",
+     "disambiguation": "US rapper",
+     "aliases": [
+      {
+       "name": "Rakim Athelston Mayers",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Rakim Mayers",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Lord Flacko",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "LORD FLACKO",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "ASAP Rocky",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "A$AP Rocky",
+       "type": null,
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "deadmau5": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "4a00ec9d-c635-463a-8cd4-eb61725f0c60",
+     "type": "Person",
+     "score": 100,
+     "name": "deadmau5",
+     "sort-name": "deadmaus",
+     "aliases": [
+      {
+       "name": "deadmau5",
+       "sort-name": "deadmaus",
+       "type": "Artist name",
+       "locale": "en",
+       "primary": true
+      },
+      {
+       "name": "デッドマウス",
+       "sort-name": "デッドマウス",
+       "type": "Artist name",
+       "locale": "ja",
+       "primary": true
+      },
+      {
+       "name": "Dead Mouse",
+       "sort-name": "Dead Mouse",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Deadmau",
+       "sort-name": "Deadmau",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Deadmaus",
+       "sort-name": "Deadmaus",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Deadmouse",
+       "sort-name": "Deadmouse",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Deadmru5",
+       "sort-name": "Deadmru5",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Deadmau 5",
+       "sort-name": "Deadmau 5",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "Tech N9ne": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "dde3d9b1-0e44-48bc-b0c9-d739b3570000",
+     "type": "Person",
+     "score": 100,
+     "name": "Tech N9ne",
+     "sort-name": "Tech N9ne",
+     "disambiguation": "US rapper",
+     "aliases": [
+      {
+       "name": "Tek N9NE",
+       "sort-name": "Tek N9NE",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Aaron D. Yates",
+       "sort-name": "Aaron D. Yates",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Aaron Dontez Yates",
+       "sort-name": "Aaron Dontez Yates",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Tec 9",
+       "sort-name": "Tec 9",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Tech Nine",
+       "sort-name": "Tech Nine",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Tech9ne",
+       "sort-name": "Tech9ne",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Aaron D. Yates",
+       "sort-name": "Aaron D. Yates",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Tech 9",
+       "sort-name": "Tech 9",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Tech N9ne",
+       "sort-name": "Tech N9ne",
+       "type": "Artist name",
+       "locale": "en_US",
+       "primary": true
+      }
+     ]
+    }
+   ]
+  },
+  "CHVRCHES": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "6a93afbb-257f-4166-b389-9f2a1e5c5df8",
+     "type": "Group",
+     "score": 100,
+     "name": "CHVRCHES",
+     "sort-name": "CHVRCHES",
+     "disambiguation": "Glaswegian electronic pop trio",
+     "aliases": [
+      {
+       "name": "CHVRCHΞS",
+       "sort-name": "CHVRCHΞS",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "CHVRCHES",
+       "sort-name": "CHVRCHES",
+       "type": "Artist name",
+       "locale": "en",
+       "primary": true
+      },
+      {
+       "name": "Churches",
+       "sort-name": "Churches",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "CHURCHES",
+       "sort-name": "CHURCHES",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "INXS": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "481bf5f9-2e7c-4c44-b08a-05b32bc7c00d",
+     "type": "Group",
+     "score": 100,
+     "name": "INXS",
+     "sort-name": "INXS",
+     "disambiguation": null,
+     "aliases": [
+      {
+       "name": "In Excess",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "I.N.X.S.",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "The Farriss Brothers",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "$uicideboy$": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "ef326b3d-61f0-4379-aca0-21237d696d63",
+     "type": "Group",
+     "score": 100,
+     "name": "$uicideboy$",
+     "sort-name": "Suicideboys",
+     "disambiguation": "American hip-hop duo",
+     "aliases": [
+      {
+       "name": "The Suicideboys",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Suicide Boys",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "$uicide Boy$",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "$‪uicideboy$",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "suicideboys",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "B.o.B": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "72c536dc-7137-4477-a521-567eeb840fa8",
+     "type": "Person",
+     "score": 100,
+     "name": "Bob Dylan",
+     "sort-name": "Dylan, Bob",
+     "disambiguation": null,
+     "aliases": [
+      {
+       "name": "Boy Dylan",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "DYLYN Bob",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Robert Dylan",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Robert Zimmerman",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Bobby Zimmerman",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Боб Дилан",
+       "type": null,
+       "locale": "ru",
+       "primary": null
+      },
+      {
+       "name": "Bob Landy",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Boo Wilbury",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Robert Allen Zimmerman",
+       "type": "Legal name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Bob D",
+       "type": "Search hint",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Dylan",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Jack Frost",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Blind Boy Grunt",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Lucky Wilbury",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Bob Dylan",
+       "type": "Artist name",
+       "locale": "en",
+       "primary": null
+      }
+     ]
+    }
+   ]
+  },
+  "MAGIC!": {
+   "count": 1,
+   "offset": 0,
+   "artists": [
+    {
+     "id": "ac5af671-1df0-4312-8b7b-e61992ecc883",
+     "type": "Group",
+     "score": 100,
+     "name": "Yellow Magic Orchestra",
+     "sort-name": "Yellow Magic Orchestra",
+     "disambiguation": null,
+     "aliases": [
+      {
+       "name": "Y.M.O.",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "YMO",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "YMO",
+       "type": "Artist name",
+       "locale": "ja",
+       "primary": null
+      },
+      {
+       "name": "イエロー・マジック・オーケストラ",
+       "type": null,
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "Y̶M̶O̶",
+       "type": "Artist name",
+       "locale": null,
+       "primary": null
+      },
+      {
+       "name": "イエローマジックオーケストラ",
+       "type": null,
+       "locale": null,
+       "primary": null
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

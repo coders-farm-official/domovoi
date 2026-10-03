@@ -56,10 +56,12 @@ _REMEMBER_RE = re.compile(
 # "stop remembering that I'm allergic" / "stop saving that I work nights".
 # Distinct from VoiceProfileHandler's "forget me" — that requires a bare
 # "me" / "everything"; this one demands a "that" / "the X" qualifier
-# followed by a body.
+# followed by a body. A bare "forget that name" / "forget that alias" /
+# "forget that nickname" is the music-names handler's (band 295: undo the
+# name just taught), not a memory whose body is the word "name".
 _FORGET_MEMORY_RE = re.compile(
     r"^(?:"
-    r"forget (?:that |the (?:fact|thing|memory|note) (?:about |that ))"
+    r"forget (?:that (?!(?:alias|name|nickname)$)|the (?:fact|thing|memory|note) (?:about |that ))"
     r"|stop (?:saving|remembering) (?:that |)"
     r")(?P<body>.+)$"
 )

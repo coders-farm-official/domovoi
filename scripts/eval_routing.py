@@ -71,6 +71,9 @@ class Case:
     path: str | None
     tags: list[str]
     note: str
+    # A handler whose fast path matches but declines the turn when it runs
+    # (music_alias: nothing in the library is called that).
+    declined_by: str | None = None
 
 
 @dataclass
@@ -94,6 +97,7 @@ def load_corpus(path: Path) -> list[Case]:
             path=c.get("path"),
             tags=list(c.get("tags") or []),
             note=c.get("note", ""),
+            declined_by=c.get("declined_by"),
         )
         for c in data["cases"]
     ]
@@ -241,6 +245,9 @@ async def run_ollama(
         normalized = _LEADING_FILLER_RE.sub("", normalized)
         t0 = time.monotonic()
         winner = fast_path_winner(normalized)
+        declined = winner is not None and winner == case.declined_by
+        if declined:
+            winner = None  # the handler declines it at run time; route() goes on
         if winner is not None:
             handler, path, detail = winner, "fast", "fast path"
         elif answers_without_tools(normalized):
@@ -254,13 +261,22 @@ async def run_ollama(
             call = await client.route(case.utterance, schemas)
             if call is None:
                 handler, path = None, "qa"
+            elif call.get("handler") == case.declined_by:
+                # The tool declines a call about something not in the
+                # library (the case's premise) and Q&A answers, as route()
+                # does (execute_from_tool returns None).
+                handler, path = None, "qa"
             else:
                 handler, path = call.get("handler"), "llm"
             detail = f"offered {len(schemas)} tools"
+            if declined:
+                detail = f"{case.declined_by} fast path declined; " + detail
             if withheld:
                 detail += f", withheld {','.join(withheld)}"
             if call is not None and call.get("args"):
                 detail += f"; args={json.dumps(call['args'])[:60]}"
+            if call is not None and call.get("handler") == case.declined_by:
+                detail += f"; {case.declined_by} tool declined it"
         latency = int((time.monotonic() - t0) * 1000)
         results.append(
             Result(

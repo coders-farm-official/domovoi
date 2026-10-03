@@ -294,7 +294,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version, home_problems_visibility}`. `home_problems_visibility` is the LIVE value of that one setting, which the web's `GET /api/config` reads from here (a config save changes only the core's copy). |
+| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, domovoi_version, home_problems_visibility, music_alias_fetch}`. `home_problems_visibility` is the LIVE value of that one setting, which the web's `GET /api/config` reads from here (a config save changes only the core's copy). `music_alias_fetch` is the opt-in MusicBrainz "also called" lookup's STATUS only — `{enabled, state, last_tick_at, last_request_at, last_error, rate_limited_until, artists_total, artists_due}` (`state`: `off` \| `offline` \| `rate_limited` \| `running` \| `idle` \| `done` \| `error`; `last_error` an error type or a short code) — never an artist name or an alias; `GET /api/music/aliases/status` adds the database counts. |
 | `POST /v1/admin/announce` | **Device (`X-Device-Token` or Bearer)** | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
 | `POST /v1/admin/dropin/start` | **Admin (Bearer)** | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms — a live microphone bridge nobody in either room was asked about, so it takes an admin Bearer. `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. Under `DROPIN_ACCEPT_MODE=ring` it returns `{"status": "ringing"}` and opens nothing until the target room answers. |
 | `POST /v1/admin/dropin/end` | **Device (`X-Device-Token` or Bearer)** | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
@@ -521,6 +521,65 @@ daily tier, so someone determined can claim a different one. It reliably keeps
 a known device out of a queue; it is not a defence against an attacker.
 Managing blocks is admin-gated precisely so it can't be undone from the device
 it was applied to. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+
+### 3.5b Music: "also called" names
+
+Other names the household says for a library artist, album or song — a
+nickname, how a styled name is actually said, a name speech-to-text keeps
+hearing — so "play <name>" finds the right thing (table `library_aliases`,
+migration V019). The track drawer shows them as an editable list per target
+(the song, each of its artists, its album), and the voice can teach them too:
+"when I say X I mean Y" / "forget that name" / "what else is Y called"
+(handler `music_alias`, band 295).
+
+* **One row per name → target.** A target can have any number of names; a
+  NAME means exactly one thing in the household. Names are compared by their
+  spoken key (`spoken_names.alias_key`: case, punctuation and spelling-out are
+  ignored, so "Gramps", "gramps!" and "GRAMPS" are one name).
+* **A name already meaning something else is a question, never a second
+  meaning:** `409` with `{"detail": {"code": "alias_taken", "existing":
+  LibraryAlias, "can_replace": bool, "message": str}}`; the dashboard asks
+  "Replace it?" and, on yes, POSTs again with `replace: true` (which moves the
+  existing row to the new target). The same name for the same target is a
+  `200` no-op.
+* **A name MAY take over another library name** (a song title taught to mean
+  an album): the answer's `shadows` lists what it now plays instead of, and
+  the resolver prefers a household name on an exact tie. MusicBrainz names
+  (the opt-in lookup) never do, and never displace a household name.
+* **Who may remove or replace what:** an admin anything; anyone a MusicBrainz
+  name (removing one hides it — `suppressed` — so the next lookup does not add
+  it back); a paired device the names IT added, by the device id its request
+  carries (the dashboard's `domovoi-device-id` cookie or `X-Device-Id`); a
+  voice speaker the names the same recognized person added (or, unrecognized,
+  ones added by voice from the same room). Everything else is `403` "Only an
+  admin can remove a name someone else added." A device id is self-asserted,
+  exactly as for the queue blocks above: **household policy, not a security
+  boundary.** A client that sends no id (the Android app today) adds names
+  only an admin can remove.
+
+`LibraryAlias` = `{id, alias, alias_key, target_type: artist|album|track,
+target_key, target_name, target_artist_key, target_track_id, source:
+manual|voice|musicbrainz, created_by_kind: admin|device|voice|system, added_by,
+created_at, suppressed, can_remove}`. `added_by` is "admin", the adding
+device's name, "voice in <room>" or "MusicBrainz" — never another device's raw
+id, and the device's NAME only for a caller on the device tier (a device token,
+an admin Bearer, the dashboard cookie or the pre-setup grace): an open read
+with no credential gets "a device" instead, since `GET /api/devices`, the
+inventory those names come from, is admin-only. `can_remove` is for the caller
+of THIS request.
+
+| Route | Tier | Body / query | Notes |
+|---|---|---|---|
+| `GET /api/music/aliases` | Open | `?target_type=&target_key=&track_id=&source=&include_suppressed=false&limit=200&offset=0` (`limit` ≤ 500) | `{items:[LibraryAlias], total}`, household names first. |
+| `GET /api/music/aliases/for-track/{track_id}` | Open | — | The drawer in one call: `{track:{id, title, aliases}, artists:[{name, key, credit, aliases}], album:{name, key, artist_key, artist_name, aliases}\|null}`. One `artists` row per performer in the credit; a credit that reads like one band's name ("Earth, Wind & Fire" — only `,` `&` `;` between at most four parts) also gets a row for the whole credit, first, with `credit: true`. `404` unknown track. |
+| `POST /api/music/aliases` | **Device** | `{alias, target_type: artist\|album\|track, target_name?, target_artist_name?, target_track_id?, replace=false}` | `201 {status: "added"\|"replaced", alias, shadows:[{type, name}]}`; `200 {status: "exists", ...}`; `409 alias_taken` (above); `403` replacing someone else's; `404` the target is not in the library (an album with `target_artist_name` must have a track whose primary artist is that artist); `422 {"detail": {"code": "empty"\|"too_long"\|"nothing_to_say"\|"already_its_name", "message"}}` — a name is 1–120 characters after trimming (control and format characters — NUL, a right-to-left override, zero-width ones — are dropped first), says at most 240 characters' worth of spoken key (a long run of digits reads as many words: `too_long` too), and the target's own library name is not another name for it. |
+| `DELETE /api/music/aliases/{alias_id}` | **Device** | — | `204`. A MusicBrainz name is hidden, a household one deleted. `403` someone else's (admin only); `404` unknown or already hidden. |
+| `GET /api/music/aliases/status` | Open | — | The Stats card: `{household, musicbrainz, suppressed, fetch:{enabled, state, artists_total, checked, matched, no_match, ambiguous, errors, aliases_added, last_lookup_at, last_error}}`. Counts come from the database; `enabled` / `state` / `last_error` from the core's snapshot key `music_alias_fetch` (`enabled: null, state: "unknown"` until the core reports one). |
+
+Every write is a plain database write: the core's spoken-name resolver sees it
+on its next request through a cheap library/aliases fingerprint (a voice add
+drops the fingerprint in-process, so "play <name>" works on the very next
+turn).
 
 ### 3.6 People
 

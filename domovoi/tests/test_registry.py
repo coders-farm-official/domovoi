@@ -44,6 +44,7 @@ CORE_BANDS = {
     # 280 reserved: the bundled radio plugin declares it (before music so
     # "play 97.5 fm" isn't poached).
     "playlist": 290,
+    "music_alias": 295,
     "music": 300,
     "library": 310,
     # 900 reserved: a media-provider plugin's greedy `^find (.+)$` catch-all.
@@ -176,6 +177,28 @@ def test_confirmation_kinds_are_core_namespaced() -> None:
             )
 
 
+def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
+    # Handler.choice_kinds: kinds whose reply may be free text. Each must be
+    # a declared confirmation kind (the mediated API parks only those), the
+    # handler must answer handle_choice_reply, and only core handlers have
+    # them (the router's choice check is core-only).
+    for h in HANDLERS:
+        assert set(h.choice_kinds) <= set(h.confirmation_kinds), (
+            f"{h.name}: choice_kinds {h.choice_kinds!r} not all in "
+            f"confirmation_kinds {h.confirmation_kinds!r}"
+        )
+        if h.choice_kinds:
+            assert getattr(h, "plugin_slug", None) is None, h.name
+            assert type(h).handle_choice_reply is not Handler.handle_choice_reply, (
+                f"{h.name} declares choice_kinds but does not override "
+                f"handle_choice_reply"
+            )
+    assert {h.name: set(h.choice_kinds) for h in HANDLERS if h.choice_kinds} == {
+        "music": {"core.music_choice"},
+        "music_alias": {"core.alias_target"},
+    }
+
+
 def test_declared_confirmation_kinds_cover_known_flows() -> None:
     # The core confirmation vocabulary — a park site for an undeclared
     # kind now raises in domovoi.confirmations.request_confirmation, so
@@ -184,9 +207,11 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "voice_profile": {"core.self_intro", "core.third_party_intro_confirm"},
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
         "memory": {"core.pending_memory_offer"},
+        "music": {"core.music_choice"},
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
         "news": {"core.news_fetch", "core.news_fetch_topics"},
         "dropin": {"core.dropin_invite"},
+        "music_alias": {"core.alias_replace", "core.alias_target"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

@@ -579,6 +579,36 @@ def test_a_whole_yes_or_no_to_a_parked_question_commits_on_the_long_hold() -> No
     assert early_commit_for("yes") is None
 
 
+def test_a_parked_music_choice_commits_early_only_on_a_whole_yes() -> None:
+    """"Did you mean …?" (core.music_choice) takes free-text replies, and
+    only a whole YES ends the capture early (tier B). A bare "no" is the
+    reply most often followed by a correction ("no… play Pink Floyd"), so
+    it runs to the satellite's own silence timeout, as does anything with
+    an open tail — "no, play the velvet kites", "velvet kites", "the
+    second one". A yes/no question that is not a choice still commits on
+    a whole "no" (the test above)."""
+    from domovoi.router import goes_to_the_tool_model
+
+    pending = _pending("music")
+    assert pending["kind"] == "core.music_choice"
+    for text in ("yes", "Yeah.", "yeah", "yes please", "Sure, thanks."):
+        ec = early_commit_for(text, pending=pending)
+        assert ec is not None, text
+        assert ec.tier == TIER_B and ec.plan.path == "confirmation", text
+        assert ec.plan.handler.name == "music", text
+    for text in (
+        "no", "No.", "No thanks.", "nope", "wrong",
+        "no, play the velvet kites", "No, play the Velvet Kites.", "no play velvet kites",
+        "velvet kites", "the second one", "yes, the second one", "no, the velvet kites",
+        "no, i said velvet kites",
+    ):
+        assert early_commit_for(text, pending=pending) is None, text
+    # A bare name is heard again on the 30 s path before it is routed (it
+    # would go to the tool model if nothing were parked); a yes/no isn't.
+    assert goes_to_the_tool_model("velvet kites") is True
+    assert goes_to_the_tool_model("no, play the velvet kites") is False
+
+
 def test_a_legacy_unnamespaced_kind_still_plans_as_its_confirmation() -> None:
     pending = _pending()
     pending["kind"] = pending["kind"].removeprefix("core.")
