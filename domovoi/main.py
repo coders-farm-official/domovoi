@@ -582,6 +582,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _startup_audiobook_index, owner="core", name="audiobook_index"
             )
 
+        # The spoken-name index ("play suicide boys" → $uicideboy$) over the
+        # freshly indexed library, so the first "play …" after a boot does
+        # not wait for it (library_match.warm; never raises).
+        async def _startup_spoken_index() -> None:
+            from domovoi.handlers.shared.library_match import warm
+
+            await warm()
+
+        WORKERS.add_startup_hook(
+            _startup_spoken_index,
+            owner="core",
+            name="spoken_index",
+            after="core.library_index",
+        )
+
     await WORKERS.start_owner("core")
 
     # Plugin runtime (design §3.7, §4.1 loader ordering): discover bundled

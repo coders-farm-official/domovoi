@@ -50,6 +50,17 @@ class MPDClient(Protocol):
     async def prepare_tracks(
         self, specs: list[dict[str, str]], *, start_sec: float = 0.0
     ) -> list[dict[str, Any]]: ...
+    # Load library files into the queue BY THEIR EXACT MPD PATH (relative
+    # URIs, e.g. "Artist/Album/01 Song.mp3"), in order: what the spoken-name
+    # resolver plays once it knows which rows it means — no tag search that
+    # could land on another song. A path MPD refuses (not in its database,
+    # a stale file) is skipped. Leaves MPD paused on the first queued song
+    # like every ``prepare_*``; ``start_sec`` as in ``prepare_tracks``.
+    # Returns the queued entries as ``playlistinfo`` reports them (each with
+    # ``file``, ``id`` and ``pos``); empty when nothing could be queued.
+    async def prepare_files(
+        self, uris: list[str], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]: ...
     # ── Queue editing (the dashboard/app room-queue surface) ──────────────
     # These operate on the EXISTING queue rather than replacing it, which is
     # what separates them from every `play_*`/`prepare_*` method above (all
@@ -178,6 +189,26 @@ class MPDStubClient:
             if start_sec > 0:
                 self._song["_elapsed"] = float(int(start_sec))
         return queued
+
+    async def prepare_files(
+        self, uris: list[str], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]:
+        # The stub has no database to refuse a path: every URI is queued,
+        # its title read from the file name.
+        from pathlib import PurePosixPath
+
+        songs = [
+            {"file": uri, "title": PurePosixPath(uri).stem}
+            for uri in uris if uri
+        ]
+        queued = self._assign_ids(songs)
+        self._queue = list(queued)
+        if queued:
+            self._song = queued[0]
+            self._state = "pause"
+            if start_sec > 0:
+                self._song["_elapsed"] = float(int(start_sec))
+        return [dict(e, pos=i) for i, e in enumerate(queued)]
 
     # ── Queue editing ──────────────────────────────────────────────────
 
@@ -319,6 +350,14 @@ def _is_not_playing(exc: BaseException) -> bool:
     """
     text = str(exc)
     return "[55@" in text or "not playing" in text.lower()
+
+
+def _is_ack(exc: BaseException) -> bool:
+    """Did MPD answer this command with an ACK (it refused it) rather than
+    the connection failing? python-mpd2's ``CommandError`` text starts with
+    the wire ACK code, ``[50@0] {add} Not found``."""
+    text = str(exc).lstrip()
+    return type(exc).__name__ == "CommandError" or (text.startswith("[") and "@" in text[:12])
 
 
 class RealMPDClient:
@@ -598,6 +637,66 @@ class RealMPDClient:
                     await c.play()
                 await c.pause(1)
             return queued
+
+    async def prepare_files(
+        self, uris: list[str], *, start_sec: float = 0.0
+    ) -> list[dict[str, Any]]:
+        """Clear the queue, ``add`` each URI as it is (no search), leave MPD
+        paused on the first one. A URI MPD refuses with an ACK (not in its
+        database — a file added since its last update, or gone) is skipped;
+        any other failure is the connection and propagates. Returns the
+        queue as ``playlistinfo`` reports it, ``id`` / ``pos`` normalized
+        as in :meth:`queue_list`."""
+        wanted = [u for u in uris if u]
+        if not wanted:
+            return []
+        async with self._connect() as c:
+            await c.clear()
+            added = 0
+            first_added = False
+            for i, uri in enumerate(wanted):
+                try:
+                    await c.add(uri)
+                except Exception as e:
+                    if not _is_ack(e):
+                        raise
+                    log.debug("MPD prepare_files: %r refused: %s", uri, e)
+                    continue
+                added += 1
+                if i == 0:
+                    first_added = True
+            if not added:
+                return []
+            started = False
+            offset = int(start_sec) if start_sec and start_sec > 0 else 0
+            if offset and first_added:
+                try:
+                    await c.seek(0, str(offset))
+                    started = True
+                except Exception as e:
+                    log.warning(
+                        "MPD prepare_files: start at %ss refused (%s); "
+                        "starting the track from the top", offset, e,
+                    )
+            if not started:
+                await c.play()
+            await c.pause(1)
+            entries = await c.playlistinfo()
+        out: list[dict[str, Any]] = []
+        for i, raw in enumerate(entries or []):
+            entry = dict(raw)
+            song_id = entry.get("id", entry.get("Id"))
+            pos = entry.get("pos", entry.get("Pos"))
+            try:
+                entry["id"] = int(song_id) if song_id is not None else None
+            except (TypeError, ValueError):
+                entry["id"] = None
+            try:
+                entry["pos"] = int(pos) if pos is not None else i
+            except (TypeError, ValueError):
+                entry["pos"] = i
+            out.append(entry)
+        return out
 
     # ── Queue editing ──────────────────────────────────────────────────
 
