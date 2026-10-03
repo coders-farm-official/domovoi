@@ -33,6 +33,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import egress
 from domovoi.db.repositories import VoicesRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
@@ -85,6 +86,14 @@ _SWITCH_RE = re.compile(
     r"|sound like (.+)"
     r")$"
 )
+
+
+def _offline_phrase() -> str:
+    """How a cloud-voice refusal says why: "I'm set to stay off the
+    internet" under INTERNET_ACCESS=never; today's words otherwise."""
+    if egress.internet_turned_off():
+        return egress.spoken_offline_phrase()
+    return "I'm offline right now"
 
 
 def _clean_name(raw: str) -> str:
@@ -215,7 +224,7 @@ class VoiceHandler(Handler):
             return await self._unknown_voice(name, ctx, session)
         if voice["engine"] == "edge" and not ctx.online:
             return self._r(
-                f"{voice['name']} is a cloud voice and I'm offline right now, "
+                f"{voice['name']} is a cloud voice and {_offline_phrase()}, "
                 f"so I can't play it.",
                 ctx,
             )
@@ -233,7 +242,7 @@ class VoiceHandler(Handler):
             return await self._unknown_voice(name, ctx, session)
         if voice["engine"] == "edge" and not ctx.online:
             return self._r(
-                f"{voice['name']} is a cloud voice and I'm offline right now, "
+                f"{voice['name']} is a cloud voice and {_offline_phrase()}, "
                 f"so I can't switch to it. Try a local voice.",
                 ctx,
             )

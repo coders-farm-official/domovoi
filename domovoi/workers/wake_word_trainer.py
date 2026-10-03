@@ -45,7 +45,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from domovoi import wake_clip_quality
+from domovoi import egress, wake_clip_quality
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import WAKE_PHRASE_PATTERN
@@ -104,6 +104,15 @@ _TRAIN_TIMEOUT_SEC = 3600
 _NO_COMMAND_MSG = (
     "wake_word_train_command not configured; openWakeWord training is "
     "Linux-only, see scripts/wake_word/README.md"
+)
+
+# Stored on a queued row when the internet answer is ``never``: the training
+# recipe downloads its training data (several GB) the first time it runs, so
+# the command is not started at all. User-started, so a visible, retryable
+# failure is the right outcome (CONTRACT 5.12); queue it again once online.
+_INTERNET_OFF_MSG = (
+    "training needs the internet the first time it runs (it downloads its "
+    "training data); " + egress.TURNED_OFF_REASON
 )
 
 
@@ -170,6 +179,12 @@ class WakeWordTrainer(Worker):
             # the row doesn't sit in 'training' forever and the dashboard shows
             # actionable guidance rather than a silent stall.
             await self._mark_failed(wake_word_id, _NO_COMMAND_MSG)
+            return 1
+
+        if egress.internet_turned_off():
+            # No train command under never: it would fetch its data set.
+            await self._mark_failed(wake_word_id, _INTERNET_OFF_MSG)
+            log.info("wake-word trainer: slug=%s not trained: internet off", slug)
             return 1
 
         # Hand the trainer ONLY the clips the operator selected. stage_selected

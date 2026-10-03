@@ -76,6 +76,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from domovoi import egress
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -236,7 +237,9 @@ def _sha256_file(path: Path) -> str:
 
 def _download(url: str, dest: Path, *, size: int) -> str:
     """Stream ``url`` to ``dest``; the SHA-256 of what was written. Refuses
-    to read past ``size`` bytes."""
+    to read past ``size`` bytes, and refuses outright (``InternetTurnedOff``,
+    before any request) when the internet answer is ``never``."""
+    egress.require_destination(url)
     import httpx
 
     h = hashlib.sha256()
@@ -944,6 +947,11 @@ def _load(gen: int) -> None:
         with _FETCH_LOCK:
             directory = ensure_model(spec)
         recognizer = build_recognizer(spec, directory, threads=threads)
+    except egress.InternetTurnedOff:
+        # The model isn't on disk and the answer is never: no download was
+        # attempted. Saving fastlane_mode again (or a restart) retries.
+        _fail(gen, f"the fast-lane model isn't downloaded and {egress.TURNED_OFF_REASON}")
+        return
     except Exception as e:
         _fail(gen, f"{type(e).__name__}: {e}")
         return
