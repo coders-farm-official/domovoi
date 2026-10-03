@@ -45,21 +45,48 @@ def _try_announce(app: Any, room_id: str | None, text: str) -> None:
     )
 
 
-def _format_enrich_summary(counts: dict[str, int]) -> str:
+# What to say when the sweep didn't run (enrich_library's ``skipped``).
+_ENRICH_SKIPPED_REPLY = {
+    "disabled": "Song recognition is turned off on the server, so I didn't identify any songs.",
+    "offline": "I lost the internet, so I'll identify your songs when it's back.",
+    "no_provider": (
+        "I can't identify songs yet: that needs a free AcoustID key or the "
+        "Shazam add-on."
+    ),
+    "running": "I'm already identifying your songs; that pass carries on.",
+}
+
+
+def _format_enrich_summary(counts: dict[str, Any]) -> str:
     """Voice-friendly one-liner reporting how the sweep went. Picks
     just the headline numbers — full counts go to the log."""
+    skipped_reason = counts.get("skipped") or ""
+    if skipped_reason == "internet_off":
+        from domovoi import egress
+
+        return f"{egress.spoken_offline_phrase()}, so I can't identify songs."
+    if skipped_reason:
+        return _ENRICH_SKIPPED_REPLY.get(
+            skipped_reason, "I couldn't identify your songs this time."
+        )
     matched = counts.get("matched", 0)
     no_match = counts.get("no_match", 0)
     errors = counts.get("errors", 0)
     skipped = counts.get("skipped_missing_file", 0)
     total = matched + no_match + errors + skipped
+    if counts.get("aborted"):
+        done = f"I identified {matched} so far" if matched else "I didn't identify any"
+        return (
+            "I stopped identifying songs because the lookups kept failing — "
+            f"{done}; the rest wait for the next try. Check the logs."
+        )
     if total == 0:
         return "Library enrichment done — nothing needed updating."
     pieces = [f"identified {matched} of {total} tracks"]
     if no_match:
         pieces.append(f"{no_match} couldn't be matched")
     if errors:
-        pieces.append(f"{errors} errored")
+        pieces.append(f"{errors} will be tried again later")
     if skipped:
         pieces.append(f"{skipped} files were missing")
     detail = ", ".join(pieces)
@@ -416,10 +443,42 @@ class LibraryHandler(Handler):
         — same plumbing reminders use. Resilient to reconnects: the
         announcement looks up the active session at completion time,
         so a Pi that drops and rejoins still hears the result.
+
+        Before anything is queued it checks, in order: the internet
+        answer (never), the probe (offline), a provider (an AcoustID key
+        or the Shazam add-on) — each has its own honest reply, and none
+        of them starts a sweep (fix B3).
         """
-        unenriched = int((await session.execute(
-            text("SELECT count(*) FROM library_tracks WHERE enriched_at IS NULL")
-        )).scalar_one() or 0)
+        from domovoi import egress
+        from domovoi.config import settings as _settings
+        from domovoi.workers import library_enricher
+
+        if egress.internet_turned_off():
+            return self._enrich_reply(
+                ctx, f"{egress.spoken_offline_phrase()}, so I can't identify songs."
+            )
+        if not ctx.online:
+            return self._enrich_reply(
+                ctx,
+                "I can't reach the internet right now, so I'll identify your "
+                "songs when it's back.",
+            )
+        if not library_enricher.provider_available():
+            return self._enrich_reply(
+                ctx,
+                "I can't identify songs yet: that needs a free AcoustID key or "
+                "the Shazam add-on.",
+            )
+        if not _settings.library_enricher_enabled:
+            return self._enrich_reply(ctx, _ENRICH_SKIPPED_REPLY["disabled"])
+        if library_enricher.enrich_running():
+            return self._enrich_reply(
+                ctx, "I'm already identifying your songs; I'll keep going."
+            )
+
+        # The unenriched tracks plus the legacy rows the sweep's one-off
+        # recovery will requeue.
+        unenriched = await library_enricher.waiting_count(session)
 
         if unenriched == 0:
             return Response(
@@ -438,9 +497,8 @@ class LibraryHandler(Handler):
         app = ctx.app
 
         async def _run_then_announce() -> None:
-            from domovoi.workers.library_enricher import enrich_library
             try:
-                counts = await enrich_library()
+                counts = await library_enricher.enrich_library()
             except Exception as e:
                 log.warning("voice-triggered enricher failed: %s", e)
                 _try_announce(
@@ -454,7 +512,6 @@ class LibraryHandler(Handler):
         import asyncio
         asyncio.create_task(_run_then_announce(), name="library-enricher-voice")
 
-        from domovoi.config import settings as _settings
         # Best-guess time estimate: ~1 sec per track (rate-limit) plus
         # API roundtrip, ~1.3 sec/track in practice. Round to whole
         # minutes; "a few minutes" beats "73 minutes" for short answers.
@@ -466,6 +523,13 @@ class LibraryHandler(Handler):
                 f"This'll take {eta_phrase}; I'll let you know when "
                 f"it's done."
             ),
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+        )
+
+    def _enrich_reply(self, ctx: Context, text_out: str) -> Response:
+        return Response(
+            text=text_out,
             session_id=ctx.session_id,
             matched_handler=self.name,
         )

@@ -4477,10 +4477,29 @@ async def admin_library_enrich() -> dict[str, Any]:
     Shazam), so this can take ~13 minutes for a fresh 750-track
     library. Voice path replies with an ETA + final announcement;
     the web caller doesn't get the announcement, just the queued ack.
-    """
-    from domovoi.workers.library_enricher import enrich_library
 
-    asyncio.create_task(enrich_library(), name="admin-library-enrich")
+    It is only queued when it can do something (fix B3): under
+    ``INTERNET_ACCESS=never`` the answer is the 409 internet-off
+    refusal; disabled, offline, no provider (no AcoustID key and no
+    Shazam add-on) or a sweep already running answer
+    ``{"queued": false, "reason": ...}`` and start nothing.
+    """
+    from domovoi import egress
+    from domovoi.workers import library_enricher
+
+    if egress.internet_turned_off():
+        raise egress.http_exception("library song recognition")
+    if not settings.library_enricher_enabled:
+        return {"queued": False, "reason": "disabled"}
+    probe = getattr(app.state, "probe", None)
+    if probe is not None and not probe.online:
+        return {"queued": False, "reason": "offline"}
+    if not library_enricher.provider_available():
+        return {"queued": False, "reason": "no_provider"}
+    if library_enricher.enrich_running():
+        return {"queued": False, "reason": "running"}
+
+    asyncio.create_task(library_enricher.enrich_library(), name="admin-library-enrich")
     return {"queued": True, "worker": "library_enricher"}
 
 

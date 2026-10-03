@@ -290,7 +290,10 @@ const SpokenAudio = (() => {
   return { clientId, getPerson, setPerson, fetchPosition, savePosition };
 })();
 
-/* Build a generic queue item from a downloaded podcast episode row. */
+/* Build a generic queue item from a downloaded podcast episode row.
+ * `artwork` is the server path of the show's stored artwork (fix B11); a
+ * remote URL is dropped, so the media session never makes the browser
+ * fetch a publisher's image. */
 const itemFromEpisode = (ep, showTitle, artwork) => ({
   uid: `pod-${ep.id}-${Math.random().toString(36).slice(2, 7)}`,
   kind: 'podcast',
@@ -300,7 +303,7 @@ const itemFromEpisode = (ep, showTitle, artwork) => ({
   artist: showTitle || 'podcast',
   album: showTitle || '',
   src: absMedia(`/api/podcasts/episodes/${ep.id}/audio`),
-  coverUrl: absMedia(artwork) || null,
+  coverUrl: (typeof artwork === 'string' && artwork.startsWith('/api/')) ? absMedia(artwork) : null,
   durationSec: ep.duration_sec ?? null,
   seekable: true,
   cacheable: true,

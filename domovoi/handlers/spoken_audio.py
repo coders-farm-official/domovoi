@@ -38,6 +38,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import egress
 from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
 from domovoi.config import settings
 from domovoi.db.repositories import SessionRepository
@@ -112,6 +113,14 @@ _SUBSCRIBE_BARE_RE = re.compile(
 # time-left / "what am I listening to" can resolve without re-querying MPD's
 # tag DB. Shape: {item_type, item_id, title, chapters, duration_sec, uri}.
 _CTX_KEY = "spoken_now"
+
+
+def _subscribe_offline_text() -> str:
+    """The reply to "subscribe to X" with no internet: today's sentence,
+    or the internet-off phrase when internet access is turned off."""
+    if egress.internet_turned_off():
+        return f"{egress.spoken_offline_phrase()}, so I can't subscribe to a new podcast."
+    return "I need an internet connection to subscribe to a new podcast."
 
 
 class SpokenAudioHandler(Handler):
@@ -288,9 +297,7 @@ class SpokenAudioHandler(Handler):
         give subscribe a clear offline message."""
         transcript = intent.transcript.strip().lower()
         if _SUBSCRIBE_RE.match(transcript):
-            return self._reply(
-                ctx, "I need an internet connection to subscribe to a new podcast."
-            )
+            return self._reply(ctx, _subscribe_offline_text())
         for pattern, method in self.fast_paths:
             m = pattern.match(transcript)
             if m:
@@ -564,36 +571,56 @@ class SpokenAudioHandler(Handler):
 
     async def _subscribe(self, ctx: Context, session: AsyncSession, show: str) -> Response:
         """Resolve a show NAME to an RSS feed via iTunes Search (keyless) and
-        add it. Network path — ``fallback_offline`` short-circuits this."""
+        add it. Network path — ``fallback_offline`` short-circuits this.
+
+        The reply promises downloads only when the feed poller is on (fix
+        B4); the directory's artwork is stored on the server in the
+        background (fix B11)."""
         if not show:
             return self._reply(ctx, "Which podcast should I subscribe to?")
-        feed_url, title = await self._itunes_lookup(show)
+        if egress.internet_turned_off():
+            return self._reply(ctx, _subscribe_offline_text())
+        feed_url, title, artwork = await self._itunes_lookup(show)
         if not feed_url:
             return self._reply(
                 ctx, f"I couldn't find a podcast called {show} to subscribe to."
             )
-        await session.execute(
-            text(
-                """
-                INSERT INTO podcast_subscriptions (feed_url, title, keep_n)
-                VALUES (:url, :title, :keep)
-                ON CONFLICT (feed_url) DO NOTHING
-                """
-            ),
-            {"url": feed_url, "title": title or show, "keep": 5},
-        )
+        row = (
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO podcast_subscriptions (feed_url, title, keep_n, artwork)
+                    VALUES (:url, :title, :keep, :artwork)
+                    ON CONFLICT (feed_url) DO UPDATE
+                       SET artwork = COALESCE(podcast_subscriptions.artwork, EXCLUDED.artwork)
+                    RETURNING id, artwork
+                    """
+                ),
+                {"url": feed_url, "title": title or show, "keep": 5, "artwork": artwork},
+            )
+        ).first()
         await session.execute(text("SELECT pg_notify('podcasts_changed', 'subscribe')"))
+        if row is not None and row[1]:
+            from domovoi import podcast_artwork
+
+            podcast_artwork.schedule_ensure(int(row[0]), row[1])
+        name = title or show
+        if settings.podcast_feed_poller_enabled:
+            return self._reply(
+                ctx, f"Subscribed to {name}. I'll download new episodes as they come out."
+            )
         return self._reply(
             ctx,
-            f"Subscribed to {title or show}. I'll download new episodes as they come out.",
+            f"Subscribed to {name}. Automatic downloads are off, so new episodes "
+            "won't download on their own; you can turn them on in Settings.",
         )
 
-    async def _itunes_lookup(self, show: str) -> tuple[str | None, str | None]:
-        """iTunes Search API → (feedUrl, collectionName). Keyless, rate-
-        limited; best-effort."""
-        import httpx
+    async def _itunes_lookup(self, show: str) -> tuple[str | None, str | None, str | None]:
+        """iTunes Search API → (feedUrl, collectionName, artworkUrl600).
+        Keyless, rate-limited; best-effort. Goes out through the egress
+        choke point, so it is refused when internet access is turned off."""
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with egress.async_client(timeout=8.0) as client:
                 r = await client.get(
                     "https://itunes.apple.com/search",
                     params={"term": show, "media": "podcast", "limit": 1},
@@ -602,12 +629,16 @@ class SpokenAudioHandler(Handler):
                 data = r.json()
         except Exception as e:
             log.warning("itunes podcast lookup failed for %r: %s", show, e)
-            return None, None
+            return None, None, None
         results = data.get("results") or []
         if not results:
-            return None, None
+            return None, None, None
         top = results[0]
-        return top.get("feedUrl"), top.get("collectionName")
+        return (
+            top.get("feedUrl"),
+            top.get("collectionName"),
+            top.get("artworkUrl600") or top.get("artworkUrl100"),
+        )
 
     # ─── Session-context bookkeeping ────────────────────────────────────
     async def _current(self, ctx: Context, session: AsyncSession) -> dict[str, Any] | None:

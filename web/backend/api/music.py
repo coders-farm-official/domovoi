@@ -251,13 +251,16 @@ async def patch_track(track_id: int, payload: TrackPatch) -> Track:
     the track drawer's edit mode (F-024), title / artist / album. Column
     names come from the schema's fields only, values are bound. A
     metadata edit stamps ``enriched_at`` so the enricher (unenriched
-    rows only) leaves the hand correction alone."""
+    rows only) leaves the hand correction alone, and records the
+    outcome ``manual`` (V020) so the enricher's one-off recovery of
+    rows stamped without an answer never requeues it either."""
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="no fields provided")
     set_fragments = [f"{k} = :{k}" for k in updates]
     if any(k in updates for k in _TRACK_METADATA_FIELDS):
         set_fragments.append("enriched_at = NOW()")
+        set_fragments.append("enrich_outcome = 'manual'")
     params: dict[str, Any] = {"id": track_id, **updates}
     favorited_changed = "favorited" in updates
     async with session_scope() as s:
