@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import random
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -372,7 +373,28 @@ class MusicHandler(Handler):
         return await self._rescan_library(ctx)
 
     # ─── Core actions ───────────────────────────────────────────────────
-    async def _play(self, query: dict, ctx: Context, session: AsyncSession) -> Response:
+    async def _play(
+        self, query: dict, ctx: Context, session: AsyncSession, *, allow_choice: bool = True
+    ) -> Response:
+        # The spoken-name resolver first (domovoi/handlers/shared/
+        # library_match.py): the library matched by how names SOUND, so
+        # "play suicide boys" finds $uicideboy$. A sure match plays by exact
+        # file path; a middle-band one may ask "did you mean …?" (the
+        # did-you-mean dialog, when present); anything else — or the
+        # resolver switched off — runs today's search below, unchanged.
+        # Every "play X" funnels here: the fast paths, the tool router,
+        # chat mode and the dashboard's play box.
+        from domovoi.handlers.shared import library_match
+
+        res = await library_match.resolve_request(session, query)
+        if res.decision == "play" and res.best is not None:
+            return await self.play_candidate(res.best, ctx, session, heard=res.heard)
+        if res.decision == "ask" and allow_choice:
+            ask = getattr(self, "ask_did_you_mean", None)
+            if ask is not None:
+                reply = await ask(res, query, ctx, session)
+                if reply is not None:
+                    return reply
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             song = await mpd.prepare_search(query)
@@ -483,6 +505,159 @@ class MusicHandler(Handler):
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"song": song},
+            music_action="start",
+            music_stream_url=mpd_stream_url_for(ctx.room_id),
+        )
+
+    # ─── Playing what the spoken-name resolver found ────────────────────
+    #: Most tracks one "play <artist>" queues (a random sample of them).
+    ARTIST_QUEUE_CAP = 500
+    # Heard words said back as they were said: plain words only.
+    _PLAIN_WORDS_RE = re.compile(r"^[a-z]+(?: [a-z]+)*$", re.I)
+
+    @classmethod
+    def _resolved_names(cls, candidate: Any, heard: str) -> tuple[str, str]:
+        """(how to say the entity, how to say the artist the request
+        named — "" when it named none). An exact match said in plain words
+        is echoed in the household's own words, title-cased; anything else
+        uses ``candidate.speak``. A "<X> by <Y>" match echoes both."""
+        heard = " ".join((heard or "").split())
+        echo = (
+            candidate.score >= 1.0
+            and candidate.via in ("exact", "alias", "musicbrainz", "by_split")
+            and bool(cls._PLAIN_WORDS_RE.match(heard))
+        )
+
+        def title_case(words: str) -> str:
+            return " ".join(w[:1].upper() + w[1:] for w in words.split())
+
+        if candidate.via == "by_split" and " by " in heard:
+            said, _, artist = heard.rpartition(" by ")
+            if echo:
+                return title_case(said), title_case(artist)
+            return candidate.speak, ""
+        if echo:
+            return title_case(heard), ""
+        return candidate.speak, ""
+
+    @staticmethod
+    def _row_for_song(song: dict, rows: list, uris: list) -> Any:
+        """The library row MPD queued first (MPD may have refused the first
+        path, or found the rows itself)."""
+        from domovoi.handlers.shared.library_match import library_path_for_mpd_file
+
+        file_ = str(song.get("file") or "")
+        for uri, row in zip(uris, rows):
+            if uri and uri == file_:
+                return row
+        if file_:
+            host = library_path_for_mpd_file(file_)
+            for row in rows:
+                if row.file_path == host:
+                    return row
+        return rows[0]
+
+    async def play_candidate(
+        self, candidate: Any, ctx: Context, session: AsyncSession, *, heard: str = ""
+    ) -> Response:
+        """Play a ``library_match.Candidate`` in the room, by exact file path.
+
+        An artist (or a whole multi-artist credit) queues ALL its tracks,
+        shuffled (at most ``ARTIST_QUEUE_CAP``); an album its tracks in file
+        order; a title or a track the one song. A queue of two songs or more
+        is what "next" / "previous" then follow (``_smart_skip`` →
+        ``_skip_in_queue``): they stay with the artist, and the queue ends
+        after its last song. Called by ``_play`` on a sure match and by the
+        did-you-mean dialog when the household confirms one.
+
+        ``heard`` is the request as the resolver read it: on an exact match
+        said in plain words the reply echoes them ("play suicide boys" →
+        "Playing Suicide Boys, shuffled."), otherwise it says the name the
+        way the household spells it out loud (``Candidate.speak``)."""
+        from domovoi.handlers.shared import library_match
+        from domovoi.handlers.shared.spoken_names import speakable
+
+        ref = candidate.ref
+        rows = (
+            await library_match.rows_by_id(session, candidate.track_ids)
+            if candidate.track_ids
+            else await library_match.tracks_for(session, ref)
+        )
+        if ref.type in ("artist", "credit"):
+            rows = list(rows)
+            random.shuffle(rows)
+            rows = rows[: self.ARTIST_QUEUE_CAP]
+        elif ref.type in ("title", "track"):
+            rows = rows[:1]
+        name, said_artist = self._resolved_names(candidate, heard)
+        missing = (
+            f"I found {name}, but the music player couldn't find the files. "
+            "Try 'rescan my library'."
+        )
+        if not rows:
+            return self._reply(ctx, missing)
+        mpd = get_mpd_client_for(ctx.room_id)
+        uris = [library_match.mpd_file_for_library_path(r.file_path) for r in rows]
+        try:
+            if all(uris):
+                queued = await mpd.prepare_files([u for u in uris if u])
+            else:
+                # A row outside music_dir has no MPD path of its own: let MPD's
+                # own search find every row of this play instead.
+                queued = await mpd.prepare_tracks([
+                    {"title": r.title or "", "artist": r.artist or "", "file_path": r.file_path}
+                    for r in rows
+                ])
+        except MPDNotProvisioned:
+            raise
+        except Exception as e:
+            log.warning("MPD play of %s %r failed: %s", ref.type, ref.label, e)
+            return self._unreachable(ctx)
+        if not queued:
+            return self._reply(ctx, missing)
+        first = dict(queued[0])
+        row = self._row_for_song(first, rows, uris)
+        n = len(queued)
+        if ctx.session_id:
+            try:
+                repo = SessionRepository(session)
+                await repo.set_context_key(ctx.session_id, "last_played_track", first)
+                await repo.set_context_key(ctx.session_id, _LAST_PLAY_SOURCE_KEY, "local")
+                # A new play replaces any external-stream skip state, as a
+                # random play does.
+                await self._clear_stream_state(repo, ctx.session_id)
+            except Exception as e:
+                log.warning("couldn't save last_played_track: %s", e)
+        await record_media_play(
+            session,
+            room_id=ctx.room_id,
+            source="library",
+            title=row.title or first.get("title"),
+            artist=row.artist or first.get("artist"),
+            library_track_id=row.id,
+        )
+        if ref.type in ("artist", "credit"):
+            if n > 1:
+                text_ = f"Playing {name}, shuffled."
+            else:
+                text_ = f"Playing {speakable(row.title or first.get('title') or 'a song')} by {name}."
+        elif ref.type == "album":
+            by = said_artist or (
+                library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
+            )
+            text_ = f"Playing the album {name}" + (f" by {by}" if by else "") + "."
+        else:
+            by = said_artist or (
+                library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
+            )
+            text_ = f"Playing {name} by {by}." if by else f"Playing {name}."
+        resolved = candidate.to_dict()
+        resolved["queued"] = n
+        return Response(
+            text=text_,
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            data={"song": first, "resolved": resolved},
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
         )

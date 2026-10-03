@@ -428,6 +428,96 @@ per room, replace semantics; storage is in-memory on the core process.
 Per-source `register_matcher` hooks drive "favorite what's playing"
 attribution, walked in ascending slug order.
 
+### Spoken names (`domovoi/handlers/shared/spoken_names.py`, `library_match.py`)
+
+Whisper writes what it hears ("suicide boys", "generation"); the library
+stores how an artist styles a name (`$uicideboy$`, `GENER8ION`). A substring
+search between the two misses, so "play X" first goes through a **spoken-name
+resolver** that matches names by how they SOUND, and only then through the
+MPD text search that was always there.
+
+* **One normalization** (`spoken_names.py`, pure, safe in both processes):
+  `spoken_forms` gives every way a name may be said (accents and lookalike
+  letters folded with anyascii, `$` → s, `!` inside a word → i, `&`/`+` →
+  "and", dotted initials joined, numbers as words both ways, a digit inside a
+  word read as a letter, as its number word and as its sound — `n9ne` → nine,
+  `gener8ion` → generation). `alias_key` — the primary form, space-less, "the"
+  dropped — is the **frozen identity** of a name (`KEY_VERSION`): two aliases
+  with one key are the same alias. Number words are hand-written (no LGPL
+  dependency); Double Metaphone comes from the BSD `Metaphone` package.
+* **The index** (`spoken_index.py`, pure; `library_match.py` holds the one
+  process-wide instance). Entities: an `artist` (every spelling merged by
+  `alias_key`, all rows whose credit names it), a whole multi-artist `credit`,
+  a `title` per primary artist, an `album` per folder, and a `track` (one row —
+  only ever a song alias's target). Each is indexed under all its spoken forms
+  (exact table + one rapidfuzz pool per type, de-duplicated), plus one
+  "title artist" phrase per title for requests whose "by" Whisper dropped.
+  Forms of three letters or fewer match exactly only (TI, U2). ~0.3 s to build
+  for 5,232 tracks; queries p50 ≈ 17 ms / p95 ≈ 50 ms there.
+* **The scorer** is the 2026-10-02 audit's untuned ranker with fixed
+  constants: exact spoken form = 1.0, else 0.6 × spelling + 0.4 × sound; an
+  entity that leaves a content word of the request unexplained is never played
+  outright; "X by Y" weighs title 0.6 / artist 0.4 and also scores the whole
+  phrase ("stand by me" stays a title); one leading carrier ("songs by", "the
+  album", "the song") narrows the kinds, and the unstripped request is scored
+  too. Decision: ≥ `music_match_play_threshold` (0.90) plays; ≥
+  `music_match_ask_threshold` (0.75) asks; else nothing. Exact ties rank
+  household alias > library name > MusicBrainz alias, then the bigger entity;
+  two entities of one type tied at the top (the same title by two artists)
+  are asked about. Single-function hooks for later phases: `_candidate_pool`
+  (narrowing), `_score` (a household-plays prior), `resolve`'s query (N-best).
+* **Freshness**: every request reads a one-query fingerprint of
+  `library_tracks` (count, max id, newest `added_at`/`enriched_at`) and
+  `library_aliases` (count, max id, newest `updated_at`). Changed aliases are
+  folded in on the spot (the next turn hears a new "also called"); a changed
+  library is rebuilt in a worker thread in the background (2 s debounce) while
+  the old index answers — inline when the library is ≤ 1,000 tracks. Boot hook
+  `core.spoken_index` (after `core.library_index`) warms it. No V019 table →
+  library names only, one warning. Any error → "none" and today's search.
+* **The hook** is `MusicHandler._play`, the funnel every "play X" goes through
+  (fast paths, tool router, chat mode, the dashboard's play box): a sure match
+  plays **by exact file path** (`MPDClient.prepare_files`; rows outside
+  `music_dir` fall back to `prepare_tracks`); a middle-band match goes to the
+  did-you-mean dialog when it is there; anything else runs the old cascade (MPD
+  tag search → filename → podcast → streaming provider → "couldn't find")
+  unchanged. `music_match_enabled = False` is exactly the old path.
+* **Playing a match** (`MusicHandler.play_candidate`): an artist or credit
+  queues ALL its tracks shuffled (≤ 500), an album its tracks in file order, a
+  title or track the one song. A queue of two or more is what "next" and
+  "previous" follow (`_skip_in_queue`), so they stay with the artist and the
+  queue ends after its last song. The play is recorded with its
+  `library_track_id`. The reply says a speakable name — the household's own
+  words when the match was exact ("Playing Suicide Boys, shuffled."), else a
+  household or MusicBrainz alias that sounds like the name, else the tag made
+  sayable (`speakable`: "P!nk" → "Pink", "T.I." → "T I").
+* **Did you mean** (`handlers/music_choice.py`, kind `core.music_choice`,
+  parked through the confirmation mechanism for 60 s): "Did you mean X, or
+  Y?" accepts yes, "the first / second / other one", plain no ("OK."), "no,
+  play Z" and a bare name (`library_match.match_reply` — a parked title or
+  album is also named by its artist); anything else drops the question and
+  routes normally. The router checks an in-memory set of sessions with a
+  parked choice, so ordinary turns gain no DB read. Never asked from the
+  dashboard's play box or chat mode (`Context.answerable`).
+* **Household aliases** ("also called", V019 `library_aliases`): one row per
+  name → target, so an artist, album or song has any number of names; a
+  unique `alias_key` means each name means ONE thing household-wide (re-using
+  it answers "replace it?"). Any paired device adds; removing or replacing
+  someone else's needs an admin (household policy — device ids are
+  self-asserted). Dashboard chips in the track drawer, REST under
+  `/api/music/aliases`, and voice ("when I say X I mean Y", "forget that
+  name", "what else is X called", band 295). The web writes plain rows; the
+  core sees them through the fingerprint.
+* **MusicBrainz aliases** (`workers/library_alias_fetch.py`): OFF by default
+  (`music_alias_fetch_enabled`, switchable without a restart), online only,
+  through the shared 1 request/s MusicBrainz client. A hit must name the
+  library's spelling; a strict filter drops legal names, non-English and
+  non-Latin forms, and for people any alias sharing a word with their legal
+  name or not sounding like the stage name; it never takes a key a library
+  name or a household alias holds.
+* **The gate** (`scripts/eval_spoken_match.py`, test `spoken_gate`): the
+  frozen held-out request set, parsed as production parses it, measures the
+  resolver — and is never used to tune it.
+
 ---
 
 ## 7. Realtime: how a DB change reaches the dashboard

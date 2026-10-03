@@ -366,6 +366,46 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "the pruner deletes old rows. 0 = keep forever.",
         "int", min=0, max=3650, unit="days",
     ),
+    FieldSpec(
+        "music_match_enabled", "Match names by sound", "Library",
+        "Match a spoken 'play …' against your library by how names sound, "
+        "so 'suicide boys' finds $uicideboy$ and 'generation' finds "
+        "GENER8ION, before the plain text search. Off = the plain text "
+        "search only. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "music_choice_enabled", "Ask 'did you mean…?'", "Library",
+        "When a spoken name is a close but not a sure match, ask 'did you "
+        "mean …?' and wait for yes, no, or the right name. Off = such "
+        "requests go to the plain text search instead. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "music_alias_fetch_enabled", "Look up other names on MusicBrainz", "Library",
+        "Fetch the spoken names people use for your artists (e.g. 'Suicide "
+        "Boys' for $uicideboy$) from MusicBrainz. Sends artist names from "
+        "your library to musicbrainz.org, one request a second (about 40 "
+        "minutes the first time for a few thousand artists, then only new "
+        "artists), and only while the server is online. People's real names "
+        "are never added. Off by default. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "music_match_play_threshold", "Play-without-asking score", "Library",
+        "How sure (0-1) a sound match must be to play without asking. "
+        "Lower = fewer questions and more wrong songs. Measured at 0.90; "
+        "change it only on purpose. Applies immediately.",
+        "float", section="advanced", tier="hot", min=0.8, max=1.0,
+    ),
+    FieldSpec(
+        "music_match_ask_threshold", "Ask-first score", "Library",
+        "How sure (0-1) a sound match must be to be offered as 'did you "
+        "mean …?'. Below it the plain text search runs. Lower = more "
+        "questions about things you don't have. At or above the play score "
+        "= never ask. Measured at 0.75. Applies immediately.",
+        "float", section="advanced", tier="hot", min=0.5, max=1.0,
+    ),
 
     # ─── Drop-in (live room-to-room audio) ─────────────────────────────
     FieldSpec(
