@@ -131,12 +131,35 @@ async def get_editable_config(request: Request, section: str | None = None):
 async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
     """Apply config changes through the Domovoi server (validate → persist to
     .env → live-apply where the tier allows). Returns
-    ``{applied, restart_required, rejected}``. The web process never mutates
-    its own settings copy — every write fans out to :6370."""
-    status, payload = await post_admin(
+    ``{applied, restart_required, rejected, normalized, followed}``. The web
+    process never mutates its own settings copy — every write fans out to
+    :6370. ``follow_internet`` (Settings → Internet's "follow the answer
+    again") rides along only when it names something."""
+    payload: dict = {"changes": body.changes}
+    if body.follow_internet:
+        payload["follow_internet"] = body.follow_internet
+    status, answer = await post_admin(
         "/v1/admin/config",
-        {"changes": body.changes},
+        payload,
         headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, answer)
+
+
+@router.get(
+    "/config/internet",
+    # A read like /config/editable beside it: the dashboard cookie renders
+    # it, a Bearer is accepted, and the core applies its own gate.
+    dependencies=[Depends(require_admin_read)],
+)
+async def get_internet(request: Request):
+    """Settings → Internet: the household's internet answer, the three
+    choices, connectivity, and every setting whose default follows the
+    answer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the
+    core owns the live settings). Changing the answer is a PATCH of
+    ``/api/config/editable`` with ``{changes: {internet_access}}``."""
+    status, payload = await get_admin(
+        "/v1/admin/internet", headers=auth_forward_headers(request)
     )
     return bridge_response(status, payload)
 

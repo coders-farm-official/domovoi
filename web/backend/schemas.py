@@ -868,3 +868,6 @@ class ConfigUpdateRequest(BaseModel):
     # bound is on the NUMBER of keys (pydantic's max_length for a dict);
     # the transport cap on the whole body is in domovoi/transport_guard.py.
     changes: dict[str, Any] = Field(..., max_length=MAX_CONFIG_CHANGES)
+    # Settings → Internet: hand-set settings that should follow the
+    # household's internet answer again (their .env line is commented out).
+    follow_internet: list[str] = Field(default_factory=list, max_length=16)

@@ -219,6 +219,17 @@ const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEve
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
 
+// The store's read is a plain fetch of the open /api/config, not apiGet: a
+// background poll must never open a sign-in or pair prompt, never replay,
+// and never land in the request log of whatever page happens to be open.
+const _readInternetAnswer = async () => {
+  const base = typeof API_BASE === 'string' ? API_BASE : '';
+  const headers = typeof apiHeaders === 'function' ? apiHeaders() : {};
+  const r = await fetch(`${base}/api/config`, { credentials: 'include', headers });
+  if (!r || !r.ok) throw new Error(`config read ${r ? r.status : 'failed'}`);
+  return r.json();
+};
+
 const InternetPolicyStore = (() => {
   let state = { access: '', loaded: false };
   const subs = new Set();
@@ -235,7 +246,7 @@ const InternetPolicyStore = (() => {
     if (inflight) return inflight;
     inflight = (async () => {
       try {
-        const cfg = await apiGet('/api/config', { quiet: true });
+        const cfg = await _readInternetAnswer();
         set((cfg && cfg.internet_access) || '');
       } catch { /* keep the last answer we heard */ }
       finally { inflight = null; }
@@ -1092,11 +1103,18 @@ const _cfgInput = {
   background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
 };
 
-const ConfigField = ({ f, value, onChange }) => {
+const ConfigField = ({ f, value, onChange, internetOff = false }) => {
+  // Under INTERNET_ACCESS=never a field that needs the internet is greyed —
+  // never hidden — with "needs internet"; so is each choice that does
+  // (tts_engine's "edge"), unless it is the value already set.
+  const greyed = !!internetOff && !!f.needs_internet;
+  const greyChoices = internetOff ? (f.needs_internet_choices || []) : [];
+  const greyTitle = greyed ? NEEDS_INTERNET_TEXT : undefined;
   let input;
   if (f.type === 'bool')
     input = <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)}
-                   style={{ width: 16, height: 16, cursor: 'pointer' }}/>;
+                   disabled={greyed} title={greyTitle}
+                   style={{ width: 16, height: 16, cursor: greyed ? 'not-allowed' : 'pointer' }}/>;
   else if (f.type === 'choice') {
     // choice_labels: words for a value that isn't any ("greeting" → "Spoken
     // greeting, then listen"). A value that is none of the choices shows as
@@ -1105,14 +1123,22 @@ const ConfigField = ({ f, value, onChange }) => {
     const choices = f.choices || [];
     const labels = f.choice_labels || {};
     const known = choices.includes(value);
-    input = <select value={known ? value : ''} onChange={e => onChange(e.target.value)} style={{ ..._cfgInput, minWidth: 150 }}>
+    input = <select value={known ? value : ''} onChange={e => onChange(e.target.value)}
+                    disabled={greyed} title={greyTitle} style={{ ..._cfgInput, minWidth: 150 }}>
       {!known && <option value="" disabled>{value == null || value === '' ? '(not set)' : String(value)}</option>}
-      {choices.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}
+      {choices.map(c => {
+        const off = greyChoices.includes(c);
+        return (
+          <option key={c} value={c} disabled={off && c !== value} title={off ? NEEDS_INTERNET_TEXT : undefined}>
+            {labels[c] || c}{off ? ' · needs internet' : ''}
+          </option>
+        );
+      })}
     </select>;
   }
   else if (f.type === 'int' || f.type === 'float')
     input = <input type="number" value={value ?? ''} min={f.min ?? undefined} max={f.max ?? undefined}
-                   step={f.type === 'int' ? 1 : 'any'}
+                   step={f.type === 'int' ? 1 : 'any'} disabled={greyed} title={greyTitle}
                    onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
                    style={{ ..._cfgInput, width: 110, textAlign: 'right' }}/>;
   else if (f.masked)
@@ -1123,6 +1149,7 @@ const ConfigField = ({ f, value, onChange }) => {
                    style={{ ..._cfgInput, minWidth: 240, color: 'var(--fg-faint)' }}/>;
   else
     input = <input type="text" value={value ?? ''} onChange={e => onChange(e.target.value)}
+                   disabled={greyed} title={greyTitle}
                    style={{ ..._cfgInput, minWidth: 240 }}/>;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)' }}>
@@ -1133,6 +1160,11 @@ const ConfigField = ({ f, value, onChange }) => {
         </span>
         {f.tier === 'restart' && <Pill tone="warn">restart</Pill>}
         {f.masked && <Pill>hidden</Pill>}
+        {f.follows_internet && (
+          <span className="config-follows-internet" title="its default follows the answer in Settings → Internet; saving a value here pins it"
+                style={{ fontSize: 11, color: 'var(--fg-muted)' }}>follows the internet answer</span>
+        )}
+        {greyed && <NeedsInternetNote compact/>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {input}
@@ -1463,6 +1495,9 @@ const LoginModal = ({ onClose }) => {
     // Only the sign-in's own refusal lands here: login()/setup() reject
     // only when the server did not say yes.
     if (failed) { setErr(loginErrorText(failed)); return; }
+    // First-run setup done: ask the internet question next, when nobody
+    // (the Windows installer, env_bootstrap) has answered it yet.
+    if (needsSetup) InternetAsk.offer();
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -1633,15 +1668,109 @@ const PairModal = ({ onClose }) => {
  * load-bearing: "sign in as an admin instead" leaves the pair modal
  * open behind the login so that cancelling the login returns to it.
  * Exactly one modal is ever on screen. */
+/* ---- First-run: "Will this Domovoi have internet?" -----------------
+ * The third step of first-run setup, after the admin password: the same
+ * three answers as Settings → Internet, plus "Decide later" (which leaves
+ * the Home row asking). Offered only when /api/config says nobody has
+ * answered — the Windows installer and `env_bootstrap --internet` answer
+ * before the dashboard ever opens. The save is the same PATCH Settings →
+ * Internet makes, with the Bearer the setup just minted. */
+const INTERNET_FIRST_RUN_CHOICES = [
+  { value: 'always', label: 'Yes, always', summary: "It's on our home internet." },
+  { value: 'sometimes', label: 'Sometimes', summary: "The connection comes and goes, or it's slow or metered." },
+  { value: 'never', label: 'No, keep everything in the house', summary: "There's no internet here, or I don't want Domovoi to use it." },
+];
+
+const InternetAsk = (() => {
+  let open = false;
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  return {
+    get open() { return open; },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    close() { open = false; notify(); },
+    // Ask only when the server says nobody has answered ('' — a server
+    // from before the question has no `internet_access` at all).
+    async offer() {
+      try {
+        const cfg = await apiGet('/api/config', { quiet: true });
+        if (cfg && cfg.internet_access === '') { open = true; notify(); }
+      } catch { /* the Home row will ask instead */ }
+    },
+  };
+})();
+
+const InternetFirstRunStep = ({ onClose }) => {
+  const [choice, setChoice] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const save = async () => {
+    if (!choice || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { internet_access: choice } });
+      const refused = res && res.rejected && res.rejected.internet_access;
+      if (refused) { setErr(`not saved — ${refused}`); setBusy(false); return; }
+      announceInternetChange(choice);
+      onClose();
+    } catch (e) {
+      const text = typeof mutationErrorText === 'function'
+        ? mutationErrorText(e, 'Save', { kept: false }) : apiErrorText(e);
+      if (text) setErr(text);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="cal-modal-bg">
+      <div className="cal-modal internet-first-run" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-head">
+          <div className="ttl">will this Domovoi have internet?</div>
+          <IconButton name="x" onClick={onClose}/>
+        </div>
+        <div className="cal-modal-body">
+          <div className="hint">
+            Domovoi understands everything you say right here on this box either way.
+            The internet only adds extras — web answers, podcast downloads, finding
+            artists by the names people say. Change it any time in Settings → Internet.
+          </div>
+          {INTERNET_FIRST_RUN_CHOICES.map((c) => (
+            <label key={c.value} className={`internet-choice${choice === c.value ? ' on' : ''}`} data-choice={c.value}
+                   style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' }}>
+              <input type="radio" name="internet-first-run" value={c.value}
+                     checked={choice === c.value} onChange={() => setChoice(c.value)}/>
+              <span>
+                <span style={{ fontWeight: 600 }}>{c.label}</span>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-muted)' }}>{c.summary}</span>
+              </span>
+            </label>
+          ))}
+          <div className="hint">
+            Your voice and recordings never leave this box, whatever you answer.
+          </div>
+          {err && <div className="err">{err}</div>}
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={onClose}>Decide later</Button>
+          <Button variant="primary" onClick={save} disabled={busy || !choice}>
+            {busy ? 'saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // subscribeModal: every change, plus the login modal coming down the
   // moment a sign-in succeeds (auth.js signedIn).
   useEffect(() => (Auth.subscribeModal ? Auth.subscribeModal(force) : Auth.subscribe(force)), []);
+  useEffect(() => InternetAsk.subscribe(force), []);
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.
   if (Auth.modalOpen) return <LoginModal key={`login-${Auth.modalSeq || 0}`} onClose={() => Auth.closeModal()}/>;
   if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
+  if (InternetAsk.open) return <InternetFirstRunStep onClose={() => InternetAsk.close()}/>;
   return null;
 };
 

@@ -184,8 +184,11 @@ const _voiceFieldStyle = {
   border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
 };
 
-const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => {
+const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, internetOff = false }) => {
   const [editing, setEditing] = React.useState(false);
+  // A Microsoft (Edge) voice speaks through the internet: under "No" its
+  // sample and "make default" are greyed, never hidden (Settings → Internet).
+  const cloudOff = internetOff && v.engine === 'edge';
   const [name, setName] = React.useState(v.name);
 
   const save = () => {
@@ -199,8 +202,8 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => 
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                   borderBottom: '1px solid var(--border-soft)' }}>
       <IconButton name={sampling ? 'loader' : 'play'}
-                  title={sampling ? 'Synthesizing…' : 'Play a sample'}
-                  disabled={sampling} onClick={() => onPlay(v)}/>
+                  title={cloudOff ? NEEDS_INTERNET_TEXT : (sampling ? 'Synthesizing…' : 'Play a sample')}
+                  disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
       {editing ? (
         <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
                onKeyDown={(e) => e.key === 'Enter' && save()}
@@ -215,9 +218,11 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => 
                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {v.model_ref}
       </span>
+      {cloudOff && <NeedsInternetNote compact/>}
       {v.is_default
         ? <Pill tone="live">default</Pill>
-        : <Button variant="ghost" onClick={() => onSetDefault(v)}>make default</Button>}
+        : <Button variant="ghost" onClick={() => onSetDefault(v)} disabled={cloudOff}
+                  title={cloudOff ? NEEDS_INTERNET_TEXT : undefined}>make default</Button>}
       {editing
         ? <Button variant="primary" onClick={save}>Save</Button>
         : <IconButton name="pencil" title="rename" onClick={() => setEditing(true)}/>}
@@ -226,11 +231,12 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => 
   );
 };
 
-const RegisterEdge = ({ onAdd }) => {
+const RegisterEdge = ({ onAdd, internetOff = false }) => {
   const [name, setName] = React.useState('');
   const [voiceId, setVoiceId] = React.useState('');
   const submit = (e) => {
     e?.preventDefault?.();
+    if (internetOff) return;
     const n = name.trim(); const id = voiceId.trim();
     if (!n || !id) return;
     onAdd(n, id);
@@ -240,11 +246,13 @@ const RegisterEdge = ({ onAdd }) => {
     <form onSubmit={submit}
           style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Aria)"
-             style={{ ..._voiceFieldStyle, width: 160 }}/>
+             disabled={internetOff} style={{ ..._voiceFieldStyle, width: 160 }}/>
       <input value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
-             placeholder="Edge voice id (e.g. en-US-AriaNeural)"
+             placeholder="Edge voice id (e.g. en-US-AriaNeural)" disabled={internetOff}
              style={{ ..._voiceFieldStyle, flex: 1, minWidth: 220 }}/>
-      <Button variant="primary" icon="cloud" type="submit">Register</Button>
+      <Button variant="primary" icon="cloud" type="submit" disabled={internetOff}
+              title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Register</Button>
+      {internetOff && <NeedsInternetNote compact/>}
     </form>
   );
 };
@@ -296,6 +304,7 @@ const UploadPiper = ({ onUpload }) => {
 
 const VoicesPanel = () => {
   const { items, loading, refresh } = useApiList('/api/voices');
+  const net = useInternetPolicy();
   const [fire, node] = useToast();
   const [samplingId, setSamplingId] = React.useState(null);
   const audioRef = React.useRef(null);
@@ -307,7 +316,13 @@ const VoicesPanel = () => {
     setSamplingId(v.id);
     try {
       const r = await fetch(`/api/voices/${v.id}/sample`);
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      if (!r.ok) {
+        // A Microsoft voice under "No": the server's own sentence, not a status line.
+        let body = '';
+        try { body = await r.text(); } catch { /* no body */ }
+        if (r.status === 409 && body.includes(INTERNET_OFF_MESSAGE)) throw new Error(INTERNET_OFF_MESSAGE);
+        throw new Error(`${r.status} ${r.statusText}`);
+      }
       const said = r.headers.get('X-Sample-Text');
       if (said) fire(`🔊 ${decodeURIComponent(said)}`);
       const url = URL.createObjectURL(await r.blob());
@@ -329,7 +344,7 @@ const VoicesPanel = () => {
       if (okMsg) fire(okMsg);
       await refresh();
     } catch (e) {
-      fire(`failed: ${e.message || e}`);
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
     }
   };
 
@@ -362,7 +377,7 @@ const VoicesPanel = () => {
     <React.Fragment>
       <Card title="Add a cloud voice"
             sub="Register a Microsoft Edge neural voice by its id. Needs network to speak.">
-        <RegisterEdge onAdd={addEdge}/>
+        <RegisterEdge onAdd={addEdge} internetOff={net.off}/>
       </Card>
 
       <Card title="Upload a local voice"
@@ -377,7 +392,8 @@ const VoicesPanel = () => {
               sub="The default is used by any satellite that hasn't picked its own.">
           {items.map((v) => (
             <VoiceRow key={v.id} v={v} sampling={samplingId === v.id} onPlay={playSample}
-                      onRename={rename} onSetDefault={setDefault} onDelete={remove}/>
+                      onRename={rename} onSetDefault={setDefault} onDelete={remove}
+                      internetOff={net.off}/>
           ))}
         </Card>
       )}
@@ -516,6 +532,9 @@ const shortCommit = (s) => (s ? String(s).slice(0, 7) : '');
 
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
+  // Checking and pulling talk to the git remote: greyed under "No"
+  // (Settings → Internet). Restarting stays — it never leaves the box.
+  const net = useInternetPolicy();
   const { data: core, refresh: refreshCore } = useApiObject('/api/config/version');
   const [fire, node] = useToast();
   const [checking, setChecking] = React.useState(false);
@@ -682,15 +701,18 @@ const VersionSection = () => {
           </Button>
         )}
         {mode === 'pull' && (
-          <Button variant="primary" icon="download" onClick={pull} disabled={pulling}>
+          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || net.off}
+                  title={net.off ? NEEDS_INTERNET_TEXT : undefined}>
             {pulling ? 'Pulling…' : 'Pull the latest'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && (
-          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking}>
+          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || net.off}
+                  title={net.off ? NEEDS_INTERNET_TEXT : undefined}>
             {checking ? 'Checking…' : 'Check for updates'}
           </Button>
         )}
+        {net.off && mode !== 'restart' && <NeedsInternetNote compact/>}
         {mode !== 'restart' && behind != null && (
           <span style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
             {behind > 0
@@ -753,6 +775,10 @@ const ConfigPanel = () => {
   // Advanced stayed hidden after a sign-in until the tab was switched.
   const { data, loading, error, refresh } = useApiObject('/api/config/editable', { refetchOnAuth: true });
   const fields = (data && data.fields) || [];
+  // Fields that need the internet are greyed under "No" (Settings → Internet).
+  const net = useInternetPolicy();
+  // The answer itself has one home, its own tab: here it is one line.
+  const internetField = fields.find((f) => f.name === 'internet_access');
   const [edits, setEdits] = React.useState({});
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState(null);
@@ -808,15 +834,27 @@ const ConfigPanel = () => {
   };
 
   const renderGroups = (list) => {
-    const grouped = _groupBy(list);
+    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet'));
     return Object.keys(grouped).map(group => (
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
-        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} onChange={v => setEdit(f.name, v)}/>)}
+        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={net.off}
+                                              onChange={v => setEdit(f.name, v)}/>)}
       </div>
     ));
   };
+  const internetLine = internetField && (
+    <div className="config-internet-line" style={{ fontSize: 13, padding: '6px 0 12px' }}>
+      <span style={{ fontWeight: 500 }}>Internet: </span>
+      <span>{(internetField.value && (internetField.choice_labels || {})[internetField.value])
+             || internetField.value || 'not answered'}</span>
+      <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
+      <a href="#settings" className="home-link" onClick={(e) => { e.preventDefault(); openSettingsTab('internet'); }}>
+        Settings → Internet
+      </a>
+    </div>
+  );
 
   const rejectedCount = result && result.rejected ? Object.keys(result.rejected).length : 0;
 
@@ -842,6 +880,7 @@ const ConfigPanel = () => {
               </div>
             </div>
           : <>
+              {internetLine}
               {renderGroups(common)}
               {advancedWithheld && (
                 <div className="config-advanced-withheld"
@@ -922,6 +961,249 @@ const ConfigPanel = () => {
         )}
       </div>
     </Card>
+    </React.Fragment>
+  );
+};
+
+/* ============================================================ */
+/* Internet tab                                                 */
+/* ============================================================ */
+/*
+ * "Will this Domovoi have internet?" — the household's one answer
+ * (INTERNET_ACCESS). It sets the DEFAULTS of the online extras; anything
+ * set by hand wins, and "No" also closes every outbound path on the
+ * server. The Windows installer asks the same question with the same
+ * words; an unanswered box behaves exactly as it always has, and Home
+ * shows an admin a row until someone answers.
+ *
+ * Data:
+ *   GET   /api/config/internet  · the answer, the choices, connectivity and
+ *                                 every setting that follows the answer
+ *   PATCH /api/config/editable  · { changes: { internet_access } } saves the
+ *                                 answer; { changes: {}, follow_internet: [name] }
+ *                                 lets a hand-set setting follow it again
+ */
+const INTERNET_STATUS_TEXT = {
+  connected: 'Connected',
+  offline: 'Not connected right now',
+  turned_off: 'Turned off for this box',
+};
+const INTERNET_ANSWER_LABEL = { always: 'Yes', sometimes: 'Sometimes', never: 'No' };
+const internetOnOff = (v) => (v === true ? 'on' : v === false ? 'off' : String(v));
+// Names in restart_required → words (a feature's own label, else these).
+const INTERNET_RESTART_WORDS = { internet_access: 'Hugging Face checks' };
+
+const InternetFeatureRow = ({ f, following, onFollow }) => {
+  const later = f.next_boot_value !== f.value;
+  const values = f.answer_values || {};
+  return (
+    <div className="internet-feature" data-feature={f.name}
+         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', flexWrap: 'wrap',
+                  borderTop: '1px solid var(--border-soft)' }}>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>{f.label}</div>
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+          {['always', 'sometimes', 'never'].map((a) => `${INTERNET_ANSWER_LABEL[a]}: ${internetOnOff(values[a])}`).join(' · ')}
+          {f.condition && !f.condition_met && <> · {f.condition}</>}
+        </div>
+      </div>
+      <span className="mono" style={{ fontSize: 12 }}>{internetOnOff(f.value)}</span>
+      {later && (
+        <span className="internet-feature-later" style={{ fontSize: 12, color: 'var(--warn)' }}>
+          → {internetOnOff(f.next_boot_value)} after a restart
+        </span>
+      )}
+      {f.set_by === 'answer' && <Pill tone="ok">follows the answer</Pill>}
+      {f.set_by === 'default' && <Pill>default</Pill>}
+      {f.set_by === 'environment' && <Pill tone="warn">set in the server's environment</Pill>}
+      {f.set_by === 'env_file' && (
+        <>
+          <Pill tone="idle">set by you</Pill>
+          <Button variant="ghost" onClick={() => onFollow(f.name)} disabled={!!following}
+                  title="comments out its line in domovoi/.env, so it takes the answer's default again">
+            {following === f.name ? 'working…' : 'follow the answer again'}
+          </Button>
+        </>
+      )}
+    </div>
+  );
+};
+
+const InternetPanel = () => {
+  // What comes back is the same for the cookie and the Bearer (no secrets
+  // in it), but a save needs the Bearer: re-read on every sign-in so the
+  // page follows the session (refetchOnAuth, data.js).
+  const { data, loading, error, refresh } = useApiObject('/api/config/internet', { refetchOnAuth: true });
+  const [choice, setChoice] = React.useState(null);   // null = the saved answer
+  const [saving, setSaving] = React.useState(false);
+  const [following, setFollowing] = React.useState(null);
+  const [result, setResult] = React.useState(null);
+  const [retrying, setRetrying] = React.useState(false);
+  const signIn = () => { try { Auth.openModal(); } catch { /* auth.js absent */ } };
+  const retry = async () => {
+    setRetrying(true);
+    try { await refresh(); } finally { setRetrying(false); }
+  };
+
+  const answer = (data && data.answer) || '';
+  const selected = choice != null ? choice : answer;
+  const locked = !!(data && data.answer_locked);
+  const dirty = choice != null && choice !== answer;
+  const features = (data && data.features) || [];
+  const labelOf = (name) => {
+    const f = features.find((x) => x.name === name);
+    return (f && f.label) || INTERNET_RESTART_WORDS[name] || name;
+  };
+
+  const save = async () => {
+    if (!dirty || saving || locked) return;
+    setSaving(true); setResult(null);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { internet_access: choice } });
+      setResult(res || {});
+      const refused = res && res.rejected && res.rejected.internet_access;
+      if (!refused) {
+        announceInternetChange(choice);
+        setChoice(null);
+      }
+      refresh();
+    } catch (e) {
+      const msg = mutationErrorText(e, 'Save');
+      if (msg) setResult({ error: msg });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const followAgain = async (name) => {
+    if (following) return;
+    setFollowing(name); setResult(null);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: {}, follow_internet: [name] });
+      setResult(res || {});
+      refresh();
+    } catch (e) {
+      const msg = mutationErrorText(e, 'Follow the answer', { kept: false });
+      if (msg) setResult({ error: msg });
+    } finally {
+      setFollowing(null);
+    }
+  };
+
+  if (!data) {
+    return (
+      <Card title="Internet">
+        <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>
+          {loading || !error ? 'loading…' : (
+            <>
+              <div>{configLoadMessage(error)}</div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'center' }}>
+                {(error.status === 401 || error.status === 403) && (
+                  <Button variant="primary" icon="key" onClick={signIn}>sign in</Button>
+                )}
+                <Button icon="refresh-cw" onClick={retry} disabled={retrying}>
+                  {retrying ? 'retrying…' : 'retry'}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+    );
+  }
+
+  const conn = data.connectivity || {};
+  const statusText = !answer
+    ? 'Not answered yet: Domovoi behaves as it always has'
+    : (INTERNET_STATUS_TEXT[conn.reason] || INTERNET_STATUS_TEXT.connected);
+  const statusTone = !answer ? 'warn' : conn.reason === 'connected' ? 'ok' : conn.reason === 'offline' ? 'warn' : 'idle';
+  const restartNames = (result && result.restart_required && result.restart_required.length)
+    ? result.restart_required : (data.restart_required || []);
+  const refusedText = result && result.rejected ? Object.entries(result.rejected) : [];
+  const notes = result && result.normalized ? Object.entries(result.normalized) : [];
+
+  return (
+    <React.Fragment>
+      <Card title="Will this Domovoi have internet?"
+            sub="It sets the defaults of the online extras. Anything you set by hand wins.">
+        <div style={{ padding: '10px 16px 14px' }}>
+          <div className="internet-status" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10 }}>
+            <Pill tone={statusTone}>{statusText}</Pill>
+            {answer && conn.reason !== 'turned_off' && conn.target && (
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>checks {conn.target}</span>
+            )}
+          </div>
+          {(data.choices || []).map((c) => (
+            <label key={c.value} className={`internet-choice${selected === c.value ? ' on' : ''}`} data-choice={c.value}
+                   style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 0',
+                            borderTop: '1px solid var(--border-soft)', cursor: locked ? 'default' : 'pointer',
+                            opacity: locked && selected !== c.value ? 0.6 : 1 }}>
+              <input type="radio" name="internet-answer" value={c.value} disabled={locked}
+                     checked={selected === c.value} onChange={() => { if (!locked) setChoice(c.value); }}/>
+              <span>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-muted)' }}>{c.summary}</span>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-muted)', marginTop: 2 }}>{c.detail}</span>
+              </span>
+            </label>
+          ))}
+          {locked && (
+            <div className="internet-locked" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
+              This answer is set in the server's environment (INTERNET_ACCESS), so it can't be changed
+              here — change it where the Domovoi server is started, then restart it.
+            </div>
+          )}
+          <div className="internet-privacy" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 10, lineHeight: 1.5 }}>
+            {data.privacy_note}
+          </div>
+          {(selected === 'always' || selected === 'sometimes') && (
+            <div className="internet-searxng-hint" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6, lineHeight: 1.5 }}>
+              Web answers use the search helper (SearXNG). Domovoi starts it when you save Yes or
+              Sometimes; on a Linux appliance an update also starts it.
+            </div>
+          )}
+          <div className="internet-edge-note" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+            Microsoft voices stay your choice on every answer (Settings → Voices).
+          </div>
+          {result && result.error && (
+            <div style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>{result.error}</div>
+          )}
+          {refusedText.length > 0 && (
+            <div className="internet-rejected" style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>
+              not saved: {refusedText.map(([k, v]) => `${labelOf(k)} (${v})`).join('; ')}
+            </div>
+          )}
+          {notes.length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
+              {notes.map(([k, v]) => `${labelOf(k)}: ${v}`).join('; ')}
+            </div>
+          )}
+          {restartNames.length > 0 && (
+            <div className="internet-restart" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Pill tone="warn">restart</Pill>
+              <span>saved — restart the Domovoi server to apply: {restartNames.map(labelOf).join(', ')}</span>
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+              {dirty ? 'unsaved' : (answer ? `saved: ${INTERNET_ANSWER_LABEL[answer] || answer}` : 'not answered')}
+            </span>
+            <div style={{ marginLeft: 'auto' }}>
+              <Button variant="primary" icon="check" onClick={save} disabled={!dirty || saving || locked}>
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
+      <Card title="What follows the answer"
+            sub="Each of these takes its default from the answer unless you set it yourself.">
+        <div style={{ padding: '4px 16px 12px' }}>
+          {features.map((f) => (
+            <InternetFeatureRow key={f.name} f={f} following={following} onFollow={followAgain}/>
+          ))}
+        </div>
+      </Card>
     </React.Fragment>
   );
 };
@@ -1142,7 +1424,7 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
 };
 
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
-                   onRename, onThreshold, onSetDefault, onPush, onDelete }) => {
+                   onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(w.name);
   const [room, setRoom] = React.useState('');
@@ -1277,8 +1559,11 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 onClick={startRec}>Record</Button>
         <Button variant="ghost" icon="square" disabled={!haveRooms}
                 onClick={stopRec}>Stop</Button>
-        <Button variant="primary" icon="cpu" disabled={!canTrain}
+        {/* Training downloads its data the first time: greyed under "No". */}
+        <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff}
+                title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                 onClick={() => onTrain(w)}>Train</Button>
+        {internetOff && <NeedsInternetNote compact/>}
         <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush}
                 onClick={() => onPush(w, roomFor)}>Push to room</Button>
         {canPush && !w.is_default &&
@@ -1337,6 +1622,7 @@ const WakeWordsPanel = () => {
   // The server's /train still 409s authoritatively below it.
   const { data: cfg } = useApiObject('/api/config');
   const minClips = (cfg && cfg.wake_word_min_clips) || WAKE_MIN_CLIPS;
+  const net = useInternetPolicy();
   const [fire, node] = useToast();
 
   const rooms = (sats || []).filter((s) => s.status === 'online');
@@ -1347,7 +1633,7 @@ const WakeWordsPanel = () => {
       if (okMsg) fire(okMsg);
       await refresh();
     } catch (e) {
-      fire(`failed: ${e.message || e}`);
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
     }
   };
 
@@ -1408,7 +1694,7 @@ const WakeWordsPanel = () => {
             <WakeRow key={w.id} w={w} rooms={rooms} minClips={minClips} fire={fire}
                      onRecordStart={recordStart} onRecordStop={recordStop} onTrain={train}
                      onRename={rename} onThreshold={threshold} onSetDefault={setDefault}
-                     onPush={push} onDelete={remove}/>
+                     onPush={push} onDelete={remove} internetOff={net.off}/>
           ))}
         </Card>
       )}
@@ -2365,6 +2651,7 @@ const SETTINGS_TABS = [
   { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
+  { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
   { id: 'config', label: 'Configuration' },   // last tab, by request
 ];
 
@@ -2376,11 +2663,38 @@ const SETTINGS_SUB = {
   recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
   models: "What's active in each role, install more, and the host hardware readout.",
+  internet: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
   config: 'Editable domovoi configuration.',
 };
 
+// openSettingsTab (components.jsx) leaves the tab to open here: the shell
+// maps one hash to one page, so a deep link rides sessionStorage, read
+// once (and cleared) when the page mounts.
+const settingsStartTab = () => {
+  try {
+    const want = sessionStorage.getItem('domovoi.settings.tab');
+    if (want) {
+      sessionStorage.removeItem('domovoi.settings.tab');
+      if (SETTINGS_TABS.some((t) => t.id === want)) return want;
+    }
+  } catch { /* storage blocked */ }
+  return 'greetings';
+};
+
 const SettingsPage = () => {
-  const [tab, setTab] = React.useState('greetings');
+  const [tab, setTab] = React.useState(settingsStartTab);
+  // A link pressed while this page is already on screen (the
+  // Configuration tab's "Settings → Internet", a "needs internet" note).
+  React.useEffect(() => {
+    const onTab = (e) => {
+      const want = e && e.detail && e.detail.tab;
+      if (!want || !SETTINGS_TABS.some((t) => t.id === want)) return;
+      try { sessionStorage.removeItem('domovoi.settings.tab'); } catch { /* storage blocked */ }
+      setTab(want);
+    };
+    window.addEventListener(SETTINGS_TAB_EVENT, onTab);
+    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onTab);
+  }, []);
 
   return (
     <div className="page">
@@ -2393,6 +2707,7 @@ const SettingsPage = () => {
       {tab === 'recordings' && <CapturesPanel/>}
       {tab === 'devices' && <DevicesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
+      {tab === 'internet' && <InternetPanel/>}
       {tab === 'config' && <ConfigPanel/>}
     </div>
   );
