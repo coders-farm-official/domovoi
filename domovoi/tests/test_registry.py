@@ -44,6 +44,7 @@ CORE_BANDS = {
     # 280 reserved: the bundled radio plugin declares it (before music so
     # "play 97.5 fm" isn't poached).
     "playlist": 290,
+    "music_alias": 295,
     "music": 300,
     "library": 310,
     # 900 reserved: a media-provider plugin's greedy `^find (.+)$` catch-all.
@@ -207,6 +208,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
         "news": {"core.news_fetch", "core.news_fetch_topics"},
         "dropin": {"core.dropin_invite"},
+        "music_alias": {"core.alias_replace", "core.alias_target"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

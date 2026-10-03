@@ -1869,6 +1869,286 @@
         }
       }
     },
+    "/api/music/aliases": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Aliases",
+        "description": "A page of names, household ones first, with the filtered total.",
+        "operationId": "list_aliases_api_music_aliases_get",
+        "parameters": [
+          {
+            "name": "target_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(artist|album|track)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          },
+          {
+            "name": "target_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 240
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Key"
+            }
+          },
+          {
+            "name": "track_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Track Id"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(manual|voice|musicbrainz)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "include_suppressed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Suppressed"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryAliasPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Add Alias",
+        "description": "Teach the household another name for an artist, album or song.",
+        "operationId": "add_alias_api_music_aliases_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryAliasCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryAliasAddResult"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "That name already means that target (nothing changed)."
+          },
+          "403": {
+            "description": "Replacing someone else's name needs an admin."
+          },
+          "404": {
+            "description": "The target is not in the library."
+          },
+          "409": {
+            "description": "The name already means something else: {\"detail\": {\"code\": \"alias_taken\", \"existing\": LibraryAlias, \"can_replace\": bool}} \u2014 retry with replace=true."
+          },
+          "422": {
+            "description": "Not a usable name: {\"detail\": {\"code\": \"empty\" | \"too_long\" | \"nothing_to_say\" | \"already_its_name\", \"message\": str}}."
+          }
+        }
+      }
+    },
+    "/api/music/aliases/status": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Alias Status",
+        "description": "Counts for the Stats tab, plus the MusicBrainz lookup's switch and\nstate as the core last reported them (snapshot key\n``music_alias_fetch``; absent \u2192 ``enabled: null, state: \"unknown\"``).",
+        "operationId": "alias_status_api_music_aliases_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/aliases/for-track/{track_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Aliases For Track",
+        "description": "The track drawer's \"also called\" lists in one call: the song, each\nperformer (the whole credit first when it reads like one band), and\nthe album.",
+        "operationId": "aliases_for_track_api_music_aliases_for_track__track_id__get",
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackAliases"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/aliases/{alias_id}": {
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete Alias",
+        "description": "Remove one name. A MusicBrainz name is hidden rather than deleted;\nsomeone else's household name needs an admin (403).",
+        "operationId": "delete_alias_api_music_aliases__alias_id__delete",
+        "parameters": [
+          {
+            "name": "alias_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Alias Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/queue/{room_id}": {
       "get": {
         "tags": [
@@ -11164,6 +11444,114 @@
         "title": "AdoptRequest",
         "description": "Adopt a pending satellite: name it, hand it Wi-Fi, pick its mic\nprofile. The PSK transits to the device on the gadget volume exactly\nonce and is never logged (docs/SECURITY_PRIVACY.md)."
       },
+      "AliasFetchStatus": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "unknown"
+          },
+          "artists_total": {
+            "type": "integer",
+            "title": "Artists Total",
+            "default": 0
+          },
+          "checked": {
+            "type": "integer",
+            "title": "Checked",
+            "default": 0
+          },
+          "matched": {
+            "type": "integer",
+            "title": "Matched",
+            "default": 0
+          },
+          "no_match": {
+            "type": "integer",
+            "title": "No Match",
+            "default": 0
+          },
+          "ambiguous": {
+            "type": "integer",
+            "title": "Ambiguous",
+            "default": 0
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors",
+            "default": 0
+          },
+          "aliases_added": {
+            "type": "integer",
+            "title": "Aliases Added",
+            "default": 0
+          },
+          "last_lookup_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Lookup At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "title": "AliasFetchStatus"
+      },
+      "AliasStatus": {
+        "properties": {
+          "household": {
+            "type": "integer",
+            "title": "Household"
+          },
+          "musicbrainz": {
+            "type": "integer",
+            "title": "Musicbrainz"
+          },
+          "suppressed": {
+            "type": "integer",
+            "title": "Suppressed"
+          },
+          "fetch": {
+            "$ref": "#/components/schemas/AliasFetchStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "household",
+          "musicbrainz",
+          "suppressed",
+          "fetch"
+        ],
+        "title": "AliasStatus",
+        "description": "``GET /api/music/aliases/status`` \u2014 the Stats tab's card."
+      },
       "AnnounceRequest": {
         "properties": {
           "message": {
@@ -12923,6 +13311,267 @@
         },
         "type": "object",
         "title": "LabelBody"
+      },
+      "LibraryAlias": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "alias": {
+            "type": "string",
+            "title": "Alias"
+          },
+          "alias_key": {
+            "type": "string",
+            "title": "Alias Key"
+          },
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "artist",
+              "album",
+              "track"
+            ],
+            "title": "Target Type"
+          },
+          "target_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Key"
+          },
+          "target_name": {
+            "type": "string",
+            "title": "Target Name"
+          },
+          "target_artist_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Artist Key"
+          },
+          "target_track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Track Id"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "voice",
+              "musicbrainz"
+            ],
+            "title": "Source"
+          },
+          "created_by_kind": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "device",
+              "voice",
+              "system"
+            ],
+            "title": "Created By Kind"
+          },
+          "added_by": {
+            "type": "string",
+            "title": "Added By"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "suppressed": {
+            "type": "boolean",
+            "title": "Suppressed",
+            "default": false
+          },
+          "can_remove": {
+            "type": "boolean",
+            "title": "Can Remove",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "alias",
+          "alias_key",
+          "target_type",
+          "target_name",
+          "source",
+          "created_by_kind",
+          "added_by"
+        ],
+        "title": "LibraryAlias",
+        "description": "One other name for a library artist, album or song. ``can_remove``\nis for THE CALLER (an admin anything; a device the names it added;\nanyone a MusicBrainz name). ``added_by`` is \"admin\", the adding\ndevice's name, \"voice in <room>\" or \"MusicBrainz\" \u2014 never another\ndevice's raw id."
+      },
+      "LibraryAliasAddResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "added",
+              "exists",
+              "replaced"
+            ],
+            "title": "Status"
+          },
+          "alias": {
+            "$ref": "#/components/schemas/LibraryAlias"
+          },
+          "shadows": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryAliasShadow"
+            },
+            "type": "array",
+            "title": "Shadows",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "alias"
+        ],
+        "title": "LibraryAliasAddResult",
+        "description": "201 (``added`` / ``replaced``) or 200 (``exists``). ``shadows``\nnames the OTHER library names this alias now plays instead of."
+      },
+      "LibraryAliasCreate": {
+        "properties": {
+          "alias": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Alias"
+          },
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "artist",
+              "album",
+              "track"
+            ],
+            "title": "Target Type"
+          },
+          "target_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Name"
+          },
+          "target_artist_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Artist Name"
+          },
+          "target_track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Track Id"
+          },
+          "replace": {
+            "type": "boolean",
+            "title": "Replace",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "alias",
+          "target_type"
+        ],
+        "title": "LibraryAliasCreate",
+        "description": "``POST /api/music/aliases``. Name the target by ``target_name``\n(artist / album \u2014 an album may add ``target_artist_name`` to pin it to\nthat artist's album) or ``target_track_id`` (a song). ``replace=true``\nanswers \"yes\" to the 409's \"replace it?\"."
+      },
+      "LibraryAliasPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryAlias"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "LibraryAliasPage"
+      },
+      "LibraryAliasShadow": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "artist",
+              "title",
+              "album"
+            ],
+            "title": "Type"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "title": "LibraryAliasShadow"
       },
       "LibraryPage": {
         "properties": {
@@ -15974,6 +16623,142 @@
           "added_at"
         ],
         "title": "Track"
+      },
+      "TrackAliasAlbum": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "artist_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist Key"
+          },
+          "artist_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist Name"
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryAlias"
+            },
+            "type": "array",
+            "title": "Aliases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "key",
+          "aliases"
+        ],
+        "title": "TrackAliasAlbum"
+      },
+      "TrackAliasArtist": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "credit": {
+            "type": "boolean",
+            "title": "Credit",
+            "default": false
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryAlias"
+            },
+            "type": "array",
+            "title": "Aliases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "key",
+          "aliases"
+        ],
+        "title": "TrackAliasArtist"
+      },
+      "TrackAliasSong": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryAlias"
+            },
+            "type": "array",
+            "title": "Aliases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "aliases"
+        ],
+        "title": "TrackAliasSong"
+      },
+      "TrackAliases": {
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/TrackAliasSong"
+          },
+          "artists": {
+            "items": {
+              "$ref": "#/components/schemas/TrackAliasArtist"
+            },
+            "type": "array",
+            "title": "Artists"
+          },
+          "album": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrackAliasAlbum"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "track",
+          "artists"
+        ],
+        "title": "TrackAliases",
+        "description": "The track drawer's \"also called\" lists in one call."
       },
       "TrackPatch": {
         "properties": {

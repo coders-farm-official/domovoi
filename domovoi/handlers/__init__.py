@@ -27,6 +27,7 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     270 spoken_audio     anchored media before playlist/music
     280 (radio plugin)   before music so "play 97.5 fm" isn't poached
     290 playlist         before music's ^play catch-all
+    295 music_alias      "when i say X i mean Y" names, before music's ^play
     300 music            greedy ^play catch-all
     310 library          "find X in my library" before greedier "find X"
     900 (media-provider plugin)  greedy ^find catch-all — LAST band
@@ -57,6 +58,7 @@ from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
 from domovoi.handlers.memory import MemoryHandler
 from domovoi.handlers.music import MusicHandler
+from domovoi.handlers.music_alias import MusicAliasHandler
 from domovoi.handlers.news import NewsHandler
 from domovoi.handlers.playlist import PlaylistHandler
 from domovoi.handlers.reminder import ReminderHandler
@@ -82,6 +84,7 @@ _CORE_HANDLERS: list[Handler] = [
     LibraryHandler(),
     MemoryHandler(),
     MusicHandler(),
+    MusicAliasHandler(),
     NewsHandler(),
     PlaylistHandler(),
     ReminderHandler(),
@@ -141,6 +144,7 @@ __all__ = [
     "IntercomHandler",
     "LibraryHandler",
     "MemoryHandler",
+    "MusicAliasHandler",
     "MusicHandler",
     "NewsHandler",
     "PlaylistHandler",
