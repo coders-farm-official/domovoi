@@ -19,6 +19,7 @@ from domovoi.clients.mpd import (
 )
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.music_choice import MusicChoiceMixin
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
 from domovoi.music_pause import note_paused_by_person
@@ -199,7 +200,7 @@ def _format_song(song: dict) -> str:
     return title
 
 
-class MusicHandler(Handler):
+class MusicHandler(MusicChoiceMixin, Handler):
     name = "music"
     # band rationale: greedy "^play (.+)$" catch-all — after every anchored media band
     #   (spoken_audio 270, radio plugin 280, playlist 290).

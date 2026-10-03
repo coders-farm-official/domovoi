@@ -110,6 +110,12 @@ class Context(BaseModel):
     # model's whole reply. False everywhere else (/v1/intent), which gets
     # the whole reply as before.
     stream_qa: bool = False
+    # Whether whoever made this turn can answer a question back on the
+    # same session. A spoken turn and /v1/intent can; the dashboard's play
+    # box (main._admin_route_intent) cannot — it shows the reply text and
+    # never sends a second turn, so a handler must not park a question
+    # ("did you mean X?") for it and should do its best without asking.
+    answerable: bool = True
 
 
 class Response(BaseModel):

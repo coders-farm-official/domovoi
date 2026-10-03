@@ -140,6 +140,13 @@ class Handler(ABC):
     # pending API (domovoi.confirmations) validates at set time; the router
     # dispatches only declared kinds.
     confirmation_kinds: tuple[str, ...] = ()
+    # The confirmation kinds whose reply may be FREE TEXT, not just yes/no —
+    # "did you mean X?" answered "no, play Y" or with a bare name. Must be a
+    # subset of ``confirmation_kinds`` (checked in test_registry). For a
+    # parked choice the router hands EVERY next reply to
+    # ``handle_choice_reply`` first (domovoi.confirmations.CHOICE_PARKED
+    # keeps that free for sessions without one). Core handlers only.
+    choice_kinds: tuple[str, ...] = ()
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).
     plugin_slug: str | None = None
@@ -200,5 +207,27 @@ class Handler(ABC):
         raise NotImplementedError(
             f"{self.name} declares no confirmation flow (confirmation_kinds="
             f"{self.confirmation_kinds!r}) but handle_confirmation was called "
+            f"with kind={kind!r}"
+        )
+
+    async def handle_choice_reply(
+        self,
+        kind: str,
+        data: dict[str, Any],
+        transcript: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """Answer the reply to a parked CHOICE (``kind`` is one of
+        ``self.choice_kinds``). ``data`` is the parked payload; the router
+        has already cleared it from the session, so the handler may park a
+        new one. ``transcript`` is the whole reply, normalized
+        (``router.normalize_transcript``) but NOT filler-stripped — "no,
+        play X" arrives whole. Return None when the reply is not about the
+        choice: the router then routes it as an ordinary turn (the choice
+        is dropped)."""
+        raise NotImplementedError(
+            f"{self.name} declares no choice flow (choice_kinds="
+            f"{self.choice_kinds!r}) but handle_choice_reply was called "
             f"with kind={kind!r}"
         )

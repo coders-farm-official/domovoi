@@ -14,7 +14,12 @@ from domovoi import registered_values
 from domovoi.clients.mpd import MPDNotProvisioned
 from domovoi.clients.ollama import QAWithUncertainty, get_ollama_client
 from domovoi.config import settings
-from domovoi.confirmations import CORE_KIND_PREFIX, request_confirmation
+from domovoi.confirmations import (
+    CORE_KIND_PREFIX,
+    PENDING_CONFIRMATION_KEY,
+    request_confirmation,
+    take_parked_choice,
+)
 from domovoi.db.repositories import (
     ConversationLogRepository,
     IntentLogRepository,
@@ -235,6 +240,45 @@ def dispatchable_confirmation(
             kind, handler.name, handler.confirmation_kinds,
         )
     return None
+
+
+def dispatchable_choice(pending: Any) -> tuple[Handler, str] | None:
+    """Like :func:`dispatchable_confirmation`, but only for a parked CHOICE
+    — a kind its handler also lists in ``choice_kinds``, whose reply may be
+    free text (``Handler.handle_choice_reply``)."""
+    target = dispatchable_confirmation(pending)
+    if target is None or target[1] not in target[0].choice_kinds:
+        return None
+    return target
+
+
+def offline_blocked(handler: Handler, fp: FastPath, ctx: Context) -> bool:
+    """Whether the offline gate sends this fast path to the handler's
+    ``fallback_offline`` instead (see route(), step 1)."""
+    return not ctx.online and (
+        handler.requires_network == "yes"
+        or (handler.requires_network == "degraded" and fp.offline_ok is False)
+    )
+
+
+async def run_fast_path(
+    handler: Handler,
+    fp: FastPath,
+    m: re.Match[str],
+    ctx: Context,
+    session: AsyncSession,
+) -> Response:
+    """Dispatch one fast path the way route() does — the offline gate, and
+    a room with no music player answered instead of raised — for a handler
+    that hands a reply on to another command (a parked choice answered
+    "no, play X"). The caller stamps and records the turn."""
+    if offline_blocked(handler, fp, ctx):
+        intent = Intent(transcript=m.string, room_id=ctx.room_id, session_id=ctx.session_id)
+        return await handler.fallback_offline(intent, ctx, session)
+    try:
+        return await fp.method(handler, m, ctx, session)
+    except MPDNotProvisioned:
+        return _no_speakers_yet(ctx.session_id, ctx)
 
 
 @dataclass(frozen=True)
@@ -552,6 +596,52 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     def _elapsed_ms() -> int:
         return int((time.monotonic() - t0) * 1000)
 
+    async def _answer_choice(handler: Handler, kind: str, pending: dict) -> Response | None:
+        """Hand this turn to a parked choice's ``handle_choice_reply``.
+        The slot is cleared FIRST — the choice is answered or abandoned by
+        this turn either way, and the handler may park a new one (a
+        re-ask). None: the reply wasn't about the choice; route() goes on
+        with the turn, and with the slot empty the yes/no pre-empt below
+        can't fire on it."""
+        await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+        try:
+            response = await handler.handle_choice_reply(kind, pending, transcript, ctx, session)
+        except MPDNotProvisioned:
+            response = _no_speakers_yet(session_id, ctx)
+        if response is None:
+            return None
+        response.matched_handler = response.matched_handler or handler.name
+        response.matched_path = "confirmation"
+        response.session_id = session_id
+        response.online = ctx.online
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=response.matched_handler,
+            matched_path="confirmation",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
+
+    # ── A parked choice ("did you mean X?") ───────────────────────────
+    # A question whose reply may be free text — "no, play the other one",
+    # a bare name — not just yes/no (Handler.choice_kinds). Checked BEFORE
+    # the yes/no pre-empt: its `\b` would read "no, play X" as a plain "no"
+    # and the "play X" would be lost. The in-process CHOICE_PARKED set says
+    # whether this session has one waiting, so an ordinary command turn
+    # still makes no context read here.
+    if take_parked_choice(session_id):
+        ctx_data = await session_repo.get_context(session_id) or {}
+        pending = ctx_data.get(PENDING_CONFIRMATION_KEY)
+        choice = dispatchable_choice(pending)
+        if choice is not None:
+            response = await _answer_choice(choice[0], choice[1], pending)
+            if response is not None:
+                return response
+
     # ── Pending confirmation pre-empt ─────────────────────────────────
     # If the previous turn parked a pending_confirmation in the session
     # context (e.g., VoiceProfileHandler asking "did I get that right?"),
@@ -566,6 +656,14 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         ctx_data = await session_repo.get_context(session_id) or {}
         pending = ctx_data.get("pending_confirmation")
         target = dispatchable_confirmation(pending, warn=True)
+        if target is not None and target[1] in target[0].choice_kinds:
+            # A choice CHOICE_PARKED didn't know about (the core restarted
+            # since it was parked): the whole reply still goes to the
+            # choice, so "no, play X" plays X here too.
+            response = await _answer_choice(target[0], target[1], pending)
+            if response is not None:
+                return response
+            target = None
         if target is not None:
             handler, kind = target
             response = await handler.handle_confirmation(
@@ -626,14 +724,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     hit = first_fast_path(transcript)
     if hit is not None:
         handler, fp, m = hit
-        offline_blocked = not ctx.online and (
-            handler.requires_network == "yes"
-            or (
-                handler.requires_network == "degraded"
-                and fp.offline_ok is False
-            )
-        )
-        if offline_blocked:
+        if offline_blocked(handler, fp, ctx):
             response = await handler.fallback_offline(intent, ctx, session)
             response.matched_handler = handler.name
             response.matched_path = "fast_offline"
