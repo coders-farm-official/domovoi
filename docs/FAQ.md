@@ -50,6 +50,7 @@ Every optional outbound touchpoint, sourced from the code:
 | Radio plugin: FCC station import | One bulk query on demand | transition.fcc.gov | Off unless you click "Import FCC" (or set `RADIO_FCC_IMPORT_ON_BOOT=true`) |
 | Radio plugin: song detection | Short clips of favorited radio *streams*; ICY metadata polls | Shazam; the stations themselves | `RADIO_SAMPLER_ENABLED=false`, `RADIO_ICY_POLLER_ENABLED=false` |
 | Library enricher | Audio fingerprints of your library files | AcoustID (only if you set `ACOUSTID_API_KEY`) and Shazam; metadata lookups to MusicBrainz | `LIBRARY_ENRICHER_ENABLED=false` |
+| MusicBrainz alias lookup — **opt-in, off by default** | Artist names from your library: one search per artist, once, then only for artists added later; the spoken names that come back are kept, people's real names are filtered out and never stored | musicbrainz.org, one request a second, only while the server is online | Nothing to disable: it is off unless you switch on Settings → Configuration → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`). Switching it back off stops it before its next request |
 | Podcasts | Feed polls + episode downloads | Feeds you subscribe to | Already off by default (`PODCAST_FEED_POLLER_ENABLED=false`) |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)

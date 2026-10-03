@@ -503,7 +503,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → command_capture_pruner.
+    #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
+    #   library_alias_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -511,6 +512,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.plugins_runtime.workers import WORKERS
     from domovoi.workers.audiobook_indexer import AudiobookIndexer
     from domovoi.workers.command_capture_pruner import CommandCapturePruner
+    from domovoi.workers.library_alias_fetch import LibraryAliasFetcher
     from domovoi.workers.memory_extractor import MemoryExtractor
     from domovoi.workers.news_fetcher import NewsFetcher
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller
@@ -535,6 +537,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # Opt-in (off by default) MusicBrainz "also called" names for the
+    # library's artists; self-gated per tick on music_alias_fetch_enabled
+    # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
+    WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
@@ -1194,6 +1200,8 @@ async def admin_snapshot() -> dict[str, Any]:
         for room, v in app.state.active_dropins.items()
         if isinstance(v, dict) and v.get("initiator")
     ]
+    from domovoi.workers.library_alias_fetch import alias_fetch_status
+
     return {
         "active_rooms": list(app.state.active_sessions.keys()),
         "resumable_music": dict(app.state.resumable_music),
@@ -1242,6 +1250,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # its 1.5 s poll, so the change reaches every open page without a
         # restart. Carries nothing else from the config.
         "home_problems_visibility": settings.home_problems_visibility,
+        # The opt-in MusicBrainz alias fetch's live state (off / offline /
+        # running / done ...), for the dashboard's "Also-called names" card.
+        "music_alias_fetch": alias_fetch_status(),
     }
 
 
