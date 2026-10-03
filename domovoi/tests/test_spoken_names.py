@@ -3,7 +3,8 @@
 DB-free on purpose, so it never skips. The examples are the owner's own
 (2026-10-02: "$uicideboy$" said "suicide boys", GENER8ION said
 "generation") and textbook cases of each rule — none is taken from the
-held-out spoken-match gate set, which only ever measures.
+held-out spoken-match gate set, which only ever measures (checked against
+functional-testing/spoken-gate/audit_set_v2.json when they were written).
 """
 
 from __future__ import annotations
@@ -26,10 +27,10 @@ from domovoi.handlers.shared import spoken_names as sn
         ("$UICIDEBOY$", "suicideboys"),
         ("P!nk", "Pink"),
         ("JAŸ-Z", "Jay Z"),
-        ("21 Pilots", "twenty one pilots"),
-        ("twenty-one pilots", "Twenty One Pilots"),
+        ("3 Doors Down", "three doors down"),
+        ("twenty-one savage", "21 Savage"),
         ("T.I.", "ti"),
-        ("R.E.M.", "R, E, M"),
+        ("U.S.D.A.", "U, S, D, A"),
         ("AC/DC", "ACDC"),
         ("Florence + The Machine", "Florence and the Machine"),
         ("The Who", "Who"),

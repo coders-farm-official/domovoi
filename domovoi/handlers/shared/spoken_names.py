@@ -1,8 +1,8 @@
 """Spoken forms of music-library names: one normalization for every user.
 
-Whisper writes what it hears ("Suicide Boys", "21 Pilots", "Jay-Z"); the
-library stores how an artist styles the name ("$uicideboy$", "twenty one
-pilots", "JAŸ-Z"). A substring search between the two misses, so every
+Whisper writes what it hears ("Suicide Boys", "3 Doors Down", "Jay-Z");
+the library stores how an artist styles the name ("$uicideboy$", "Three
+Doors Down", "JAŸ-Z"). A substring search between the two misses, so every
 place that compares a spoken name with a library name goes through here:
 
 * the spoken-name resolver (:mod:`domovoi.handlers.shared.library_match`)
@@ -18,8 +18,8 @@ place that compares a spoken name with a library name goes through here:
 The rules are general ones, written down before any evaluation set was
 read: fold accents and lookalike letters, read ``$`` as s and a ``!``
 inside a word as i, ``&``/``+`` as "and", join dotted initials, read
-numbers as words (both ways round, because Whisper writes "21 Pilots" for
-a library's "twenty one pilots"), and read a single digit used inside a
+numbers as words (both ways round, because Whisper writes "3 Doors Down"
+for a library's "Three Doors Down"), and read a single digit used inside a
 word the three ways people use one (as a letter, ``5`` → s; as its number
 word, ``n9ne`` → nine; as a sound, ``gener8ion`` → generation), merging
 the letters it overlaps. Deliberately absent, because the 2026-10-02 audit
@@ -274,8 +274,8 @@ def spoken_forms(text: str) -> tuple[str, ...]:
     without a leading "the". Empty tuple for a name with nothing sayable.
 
     "$uicideboy$" → ("suicideboys",); "Tech N9ne" → ("tech n9ne",
-    "tech ngne", "tech nine", ...); "twenty one pilots" and "21 Pilots"
-    share "twenty one pilots"."""
+    "tech ngne", "tech nine", ...); "Three Doors Down" and "3 Doors Down"
+    share "three doors down"."""
     tokens = _clean(fold(text)).split()
     if not tokens:
         return ()
@@ -302,8 +302,8 @@ def alias_key(text: str) -> str:
     """The household-wide identity of a name or an alias (FROZEN, see
     :data:`KEY_VERSION`): the primary spoken form, leading "the" dropped,
     spaces removed. "Subtract", "subtract!" and " SUBTRACT " share
-    "subtract"; "21 Pilots" and "twenty-one pilots" share
-    "twentyonepilots". Empty for a name with nothing sayable."""
+    "subtract"; "3 Doors Down" and "three doors down" share
+    "threedoorsdown". Empty for a name with nothing sayable."""
     forms = spoken_forms(text)
     if not forms:
         return ""
