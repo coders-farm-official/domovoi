@@ -35,7 +35,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK
+from domovoi.sdk import PluginSDK, egress
 
 from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
@@ -55,15 +55,22 @@ class ResolveResult:
     stream_url: str | None = None
     external_id: str | None = None
     message: str = ""
+    # "internet_off" when the box is set to stay off the internet and no
+    # lookup was made; "" otherwise (``resolved`` and ``message`` say the
+    # rest).
+    status: str = ""
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        out: dict[str, object] = {
             "resolved": self.resolved,
             "station_id": self.station_id,
             "stream_url": self.stream_url,
             "external_id": self.external_id,
             "message": self.message,
         }
+        if self.status:
+            out["status"] = self.status
+        return out
 
 
 async def resolve_simulcast_for_station(
@@ -74,7 +81,15 @@ async def resolve_simulcast_for_station(
     Idempotent: rows that already carry a stream_url are left alone
     (``resolved=False`` + "already has" message), so the dashboard
     button and the boot backfill are both safe to spam.
+
+    Under ``INTERNET_ACCESS=never`` it returns ``status="internet_off"``
+    without a lookup and without touching the row.
     """
+    if egress.internet_turned_off():
+        return ResolveResult(
+            resolved=False, station_id=station_id,
+            message=egress.TURNED_OFF_REASON, status="internet_off",
+        )
     async with sdk.db.session_scope() as s:
         row = (
             await s.execute(
@@ -183,7 +198,13 @@ async def backfill_fm_favorites_missing_simulcast(
     1000+ directory requests on boot; sequential rather than concurrent
     because radio-browser asks clients to be polite (~1 rps finishes a
     25-station backfill inside half a minute).
+
+    Under ``INTERNET_ACCESS=never`` nothing is looked up (an empty list);
+    the favorites wait for the next start with the internet allowed.
     """
+    if egress.internet_turned_off():
+        log.info("simulcast: backfill skipped — internet access is turned off")
+        return []
     async with sdk.db.session_scope() as s:
         rows = (
             await s.execute(

@@ -510,8 +510,10 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
  * checkout and updates with it — the core refuses a zip or GitHub upgrade
  * of one, which would move its folder out of the checkout — and a
  * dev-mode plugin just restarts. */
-const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
+const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
   const [ghUrl, setGhUrl] = React.useState('');
+  // GitHub downloads need the internet (internetOff, read by the page); a
+  // zip upgrade doesn't.
   if (p.status === 'uninstalled' || p.install_source === 'dev') return null;
   if (p.bundled) {
     return (
@@ -526,19 +528,22 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
       <Button icon="arrow-up-circle" onClick={() => onUpgradeZip(p.slug)}>upgrade from zip</Button>
       <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
              onChange={(e) => setGhUrl(e.target.value)}
+             disabled={internetOff} title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
              style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 10px', width: 280,
                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                       background: 'var(--card)', color: 'var(--fg)' }}/>
-      <Button icon="github" disabled={!ghUrl.trim()}
+      <Button icon="github" disabled={internetOff || !ghUrl.trim()}
+              title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
               onClick={() => { onUpgradeUrl(p.slug, ghUrl.trim()); setGhUrl(''); }}>
         upgrade from GitHub
       </Button>
+      {internetOff && <NeedsInternetNote compact/>}
     </div>
   );
 };
 
 /* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
   const [open, setOpen] = React.useState(false);
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
@@ -636,7 +641,8 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               ))}
             </div>
           )}
-          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}/>
+          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}
+                                 internetOff={internetOff}/>
         </div>
       )}
     </div>
@@ -659,6 +665,12 @@ const PluginsPage = () => {
   const refresh = () => Promise.all([refreshList(), refreshVersion()]);
   const flow = useInstallFlow(fire, refresh);
   const [ghUrl, setGhUrl] = React.useState('');
+  // Installing from GitHub downloads; a zip install stays available.
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   const [uninstalling, setUninstalling] = React.useState(null);
 
   // The core answers 200 with {enabled: false, status: 'load_error',
@@ -702,15 +714,19 @@ const PluginsPage = () => {
         <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input placeholder="https://github.com/org/repo[@ref]" value={ghUrl}
                  onChange={(e) => setGhUrl(e.target.value)}
-                 onKeyDown={(e) => { if (e.key === 'Enter' && ghUrl.trim()) { flow.stageGithub(ghUrl.trim(), null); setGhUrl(''); } }}
+                 disabled={internetOff} title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                 onKeyDown={(e) => { if (e.key === 'Enter' && ghUrl.trim() && !internetOff) { flow.stageGithub(ghUrl.trim(), null); setGhUrl(''); } }}
                  style={{ flex: '1 1 300px', maxWidth: 480, font: 'inherit', fontSize: 13, height: 30,
                           padding: '0 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)' }}/>
-          <Button variant="primary" icon="github" disabled={!ghUrl.trim()}
+          <Button variant="primary" icon="github" disabled={internetOff || !ghUrl.trim()}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                   onClick={() => { flow.stageGithub(ghUrl.trim(), null); setGhUrl(''); }}>
             fetch & preview
           </Button>
-          <span className="meta">nothing runs until you confirm the trust screen</span>
+          {internetOff
+            ? <NeedsInternetNote compact/>
+            : <span className="meta">nothing runs until you confirm the trust screen</span>}
         </div>
       </Card>
 
@@ -725,7 +741,8 @@ const PluginsPage = () => {
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
-                         onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}/>
+                         onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}
+                         internetOff={internetOff}/>
             ))}
           </div>
         )}

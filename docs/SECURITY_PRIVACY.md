@@ -573,6 +573,19 @@ household that is offline can still save one; the fetch itself resolves and
 re-checks. None of this replaces network segmentation — it is the server
 declining to be your attacker's proxy.
 
+**When the server is told to stay off the internet**
+(`INTERNET_ACCESS=never`, the **No** answer in Settings → Internet — see
+[The internet switch](#the-internet-switch-what-it-closes-and-what-it-cant)),
+the same check refuses every URL whose host is not on this box or the house
+network, **before** resolving it: under `never` a public name is never even
+looked up, because a DNS query is egress too. "On the house network" is
+judged from the URL as written (an IP literal in a private, loopback or
+link-local range; `localhost`; a single-label name; a `.local`, `.lan`,
+`.home.arpa`, `.internal`, `.localdomain` or `.localhost` name). An
+`OUTBOUND_ALLOW_HOSTS` entry survives `never` only if it is local by that
+same rule, so a public name in the allowlist cannot punch through. Saving a
+URL for later still works.
+
 **The one exception, and it is yours to grant** (`OUTBOUND_ALLOW_HOSTS`,
 empty on every install unless you set it). Some households genuinely do
 host something on the box or the LAN they want Domovoi to fetch — a feed
@@ -938,28 +951,112 @@ and migration V018.
 
 Local-first is the default posture: **Whisper (STT), Ollama (both LLMs),
 Piper (TTS), MPD, and the optional Letta chat agent all run on your
-hardware and send nothing out.** The complete list of things that *can*
-create outbound traffic:
+hardware and send nothing out.** One setting closes everything in this
+table at once: **No, keep everything in the house** (`INTERNET_ACCESS=never`,
+[below](#the-internet-switch-what-it-closes-and-what-it-cant)). On a server
+that does use the internet, the complete list of things that *can* create
+outbound traffic, each with its own off switch:
 
 | Traffic | When | Off switch |
 |---|---|---|
-| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box nothing Domovoi says leaves the network. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. |
+| **Connectivity probe** — a TCP connection with no payload to `CONNECTIVITY_PROBE_TARGET` (`1.1.1.1:443`) | Every 30 s | Under `never` it doesn't dial. Otherwise keep it on an internet address: it is how the core knows the line is down. |
+| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box replies are spoken on your hardware. Edge is never a fallback for Piper (`piper → system`), and an Edge voice is registered only when you choose Edge or the extra voices (`seed_voice_catalog`). A registered Edge voice's fixed clips (the network notice, the voice sample, the wake greetings) are rendered by Microsoft once each, and only while the internet is up; offline, Piper renders stand-ins. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. Under `never` Edge is not used at all. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
+| **Whisper model download** — the configured model (and its CPU fallback) from Hugging Face | Only when the model isn't on disk yet: every load tries the local cache first | Download the models while online; under `never` the core also sets `HF_HUB_OFFLINE=1` for itself. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
-| **Podcasts** — the subscribed feeds and the episode files they point at | Only for shows you subscribed to, when the poller runs (off by default) or you press "poll now" | `podcast_feed_poller_enabled = false` (the default); unsubscribe from a show to stop fetching it. |
+| **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No**; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` stops Domovoi starting it. Under `never` no query is sent even if it runs. |
+| **Podcasts** — the subscribed feeds and the episode files they point at; each show's artwork, fetched once by the server; a show's name to Apple's iTunes search when you subscribe by voice or use Discover | Only for shows you subscribed to, when the poller runs (on for the **Yes** answer, off otherwise) or you press "poll now"; the search only when you ask | `podcast_feed_poller_enabled = false`; unsubscribe from a show to stop fetching it. The browser and the phone load artwork from the server, never from the publisher. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
-| **MusicBrainz alias lookup** — artist names from your library are searched on musicbrainz.org for the spoken names people use for them ("Tec 9" for Tech N9ne), so a spoken request finds a stylized name. The names sent are the library's artist credits, **including the "Artist" part of an untagged file named "Artist - Title"** (a home recording "Grandma Edith - Happy Birthday" would send "Grandma Edith"). Only stage names are kept: legal names, a person's names sharing a word with one, non-English and non-Latin forms and, for a person, names that don't sound like the stage name are dropped and never stored; for a band (a MusicBrainz group) its other names are kept, which may include members' or family names ("The Farriss Brothers" for INXS) (`domovoi/workers/library_alias_fetch.py`) | **Only if you opt in** — off by default. Then one search per artist (a library of a few thousand tracks takes on the order of an hour and a half the first time), one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, and afterwards only for artists added to the library | Leave `music_alias_fetch_enabled` off (Settings → Configuration → Library → "Look up other names on MusicBrainz"); switching it off stops the fetch before its next request. A fetched name can be removed from a track's "also called" list by anyone and is never fetched back. |
+| **MusicBrainz alias lookup** — artist names from your library are searched on musicbrainz.org for the spoken names people use for them ("Tec 9" for Tech N9ne), so a spoken request finds a stylized name. The names sent are the library's artist credits, **including the "Artist" part of an untagged file named "Artist - Title"** (a home recording "Grandma Edith - Happy Birthday" would send "Grandma Edith"). Only stage names are kept: legal names, a person's names sharing a word with one, non-English and non-Latin forms and, for a person, names that don't sound like the stage name are dropped and never stored; for a band (a MusicBrainz group) its other names are kept, which may include members' or family names ("The Farriss Brothers" for INXS) (`domovoi/workers/library_alias_fetch.py`) | **Only if you opt in** — off by default. Then one search per artist (a library of a few thousand tracks takes on the order of an hour and a half the first time), one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, and afterwards only for artists added to the library | On when the internet answer is **Yes** or **Sometimes**; set `music_alias_fetch_enabled` off (Settings → Configuration → Library → "Look up other names on MusicBrainz") to keep it off anyway; switching it off stops the fetch before its next request. A fetched name can be removed from a track's "also called" list by anyone and is never fetched back. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. The first device to park holds that room name until someone approves or rejects it; a different device asking for the same name is refused as a conflict. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
-| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed. |
+| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed. |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** | While you're listening to an internet station (bundled radio plugin) | Don't play internet radio; FM/SDR paths in the same plugin are local RF. |
+| **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
+| **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download during satellite provisioning | Provisioning a Pi | One-time, on the Pi, at build time. |
+| **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), and **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub) | Only when an admin starts one | Don't start them. Under `never` they are refused. |
+| **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) are refused under `never`; a plugin that opens its own connections is outside the switch. |
 
 Turn off Edge TTS, news, and the enricher, leave the MusicBrainz alias
-lookup off, skip provider plugins, and Domovoi's steady-state outbound
-traffic is **zero**.
+lookup off, skip provider plugins, and
+Domovoi's steady-state outbound traffic is **zero**, apart from the
+connectivity probe (a TCP connection with no payload to
+`CONNECTIVITY_PROBE_TARGET` every 30 s) and the radio plugin's detectors
+while you have favorited internet stations. Answer **No** and it is zero,
+probe included. The
+[FAQ table](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
+lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
+server that has internet, one that only sometimes does, and one that never
+does.
+
+### The internet switch: what it closes and what it can't
+
+`INTERNET_ACCESS` (`always` | `sometimes` | `never`; Settings → Internet)
+is read from the process environment first, then `domovoi/.env`, by both
+the core and the web process, through one module (`domovoi/egress.py`).
+An answer pinned in the environment is shown read-only in the dashboard,
+so the two processes can never disagree. Unanswered means exactly the
+behaviour before the switch existed.
+
+**What `never` closes** — every way the server itself reaches past your
+network:
+
+- the connectivity probe (it stops dialing; the state reads "turned
+  off");
+- every fetch that goes through the outbound-URL check above: news and
+  podcast feeds and episodes, podcast artwork, radio streams, ICY polls,
+  add-by-URL, a model registry;
+- the paths that never went through that check: SearXNG searches (the
+  container is local, the engines it asks are not), Microsoft Edge speech,
+  Piper and Whisper downloads (`HF_HUB_OFFLINE=1` is set for the core),
+  the fast-lane model, the wake-word trainer's data, the library enricher
+  (AcoustID, Shazam, MusicBrainz), the MusicBrainz name lookup, Apple's
+  iTunes search, the radio plugin's directory, simulcast and FCC lookups
+  and its Shazam step, `git fetch` / `pull`, plugin downloads from GitHub
+  (and PyPI: pip runs with `--no-index`), the satellite media cache
+  refresh, Ollama model pulls from a public registry, and building the
+  music container image;
+- plugins' requests through the SDK's HTTP client (`sdk.http` in the core,
+  the web host's `http()`), which refuse any non-local URL;
+- the SearXNG container, which is stopped.
+
+A refusal is never recorded as "this is broken": no feed is marked
+invalid, no episode failed, no track "no match", no station unreachable.
+Switching the answer back picks everything up where it was.
+
+**How a refusal looks:**
+
+- an HTTP route that would reach the internet answers **`409`** with
+  `{"detail": "internet access is turned off for this box (Settings → Internet)"}`
+  and the header **`X-Domovoi-Refusal: internet-off`**, so a client can
+  tell it from any other 409;
+- the plugin installer keeps its own envelope: `422` with
+  `detail.error.code` = `internet_off`;
+- the version check and pull answer `{"ok": false, "error": <that reason>}` /
+  `{"pulled": false, "error": <that reason>}` without running git;
+- the voice says "I'm set to stay off the internet, so …";
+- the dashboard greys the control with "needs internet · Settings →
+  Internet" (greyed, not hidden, so the household can find it again).
+
+**What it can't close**, because it isn't the server:
+
+- **browsers and phones** — they reach Domovoi on your network, but a link
+  someone opens, or a picture pasted into a document from a website, loads
+  from wherever it points;
+- **the satellites' operating system** (Raspberry Pi OS): time
+  synchronisation with public NTP servers, and the package install a
+  satellite runs on its second boot while it is being set up. The Domovoi
+  client on it talks only to the server;
+- **Docker Desktop, Ollama and the host operating system**, which check for
+  their own updates;
+- **a plugin that opens its own connections** instead of using the SDK's
+  client (its install screen lists what it does).
+
+For a house where nothing should reach out, block the server (and the
+satellites, once set up) at the router as well.
 
 ## Server identity (which core a satellite belongs to)
 

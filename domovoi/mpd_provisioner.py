@@ -41,6 +41,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from domovoi import egress
 from domovoi.config import MPD_CONTROL_BIND, settings
 
 log = logging.getLogger(__name__)
@@ -383,9 +384,20 @@ async def ensure_image() -> None:
     Idempotent. The build itself relies on the same ``Dockerfile.mpd`` that
     docker-compose used to consume directly. First run takes ~10–30 s; cached
     layers on every subsequent boot.
+
+    Under ``INTERNET_ACCESS=never`` a missing image is not built: the build
+    pulls ``debian:bookworm-slim`` and runs apt. It raises the way a failed
+    build does, so the caller's handling is unchanged.
     """
     if await _image_exists(settings.mpd_image_tag):
         return
+    if egress.internet_turned_off():
+        msg = (
+            "the music container image is missing and internet access is "
+            "turned off; build it while online (docs/INTERNET.md)"
+        )
+        log.warning(msg)
+        raise RuntimeError(msg)
     await _build_image(settings.mpd_image_tag)
     log.info("MPD image build complete")
 

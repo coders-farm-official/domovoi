@@ -22,7 +22,9 @@
 const validityTone = (feed) => (feed.valid ? 'live' : 'idle');
 
 /* ---- A single topic row, expandable to its feeds ------------- */
-const TopicRow = ({ topic, onRemove, fire }) => {
+const TopicRow = ({ topic, onRemove, fire, internetOff = false }) => {
+  // Adding or re-checking a feed fetches it: greyed while the box is set
+  // to stay off the internet (Settings → Internet; read by the page).
   const [open, setOpen] = React.useState(false);
   const [feeds, setFeeds] = React.useState(null);
   const [newUrl, setNewUrl] = React.useState('');
@@ -45,7 +47,9 @@ const TopicRow = ({ topic, onRemove, fire }) => {
       setNewUrl('');
       await loadFeeds();
       fire('feed added');
-    } catch (e) { fire('couldn’t add that feed'); } finally { setBusy(false); }
+    } catch (e) {
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : 'couldn’t add that feed');
+    } finally { setBusy(false); }
   };
 
   const removeFeed = async (fid) => {
@@ -57,7 +61,7 @@ const TopicRow = ({ topic, onRemove, fire }) => {
 
   const revalidate = async (fid) => {
     try { await apiPost(`/api/news/feeds/${fid}/validate`, {}); await loadFeeds(); }
-    catch (e) { fire('couldn’t validate'); }
+    catch (e) { fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : 'couldn’t validate'); }
   };
 
   return (
@@ -93,19 +97,24 @@ const TopicRow = ({ topic, onRemove, fire }) => {
                   {f.discovered_via}{f.scope ? ` · ${f.scope}` : ''} · {f.url}
                 </div>
               </div>
-              <IconButton name="refresh-cw" title="re-check validity" onClick={() => revalidate(f.id)}/>
+              <IconButton name="refresh-cw" disabled={internetOff}
+                          title={internetOff ? NEEDS_INTERNET_TEXT : 're-check validity'}
+                          onClick={() => revalidate(f.id)}/>
               <IconButton name="x" title="remove feed" onClick={() => removeFeed(f.id)}/>
             </div>
           ))}
           <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
             <input value={newUrl} onChange={e => setNewUrl(e.target.value)}
                    placeholder="add RSS feed URL…"
-                   onKeyDown={e => { if (e.key === 'Enter') addFeed(); }}
+                   disabled={internetOff} title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                   onKeyDown={e => { if (e.key === 'Enter' && !internetOff) addFeed(); }}
                    style={{ font: 'inherit', fontSize: 12, flex: 1, height: 30, padding: '0 8px',
                             borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                             background: 'var(--card)', color: 'var(--fg)' }}/>
-            <Button icon="plus" onClick={addFeed} disabled={busy}>add</Button>
+            <Button icon="plus" onClick={addFeed} disabled={busy || internetOff}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>add</Button>
           </div>
+          {internetOff && <div style={{ marginTop: 6 }}><NeedsInternetNote compact/></div>}
         </div>
       )}
     </div>
@@ -113,7 +122,9 @@ const TopicRow = ({ topic, onRemove, fire }) => {
 };
 
 /* ---- Topic manager (category chips + free-form add) ---------- */
-const TopicManager = ({ personId, topics, categories, onChanged, fire }) => {
+const TopicManager = ({ personId, topics, categories, onChanged, fire, internetOff = false }) => {
+  // A free-form topic finds its feeds with a web search: greyed while the
+  // box is set to stay off the internet. Categories use built-in feeds.
   const [freeform, setFreeform] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const activeCats = new Set(topics.filter(t => t.kind === 'category').map(t => t.topic));
@@ -168,16 +179,20 @@ const TopicManager = ({ personId, topics, categories, onChanged, fire }) => {
         <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
           <input value={freeform} onChange={e => setFreeform(e.target.value)}
                  placeholder="add a free-form topic (e.g. Formula 1, Lansing schools)…"
-                 onKeyDown={e => { if (e.key === 'Enter') addFreeform(); }}
+                 disabled={internetOff} title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                 onKeyDown={e => { if (e.key === 'Enter' && !internetOff) addFreeform(); }}
                  style={{ font: 'inherit', fontSize: 13, flex: 1, height: 34, padding: '0 10px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)' }}/>
-          <Button variant="primary" icon="plus" onClick={addFreeform} disabled={busy}>add topic</Button>
+          <Button variant="primary" icon="plus" onClick={addFreeform} disabled={busy || internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>add topic</Button>
+          {internetOff && <NeedsInternetNote compact/>}
         </div>
 
         {topics.length === 0
           ? <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>No topics yet. Pick a category above or add a free-form topic.</div>
-          : topics.map(t => <TopicRow key={t.id} topic={t} onRemove={removeTopic} fire={fire}/>)}
+          : topics.map(t => <TopicRow key={t.id} topic={t} onRemove={removeTopic} fire={fire}
+                                      internetOff={internetOff}/>)}
       </div>
     </Card>
   );
@@ -234,6 +249,13 @@ const PersonNews = ({ person, categories, fire }) => {
   const items = useApiList(`/api/news/people/${pid}/items`, { eventTypes: ['news.changed'] });
   const briefing = useApiObject(`/api/news/people/${pid}/briefing`, { eventTypes: ['news.changed'] });
   const [polling, setPolling] = React.useState(false);
+  // "poll now" fetches every feed: greyed while the box is set to stay off
+  // the internet. Saved stories and the last briefing stay readable.
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
 
   const pollNow = async () => {
     setPolling(true);
@@ -241,7 +263,9 @@ const PersonNews = ({ person, categories, fire }) => {
       const r = await apiPost(`/api/news/poll?person_id=${pid}`, {});
       fire(`polled — ${r.house + r.topics} new item${(r.house + r.topics) === 1 ? '' : 's'}`);
       topics.refresh(); items.refresh(); briefing.refresh();
-    } catch (e) { fire('poll failed (offline?)'); } finally { setPolling(false); }
+    } catch (e) {
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : 'poll failed (offline?)');
+    } finally { setPolling(false); }
   };
 
   const b = briefing.data;
@@ -250,7 +274,15 @@ const PersonNews = ({ person, categories, fire }) => {
       <PageHeader
         title={`${person.name}’s news`}
         sub="Topics of interest, discovered feeds, and their saved stories."
-        actions={<Button icon="refresh-cw" onClick={pollNow} disabled={polling}>{polling ? 'polling…' : 'poll now'}</Button>}
+        actions={
+          <>
+            {internetOff && <NeedsInternetNote compact/>}
+            <Button icon="refresh-cw" onClick={pollNow} disabled={polling || internetOff}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
+              {polling ? 'polling…' : 'poll now'}
+            </Button>
+          </>
+        }
       />
 
       <Card title="Current briefing" sub={b && b.generated_at ? `generated ${relTime(b.generated_at)}` : 'the latest spoken digest'}>
@@ -260,7 +292,8 @@ const PersonNews = ({ person, categories, fire }) => {
       </Card>
 
       <TopicManager personId={pid} topics={topics.items} categories={categories}
-                    onChanged={() => { topics.refresh(); items.refresh(); }} fire={fire}/>
+                    onChanged={() => { topics.refresh(); items.refresh(); }} fire={fire}
+                    internetOff={internetOff}/>
 
       <SavedFeed personId={pid} items={items.items} onChanged={items.refresh} fire={fire}/>
     </div>

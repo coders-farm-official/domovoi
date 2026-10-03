@@ -15,6 +15,14 @@
 #   --autoplay-policy=...            allow the page's media session hooks
 #   --user-data-dir                  own profile: never shares state (or a
 #                                    service worker) with any other browser
+#   --disable-background-networking  no traffic nobody asked for: no Safe
+#                                    Browsing list, variations or translate
+#                                    downloads, no network prediction
+#   --disable-component-update       no component updater checks (Widevine,
+#                                    certificate lists and the like)
+#   --no-pings                       never send hyperlink-auditing pings
+#   --disable-domain-reliability     no Domain Reliability reports to Google
+# The page itself talks only to the Domovoi server on your network.
 # If Chromium is unstable on your board's GPU stack, add --disable-gpu
 # (see VIDEO_SATELLITE.md).
 
@@ -32,4 +40,8 @@ exec cage -- "$BROWSER" \
   --disable-session-crashed-bubble \
   --autoplay-policy=no-user-gesture-required \
   --user-data-dir="$HOME/.domovoi/kiosk-profile" \
+  --disable-background-networking \
+  --disable-component-update \
+  --no-pings \
+  --disable-domain-reliability \
   "$URL"

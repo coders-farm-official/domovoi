@@ -370,7 +370,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.3.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.4.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 
 ### `[entry_points]`
@@ -720,9 +720,12 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.3.0"` — 1.3 added
-`device_endpoint`) is the semver your `domovoi_api` range is checked
-against.
+`domovoi.sdk.API_VERSION` (currently `"1.4.0"` — 1.3 added
+`device_endpoint`; 1.4 added `egress`, the internet-access gate, and
+`connectivity.policy` / `.reason` / `.internet_allowed`, and made
+`sdk.http` refuse non-local requests when the answer is `never`) is the
+semver your `domovoi_api` range is checked against. Ask for `">=1.4"` if you
+use the 1.4 names.
 
 ### 4.1 `register(ctx)` — the PluginContext
 
@@ -1126,7 +1129,35 @@ is `auto`, which the core resolves to its current LAN address.
 * `sdk.http.client(**httpx_kwargs)` — an `httpx.AsyncClient` with the product
   User-Agent preset (`domovoi/<version> (+github.com/coders-farm-official/domovoi)`)
   and a 15 s default timeout. Use it for all outbound HTTP — several
-  upstream services require a descriptive UA.
+  upstream services require a descriptive UA. **It honours the household's
+  internet answer** (SDK 1.4): when the server is answered `never`, every
+  request to a host outside the house network — redirect hops included —
+  raises `egress.InternetTurnedOff` before anything is sent. Your own
+  `event_hooks` still run, after that check. A plugin that builds a raw
+  `httpx.AsyncClient` (or uses `requests`, `aiohttp`, a subprocess…)
+  bypasses this, and keeping it honest is then your job: wrap the client
+  with `egress.async_client(...)`, or call `egress.require_destination(url)`
+  / `egress.require_internet("what")` first.
+* `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
+  `web.py`; SDK 1.4) — the one place the internet answer
+  (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while
+  unanswered) is read. `egress.policy()`, `egress.internet_allowed()`,
+  `egress.internet_turned_off()`; `egress.is_local_host(host)` (no DNS);
+  `egress.require_destination(url)` and `egress.require_internet("what")`
+  raise `egress.InternetTurnedOff` (a subclass of
+  `net_safety.UnsafeOutboundURL`, so an existing `except` still refuses
+  instead of crashing); `egress.async_client(**kw)` / `sync_client(**kw)`
+  are httpx clients with the check as their first request hook;
+  `egress.http_exception("what")` is the standard refusal for a route —
+  `409` with the fixed detail `"internet access is turned off for this box
+  (Settings → Internet)"` and the header `X-Domovoi-Refusal: internet-off`,
+  which the dashboard recognises; `egress.spoken_offline_phrase()` is the
+  start of a voice reply ("I'm set to stay off the internet" under `never`,
+  "I don't have internet right now" otherwise). Two rules: refuse **before**
+  you write anything (no job row, no "failed" state), and never record a
+  refusal as a permanent failure (a feed marked dead, a track marked "no
+  match") — the household can switch the answer back. Local destinations
+  (the satellites, a LAN server, Ollama) are always allowed.
 * `net_safety` (`from domovoi.sdk import net_safety`, also
   `domovoi.webkit.net_safety` in `web.py`) — the shared outbound-URL check.
   **Any URL that reached you from outside — a user typed it, a directory
@@ -1151,7 +1182,13 @@ is `auto`, which the core resolves to its current LAN address.
 * `sdk.data_dir` / `sdk.ensure_data_dir()` —
   `~/.domovoi/plugins/data/<slug>` for files you own. Uninstall-purge
   deletes it; uninstall-keep preserves it.
-* `sdk.connectivity.online` — the shared connectivity probe's current view.
+* `sdk.connectivity` — the shared connectivity probe's current view:
+  `.online` (false while the internet is down **and** whenever the answer
+  is `never`), `.policy` (the answer: `""`, `always`, `sometimes`,
+  `never`), `.reason` (`connected`, `offline` or `turned_off`) and
+  `.internet_allowed` (SDK 1.4). Use `.policy` to pick your own defaults —
+  a plugin with a big automatic download might stay off for `sometimes`
+  — and `.online` to decide whether to try right now.
 
 ### 4.15 Core-process HTTP routers, `device_endpoint` and `open_endpoint`
 
@@ -1289,7 +1326,11 @@ Runs in the separate dashboard process. Your `web.py` receives a
   along, or the core answers `401`). Give the proxy and the core route it
   calls the same tier.
   Relative paths resolve to `/v1/plugins/<slug>/...`.
-* `ctx.http(**kwargs)` — UA-preset httpx client factory.
+* `ctx.http(**kwargs)` — UA-preset httpx client factory. Like `sdk.http`, it
+  refuses non-local requests when the server is answered `never` (SDK 1.4).
+* `domovoi.webkit.egress` — the internet-answer gate (see
+  [§4.14](#414-sounds-http-state-logging)); a web route that would reach the
+  internet raises `egress.http_exception("what")` first under `never`.
 * `domovoi.webkit.net_safety` — the same outbound-URL check the core uses
   (see [§4.14](#414-sounds-http-state-logging)); a web route that fetches a
   URL out of your own table still goes through it, because rows outlive the
@@ -1357,6 +1398,9 @@ story. Here is the developer's tour, file by file.
   handler's greedy `^play (.+)$` at 300 so "play 97.5 fm" is claimed first.
   `requires_network = "degraded"`, `chat_exposed = true`, corpus
   `["play 97.5 fm", "tune to the news station"]`.
+* **SDK range** `domovoi_api = ">=1.4,<2.0"` (version 1.3.0): it reads
+  `sdk.connectivity.policy` and uses `sdk.egress`. It ships inside the
+  core, so the range can never be unmet.
 * **Six `[[workers]]`**: four `poll` (`radio_sampler`, `radio_icy_poller`,
   `radio_detections_reaper`, `track_fingerprinter`) and two `startup`
   (`fcc_import`, `simulcast_backfill`) — the startup entries cross-check
@@ -1437,7 +1481,13 @@ recorded, satellite handshake fields populated, one call.
 stations and runs a two-tier identify chain: local library fingerprints
 first (free, offline), then the online song-identification service.
 `workers/icy_poller.py` reads now-playing titles straight from stream
-metadata (cheap, `requires_online=True`). Both funnel through
+metadata (cheap, `requires_online=True`). Offline — including a server
+answered `never` — the sampler samples only favorites whose stream is on
+the house network, skips the online tier, and leaves internet stations'
+`last_sampled_at` alone so they come due again when the internet is back:
+the pattern for a worker that is half local, half online. Under `never`
+the plugin's online routes (search, simulcast, FCC import, internet play
+and stream) answer `egress.http_exception(...)` before doing anything. Both funnel through
 `workers/detection_store.py`, which inserts the detection row and checks
 whether the library already has the song; after commit the worker emits a
 `plugin.radio.detection_recorded` bus event carrying the full observation

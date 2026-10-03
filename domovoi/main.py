@@ -213,6 +213,15 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
+    # Saving the internet answer starts the local search helper (SearXNG)
+    # for always / sometimes and stops it for never, in the background
+    # (domovoi/searxng_service.py). Never run at boot: no docker call can
+    # slow or break a start.
+    from domovoi import searxng_service
+
+    reapply.on_reapply(
+        "internet_access", searxng_service.schedule_reconcile, key="searxng"
+    )
 
 
 # At shutdown, how long a worker owner's (a plugin's, the core's) running

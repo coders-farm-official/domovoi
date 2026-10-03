@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi import egress
 from domovoi import net_safety
 from domovoi import news_service
 from domovoi.admin_auth import require_device
@@ -263,6 +264,11 @@ async def add_topic_feed(topic_id: int, payload: NewsFeedCreate) -> NewsFeed:
         raise HTTPException(
             status_code=400, detail=f"refusing this feed URL — {reason}"
         )
+    # Attaching validates by fetching the feed. Under INTERNET_ACCESS=never
+    # refuse first, so no feed is ever stored as invalid because the box
+    # was told to stay off the internet.
+    if egress.internet_turned_off():
+        raise egress.http_exception("news feed check")
     # Validate by parsing before we attach so a bad URL surfaces immediately.
     valid = await news_feeds_client.feed_is_valid(url)
     async with session_scope() as s:
@@ -319,7 +325,13 @@ async def detach_feed(topic_id: int, feed_id: int) -> None:
 )
 async def validate_feed(feed_id: int) -> NewsFeed:
     """Re-check a feed's validity by parsing it now; update the validity
-    dot. Device tier — it fetches the feed."""
+    dot. Device tier — it fetches the feed.
+
+    409 under ``INTERNET_ACCESS=never``, before anything is read or
+    written: the feed's ``valid`` flag must not flip because the box is
+    set to stay off the internet."""
+    if egress.internet_turned_off():
+        raise egress.http_exception("news feed check")
     async with session_scope() as s:
         row = await s.execute(
             text("SELECT url FROM news_feeds WHERE id = :id"), {"id": feed_id}
@@ -433,7 +445,12 @@ async def get_briefing(person_id: int) -> NewsBriefing:
 async def poll_now(person_id: int | None = Query(default=None)) -> dict[str, Any]:
     """Trigger a fetch pass immediately (the 'poll now' button). Fetches the
     house scopes always; also this person's topics + briefing when
-    ``person_id`` is given. Network — best-effort; runs in the web process."""
+    ``person_id`` is given. Network — best-effort; runs in the web process.
+
+    409 under ``INTERNET_ACCESS=never``: every feed fetch would be refused,
+    and a refused fetch must not mark the feeds dead."""
+    if egress.internet_turned_off():
+        raise egress.http_exception("news fetch")
     house = topics = 0
     briefing = None
     async with session_scope() as s:

@@ -39,6 +39,10 @@
 #      enabled and not at load_error in the plugins registry is at load_error
 #      now. The core keeps a failing plugin from taking it down, so its
 #      health endpoint stays green through one.
+#   9. The search helper (SearXNG) follows the internet answer: started for
+#      INTERNET_ACCESS=always|sometimes, stopped for never, left alone while
+#      unanswered (reconcile_searxng). Never fatal: a failure is a `warn`
+#      step and the run stays ok. A healthy plain restart ends with it too.
 #   On any failure in 3-8: stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
 #   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
@@ -102,6 +106,14 @@ esac
 CORE_UNIT=domovoi-core.service
 WEB_UNIT=domovoi-web.service
 DB_UNIT=domovoi-db.service
+
+# The search helper (docs/INTERNET.md): the compose service and the
+# container it runs as. DOMOVOI_MANAGE_SEARXNG=0 (or false/no/off) in
+# /etc/default/domovoi-update leaves the container alone, for a host that
+# runs SearXNG some other way.
+SEARXNG_SERVICE=searxng
+SEARXNG_CONTAINER=domovoi-searxng
+MANAGE_SEARXNG=${DOMOVOI_MANAGE_SEARXNG:-1}
 
 RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
@@ -310,6 +322,33 @@ run_step() {
   fi
   rm -f "$out"
   return "$rc"
+}
+
+# run_soft_step NAME CMD...: run_step for a step that must never fail the
+# run. Success is an `ok` step as usual; a failure is recorded as a `warn`
+# step with the tail of its output, LAST_ERROR is left alone, and it
+# returns 0, so the run's own result is unaffected.
+run_soft_step() {
+  local name=$1 t0 out rc=0
+  shift
+  t0=$(now_ms)
+  out=$(mktemp)
+  log "step $name"
+  STEP_DETAIL=""
+  set +e
+  "$@" >"$out" 2>&1
+  rc=$?
+  set -e
+  sed 's/^/    /' "$out"
+  if [ "$rc" -eq 0 ]; then
+    add_step "$name" ok "$t0" "$STEP_DETAIL"
+    if [ -n "$STEP_DETAIL" ]; then log "step $name: $STEP_DETAIL"; fi
+  else
+    add_step "$name" warn "$t0" "$(tail_lines "$out" 15 300)"
+    log "step $name failed (exit $rc); not fatal, the run goes on"
+  fi
+  rm -f "$out"
+  return 0
 }
 
 on_exit() {
@@ -850,6 +889,47 @@ wait_healthy() {
   return 1
 }
 
+# The internet answer, as the core reads it (INTERNET_ACCESS from the
+# environment, then domovoi/.env): always, sometimes, never, or empty while
+# unanswered. Fails when the checkout's code can't say (a tree from before
+# the setting existed).
+internet_policy() {
+  local p
+  p=$(as_user "$VENV_DIR/bin/python" -m domovoi.egress --print-policy 2>/dev/null) || return 1
+  printf '%s' "$p" | tr -d '[:space:]'
+}
+
+# Start or stop the search helper (SearXNG) to match the internet answer:
+# Yes or Sometimes start it (the first start pulls the pinned image), No
+# stops it if it runs, unanswered leaves it as it is. Run as a soft step.
+reconcile_searxng() {
+  local policy compose_file=$REPO_DIR/domovoi/docker-compose.yml
+  case "$(printf '%s' "$MANAGE_SEARXNG" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off)
+      STEP_DETAIL="skipped: DOMOVOI_MANAGE_SEARXNG=$MANAGE_SEARXNG"
+      return 0 ;;
+  esac
+  if ! policy=$(internet_policy); then
+    STEP_DETAIL="skipped: this checkout can't say the internet answer"
+    return 0
+  fi
+  case "$policy" in
+    always|sometimes)
+      docker compose -f "$compose_file" --project-directory "$REPO_DIR/domovoi" \
+        up -d --no-deps "$SEARXNG_SERVICE" || return 1
+      STEP_DETAIL="$SEARXNG_CONTAINER up (internet answer: $policy)" ;;
+    never)
+      if [ "$(docker inspect -f '{{.State.Running}}' "$SEARXNG_CONTAINER" 2>/dev/null)" = true ]; then
+        docker stop "$SEARXNG_CONTAINER" || return 1
+        STEP_DETAIL="$SEARXNG_CONTAINER stopped (internet answer: never)"
+      else
+        STEP_DETAIL="$SEARXNG_CONTAINER not running (internet answer: never)"
+      fi ;;
+    *)
+      STEP_DETAIL="left as it is: the internet question isn't answered" ;;
+  esac
+}
+
 migrations_grew() {
   [[ $MIGRATIONS_BEFORE =~ ^[0-9]+$ ]] && [[ $MIGRATIONS_AFTER =~ ^[0-9]+$ ]] \
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
@@ -869,6 +949,7 @@ plain_restart() {
   SERVICES_STOPPED=0
   run_step health wait_healthy || failed=${failed:-health}
   if [ -z "$failed" ]; then
+    run_soft_step searxng reconcile_searxng
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
     finish ok
   else
@@ -937,6 +1018,7 @@ full_update() {
   LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
 
   if [ -z "$failed" ]; then
+    run_soft_step searxng reconcile_searxng
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
     rm -f "$BAD_FILE"
     BAD_SHA=""

@@ -8,7 +8,8 @@ voice in every room. Your voice never leaves your network — speech recognition
 (Whisper on your GPU), language models (Ollama), and text-to-speech all run
 locally. When your internet goes out, Domovoi keeps working: every skill
 declares up front whether it needs the network, and anything that can run
-offline does.
+offline does. Whether it uses the internet at all is your choice:
+[Will your Domovoi have internet?](docs/INTERNET.md)
 
 Out of the box it handles music and your media library, timers and reminders,
 room-to-room intercom and drop-in, voice notes, per-person voice profiles,
@@ -88,6 +89,7 @@ owning devices and automations. Setup and patterns:
 | **Docker Desktop** | Runs Postgres, database migrations, and per-room audio (MPD) containers. |
 | **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both. |
 | **Git** | To clone the repo. |
+| **Internet, while you install** | Packages, Docker images and the models all download during setup. After that it's your choice — see [Will your Domovoi have internet?](#will-your-domovoi-have-internet) below. |
 | **~20 GB free disk** | For the software and all default models — **plus** room for your own media library. See [Disk footprint](#disk-footprint) below. |
 
 #### Disk footprint
@@ -114,6 +116,29 @@ the biggest single win; use a smaller Whisper (`medium` ~0.8 GB, `small`
 ~0.5 GB) at some accuracy cost; or skip the `voice-profile` extra (drops
 torch, loses speaker identification) to save up to ~2.5 GB.
 
+### Will your Domovoi have internet?
+
+Setup itself needs the internet. After that, Domovoi runs with or without
+it, and your voice never leaves the house either way. Domovoi asks once —
+**Yes, always**, **Sometimes**, or **No, keep everything in the house** —
+in the dashboard right after you claim the admin account (step 2), and
+the answer sets the defaults of the online extras:
+
+- **Yes, always** turns on web answers (it starts the local search helper,
+  SearXNG), other names for artists from MusicBrainz, podcast downloads,
+  and song recognition once you add a free AcoustID key. Still yours to
+  do: your town for local news, the AcoustID key, your radio market:
+  [If your Domovoi will have internet](docs/INTERNET.md#if-your-domovoi-will-have-internet).
+- **Sometimes** is the same without automatic podcast downloads.
+- **No** makes the server contact nothing outside your network, and greys
+  what needs the internet. Download what it will need first:
+  [Running Domovoi with no internet](docs/INTERNET.md#running-domovoi-with-no-internet).
+
+Settings you set yourself always win, and you can change the answer later
+in **Settings → Internet**. Answering from the command line instead:
+`python -m domovoi.env_bootstrap --internet always|sometimes|never` before
+the first start (it writes the answer into the fresh `domovoi/.env`).
+
 ### 1. Install the server
 
 ```powershell
@@ -126,7 +151,9 @@ pip install -e ".[cuda]"            # NVIDIA hosts only — CUDA runtime wheels
 pip install --no-deps resemblyzer   # Windows quirk — see domovoi/README.md
                                     # (on Linux: plain `pip install resemblyzer`)
 
-# One-shot bootstrap: starts Postgres, runs migrations, starts the core service
+# One-shot bootstrap: starts Postgres, runs migrations (and the search
+# helper, when the internet question is answered Yes or Sometimes), then
+# starts the core service
 ./domovoi/scripts/dev.sh            # bash
 ./domovoi/scripts/dev.ps1           # PowerShell
 ```
@@ -135,10 +162,12 @@ Prefer to see each step? The manual equivalent:
 
 ```powershell
 python -m domovoi.env_bootstrap      # first run only: .env with a random Postgres password
+                                     # (add --internet always|sometimes|never to answer now)
 cd domovoi
 docker compose up -d postgres        # Postgres 16 on 127.0.0.1:6432 (loopback only)
 docker compose run --rm flyway       # database migrations
 docker compose run --rm flyway-test  # migrate the test DB (so pytest can run)
+docker compose up -d searxng         # optional: the web-answers helper (saving Yes or Sometimes starts it too)
 cd ..
 python -m domovoi.main               # core voice service on :6370
 ```
@@ -168,6 +197,10 @@ the dashboard once you are logged in) is what your phones and dashboards
 will present for ordinary actions. Forgot the password? Run
 `python -m domovoi.main --reset-admin` on the server to clear it and print a
 fresh setup code.
+
+Right after the admin account is set up, the dashboard asks whether this
+Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
+**Decide later** leaves a reminder on the Home page.
 
 ### 3. Add your first satellite
 
@@ -257,10 +290,13 @@ text-to-speech, satellite WebSockets, background workers, the plugin runtime
 live-state/admin actions to the core. Each room gets its own MPD music
 daemon, provisioned lazily in Docker when the room's satellite first
 connects. TTS is local by default — neural **Piper** voices rendered on the
-server, so nothing Domovoi says leaves your network. Microsoft's online Edge
-voices are available as a deliberate opt-in for anyone who prefers them, and
-the engine chain falls back gracefully (`piper → system`, or `edge → piper →
-system` if you enable Edge) so the house keeps talking whatever happens.
+server, so Domovoi's replies are spoken on your own hardware. Microsoft's
+online Edge voices are available as a deliberate opt-in for anyone who
+prefers them, and the engine chain falls back gracefully (`piper → system`
+by default, `edge → piper → system` if you choose Edge) so the house keeps
+talking whatever happens. Edge is never a stand-in for the local voice:
+text reaches Microsoft only if you choose an Edge voice. See
+[What goes out](docs/INTERNET.md#what-goes-out).
 
 Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 [UML diagrams](docs/uml/) · [API reference](docs/API_REFERENCE.md)
@@ -348,6 +384,7 @@ Want to write one? Start at the
 | Doc | What's in it |
 |---|---|
 | [Setup runbook](docs/SETUP_RUNBOOK.md) | Day-one bring-up in order — server, first satellite, fleet, verification gates |
+| [Will your Domovoi have internet?](docs/INTERNET.md) | The internet question: what Yes, Sometimes and No each switch, what's left to set up, and what to download before a server goes without |
 | [FAQ](docs/FAQ.md) | Quick answers — privacy, hardware, common "can it…?" questions |
 | [Glossary](docs/GLOSSARY.md) | The words we use (satellite, handler, capability, band…) |
 | [Architecture](docs/ARCHITECTURE.md) | How the system works, for the curious and the contributing |

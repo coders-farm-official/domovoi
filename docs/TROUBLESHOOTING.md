@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptom → cause → fix, grouped by area. Start with [Which logs to check](#which-logs-to-check) if you're not sure where the problem lives. Terms are defined in the [Glossary](GLOSSARY.md); setup steps live in the [README](../README.md) and `satellite/PROVISIONING.md`.
+Symptom → cause → fix, grouped by area. Start with [Which logs to check](#which-logs-to-check) if you're not sure where the problem lives. Terms are defined in the [Glossary](GLOSSARY.md); setup steps live in the [README](../README.md) and `satellite/PROVISIONING.md`. Running without internet on purpose, or only sometimes? [INTERNET.md](INTERNET.md) says what each answer to the internet question switches, what is expected not to work, and what to download first.
 
 - [Satellite won't connect](#satellite-wont-connect)
 - [No TTS audio / Domovoi is silent](#no-tts-audio--domovoi-is-silent)
@@ -34,13 +34,15 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 
 ## No TTS audio / Domovoi is silent
 
-The TTS engine chain is **edge → piper → system**: a per-engine failure (network drop, missing voice, or an engine "succeeding" with a zero-length WAV) falls through to the next, so total silence is usually playback-side, not synthesis-side.
+The TTS engine chain is **piper → system** (**edge → piper → system** if you chose Edge; Edge is never a fallback for Piper, and is skipped when the server is answered **No** to the internet question): a per-engine failure (network drop, missing voice, or an engine "succeeding" with a zero-length WAV) falls through to the next, so total silence is usually playback-side, not synthesis-side.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | No speech at all, LEDs show "speaking" | Pi playback path, not the server | Check speaker power/cable; on the HAT verify the codec/overlay smoke test (`aplay`) from PROVISIONING.md §5; check `journalctl -u domovoi-satellite` for PortAudio device errors |
 | No speech on an XVF3800 satellite | `output_device` not pinned to the array | Set `input_device` / `output_device` (device-name substrings are reboot-proof) in `[audio]`; the client logs a startup warning when the xvf profile runs with output unset. Find IDs with `python -m satellite.client --list-devices` |
-| Voice sounds different than usual when internet is down | Expected fallback | Edge (online) failed → Piper (local) spoke instead. Set the engine to `piper` in the settings gear if you want one consistent offline voice |
+| Voice sounds different than usual when internet is down | Expected fallback | Edge (online) failed → Piper (local) spoke instead. Set the engine to `piper` (Settings → Voices) if you want one consistent offline voice |
+| An Edge voice speaks with a Piper voice's greeting or sample | Its clips were rendered while Edge wasn't usable (the internet was down, or the server is answered **No**): Piper made stand-ins | Nothing to do: the stand-ins are replaced at the next start with the internet up. Under **No** they stay, because Edge isn't used |
+| Robotic voice instead of the Piper voice, on a server answered **No** | The Piper voice isn't on disk, and with the internet off it can't be downloaded | Switch the answer to **Sometimes** once and say something (the voice downloads), or copy the `.onnx` + `.onnx.json` into `~/.domovoi/piper_voices/` |
 | Wake word answers with a canned "trouble reaching the network" clip | The Pi hasn't reached the server for 30+ s (`degraded_after_disconnect_sec`) | Fix the satellite↔server link (see the section above); the clip is the designed offline behavior, not a bug |
 | Domovoi is much quieter than music | TTS engines normalize well below full scale | Raise `[playback] gain` on the satellite (2.0–4.0 typical); it scales TTS and greeting clips but leaves music untouched |
 | Speech is choppy ("It's Wednes…day…") | WS delivery jitter draining the audio buffer, or the Wi-Fi rate wedge | Confirm `[playback] tts_prebuffer_sec` isn't set to 0; check the Wi-Fi watcher rows above |
@@ -183,7 +185,11 @@ Compose commands run from the `domovoi/` directory (where `docker-compose.yml` l
 | Music in one room stopped once right after upgrading the core; log says `recreating it bound to 127.0.0.1` | That room's MPD container was created before the control port moved to loopback; port bindings can't be edited, so the core recreated it once | Nothing to do — the data volume carried over and the new container never trips this again. Say "play" to resume |
 | Tables missing after a fresh setup | Migrations never ran | `docker compose run --rm flyway` (prod DB) and `docker compose run --rm flyway-test` (test DB) — they exit after migrating; that's normal |
 | `pytest` refuses to run / can't find `domovoi_test` | Test DB missing on a pre-existing volume | The `domovoi_test` DB is only auto-created on a *fresh* Postgres volume; on an existing one create it manually, then `docker compose run --rm flyway-test`. The test suite hard-refuses any non-`_test` database by design |
-| "Double-check" always says it can't search | SearXNG container not running | `docker compose up -d searxng` — it's localhost-only on port 6888, reachable solely from the server itself |
+| Web answers ("check that online", the weather, "double-check that") answer "I can't search the web right now — my search helper isn't running" | The SearXNG container isn't running. The core's log says `SearXNG isn't answering at http://localhost:6888` once | Saving **Yes** or **Sometimes** in Settings → Internet starts it, and so do `dev.sh` / `dev.ps1` and the Linux update unit. By hand, from `domovoi/`: `docker compose up -d searxng` (the first start downloads the pinned image); Docker restarts it after reboots. Check with `docker ps --filter name=domovoi-searxng` and `docker logs domovoi-searxng`. It's localhost-only on port 6888, reachable solely from the server itself |
+| Web answers say "I couldn't reach my search helper just now" | SearXNG answered with an error, or something that isn't its JSON (a wrong `SEARXNG_URL`, the container still starting) | Try again in a moment; if it persists, `docker logs domovoi-searxng`, and check `SEARXNG_URL` (default `http://localhost:6888`) |
+| Web answers say "I'm set to stay off the internet, so I can't check that" | The server is answered **No** to the internet question | Expected. To allow web answers, switch to **Yes** or **Sometimes** in Settings → Internet ([INTERNET.md](INTERNET.md)) |
+| A button is greyed with "needs internet · Settings → Internet", or an action fails with "internet access is turned off for this box (Settings → Internet)" (HTTP 409) | The server is answered **No** | Expected: it would reach the internet. Change the answer in Settings → Internet if you want it ([what each answer changes](INTERNET.md#what-each-answer-changes)) |
+| "I checked online but couldn't find a clear answer to that" | The search ran and found nothing usable | Rephrase, or ask more specifically; this reply now only comes after a search that really ran |
 | MPD containers won't start after changing `MUSIC_DIR` or Docker Desktop file-sharing | Stale mounts / unshared drive | Share the drive in Docker Desktop settings; remove the `domovoi-mpd-*` containers so the provisioner recreates them with current paths |
 | Chat mode won't start | Letta container not up | Chat mode is off by default; enabling `CHAT_MODE_ENABLED` assumes `docker compose up letta` and the required Ollama models (including the embedding model) are pulled |
 

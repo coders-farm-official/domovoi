@@ -56,6 +56,35 @@ const browserPlayable = (st) => {
   return !['localhost', '127.0.0.1', '://0.0.0.0'].some((h) => url.includes(h));
 };
 
+/* INTERNET_ACCESS=never (Settings → Internet): the server refuses an
+ * internet stream with a 409, so the page greys those up front. A stream
+ * on the house network (a LAN Icecast, an SDR box) is not the internet and
+ * stays playable — the same "local" the server's egress check uses: a
+ * private / loopback / link-local address, a single-label name, or a
+ * .local / .lan / .home.arpa / .internal / .localdomain / .localhost name. */
+const radioStreamIsLocal = (url) => {
+  // The host, by pattern (no URL object: the same answer in every runtime).
+  const hm = String(url || '').match(/^https?:\/\/(?:[^@\/?#]*@)?(\[[^\]]+\]|[^\/:?#]+)/i);
+  if (!hm) return false;
+  const host = hm[1].toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) return false;
+  if (host === 'localhost' || host === '::1' || !host.includes('.') && !host.includes(':')) return true;
+  if (/\.(local|lan|home\.arpa|internal|localdomain|localhost)$/.test(host)) return true;
+  const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 169 && b === 254)
+      || (a === 100 && b >= 64 && b <= 127);
+  }
+  return host.includes(':') && /^(fe80:|fc|fd)/.test(host);
+};
+
+const radioInternetBlocked = (st, internetOff) => (
+  !!internetOff && /^https?:\/\//i.test(String(st?.stream_url || ''))
+  && !radioStreamIsLocal(st.stream_url)
+);
+
 const unplayableReason = (st) => (
   st?.source === 'fm'
     ? `${st.name} has no online simulcast yet — resolve one, or play it through a room`
@@ -116,8 +145,14 @@ const radioQueueItem = (st) => ({
  * the online scope is selected, because "where is that station I already
  * saved" is the question being answered.
  */
-const StationSearch = ({ onFavorite, onPlay, fire }) => {
+const StationSearch = ({ onFavorite, onPlay, fire, internetOff = false }) => {
   const [scope, setScope] = React.useState('online');  // 'online' | 'fm'
+  // The station directory is on the internet: under INTERNET_ACCESS=never
+  // (internetOff, read once by the page) the online scope is greyed and the
+  // page falls back to local FM.
+  React.useEffect(() => {
+    if (internetOff && scope === 'online') setScope('fm');
+  }, [internetOff, scope]);
   const [q, setQ] = React.useState('');
   const [country, setCountry] = React.useState('US');
   const [results, setResults] = React.useState([]);
@@ -188,7 +223,8 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
       setOffset(newOffset);
       setSubmitted(true);
     } catch (e) {
-      fire(`search failed: ${e.message}`);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else fire(`search failed: ${e.message}`);
       setResults([]);
     } finally {
       setLoading(false);
@@ -213,6 +249,8 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
           { id: 'fm',     label: 'local FM',         sub: 'FCC-imported, near you' },
         ].map(s => (
           <button key={s.id} type="button" onClick={() => setScope(s.id)}
+                  disabled={s.id === 'online' && internetOff}
+                  title={s.id === 'online' && internetOff ? NEEDS_INTERNET_TEXT : undefined}
                   style={{ font: 'inherit', fontSize: 12, cursor: 'pointer',
                            padding: '6px 14px', borderRadius: 'var(--r-sm)',
                            border: '1px solid var(--border)',
@@ -225,6 +263,7 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
             </span>
           </button>
         ))}
+        {internetOff && <NeedsInternetNote compact/>}
       </div>
 
       <form onSubmit={onSubmit}
@@ -254,7 +293,8 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
                             textTransform: 'uppercase' }}/>
           </label>
         )}
-        <Button variant="primary" icon="search" type="submit" disabled={loading}>
+        <Button variant="primary" icon="search" type="submit"
+                disabled={loading || (scope === 'online' && internetOff)}>
           {loading ? 'searching…' : scope === 'fm' ? 'browse' : 'search'}
         </Button>
       </form>
@@ -290,7 +330,7 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
           </div>
           <div style={{ padding: '4px 8px 8px' }}>
             {favMatches.map((s) => (
-              <FavoriteMatchRow key={`fav-${s.id}`} s={s} onPlay={onPlay}/>
+              <FavoriteMatchRow key={`fav-${s.id}`} s={s} onPlay={onPlay} internetOff={internetOff}/>
             ))}
           </div>
         </div>
@@ -335,7 +375,7 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
           <tbody>
             {results.map(r => (
               <SearchResultRow key={(r.external_id || `id-${r.id}`) + '-' + offset}
-                               hit={r} scope={scope}
+                               hit={r} scope={scope} internetOff={internetOff}
                                onFavorite={onFavorite} onPlay={onPlay} fire={fire}/>
             ))}
           </tbody>
@@ -359,9 +399,10 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
 
 /* One matching favorite inside the search surface. Already saved, so
  * there's nothing to favorite here — the whole row just plays. */
-const FavoriteMatchRow = ({ s, onPlay }) => (
+const FavoriteMatchRow = ({ s, onPlay, internetOff }) => (
   <button type="button" onClick={() => onPlay(s)}
-          title={`play ${s.name}`}
+          disabled={radioInternetBlocked(s, internetOff)}
+          title={radioInternetBlocked(s, internetOff) ? NEEDS_INTERNET_TEXT : `play ${s.name}`}
           style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
                    width: '100%', padding: '7px 8px', borderRadius: 'var(--r-sm)',
                    display: 'flex', alignItems: 'center', gap: 8,
@@ -386,7 +427,7 @@ const FavoriteMatchRow = ({ s, onPlay }) => (
   </button>
 );
 
-const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
+const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = false }) => {
   // Local favorited state so the star feels snappy; the realtime push
   // refreshes the canonical list.
   const [favorited, setFavorited] = React.useState(hit.favorited);
@@ -407,7 +448,9 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
         // favoriting, fire the simulcast resolver so the poller has
         // something to hit. Kept separate from the PATCH so a slow /
         // failing directory lookup can't bounce the favorite itself.
-        if (newFav && hit.source === 'fm' && !hit.stream_url) {
+        // Not while the box is set to stay off the internet: the lookup
+        // is a directory search (resolve it later from the details pane).
+        if (newFav && hit.source === 'fm' && !hit.stream_url && !internetOff) {
           try {
             const res = await apiPost(
               `${RADIO_API}/stations/${hit.id}/resolve-simulcast`, {},
@@ -435,10 +478,12 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
   // The row plays; only the star cell favorites. Keeping those separate is
   // the whole point — a station you just want to hear shouldn't end up in
   // the favorites list (and on the sampler's poll schedule) to be heard.
-  const playable = browserPlayable(hit);
+  const blocked = radioInternetBlocked(hit, internetOff);
+  const playable = browserPlayable(hit) && !blocked;
+  const unplayableTitle = blocked ? NEEDS_INTERNET_TEXT : unplayableReason(hit);
   const rowProps = {
     onClick: () => onPlay(hit),
-    title: playable ? `play ${hit.name}` : unplayableReason(hit),
+    title: playable ? `play ${hit.name}` : unplayableTitle,
     style: { cursor: 'pointer' },
   };
   return (
@@ -489,7 +534,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
                       justifyContent: 'flex-end' }}>
           {favorited && <Pill tone="live">saved</Pill>}
           <Button icon="play" onClick={() => onPlay(hit)} disabled={!playable}
-                  title={playable ? `play ${hit.name}` : unplayableReason(hit)}>
+                  title={playable ? `play ${hit.name}` : unplayableTitle}>
             play
           </Button>
         </div>
@@ -499,7 +544,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
 };
 
 /* ---- Favorited stations list ----------------------------------- */
-const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh }) => {
+const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh, internetOff = false }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading favorites…</div>;
   if (stations.length === 0)
@@ -509,7 +554,7 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {stations.map(s => (
-        <FavoriteRow key={s.id} s={s}
+        <FavoriteRow key={s.id} s={s} internetOff={internetOff}
                      active={selectedId === s.id}
                      onSelect={() => onSelect(s.id)}
                      onPlay={onPlay}
@@ -527,7 +572,7 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
  * by design. A row here can be a favorite or a station played once out of
  * search; the star tells them apart and promotes the latter.
  */
-const RecentList = ({ stations, loading, onPlay, onFavorite, fire }) => {
+const RecentList = ({ stations, loading, onPlay, onFavorite, fire, internetOff = false }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>;
   if (stations.length === 0)
@@ -538,13 +583,14 @@ const RecentList = ({ stations, loading, onPlay, onFavorite, fire }) => {
     );
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay}
+      {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay} internetOff={internetOff}
                                     onFavorite={onFavorite} fire={fire}/>)}
     </div>
   );
 };
 
-const RecentRow = ({ s, onPlay, onFavorite, fire }) => {
+const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
+  const blocked = radioInternetBlocked(s, internetOff);
   const [busy, setBusy] = React.useState(false);
   // Recent rows are already persisted, so favoriting is a PATCH either
   // way — no POST /stations path to worry about here.
@@ -564,7 +610,8 @@ const RecentRow = ({ s, onPlay, onFavorite, fire }) => {
   return (
     <div style={{ borderTop: '1px solid var(--border-soft)', display: 'flex',
                   alignItems: 'center' }}>
-      <button onClick={() => onPlay(s)} title={`play ${s.name}`}
+      <button onClick={() => onPlay(s)} disabled={blocked}
+              title={blocked ? NEEDS_INTERNET_TEXT : `play ${s.name}`}
               style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
                        flex: 1, minWidth: 0, padding: '9px 4px 9px 14px',
                        display: 'flex', alignItems: 'center', gap: 7,
@@ -637,7 +684,8 @@ const NowPlayingLine = ({ s }) => {
   );
 };
 
-const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) => {
+const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, internetOff = false }) => {
+  const blocked = radioInternetBlocked(s, internetOff);
   const [editing, setEditing] = React.useState(false);
   const [intervalDraft, setIntervalDraft] = React.useState(s.sample_interval_sec);
   React.useEffect(() => { setIntervalDraft(s.sample_interval_sec); setEditing(false); }, [s.id, s.sample_interval_sec]);
@@ -667,7 +715,8 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) =
           button is invalid markup, and relying on stopPropagation to tell the
           two apart is a trap the first keyboard user would find. */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
-        <button onClick={() => onPlay(s)} title={`play ${s.name}`}
+        <button onClick={() => onPlay(s)} disabled={blocked}
+                title={blocked ? NEEDS_INTERNET_TEXT : `play ${s.name}`}
                 style={{ font: 'inherit', textAlign: 'left', cursor: 'pointer',
                          flex: 1, minWidth: 0, padding: '12px 6px 12px 14px',
                          display: 'grid', gridTemplateColumns: '1fr auto', gap: 8,
@@ -712,7 +761,8 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) =
             </>
           ) : (
             <>
-              <Button icon="headphones" onClick={() => onPlay(s)}>play here</Button>
+              <Button icon="headphones" onClick={() => onPlay(s)} disabled={blocked}
+                      title={blocked ? NEEDS_INTERNET_TEXT : undefined}>play here</Button>
               <Button icon="pencil" onClick={() => setEditing(true)}>interval</Button>
               <span style={{ flex: 1 }}/>
               <Button icon="trash-2" onClick={() => onDelete(s)}
@@ -780,7 +830,7 @@ const DetectionFeed = ({ stationId }) => {
 };
 
 /* ---- Stream URL editor (StationDetail's "stream" row) ---------- */
-const StreamUrlEditor = ({ s, fire }) => {
+const StreamUrlEditor = ({ s, fire, internetOff = false }) => {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(s.stream_url || '');
   const [resolving, setResolving] = React.useState(false);
@@ -816,7 +866,8 @@ const StreamUrlEditor = ({ s, fire }) => {
         fire(res?.message || 'no simulcast found');
       }
     } catch (e) {
-      reportFailure(fire, 'resolve', e);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else reportFailure(fire, 'resolve', e);
     } finally {
       setResolving(false);
     }
@@ -864,7 +915,8 @@ const StreamUrlEditor = ({ s, fire }) => {
       </span>
       <span style={{ flex: 1 }}/>
       {s.source === 'fm' && (
-        <Button icon="search" onClick={resolve} disabled={resolving}>
+        <Button icon="search" onClick={resolve} disabled={resolving || internetOff}
+                title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
           {resolving ? 'resolving…' : 'resolve'}
         </Button>
       )}
@@ -874,7 +926,7 @@ const StreamUrlEditor = ({ s, fire }) => {
 };
 
 /* ---- Detail pane (overview + detection feed) ------------------- */
-const StationDetail = ({ s, fire }) => (
+const StationDetail = ({ s, fire, internetOff = false }) => (
   <Card>
     <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -910,7 +962,7 @@ const StationDetail = ({ s, fire }) => (
     <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8,
                   fontSize: 12, borderBottom: '1px solid var(--border-soft)' }}>
       <div className="label">stream</div>
-      <div><StreamUrlEditor s={s} fire={fire}/></div>
+      <div><StreamUrlEditor s={s} fire={fire} internetOff={internetOff}/></div>
       <div className="label">country</div>
       <div className="mono">{s.country_code || '—'}</div>
       <div className="label">language</div>
@@ -935,7 +987,8 @@ const StationDetail = ({ s, fire }) => (
 );
 
 /* ---- FCC import button (async job — POST then poll) ------------- */
-const FccImportButton = ({ fire }) => {
+const FccImportButton = ({ fire, internetOff = false }) => {
+  // The FCC catalog is on the internet.
   const [running, setRunning] = React.useState(false);
 
   const poll = async (attempts) => {
@@ -974,16 +1027,21 @@ const FccImportButton = ({ fire }) => {
       await apiPost(`${RADIO_API}/fcc-import`, {});
       await poll(45);
     } catch (e) {
-      reportFailure(fire, 'fcc import', e);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else reportFailure(fire, 'fcc import', e);
     } finally {
       setRunning(false);
     }
   };
 
   return (
-    <Button icon="download" onClick={start} disabled={running}>
-      {running ? 'importing…' : 'Import FCC FM'}
-    </Button>
+    <>
+      {internetOff && <NeedsInternetNote compact/>}
+      <Button icon="download" onClick={start} disabled={running || internetOff}
+              title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
+        {running ? 'importing…' : 'Import FCC FM'}
+      </Button>
+    </>
   );
 };
 
@@ -1029,6 +1087,11 @@ const StationsPage = () => {
   // resolves row ids, and marks it created_by_play so the server's Recent
   // trim reclaims it if it never gets starred.
   const player = usePlayback();
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   // One play request in flight at a time. A tap that shows nothing for a
   // round trip gets tapped again, and every copy refused for want of a
   // credential waits on the SAME pair / sign-in prompt — so dismissing it
@@ -1041,6 +1104,7 @@ const StationsPage = () => {
     if (playPending.current) return;
     if (!player.available) { fire('browser player not available'); return; }
     if (!browserPlayable(st)) { fire(unplayableReason(st)); return; }
+    if (radioInternetBlocked(st, internetOff)) { fire(INTERNET_OFF_MESSAGE); return; }
     playPending.current = true;
     try {
       const row = await apiPost(`${RADIO_API}/play`, st.id
@@ -1060,7 +1124,8 @@ const StationsPage = () => {
       // makes the Recent strip move under the click that caused it.
       refreshRecent();
     } catch (e) {
-      reportFailure(fire, 'play', e);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else reportFailure(fire, 'play', e);
     } finally {
       playPending.current = false;
     }
@@ -1099,11 +1164,12 @@ const StationsPage = () => {
         title="Stations"
         sub={`${favTotal != null ? favTotal : favorites.length} favorited`
              + ` · ${recent.length} recent · click any station to play it`}
-        actions={<FccImportButton fire={fire}/>}
+        actions={<FccImportButton fire={fire} internetOff={internetOff}/>}
       />
 
       {/* [1] Search */}
-      <StationSearch onFavorite={onFavorite} onPlay={playStation} fire={fire}/>
+      <StationSearch onFavorite={onFavorite} onPlay={playStation} fire={fire}
+                     internetOff={internetOff}/>
 
       {/* [2] Recent + favorites + detail */}
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16, alignItems: 'start' }}>
@@ -1118,7 +1184,7 @@ const StationsPage = () => {
               </span>
             </div>
             <RecentList stations={recent} loading={recentLoading}
-                        onPlay={playStation}
+                        onPlay={playStation} internetOff={internetOff}
                         onFavorite={() => { refresh(); refreshRecent(); }}
                         fire={fire}/>
           </Card>
@@ -1134,7 +1200,7 @@ const StationsPage = () => {
             </div>
             <FavoritesList stations={favorites} loading={loading} page={favPage}
                            selectedId={selectedId} onSelect={setSelectedId}
-                           onPlay={playStation}
+                           onPlay={playStation} internetOff={internetOff}
                            onDelete={onDelete} refresh={refresh} fire={fire}/>
             {(hasPrevFav || hasNextFav) && (
               <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8,
@@ -1153,7 +1219,7 @@ const StationsPage = () => {
         </div>
 
         {selected ? (
-          <StationDetail s={selected} fire={fire}/>
+          <StationDetail s={selected} fire={fire} internetOff={internetOff}/>
         ) : (
           <Card>
             <div style={{ padding: '64px 24px', textAlign: 'center' }}>

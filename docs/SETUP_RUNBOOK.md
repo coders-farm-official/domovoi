@@ -39,7 +39,7 @@ per-Pi checklist) · [Running without an NVIDIA GPU](CPU_HOST.md) ·
 
 ## Step 0 — Before you touch anything
 
-Three decisions that are annoying to reverse:
+Four decisions that are annoying to reverse:
 
 **Room names.** A room *is* a satellite, and its `room_id` becomes the
 name of its MPD container, its database row, and the word you say out
@@ -58,6 +58,23 @@ all default models (less if you're following [CPU_HOST.md](CPU_HOST.md) and
 running smaller ones). Your music, podcasts, and audiobooks sit on top of
 that with no ceiling. Work out where that lives before you fill the boot
 drive. See the README's [Disk footprint](../README.md#disk-footprint).
+
+**Will the server have internet after setup?** Setup itself needs it:
+packages, Docker images and models all download. After that Domovoi works
+with or without it, and your voice never leaves the house either way.
+Domovoi asks the question itself in Step 3, right after you claim admin,
+and the answer sets the defaults of the online extras:
+
+- *Yes, always:* web answers (the search helper starts by itself), other
+  names for artists, podcast downloads, song recognition once it has a key.
+- *Sometimes:* the same, minus automatic podcast downloads.
+- *No, keep everything in the house:* the server contacts nothing outside
+  your network; online features are greyed.
+
+The part that's hard to undo is the downloading: the first time Domovoi
+needs something it can only fetch online is usually the day the line is
+down. What each answer switches, and what to download first, is in
+[INTERNET.md](INTERNET.md).
 
 Then inventory what you actually have, because it changes which path you
 take:
@@ -180,13 +197,20 @@ its password from `domovoi/.env` when it initialises its volume, and the
 core connects with the same value. If a `.env` already exists the command
 does nothing (prints "left untouched").
 
-Two things `dev.ps1` deliberately leaves out:
+One thing `dev.ps1` deliberately leaves out, and one it does only
+sometimes:
 
 - `docker compose run --rm flyway-test` — migrates the **test** database.
   You only need it to run `pytest`, so it's not part of a normal boot.
-- `docker compose up -d searxng` — the metasearch proxy behind
-  "double-check that" claim verification. Bound to `127.0.0.1:6888`, so
-  the LAN can't reach it. Start it if you want that feature.
+- `docker compose up -d searxng` — the metasearch proxy behind web
+  answers: the weather, scores, prices and current events ("Want me to
+  check that online?"), "double-check that", and news feed discovery.
+  Bound to `127.0.0.1:6888`, so the LAN can't reach it. `dev.ps1` starts
+  it when the internet question is answered **Yes** or **Sometimes**, and
+  saving either answer in the dashboard starts it too; Docker brings it
+  back after reboots by itself (`restart: unless-stopped`). Want to answer
+  before the first start? `python -m domovoi.env_bootstrap --internet
+  always` (or `sometimes`, `never`) instead of the plain bootstrap line.
 
 Also note the core builds the `domovoi-mpd:latest` image lazily on first
 startup, so your first boot is slower than every subsequent one.
@@ -201,7 +225,9 @@ writes it to `~/.domovoi/setup-code.txt`.
 
 In the dashboard: **Settings → Configuration → Admin → "set up admin"**.
 Enter the code, choose a password. The code file is deleted the instant
-setup completes.
+setup completes. The dialog then asks **Will this Domovoi have internet?**
+— answer with your Step 0 decision, or **Decide later** (the Home page
+keeps a reminder until someone answers).
 
 Day-to-day use doesn't need a login — the password gates the risky
 surface: plugin installs, configuration, credentials. Locked out later?
@@ -224,6 +250,22 @@ which follows the device, so setting `device = cpu` is enough.
 
 Whisper settings are restart-tier: change them, then restart the core.
 Ollama model settings are hot and take effect on the next turn.
+
+### Tell it about the internet
+
+If you chose **Decide later**, answer now: **Settings → Internet**. The
+page also shows which settings follow the answer and which you set
+yourself. Then, before you add music or build satellites:
+
+- **Yes, always, or Sometimes:** do
+  [the items that stay yours](INTERNET.md#if-your-domovoi-will-have-internet):
+  your town for local news, an AcoustID **application** key for song
+  recognition (`ACOUSTID_API_KEY` in `domovoi/.env`, then restart), your
+  radio market. Tracks the server looked at before it had a key are tried
+  again by themselves, so the order no longer matters.
+- **No:** work through
+  [Before you disconnect](INTERNET.md#before-you-disconnect) while the
+  line is still there, then answer **No**.
 
 ---
 
@@ -334,10 +376,15 @@ There are two routes.
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
 **Satellites → prepare satellite media**. It writes a first-boot overlay
-and a fully offline payload (wheels, packages, the satellite code from
-this machine, plugin payloads) to the card. Boot the Pi, plug it into the
-server's USB port, and adopt it from the Satellites page — name and Wi-Fi,
-done.
+and an offline payload (wheels, packages, the satellite code from this
+machine, plugin payloads) to the card. The payload comes from the
+server's caches, which the server fills while it has internet (**Refresh
+caches**; [INTERNET.md](INTERNET.md#before-you-disconnect) has the order).
+If a cache is incomplete the build warns, and the Pi fetches the rest over
+its own connection; its second boot also runs `apt` online to settle
+package dependencies, and tries again on later boots if it can't. Boot the
+Pi, plug it into the server's USB port, and adopt it from the Satellites
+page — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -461,6 +508,13 @@ Some fleet-level things worth doing once you have two or more rooms:
 
 Optional, in rough order of payoff:
 
+**If your Domovoi has internet, finish the extras.** Answering **Yes**
+already started web answers, artist names and podcast downloads. What's
+left: your town for local news, a free AcoustID application key for badly
+tagged music, and your radio market for "play 97.5 FM". The exact settings
+and why each one helps:
+[If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet).
+
 **Train a custom wake word.** The default is the built-in `hey_jarvis`.
 The documented path is to record clips through a satellite's own mic,
 train on the server, and push to the room — all from the dashboard, no
@@ -540,5 +594,10 @@ confirming the house comes back without you logging in.
 **Test the power cut.** Pull power from the server. Bring it back. Does
 everything return — Docker, Postgres, both processes, every satellite —
 without a human? That's the difference between a demo and an appliance.
+
+**A server with no internet, or only sometimes?** Check that everything in
+[Before you disconnect](INTERNET.md#before-you-disconnect) is done while
+the line is still there: the music image, both Whisper models, the Ollama
+models, the satellite media cache and the time zone.
 
 *May your stove stay warm and your wake word never misfire.* 🐈

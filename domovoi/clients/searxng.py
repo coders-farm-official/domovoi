@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 
+from domovoi import egress
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -55,8 +56,36 @@ class SearchResult:
         }
 
 
+SearchStatus = Literal["ok", "no_results", "unreachable", "internet_off", "error"]
+
+
+class SearchOutcome(NamedTuple):
+    """What a search came back with, and why when it came back empty.
+
+    ``status``:
+
+    * ``ok`` — at least one result;
+    * ``no_results`` — SearXNG answered with nothing usable;
+    * ``unreachable`` — nothing listens at ``SEARXNG_URL`` (the container
+      isn't running, or the URL is wrong);
+    * ``internet_off`` — the box is set to stay off the internet
+      (``INTERNET_ACCESS=never``); no request was made. SearXNG itself is
+      local, but every search it runs goes to public search engines;
+    * ``error`` — any other HTTP or JSON failure.
+
+    Callers that only want results keep using ``search()``; the voice
+    replies use the status so "I checked online" is only ever said after a
+    search really ran (handlers/double_check.py)."""
+
+    results: list[SearchResult]
+    status: SearchStatus
+
+
 class SearxNGClient(Protocol):
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        ...
+
+    async def search_detailed(self, query: str, max_results: int = 5) -> SearchOutcome:
         ...
 
 
@@ -66,17 +95,23 @@ class SearxNGStubClient:
     USE_STUBS without the core ever needing a live SearxNG."""
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        return (await self.search_detailed(query, max_results)).results
+
+    async def search_detailed(self, query: str, max_results: int = 5) -> SearchOutcome:
         if not query.strip():
-            return []
-        return [
-            SearchResult(
-                title=f"Stub result {i + 1} for {query}",
-                url=f"https://stub.example/r/{i + 1}",
-                content=f"Stub content for {query} #{i + 1}.",
-                engine="stub",
-            )
-            for i in range(max_results)
-        ]
+            return SearchOutcome([], "no_results")
+        return SearchOutcome(
+            [
+                SearchResult(
+                    title=f"Stub result {i + 1} for {query}",
+                    url=f"https://stub.example/r/{i + 1}",
+                    content=f"Stub content for {query} #{i + 1}.",
+                    engine="stub",
+                )
+                for i in range(max_results)
+            ],
+            "ok",
+        )
 
 
 class RealSearxNGClient:
@@ -90,8 +125,17 @@ class RealSearxNGClient:
         self._base_url = base_url.rstrip("/")
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        return (await self.search_detailed(query, max_results)).results
+
+    async def search_detailed(self, query: str, max_results: int = 5) -> SearchOutcome:
         if not query.strip():
-            return []
+            return SearchOutcome([], "no_results")
+        try:
+            # SearXNG is on this box, but it forwards every query to public
+            # search engines: under INTERNET_ACCESS=never nothing is sent.
+            egress.require_internet("web search")
+        except egress.InternetTurnedOff:
+            return SearchOutcome([], "internet_off")
         import httpx
 
         url = f"{self._base_url}/search"
@@ -114,9 +158,14 @@ class RealSearxNGClient:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 payload = response.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # Nothing listening (the container isn't running) or the
+            # address doesn't answer: the search never ran.
+            log.warning("SearxNG unreachable at %s for %r: %s", self._base_url, query, e)
+            return SearchOutcome([], "unreachable")
         except Exception as e:
             log.warning("SearxNG query failed for %r: %s", query, e)
-            return []
+            return SearchOutcome([], "error")
 
         raw_results = payload.get("results", []) if isinstance(payload, dict) else []
         out: list[SearchResult] = []
@@ -137,7 +186,11 @@ class RealSearxNGClient:
                     engine=str(engine),
                 )
             )
-        return out
+        return SearchOutcome(out, "ok" if out else "no_results")
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
 
 
 _client: SearxNGClient | None = None

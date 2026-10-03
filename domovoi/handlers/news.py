@@ -43,7 +43,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import news_service
+from domovoi import egress, news_service
 from domovoi.config import settings
 from domovoi.db.repositories import SessionRepository
 from domovoi.confirmations import request_confirmation
@@ -51,6 +51,15 @@ from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
+
+
+def _offline_lead() -> str:
+    """The lead-in before reading cached news when a fetch can't happen:
+    today's wording while the internet is down, the turned-off one when
+    the box is set to stay off the internet (INTERNET_ACCESS=never)."""
+    if egress.internet_turned_off():
+        return f"{egress.spoken_offline_phrase()}, so here's what I already have. "
+    return "I can't reach the internet right now. "
 
 
 # Verbs that mean "go get it" (fetch → confirm) vs "read what you have"
@@ -421,7 +430,7 @@ class NewsHandler(Handler):
             cached = await self._read_subject(subject, count, ctx, session)
             return self._reply(
                 ctx,
-                "I can't reach the internet right now. " + cached.text,
+                _offline_lead() + cached.text,
             )
         await self._park(
             ctx, session, kind="core.news_fetch",
@@ -445,7 +454,7 @@ class NewsHandler(Handler):
                 ctx, session, order="newest", count=None
             )
             return self._reply(
-                ctx, "I can't reach the internet right now. " + cached.text
+                ctx, _offline_lead() + cached.text
             )
         await self._park(ctx, session, kind="core.news_fetch_topics")
         return Response(

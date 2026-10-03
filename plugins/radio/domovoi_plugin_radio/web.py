@@ -19,6 +19,12 @@ a station URL, so they go through ``domovoi.webkit.net_safety`` — http(s)
 only, never an address inside the house or on the box, and every redirect
 hop re-checked.
 
+Under ``INTERNET_ACCESS=never`` (``domovoi.webkit.egress``) the routes that
+would reach the internet answer 409 with the turned-off reason before doing
+anything: the directory search, the simulcast lookup, the FCC import, playing
+an internet station and its stream proxy. Saving or editing a station stays
+allowed (nothing is fetched), and so does FM.
+
 Router mounts at ``/api/plugins/radio`` behind the host's default-deny
 gate (design §5.1). Listening to the radio is a household action, not an
 admin one, so the everyday mutations are ``@device_endpoint`` — play,
@@ -49,7 +55,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.webkit import device_endpoint, net_safety
+from domovoi.webkit import device_endpoint, egress, net_safety
 
 from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
@@ -197,6 +203,14 @@ async def _check_stream_url(stream_url: str | None) -> None:
         )
 
 
+def _refuse_internet_stream(stream_url: str) -> None:
+    """409 (the turned-off refusal) when ``stream_url`` is on the internet
+    and the box is set to stay off it. A stream on the house network
+    passes: under never only the internet is off."""
+    if egress.check_destination(stream_url) is not None:
+        raise egress.http_exception("internet radio")
+
+
 def register_web(ctx: Any) -> None:
     ctx.add_router(build_router(ctx))
 
@@ -221,7 +235,10 @@ def build_router(ctx: Any) -> APIRouter:
     ) -> list[RadioStation]:
         """Proxy a radio-browser search; hits whose ``external_id`` is
         already persisted are flagged with that row's id + favorited
-        state so the page renders the star correctly."""
+        state so the page renders the star correctly. 409 under
+        ``INTERNET_ACCESS=never``."""
+        if egress.internet_turned_off():
+            raise egress.http_exception("radio station search")
         client = get_radio_browser_client(use_stubs=_use_stubs())
         hits = await client.search(
             name=q, country_code=country_code, tag=tag,
@@ -350,6 +367,10 @@ def build_router(ctx: Any) -> APIRouter:
                 status_code=400, detail=f"invalid source {payload.source!r}"
             )
         await _check_stream_url(payload.stream_url)
+        # An internet station can't play under INTERNET_ACCESS=never: 409
+        # before anything is written. FM (a tuner in the house) still plays.
+        if payload.source == "online" and payload.stream_url:
+            _refuse_internet_stream(payload.stream_url)
         async with session_scope() as s:
             station_id: int | None = None
 
@@ -373,6 +394,18 @@ def build_router(ctx: Any) -> APIRouter:
                 row = existing.first()
                 if row is not None:
                     station_id = int(row[0])
+
+            if station_id is not None and egress.internet_turned_off():
+                known = await s.execute(
+                    text(
+                        "SELECT source, stream_url FROM radio_stations "
+                        "WHERE id = :id"
+                    ),
+                    {"id": station_id},
+                )
+                kr = known.first()
+                if kr is not None and kr[0] == "online" and kr[1]:
+                    _refuse_internet_stream(str(kr[1]))
 
             if station_id is None:
                 # Nothing to resolve against — persist the hit. Needs at
@@ -611,7 +644,10 @@ def build_router(ctx: Any) -> APIRouter:
         endpoint (slug-relative path → /v1/plugins/radio/...) with the
         caller's credentials forwarded (household token or Bearer) — the
         core gates this mutation on the same device tier. The page fires
-        it right after an FM favorite, so it lives on the favorite's tier."""
+        it right after an FM favorite, so it lives on the favorite's tier.
+        409 under ``INTERNET_ACCESS=never``, before the core is asked."""
+        if egress.internet_turned_off():
+            raise egress.http_exception("radio station directory")
         result = await ctx.core.post_admin(
             f"stations/{station_id}/resolve-simulcast", request=request
         )
@@ -627,7 +663,9 @@ def build_router(ctx: Any) -> APIRouter:
         core and return immediately (poll GET /fcc-import for status).
         Admin tier (the default — no marker): a long server-side sweep,
         like the core's library reindex. The caller's admin credential is
-        forwarded to the core's gate."""
+        forwarded to the core's gate. 409 under ``INTERNET_ACCESS=never``."""
+        if egress.internet_turned_off():
+            raise egress.http_exception("FCC station import")
         path = "fcc-import" + (f"?state={state}" if state else "")
         return await ctx.core.post_admin(path, request=request)
 
@@ -717,6 +755,9 @@ def build_router(ctx: Any) -> APIRouter:
                     "a satellite room, not the browser"
                 ),
             )
+        # Under INTERNET_ACCESS=never an internet stream is refused with the
+        # turned-off 409 before any lookup.
+        _refuse_internet_stream(str(stream_url))
         # A row's URL is checked when it is written, and again here: the
         # proxy is the thing that actually reaches out, rows predate the
         # check, and a name's addresses can change between the two.
