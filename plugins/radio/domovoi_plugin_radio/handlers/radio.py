@@ -367,6 +367,16 @@ class RadioHandler(Handler):
         )
         row = result.first()
         if row is None:
+            if egress.internet_turned_off():
+                # The FCC import needs the internet, and it is greyed out:
+                # don't send anyone to it.
+                return self._reply(
+                    ctx,
+                    f"I don't know {frequency_mhz} FM in your market. "
+                    f"{egress.spoken_offline_phrase()}, so I can't load the FCC "
+                    "station list. You can add the station by hand; the radio "
+                    "plugin's README says how.",
+                )
             return self._reply(
                 ctx,
                 f"I don't know {frequency_mhz} FM in your market. "
@@ -451,6 +461,10 @@ class RadioHandler(Handler):
             },
         )
         if response.music_action != "start":
+            if (response.data or {}).get("status") == "internet_off":
+                # The SDK refused an internet stream under never; its
+                # reply already says so.
+                return self._reply(ctx, response.text)
             # MPD refused the stream — play_url already phrased a
             # fallback; keep the canonical wording.
             return self._reply(

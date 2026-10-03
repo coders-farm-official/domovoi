@@ -908,7 +908,13 @@ carrying `music_action="start"` and the room's MPD HTTP stream URL. The
 streaming layer runs the `music_start` → `music_ready` handshake from those
 fields — **return the Response unchanged** (you may overwrite `.text`).
 On MPD failure you get a Response with no `music_action` and a spoken
-fallback. Also: `stop(room_id)`, `mpd_client_for(room_id)` (escape hatch),
+fallback. **Under `INTERNET_ACCESS=never`** a `stream_url` whose host is
+not on the house network is refused before it reaches MPD (the room's MPD
+fetches a queued URL itself, where no in-process check can see it): the
+Response has no `music_action`, its text is the internet-off sentence
+("I'm set to stay off the internet, so I can't play <title>.") and
+`data["status"] == "internet_off"`. Check it before you rephrase the
+failure. A LAN stream (an SDR tuner, a NAS) still plays. Also: `stop(room_id)`, `mpd_client_for(room_id)` (escape hatch),
 `mpd_stream_url_for(room_id)`, and `update_library_all_rooms()` (each
 per-room MPD has its own database and Docker Desktop drops host inotify —
 after writing files you must tell every daemon to rescan).
@@ -1137,7 +1143,12 @@ is `auto`, which the core resolves to its current LAN address.
   `httpx.AsyncClient` (or uses `requests`, `aiohttp`, a subprocess…)
   bypasses this, and keeping it honest is then your job: wrap the client
   with `egress.async_client(...)`, or call `egress.require_destination(url)`
-  / `egress.require_internet("what")` first.
+  / `egress.require_internet("what")` first. The refusal these clients
+  raise is `egress.InternetTurnedOffConnectError`: an
+  `egress.InternetTurnedOff` **and** an `httpx.ConnectError`, so code that
+  only handles `httpx.HTTPError` / `httpx.TransportError` treats it as
+  "the network is unavailable" (which it is) rather than letting a
+  `ValueError` escape as a 500.
 * `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
   `web.py`; SDK 1.4) — the one place the internet answer
   (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while

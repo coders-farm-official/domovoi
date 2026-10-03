@@ -5,8 +5,9 @@
   turned off (the web's "poll now" runs ``tick()`` outside that gate).
 * A download that fails because the line is down — internet access turned
   off, a refused connection, a name that doesn't resolve while offline —
-  puts the episode back to ``pending`` and stops the pass; it is never
-  marked ``failed`` (the durable-failure rule). A real failure (an HTTP
+  puts the episode back to ``pending``; it is never marked ``failed``
+  (the durable-failure rule). The pass stops only when the line itself is
+  gone (test_internet_review_fixes covers one dead host among good ones). A real failure (an HTTP
   error, a house-local URL, an over-cap body) is still ``failed``.
 * Each poll stores the show's artwork on the server (B11).
 * The voice "subscribe to X" promises downloads only when the poller is
@@ -206,8 +207,17 @@ async def test_a_pass_stops_downloading_when_the_line_is_down(db_session, monkey
         attempts.append(ep["id"])
         return None
 
+    class OfflineProbe:
+        online = True
+
+        async def check_now(self):
+            self.online = False
+            return False
+
     monkeypatch.setattr(poller, "poll_subscription", no_poll)
     monkeypatch.setattr(poller, "download_episode", line_down)
+    # After the failure the probe looks again and says the line is down.
+    monkeypatch.setattr(poller.connectivity, "current_probe", lambda: OfflineProbe())
     counts = await poller.PodcastFeedPoller().tick()
     assert counts["downloaded"] == 0
     assert len(attempts) == 1                       # the rest wait for the next pass

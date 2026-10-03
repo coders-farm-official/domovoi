@@ -281,6 +281,13 @@ def _log_refusal(what: str) -> None:
         log.debug("internet off: refused %s", label)
 
 
+def log_refusal(what: str) -> None:
+    """Log a refusal the caller made itself (it checked
+    :func:`check_destination` and answered without raising): INFO the
+    first time per ``what`` in this process, DEBUG after that."""
+    _log_refusal(what)
+
+
 def check_destination(url: str) -> str | None:
     """None when ``url`` may be fetched as far as the internet answer is
     concerned; :data:`TURNED_OFF_REASON` when the answer is ``never`` and
@@ -324,15 +331,67 @@ def require_internet(what: str) -> None:
 # ─── httpx ────────────────────────────────────────────────────────────────
 
 
+_CONNECT_ERROR_CLASS: type | None = None
+
+
+def _connect_error_class() -> type:
+    """:class:`InternetTurnedOffConnectError`, built on first use so this
+    module never imports httpx at import time."""
+    global _CONNECT_ERROR_CLASS
+    if _CONNECT_ERROR_CLASS is None:
+        import httpx
+
+        class InternetTurnedOffConnectError(InternetTurnedOff, httpx.ConnectError):
+            """What an egress-hooked httpx client raises under ``never``.
+
+            Both an :class:`InternetTurnedOff` (so ``except
+            InternetTurnedOff`` / ``UnsafeOutboundURL`` / ``ValueError``
+            still refuse) and an ``httpx.ConnectError`` (so a plugin that
+            only handles ``httpx.HTTPError`` / ``httpx.TransportError``
+            treats it as the network being unavailable, which it is,
+            instead of letting a ValueError surface as a 500)."""
+
+            def __init__(self, what: str, request: Any = None) -> None:
+                InternetTurnedOff.__init__(self, what)
+                # httpx.HTTPError.__init__ is not on this MRO path; its
+                # ``request`` property reads ``_request``.
+                self._request = request
+
+        InternetTurnedOffConnectError.__module__ = __name__
+        _CONNECT_ERROR_CLASS = InternetTurnedOffConnectError
+    return _CONNECT_ERROR_CLASS
+
+
+def __getattr__(name: str) -> Any:
+    # ``egress.InternetTurnedOffConnectError`` without importing httpx at
+    # module import (PEP 562).
+    if name == "InternetTurnedOffConnectError":
+        return _connect_error_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _refuse_request(request: Any) -> None:
+    url = str(request.url)
+    if check_destination(url) is not None:
+        try:
+            host = urlsplit(url).hostname or url
+        except ValueError:
+            host = url
+        _log_refusal(host)
+        raise _connect_error_class()(url, request=request)
+
+
 async def async_request_hook(request: Any) -> None:
     """httpx request event hook (async client): runs for every request a
-    client sends, redirect hops included."""
-    require_destination(str(request.url))
+    client sends, redirect hops included. Under ``never`` a non-local URL
+    raises :class:`InternetTurnedOffConnectError` — an
+    :class:`InternetTurnedOff` that is also an ``httpx.ConnectError``."""
+    _refuse_request(request)
 
 
 def sync_request_hook(request: Any) -> None:
-    """httpx request event hook (sync client)."""
-    require_destination(str(request.url))
+    """httpx request event hook (sync client); see :func:`async_request_hook`."""
+    _refuse_request(request)
 
 
 def _with_hook(kwargs: dict[str, Any], hook: Any) -> dict[str, Any]:
@@ -444,6 +503,7 @@ __all__ = [
     "internet_allowed",
     "internet_turned_off",
     "is_local_host",
+    "log_refusal",
     "normalize_policy",
     "override_policy",
     "policy",

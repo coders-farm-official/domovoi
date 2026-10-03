@@ -56,7 +56,9 @@ class SearchResult:
         }
 
 
-SearchStatus = Literal["ok", "no_results", "unreachable", "internet_off", "error"]
+SearchStatus = Literal[
+    "ok", "no_results", "engines_failed", "unreachable", "internet_off", "error"
+]
 
 
 class SearchOutcome(NamedTuple):
@@ -65,7 +67,12 @@ class SearchOutcome(NamedTuple):
     ``status``:
 
     * ``ok`` — at least one result;
-    * ``no_results`` — SearXNG answered with nothing usable;
+    * ``no_results`` — SearXNG answered with nothing usable, and its
+      search engines did answer;
+    * ``engines_failed`` — SearXNG answered with no results because the
+      public engines it asks did not (``unresponsive_engines``: a CAPTCHA,
+      a timeout, the line dropping before the probe noticed). No search
+      really ran, so nobody may say "I checked online";
     * ``unreachable`` — nothing listens at ``SEARXNG_URL`` (the container
       isn't running, or the URL is wrong);
     * ``internet_off`` — the box is set to stay off the internet
@@ -186,7 +193,16 @@ class RealSearxNGClient:
                     engine=str(engine),
                 )
             )
-        return SearchOutcome(out, "ok" if out else "no_results")
+        if out:
+            return SearchOutcome(out, "ok")
+        unresponsive = payload.get("unresponsive_engines") if isinstance(payload, dict) else None
+        if unresponsive:
+            log.info(
+                "SearxNG returned nothing for %r: its engines didn't answer (%s)",
+                query, str(unresponsive)[:300],
+            )
+            return SearchOutcome([], "engines_failed")
+        return SearchOutcome([], "no_results")
 
     @property
     def base_url(self) -> str:

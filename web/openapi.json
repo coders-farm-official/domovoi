@@ -5785,6 +5785,26 @@
         }
       }
     },
+    "/api/config/internet/search-helper": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Start Search Helper",
+        "description": "Settings \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
+        "operationId": "start_search_helper_api_config_internet_search_helper_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version": {
       "get": {
         "tags": [
@@ -10424,7 +10444,7 @@
           "models"
         ],
         "summary": "Get Catalog",
-        "description": "The curated model catalog (static JSON). Works offline \u2014 powers the\nbrowse-and-install cards, the STT list, and every fit badge's VRAM\nestimate.",
+        "description": "The curated model catalog (static JSON). Works offline \u2014 powers the\nbrowse-and-install cards, the STT list, and every fit badge's VRAM\nestimate. Each Whisper row carries ``cached``: whether that model is\nalready in this host's Hugging Face cache (None when unknown), so the\npage can grey a size that can't load while the box is set to stay off\nthe internet.",
         "operationId": "get_catalog_api_models_catalog_get",
         "responses": {
           "200": {

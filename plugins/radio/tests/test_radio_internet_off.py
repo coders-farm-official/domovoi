@@ -315,3 +315,69 @@ def test_manifest_is_1_3_0_and_needs_sdk_1_4() -> None:
     manifest = tomllib.loads((PLUGIN_DIR / "domovoi-plugin.toml").read_text(encoding="utf-8"))
     assert manifest["plugin"]["version"] == "1.3.0"
     assert manifest["plugin"]["domovoi_api"] == ">=1.4,<2.0"
+
+
+# ─── 2026-10-03 review fixes ─────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_unknown_fm_station_under_never_doesnt_send_you_to_the_fcc_import(stub_sdk, db_session) -> None:
+    from domovoi.sdk import Context
+
+    from domovoi_plugin_radio.handlers.radio import _PLAY_FREQUENCY_RE, RadioHandler
+
+    handler = RadioHandler(stub_sdk)
+    m = _PLAY_FREQUENCY_RE.match("play 99.9 fm")
+    ctx = Context(room_id="kitchen", online=False)
+    with egress.override_policy("never"):
+        resp = await handler._frequency_from_match(m, ctx, db_session)
+    assert resp.text.startswith(
+        "I don't know 99.9 FM in your market. I'm set to stay off the internet, so I can't load the FCC station list."
+    )
+    assert "add the station by hand" in resp.text and "Run the FCC import" not in resp.text
+    with egress.override_policy(""):
+        resp = await handler._frequency_from_match(m, ctx, db_session)
+    assert resp.text.endswith("Run the FCC import in the dashboard to load local stations.")
+
+
+@pytest.mark.asyncio
+async def test_the_sdk_refusal_wording_reaches_the_listener(stub_sdk, monkeypatch) -> None:
+    """If the playback SDK refuses a stream as internet-off, the reply is
+    its sentence, not "the music player wouldn't take it"."""
+    from domovoi.models import Response
+    from domovoi.sdk import Context
+
+    from domovoi_plugin_radio.handlers.radio import RadioHandler
+
+    async def refused(room_id, stream_url, **kw):
+        return Response(text="I'm set to stay off the internet, so I can't play FM box.",
+                        data={"stream_url": stream_url, "ok": False, "status": "internet_off"})
+
+    monkeypatch.setattr(stub_sdk.playback, "play_url", refused)
+    station = {"id": 2, "name": "FM box", "source": "online", "stream_url": LAN_URL}
+    with egress.override_policy(""):
+        resp = await RadioHandler(stub_sdk)._stream_station_row(station, Context(room_id="kitchen"), None)
+    assert resp.text == "I'm set to stay off the internet, so I can't play FM box."
+
+
+@pytest.mark.asyncio
+async def test_an_open_browser_stream_is_cut_off_when_the_answer_becomes_never(monkeypatch) -> None:
+    from domovoi_plugin_radio import web as radio_web
+
+    real = httpx.AsyncClient
+    body = b"x" * (radio_web._STREAM_CHUNK * 4)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(
+        *a, transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, headers={"content-type": "audio/mpeg"}, content=body)), **kw))
+    with egress.override_policy(""):
+        resp = await radio_web._proxy_stream("http://93.184.216.34/kexp.mp3")
+        state = {"off": False}
+        real_check = egress.check_destination
+        monkeypatch.setattr(egress, "check_destination",
+                            lambda url: egress.TURNED_OFF_REASON if state["off"] else real_check(url))
+        got = []
+        async for chunk in resp.body_iterator:
+            got.append(chunk)
+            state["off"] = True                   # saved "No" while it plays
+    assert len(got) == 1

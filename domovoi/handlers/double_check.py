@@ -66,6 +66,11 @@ _UNREACHABLE_REPLY = (
 _ERROR_REPLY = (
     "I couldn't reach my search helper just now. Try again in a moment."
 )
+# SearXNG answered, but the public engines behind it didn't (a CAPTCHA, a
+# timeout, the line just dropped): nothing was really searched.
+_ENGINES_FAILED_REPLY = (
+    "My search engines didn't answer just now. Try again in a moment."
+)
 _OFFLINE_REPLY = "I can't check that right now — I don't have internet."
 
 # The "start it" hint is logged once per process, not on every question.
@@ -89,7 +94,17 @@ def _unsearched_reply(status: str) -> str | None:
         return _UNREACHABLE_REPLY
     if status == "error":
         return _ERROR_REPLY
+    if status == "engines_failed":
+        return _ENGINES_FAILED_REPLY
     return None
+
+
+def _searched(response: Response) -> bool:
+    """Whether a web answer came from a search that really ran (results,
+    or a genuine nothing). A reply saying no search happened must not
+    carry the "do this automatically?" offer."""
+    status = (response.data or {}).get("search_status")
+    return status is None or status in ("ok", "no_results")
 
 
 # ─── Fast-path regexes ────────────────────────────────────────────────────
@@ -623,6 +638,7 @@ class DoubleCheckHandler(Handler):
             ctx.person_id is not None
             and category
             and new_yes_count >= AUTO_SEARCH_OFFER_THRESHOLD
+            and _searched(response)
         ):
             await self._maybe_offer_prefs_followup(category, ctx, session, response)
 

@@ -200,6 +200,18 @@ def _pending_root_work(
     return out
 
 
+def _helper_offline_aware(path: str | None = None) -> bool:
+    """Whether the installed root helper honours a request's "offline"
+    flag (it says ``offline-aware`` in its header). Unreadable or missing
+    → False."""
+    try:
+        return "offline-aware" in Path(path or APPLY_HELPER).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+
+
 def request_root_apply(
     meta: dict[str, Any],
     slugs: list[str],
@@ -216,6 +228,27 @@ def request_root_apply(
     log to root-owned paths of its own; ``payloads_root`` is the sync's
     concern and is deliberately not forwarded."""
     del payloads_root
+    # Under the server's INTERNET_ACCESS=never the manifest marks each slug
+    # "offline": its apt packages may come from the local caches only. An
+    # older helper doesn't know that flag and would run apt online, so a
+    # slug with apt work waits until the helper is offline-aware or the
+    # answer allows the internet.
+    helper_ok = _helper_offline_aware()
+    held = [
+        slug for slug in slugs
+        if (meta.get(slug) or {}).get("offline") is True
+        and (meta.get(slug) or {}).get("apt_packages")
+        and not helper_ok
+    ]
+    if held:
+        log.warning(
+            "plugin sync: internet access is turned off on the server and this "
+            "satellite's apply-payload helper predates that; leaving the apt "
+            "work of %s for later", ", ".join(held),
+        )
+        slugs = [s for s in slugs if s not in held]
+        if not slugs:
+            return False
     payload = {
         "schema": 2,
         "slugs": {
@@ -223,6 +256,7 @@ def request_root_apply(
                 "apt_packages": sorted((meta.get(slug) or {}).get("apt_packages") or []),
                 "post_install": (meta.get(slug) or {}).get("post_install"),
                 "version": (meta.get(slug) or {}).get("version"),
+                **({"offline": True} if (meta.get(slug) or {}).get("offline") is True else {}),
             }
             for slug in slugs
         },

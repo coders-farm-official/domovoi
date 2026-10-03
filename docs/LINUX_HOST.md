@@ -578,9 +578,9 @@ For the update unit's search-helper step to read the same answer, put
 `INTERNET_ACCESS=never` in `/etc/default/domovoi-update` too, or keep the
 answer in `domovoi/.env`, which all three read.
 
-**An alternative for the search helper:** if you'd rather the database unit
-(re)create the `searxng` container as well, add it in a drop-in, with the
-leading `-`:
+**An alternative for the search helper, for Yes and Sometimes only:** if
+you'd rather the database unit (re)create the `searxng` container as well,
+add it in a drop-in, with the leading `-`:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/domovoi-db.service.d
@@ -594,6 +594,11 @@ fails `domovoi-db`, and the core, which `Requires=` it, doesn't start.
 
 Either way, `sudo systemctl daemon-reload` and a restart of that unit pick
 it up.
+
+**Remove that drop-in before you answer No.** It starts the container on
+every boot whatever the answer says, and SearXNG fetches its own rule
+lists and server lists from the internet each time it starts, before
+anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off)).
 
 ---
 
@@ -658,10 +663,24 @@ instead of bouncing core and web, and each run does this:
    --print-policy`, as the service user): `always` or `sometimes` →
    `docker compose up -d --no-deps searxng` (the first time, that downloads
    the pinned image); `never` → `docker stop domovoi-searxng` if it runs;
-   not answered → left as it is. This step can't fail the update: a
-   failure is recorded as a `warn` step with its output, and the result
-   stays `ok`. `DOMOVOI_MANAGE_SEARXNG=0` in
+   not answered → left as it is. The update is recorded as applied
+   (`applied_sha`) before this step, and the start is handed to a
+   transient unit of its own (`domovoi-searxng-start`, see
+   `journalctl -u domovoi-searxng-start`), so a first download on a slow
+   line never holds the update open or turns it into a failure. Without
+   systemd (`DOMOVOI_UPDATE_SEARXNG_DETACH=0`) it runs in the foreground,
+   bounded by `DOMOVOI_UPDATE_SEARXNG_TIMEOUT` (300 s). This step can't
+   fail the update: a failure is recorded as a `warn` step with its
+   output, and the result stays `ok`. `DOMOVOI_MANAGE_SEARXNG=0` in
    `/etc/default/domovoi-update` skips it.
+
+Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
+update that would download is refused with status `aborted`, nothing
+stopped or changed: one whose Python dependencies changed (pip) or whose
+`Dockerfile.mpd` changed (docker build pulls the base image and runs apt).
+An `mpd.conf`-only change keeps the image and just recreates the rooms.
+To take such an update, follow
+[INTERNET.md → Updating a box answered No](INTERNET.md#updating-a-box-answered-no).
 
 If any of 4-9 fails, it rolls back: `git reset --keep` to the previous SHA
 (never `--hard`), the venv re-synced and every package put back at its

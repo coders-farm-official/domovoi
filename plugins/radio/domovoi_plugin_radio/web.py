@@ -989,6 +989,11 @@ async def _proxy_stream(url: str) -> StreamingResponse:
     async def _gen():
         try:
             async for chunk in resp.aiter_bytes(chunk_size=_STREAM_CHUNK):
+                # Switching the box to "never" ends a relay that is
+                # already open (one os.stat per chunk, cached on .env).
+                if egress.check_destination(url) is not None:
+                    egress.log_refusal(f"open radio relay {url[:120]}")
+                    break
                 yield chunk
         finally:
             await resp.aclose()

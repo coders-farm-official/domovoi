@@ -254,6 +254,31 @@ def model_not_cached(exc: BaseException) -> bool:
     return False
 
 
+def pinned_snapshot_dir(model: str) -> str | None:
+    """A cached model that a local-only load by NAME can't find: one pinned
+    by commit (``huggingface_hub.snapshot_download(revision=<sha>)``, what
+    the Windows installer's pin does) writes ``snapshots/<sha>`` but no
+    ``refs/main``, and a load by name looks up ``refs/main``. When the
+    model's cache holds exactly ONE snapshot and no ``refs/main``, that
+    snapshot's directory — loaded as a local path, with no Hugging Face
+    request — is the pinned revision. None otherwise (the normal layout
+    loads by name; several snapshots are ambiguous)."""
+    from domovoi import whisper_cache
+
+    repo = whisper_cache.repo_dir(model)
+    if repo is None:
+        return None
+    try:
+        if (repo / "refs" / "main").is_file():
+            return None
+    except OSError:
+        return None
+    dirs = whisper_cache.snapshot_dirs(model)
+    if len(dirs) != 1:
+        return None
+    return str(dirs[0])
+
+
 def _is_local_model_path(model: str) -> bool:
     """A model given as a directory on disk: faster-whisper loads it as-is,
     so there is nothing to download and nothing to retry."""
@@ -525,6 +550,21 @@ class FasterWhisperClient:
         try:
             self._model = WhisperModel(model, local_files_only=True, **kwargs)
         except Exception as e:
+            pinned = (
+                None if _is_local_model_path(model) or not model_not_cached(e)
+                else pinned_snapshot_dir(model)
+            )
+            if pinned is not None:
+                # Cached by commit (no refs/main): load that snapshot as a
+                # local path — the pinned revision, no request, any answer.
+                log.info("Whisper: loading %s from its pinned snapshot %s", model, pinned)
+                try:
+                    self._model = WhisperModel(pinned, **kwargs)
+                except Exception as e2:
+                    raise RuntimeError(_load_hint(model, device, compute_type, e2)) from e2
+                log.info("Whisper ready")
+                self.short_window = self._load_short_window()
+                return
             if (
                 _is_local_model_path(model)
                 or not model_not_cached(e)

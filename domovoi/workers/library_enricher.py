@@ -50,8 +50,10 @@ NULL`` — the enrichment timestamp marker.
 
 A network error, a refused key, the internet being turned off, or no
 provider configured at all is NOT "no match": the row is left exactly as
-it was, so the next sweep tries again. After
-:data:`MAX_CONSECUTIVE_ERRORS` errors in a row the sweep stops.
+it was, so the next sweep tries again. A refused AcoustID key is treated
+like no key for the rest of the sweep (Shazam's answer, if installed,
+decides). After :data:`MAX_CONSECUTIVE_ERRORS` lookups in a row that NO
+provider answered, the sweep stops.
 
 **The one-off recovery.** Before V020 every attempt stamped
 ``enriched_at``, whether or not anything answered — a box with no
@@ -59,11 +61,23 @@ AcoustID key and no shazamio stamped its whole library "no match" without
 sending a request (the Beelink: 5,232 rows, 0 MusicBrainz ids). V020
 marks every stamped row that carries a MusicBrainz recording id as
 ``matched`` (an AcoustID match always wrote one). Any other stamped row
-still has a NULL outcome; when a provider becomes available,
-:func:`requeue_legacy` puts those rows back in the queue once, with
-outcome ``recheck``. A ``recheck`` match fills only the fields that are
+still has a NULL outcome. A sweep looks at those rows too, and once a
+provider has actually answered for some file (a match or a genuine
+no-match), :func:`requeue_legacy` puts the rest back in the queue once,
+with outcome ``recheck``. Until then — no key, a refused key, a provider
+that can't run here, the line down — they stay exactly as they were.
+A match for a legacy or ``recheck`` row fills only the fields that are
 EMPTY — a legacy hand correction can't be told apart from a legacy
-no-provider stamp, so its tags must never be overwritten.
+no-provider stamp, so its tags must never be overwritten. So the
+recovery adds MusicBrainz ids and fills empty tags; it does not correct
+a title or artist that was guessed from a file name.
+
+Two limits of the recovery: a legacy SHAZAM match never wrote a
+MusicBrainz id, so it is requeued and looked up again like the rest (its
+tags are kept; if no provider recognises it this time it is recorded as
+``no_match``). And the Shazam add-on is used only after a throwaway
+interpreter has imported it once: a build that crashes at import is
+skipped with a log line instead of taking the core down.
 
 Network-required. The connectivity probe gates the startup hook (and
 this module checks it again), so we don't spam the APIs with errors when
@@ -76,6 +90,7 @@ import asyncio
 import enum
 import importlib.util
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -149,10 +164,11 @@ class Lookup:
 
 def provider_available() -> bool:
     """An AcoustID key is set, or the Shazam add-on (shazamio) is
-    installed. Without either, no track can be identified, so nothing
-    is attempted and nothing is stamped."""
+    installed (and not already found to crash at import). Without either,
+    no track can be identified, so nothing is attempted and nothing is
+    stamped."""
     return bool((settings.acoustid_api_key or "").strip()) or (
-        importlib.util.find_spec("shazamio") is not None
+        importlib.util.find_spec("shazamio") is not None and _shazam_import_ok is not False
     )
 
 
@@ -170,17 +186,71 @@ def enrich_running() -> bool:
 _key_hint_logged = False
 
 
-def _note_acoustid_error(e: Exception) -> None:
-    """Log the application-key hint once per process when AcoustID
-    refuses the key (error 4 "invalid API key"; 17 "unknown
-    application")."""
-    global _key_hint_logged
+def _is_key_refusal(e: Exception) -> bool:
+    """AcoustID refused the key itself (error 4 "invalid API key"; 17
+    "unknown application") — not the line, not this file."""
     code = getattr(e, "code", None)
     msg = (getattr(e, "message", None) or str(e) or "").lower()
-    refused = code in (4, 17) or "api key" in msg or "apikey" in msg or "unknown application" in msg
-    if refused and not _key_hint_logged:
+    return code in (4, 17) or "api key" in msg or "apikey" in msg or "unknown application" in msg
+
+
+def _note_acoustid_error(e: Exception) -> None:
+    """Log the application-key hint once per process when AcoustID
+    refuses the key."""
+    global _key_hint_logged
+    if _is_key_refusal(e) and not _key_hint_logged:
         _key_hint_logged = True
         log.warning("%s (AcoustID said: %s)", ACOUSTID_KEY_HINT, getattr(e, "message", e))
+
+
+# Whether ``import shazamio`` survives in a fresh interpreter: None until
+# probed. A source-built shazamio-core segfaults at import on some
+# platforms (CPython 3.14 on Ubuntu 26.04, pyproject.toml), which would
+# take the whole core down — and, since the recovery requeues a library,
+# do it again on every boot. The probe costs one short subprocess, once
+# per process, before the first in-process import.
+_shazam_import_ok: bool | None = None
+
+
+def _probe_shazamio_import() -> bool:
+    import subprocess
+    import sys
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", "import shazamio"],
+            capture_output=True,
+            timeout=120,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("library enricher: couldn't check the Shazam add-on (%s); not using it", e)
+        return False
+    if proc.returncode != 0:
+        tail = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        log.warning(
+            "library enricher: the Shazam add-on (shazamio) is installed but "
+            "importing it fails (exit %s%s); not using it. Reinstall it, or "
+            "remove it to silence this.", proc.returncode,
+            f": {tail[-1][:200]}" if tail else "",
+        )
+        return False
+    return True
+
+
+async def shazam_importable() -> bool:
+    """Whether the Shazam layer can be imported in this process without
+    killing it. True without a probe once it is already imported (a test's
+    stand-in, or an earlier sweep); False when it isn't installed."""
+    global _shazam_import_ok
+    if sys.modules.get("shazamio") is not None:
+        return True
+    if importlib.util.find_spec("shazamio") is None:
+        return False
+    if _shazam_import_ok is None:
+        _shazam_import_ok = await asyncio.to_thread(_probe_shazamio_import)
+    return _shazam_import_ok
 
 
 def _is_network_error(e: BaseException) -> bool:
@@ -225,8 +295,15 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
         log.debug("fpcalc failed for %s: %s", file_path, e)
         return Lookup(Verdict.NOT_ASKED, detail=f"couldn't fingerprint: {e}")
     except acoustid.WebServiceError as e:
-        # pyacoustid wraps connection failures in WebServiceError too.
         _note_acoustid_error(e)
+        if _is_key_refusal(e):
+            # A refused key is like no key: AcoustID can't answer for any
+            # file this sweep, so it isn't asked again and Shazam's answer
+            # (if installed) decides. Nothing is stamped for it.
+            return Lookup(
+                Verdict.NOT_ASKED, detail="AcoustID refused the key", unusable=True,
+            )
+        # pyacoustid wraps connection failures in WebServiceError too.
         log.debug("AcoustID web error for %s: %s", file_path, e)
         return Lookup(Verdict.ERROR, detail=f"AcoustID: {e}", transient=True)
     except Exception as e:
@@ -257,6 +334,10 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
 async def _enrich_via_shazam(file_path: Path) -> Lookup:
     """Send the file to Shazam's API via shazamio and return what it
     said. shazamio handles audio loading + chunking internally."""
+    if not await shazam_importable():
+        return Lookup(
+            Verdict.NOT_ASKED, detail="shazamio not installed or broken", unusable=True,
+        )
     try:
         from shazamio import Shazam
     except ImportError:
@@ -333,10 +414,15 @@ async def _enrich_one(file_path: Path, providers: _Providers | None = None) -> L
         return sh
     errors = [x for x in (ac, sh) if x.verdict is Verdict.ERROR]
     if errors:
+        # Not decided (one provider couldn't answer), so not stamped. It
+        # counts toward stopping the sweep only when NO provider answered:
+        # one provider down while the other keeps answering is not "the
+        # line is down".
+        answered = any(x.verdict is Verdict.NO_MATCH for x in (ac, sh))
         return Lookup(
             Verdict.ERROR,
             detail="; ".join(x.detail for x in errors),
-            transient=any(x.transient for x in errors),
+            transient=any(x.transient for x in errors) and not answered,
         )
     if Verdict.NO_MATCH in (ac.verdict, sh.verdict):
         return Lookup(Verdict.NO_MATCH, detail="; ".join(
@@ -460,21 +546,20 @@ async def _sweep() -> dict[str, Any]:
     counts = _counts()
     providers = _Providers()
     consecutive_errors = 0
+    # The legacy rows (stamped before V020 with no sign a provider ever
+    # answered) are looked at in this sweep, but put back in the queue
+    # (requeue_legacy) only once a provider has actually answered for some
+    # file: a refused key, a provider that can't run here or a line that
+    # is down leaves every one of them exactly as it was.
+    requeued_done = False
     async with session_scope() as session:
-        requeued = await requeue_legacy(session)
-        await session.commit()
-        counts["requeued_legacy"] = requeued
-        if requeued:
-            log.info(
-                "library enricher: requeued %d tracks stamped before song "
-                "recognition could answer (one-off recovery; their tags are "
-                "only filled where empty)", requeued,
-            )
         rows = (
             await session.execute(
                 text(
-                    "SELECT id, file_path, enrich_outcome FROM library_tracks "
-                    "WHERE enriched_at IS NULL "
+                    "SELECT id, file_path, enrich_outcome, "
+                    f"({LEGACY_UNANSWERED_WHERE}) AS legacy "
+                    "FROM library_tracks "
+                    f"WHERE {WAITING_WHERE} "
                     "ORDER BY id"
                 )
             )
@@ -485,6 +570,23 @@ async def _sweep() -> dict[str, Any]:
             return counts
 
         log.info("library enricher: %d unenriched tracks; starting sweep", len(rows))
+
+        async def _requeue_once() -> None:
+            nonlocal requeued_done
+            if requeued_done:
+                return
+            requeued_done = True
+            # Includes the row that just got the first answer when it is a
+            # legacy row (it is stamped right after this).
+            requeued = await requeue_legacy(session)
+            counts["requeued_legacy"] = requeued
+            if requeued:
+                log.info(
+                    "library enricher: requeued %d tracks stamped before song "
+                    "recognition could answer (one-off recovery; their tags are "
+                    "only filled where empty)", requeued,
+                )
+
         for row in rows:
             file_path = Path(row.file_path)
             if not file_path.exists():
@@ -506,7 +608,8 @@ async def _sweep() -> dict[str, Any]:
 
             if lookup.verdict is Verdict.MATCH and lookup.result is not None:
                 result = lookup.result
-                fill_only = row.enrich_outcome == OUTCOME_RECHECK
+                fill_only = bool(row.legacy) or row.enrich_outcome == OUTCOME_RECHECK
+                await _requeue_once()
                 await session.execute(
                     text(_FILL_ONLY_SQL if fill_only else _MATCH_SQL),
                     {
@@ -530,6 +633,7 @@ async def _sweep() -> dict[str, Any]:
             elif lookup.verdict is Verdict.NO_MATCH:
                 counts["no_match"] += 1
                 consecutive_errors = 0
+                await _requeue_once()
                 await session.execute(
                     text(_STAMP_SQL), {"id": row.id, "outcome": OUTCOME_NO_MATCH},
                 )

@@ -469,7 +469,7 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     // unanswered answer; a server from before the question sends nothing.
     if (config && config.internet_access === '') {
       add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings', tab: 'internet',
-            text: 'Tell Domovoi whether this box has internet' });
+            text: 'tell Domovoi whether this box has internet' });
     }
     const disk = hardware && hardware.disk;
     if (disk && typeof disk.percent === 'number' && disk.percent >= HOME_DISK_WARN) {

@@ -27,6 +27,12 @@
 # code path the satellite account can trigger is a script the SERVER served
 # under a slug the server declared, after the whole of it was copied into a
 # directory that account cannot touch.
+#
+# offline-aware: a slug the request marks "offline" (the server's answer is
+# INTERNET_ACCESS=never) gets its apt packages from the local caches only
+# (the stage-1 debs, then apt-get --no-download); apt never goes online for
+# it. satellite/plugin_sync.py looks for the word offline-aware in this
+# file before it sends such a request to a helper.
 
 set -u
 
@@ -159,6 +165,8 @@ for slug, m in sorted((slugs or {}).items()):
             print(f"APT\t{slug}\t{pkg}")
         else:
             note(f"{slug}: ignoring apt package {pkg!r}")
+    if pkgs and m.get("offline") is True:
+        print(f"OFFLINE\t{slug}\t1")
     entry = {"version": m.get("version") if isinstance(m.get("version"), str) else None,
              "apt_packages": sorted(pkgs), "post_install": None, "script": None}
     request[slug] = entry
@@ -187,21 +195,35 @@ EOF
 
 FAIL=0
 APT_PKGS=""
+APT_OFFLINE=0
 while IFS="$(printf '\t')" read -r kind slug arg; do
   case "$kind" in
     APT) APT_PKGS="$APT_PKGS $arg" ;;
+    OFFLINE) APT_OFFLINE=1 ;;
     SKIP) log "skipped: $arg" ;;
   esac
 done <"$STAGING/steps"
 
 if [ -n "$APT_PKGS" ]; then
-  log "apt install:$APT_PKGS"
+  if [ "$APT_OFFLINE" -eq 1 ]; then
+    log "apt install (internet access is turned off: local package caches only):$APT_PKGS"
+  else
+    log "apt install:$APT_PKGS"
+  fi
   if [ -d "$DEB_CACHE" ] && ls "$DEB_CACHE"/*.deb >/dev/null 2>&1; then
     dpkg -i --force-confold "$DEB_CACHE"/*.deb >>"$LOGFILE" 2>&1 || true
   fi
-  # shellcheck disable=SC2086
-  DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_PKGS >>"$LOGFILE" 2>&1 \
-    || { log "apt install failed"; FAIL=1; }
+  if [ "$APT_OFFLINE" -eq 1 ]; then
+    # Cache only: a package that needs a download fails here and the
+    # request is kept, so it is retried once the answer allows the internet.
+    # shellcheck disable=SC2086
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-download $APT_PKGS >>"$LOGFILE" 2>&1 \
+      || { log "apt install failed (internet off: a package is not in the local cache)"; FAIL=1; }
+  else
+    # shellcheck disable=SC2086
+    DEBIAN_FRONTEND=noninteractive apt-get install -y $APT_PKGS >>"$LOGFILE" 2>&1 \
+      || { log "apt install failed"; FAIL=1; }
+  fi
 fi
 
 while IFS="$(printf '\t')" read -r kind slug arg; do

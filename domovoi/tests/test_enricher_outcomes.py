@@ -249,7 +249,11 @@ async def test_a_refused_key_logs_the_application_key_hint_once(acoustid_key, tm
     with patch("acoustid.match", refused), caplog.at_level(logging.WARNING, logger=ENRICHER):
         first = await le._enrich_via_acoustid(tmp_path / "x.mp3")
         second = await le._enrich_via_acoustid(tmp_path / "y.mp3")
-    assert first.verdict is second.verdict is Verdict.ERROR
+    # A refused key is like no key (review 2026-10-03): not asked again this
+    # sweep, so Shazam's answer (if installed) decides; nothing is stamped
+    # for it.
+    assert first.verdict is second.verdict is Verdict.NOT_ASKED
+    assert first.unusable is True
     hints = [r for r in caplog.records if "APPLICATION key" in r.getMessage()]
     assert len(hints) == 1
     assert "https://acoustid.org/new-application" in hints[0].getMessage()

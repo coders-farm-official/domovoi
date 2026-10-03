@@ -115,6 +115,11 @@ _SUBSCRIBE_BARE_RE = re.compile(
 _CTX_KEY = "spoken_now"
 
 
+class PodcastDirectoryUnreachable(Exception):
+    """The podcast directory lookup itself failed (network error, timeout,
+    HTTP error) — as opposed to answering with no match."""
+
+
 def _subscribe_offline_text() -> str:
     """The reply to "subscribe to X" with no internet: today's sentence,
     or the internet-off phrase when internet access is turned off."""
@@ -580,7 +585,15 @@ class SpokenAudioHandler(Handler):
             return self._reply(ctx, "Which podcast should I subscribe to?")
         if egress.internet_turned_off():
             return self._reply(ctx, _subscribe_offline_text())
-        feed_url, title, artwork = await self._itunes_lookup(show)
+        try:
+            feed_url, title, artwork = await self._itunes_lookup(show)
+        except PodcastDirectoryUnreachable:
+            # The lookup itself failed (a network error, a timeout, an
+            # HTTP error): nothing was searched, so don't say "couldn't find".
+            return self._reply(
+                ctx,
+                "I couldn't reach the podcast directory just now. Try again in a moment.",
+            )
         if not feed_url:
             return self._reply(
                 ctx, f"I couldn't find a podcast called {show} to subscribe to."
@@ -618,7 +631,9 @@ class SpokenAudioHandler(Handler):
     async def _itunes_lookup(self, show: str) -> tuple[str | None, str | None, str | None]:
         """iTunes Search API → (feedUrl, collectionName, artworkUrl600).
         Keyless, rate-limited; best-effort. Goes out through the egress
-        choke point, so it is refused when internet access is turned off."""
+        choke point, so it is refused when internet access is turned off.
+        ``(None, None, None)`` when the directory answered with no match;
+        :class:`PodcastDirectoryUnreachable` when the lookup itself failed."""
         try:
             async with egress.async_client(timeout=8.0) as client:
                 r = await client.get(
@@ -627,10 +642,14 @@ class SpokenAudioHandler(Handler):
                 )
                 r.raise_for_status()
                 data = r.json()
+        except egress.InternetTurnedOff:
+            # Refused before anything was sent (the box is set to stay off
+            # the internet): no lookup, no match.
+            return None, None, None
         except Exception as e:
             log.warning("itunes podcast lookup failed for %r: %s", show, e)
-            return None, None, None
-        results = data.get("results") or []
+            raise PodcastDirectoryUnreachable(str(e)) from e
+        results = (data.get("results") if isinstance(data, dict) else None) or []
         if not results:
             return None, None, None
         top = results[0]

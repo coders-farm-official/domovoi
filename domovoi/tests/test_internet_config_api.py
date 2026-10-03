@@ -19,7 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from domovoi import config as config_mod
-from domovoi import config_env_writer, egress
+from domovoi import config_env_writer, egress, internet_profile
 from domovoi.config import PROFILE_DEFAULTS, Settings, settings
 from domovoi.main import app as core_app
 from domovoi.tests.auth_testkit import COOKIE, bearer, install_fake_db
@@ -147,7 +147,8 @@ async def test_crossing_never_lists_internet_access(box) -> None:
     await _post({"changes": {"internet_access": "sometimes"}})
     body = await _post({"changes": {"internet_access": "never"}})
     assert "internet_access" in body["restart_required"]
-    assert "Hugging Face" in body["normalized"]["internet_access"]
+    assert body["normalized"]["internet_access"] == internet_profile.HF_RESTART_NOTE
+    assert "Hugging Face" not in body["normalized"]["internet_access"]     # owner words
     assert settings.music_alias_fetch_enabled is False
     assert {"news_enabled", "library_enricher_enabled", "seed_voice_catalog"} <= set(body["restart_required"])
 
@@ -247,7 +248,10 @@ async def test_admin_internet_shape(box, monkeypatch) -> None:
     assert r.status_code == 200, r.text
     doc = r.json()
     assert set(doc) == {"answer", "answer_locked", "answer_source", "choices", "privacy_note",
-                        "connectivity", "hf_hub_offline", "features", "restart_required"}
+                        "connectivity", "hf_hub_offline", "features", "restart_required",
+                        "search_helper", "network_plugins", "warnings"}
+    assert set(doc["search_helper"]) == {"state", "detail", "at", "managed"}
+    assert doc["warnings"] == []                                   # only under never
     assert doc["answer"] == "" and doc["answer_source"] == "unset"
     assert doc["connectivity"]["online"] is True and doc["connectivity"]["reason"] == "connected"
     feature = doc["features"][0]

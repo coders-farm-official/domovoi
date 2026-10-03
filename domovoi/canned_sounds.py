@@ -324,6 +324,57 @@ def _render_voice(
     return engine, model_ref
 
 
+# Edge clips are decoded at 24 kHz (clients/tts.py) and encoded at that
+# rate; Piper renders at 22.05 kHz (some voices 16 kHz).
+EDGE_CLIP_SAMPLE_RATE = 24_000
+
+# MPEG audio sample rates by version bits (3 = MPEG-1, 2 = MPEG-2,
+# 0 = MPEG-2.5) and sample-rate index.
+_MPEG_RATES = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+
+
+def _mp3_sample_rate(path: Path) -> int | None:
+    """The sample rate of the first MPEG audio frame in ``path`` (skipping
+    an ID3v2 tag), or None when it can't be read."""
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(16384)
+    except OSError:
+        return None
+    i = 0
+    if data[:3] == b"ID3" and len(data) >= 10:
+        size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+        i = 10 + size
+    while i + 3 < len(data):
+        if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0:
+            version = (data[i + 1] >> 3) & 0x3
+            layer = (data[i + 1] >> 1) & 0x3
+            rate_index = (data[i + 2] >> 2) & 0x3
+            if version != 1 and layer != 0 and rate_index != 3:
+                return _MPEG_RATES[version][rate_index]
+        i += 1
+    return None
+
+
+def _misattributed_edge_clip(mp3: Path, sidecar: Path, marker: str) -> bool:
+    """An Edge-marked clip that Edge did not render. Before the sidecar
+    named the rung that actually rendered a clip, an Edge voice's clip
+    rendered by a Piper or system stand-in (Edge unreachable) was marked
+    as the Edge voice anyway, so it never re-rendered — the "wrong voice
+    sticks forever" symptom. Such a clip is not at Edge's 24 kHz; this
+    finds it so the first pass where Edge works renders it again, once."""
+    if not marker.lower().startswith("edge|") or not mp3.exists():
+        return False
+    try:
+        recorded = sidecar.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    if not recorded or recorded[0].strip() != marker:
+        return False
+    rate = _mp3_sample_rate(mp3)
+    return rate is not None and rate != EDGE_CLIP_SAMPLE_RATE
+
+
 def _needs_regen(mp3: Path, sidecar: Path, marker: str, text: str) -> bool:
     """True if the MP3 is missing or the sidecar disagrees with the current
     voice marker or clip text. Sidecar is two lines: voice marker, then a
@@ -421,7 +472,13 @@ async def _regen_entry(
     mp3_path = directory / mp3_name
     sidecar_path = directory / sidecar_name
     if not _needs_regen(mp3_path, sidecar_path, marker, text):
-        return
+        if not (edge_ok and _misattributed_edge_clip(mp3_path, sidecar_path, marker)):
+            return
+        log.info(
+            "clip %s for Edge voice %r was rendered by another voice by an "
+            "earlier version; rendering it again in its own voice",
+            mp3_name, voice["name"],
+        )
     plan = _render_voice(
         voice["engine"], voice["model_ref"], mp3_path, sidecar_path, text,
         edge_ok=edge_ok,

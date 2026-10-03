@@ -192,3 +192,53 @@ def test_the_applied_state_is_read_from_the_root_owned_file_first(sidecars, tmp_
     plugin_sync.ROOT_STATE_FILE.write_text(json.dumps(applied), encoding="utf-8")
     plugin_sync.STATE_SIDECAR.write_text("{}", encoding="utf-8")
     assert plugin_sync._pending_root_work(meta, root) == []
+
+
+# ─── the server answered "never": apt work from local caches only ───────
+
+
+def test_an_offline_slug_is_sent_offline_to_an_offline_aware_helper(sidecars, tmp_path, monkeypatch):
+    helper = tmp_path / "domovoi-apply-payload"
+    helper.write_text("#!/bin/sh\n# offline-aware: ...\n", encoding="utf-8")
+    monkeypatch.setattr(plugin_sync, "APPLY_HELPER", str(helper))
+    calls = []
+    meta = {"radio": {"apt_packages": ["libfoo2"], "post_install": None, "version": "1.0.0",
+                      "offline": True}}
+    ok = plugin_sync.request_root_apply(
+        meta, ["radio"], tmp_path / "payloads",
+        run=lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+    )
+    assert ok is True and calls
+    staged = json.loads(plugin_sync.PENDING_FILE.read_text(encoding="utf-8"))
+    assert staged["slugs"]["radio"]["offline"] is True
+
+
+def test_an_older_helper_never_gets_offline_apt_work(sidecars, tmp_path, monkeypatch):
+    """A helper from before the flag would run apt online: the slug's apt
+    work waits instead (nothing is asked of the helper)."""
+    helper = tmp_path / "domovoi-apply-payload"
+    helper.write_text("#!/bin/sh\napt-get install -y $APT_PKGS\n", encoding="utf-8")
+    monkeypatch.setattr(plugin_sync, "APPLY_HELPER", str(helper))
+    calls = []
+    meta = {"radio": {"apt_packages": ["libfoo2"], "post_install": None, "version": "1.0.0",
+                      "offline": True},
+            "clock": {"apt_packages": [], "post_install": "post.sh", "version": "1.0.0",
+                      "offline": True}}
+    ok = plugin_sync.request_root_apply(
+        meta, ["radio", "clock"], tmp_path / "payloads",
+        run=lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+    )
+    assert ok is True and len(calls) == 1
+    staged = json.loads(plugin_sync.PENDING_FILE.read_text(encoding="utf-8"))
+    assert set(staged["slugs"]) == {"clock"}          # no apt work: nothing to hold
+    calls.clear()
+    assert plugin_sync.request_root_apply(
+        {"radio": meta["radio"]}, ["radio"], tmp_path / "payloads",
+        run=lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+    ) is False
+    assert calls == []
+
+
+def test_the_installed_helper_says_it_is_offline_aware():
+    helper = Path(__file__).resolve().parents[1] / "scripts" / "domovoi-apply-payload"
+    assert plugin_sync._helper_offline_aware(str(helper)) is True

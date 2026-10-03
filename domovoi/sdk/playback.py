@@ -15,6 +15,12 @@ invariant 9) so plugins never hand-assemble it:
 * the room's now-playing stamp is placed (source must be a registered
   now-playing source, §4.7) and one ``media_plays`` history row is
   recorded (best-effort).
+
+Under ``INTERNET_ACCESS=never`` a stream URL whose host is not on this
+network is refused BEFORE it reaches MPD: the room's MPD container fetches
+whatever it is given, and no in-process gate can see that traffic. The
+refusal is a Response with no ``music_action`` and
+``data["status"] == "internet_off"``.
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from domovoi import registered_values
+from domovoi import egress, registered_values
 from domovoi.clients.mpd import (
     MPDClient,
     get_mpd_client_for,
@@ -61,6 +67,17 @@ class PlaybackAPI:
         if source not in NOW_PLAYING.sources():
             raise ValueError(
                 f"play_url: {source!r} is not a registered now-playing source"
+            )
+        # The room's MPD would fetch an internet stream itself, out of
+        # sight of every in-process gate: refuse it here under never.
+        if egress.check_destination(stream_url) is not None:
+            egress.log_refusal(f"music stream {stream_url[:120]}")
+            return Response(
+                text=(
+                    f"{egress.spoken_offline_phrase()}, so I can't play "
+                    f"{title or 'that'}."
+                ),
+                data={"stream_url": stream_url, "ok": False, "status": "internet_off"},
             )
         ok = False
         try:

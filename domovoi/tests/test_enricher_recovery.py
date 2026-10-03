@@ -11,9 +11,11 @@ How the rows are told apart (V020 + ``library_enricher.requeue_legacy``):
   the old enricher's "no provider / network error / no match" (the
   Beelink's 5,232 rows), a pre-V020 dashboard edit, or a Shazam match
   (Shazam gives no MusicBrainz id). The data can't tell those apart, so
-  the recovery requeues them ONCE (outcome ``recheck``) and a recheck
-  match only FILLS EMPTY fields: a hand correction and a Shazam match's
-  tags survive; the cost of a legacy Shazam match is one more lookup.
+  the recovery requeues them ONCE (outcome ``recheck``) — and only after a
+  provider has actually answered for some file in that sweep — and a
+  recheck match only FILLS EMPTY fields: a hand correction and a Shazam
+  match's tags survive; the cost of a legacy Shazam match is one more
+  lookup.
 * Every stamp the new code writes carries an outcome, so a legacy row
   exists only until its first post-V020 judgement: the recovery is
   one-off by construction. A dashboard edit since V020 writes ``manual``.
@@ -190,15 +192,18 @@ async def test_a_recheck_that_errors_waits_for_the_next_sweep(lane, monkeypatch,
     monkeypatch.setattr(f"{ENRICHER}.provider_available", lambda: True)
     _recording(monkeypatch, lambda _p: Lookup(Verdict.ERROR, detail="down", transient=True))
     counts = await enrich_library()
-    assert counts["requeued_legacy"] == 2 and counts["errors"] == 3
+    # Nothing answered, so nothing was requeued (2026-10-03 review): the
+    # legacy rows stay exactly as they were, and are never stamped by an
+    # error.
+    assert counts["requeued_legacy"] == 0 and counts["errors"] == 3
     legacy = await _row(lane, ids["legacy_unanswered"])
-    # Still queued, still fill-only next time; never stamped by an error.
-    assert legacy.enriched_at is None and legacy.enrich_outcome == "recheck"
-    # The next sweep picks it up without requeuing anything again.
+    assert legacy.enriched_at is not None and legacy.enrich_outcome is None
+    # The next sweep with an answer requeues them then, and they are still
+    # fill-only.
     _recording(monkeypatch, lambda _p: Lookup(Verdict.MATCH, result=EnrichmentResult(
         title="Overwrite?", artist="Filled", source="shazam")))
     again = await enrich_library()
-    assert again["requeued_legacy"] == 0 and again["matched"] == 3
+    assert again["requeued_legacy"] == 2 and again["matched"] == 3
     legacy = await _row(lane, ids["legacy_unanswered"])
     assert (legacy.title, legacy.artist, legacy.enrich_outcome) == ("01 - track", "Filled", "matched")
 

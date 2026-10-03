@@ -43,6 +43,15 @@
 #      INTERNET_ACCESS=always|sometimes, stopped for never, left alone while
 #      unanswered (reconcile_searxng). Never fatal: a failure is a `warn`
 #      step and the run stays ok. A healthy plain restart ends with it too.
+#      applied_sha is recorded BEFORE this step. Under systemd the start is
+#      handed to a transient unit (domovoi-searxng-start), so a first start's
+#      image download never holds the update open; without systemd it is
+#      bounded by DOMOVOI_UPDATE_SEARXNG_TIMEOUT seconds (a `warn` when hit).
+#   Under INTERNET_ACCESS=never (read once, at the start) an update that
+#   would go online is refused before anything is touched: a dependency
+#   change (pip would download) or a Dockerfile.mpd change (docker build
+#   pulls the base image and runs apt). An mpd.conf-only change keeps the
+#   image and just recreates the rooms.
 #   On any failure in 3-8: stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
 #   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
@@ -114,6 +123,13 @@ DB_UNIT=domovoi-db.service
 SEARXNG_SERVICE=searxng
 SEARXNG_CONTAINER=domovoi-searxng
 MANAGE_SEARXNG=${DOMOVOI_MANAGE_SEARXNG:-1}
+# The first start downloads the image (a few hundred MB). Under systemd
+# (auto) the start runs in a transient unit of its own and the update does
+# not wait for it; 1 forces that (systemd-run must exist), 0 runs it in the
+# foreground, bounded by DOMOVOI_UPDATE_SEARXNG_TIMEOUT seconds.
+SEARXNG_DETACH=${DOMOVOI_UPDATE_SEARXNG_DETACH:-auto}
+SEARXNG_TIMEOUT=${DOMOVOI_UPDATE_SEARXNG_TIMEOUT:-300}
+SEARXNG_START_UNIT=domovoi-searxng-start
 
 RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
@@ -140,6 +156,13 @@ STARTED_AT=""
 START_MS=0
 DEPS_CHANGED=0
 MPD_CHANGED=0
+MPD_IMAGE_CHANGED=0
+# The internet answer as this run found it at the start ("" when
+# unanswered, or when the checkout can't say).
+POLICY_AT_START=""
+# The update itself succeeded and applied_sha was written; set before the
+# search-helper step, so an interruption there can't report a failure.
+APPLIED_OK=0
 MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
 LEDGERS_BEFORE=""
@@ -354,6 +377,12 @@ run_soft_step() {
 on_exit() {
   local rc=$?
   if [ "$FINAL_WRITTEN" != 1 ]; then
+    if [ "$APPLIED_OK" = 1 ]; then
+      # Stopped during the search-helper step, after the update itself was
+      # healthy and recorded: that is still a good update.
+      write_result ok || true
+      return
+    fi
     # Something this script did not expect. Don't leave the house without
     # its services: start whatever this run stopped, then say what happened.
     if [ "$SERVICES_STOPPED" = 1 ]; then
@@ -863,7 +892,14 @@ restore_pins() {
 # recreates each from its mpd_rooms row with the same named data volume.
 rebuild_mpd() {
   local names n
-  docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
+  if [ "$POLICY_AT_START" = never ] && [ "$MPD_IMAGE_CHANGED" = 0 ]; then
+    # Only mpd.conf changed, and the build would at most re-pull the base
+    # image: keep the image (internet access is turned off) and just
+    # recreate the rooms so they mount the new conf.
+    echo "internet access is turned off: keeping the $MPD_TAG image (Dockerfile.mpd unchanged)"
+  else
+    docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
+  fi
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
     if [[ $n == "$MPD_PREFIX"* ]]; then
@@ -899,6 +935,50 @@ internet_policy() {
   printf '%s' "$p" | tr -d '[:space:]'
 }
 
+# Whether the search helper's start goes to a transient systemd unit
+# (DOMOVOI_UPDATE_SEARXNG_DETACH: auto = when systemd runs this host).
+searxng_detach() {
+  case "$(printf '%s' "$SEARXNG_DETACH" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) return 1 ;;
+    1|true|yes|on) command -v systemd-run >/dev/null 2>&1 ;;
+    *) [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1 ;;
+  esac
+}
+
+# searxng_start POLICY COMPOSE_FILE: `docker compose up -d` the search
+# helper. Detached (a transient unit the update does not wait for, which
+# also survives the update unit's own exit), or in the foreground bounded
+# by SEARXNG_TIMEOUT: the first start pulls the image, and on a slow or
+# metered line that must not hold the update open, let alone let the
+# unit's TimeoutStartSec kill it into a "failed" result.
+searxng_start() {
+  local policy=$1 compose_file=$2 rc=0
+  local -a cmd=(docker compose -f "$compose_file" --project-directory "$REPO_DIR/domovoi"
+                up -d --no-deps "$SEARXNG_SERVICE")
+  if searxng_detach; then
+    if systemd-run --no-block --collect --quiet --unit="$SEARXNG_START_UNIT" "${cmd[@]}"; then
+      STEP_DETAIL="starting $SEARXNG_CONTAINER in the background ($SEARXNG_START_UNIT; internet answer: $policy)"
+      return 0
+    fi
+    if systemctl is-active --quiet "$SEARXNG_START_UNIT" 2>/dev/null; then
+      STEP_DETAIL="$SEARXNG_CONTAINER is already starting in the background ($SEARXNG_START_UNIT)"
+      return 0
+    fi
+    return 1
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$SEARXNG_TIMEOUT" "${cmd[@]}" || rc=$?
+  else
+    "${cmd[@]}" || rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Internet"
+    return 1
+  fi
+  [ "$rc" -eq 0 ] || return 1
+  STEP_DETAIL="$SEARXNG_CONTAINER up (internet answer: $policy)"
+}
+
 # Start or stop the search helper (SearXNG) to match the internet answer:
 # Yes or Sometimes start it (the first start pulls the pinned image), No
 # stops it if it runs, unanswered leaves it as it is. Run as a soft step.
@@ -915,9 +995,7 @@ reconcile_searxng() {
   fi
   case "$policy" in
     always|sometimes)
-      docker compose -f "$compose_file" --project-directory "$REPO_DIR/domovoi" \
-        up -d --no-deps "$SEARXNG_SERVICE" || return 1
-      STEP_DETAIL="$SEARXNG_CONTAINER up (internet answer: $policy)" ;;
+      searxng_start "$policy" "$compose_file" || return 1 ;;
     never)
       if [ "$(docker inspect -f '{{.State.Running}}' "$SEARXNG_CONTAINER" 2>/dev/null)" = true ]; then
         docker stop "$SEARXNG_CONTAINER" || return 1
@@ -949,8 +1027,9 @@ plain_restart() {
   SERVICES_STOPPED=0
   run_step health wait_healthy || failed=${failed:-health}
   if [ -z "$failed" ]; then
-    run_soft_step searxng reconcile_searxng
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
+    APPLIED_OK=1
+    run_soft_step searxng reconcile_searxng
     finish ok
   else
     finish failed "$LAST_ERROR"
@@ -975,6 +1054,21 @@ full_update() {
   fi
   if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
+  if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
+  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ]; then
+    # Read once, before anything is touched: what this run may download
+    # depends on it (the rollback's re-sync and rebuild use it too).
+    POLICY_AT_START=$(internet_policy 2>/dev/null || true)
+  fi
+  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ]; }; then
+    why="this update changes"
+    if [ "$DEPS_CHANGED" = 1 ]; then why="$why the Python dependencies (pip would download them)"; fi
+    if [ "$DEPS_CHANGED" = 1 ] && [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why and"; fi
+    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why the music player image (docker build downloads it)"; fi
+    add_step preflight refused "$t0" "$why; internet access is turned off for this box"
+    finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No (docs/INTERNET.md)."
+    return
+  fi
   if [ "$DEPS_CHANGED" = 1 ] && ! why=$(venv_writable); then
     add_step preflight refused "$t0" "$why"
     finish aborted "the dependencies changed but the venv can't be re-synced, so nothing was changed: $why"
@@ -1018,10 +1112,11 @@ full_update() {
   LEDGERS_AFTER=$(ledger_snapshot "$PG_DB" || true)
 
   if [ -z "$failed" ]; then
-    run_soft_step searxng reconcile_searxng
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
     rm -f "$BAD_FILE"
     BAD_SHA=""
+    APPLIED_OK=1
+    run_soft_step searxng reconcile_searxng
     finish ok
     return
   fi

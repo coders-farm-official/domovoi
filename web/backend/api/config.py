@@ -164,6 +164,23 @@ async def get_internet(request: Request):
     return bridge_response(status, payload)
 
 
+@router.post(
+    "/config/internet/search-helper",
+    # An admin mutation at both hops (it starts or stops a container).
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def start_search_helper(request: Request):
+    """Settings → Internet's "start it again": the core runs the search
+    helper's start/stop for the current answer in the background and
+    returns its state (proxy of ``POST /v1/admin/internet/search-helper``)."""
+    status, payload = await post_admin(
+        "/v1/admin/internet/search-helper",
+        {},
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
 @router.get("/config/version")
 async def get_version(request: Request):
     """What the Domovoi server is RUNNING, and what's checked out on disk.

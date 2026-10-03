@@ -34,6 +34,17 @@ process environment turns all of this off: test harnesses use it so they
 never stop a container they did not start, and an operator who runs
 SearXNG some other way can set it too.
 
+Reconciles run ONE AT A TIME (a lock), and each reads the answer only
+once it holds the lock: an owner who saves Yes and then No while the first
+start is still pulling the image gets the stop after the start, so the
+container never ends up running under never. A start that finishes while
+the answer has meanwhile become never stops the container again.
+
+:func:`status` is what Settings → Internet shows about the helper: the
+last reconcile's outcome in this process (the core never asks docker at
+boot, so it is ``unknown`` until something reconciles), and whether one
+is running now.
+
 Everything here is best effort: the docker CLI runs in a worker thread,
 every outcome is logged, and nothing raises into the caller.
 """
@@ -45,8 +56,9 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from domovoi import egress
 from domovoi.config import settings
@@ -71,6 +83,15 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # Fire-and-forget tasks are kept referenced until they finish, so the
 # event loop's weak reference can't drop one mid-run.
 _PENDING: set[asyncio.Task] = set()
+
+# One reconcile at a time. An asyncio.Lock binds to the loop that first
+# waits on it, so keep one per running loop (tests run many loops).
+_LOCK: asyncio.Lock | None = None
+_LOCK_LOOP: asyncio.AbstractEventLoop | None = None
+
+# The last reconcile's outcome in this process, for status().
+_LAST: dict[str, Any] = {"state": "unknown", "detail": "", "at": None}
+_IN_PROGRESS: str = ""   # "start" / "stop" while docker is being asked
 
 
 @dataclass
@@ -134,24 +155,81 @@ async def _running() -> bool | None:
     return out.strip().lower() == "true"
 
 
+def _lock() -> asyncio.Lock:
+    global _LOCK, _LOCK_LOOP
+    loop = asyncio.get_running_loop()
+    if _LOCK is None or _LOCK_LOOP is not loop:
+        _LOCK, _LOCK_LOOP = asyncio.Lock(), loop
+    return _LOCK
+
+
+def _record(result: SearxngAction) -> None:
+    if result.action == "skipped":
+        state = "unmanaged"
+    elif not result.ok:
+        state = "failed"
+    elif result.action == "start":
+        state = "running"
+    elif result.action == "stop" or "not running" in result.detail:
+        state = "stopped"
+    else:
+        state = "left"          # unanswered: nothing was done
+    _LAST.update(
+        state=state, detail=result.detail,
+        at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+
+def status() -> dict[str, Any]:
+    """What Settings → Internet shows about the search helper.
+
+    ``state`` is ``unknown`` (nothing reconciled since the core started),
+    ``starting`` / ``stopping`` (docker is being asked right now; a first
+    start downloads the image and can take minutes), ``running``,
+    ``stopped``, ``failed`` (``detail`` says why), ``unmanaged``
+    (``DOMOVOI_MANAGE_SEARXNG=0``) or ``left`` (the answer is unset, so it
+    was left as it is)."""
+    if not managed():
+        return {"state": "unmanaged", "detail": f"{MANAGE_ENV} opts out",
+                "at": None, "managed": False}
+    state = {"start": "starting", "stop": "stopping"}.get(_IN_PROGRESS) or _LAST["state"]
+    return {"state": state, "detail": _LAST.get("detail") or "",
+            "at": _LAST.get("at"), "managed": True}
+
+
 async def reconcile(answer: str | None = None) -> SearxngAction:
     """Start or stop the container to match ``answer`` (default: the
-    current :func:`egress.policy`). Never raises."""
+    current :func:`egress.policy`, read once this reconcile holds the
+    lock, so a queued reconcile acts on the latest answer). Never
+    raises."""
+    global _IN_PROGRESS
     try:
         if not managed():
             result = SearxngAction("skipped", True, f"{MANAGE_ENV} opts out")
         else:
-            policy = egress.policy() if answer is None else egress.normalize_policy(answer)
-            if policy in ("always", "sometimes"):
-                result = await _start()
-            elif policy == "never":
-                result = await _stop()
-            else:
-                result = SearxngAction(
-                    "none", True, "internet access is not answered; left as it is"
-                )
+            async with _lock():
+                policy = egress.policy() if answer is None else egress.normalize_policy(answer)
+                try:
+                    if policy in ("always", "sometimes"):
+                        _IN_PROGRESS = "start"
+                        result = await _start()
+                        # The answer became never while the image was
+                        # downloading: don't leave the helper running.
+                        if result.ok and answer is None and egress.policy() == "never":
+                            _IN_PROGRESS = "stop"
+                            result = await _stop()
+                    elif policy == "never":
+                        _IN_PROGRESS = "stop"
+                        result = await _stop()
+                    else:
+                        result = SearxngAction(
+                            "none", True, "internet access is not answered; left as it is"
+                        )
+                finally:
+                    _IN_PROGRESS = ""
     except Exception as e:  # noqa: BLE001 — best effort, never raises
         result = SearxngAction("none", False, f"{type(e).__name__}: {e}")
+    _record(result)
     level = logging.INFO if result.ok else logging.WARNING
     log.log(level, "search helper (SearXNG): %s %s — %s",
             result.action, "ok" if result.ok else "failed", result.detail)
@@ -188,8 +266,10 @@ async def _stop() -> SearxngAction:
 
 
 def schedule_reconcile() -> None:
-    """The ``internet_access`` reapply hook: run :func:`reconcile` as a
-    background task on the running loop. A no-op without a running loop
+    """The ``internet_access`` reapply hook, and Settings → Internet's
+    "start it again" (``POST /v1/admin/internet/search-helper``): run
+    :func:`reconcile` as a background task on the running loop. A no-op
+    without a running loop
     (a synchronous caller has nothing to schedule on)."""
     try:
         loop = asyncio.get_running_loop()

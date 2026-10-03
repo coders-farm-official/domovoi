@@ -222,6 +222,15 @@ def _register_core_reapply_hooks() -> None:
     reapply.on_reapply(
         "internet_access", searxng_service.schedule_reconcile, key="searxng"
     )
+    # Saving never also stops a room that is playing an internet station
+    # and takes internet streams out of every room's queue: MPD fetches
+    # them itself and resumes them after any container restart
+    # (domovoi/mpd_internet.py).
+    from domovoi import mpd_internet
+
+    reapply.on_reapply(
+        "internet_access", mpd_internet.schedule_purge, key="mpd_internet"
+    )
 
 
 # At shutdown, how long a worker owner's (a plugin's, the core's) running
@@ -375,6 +384,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # (timer, QA, library metadata) should still work even if
             # docker is misbehaving.
             log.warning("MPD startup warm failed: %s", e)
+        # Under INTERNET_ACCESS=never: a room's MPD resumes whatever its
+        # state file holds after a container restart, internet stations
+        # included. Take those out of every queue, in the background
+        # (a no-op for any other answer; domovoi/mpd_internet.py).
+        from domovoi import mpd_internet
+
+        mpd_internet.schedule_boot_purge()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -1104,7 +1120,9 @@ async def satellite_code_file(path: str) -> FileResponse:
 async def satellite_plugins_manifest() -> dict[str, Any]:
     """``{"files": {"<slug>/<rel>": sha256}, "meta": {slug: {version,
     apt_packages, pip_requirements, pip_lockfile, post_install}}}`` for
-    every enabled plugin declaring a [satellite] payload."""
+    every enabled plugin declaring a [satellite] payload. Under
+    ``INTERNET_ACCESS=never`` each slug also carries ``"offline": true``:
+    the satellite installs its apt packages from local caches only."""
     from domovoi.satellite_payload import build_channel_manifest
 
     return await build_channel_manifest()
@@ -4166,6 +4184,31 @@ async def admin_internet() -> dict[str, Any]:
     from domovoi import internet_profile
 
     return internet_profile.status(settings, getattr(app.state, "probe", None))
+
+
+@app.post(
+    "/v1/admin/internet/search-helper",
+    # An admin mutation (it starts or stops a container), not a config
+    # write: nothing is saved.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_internet_search_helper() -> dict[str, Any]:
+    """Settings → Internet's "start it again": run the search helper's
+    start/stop for the CURRENT answer in the background — the same thing
+    saving the answer does (``domovoi/searxng_service.py``). For a first
+    start that failed or timed out, or a helper somebody stopped by hand.
+    Returns at once with the helper's state (``starting`` while docker
+    works); the page polls ``GET /v1/admin/internet``. A no-op while the
+    answer is unset or ``DOMOVOI_MANAGE_SEARXNG=0``."""
+    from domovoi import egress, searxng_service
+
+    scheduled = False
+    if searxng_service.managed() and egress.policy() in egress.POLICIES:
+        searxng_service.schedule_reconcile()
+        scheduled = True
+        # Let the task take the lock, so the state reads "starting".
+        await asyncio.sleep(0)
+    return {"scheduled": scheduled, "search_helper": searxng_service.status()}
 
 
 @app.get("/v1/admin/hardware")

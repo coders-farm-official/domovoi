@@ -8,66 +8,109 @@ a way that would otherwise get reported as a bug.
 
 ### Upgrading
 
-1. **Pull the update and restart** as usual. **Flyway V020** adds
-   `library_tracks.enrich_outcome` (what song recognition concluded for each
-   track) and marks every track that already has a MusicBrainz id as
-   matched; nothing else changes, and the update's backup and rollback cover
-   it.
-2. **Nothing else changes until someone answers.** An existing install (the
-   Beelink included) has no `INTERNET_ACCESS` yet, and an unanswered box
-   behaves exactly as it did before this update: same defaults, same
-   connectivity check, nothing refused. An admin's Home page shows one row,
-   **"Tell Domovoi whether this box has internet"**, until the question is
-   answered; it opens **Settings → Internet**.
-3. **Answering is one click** in Settings → Internet (admin sign-in): "Yes,
-   always", "Sometimes" or "No, keep everything in the house". Saving needs
-   no restart for the answer itself; the page lists the few defaults that
-   follow after a restart ("restart required"), and a move into or out of
-   "No" also lists the Hugging Face setting.
+1. **Pull the update and restart** as usual. No new Python packages, no
+   music-image rebuild. **Flyway V020** adds `library_tracks.enrich_outcome`
+   (what song recognition concluded for each track) and marks every track
+   that already has a MusicBrainz id as matched; the update's backup and
+   rollback cover it.
+2. **Until someone answers, the internet settings don't change.** An
+   existing install (the Beelink included) has no `INTERNET_ACCESS` yet.
+   Unanswered, every default that follows the answer keeps its old value,
+   the connectivity check dials as before, and nothing is refused. An
+   admin's Home page shows one row, **"tell Domovoi whether this box has
+   internet"**, until the question is answered; it opens **Settings →
+   Internet**. What does change on every answer, unanswered included, is
+   the set of fixes under [What changes](#what-changes): the one new piece
+   of outbound traffic among them is that **the server now downloads each
+   podcast show's artwork** (once per show, the first time the Podcasts
+   page lists it), so phones and browsers stop fetching it from the
+   publisher.
+3. **Answering is one click** in Settings → Internet (admin sign-in). What
+   each answer does:
+   * **Yes, always:** the search helper (SearXNG, behind web answers)
+     starts at once; artist names from MusicBrainz start at once; automatic
+     podcast downloads start after the next restart; song recognition runs
+     if there is an AcoustID key or the Shazam add-on.
+   * **Sometimes:** the same, except podcast downloads stay off.
+   * **No, keep everything in the house:** the server stops reaching the
+     internet at once: the connectivity check stops dialing, every fetch,
+     search, download and update is refused with "internet access is turned
+     off for this box (Settings → Internet)", the search helper stops, a
+     room playing an internet station stops and internet stations leave
+     every room's queue, and transfers already running (a station in a
+     browser, a model download, a podcast download) stop. After the next
+     restart the news worker is off and `HF_HUB_OFFLINE=1` is set. Online
+     controls are greyed with "needs internet", not hidden. Machines on
+     your network (satellites, a NAS, Ollama) are still reached.
+
+   Saving needs no restart for the answer itself; the page lists what
+   follows after a restart ("restart required"). Switch back any time:
+   nothing is marked broken by a refusal.
    * **Settings you set by hand stay put.** Any key already in your
-     `domovoi/.env` (the Beelink's was copied from `.env.example`, so it
-     likely pins `SEED_VOICE_CATALOG=true` and `LIBRARY_ENRICHER_ENABLED=true`)
-     or exported in the service environment wins over the answer. Settings →
-     Internet shows each one as "set by you", with **"follow the answer
-     again"**, which comments the line out of `.env` (it is never deleted,
-     and carries the date it was commented).
-   * An answer exported in the server's environment (`INTERNET_ACCESS=` in a
-     unit file) is shown read-only in the dashboard: change it where it is
-     set. A fresh checkout can answer at bootstrap:
+     `domovoi/.env` or in the service environment wins over the answer.
+     The Beelink's `.env` was copied from an older `.env.example`, so it
+     likely pins `SEED_VOICE_CATALOG=true` and `LIBRARY_ENRICHER_ENABLED=true`:
+     Settings → Internet shows each such key as **"set in domovoi/.env"**,
+     with **"follow the answer again"**, which comments the line out of
+     `.env` (never deletes it; the comment carries the date).
+   * An answer in the server's environment (`INTERNET_ACCESS=` in a unit
+     file) is shown read-only: put it in both units, and in
+     `/etc/default/domovoi-update` (docs/LINUX_HOST.md). A fresh checkout
+     can answer at bootstrap:
      `python -m domovoi.env_bootstrap --internet always|sometimes|never`
      (an existing `.env` is never touched).
 4. **The search helper (SearXNG) now follows the answer.** Saving **Yes,
    always** or **Sometimes** starts the `searxng` container in the
    background (the first start downloads its image, now pinned by digest:
    `searxng/searxng:2026.5.6-a9909c497`, about 375 MB); **No** stops it; an
-   unanswered box leaves it as it is. On a Linux box with the update unit,
-   every healthy update and restart also brings it in step with the answer,
-   as a new last step that can only warn, never fail the update. `dev.sh` /
-   `dev.ps1` start it for Yes and Sometimes. `DOMOVOI_MANAGE_SEARXNG=0` (in
-   the core's environment, or in `/etc/default/domovoi-update`) leaves the
-   container alone. Nothing touches it at core boot.
+   unanswered box leaves it as it is. Saves are applied one after another,
+   so switching Yes then No during that first download still ends with it
+   stopped. Settings → Internet shows whether it is starting, running or
+   couldn't start, with **start it again**. With the Linux update unit,
+   every healthy update and restart also brings it in step with the
+   answer, after the update is recorded as applied: the start runs in a
+   unit of its own (`domovoi-searxng-start`), so a slow first download
+   never holds the update open or turns it into a failure. `dev.sh` /
+   `dev.ps1` start it for Yes and Sometimes. `DOMOVOI_MANAGE_SEARXNG=0`
+   (in the core's environment, or in `/etc/default/domovoi-update`) leaves
+   the container alone. Nothing touches it at core boot.
 5. **Song recognition gets one honest second pass.** On the Beelink all
-   5,232 tracks were stamped done without a MusicBrainz id because no
-   AcoustID key or Shazam add-on was ever set up. They stay as they are
-   until one exists: add an AcoustID **application** key
-   (https://acoustid.org/new-application — a user key is refused) or
-   install the Shazam add-on, and the next song-recognition run queues them
-   once and identifies them for real, filling only empty tags (a title
-   corrected by hand is never overwritten). No SQL needed. If AcoustID
-   refuses the key, the run stops after five failed lookups, marks nothing,
-   and the log names the key it needs.
-6. **Voices: nothing to do.** A greeting clip that an earlier version
-   rendered in the wrong voice still carries that voice's tag, so it is not
-   redone by itself. To redo one voice's clips, delete
-   `~/.domovoi/sounds/voices/<voice name>` (the name in lower case, e.g.
-   `voices/ryan`) on the server and restart the core.
+   5,232 tracks were stamped done without a MusicBrainz id — most likely
+   because no working AcoustID key or Shazam add-on was ever set up (a
+   personal AcoustID *user* key is refused for lookups, so it would have
+   the same effect). Those tracks stay exactly as they are until a lookup
+   actually answers: with an AcoustID **application** key
+   (https://acoustid.org/new-application) or the Shazam add-on, the next
+   song-recognition run gives them one real try. A refused key now counts
+   as no key: with the Shazam add-on Shazam decides; without it the run
+   stops at once, marks and requeues nothing, and the log names the key it
+   needs. What the retry does to those older tracks: it adds MusicBrainz
+   ids and fills tags that are empty; it doesn't rewrite a title or artist
+   they already have (so a hand correction is never overwritten, and a
+   name guessed from a file name stays until you edit it). A track an
+   older version matched through Shazam is looked up once more too (its
+   tags are kept). No SQL needed. Before installing or keeping the Shazam
+   add-on on the Beelink (CPython 3.14), note that a source-built
+   `shazamio` can crash at import: Domovoi now tries the import in a
+   throwaway process first and skips a broken one with a log line instead
+   of going down; `python -c "import shazamio"` in the venv shows which you
+   have.
+6. **Voices: wrong-voice clips heal by themselves.** A Microsoft voice's
+   clip that an earlier version rendered with a stand-in voice (it still
+   carried the Microsoft tag) is now recognised — it isn't at the 24 kHz
+   Microsoft renders at — and rendered again once, the first time
+   Microsoft can be reached. For a Piper voice's clips that came out in the
+   robot voice, delete `~/.domovoi/sounds/voices/<voice name>` (lower case,
+   e.g. `voices/ryan`) and restart the core.
 7. **Whisper no longer asks huggingface.co on every start.** A model already
    downloaded loads from the local cache, so the version you have keeps
-   loading. A missing model downloads once, as before, except when the
-   answer is No: then the load fails and the Models page says why. The
-   `HF_HUB_OFFLINE` drop-in the internet docs suggested for a box without
-   internet is no longer needed: answering No sets it for the core. An
-   existing drop-in does no harm.
+   loading — including one downloaded at a pinned revision (a cache with no
+   `refs/main`, as the Windows installer will make). A missing model
+   downloads once, as before, except when the answer is No: then the load
+   falls back to a model that is on disk, and the Models page greys sizes
+   that aren't downloaded. The `HF_HUB_OFFLINE` drop-in the internet docs
+   suggested for a box without internet is no longer needed: answering No
+   sets it for the core. An existing drop-in does no harm.
 8. **The radio plugin is 1.3.0 and needs SDK 1.4** (it ships with the core,
    so nothing to do). Its settings still live in
    `~/.domovoi/plugins/radio.env`. **The core's own `RADIO_*` settings are
@@ -77,6 +120,12 @@ a way that would otherwise get reported as a bug.
    ignored.
 9. Podcast artwork is stored under `~/.domovoi/podcast_artwork`
    (`PODCAST_ARTWORK_DIR`).
+10. **Updating a box answered No** (Linux update unit): an update that would
+    download — new Python dependencies, or a new music player image — is
+    refused before anything is touched (status `aborted`, with the reason).
+    Switch to Sometimes, pull and restart, switch back to No and restart
+    once more; docs/INTERNET.md → "Updating a box answered No" lists what
+    the temporary Sometimes turns on.
 
 ### What changes
 
@@ -99,33 +148,53 @@ a way that would otherwise get reported as a bug.
   longer dials 1.1.1.1 at all (it reports "turned off"); every fetch that
   would leave your network is refused before a name is even looked up —
   in the server, the dashboard's server side, and plugins that use the
-  SDK's HTTP client or the shared URL check; `HF_HUB_OFFLINE=1` is set for
-  the server. Machines on your network (satellites, the router, a NAS,
-  Ollama) are still reached. Refusals read "internet access is turned off
-  for this box (Settings → Internet)".
+  SDK's HTTP client, its playback call or the shared URL check;
+  `HF_HUB_OFFLINE=1` is set for the server. Machines on your network
+  (satellites, the router, a NAS, Ollama) are still reached. Refusals read
+  "internet access is turned off for this box (Settings → Internet)".
 * **Under No, nothing of these goes out:** version check and pull (no git
   runs), plugin installs from GitHub (a zip whose Python packages are
   already installed still installs; pip runs with `--no-index`), the
   satellite media **Refresh caches** (Prepare still works from the cache),
-  Ollama model installs (a registry on the house network still works),
-  building the music container image when it's missing, news feed add /
-  re-check / **poll now** (the feed is never marked invalid for it),
-  podcast search, subscribe-by-name and **poll now** (subscribing by RSS
-  URL still works), registering or sampling a Microsoft voice, the
-  fast-lane model download, wake-word training (the word is marked failed,
-  "training needs the internet the first time it runs"), and the radio
-  plugin's search, simulcast lookup, FCC import, internet-station play and
-  stream. The API answers `409` with `X-Domovoi-Refusal: internet-off`
-  (plugin installs keep their `422` with code `internet_off`). FM over an
-  RTL-SDR keeps working, and the radio sampler samples only house-network
-  streams, against your library.
+  Ollama model installs (a registry on the house network still works, and
+  the Models page lets you type one), building the music container image
+  when it's missing, news feed add / re-check / **poll now** (the feed is
+  never marked invalid for it), podcast search, subscribe-by-name and
+  **poll now** (subscribing by RSS URL still works), registering or
+  sampling a Microsoft voice, the fast-lane model download, wake-word
+  training (the word is marked failed, "training needs the internet the
+  first time it runs"), and the radio plugin's search, simulcast lookup,
+  FCC import, internet-station play and stream. The API answers `409` with
+  `X-Domovoi-Refusal: internet-off` (plugin installs keep their `422` with
+  code `internet_off`). FM over an RTL-SDR keeps working, and the radio
+  sampler samples only house-network streams, against your library.
+* **The rooms' music players stay off the internet too.** MPD fetches a
+  queued stream by itself and resumes its queue after a container restart
+  (a reboot), out of sight of every check in the server. Under No no
+  internet stream is handed to it (`sdk.playback.play_url`, the call the
+  radio plugin and other plugins use, answers "I'm set to stay off the
+  internet, so I can't play …"), and when the answer becomes No — and at
+  every core start under No — a room playing one is stopped and internet
+  entries are taken out of every queue. Your own music stays queued.
+* **Switching to No stops transfers already running:** the radio plugin's
+  browser stream, a model download (marked "cancelled: internet access was
+  turned off") and a podcast episode download (back to waiting).
+* **Satellites:** under No, a plugin's satellite system packages are
+  installed from the satellite's local package caches only; whatever
+  would need a download waits until the answer allows it.
+* **Settings → Internet** also lists the enabled plugins that may reach the
+  internet on their own (their manifest asks for the network; the bundled
+  radio plugin follows the answer and isn't listed), and, under No, warns
+  when the language model server (`OLLAMA_URL`) is outside the house or an
+  Ollama cloud model is configured — both would still send your questions
+  out.
 * **Controls that need the internet are greyed, not hidden**, under "No",
   with "needs internet · Settings → Internet": the online settings on the
   Configuration tab (and the Microsoft choice of TTS engine), "Check for
   updates" and "Pull the latest" (restarting still works), registering,
-  sampling and choosing a Microsoft voice, training a wake word, and the
-  online controls on the Podcasts, News, Radio, Models, Plugins and
-  Satellites pages.
+  sampling and choosing a Microsoft voice, training a wake word, Whisper
+  sizes that aren't downloaded, and the online controls on the Podcasts,
+  News, Radio, Models, Plugins and Satellites pages.
 * **Microsoft voices are never a silent fallback.** A Piper voice that
   failed used to make Domovoi speak through Microsoft's Edge voice, which
   sent the reply text to Microsoft. Edge now speaks only when it is the
@@ -136,7 +205,8 @@ a way that would otherwise get reported as a bug.
 * **Greetings stay in the right voice.** Each clip records the voice that
   actually rendered it, and is redone once the real voice works. While
   Microsoft voices can't be reached, their missing clips use the default
-  Piper voice and nothing waits on Microsoft.
+  Piper voice and nothing waits on Microsoft. Fewer clips go to Microsoft
+  at startup: only those of Microsoft voices you actually use.
 * **No Microsoft voice is added unasked.** `TTS_EDGE_VOICE` joins the voice
   list only when the extra-voices catalog is on or `TTS_ENGINE=edge`. Under
   No, no Microsoft voice is added at all. Voices already in the list stay.
@@ -144,12 +214,16 @@ a way that would otherwise get reported as a bug.
   With the search helper stopped, web answers and "double-check that" now
   say "I can't search the web right now — my search helper isn't running"
   (and the core logs once how to start it); a SearXNG error says "I couldn't
-  reach my search helper just now. Try again in a moment."; a box answered
-  **No** says "I'm set to stay off the internet, so I can't check that."
-  The router's offline answer to a weather/news-type question, the news
-  handler's offline lead-in and the cloud-voice refusal use the turned-off
-  wording under **No** too; unanswered and plain-offline wording is
-  unchanged.
+  reach my search helper just now. Try again in a moment."; when SearXNG
+  answers but every search engine behind it failed (a CAPTCHA, a timeout),
+  "My search engines didn't answer just now. Try again in a moment."; a box
+  answered **No** says "I'm set to stay off the internet, so I can't check
+  that." The "want me to do that automatically?" offer is only made after
+  a search really ran. The router's offline answer to a weather/news-type
+  question, the news handler's offline lead-in, "play 97.5 FM" for a
+  station that isn't loaded, and the cloud-voice refusal use the
+  turned-off wording under **No** too; unanswered and plain-offline
+  wording is unchanged.
 * **Song recognition marks a track done only when AcoustID or Shazam
   actually answered**; a network error, a refused key or no provider leaves
   it waiting. Without a key or the add-on the startup run does nothing.
@@ -157,8 +231,12 @@ a way that would otherwise get reported as a bug.
   they can't start (internet off or down, no key, switched off, already
   running). A tag edit in the dashboard counts as a hand edit.
 * **Podcasts:** "subscribe to …" promises downloads only when automatic
-  downloads are on; a download cut off by the internet waits and retries
-  instead of failing; the poller skips its rounds offline.
+  downloads are on, and says when the podcast directory couldn't be
+  reached instead of "I couldn't find a podcast called …"; a download cut
+  off by the internet waits and retries instead of failing; one show's
+  dead or slow host no longer holds up every other show's downloads (the
+  round stops early only when the internet itself is gone); the poller
+  skips its rounds offline.
 * **Podcast artwork now comes from Domovoi.** The server downloads each
   show's artwork itself (on subscribe and at each poll; JPEG/PNG/WebP/GIF,
   at most 5 MB), and the dashboard and the Android app load it only from
@@ -182,15 +260,23 @@ a way that would otherwise get reported as a bug.
   `choice_labels`, `needs_internet`, `needs_internet_choices`,
   `internet_profile`, `follows_internet` and `set_in_environment`;
   `POST /v1/admin/config` accepts `follow_internet` and answers `followed`.
-  New: `GET /v1/admin/internet` (and `GET /api/config/internet`);
-  `GET /api/config` carries `internet_access`. `POST /v1/admin/library/enrich`
-  answers `409` under No and otherwise `{queued: false, reason: disabled |
-  offline | no_provider | running}` when it can't start. New:
-  `GET /api/podcasts/subscriptions/{id}/artwork` and
-  `GET /api/podcasts/discover/artwork/{key}`; `artwork` in the podcast
-  answers is now a server path or null. The plugin SDK is **1.4.0**:
-  `sdk.egress`, `connectivity.policy` / `.reason` / `.internet_allowed`, and
-  `sdk.http` clients refuse non-local requests under "No".
+  New: `GET /v1/admin/internet` (and `GET /api/config/internet`), with
+  `search_helper`, `network_plugins` and `warnings`;
+  `POST /v1/admin/internet/search-helper` (and
+  `POST /api/config/internet/search-helper`) runs the helper's start/stop
+  again; `GET /api/config` carries `internet_access`.
+  `POST /v1/admin/library/enrich` answers `409` under No and otherwise
+  `{queued: false, reason: disabled | offline | no_provider | running}`
+  when it can't start. New: `GET /api/podcasts/subscriptions/{id}/artwork`
+  and `GET /api/podcasts/discover/artwork/{key}`; `artwork` in the podcast
+  answers is now a server path or null. `GET /api/models/catalog` Whisper
+  rows carry `cached`. `GET /v1/satellite-plugins/manifest` marks each
+  plugin `offline` under No. The plugin SDK is **1.4.0**: `sdk.egress`,
+  `connectivity.policy` / `.reason` / `.internet_allowed`; `sdk.http`
+  clients refuse non-local requests under "No" with
+  `egress.InternetTurnedOffConnectError` (also an `httpx.ConnectError`),
+  and `sdk.playback.play_url` refuses an internet stream
+  (`data.status == "internet_off"`).
 * **Docs:** `docs/INTERNET.md` now explains the three answers and what each
   switches; the FAQ, troubleshooting, security, API, plugin-development,
   Linux, runbook and README pages follow it.

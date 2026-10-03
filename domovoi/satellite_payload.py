@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from domovoi import egress
 from domovoi.db.session import session_scope
 
 log = logging.getLogger(__name__)
@@ -133,6 +134,10 @@ async def build_channel_manifest() -> dict[str, Any]:
     ``{"files": {"<slug>/<rel>": sha256}, "meta": {slug: {...}}}``."""
     files: dict[str, str] = {}
     meta: dict[str, Any] = {}
+    # Under INTERNET_ACCESS=never each slug is marked offline: the
+    # satellite's root helper installs its apt packages from the local
+    # caches only (apt-get --no-download), never from the internet.
+    offline = egress.internet_turned_off()
     for entry in await enabled_satellite_plugins():
         slug, decl = entry["slug"], entry["decl"]
         plugin_files = payload_files(entry["root"], decl)
@@ -150,6 +155,8 @@ async def build_channel_manifest() -> dict[str, Any]:
             "pip_lockfile": decl["pip_lockfile"],
             "post_install": decl["post_install"],
         }
+        if offline:
+            meta[slug]["offline"] = True
     return {"files": files, "meta": meta}
 
 

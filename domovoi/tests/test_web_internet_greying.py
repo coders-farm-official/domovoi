@@ -48,6 +48,11 @@ globalThis.relTime = () => 'just now';
 """
 
 MODEL = {"name": "qwen2.5:7b", "role": "qa", "desc": "a model", "est_vram_gb": 5}
+# Whisper sizes, one on disk and one not (the catalog's `cached`).
+WHISPER_ROWS = [
+    {"name": "small.en", "compute": "auto", "accuracy": "good", "est_vram_gb": 1, "cached": True},
+    {"name": "medium.en", "compute": "auto", "accuracy": "better", "est_vram_gb": 2, "cached": False},
+]
 STATION_ONLINE = {"id": 4, "name": "KEXP", "source": "online",
                   "stream_url": "https://kexp.example/stream.mp3", "favorited": True,
                   "sample_interval_sec": 180, "tags": []}
@@ -69,14 +74,21 @@ def _scenarios(answer: str) -> dict:
             "setup": SETUP,
             "api": {**cfg,
                     "GET /api/models/installed": {"installed": [], "ollama_reachable": True},
-                    "GET /api/models/catalog": {"ollama": [MODEL], "whisper": []},
+                    "GET /api/models/catalog": {"ollama": [MODEL], "whisper": WHISPER_ROWS},
                     "GET /api/models/active": {"roles": []},
                     "GET /api/models/hardware": {"gpus": [], "ram": None},
                     "GET /api/models/jobs": {"jobs": []}},
-            "script": ("h.render();"
+            "script": ("h.render(); await h.settle(); h.rerender();"
                        " const installs = h.findAll({ type: 'button', text: 'Install' }).map((b) => h.plain(b).props);"
-                       " const box = h.find({ type: 'input', placeholder: 'Pull by name (e.g. qwen2.5:7b)' });"
-                       " return { installs, box: box && h.plain(box).props, calls: h.calls.length };"),
+                       " const box = h.find((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'));"
+                       " const uses = h.findAll({ type: 'button', text: 'Use (restart)' }).map((b) => h.plain(b).props);"
+                       " const notOnDisk = h.findAll((el) => String(el.props.className || '').includes('stt-not-cached')).length;"
+                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'), 'nas.local/library/qwen2.5:7b');"
+                       " const lanInstall = h.plain(h.findAll({ type: 'button', text: 'Install' })[0]).props;"
+                       " await h.type((el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull'), 'qwen2.5:7b');"
+                       " const netInstall = h.plain(h.findAll({ type: 'button', text: 'Install' })[0]).props;"
+                       " return { installs, box: box && h.plain(box).props, uses, notOnDisk, lanInstall, netInstall,"
+                       "  calls: h.calls.length };"),
         },
         f"plugins_{answer or 'unset'}": {
             "files": [COMPONENTS, "web/static/plugins.jsx"], "component": "PluginsPage",
@@ -158,10 +170,22 @@ def _greyed(props: dict | None) -> bool:
 def test_models_install_is_greyed_under_never(driven) -> None:
     off, on = driven["models_never"], driven["models_unset"]
     assert off["installs"] and all(_greyed(b) for b in off["installs"])
-    assert off["box"]["disabled"] is True and off["box"]["title"] == NEEDS
+    # The pull-by-name box stays usable: a registry in the house is allowed.
+    assert not off["box"].get("disabled") and "registry in the house" in off["box"]["placeholder"]
+    assert not off["lanInstall"].get("disabled")       # nas.local/... may be pulled
+    assert _greyed(off["netInstall"])                  # the public registry may not
     assert on["installs"] and not any(b.get("disabled") for b in on["installs"])
     assert not on["box"].get("disabled")
     assert off["calls"] == on["calls"] == 0          # the answer is a hook read
+
+
+def test_whisper_sizes_not_on_disk_are_greyed_under_never(driven) -> None:
+    off, on = driven["models_never"], driven["models_unset"]
+    assert len(off["uses"]) == 2 and len(on["uses"]) == 2
+    assert not off["uses"][0].get("disabled")          # small.en is on disk
+    assert _greyed(off["uses"][1])                     # medium.en isn't: it couldn't load
+    assert not any(b.get("disabled") for b in on["uses"])
+    assert off["notOnDisk"] == on["notOnDisk"] == 1    # said on every answer
 
 
 def test_plugins_github_is_greyed_and_zip_stays(driven) -> None:

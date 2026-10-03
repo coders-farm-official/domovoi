@@ -509,8 +509,8 @@ Some fleet-level things worth doing once you have two or more rooms:
 Optional, in rough order of payoff:
 
 **If your Domovoi has internet, finish the extras.** Answering **Yes**
-already started web answers, artist names and podcast downloads. What's
-left: your town for local news, a free AcoustID application key for badly
+already started web answers and artist names; podcast downloads start
+after the next restart. What's left: your town for local news, a free AcoustID application key for badly
 tagged music, and your radio market for "play 97.5 FM". The exact settings
 and why each one helps:
 [If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet).

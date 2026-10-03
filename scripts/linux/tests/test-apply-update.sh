@@ -30,8 +30,9 @@
 #   * the venv's `python -m domovoi.egress --print-policy` prints the
 #     internet answer held in internet-policy (nothing: unanswered), and
 #     `docker compose` / `docker inspect` / `docker stop` model the search
-#     helper (SearXNG): compose can be told to fail, inspect reports
-#     searxng-running.
+#     helper (SearXNG): compose can be told to fail or to hang, inspect
+#     reports searxng-running; a systemd-run shim (write_systemd_run) logs
+#     the detached start.
 #
 # Usage: bash scripts/linux/tests/test-apply-update.sh
 # Exit status is non-zero if any case failed. Set HARNESS_PYTHON to a Python
@@ -188,6 +189,8 @@ case "${1-}" in
     if [ -f "$SHIM_STATE/fail-docker-compose" ]; then
       echo "Error response from daemon: pull access denied" >&2; exit 1
     fi
+    # A first start that never finishes (an image pull on a slow line).
+    if [ -f "$SHIM_STATE/hang-docker-compose" ]; then exec sleep 30; fi
     case " $* " in *" up "*) echo true >"$SHIM_STATE/searxng-running" ;; esac
     exit 0
     ;;
@@ -433,6 +436,8 @@ run_update() {
     DOMOVOI_UPDATE_STOP_TIMEOUT="${STOP_TIMEOUT:-5}" \
     DOMOVOI_UPDATE_STOP_KILL_WAIT=1 \
     DOMOVOI_UPDATE_KEEP_BACKUPS="${KEEP_BACKUPS:-5}" \
+    DOMOVOI_UPDATE_SEARXNG_DETACH="${SEARXNG_DETACH:-0}" \
+    DOMOVOI_UPDATE_SEARXNG_TIMEOUT="${SEARXNG_TIMEOUT:-300}" \
     "${run[@]}" >"$CASE/output.log" 2>&1 || RC=$?
   RESULT=$UPD/last-result.json
 }
@@ -1392,6 +1397,117 @@ case_searxng_opt_out_and_an_older_checkout() {
   end_case
 }
 
+# 2026-10-03 review: the first start pulls ~375 MB. Unbounded, it held the
+# update open for the whole pull, and the unit's TimeoutStartSec could kill
+# the run into a "failed" result after core and web were already healthy.
+case_searxng_hung_start_is_bounded_and_the_update_stays_ok() {
+  new_case searxng_hung_start_is_bounded_and_the_update_stays_ok
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  echo always >"$STATE/internet-policy"
+  : >"$STATE/hang-docker-compose"
+  SEARXNG_TIMEOUT=2 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no error" eq "$(field error)" null
+  check "tried to start it" called "up -d --no-deps searxng"
+  check "a warning, not a failure" step_is searxng warn
+  check "the warning says why" eq "$(grep -c 'did not start within 2s' "$RESULT")" 1
+  check "bounded: the step took under 20 s" step_took_under searxng 20
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  check "no rollback" not_called "reset --keep"
+  end_case
+}
+
+write_systemd_run() {
+  local bin=$1
+  mkdir -p "$bin"
+  cat >"$bin/systemd-run" <<'SH'
+#!/usr/bin/env bash
+echo "systemd-run $*" >>"$SHIM_STATE/calls.log"
+exit 0
+SH
+  chmod +x "$bin/systemd-run"
+}
+
+case_searxng_start_detached_under_systemd() {
+  new_case searxng_start_detached_under_systemd
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo sometimes >"$STATE/internet-policy"
+  write_systemd_run "$CASE/sdbin"
+  SEARXNG_DETACH=1 run_update "$CASE/sdbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "handed to a transient unit" called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start docker compose -f $REPO/domovoi/docker-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "the update did not run compose itself" eq "$(grep -c '^docker compose' "$STATE/calls.log")" 0
+  check "a searxng step, ok" step_is searxng ok
+  check "says it starts in the background" eq "$(grep -c 'in the background' "$RESULT")" 1
+  end_case
+}
+
+# 2026-10-03 review: under INTERNET_ACCESS=never the update unit must not
+# go online behind the answer's back (pip, docker build).
+case_never_refuses_a_dependency_update() {
+  new_case never_refuses_a_dependency_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps")
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "says the internet is off" eq "$(field error | grep -c 'internet access is turned off for this box')" 1
+  check "names the dependencies" eq "$(field error | grep -c 'Python dependencies')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no pip" not_called "pip "
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_never_refuses_a_music_image_change() {
+  new_case never_refuses_a_music_image_change
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd image" >/dev/null
+  run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "names the image" eq "$(field error | grep -c 'music player image')" 1
+  check "no docker build" not_called "docker build"
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+case_never_mpd_conf_only_keeps_the_image() {
+  new_case never_mpd_conf_only_keeps_the_image
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  printf 'music_directory "/music"\naudio_output { type "httpd" }\n' >"$REPO/domovoi/mpd.conf"
+  local sha_b; sha_b=$(commit_all "B: mpd.conf")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no docker build" not_called "docker build"
+  check "rooms recreated for the new conf" called "docker rm -f domovoi-mpd-kitchen"
+  check "says why" eq "$(grep -c 'keeping the domovoi-mpd:latest image' "$CASE/output.log")" 1
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_unanswered_dependency_update_reads_the_answer_once() {
+  new_case unanswered_dependency_update_reads_the_answer_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "syncs as before" called "install -e"
+  check "the answer was read before stopping anything" before "domovoi.egress --print-policy" "systemctl stop"
+  end_case
+}
+
 case_noop_restart
 case_noop_without_any_history
 case_deps_changed_as_root
@@ -1436,6 +1552,12 @@ case_searxng_stopped_for_never
 case_searxng_not_running_for_never_is_left_alone
 case_searxng_left_alone_when_unanswered
 case_searxng_opt_out_and_an_older_checkout
+case_searxng_hung_start_is_bounded_and_the_update_stays_ok
+case_searxng_start_detached_under_systemd
+case_never_refuses_a_dependency_update
+case_never_refuses_a_music_image_change
+case_never_mpd_conf_only_keeps_the_image
+case_unanswered_dependency_update_reads_the_answer_once
 
 echo "apply-update harness: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

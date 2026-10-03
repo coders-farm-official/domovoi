@@ -31,7 +31,7 @@ defaults.
 | **Yes, always** | It's on your home internet. | The online extras are on. They pause by themselves when the internet drops and pick up again when it's back. |
 | **Sometimes** | The connection comes and goes, or it's slow or metered. | Small lookups run whenever the internet is up. Big automatic downloads (podcast episodes) stay off until you turn them on. |
 | **No, keep everything in the house** | There's no internet there, or you don't want Domovoi to use it. | Domovoi doesn't contact the internet at all. Online extras are off and say "needs internet"; music, timers, intercom, voice and everything else on your network work as normal. |
-| *not answered yet* | Every server installed before the question existed, and anyone who skips it. | Every default stays as it always was. An admin sees one Home row, **Tell Domovoi whether this box has internet**, until someone answers. |
+| *not answered yet* | Every server installed before the question existed, and anyone who skips it. | Every default stays as it always was. An admin sees one Home row, **tell Domovoi whether this box has internet**, until someone answers. |
 
 "No" means no **internet**, not no network: the satellites, the phones and
 browsers in the house, Ollama, a music share or a feed server on your LAN
@@ -62,8 +62,15 @@ Any one of these; they all set the same thing, `INTERNET_ACCESS`:
   warning in the core's log.
 - **The server's environment** (a systemd `Environment=` line, say). It
   wins over `.env`, and the dashboard then shows the answer as **set in
-  the server's environment** and won't change it, so the core and the
-  dashboard can never disagree.
+  the server's environment** and won't change it. The core and the
+  dashboard are separate processes, so the line goes into **both** units
+  (and, on Linux, into `/etc/default/domovoi-update` for the update
+  unit): a line in the core's unit alone leaves the dashboard asking the
+  question and skips the dashboard's own refusals.
+  [LINUX_HOST.md → Internet or not](LINUX_HOST.md#internet-or-not) has the
+  drop-ins. (One related switch works only from the environment, never
+  from `domovoi/.env`: `DOMOVOI_MANAGE_SEARXNG=0`, which tells Domovoi to
+  leave the search helper's container alone.)
 
 The answer only sets **defaults**. A setting you set yourself, in
 `domovoi/.env`, in the server's environment, or by saving it in the
@@ -140,10 +147,12 @@ recognition on as soon as it has a key. What stays yours to do:
 
    *Why:* tracks with missing or wrong tags get their real artist and
    title, so voice requests find them. Tracks the server looked at before
-   it had a key are tried again by themselves on the next pass; a track
-   is only ever marked "no match" after a lookup really ran, never because
-   the internet was down or there was no key. Names you corrected by hand
-   are kept.
+   it had a key are tried again by themselves, once a lookup has actually
+   answered; a track is only ever marked "no match" after a lookup really
+   ran, never because the internet was down, the key was refused or there
+   was no key. For those older tracks the retry adds MusicBrainz ids and
+   fills tags that are empty; it doesn't rewrite a title or artist they
+   already have, so names you corrected by hand are kept.
 
 3. **FM stations by frequency (radio plugin):** in
    `~/.domovoi/plugins/radio.env` (the home of the user the core runs
@@ -193,10 +202,13 @@ recognition on as soon as it has a key. What stays yours to do:
   **Sometimes** starts it (the first start downloads the pinned image,
   a few hundred MB, in the background); `dev.sh` / `dev.ps1` and the
   Linux update unit start it too, and Docker brings it back after every
-  reboot. It listens on `127.0.0.1:6888`, so the LAN can't reach it. If it
-  isn't running, Domovoi says so ("I can't search the web right now — my
-  search helper isn't running") instead of pretending it searched; start
-  it by hand from `domovoi/` with `docker compose up -d searxng`.
+  reboot. It listens on `127.0.0.1:6888`, so the LAN can't reach it.
+  Settings → Internet shows whether it is starting, running or couldn't
+  start (and why), with a **start it again** button for a first start that
+  failed or timed out. If it isn't running, Domovoi says so ("I can't
+  search the web right now — my search helper isn't running") instead of
+  pretending it searched; by hand, from `domovoi/`:
+  `docker compose up -d searxng`.
 - **Other names for artists** from MusicBrainz, so "play suicide boys"
   finds `$uicideboy$`. It sends your library's artist names to
   musicbrainz.org, one a second (about an hour and a half the first time
@@ -309,6 +321,17 @@ off.
   you can find them again.
 - `HF_HUB_OFFLINE=1` is set for the core at its next start, so the Hugging
   Face libraries don't try either.
+- A room that is playing an internet station stops, and internet stations
+  are taken out of every room's music queue, so neither a reboot (the
+  music player resumes what it had queued) nor "resume" can bring one
+  back. Your own music stays queued.
+- Transfers that were already running stop: a station playing in a
+  browser, a model download (marked "cancelled: internet access was turned
+  off"), a podcast episode download (back to waiting). Song recognition
+  stops by itself.
+- A satellite installs a plugin's system packages from its local package
+  cache only; anything that would need a download waits until the answer
+  changes.
 - Nothing is marked as broken because of it: no feed is flagged dead, no
   episode failed, no track "no match", no radio station unreachable. Turn
   the answer back to Yes and everything picks up where it was.
@@ -348,18 +371,39 @@ your router, it would tell Domovoi the internet is up when it isn't.
 - Downloading models, voices and wake-word training data; installing
   plugins from GitHub (a plugin zip whose Python packages are already
   installed still installs).
-- Updates: **Check for updates** and **Pull the latest** are greyed.
-  For an update, switch the answer to **Sometimes**, pull **and** restart
-  in the same sitting, then switch it back to **No**.
+- Updates: **Check for updates** and **Pull the latest** are greyed, and
+  on Linux the update unit refuses (touching nothing) an update that
+  would download: new Python dependencies, or a new music player image.
+
+#### Updating a box answered No
+
+Switch the answer to **Sometimes**, pull **and** restart in the same
+sitting, then switch it back to **No** and restart once more. While the
+answer is Sometimes, Sometimes is real:
+
+- saving it starts the search helper (the first time that downloads its
+  image, a few hundred MB; every start also fetches its own rule lists,
+  see [What goes out](#what-goes-out));
+- artist names from MusicBrainz follow at once, so the artist-names sweep
+  starts sending your artists' names;
+- the restart boots the news worker.
+
+Switching back to **No** stops the search helper and the artist names at
+once; the second restart turns the news worker off again and sets
+`HF_HUB_OFFLINE` back. To keep that window quiet, set
+`MUSIC_ALIAS_FETCH_ENABLED=false` (Settings → Configuration) before you
+switch; it then stays off whatever the answer says until you press
+**follow the answer again**.
 
 ---
 
 ## Internet in the house, but Domovoi shouldn't use it
 
-Answer **No**: it is real. The server then contacts nothing outside your
-network: no internet check, no feeds, no searches, no voices, no model
-or plugin downloads, no updates, and plugins' requests through the SDK are
-refused too.
+Answer **No**: it is real. Domovoi's own code then contacts nothing
+outside your network: no internet check, no feeds, no searches, no voices,
+no model or plugin downloads, no updates, no internet stations in the
+rooms' music players, and plugins' requests through the SDK are refused
+too.
 
 What the answer can't reach, because it isn't the server:
 
@@ -370,13 +414,26 @@ What the answer can't reach, because it isn't the server:
 - **The satellites' own system** (Raspberry Pi OS): it keeps its clock with
   public time servers, and a satellite being set up installs packages
   over its own connection on its second boot. The Domovoi part of the
-  satellite talks only to the server, and the video satellite's kiosk
-  browser is started with its background traffic switched off.
+  satellite talks only to the server (under **No**, a plugin's system
+  packages come from the satellite's local package cache only), and the
+  video satellite's kiosk browser is started with its background traffic
+  switched off.
 - **Docker Desktop and Ollama themselves** check for their own updates; so
   does the server's operating system.
-- **A third-party plugin** that makes its own connections without the SDK
-  (raw `httpx`, say) is the plugin author's responsibility; its install
-  screen lists what it does.
+- **A plugin that makes its own connections** without the SDK (raw
+  `httpx`, its own downloads, a `docker pull`) is its author's
+  responsibility; its install screen lists what it does, and Settings →
+  Internet lists every enabled plugin that asks for the network as one
+  that "may reach the internet on its own". Today that includes Coders
+  Farm's own optional plugins: the media-provider plugin's dashboard
+  search and stream, Image generation's engine, package and model
+  downloads, and the container images Kiwix, Jellyfin and RomM pull when
+  they set themselves up. Disable one to keep it in the house. (The radio
+  plugin that ships with Domovoi follows the answer.)
+- **A language model outside the house.** Ollama counts as local, but an
+  `OLLAMA_URL` that points at a machine on the internet, or an Ollama
+  "cloud" model (a name ending in `-cloud`), sends every question there.
+  Settings → Internet warns about both under **No**.
 
 If nothing in the house should reach out at all, block the server, and the
 satellites once they are set up, at your router as well.
@@ -390,22 +447,29 @@ satellites once they are set up, at your router as well.
 - shows whether the server is connected right now, not connected, or
   turned off for this box;
 - changes the answer. The search helper starts or stops at once, and so
-  does everything in the [second table](#what-each-answer-changes);
+  does everything in the [second table](#what-each-answer-changes). Saves
+  are applied one after another: switch to Yes and then to No while the
+  helper's first download runs, and it is stopped as soon as the download
+  ends;
+- shows the search helper's state, with **start it again**;
 - lists every setting that follows the answer, with its value and a tag:
   - **follows the answer**;
-  - **set by you · follow the answer again**: the button hands it back to
-    the answer. That comments its line out of `domovoi/.env` (the line
-    stays in the file, marked, so you can see what it was) and applies the
+  - **set in domovoi/.env · follow the answer again**: set by hand (or by
+    an older `.env` template, below). The button hands it back to the
+    answer: it comments the line out of `domovoi/.env` (the line stays in
+    the file, marked, so you can see what it was) and applies the
     answer's value;
   - **set in the server's environment**: change it there;
+- lists the plugins that may reach the internet on their own, and, under
+  **No**, warns about a language model outside the house;
 - says when a restart is needed, the same way Settings → Configuration
   does.
 
 **Installed before October 2026?** Your `domovoi/.env` was copied from an
 older `.env.example`, which set `SEED_VOICE_CATALOG=true` and
-`LIBRARY_ENRICHER_ENABLED=true` explicitly. Those two count as set by you,
-so the answer leaves them alone until you press **follow the answer again**
-next to them.
+`LIBRARY_ENRICHER_ENABLED=true` explicitly. Those two show as **set in
+domovoi/.env**, so the answer leaves them alone until you press **follow
+the answer again** next to them.
 
 **Going online:** switch to **Yes** or **Sometimes**, then do the
 [items that stay yours](#if-your-domovoi-will-have-internet).
@@ -421,7 +485,12 @@ None of the extras send your voice or recordings. With the internet
 allowed, they send short text:
 
 - a question or claim you asked to have checked online, through your own
-  SearXNG, which passes it on to public search engines;
+  SearXNG, which passes it on to public search engines. SearXNG also
+  fetches a few things of its own every time its container starts, before
+  anyone searches: the ClearURLs rule lists (clearurls.xyz,
+  raw.githubusercontent.com), a Wikidata query, and the radio-browser
+  server list. That is why **No** stops the container instead of just not
+  searching;
 - your library's artist names, to musicbrainz.org (the artist-names
   extra);
 - the addresses of news feeds and of the podcasts you subscribe to, and a

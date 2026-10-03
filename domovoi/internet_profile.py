@@ -33,7 +33,9 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter
 
@@ -52,12 +54,13 @@ from domovoi.config import (
 
 log = logging.getLogger(__name__)
 
-HF_RESTART_NOTE = "Hugging Face checks follow after a restart"
+HF_RESTART_NOTE = "the speech models switch their download checks after a restart"
 NOT_IN_PROFILE = "not a setting that follows the internet answer"
 ANSWER_LOCKED = "set in the server's environment (INTERNET_ACCESS); change it there"
 
 # What Settings → Internet shows for each answer (contract 5.7.4). The
-# Windows installer asks the same question with the same words.
+# Windows installer's question uses these labels too
+# (windows-installer/INTERNET-PROFILE.md §3).
 CHOICES: list[dict[str, str]] = [
     {
         "value": "always",
@@ -338,6 +341,68 @@ def _connectivity(probe: Any) -> dict[str, Any]:
     }
 
 
+def network_plugins() -> list[dict[str, Any]]:
+    """Loaded plugins whose manifest asks for the network
+    (``permissions.network = true``). A plugin that uses the SDK's HTTP
+    client follows the answer; one with its own HTTP code or a
+    ``docker pull`` may not. ``bundled`` marks the plugins shipped in this
+    repo (the radio plugin), which follow it."""
+    try:
+        from domovoi.plugins_runtime.loader import LOADER, bundled_root
+
+        root = bundled_root().resolve()
+        out: list[dict[str, Any]] = []
+        for slug, lp in sorted(LOADER.loaded.items()):
+            perms = getattr(lp.manifest, "permissions", {}) or {}
+            if not perms.get("network"):
+                continue
+            try:
+                bundled = Path(lp.install_dir).resolve().is_relative_to(root)
+            except (OSError, ValueError):
+                bundled = False
+            out.append({"slug": slug, "name": lp.manifest.name or slug, "bundled": bundled})
+        return out
+    except Exception as e:  # noqa: BLE001 — a status page must render
+        log.debug("internet status: couldn't list network plugins: %s", e)
+        return []
+
+
+def _is_cloud_model(name: object) -> bool:
+    text = str(name or "").strip().lower()
+    return text.endswith("-cloud") or text.endswith(":cloud")
+
+
+def never_warnings(s: Any = None) -> list[str]:
+    """Things a box answered No still sends out, which the gate can't stop
+    because the core treats them as local: a language-model server
+    (``OLLAMA_URL``) that is not on this network, and an Ollama cloud
+    model (local Ollama forwards those to ollama.com). Empty unless the
+    answer is ``never``."""
+    s = settings if s is None else s
+    if egress.normalize_policy(getattr(s, "internet_access", "")) != "never":
+        return []
+    out: list[str] = []
+    url = str(getattr(s, "ollama_url", "") or "")
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        host = ""
+    if host and not egress.is_local_host(host):
+        out.append(
+            f"The language model server ({url}) is not on this network, so every "
+            "question you ask Domovoi goes to it. Point OLLAMA_URL at an Ollama in "
+            "the house to keep them here."
+        )
+    for field_name in ("ollama_model", "ollama_tool_model", "ollama_vision_model"):
+        model = getattr(s, field_name, "")
+        if _is_cloud_model(model):
+            out.append(
+                f"The model {model} ({field_name.upper()}) runs in Ollama's cloud, so "
+                "what you ask it leaves the house. Pick a model that runs on this box."
+            )
+    return out
+
+
 def status(s: Any = None, probe: Any = None) -> dict[str, Any]:
     """The Settings → Internet document (``GET /v1/admin/internet``)."""
     s = settings if s is None else s
@@ -368,6 +433,8 @@ def status(s: Any = None, probe: Any = None) -> dict[str, Any]:
     hf_now = hf_hub_offline_now()
     if hf_now != hf_hub_offline_next_boot(boot_answer):
         restart_required.append("internet_access")
+    from domovoi import searxng_service
+
     return {
         "answer": answer,
         "answer_locked": answer_locked(),
@@ -378,6 +445,13 @@ def status(s: Any = None, probe: Any = None) -> dict[str, Any]:
         "hf_hub_offline": hf_now,
         "features": features,
         "restart_required": restart_required,
+        # The local search helper behind web answers (SearXNG): what the
+        # last start/stop in this process did, and whether one runs now.
+        "search_helper": searxng_service.status(),
+        # Add-ons that may reach the internet with their own code.
+        "network_plugins": network_plugins(),
+        # Under never: what still leaves the house that the gate can't see.
+        "warnings": never_warnings(s),
     }
 
 

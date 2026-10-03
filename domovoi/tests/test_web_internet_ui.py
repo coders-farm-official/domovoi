@@ -13,8 +13,11 @@
   Train.
 * The first-run step after the admin password, its "Decide later", and
   that it is never offered when the answer is already set.
-* Home's admin row "Tell Domovoi whether this box has internet" while the
+* Home's admin row "tell Domovoi whether this box has internet" while the
   answer is unset, and that it opens Settings → Internet.
+* The search helper's state and "start it again", the plugins that may
+  reach the internet on their own, the never-only warnings, and the
+  internet answer's restart note shown without a technical label.
 
 ``jsx_interact_harness.js`` compiles the real components with the
 dashboard's own Babel; the Home scenarios reuse ``test_web_home_page``'s
@@ -442,6 +445,64 @@ SCENARIOS["first_run_already_answered"] = _first_run("none", answer="never")
 SCENARIOS["login_never_asks"] = _first_run("none", setup_done=True)
 
 
+HELPER_FAILED = {"state": "failed", "detail": "Error response from daemon: pull access denied",
+                 "at": "2026-10-03T10:00:00+00:00", "managed": True}
+NOTE = "the speech models switch their download checks after a restart"
+
+
+def _doc_plus(answer, **extra) -> dict:
+    d = doc(answer, reason="turned_off" if answer == "never" else "connected")
+    d.update(extra)
+    return d
+
+
+SCENARIOS["panel_helper_and_plugins"] = {
+    "files": [COMPONENTS, SETTINGS], "component": PANEL, "setup": _setup("always"),
+    "api": {"GET /api/config/internet": _doc_plus(
+                "always", search_helper=HELPER_FAILED, warnings=[],
+                network_plugins=[{"slug": "kiwix", "name": "Kiwix", "bundled": False},
+                                 {"slug": "radio", "name": "Radio", "bundled": True}]),
+            "POST /api/config/internet/search-helper": {"scheduled": True,
+                                                        "search_helper": dict(HELPER_FAILED, state="starting")}},
+    "script": r"""
+      const w = h.global('window');
+      h.render(); await w.__settle(h);
+      const out = { helper: w.__byClass(h, 'internet-search-helper').map((e) => w.__deep(e)),
+                    plugins: w.__byClass(h, 'internet-network-plugins').map((e) => w.__deep(e)),
+                    warnings: w.__byClass(h, 'internet-warnings').length,
+                    again: w.__button(h, 'start it again') };
+      await h.click({ type: 'button', text: 'start it again' });
+      await w.__settle(h);
+      out.calls = h.calls.filter((c) => c.method !== 'GET').map((c) => ({ m: c.method, p: c.path, b: c.body }));
+      return out;
+    """,
+}
+
+SCENARIOS["panel_never_warnings_and_note"] = {
+    "files": [COMPONENTS, SETTINGS], "component": PANEL, "setup": _setup("sometimes"),
+    "api": {"GET /api/config/internet": _doc_plus(
+                "sometimes", search_helper={"state": "running", "detail": "", "at": None, "managed": True},
+                network_plugins=[{"slug": "radio", "name": "Radio", "bundled": True}],
+                warnings=["The language model server (https://ollama.example.com) is not on this network."]),
+            "PATCH /api/config/editable": {"applied": ["internet_access"],
+                                           "restart_required": ["news_enabled", "internet_access"],
+                                           "rejected": {}, "normalized": {"internet_access": NOTE},
+                                           "followed": []}},
+    "script": r"""
+      const w = h.global('window');
+      h.render(); await w.__settle(h);
+      const before = { helper: w.__byClass(h, 'internet-search-helper').map((e) => w.__deep(e)),
+                       again: w.__button(h, 'start it again'),
+                       plugins: w.__byClass(h, 'internet-network-plugins').length,
+                       warnings: w.__byClass(h, 'internet-warnings').map((e) => w.__deep(e)) };
+      await h.change((e) => e.type === 'input' && e.props.type === 'radio' && e.props.value === 'never', true);
+      await h.click({ type: 'button', text: 'Save' });
+      await w.__settle(h);
+      return { before, texts: h.text(), restart: w.__byClass(h, 'internet-restart').map((e) => w.__deep(e)) };
+    """,
+}
+
+
 @pytest.fixture(scope="module")
 def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
@@ -479,8 +540,8 @@ def test_saving_an_answer_patches_it_and_tells_the_page(driven) -> None:
     assert o["picked"]["save"]["disabled"] is False
     assert [r["value"] for r in o["picked"]["radios"] if r["checked"]] == ["sometimes"]
     assert o["picked"]["hint"] == ["Web answers use the search helper (SearXNG). Domovoi starts it "
-                                   "when you save Yes or Sometimes; on a Linux appliance an update "
-                                   "also starts it."]
+                                   "when you save Yes or Sometimes (the first time it downloads a few "
+                                   "hundred MB); on a Linux appliance an update also starts it."]
     assert o["calls"] == [{"method": "PATCH", "path": "/api/config/editable",
                            "body": {"changes": {"internet_access": "sometimes"}}}]
     assert o["events"] == [{"type": "domovoi:internet-changed", "detail": {"access": "sometimes"}}]
@@ -503,7 +564,7 @@ def test_the_feature_chips_and_follow_again(driven) -> None:
     assert "Turned off for this box" in o["status"][0]
     assert o["hint"] == 0                                           # no SearXNG hint under No
     rows = {r["name"]: r["text"] for r in o["rows"]}
-    assert "set by you" in rows["news_enabled"] and "follow the answer again" in rows["news_enabled"]
+    assert "set in domovoi/.env" in rows["news_enabled"] and "follow the answer again" in rows["news_enabled"]
     assert "follows the answer" in rows["music_alias_fetch_enabled"]
     assert "set in the server's environment" in rows["podcast_feed_poller_enabled"]
     assert "needs an AcoustID key or the Shazam add-on" in rows["library_enricher_enabled"]
@@ -512,7 +573,38 @@ def test_the_feature_chips_and_follow_again(driven) -> None:
     assert o["follow"] == 1
     assert o["calls"] == [{"method": "PATCH", "path": "/api/config/editable",
                            "body": {"changes": {}, "follow_internet": ["news_enabled"]}}]
-    assert "Extra voices at startup, Hugging Face checks" in o["restart"][0]
+    assert "Extra voices at startup, the speech models\u2019 download checks" in o["restart"][0]
+    assert "Hugging Face" not in o["restart"][0]
+
+
+def test_the_search_helper_state_and_start_it_again(driven) -> None:
+    o = driven["panel_helper_and_plugins"]
+    assert len(o["helper"]) == 1
+    assert "couldn\u2019t start" in o["helper"][0] and "pull access denied" in o["helper"][0]
+    assert o["again"] == {"disabled": False, "title": "runs the same start Domovoi does when you save Yes or Sometimes"}
+    assert o["calls"] == [{"m": "POST", "p": "/api/config/internet/search-helper", "b": {}}]
+
+
+def test_plugins_that_may_reach_the_internet_are_listed(driven) -> None:
+    o = driven["panel_helper_and_plugins"]
+    assert len(o["plugins"]) == 1
+    assert "Kiwix" in o["plugins"][0] and "Radio" not in o["plugins"][0]   # the bundled one follows
+    assert o["warnings"] == 0
+
+
+def test_a_running_helper_offers_no_button_and_never_shows_its_warnings(driven) -> None:
+    o = driven["panel_never_warnings_and_note"]
+    assert o["before"]["again"] is None
+    assert "running" in o["before"]["helper"][0]
+    assert o["before"]["plugins"] == 0                    # only the bundled plugin
+    assert o["before"]["warnings"] == ["The language model server (https://ollama.example.com) is not on this network."]
+
+
+def test_the_internet_restart_note_has_no_technical_label(driven) -> None:
+    o = driven["panel_never_warnings_and_note"]
+    assert NOTE in o["texts"]                             # the note on its own
+    assert not any("Hugging Face" in t for t in o["texts"])
+    assert any("the speech models\u2019 download checks" in t for t in o["restart"])
 
 
 def test_a_signed_out_read_offers_the_sign_in(driven) -> None:
@@ -686,7 +778,7 @@ def test_home_asks_an_admin_while_the_answer_is_unset(home_driven) -> None:
     o = home_driven["admin_unanswered"]
     rows = _internet_rows(o)
     assert len(rows) == 1
-    assert rows[0]["text"] == "Tell Domovoi whether this box has internet"
+    assert rows[0]["text"] == "tell Domovoi whether this box has internet"   # lower case, like its siblings
     assert rows[0]["href"] == "#settings"
     # clicking it opens Settings on the Internet tab
     assert o["hash"] == "settings" and o["tab"] == "internet"

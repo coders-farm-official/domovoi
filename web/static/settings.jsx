@@ -993,7 +993,18 @@ const INTERNET_STATUS_TEXT = {
 const INTERNET_ANSWER_LABEL = { always: 'Yes', sometimes: 'Sometimes', never: 'No' };
 const internetOnOff = (v) => (v === true ? 'on' : v === false ? 'off' : String(v));
 // Names in restart_required → words (a feature's own label, else these).
-const INTERNET_RESTART_WORDS = { internet_access: 'Hugging Face checks' };
+const INTERNET_RESTART_WORDS = { internet_access: 'the speech models’ download checks' };
+// The search helper (SearXNG) behind web answers, as /v1/admin/internet
+// reports it (domovoi/searxng_service.py status()).
+const SEARCH_HELPER_TEXT = {
+  unknown: 'not checked since the Domovoi server started',
+  starting: 'starting (the first time it downloads a few hundred MB, which can take a few minutes)',
+  stopping: 'stopping',
+  running: 'running',
+  stopped: 'stopped',
+  failed: 'couldn’t start',
+  left: 'left as it is',
+};
 
 const InternetFeatureRow = ({ f, following, onFollow }) => {
   const later = f.next_boot_value !== f.value;
@@ -1020,7 +1031,9 @@ const InternetFeatureRow = ({ f, following, onFollow }) => {
       {f.set_by === 'environment' && <Pill tone="warn">set in the server's environment</Pill>}
       {f.set_by === 'env_file' && (
         <>
-          <Pill tone="idle">set by you</Pill>
+          <span title="set by hand, or written there by an older .env template">
+            <Pill tone="idle">set in domovoi/.env</Pill>
+          </span>
           <Button variant="ghost" onClick={() => onFollow(f.name)} disabled={!!following}
                   title="comments out its line in domovoi/.env, so it takes the answer's default again">
             {following === f.name ? 'working…' : 'follow the answer again'}
@@ -1041,6 +1054,8 @@ const InternetPanel = () => {
   const [following, setFollowing] = React.useState(null);
   const [result, setResult] = React.useState(null);
   const [retrying, setRetrying] = React.useState(false);
+  const [helperBusy, setHelperBusy] = React.useState(false);
+  const [helperError, setHelperError] = React.useState(null);
   const signIn = () => { try { Auth.openModal(); } catch { /* auth.js absent */ } };
   const retry = async () => {
     setRetrying(true);
@@ -1074,6 +1089,24 @@ const InternetPanel = () => {
       if (msg) setResult({ error: msg });
     } finally {
       setSaving(false);
+    }
+  };
+
+  // "start it again": the core runs the search helper's start/stop for the
+  // saved answer in the background; the page re-reads its state.
+  const startHelper = async () => {
+    if (helperBusy) return;
+    setHelperBusy(true); setHelperError(null);
+    try {
+      await apiPost('/api/config/internet/search-helper', {});
+      refresh();
+      // A first start downloads the image: look again a little later.
+      setTimeout(() => { refresh(); }, 5000);
+    } catch (e) {
+      const msg = mutationErrorText(e, 'Start the search helper', { kept: false });
+      if (msg) setHelperError(msg);
+    } finally {
+      setHelperBusy(false);
     }
   };
 
@@ -1123,6 +1156,15 @@ const InternetPanel = () => {
     ? result.restart_required : (data.restart_required || []);
   const refusedText = result && result.rejected ? Object.entries(result.rejected) : [];
   const notes = result && result.normalized ? Object.entries(result.normalized) : [];
+  // The internet answer's own note already says what it is about: no label.
+  const noteText = ([k, v]) => (k === 'internet_access' ? v : `${labelOf(k)}: ${v}`);
+  const helper = data.search_helper || null;
+  const helperWanted = answer === 'always' || answer === 'sometimes';
+  const helperShown = helper && helper.managed !== false && (helperWanted || helper.state === 'failed');
+  const helperCanRetry = helperWanted && !locked && helper
+    && !['running', 'starting', 'stopping', 'unmanaged'].includes(helper.state);
+  const ownNetPlugins = (data.network_plugins || []).filter((p) => !p.bundled);
+  const warnings = data.warnings || [];
 
   return (
     <React.Fragment>
@@ -1161,7 +1203,36 @@ const InternetPanel = () => {
           {(selected === 'always' || selected === 'sometimes') && (
             <div className="internet-searxng-hint" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6, lineHeight: 1.5 }}>
               Web answers use the search helper (SearXNG). Domovoi starts it when you save Yes or
-              Sometimes; on a Linux appliance an update also starts it.
+              Sometimes (the first time it downloads a few hundred MB); on a Linux appliance an
+              update also starts it.
+            </div>
+          )}
+          {helperShown && (
+            <div className="internet-search-helper" data-state={helper.state}
+                 style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ color: helper.state === 'failed' ? 'var(--err)' : 'var(--fg-muted)' }}>
+                Search helper: {SEARCH_HELPER_TEXT[helper.state] || helper.state}
+                {helper.state === 'failed' && helper.detail ? ` (${helper.detail})` : ''}
+              </span>
+              {helperCanRetry && (
+                <Button variant="ghost" icon="refresh-cw" onClick={startHelper} disabled={helperBusy}
+                        title="runs the same start Domovoi does when you save Yes or Sometimes">
+                  {helperBusy ? 'starting…' : (helper.state === 'unknown' ? 'check it' : 'start it again')}
+                </Button>
+              )}
+              {helperError && <span style={{ color: 'var(--err)' }}>{helperError}</span>}
+            </div>
+          )}
+          {warnings.length > 0 && (
+            <div className="internet-warnings" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8, lineHeight: 1.5 }}>
+              {warnings.map((w, i) => <div key={i}>{w}</div>)}
+            </div>
+          )}
+          {ownNetPlugins.length > 0 && (
+            <div className="internet-network-plugins" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6, lineHeight: 1.5 }}>
+              Add-ons that may reach the internet on their own, whatever you answer:{' '}
+              {ownNetPlugins.map((p) => p.name).join(', ')}. Disable one on the Plugins page to keep it
+              in the house.
             </div>
           )}
           <div className="internet-edge-note" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
@@ -1177,7 +1248,7 @@ const InternetPanel = () => {
           )}
           {notes.length > 0 && (
             <div style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
-              {notes.map(([k, v]) => `${labelOf(k)}: ${v}`).join('; ')}
+              {notes.map(noteText).join('; ')}
             </div>
           )}
           {restartNames.length > 0 && (

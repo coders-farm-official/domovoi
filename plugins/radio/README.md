@@ -129,6 +129,20 @@ through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
   (HTTP 409 from the API). The Stations page greys those controls with
   "needs internet" and opens on local FM. Saving, editing and forgetting
   stations still work: nothing is fetched until the answer changes.
+  A browser stream that is already playing when the answer becomes No is
+  cut off, and the core stops a room that is playing an internet station
+  and takes internet stations out of every room's queue.
+* **Adding an FM station by hand** (no FCC import needed), with the
+  household device token:
+
+  ```
+  curl -X POST http://<server>:6369/api/plugins/radio/stations \
+    -H "X-Device-Token: <token>" -H "X-Requested-With: XMLHttpRequest" \
+    -H "Content-Type: application/json" \
+    -d '{"name": "KBCO", "source": "fm", "frequency_mhz": 97.3, "market_state": "CO", "market_city": "Boulder", "call_sign": "KBCO"}'
+  ```
+
+  "Play 97.3 FM" then finds it in that market.
 
 ## Privacy & permissions (what the manifest warns about)
 

@@ -33,9 +33,13 @@ SpokenAudioHandler's ``fallback_offline`` path); only polling/downloading
 needs the network.
 
 A download that fails because the internet is unreachable or turned off
-is not a verdict on the episode: it goes back to ``pending`` (and the
-pass stops downloading), never ``failed``. A refused or broken URL, an
-HTTP error and an over-cap body are still ``failed``.
+is not a verdict on the episode: it goes back to ``pending``, never
+``failed``, and the pass moves on to the next episode — one show's dead
+or slow host must not hold up every other show. The pass stops
+downloading only when the line itself is gone (internet access turned
+off, the probe reading offline after the failure, or three such failures
+in a row). A refused or broken URL, an HTTP error and an over-cap body
+are still ``failed``.
 
 Each poll also stores the show's artwork on the server
 (``domovoi.podcast_artwork``), which is what the clients display.
@@ -51,7 +55,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from domovoi import egress, net_safety, podcast_artwork
+from domovoi import connectivity, egress, net_safety, podcast_artwork
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.workers.base import Worker
@@ -405,6 +409,9 @@ async def download_episode(session, episode: dict[str, Any]) -> bool | None:
                     async for chunk in net_safety.iter_capped(
                         r, MAX_ENCLOSURE_BYTES
                     ):
+                        # Switching the box to "never" stops a download
+                        # that is already running (back to pending).
+                        egress.require_destination(url)
                         fh.write(chunk)
             finally:
                 await r.aclose()
@@ -451,6 +458,59 @@ async def download_episode(session, episode: dict[str, Any]) -> bool | None:
     )
     log.info("podcast download complete ep=%s -> %s", ep_id, dest)
     return True
+
+
+# A pass gives up on the rest of its downloads after this many transient
+# failures in a row (the line is probably down even if the probe hasn't
+# noticed yet). One dead host is not a down line: the others go on.
+MAX_TRANSIENT_FAILURES_IN_A_ROW = 3
+
+
+async def _line_is_down() -> bool:
+    """After a transient download failure: is the internet itself gone
+    (turned off for this box, or the connectivity probe now reads
+    offline), rather than this one episode's host?"""
+    if egress.internet_turned_off():
+        return True
+    probe = connectivity.current_probe()
+    if probe is None:
+        return False
+    try:
+        await probe.check_now()
+    except Exception as e:  # noqa: BLE001 — a probe failure says nothing
+        log.debug("podcast poller: probe re-check failed: %s", e)
+        return False
+    return not probe.online
+
+
+async def download_pending(session, pending: list[dict[str, Any]]) -> int:
+    """Download ``pending`` episodes in order; return how many finished.
+
+    A transient failure (:func:`is_transient_fetch_error`) leaves that
+    episode pending and moves on to the next one — one show's dead or
+    slow host must not starve every other show. The pass stops early only
+    when the line itself is gone: internet access turned off, the probe
+    reading offline after the failure, or
+    :data:`MAX_TRANSIENT_FAILURES_IN_A_ROW` transient failures in a row."""
+    downloaded = 0
+    transient_run = 0
+    for ep in pending:
+        ok = await download_episode(session, ep)
+        if ok:
+            downloaded += 1
+            transient_run = 0
+        elif ok is None:
+            transient_run += 1
+            if transient_run >= MAX_TRANSIENT_FAILURES_IN_A_ROW or await _line_is_down():
+                # Leave the rest pending for the next pass.
+                log.info(
+                    "podcast poller: the internet looks unavailable; leaving "
+                    "the remaining downloads for the next pass"
+                )
+                break
+        else:
+            transient_run = 0
+    return downloaded
 
 
 class PodcastFeedPoller(Worker):
@@ -514,14 +574,7 @@ class PodcastFeedPoller(Worker):
                     )
                 )
             ).mappings().all()
-            for ep in pending:
-                ok = await download_episode(session, dict(ep))
-                if ok:
-                    downloaded += 1
-                elif ok is None:
-                    # The line is down (or internet access turned off):
-                    # leave the rest pending for the next pass.
-                    break
+            downloaded += await download_pending(session, [dict(ep) for ep in pending])
 
             for sub in subs:
                 evicted += await enforce_keep_n(session, sub["id"], sub["keep_n"])
