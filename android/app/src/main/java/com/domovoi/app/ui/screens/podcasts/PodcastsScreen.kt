@@ -49,6 +49,7 @@ import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.PlayItem
+import com.domovoi.app.player.PodcastArtwork
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.DomovoiCard
@@ -226,12 +227,15 @@ private fun SubscriptionCard(sub: PodcastSubscription, onClick: () -> Unit) {
     }
 }
 
-/** Artwork square with a podcast-glyph fallback (web PodArt). */
+/** Artwork square with a podcast-glyph fallback (web PodArt). Only a
+ *  server path is loaded, from the active server; an absolute URL draws the
+ *  placeholder (PodcastArtwork, fix B11). */
 @Composable
 internal fun PodArt(url: String?, size: Int) {
     val app = LocalApp.current
     val shape = RoundedCornerShape(8.dp)
-    if (url.isNullOrBlank()) {
+    val model = PodcastArtwork.model(url, app.api::absolute)
+    if (model == null) {
         Box(
             Modifier.size(size.dp)
                 .background(Domovoi.colors.sunken, shape)
@@ -247,7 +251,7 @@ internal fun PodArt(url: String?, size: Int) {
         }
     } else {
         AsyncImage(
-            model = app.api.absolute(url),
+            model = model,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.size(size.dp)

@@ -872,6 +872,10 @@ class Settings(BaseSettings):
     # doesn't set its own. LRU eviction removes downloaded episodes beyond
     # this window (the file is deleted, the row flips to 'skipped').
     podcast_keep_n: int = 5
+    # Podcast artwork the SERVER fetched (on subscribe and on each feed
+    # poll) and serves at /api/podcasts/subscriptions/{id}/artwork, so the
+    # browser and the phone never load a publisher's image themselves.
+    podcast_artwork_dir: str = os.path.expanduser("~/.domovoi/podcast_artwork")
     # Audiobook indexer cadence (like library_fingerprinter_inner_loop_sec).
     # Books are added rarely (drop an .m4b in, import a LibriVox title), so a
     # slow poll is fine; the startup sweep + a manual reindex endpoint cover

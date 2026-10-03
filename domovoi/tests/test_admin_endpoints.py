@@ -331,10 +331,56 @@ async def test_admin_library_reindex_returns_queued_ack() -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_admin_library_enrich_returns_queued_ack() -> None:
+async def test_admin_library_enrich_returns_queued_ack(monkeypatch) -> None:
+    # It queues only when it can do something (fix B3): pin a provider and
+    # an online probe, and keep the sweep itself out of this test.
+    from domovoi.workers import library_enricher
+
+    monkeypatch.setattr(library_enricher, "provider_available", lambda: True)
+    monkeypatch.setattr(library_enricher, "enrich_library", AsyncMock(return_value={}))
+    monkeypatch.setattr(library_enricher.settings, "library_enricher_enabled", True)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
+        app.state.probe.online = True
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post("/v1/admin/library/enrich")
         assert r.status_code == 200
         assert r.json() == {"queued": True, "worker": "library_enricher"}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_admin_library_enrich_without_a_provider_queues_nothing(monkeypatch) -> None:
+    from domovoi.workers import library_enricher
+
+    sweep = AsyncMock(return_value={})
+    monkeypatch.setattr(library_enricher, "provider_available", lambda: False)
+    monkeypatch.setattr(library_enricher, "enrich_library", sweep)
+    monkeypatch.setattr(library_enricher.settings, "library_enricher_enabled", True)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        app.state.probe.online = True
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post("/v1/admin/library/enrich")
+        assert r.status_code == 200
+        assert r.json() == {"queued": False, "reason": "no_provider"}
+    sweep.assert_not_called()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_admin_library_enrich_under_never_is_the_internet_off_409(monkeypatch) -> None:
+    from domovoi import egress
+    from domovoi.workers import library_enricher
+
+    sweep = AsyncMock(return_value={})
+    monkeypatch.setattr(library_enricher, "enrich_library", sweep)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with egress.override_policy("never"):
+                r = await client.post("/v1/admin/library/enrich")
+        assert r.status_code == 409
+        assert r.json()["detail"] == egress.TURNED_OFF_REASON
+        assert r.headers["X-Domovoi-Refusal"] == "internet-off"
+    sweep.assert_not_called()

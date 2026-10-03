@@ -12,10 +12,48 @@
  *   * POST /api/podcasts/poll                     — manual feed poll now
  *   * /ws/state · podcasts.changed                — refresh subs/episodes
  *   * /ws/state · podcast_positions.changed       — refresh resume positions
+ *
+ * Artwork (fix B11): every `artwork` the API returns is a SERVER path
+ * (/api/podcasts/subscriptions/{id}/artwork, /api/podcasts/discover/artwork/
+ * {key}) or null — the server fetched the image. PodArt draws only such a
+ * path; anything else gets the placeholder, so this page never makes the
+ * browser contact a publisher.
+ *
+ * Internet answer "never" (components.jsx useInternetPolicy): search, poll
+ * now and the directory are greyed with the "needs internet" note;
+ * subscribing by RSS URL stays.
  */
+
+// The internet answer and its refusal text (components.jsx, internet-build
+// 5.10). Guarded so the page still renders on a dashboard without them.
+const usePodcastsInternet = () => (
+  typeof useInternetPolicy === 'function' ? useInternetPolicy() : { off: false }
+);
+const podcastsFailText = (e, fallback) => (
+  typeof isInternetOffError === 'function' && isInternetOffError(e) ? INTERNET_OFF_MESSAGE : fallback
+);
+const podcastsNeedsInternetTitle = (off) => (
+  off ? (typeof NEEDS_INTERNET_TEXT === 'string' ? NEEDS_INTERNET_TEXT : 'needs internet') : undefined
+);
+const PodcastsNeedsInternet = () => (
+  typeof NeedsInternetNote === 'function'
+    ? <NeedsInternetNote compact/>
+    : <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>needs internet</span>
+);
+
+/* A podcast artwork value the page may load: only a server path (/api/…),
+ * resolved against the selected server (API_BASE). A remote URL — an old
+ * server's answer — or a protocol-relative //host/… is never handed to the
+ * browser. */
+const podcastArtSrc = (url) => (
+  typeof url === 'string' && url.startsWith('/api/')
+    ? `${typeof API_BASE === 'string' ? API_BASE : ''}${url}`
+    : null
+);
 
 const PodcastsPage = () => {
   const p = usePlayback();
+  const net = usePodcastsInternet();
   const [fire, toastNode] = useToast();
   const { items: subs, refresh } = useApiList('/api/podcasts/subscriptions', {
     eventTypes: ['podcasts.changed'],
@@ -31,7 +69,7 @@ const PodcastsPage = () => {
       const r = await apiPost('/api/podcasts/poll', {});
       fire(`Polled — ${r.downloaded || 0} downloaded, ${r.new || 0} new`);
       refresh();
-    } catch { fire('Poll failed (offline?)'); }
+    } catch (e) { fire(podcastsFailText(e, 'Poll failed (offline?)')); }
     setPolling(false);
   };
 
@@ -41,7 +79,9 @@ const PodcastsPage = () => {
                   actions={
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <ListeningAsSelector/>
-                      <Button icon="refresh-cw" onClick={poll} disabled={polling}>{polling ? 'polling…' : 'poll now'}</Button>
+                      <Button icon="refresh-cw" onClick={poll} disabled={polling || net.off}
+                              title={podcastsNeedsInternetTitle(net.off)}>{polling ? 'polling…' : 'poll now'}</Button>
+                      {net.off && <PodcastsNeedsInternet/>}
                       <Button variant="primary" icon="plus" onClick={() => setShowAdd(true)}>subscribe</Button>
                     </div>
                   }/>
@@ -78,7 +118,7 @@ const PodcastsPage = () => {
                          setSelected(null); refresh();
                        }}/>
       )}
-      {showAdd && <SubscribeModal onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); refresh(); }}/>}
+      {showAdd && <SubscribeModal off={net.off} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); refresh(); }}/>}
       {resumePrompt && (
         <ResumePrompt prompt={resumePrompt} onClose={() => setResumePrompt(null)}
                       onResume={() => { p.playSpoken(resumePrompt.item, { resumeSec: resumePrompt.pos.position_sec, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}
@@ -97,14 +137,15 @@ async function playEpisode(p, sub, ep, setResumePrompt) {
   else p.playSpoken(item, { resumeSec: 0, speed: (pos && pos.speed) || 1 });
 }
 
-const PodArt = ({ url, size = 48 }) => (
-  url
-    ? <img src={url} alt="" style={{ width: size, height: size, borderRadius: 'var(--r-sm)', objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }}/>
+const PodArt = ({ url, size = 48 }) => {
+  const src = podcastArtSrc(url);
+  return src
+    ? <img src={src} alt="" style={{ width: size, height: size, borderRadius: 'var(--r-sm)', objectFit: 'cover', border: '1px solid var(--border)', flexShrink: 0 }}/>
     : <div style={{ width: size, height: size, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                     background: 'var(--sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <Icon name="podcast" size={size * 0.45}/>
-      </div>
-);
+      </div>;
+};
 
 const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
   const { items: episodes } = useApiList(`/api/podcasts/subscriptions/${sub.id}/episodes`, {
@@ -154,8 +195,9 @@ const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
   );
 };
 
-const SubscribeModal = ({ onClose, onDone }) => {
-  const [tab, setTab] = React.useState('search');
+const SubscribeModal = ({ off = false, onClose, onDone }) => {
+  // Searching the directory needs the internet; an RSS URL is only stored.
+  const [tab, setTab] = React.useState(off ? 'url' : 'search');
   const [q, setQ] = React.useState('');
   const [results, setResults] = React.useState([]);
   const [feedUrl, setFeedUrl] = React.useState('');
@@ -166,13 +208,13 @@ const SubscribeModal = ({ onClose, onDone }) => {
     if (!q.trim()) return;
     setBusy(true);
     try { setResults(await apiGet(`/api/podcasts/discover?q=${encodeURIComponent(q.trim())}`)); }
-    catch { fire('Discovery needs internet'); }
+    catch (e) { fire(podcastsFailText(e, 'Discovery needs internet')); }
     setBusy(false);
   };
   const subscribe = async (body) => {
     setBusy(true);
     try { await apiPost('/api/podcasts/subscriptions', body); fire('Subscribed'); onDone(); }
-    catch (e) { fire('Subscribe failed'); }
+    catch (e) { fire(podcastsFailText(e, 'Subscribe failed')); }
     setBusy(false);
   };
 
@@ -192,11 +234,14 @@ const SubscribeModal = ({ onClose, onDone }) => {
         </div>
         {tab === 'search' ? (
           <>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="show name…" autoFocus
-                     onKeyDown={(e) => e.key === 'Enter' && search()} style={_inp}/>
-              <Button variant="primary" icon="search" onClick={search} disabled={busy}>search</Button>
+                     disabled={off} title={podcastsNeedsInternetTitle(off)}
+                     onKeyDown={(e) => e.key === 'Enter' && !off && search()} style={_inp}/>
+              <Button variant="primary" icon="search" onClick={search} disabled={busy || off}
+                      title={podcastsNeedsInternetTitle(off)}>search</Button>
             </div>
+            {off && <div style={{ marginTop: 8 }}><PodcastsNeedsInternet/></div>}
             <div style={{ marginTop: 12, maxHeight: '40vh', overflowY: 'auto' }}>
               {results.map((r, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 4px', borderBottom: '1px solid var(--border-soft)' }}>
