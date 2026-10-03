@@ -845,6 +845,34 @@ class Settings(BaseSettings):
     # occasional confident-but-wrong responses on noisy fingerprints.
     library_enricher_acoustid_min_score: float = 0.7
 
+    # ─── Spoken-name matching (music) ───────────────────────────────────
+    # "play suicide boys" finds $uicideboy$, "play generation" GENER8ION:
+    # a spoken request is matched against the library by how names SOUND
+    # (domovoi/handlers/shared/spoken_names.py, library_match.py) before
+    # MusicHandler's plain MPD text search runs. Off = the text search only,
+    # exactly as before. All five apply immediately (read per request/tick).
+    music_match_enabled: bool = True
+    # Score (0-1) at or above which the best match plays without asking.
+    # 0.90 / 0.75 were fixed BEFORE the 2026-10-02 held-out gate was run and
+    # are measured, not tuned, by it — never move them to make the gate pass.
+    music_match_play_threshold: float = 0.90
+    # Score at or above which (and below the play score) Domovoi asks "did
+    # you mean X?" instead of playing; below it, today's search runs. An ask
+    # score at or above the play score means "never ask".
+    music_match_ask_threshold: float = 0.75
+    # Ask "did you mean X?" in that middle band (owner decision 2026-10-02).
+    # Off = the middle band falls through to today's search.
+    music_choice_enabled: bool = True
+    # Fetch spoken aliases ("Suicide Boys", "Dead Mouse") for the library's
+    # artists from MusicBrainz — OPT-IN, OFF by default: it sends artist names
+    # from the library to musicbrainz.org (1 request/s, ~40 min for a few
+    # thousand artists the first time, a few requests per new artist after),
+    # and only while the server is online. People's real names are filtered
+    # out. See domovoi/workers/library_alias_fetch.py.
+    music_alias_fetch_enabled: bool = False
+    # The fetch worker's cadence (it looks up a small batch per tick).
+    music_alias_fetch_interval_sec: float = 30.0
+
     # ─── Session context ───────────────────────────────────────────────
     session_recent_turns_cap: int = 20
 

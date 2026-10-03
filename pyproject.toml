@@ -55,6 +55,17 @@ dependencies = [
     # Direct dependency for the chat-stream helper (clients/ollama.py) and
     # other httpx call sites (was already transitive via the ollama client).
     "httpx>=0.27",
+    # Spoken-name matching for music (handlers/shared/spoken_names.py and
+    # library_match.py: "play suicide boys" finds $uicideboy$). rapidfuzz
+    # (MIT; binary wheels for every CPython incl. cp314 manylinux) scores
+    # spellings; anyascii (ISC, pure Python) transliterates names to ASCII
+    # — NOT unidecode, which is GPL; Metaphone (BSD, pure Python, published
+    # as an sdist only) gives Double Metaphone sounds-alike keys. Number
+    # words are written by hand (spoken_names.int_to_words), not num2words
+    # (LGPL).
+    "rapidfuzz>=3.14",
+    "anyascii>=0.3.3",
+    "Metaphone>=0.6",
 ]
 
 [project.urls]
@@ -227,3 +238,6 @@ include = ["domovoi*", "web*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["domovoi/tests", "plugins/radio/tests", "satellite/tests"]
+markers = [
+    "spoken_gate: the spoken-name resolver on the frozen held-out audit set (opt-in, DOMOVOI_SPOKEN_GATE_DIR); it measures and never tunes",
+]
