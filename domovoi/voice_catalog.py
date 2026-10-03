@@ -11,6 +11,13 @@ by name + model_ref**, so it augments an existing registry on the next boot
 and never disturbs the chosen default — flip the flag off once you've
 curated the list (deleted rows would otherwise reappear on reboot).
 
+Microsoft Edge voices send what Domovoi says to Microsoft, so they are an
+informed opt-in. The configured Edge voice (``TTS_EDGE_VOICE``) is
+registered only when the catalog is on or ``TTS_ENGINE=edge`` — a household
+that never chose Edge gets no Edge voice in its registry — and no Edge
+voice at all (configured or catalog) is registered under
+``INTERNET_ACCESS=never``. Rows already in the registry are never removed.
+
 Labels are the unique first-names you say ("switch to Jenny"); they're kept
 distinct across both engines so the DB's UNIQUE(name) is always satisfied.
 """
@@ -18,6 +25,9 @@ distinct across both engines so the DB's UNIQUE(name) is always satisfied.
 from __future__ import annotations
 
 import logging
+
+from domovoi import egress
+from domovoi.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -74,19 +84,28 @@ def piper_label(model_ref: str) -> str:
 
 
 def planned_voices(
-    *, include_catalog: bool, edge_voice: str, piper_voice: str
+    *,
+    include_catalog: bool,
+    edge_voice: str,
+    piper_voice: str,
+    include_edge_voice: bool,
+    include_edge_catalog: bool = True,
 ) -> list[tuple[str, str, str]]:
     """The de-duplicated ``(engine, name, model_ref)`` list to ensure.
 
-    Always includes the configured Edge + Piper voices (so a default can
-    point at one even with the catalog disabled); prepends the full catalog
-    when enabled. De-duped by ``(engine, model_ref)`` keeping the first
-    label, so a configured voice already in the catalog isn't doubled."""
+    Always includes the configured Piper voice, and the configured Edge
+    voice when ``include_edge_voice`` (so a default can point at either even
+    with the catalog disabled); prepends the full catalog when enabled — its
+    Edge half only when ``include_edge_catalog``. De-duped by ``(engine,
+    model_ref)`` keeping the first label, so a configured voice already in
+    the catalog isn't doubled. Pure: :func:`seed_voices` decides the flags."""
     rows: list[tuple[str, str, str]] = []
     if include_catalog:
-        rows += [("edge", n, r) for n, r in EDGE_CATALOG]
+        if include_edge_catalog:
+            rows += [("edge", n, r) for n, r in EDGE_CATALOG]
         rows += [("piper", n, r) for n, r in PIPER_CATALOG]
-    rows.append(("edge", edge_label(edge_voice), edge_voice))
+    if include_edge_voice:
+        rows.append(("edge", edge_label(edge_voice), edge_voice))
     rows.append(("piper", piper_label(piper_voice), piper_voice))
 
     seen: set[tuple[str, str]] = set()
@@ -106,22 +125,36 @@ async def seed_voices(
     edge_voice: str,
     piper_voice: str,
     default_is_piper: bool,
+    include_edge_voice: bool | None = None,
 ) -> int:
     """Idempotently ensure the planned voices exist and exactly one default
     is set. Returns the number of rows created.
 
-    A row is skipped if its name (case-insensitive) or ``(engine,
-    model_ref)`` already exists, so re-running never duplicates and never
-    raises on the UNIQUE(name) constraint. An existing default is preserved;
-    only a registry with no default gets the configured engine's voice
-    promoted (falling back to the first row)."""
+    ``include_edge_voice`` None (what the boot passes) derives it:
+    ``(include_catalog or settings.tts_engine == "edge")`` and the internet
+    answer isn't ``never``. Under ``never`` the catalog's Edge voices are
+    left out too. A row is skipped if its name (case-insensitive) or
+    ``(engine, model_ref)`` already exists, so re-running never duplicates
+    and never raises on the UNIQUE(name) constraint. An existing default is
+    preserved; only a registry with no default gets the configured engine's
+    voice promoted (falling back to the first row)."""
+    edge_allowed = not egress.internet_turned_off()
+    if include_edge_voice is None:
+        engine_is_edge = (settings.tts_engine or "").strip().lower() == "edge"
+        include_edge_voice = include_catalog or engine_is_edge
+    include_edge_voice = include_edge_voice and edge_allowed
+
     existing = await repo.all()
     names = {v["name"].lower() for v in existing}
     refs = {(v["engine"], v["model_ref"]) for v in existing}
 
     created = 0
     for engine, name, ref in planned_voices(
-        include_catalog=include_catalog, edge_voice=edge_voice, piper_voice=piper_voice
+        include_catalog=include_catalog,
+        edge_voice=edge_voice,
+        piper_voice=piper_voice,
+        include_edge_voice=include_edge_voice,
+        include_edge_catalog=edge_allowed,
     ):
         if name.lower() in names or (engine, ref) in refs:
             continue

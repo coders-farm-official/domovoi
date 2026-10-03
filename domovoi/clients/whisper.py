@@ -24,6 +24,13 @@ a spoken explanation, and :func:`stt_status` tells the dashboard what
 happened. Before this, a CUDA default on a machine with no NVIDIA GPU
 stopped the core at boot, before it had written the first-run setup code,
 so the dashboard that could have fixed the setting could never be claimed.
+
+Every load is local first (``local_files_only=True``): a model already in
+the Hugging Face cache loads with no request to huggingface.co, so the
+installed revision holds and a load never waits on the network. A model
+that isn't on disk is downloaded once, and only while the internet answer
+(``INTERNET_ACCESS``) allows it; under ``never`` the load fails with a hint
+that says so.
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ from typing import Any, Callable, Protocol
 
 import numpy as np
 
+from domovoi import egress
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -221,6 +229,40 @@ def resolve_cpu_threads(configured: int | None = None) -> int:
     return max(1, auto)
 
 
+_NOT_CACHED_PHRASES = (
+    "cannot find the requested files in the local cache",
+    "cannot find an appropriate cached snapshot folder",
+    "outgoing traffic has been disabled",
+)
+
+
+def model_not_cached(exc: BaseException) -> bool:
+    """True when a Whisper load failed only because the model isn't in the
+    local Hugging Face cache (a ``local_files_only`` / offline load of a
+    model that was never downloaded): ``LocalEntryNotFoundError`` anywhere in
+    the cause/context chain, or its message family."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if type(cur).__name__ == "LocalEntryNotFoundError":
+            return True
+        msg = str(cur).lower()
+        if any(p in msg for p in _NOT_CACHED_PHRASES):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _is_local_model_path(model: str) -> bool:
+    """A model given as a directory on disk: faster-whisper loads it as-is,
+    so there is nothing to download and nothing to retry."""
+    try:
+        return os.path.isdir(model)
+    except (TypeError, ValueError):
+        return False
+
+
 def _load_hint(model: str, device: str, compute_type: str, exc: Exception) -> str:
     """Turn a Whisper load failure into an actionable message.
 
@@ -234,6 +276,13 @@ def _load_hint(model: str, device: str, compute_type: str, exc: Exception) -> st
         f"Whisper failed to load (model={model} device={device} "
         f"compute={compute_type}). {detail}"
     )
+    if model_not_cached(exc) and not egress.internet_allowed():
+        return (
+            f"{base}\n"
+            f"  The model isn't downloaded, and {egress.TURNED_OFF_REASON}. "
+            "Download it while online (docs/INTERNET.md, Before you "
+            "disconnect), or pick a model that is already on disk."
+        )
     if device == "cuda":
         return (
             f"{base}\n"
@@ -467,10 +516,29 @@ class FasterWhisperClient:
             "loading Whisper model=%s device=%s compute=%s%s", model, device, compute_type,
             f" cpu_threads={self.cpu_threads}" if self.cpu_threads else "",
         )
+        # Local cache first, on every answer (B6): a cached model loads with
+        # no Hugging Face request at all — not even the revision check
+        # faster-whisper otherwise makes on every load — so the installed
+        # revision is the one that keeps loading. Only a model that isn't on
+        # disk yet is downloaded, once, and only when the internet answer
+        # allows it.
         try:
-            self._model = WhisperModel(model, **kwargs)
+            self._model = WhisperModel(model, local_files_only=True, **kwargs)
         except Exception as e:
-            raise RuntimeError(_load_hint(model, device, compute_type, e)) from e
+            if (
+                _is_local_model_path(model)
+                or not model_not_cached(e)
+                or not egress.internet_allowed()
+            ):
+                raise RuntimeError(_load_hint(model, device, compute_type, e)) from e
+            log.info(
+                "Whisper: model %s isn't in the local cache; downloading it (one time)",
+                model,
+            )
+            try:
+                self._model = WhisperModel(model, **kwargs)
+            except Exception as e2:
+                raise RuntimeError(_load_hint(model, device, compute_type, e2)) from e2
         log.info("Whisper ready")
         self.short_window: ShortWindowDecoder | None = self._load_short_window()
 
