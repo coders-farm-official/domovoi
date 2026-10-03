@@ -63,10 +63,10 @@ const browserPlayable = (st) => {
  * private / loopback / link-local address, a single-label name, or a
  * .local / .lan / .home.arpa / .internal / .localdomain / .localhost name. */
 const radioStreamIsLocal = (url) => {
-  let host = '';
-  try { host = new URL(String(url || '')).hostname.toLowerCase(); }
-  catch (e) { return false; }
-  host = host.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  // The host, by pattern (no URL object: the same answer in every runtime).
+  const hm = String(url || '').match(/^https?:\/\/(?:[^@\/?#]*@)?(\[[^\]]+\]|[^\/:?#]+)/i);
+  if (!hm) return false;
+  const host = hm[1].toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!host) return false;
   if (host === 'localhost' || host === '::1' || !host.includes('.') && !host.includes(':')) return true;
   if (/\.(local|lan|home\.arpa|internal|localdomain|localhost)$/.test(host)) return true;
