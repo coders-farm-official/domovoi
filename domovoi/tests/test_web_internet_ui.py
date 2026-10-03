@@ -60,16 +60,6 @@ window.dispatchEvent = (e) => {
   return true;
 };
 CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
-window.__configReads = 0;
-// The shared policy store reads /api/config with a plain fetch.
-fetch = async (url) => {
-  const path = String(url).replace(/^https?:\/\/[^/]+/, '');
-  if (path === '/api/config') {
-    window.__configReads += 1;
-    return { ok: true, status: 200, json: async () => ({ bot_name: 'x', internet_access: __ACCESS }) };
-  }
-  throw new Error('no network in the harness');
-};
 Auth = {
   status: { setup_complete: true, authenticated: true },
   subscribe: () => () => {},
@@ -296,7 +286,7 @@ CONFIG_SCRIPT = r"""
            follows: w.__byClass(h, 'config-follows-internet').length,
            notes: w.__byClass(h, 'needs-internet').length,
            labels: h.text(),
-           check: w.__button(h, 'Check for updates'), reads: w.__configReads };
+           check: w.__button(h, 'Check for updates'), calls: h.calls.map((c) => `${c.method} ${c.path}`) };
 """
 
 for answer in ("never", "always", ""):
@@ -329,7 +319,8 @@ for answer in ("never", "always"):
     SCENARIOS[f"voices_{answer}"] = {
         "files": [COMPONENTS, SETTINGS], "component": "VoicesPanel",
         "setup": _setup(answer),
-        "api": {"GET /api/voices": [EDGE, PIPER, PIPER2]},
+        "api": {"GET /api/voices": [EDGE, PIPER, PIPER2],
+                "GET /api/config": {"bot_name": "x", "internet_access": answer}},
         "script": f"const __NEEDS = {json.dumps(NEEDS)};" + VOICES_SCRIPT,
     }
 
@@ -347,6 +338,41 @@ for answer in ("never", "always"):
           return { train: w.__button(h, 'Train'), notes: w.__byClass(h, 'needs-internet').length };
         """,
     }
+
+# ─── the shared policy hook ──────────────────────────────────────────────
+
+POLICY_PROBE = (
+    "(window.__store = InternetPolicyStore, window.__announce = announceInternetChange, (() => {"
+    " function PolicyRow() { const p = useInternetPolicy();"
+    "   return React.createElement('div', { 'data-probe': JSON.stringify({ access: p.access, off: p.off,"
+    "     unanswered: p.unanswered, loaded: p.loaded }) }); }"
+    " return function PolicyProbe() { return React.createElement('div', null,"
+    "   React.createElement(PolicyRow, { key: 'a' }), React.createElement(PolicyRow, { key: 'b' })); };"
+    "})())"
+)
+
+POLICY_SCRIPT = r"""
+  const w = h.global('window');
+  const read = () => h.findAll((e) => e.props && e.props['data-probe']).map((e) => JSON.parse(e.props['data-probe']));
+  h.render();
+  const initial = read();
+  await w.__settle(h);
+  const loaded = read();
+  const readsAfterLoad = h.calls.map((c) => `${c.method} ${c.path}`);
+  w.__announce('always');
+  h.rerender();
+  const announced = read();
+  await w.__settle(h);
+  return { initial, loaded, readsAfterLoad, announced, events: w.__events,
+           reads: h.calls.map((c) => `${c.method} ${c.path}`) };
+"""
+
+for name, cfg in (("policy_never", {"internet_access": "never"}),
+                  ("policy_unset", {"internet_access": ""}),
+                  ("policy_old_server", {"bot_name": "x"})):
+    SCENARIOS[name] = {"files": [COMPONENTS], "component": POLICY_PROBE, "setup": _setup(),
+                       "api": {"GET /api/config": cfg}, "script": POLICY_SCRIPT}
+
 
 # ─── first-run setup: the third step ─────────────────────────────────────
 
@@ -526,7 +552,7 @@ def test_configuration_greys_what_needs_the_internet_under_never(driven) -> None
     assert "Will this box use the internet?" not in o["labels"]                  # one line, not a field
     assert o["follows"] == 1
     assert o["check"] == {"disabled": True, "title": NEEDS}                      # Version: check greyed
-    assert o["reads"] == 1                                                      # one shared read
+    assert o["calls"] == []                     # greyed from the reads the page makes anyway
 
 
 def test_configuration_greys_nothing_when_the_internet_is_allowed(driven) -> None:
@@ -679,3 +705,24 @@ def test_the_dashboard_and_the_server_say_the_same_refusal() -> None:
     src = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
     assert f"const INTERNET_OFF_MESSAGE = '{egress.TURNED_OFF_REASON}';" in src
     assert f"const NEEDS_INTERNET_TEXT = '{NEEDS}';" in src
+
+
+# ─── The shared hook ──────────────────────────────────────────────────────
+
+
+def test_use_internet_policy_is_one_shared_read(driven) -> None:
+    o = driven["policy_never"]
+    assert o["initial"] == [{"access": "", "off": False, "unanswered": False, "loaded": False}] * 2
+    assert o["loaded"] == [{"access": "never", "off": True, "unanswered": False, "loaded": True}] * 2
+    assert o["readsAfterLoad"] == ["GET /api/config"]                # two users, one read
+    # a save elsewhere on the page: every user hears it at once, and re-reads
+    assert o["announced"] == [{"access": "always", "off": False, "unanswered": False, "loaded": True}] * 2
+    assert o["events"] == [{"type": "domovoi:internet-changed", "detail": {"access": "always"}}]
+    assert o["reads"] == ["GET /api/config", "GET /api/config"]
+
+
+def test_use_internet_policy_unanswered_and_older_servers(driven) -> None:
+    assert driven["policy_unset"]["loaded"] == [
+        {"access": "", "off": False, "unanswered": True, "loaded": True}] * 2
+    assert driven["policy_old_server"]["loaded"] == [
+        {"access": "", "off": False, "unanswered": True, "loaded": True}] * 2

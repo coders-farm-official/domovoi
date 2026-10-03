@@ -304,7 +304,9 @@ const UploadPiper = ({ onUpload }) => {
 
 const VoicesPanel = () => {
   const { items, loading, refresh } = useApiList('/api/voices');
-  const net = useInternetPolicy();
+  // Microsoft voices need the internet: greyed under "No" (Settings → Internet).
+  const { data: cfg } = useApiObject('/api/config');
+  const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
   const [samplingId, setSamplingId] = React.useState(null);
   const audioRef = React.useRef(null);
@@ -377,7 +379,7 @@ const VoicesPanel = () => {
     <React.Fragment>
       <Card title="Add a cloud voice"
             sub="Register a Microsoft Edge neural voice by its id. Needs network to speak.">
-        <RegisterEdge onAdd={addEdge} internetOff={net.off}/>
+        <RegisterEdge onAdd={addEdge} internetOff={internetOff}/>
       </Card>
 
       <Card title="Upload a local voice"
@@ -393,7 +395,7 @@ const VoicesPanel = () => {
           {items.map((v) => (
             <VoiceRow key={v.id} v={v} sampling={samplingId === v.id} onPlay={playSample}
                       onRename={rename} onSetDefault={setDefault} onDelete={remove}
-                      internetOff={net.off}/>
+                      internetOff={internetOff}/>
           ))}
         </Card>
       )}
@@ -534,7 +536,7 @@ const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
   // (Settings → Internet). Restarting stays — it never leaves the box.
-  const net = useInternetPolicy();
+  const internetOff = internetOffIn(cfg);
   const { data: core, refresh: refreshCore } = useApiObject('/api/config/version');
   const [fire, node] = useToast();
   const [checking, setChecking] = React.useState(false);
@@ -701,18 +703,18 @@ const VersionSection = () => {
           </Button>
         )}
         {mode === 'pull' && (
-          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || net.off}
-                  title={net.off ? NEEDS_INTERNET_TEXT : undefined}>
+          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
             {pulling ? 'Pulling…' : 'Pull the latest'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && (
-          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || net.off}
-                  title={net.off ? NEEDS_INTERNET_TEXT : undefined}>
+          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
             {checking ? 'Checking…' : 'Check for updates'}
           </Button>
         )}
-        {net.off && mode !== 'restart' && <NeedsInternetNote compact/>}
+        {internetOff && mode !== 'restart' && <NeedsInternetNote compact/>}
         {mode !== 'restart' && behind != null && (
           <span style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
             {behind > 0
@@ -775,10 +777,10 @@ const ConfigPanel = () => {
   // Advanced stayed hidden after a sign-in until the tab was switched.
   const { data, loading, error, refresh } = useApiObject('/api/config/editable', { refetchOnAuth: true });
   const fields = (data && data.fields) || [];
-  // Fields that need the internet are greyed under "No" (Settings → Internet).
-  const net = useInternetPolicy();
-  // The answer itself has one home, its own tab: here it is one line.
+  // The answer itself has one home, its own tab: here it is one line. Fields
+  // that need the internet are greyed under "No", read off that same row.
   const internetField = fields.find((f) => f.name === 'internet_access');
+  const internetOff = !!(internetField && internetField.value === 'never');
   const [edits, setEdits] = React.useState({});
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState(null);
@@ -839,7 +841,7 @@ const ConfigPanel = () => {
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
-        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={net.off}
+        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
                                               onChange={v => setEdit(f.name, v)}/>)}
       </div>
     ));
@@ -1622,7 +1624,8 @@ const WakeWordsPanel = () => {
   // The server's /train still 409s authoritatively below it.
   const { data: cfg } = useApiObject('/api/config');
   const minClips = (cfg && cfg.wake_word_min_clips) || WAKE_MIN_CLIPS;
-  const net = useInternetPolicy();
+  // Training downloads its data the first time: greyed under "No".
+  const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
 
   const rooms = (sats || []).filter((s) => s.status === 'online');
@@ -1694,7 +1697,7 @@ const WakeWordsPanel = () => {
             <WakeRow key={w.id} w={w} rooms={rooms} minClips={minClips} fire={fire}
                      onRecordStart={recordStart} onRecordStop={recordStop} onTrain={train}
                      onRename={rename} onThreshold={threshold} onSetDefault={setDefault}
-                     onPush={push} onDelete={remove} internetOff={net.off}/>
+                     onPush={push} onDelete={remove} internetOff={internetOff}/>
           ))}
         </Card>
       )}

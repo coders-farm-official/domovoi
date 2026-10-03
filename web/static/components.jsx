@@ -219,16 +219,9 @@ const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEve
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
 
-// The store's read is a plain fetch of the open /api/config, not apiGet: a
-// background poll must never open a sign-in or pair prompt, never replay,
-// and never land in the request log of whatever page happens to be open.
-const _readInternetAnswer = async () => {
-  const base = typeof API_BASE === 'string' ? API_BASE : '';
-  const headers = typeof apiHeaders === 'function' ? apiHeaders() : {};
-  const r = await fetch(`${base}/api/config`, { credentials: 'include', headers });
-  if (!r || !r.ok) throw new Error(`config read ${r ? r.status : 'failed'}`);
-  return r.json();
-};
+/* The answer from a /api/config read a page already makes (useApiObject):
+ * a page that reads it anyway greys from that, with no second request. */
+const internetOffIn = (cfg) => !!(cfg && cfg.internet_access === 'never');
 
 const InternetPolicyStore = (() => {
   let state = { access: '', loaded: false };
@@ -246,7 +239,8 @@ const InternetPolicyStore = (() => {
     if (inflight) return inflight;
     inflight = (async () => {
       try {
-        const cfg = await _readInternetAnswer();
+        // quiet: an unasked background read never opens a prompt.
+        const cfg = await apiGet('/api/config', { quiet: true });
         set((cfg && cfg.internet_access) || '');
       } catch { /* keep the last answer we heard */ }
       finally { inflight = null; }
