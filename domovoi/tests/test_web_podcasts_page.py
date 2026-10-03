@@ -6,10 +6,11 @@ Driven outside a browser through domovoi/tests/jsx_interact_harness.js:
   publisher's URL — what an older server answered — or a protocol-relative
   ``//host`` gets the placeholder, so the page never sends the browser to a
   publisher. Discovery thumbnails follow the same rule.
-* Under the answer "never" (components.jsx ``useInternetPolicy``, stubbed
-  here as builder 1's helper behaves): "poll now" and the directory search
-  are greyed with the "needs internet" title, the subscribe dialog opens on
-  "by RSS URL", and that tab still works.
+* Under the answer "never" (components.jsx ``useInternetPolicy``, which
+  reads ``/api/config``; on a tree without the helpers the ``setup`` stubs
+  stand in for them): "poll now" and the directory search are greyed with
+  the "needs internet" title, the subscribe dialog opens on "by RSS URL",
+  and that tab still works.
 * With no internet helpers at all the page renders as before.
 """
 
@@ -44,8 +45,12 @@ DISCOVER = [
      "artwork": "https://is1-ssl.mzstatic.com/image/100x100bb.jpg"},
 ]
 API = {"GET /api/podcasts/subscriptions": SUBS, "GET /api/podcasts/discover?q=npr": DISCOVER}
+NEVER_API = {**API, "GET /api/config": {"internet_access": "never"}}
 
 BASE_SETUP = "globalThis.ListeningAsSelector = () => null;"
+# Stand-ins for the components.jsx internet helpers, for a tree that doesn't
+# have them yet; where components.jsx declares them, its own (which read
+# GET /api/config from the table) take precedence.
 NEVER_SETUP = BASE_SETUP + r"""
 globalThis.NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
 globalThis.INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
@@ -61,6 +66,8 @@ SCENARIOS = {
         "files": FILES, "component": "PodcastsPage", "api": API, "setup": BASE_SETUP,
         "script": r"""
           h.render();
+          await h.settle();
+          h.rerender();
           const listImgs = __IMGS__;
           const poll = h.plain(h.find({ type: 'button', text: 'poll now' }));
           await h.click({ type: 'button', text: 'subscribe' });
@@ -70,11 +77,14 @@ SCENARIOS = {
         """.replace("__IMGS__", IMG_SRCS),
     },
     "never": {
-        "files": FILES, "component": "PodcastsPage", "api": API, "setup": NEVER_SETUP,
+        "files": FILES, "component": "PodcastsPage", "api": NEVER_API, "setup": NEVER_SETUP,
         "script": r"""
           h.render();
+          await h.settle();
+          h.rerender();
+          await h.settle();
           const poll = h.plain(h.find({ type: 'button', text: 'poll now' }));
-          const note = h.text().includes('needs internet · Settings → Internet');
+          const note = h.text().some((t) => t.includes('needs internet'));
           await h.click({ type: 'button', text: 'subscribe' });
           const urlField = !!h.find({ placeholder: 'https://…/feed.xml' });
           await h.click({ type: 'button', text: 'search' });
