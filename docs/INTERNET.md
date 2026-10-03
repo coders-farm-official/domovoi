@@ -2,139 +2,167 @@
 
 Installing Domovoi needs the internet: Python packages, Docker images, the
 language models and the speech models all download during setup. After
-that it is your choice. Speech recognition, the language models and the
-default voice all run on the server, so **your voice never leaves the
-house, with or without internet**. The internet only adds extras.
+that it is your choice, and Domovoi asks you once:
 
-Decide which of these fits the server, then do that section:
+> **Will this Domovoi have internet?**
+> **Yes, always** · **Sometimes** · **No, keep everything in the house**
 
-| Will the server have internet after setup? | Do this |
-|---|---|
-| **Yes, always.** It's on your home internet. | [Turn on the online extras](#if-your-domovoi-will-have-internet-turn-these-on) |
-| **Sometimes.** The line comes and goes, or it's slow or metered. | [Download ahead](#before-you-disconnect), then turn on [the small extras](#sometimes-connected-boxes) |
-| **No.** There's no internet there, or you don't want Domovoi to use it. | [Download ahead, then switch off what can't work](#running-domovoi-with-no-internet). If the house does have internet, also read [Internet in the house, but Domovoi shouldn't use it](#internet-in-the-house-but-domovoi-shouldnt-use-it) |
+Speech recognition, the language models and the default voice all run on
+the server, so **your voice and recordings never leave the house, whatever
+you answer**. The internet only adds extras, and the answer sets their
+defaults.
 
-How to change a setting:
-
-- **`domovoi/.env`** is Domovoi's settings file. The first run creates it
-  from `.env.example` (`dev.sh` / `dev.ps1` do that for you). Edit it on
-  the server, then restart the core.
-- **Settings → Configuration** in the dashboard needs the admin sign-in.
-  It saves to the same `.env`. Some settings apply at once; the page says
-  when one needs a restart.
-- **The radio plugin** reads its own file, `~/.domovoi/plugins/radio.env`,
-  in the home of the user the core runs as. Restart the core after editing
-  it.
-
-"Restart the core" means `sudo systemctl restart domovoi-core` if you
-installed the [Linux units](LINUX_HOST.md#make-it-an-appliance), or
-stopping `dev.sh` / `dev.ps1` and starting it again.
-
-Nothing here is permanent. Every item is a setting you can flip later.
+- [Which answer fits you](#which-answer-fits-you)
+- [Where you answer](#where-you-answer)
+- [What each answer changes](#what-each-answer-changes)
+- [If your Domovoi will have internet](#if-your-domovoi-will-have-internet)
+- [Sometimes](#sometimes)
+- [Running Domovoi with no internet](#running-domovoi-with-no-internet)
+- [Internet in the house, but Domovoi shouldn't use it](#internet-in-the-house-but-domovoi-shouldnt-use-it)
+- [Changing it later](#changing-it-later)
+- [What goes out](#what-goes-out)
 
 ---
 
-## If your Domovoi will have internet, turn these on
+## Which answer fits you
 
-In rough order of payoff.
+| Answer | Pick it when | In one line |
+|---|---|---|
+| **Yes, always** | It's on your home internet. | The online extras are on. They pause by themselves when the internet drops and pick up again when it's back. |
+| **Sometimes** | The connection comes and goes, or it's slow or metered. | Small lookups run whenever the internet is up. Big automatic downloads (podcast episodes) stay off until you turn them on. |
+| **No, keep everything in the house** | There's no internet there, or you don't want Domovoi to use it. | Domovoi doesn't contact the internet at all. Online extras are off and say "needs internet"; music, timers, intercom, voice and everything else on your network work as normal. |
+| *not answered yet* | Every server installed before the question existed, and anyone who skips it. | Every default stays as it always was. An admin sees one Home row, **Tell Domovoi whether this box has internet**, until someone answers. |
 
-1. **Start the search helper (SearXNG).** From `domovoi/`, once:
+"No" means no **internet**, not no network: the satellites, the phones and
+browsers in the house, Ollama, a music share or a feed server on your LAN
+all keep working.
 
-   ```bash
-   docker compose up -d searxng
-   ```
+## Where you answer
 
-   Docker brings it back after every reboot (`restart: unless-stopped`).
-   It listens on `127.0.0.1:6888`, so the LAN can't reach it.
+Any one of these; they all set the same thing, `INTERNET_ACCESS`:
 
-   *Why:* the weather, sports scores, prices and current events ("Want me
-   to check that online?"), "double-check that", and news feed discovery
-   all search through it. Nothing starts it for you: not `dev.sh` /
-   `dev.ps1`, not the Linux units. Without it the searches come back
-   empty, and Domovoi answers "I checked online but couldn't find a clear
-   answer to that" (for "double-check that": "I couldn't find anything
-   about that to confirm or deny it").
+- **The dashboard.** Right after you claim the admin account, the setup
+  dialog asks (or choose **Decide later**). Afterwards: **Settings →
+  Internet** (admin sign-in), or click the Home row.
+- **A fresh install from the command line.** Create the first `.env` with
+  the answer in it:
 
-2. **Set your town for local news:** Settings → Configuration → News →
+  ```bash
+  python -m domovoi.env_bootstrap --internet always    # or sometimes, never
+  ```
+
+  That only works on a fresh checkout: an existing `.env` is never touched
+  (`dev.sh` / `dev.ps1` run `env_bootstrap` without the flag, so run this
+  first). The Windows installer asks the same question and does this for
+  you.
+- **By hand.** `INTERNET_ACCESS=always` (or `sometimes`, `never`) in
+  `domovoi/.env` (where the dashboard and `env_bootstrap` write it too),
+  then restart the core. `yes` / `no` / `online` /
+  `offline` work too. Anything else counts as not answered, with one
+  warning in the core's log.
+- **The server's environment** (a systemd `Environment=` line, say). It
+  wins over `.env`, and the dashboard then shows the answer as **set in
+  the server's environment** and won't change it, so the core and the
+  dashboard can never disagree.
+
+The answer only sets **defaults**. A setting you set yourself, in
+`domovoi/.env`, in the server's environment, or by saving it in the
+dashboard, stays the way you set it. Settings → Internet shows which is
+which and can hand a setting back to the answer
+([Changing it later](#changing-it-later)).
+
+## What each answer changes
+
+**Settings that follow the answer** (unless you set them yourself):
+
+| Feature | Setting | Not answered | Yes, always | Sometimes | No | Applies |
+|---|---|---|---|---|---|---|
+| Daily news briefing | `NEWS_ENABLED` | on | on | on | off | after a restart |
+| Find artists by the names people say (MusicBrainz) | `MUSIC_ALIAS_FETCH_ENABLED` | off | on | on | off | at once |
+| Automatic podcast downloads | `PODCAST_FEED_POLLER_ENABLED` | off | **on** | off | off | after a restart |
+| Song recognition (AcoustID / Shazam) | `LIBRARY_ENRICHER_ENABLED` | on (does nothing without a key) | on **if** there is an AcoustID key or the Shazam add-on, else off | same as Yes | off | after a restart |
+| Extra voices at startup | `SEED_VOICE_CATALOG` | on | off | off | off | after a restart |
+
+Synced lyrics (LRCLIB) will join this table when that feature ships: on for
+Yes and Sometimes, off for No.
+
+**What the answer switches by itself** (no setting of its own):
+
+| | Not answered | Yes, always | Sometimes | No |
+|---|---|---|---|---|
+| The search helper (SearXNG) behind web answers | as you left it | started | started | stopped |
+| The internet check (a connection to `1.1.1.1:443` every 30 s) | dials | dials | dials | **doesn't dial**; the dashboard says "Turned off for this box" |
+| Anything that would reach the internet: feeds, streams, downloads, searches, plugins' requests through the SDK | allowed | allowed | allowed | **refused**: "internet access is turned off for this box (Settings → Internet)" |
+| Online controls in the dashboard | as today | as today | as today | greyed, marked **needs internet · Settings → Internet** |
+| `HF_HUB_OFFLINE` (the Hugging Face libraries' offline switch) | as you set it | as you set it | as you set it | set to `1` at the core's start, unless you set it yourself |
+
+**What no answer changes:**
+
+- **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → Configuration
+  → News) stays each household's own opt-in, off by default.
+- **Microsoft Edge voices** stay your choice (`TTS_ENGINE=edge`, Settings →
+  Voices). They are never used as a stand-in for the local voice, and
+  under **No** they aren't used at all.
+- **Your voice never leaves the box.** Whisper always loads its model from
+  the server's own disk first; a model downloads only when it isn't there
+  yet, and never under **No**.
+
+Restart-tier settings keep their current value until the core restarts,
+like any other restart-tier change: Settings → Internet lists them under
+"restart required". Switching to or from **No** also asks for a restart,
+so the Hugging Face libraries pick up `HF_HUB_OFFLINE`. Everything else in
+the second table applies the moment you save.
+
+---
+
+## If your Domovoi will have internet
+
+Answer **Yes, always**. That already starts the search helper, turns on
+artist names from MusicBrainz and podcast downloads, and turns song
+recognition on as soon as it has a key. What stays yours to do:
+
+1. **Set your town for local news:** Settings → Configuration → News →
    *Local news location* (`NEWS_LOCATION`). Applies at once.
 
    *Why:* the morning briefing gets a local block. Empty skips it.
 
-3. **Leave the news worker on.** `NEWS_ENABLED` is on by default
-   (Settings → Configuration → Workers → *News worker*).
-
-   *Why:* the general briefing is fetched every morning at 05:00
-   (`NEWS_FETCH_HOUR`), so "what's the news" answers at once.
-
-4. **Optional: topic news every morning:** Settings → Configuration → News
-   → *Auto-fetch topic news* (`NEWS_AUTO_FETCH`, off by default). Applies at
-   once.
-
-   *Why:* each person's topics of interest are fetched with the morning
-   job, instead of Domovoi asking first. It is off by default on purpose:
-   the household opts in.
-
-5. **Podcast downloads:** in `domovoi/.env`,
+2. **Song recognition for badly tagged music:** create a free AcoustID
+   **application** at [acoustid.org/new-application](https://acoustid.org/new-application)
+   and put its API key in `domovoi/.env`:
 
    ```
-   PODCAST_FEED_POLLER_ENABLED=true
+   ACOUSTID_API_KEY=<the application's key>
    ```
 
-   then restart the core.
-
-   *Why:* new episodes of the shows you subscribe to download by
-   themselves: every subscription is checked every 30 minutes and the
-   newest 5 per show are kept. It is off by default,
-   and until you turn it on a voice "subscribe to …" subscribes but
-   downloads nothing, although the reply says "I'll download new episodes
-   as they come out".
-
-6. **Song recognition for badly tagged music:** get a free API key from
-   [acoustid.org](https://acoustid.org/) (sign in and register an
-   application; the application's key is the one that works for lookups),
-   then in `domovoi/.env`:
-
-   ```
-   ACOUSTID_API_KEY=<your key>
-   LIBRARY_ENRICHER_ENABLED=true
-   ```
-
-   (A fresh `.env` already has the second line.) Restart the core.
+   then restart the core. It must be an application key: the key on your
+   AcoustID user page is refused for lookups, and the core's log then
+   says so. (Or install the `shazam` extra; either one is enough.)
 
    *Why:* tracks with missing or wrong tags get their real artist and
-   title, so voice requests find them.
+   title, so voice requests find them. Tracks the server looked at before
+   it had a key are tried again by themselves on the next pass; a track
+   is only ever marked "no match" after a lookup really ran, never because
+   the internet was down or there was no key. Names you corrected by hand
+   are kept.
 
-   **Do this before the first start with your music in place and the
-   internet up.** The enricher looks at each track once. Without a key it
-   has nothing to ask (the optional second stage, Shazam, is the separate
-   `shazam` extra and is not installed by default), and it still marks
-   every track as looked up. A key added later is then never used on those
-   tracks. To make it try them again:
-
-   ```bash
-   docker exec -i domovoi-postgres psql -U domovoi domovoi -c "UPDATE library_tracks SET enriched_at = NULL WHERE musicbrainz_recording_id IS NULL;"
-   ```
-
-   then say "enrich my library", or restart the core.
-
-7. **FM stations by frequency (radio plugin):** in
-   `~/.domovoi/plugins/radio.env`,
+3. **FM stations by frequency (radio plugin):** in
+   `~/.domovoi/plugins/radio.env` (the home of the user the core runs
+   as),
 
    ```
    RADIO_MARKET_STATE=CO
    RADIO_MARKET_CITY=Denver
-   RADIO_FCC_IMPORT_ON_BOOT=true
    ```
 
-   with your own two-letter state and city, then restart the core. The
-   last line downloads your state's FM list again at every start. To do it
-   just once instead, leave that line out and press **Import FCC FM** on
-   the radio plugin's Stations page (admin sign-in) after the restart.
+   with your own two-letter state and city, restart the core, then press
+   **Import FCC FM** once on the Stations page (admin sign-in).
+   `RADIO_FCC_IMPORT_ON_BOOT=true` does the same at every start instead;
+   the button is enough, the list rarely changes.
 
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-8. **Fill the satellite media cache.** First install `openwakeword` into
+4. **Fill the satellite media cache.** First install `openwakeword` into
    the server's Python environment, so the wake-word models can be cached
    too:
 
@@ -149,69 +177,66 @@ In rough order of payoff.
    Python wheels, system packages and wake-word models, so a new satellite
    sets itself up from the card instead of from the internet.
 
-9. **One-click updates (Linux):** install the update unit,
+5. **One-click updates (Linux):** install the update unit,
    [LINUX_HOST.md → Updates from the dashboard](LINUX_HOST.md#updates-from-the-dashboard).
 
    *Why:* **Pull the latest** and **Restart to apply changes** (Settings →
    Configuration → Version) then also re-sync dependencies, run
-   migrations, rebuild the music image, and roll back if the result isn't
-   healthy.
+   migrations, rebuild the music image, keep the search helper in step
+   with your answer, and roll back if the result isn't healthy.
 
-10. **Worth knowing, but not turned on here:**
+**Already on if you answered Yes:**
 
-    - **Microsoft Edge voices** (`TTS_ENGINE=edge`, Settings →
-      Configuration → Voice & speech → *TTS engine*): nicer voices, but the
-      text of every reply goes to Microsoft.
-    - **Extra voices.** A fresh `.env` has `SEED_VOICE_CATALOG=true`. On
-      its first start with internet the core registers a catalog of 9
-      Piper voices (about 0.7 GB, downloaded to render their clips) and 19
-      Microsoft Edge voices, whose clips are rendered by Microsoft (see
-      [What goes out](#what-goes-out)). Set `SEED_VOICE_CATALOG=false`
-      before that first start if you'd rather it didn't.
-    - **A custom wake word.** The trainer downloads about 8 GB of training
-      data once. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
+- **The search helper (SearXNG)**, behind the weather, sports scores,
+  prices and current events ("Want me to check that online?"),
+  "double-check that", and news feed discovery. Saving **Yes** or
+  **Sometimes** starts it (the first start downloads the pinned image,
+  a few hundred MB, in the background); `dev.sh` / `dev.ps1` and the
+  Linux update unit start it too, and Docker brings it back after every
+  reboot. It listens on `127.0.0.1:6888`, so the LAN can't reach it. If it
+  isn't running, Domovoi says so ("I can't search the web right now — my
+  search helper isn't running") instead of pretending it searched; start
+  it by hand from `domovoi/` with `docker compose up -d searxng`.
+- **Other names for artists** from MusicBrainz, so "play suicide boys"
+  finds `$uicideboy$`. It sends your library's artist names to
+  musicbrainz.org, one a second (about an hour and a half the first time
+  for a couple of thousand artists, then only new ones), and pauses while
+  the internet is down.
+- **Podcast downloads:** new episodes of the shows you subscribe to
+  download by themselves (every subscription is checked every 30
+  minutes). Saving the answer lists it under "restart required"; it starts
+  after the next restart. Subscribing by voice says whether it will
+  download.
+- **The news worker** fetches the general briefing every morning at 05:00
+  (`NEWS_FETCH_HOUR`), so "what's the news" answers at once.
 
-Coming: other names for artists from MusicBrainz, so an artist is found
-by the name people say even when it's written differently, and synced
-lyrics from LRCLIB. Both will be off until you turn them on, and this list will name
-their settings when they ship.
+**Worth knowing, but not turned on by any answer:**
+
+- **Microsoft Edge voices** (Settings → Voices, or `TTS_ENGINE=edge`):
+  nicer voices, but the text of every reply goes to Microsoft.
+- **Extra voices** (`SEED_VOICE_CATALOG=true`): 9 more Piper voices (about
+  0.7 GB) and 19 Microsoft Edge voices registered at startup.
+- **Topic news every morning** (`NEWS_AUTO_FETCH`).
+- **A custom wake word.** The trainer downloads about 8 GB of training
+  data the first time. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
 
 ---
 
-## What goes out
+## Sometimes
 
-None of the extras send your voice or recordings. They send short text:
+Answer **Sometimes**. It is **Yes** minus podcast downloads, which stay off
+until you turn them on yourself (`PODCAST_FEED_POLLER_ENABLED=true` in
+`domovoi/.env`, then restart), because a slow or metered line is the wrong
+place for episodes to download on their own.
 
-- a question or claim you asked to have checked online, through your own
-  SearXNG, which passes it on to public search engines;
-- the addresses of news feeds and of the podcasts you subscribe to, and a
-  show's name when you subscribe by voice or use Discover (Apple's iTunes
-  search);
-- audio fingerprints of your music files (AcoustID), never the files;
-- station searches and the FCC import (radio plugin).
-
-Three that are easy to miss, all only while the server has internet:
-
-- **Clips for the Edge voice.** The voice registry always holds one
-  Microsoft Edge voice (`TTS_EDGE_VOICE`, Aria by default; the extra
-  voices above add 18 more). At startup the core renders each registered
-  voice's clips that are missing: the "trouble reaching the network"
-  notice, the voice sample ("Hi, I'm Domovoi…") and the wake greetings,
-  including any you wrote under Settings → Greetings. For an Edge voice
-  Microsoft renders them, so that fixed text goes to Microsoft once per
-  clip. Never anything you said, and there's no setting for it yet.
-- **The voice fallback.** With the default `piper` engine, a reply that
-  Piper fails to speak goes to the Edge voice next and only then to the
-  system voice, so on a server with internet that one reply's text reaches
-  Microsoft. Keep the Piper voice working: the core's log says
-  `speech warm-up: Piper voice … ready` at every start.
-- **The Whisper check.** Each time the core starts, it asks huggingface.co
-  whether its Whisper model changed, and downloads it again if it did. To
-  stop that once the model is downloaded, set `HF_HUB_OFFLINE=1` in the
-  core's environment ([below](#stop-the-whisper-check)).
-
-The full list, with every off switch: [FAQ → What touches the internet](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
-and [Security & privacy → What leaves your network](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off).
+- Do the whole [Before you disconnect](#before-you-disconnect) list too:
+  the first time Domovoi needs something it can only download is usually
+  the day the line is down.
+- Everything that is on waits for the internet by itself and picks up
+  again when it's back: the search helper's answers, artist names, the news
+  worker, song recognition. A lookup that fails because the line dropped is
+  simply tried again later.
+- Update only while connected: pull **and** restart in the same sitting.
 
 ---
 
@@ -242,10 +267,16 @@ needs something it can only download is usually the day the line is down.
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
 - [ ] **Pull every Ollama model you'll want** (`ollama pull <model>`, or
       Settings → Models, which shows the model each role uses).
+- [ ] **The extra voices**, if you want them: `SEED_VOICE_CATALOG=true`
+      in `domovoi/.env` and one restart while online downloads them.
+      Voices you upload on Settings → Voices are already on the server.
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
+- [ ] **A custom wake word**, if you want one: train it now (the trainer
+      downloads its training data the first time).
 - [ ] **Install the plugins you want** (the Plugins page). Installing one
       from GitHub, and the Python packages it needs, takes the internet.
-- [ ] **Fill the satellite media cache** (item 8 above, `openwakeword`
+- [ ] **Fill the satellite media cache**
+      ([item 4 above](#if-your-domovoi-will-have-internet), `openwakeword`
       first). Prepare the satellites' cards after that. A card built from
       complete caches carries what the satellite needs; if a cache was
       incomplete, the build warns and the satellite fetches the rest over
@@ -261,69 +292,30 @@ needs something it can only download is usually the day the line is down.
       clocks from the server, so the house stays consistent even if the
       server drifts.
 
-### Then switch off what can't work
+### Then answer No
 
-In `domovoi/.env`, then restart the core:
+Settings → Internet → **No, keep everything in the house** (or
+`INTERNET_ACCESS=never`). That is all: there is nothing else to switch
+off.
 
-```
-LIBRARY_ENRICHER_ENABLED=false
-SEED_VOICE_CATALOG=false
-PODCAST_FEED_POLLER_ENABLED=false
-NEWS_ENABLED=false
-```
+- The internet check stops dialing.
+- Every way out is refused, with "internet access is turned off for this
+  box (Settings → Internet)": feeds, streams, searches, model and plugin
+  downloads, updates, and plugins' requests through the SDK.
+- The news worker, artist names, podcast downloads, song recognition and
+  the extra voices are off, unless you set one on yourself.
+- The search helper container is stopped.
+- The online controls are greyed with "needs internet", not hidden, so
+  you can find them again.
+- `HF_HUB_OFFLINE=1` is set for the core at its next start, so the Hugging
+  Face libraries don't try either.
+- Nothing is marked as broken because of it: no feed is flagged dead, no
+  episode failed, no track "no match", no radio station unreachable. Turn
+  the answer back to Yes and everything picks up where it was.
 
-- `LIBRARY_ENRICHER_ENABLED=false`, so "enrich my library" can't mark
-  your tracks as looked up when it can't look anything up.
-- `SEED_VOICE_CATALOG=false`, so the core doesn't add the extra voices,
-  which it would try to download and render without the internet. (Voices
-  already added stay.)
-- `PODCAST_FEED_POLLER_ENABLED=false` is the default; it's written here so
-  it stays that way. The poller doesn't wait for the internet: switched on,
-  it would try every feed every 30 minutes.
-- `NEWS_ENABLED=false` is optional. The news worker already skips its
-  fetch while the server is offline; off, it doesn't run at all.
-
-In `~/.domovoi/plugins/radio.env` (radio plugin), unless you listen to FM
-through an RTL-SDR dongle and have favorited FM stations:
-
-```
-RADIO_SAMPLER_ENABLED=false
-```
-
-The song-detection sampler doesn't check for the internet: it tries to
-grab audio from every favorited internet station (up to 20 seconds each)
-and fails. The ICY "now playing" poller waits for the internet by itself;
-leave it.
-
-**Leave `CONNECTIVITY_PROBE_TARGET` on an internet address** (the default
-is `1.1.1.1:443`). With no internet the probe's connection simply fails,
-and that is how Domovoi knows to answer offline. Pointing it at your
-router makes Domovoi believe it is online: it offers to "check that
-online", and online features fail slowly instead of saying they can't.
-
-#### Stop the Whisper check
-
-Optional, but it saves a failed lookup at every start: set `HF_HUB_OFFLINE=1`
-in the core's **process environment**. A line in `domovoi/.env` won't do,
-because Domovoi reads `.env` itself and doesn't hand it on to the
-libraries.
-
-- **Linux units:** a drop-in, as in
-  [LINUX_HOST.md → Make it an appliance](LINUX_HOST.md#make-it-an-appliance):
-
-  ```bash
-  sudo mkdir -p /etc/systemd/system/domovoi-core.service.d
-  printf '[Service]\nEnvironment=HF_HUB_OFFLINE=1\n' \
-    | sudo tee /etc/systemd/system/domovoi-core.service.d/offline.conf
-  sudo systemctl daemon-reload && sudo systemctl restart domovoi-core
-  ```
-
-- **Windows:** `setx HF_HUB_OFFLINE 1` as the account that runs the core,
-  then start the core from a new terminal.
-
-With it set, a Whisper model that isn't downloaded yet can't be fetched
-either: to change `WHISPER_MODEL` later, remove the line, restart while
-online, then put it back.
+Leave `CONNECTIVITY_PROBE_TARGET` alone. It only matters while the
+internet is allowed, and it must point at an internet address: pointed at
+your router, it would tell Domovoi the internet is up when it isn't.
 
 ### What works with no internet
 
@@ -335,70 +327,116 @@ online, then put it back.
 - Intercom announcements and drop-in between rooms.
 - Voice profiles, memories and voice notes; the calendar and documents.
 - The dashboard and the Android app on your network.
-- FM radio through an RTL-SDR dongle (radio plugin, `RADIO_SDR_ENABLED`).
+- FM radio through an RTL-SDR dongle (radio plugin, `RADIO_SDR_ENABLED`),
+  including song detection against your own library.
+- Saving a podcast feed (by its address) or a radio station for later:
+  nothing is fetched until the answer changes.
 - General questions, answered from what the local language model already
   knows.
 
 ### What doesn't
 
 - Web answers: the weather, scores, prices, current events, "double-check
-  that". Domovoi says so: "I can't check that right now — I don't have
-  internet."
+  that". Domovoi says why: "I'm set to stay off the internet, so I can't
+  check that."
 - Fresh news. The briefing reads whatever was fetched last.
 - Internet radio and station search.
-- Podcast search, new subscriptions and new episodes.
+- Podcast search, and new episodes.
 - Song recognition: the library enricher and the radio plugin's Shazam
   step.
-- Downloading models or voices, and installing plugins from GitHub.
-- Updates: **Pull the latest** needs GitHub, and the update unit needs
-  PyPI when dependencies changed. Bring the server online for an update,
-  and pull **and** restart in the same sitting.
-
-### Internet in the house, but Domovoi shouldn't use it
-
-Do everything above, with two changes: `NEWS_ENABLED=false` is not
-optional for you, and don't start the search helper (SearXNG). Even then,
-while the server can reach the internet, a few things still go out on
-their own:
-
-- the internet check: a connection that carries no data, to `1.1.1.1`
-  every 30 seconds;
-- the Edge voice's clips, rendered by Microsoft whenever one is missing or
-  its text changed (see [What goes out](#what-goes-out));
-- the Whisper check at each start, unless you [stop it](#stop-the-whisper-check);
-- the radio plugin, if you have favorite stations: it checks the internet
-  stations' "now playing" every 30 seconds, and at each start looks up an
-  internet stream for FM favorites that don't have one.
-
-Things you ask for also go out when you ask: a podcast or station search,
-a model or plugin install, an update.
-
-There is no single off switch for this yet. The sure way is to block the
-server's internet at your router once [Before you disconnect](#before-you-disconnect)
-is done. Domovoi then sees no internet and works as described above. The
-satellites use the house Wi-Fi too: if nothing in the system should reach
-out, block them as well once they are set up (they take their clock from
-the server).
+- Microsoft Edge voices: Piper speaks instead.
+- Downloading models, voices and wake-word training data; installing
+  plugins from GitHub (a plugin zip whose Python packages are already
+  installed still installs).
+- Updates: **Check for updates** and **Pull the latest** are greyed.
+  For an update, switch the answer to **Sometimes**, pull **and** restart
+  in the same sitting, then switch it back to **No**.
 
 ---
 
-## Sometimes-connected boxes
+## Internet in the house, but Domovoi shouldn't use it
 
-- Do the whole [Before you disconnect](#before-you-disconnect) list.
-- Turn on items 1-4 of [the online list](#if-your-domovoi-will-have-internet-turn-these-on):
-  the search helper, local news, the news worker, and topic news if you
-  want it. They wait for the connection by themselves.
-- Leave podcast downloads off on a slow or metered line.
-- Leave the library enricher off (`LIBRARY_ENRICHER_ENABLED=false`) unless
-  you have an AcoustID key and the line is reliable while it runs. A
-  lookup that fails because the line dropped still marks the track as
-  looked up.
-- Leave `CONNECTIVITY_PROBE_TARGET` alone, as above.
-- Update only while connected: pull **and** restart in the same sitting.
+Answer **No**: it is real. The server then contacts nothing outside your
+network: no internet check, no feeds, no searches, no voices, no model
+or plugin downloads, no updates, and plugins' requests through the SDK are
+refused too.
 
-## Changing your answer later
+What the answer can't reach, because it isn't the server:
 
-- **Going online:** do [the online list](#if-your-domovoi-will-have-internet-turn-these-on).
-  Downloads happen as features need them.
-- **Going offline:** do [Before you disconnect](#before-you-disconnect)
-  first, while the line is still there, then switch things off.
+- **The browsers and phones** in the house. They talk to Domovoi on your
+  network; podcast artwork comes from the server too. But a link you open,
+  or a picture someone pasted into a document from a website, loads from
+  wherever it points.
+- **The satellites' own system** (Raspberry Pi OS): it keeps its clock with
+  public time servers, and a satellite being set up installs packages
+  over its own connection on its second boot. The Domovoi part of the
+  satellite talks only to the server, and the video satellite's kiosk
+  browser is started with its background traffic switched off.
+- **Docker Desktop and Ollama themselves** check for their own updates; so
+  does the server's operating system.
+- **A third-party plugin** that makes its own connections without the SDK
+  (raw `httpx`, say) is the plugin author's responsibility; its install
+  screen lists what it does.
+
+If nothing in the house should reach out at all, block the server, and the
+satellites once they are set up, at your router as well.
+
+---
+
+## Changing it later
+
+**Settings → Internet** (admin sign-in):
+
+- shows whether the server is connected right now, not connected, or
+  turned off for this box;
+- changes the answer. The search helper starts or stops at once, and so
+  does everything in the [second table](#what-each-answer-changes);
+- lists every setting that follows the answer, with its value and a tag:
+  - **follows the answer**;
+  - **set by you · follow the answer again**: the button hands it back to
+    the answer. That comments its line out of `domovoi/.env` (the line
+    stays in the file, marked, so you can see what it was) and applies the
+    answer's value;
+  - **set in the server's environment**: change it there;
+- says when a restart is needed, the same way Settings → Configuration
+  does.
+
+**Installed before October 2026?** Your `domovoi/.env` was copied from an
+older `.env.example`, which set `SEED_VOICE_CATALOG=true` and
+`LIBRARY_ENRICHER_ENABLED=true` explicitly. Those two count as set by you,
+so the answer leaves them alone until you press **follow the answer again**
+next to them.
+
+**Going online:** switch to **Yes** or **Sometimes**, then do the
+[items that stay yours](#if-your-domovoi-will-have-internet).
+
+**Going offline:** do [Before you disconnect](#before-you-disconnect)
+first, while the line is still there, then switch to **No**.
+
+---
+
+## What goes out
+
+None of the extras send your voice or recordings. With the internet
+allowed, they send short text:
+
+- a question or claim you asked to have checked online, through your own
+  SearXNG, which passes it on to public search engines;
+- your library's artist names, to musicbrainz.org (the artist-names
+  extra);
+- the addresses of news feeds and of the podcasts you subscribe to, and a
+  show's name when you subscribe by voice or search Discover (Apple's
+  iTunes search); the server downloads each show's artwork once, so your
+  browser and phone don't contact the publisher;
+- audio fingerprints of your music files (AcoustID), never the files;
+- station searches, an FM station's call sign when you favorite it, and
+  the FCC import (radio plugin); short clips of a favorited internet
+  station's audio to Shazam to name the song.
+
+And only if you choose them: the text of every reply to Microsoft for an
+Edge voice (and, for a registered Edge voice, its fixed greeting clips,
+rendered once while the internet is up), and downloads an admin starts
+(models, plugins, updates, the satellite cache).
+
+The full list, with every off switch: [FAQ → What touches the internet](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
+and [Security & privacy → What leaves your network](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off).

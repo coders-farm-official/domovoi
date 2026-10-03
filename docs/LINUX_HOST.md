@@ -38,8 +38,9 @@ them.
 
 ### 1. The system-voice fallback needs a package installed
 
-TTS falls back through `piper → edge → system` (`edge → piper → system` if
-you chose Edge). The `system` rung is the OS's own synthesizer —
+TTS falls back through `piper → system` (`edge → piper → system` if you
+chose Edge; Edge is never a fallback for Piper). The `system` rung is the
+OS's own synthesizer —
 pyttsx3/SAPI on Windows, and **`espeak-ng` on Linux**. It's
 robotic, and that's the point: it's the floor that still talks when the
 network is down *and* the Piper voice is missing or broken.
@@ -351,7 +352,12 @@ domovoi.env_bootstrap`; both `DATABASE_URL` and the `POSTGRES_PASSWORD`
 line that `docker-compose.yml` reads carry it). Run the stack by hand
 instead? Run that command first, before the first `docker compose up`, so
 the database is initialised with the password your `.env` holds. An
-existing `.env` is never touched.
+existing `.env` is never touched. Already know whether this box will have
+internet? Answer in the same step: `python -m domovoi.env_bootstrap
+--internet always` (or `sometimes`, `never`) writes `INTERNET_ACCESS` into
+the fresh `.env`; run it before `dev.sh`. After the migrations, `dev.sh`
+starts the search helper (SearXNG) when the answer is `always` or
+`sometimes`.
 
 and in a second terminal, from the repo root:
 
@@ -365,32 +371,30 @@ to claim admin and apply your [CPU host settings](CPU_HOST.md).
 
 ### Will your Domovoi have internet?
 
-Installing needed it. After this point it's your choice, and the answer
-changes what you do next. [INTERNET.md](INTERNET.md) has the whole list for
-each answer; on Linux it comes down to this:
+Installing needed it. After this point it's your choice. The dashboard
+asks right after you claim the admin account — **Yes, always**,
+**Sometimes**, or **No, keep everything in the house** — and you can
+change it later in **Settings → Internet**. [INTERNET.md](INTERNET.md)
+says what each answer switches; on Linux it comes down to this:
 
-- **Yes, always.** Start the search helper once, from `domovoi/`:
-
-  ```bash
-  docker compose up -d searxng
-  ```
-
-  Docker brings it back after every reboot (`restart: unless-stopped`);
-  none of the units below start it, and without it web answers (weather,
-  scores, "check that online", news feed discovery) come back empty. Then
-  go through [the online extras](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on):
-  local news, podcast downloads, song recognition. Put `ACOUSTID_API_KEY`
-  in `domovoi/.env` **before** the server first sees your music.
-- **Sometimes, or no.** While the box is still online, work through
+- **Yes, always** (or **Sometimes**). Saving the answer starts the search
+  helper (SearXNG) behind web answers — the weather, scores, "check that
+  online", news feed discovery — and the [update unit](#updates-from-the-dashboard)
+  keeps it in step after every update; Docker brings it back after a
+  reboot. Then do [what stays yours](INTERNET.md#if-your-domovoi-will-have-internet):
+  your town for local news, an AcoustID **application** key in
+  `domovoi/.env` for song recognition, your radio market.
+- **No.** While the box is still online, work through
   [Before you disconnect](INTERNET.md#before-you-disconnect): the Whisper
   fallback model, the Ollama models, the satellite media cache, and the
   time zone (`timedatectl` should show yours, not UTC; without internet,
   point `systemd-timesyncd` at a LAN time server if you have one). Then
-  [switch off what can't work](INTERNET.md#then-switch-off-what-cant-work),
-  and once the units below are in, add the `HF_HUB_OFFLINE=1` drop-in from
-  [Internet or not](#internet-or-not). Leave `CONNECTIVITY_PROBE_TARGET` on
-  an internet address: pointed at the router, the probe tells Domovoi it is
-  online when it isn't.
+  answer **No**: the server stops contacting anything outside your
+  network, including the internet check, and sets `HF_HUB_OFFLINE=1` for
+  itself. No drop-in is needed.
+- Whatever the answer, leave `CONNECTIVITY_PROBE_TARGET` on an internet
+  address: pointed at the router, the probe tells Domovoi it is online
+  when it isn't.
 
 ---
 
@@ -549,27 +553,34 @@ appliance, and it's the thing Linux makes genuinely easy.
 
 ### Internet or not
 
-Two optional drop-ins, depending on your answer to
-[Will your Domovoi have internet?](#will-your-domovoi-have-internet)
+The internet answer needs nothing from the units. Saving it in Settings →
+Internet starts or stops the search helper at once, the
+[update unit](#updates-from-the-dashboard) keeps it in step after every
+update, and under **No** the core sets `HF_HUB_OFFLINE=1` for itself (the
+`HF_HUB_OFFLINE` drop-in older versions of this guide suggested is no
+longer needed; leaving one in place does no harm). Whisper loads its model
+from the local cache first on every answer.
 
-**No internet, or sometimes:** stop the core asking huggingface.co about
-its Whisper model at every start. It has to be the unit's environment:
-Domovoi reads `domovoi/.env` itself and doesn't pass it on to the
-libraries.
+**Pinning the answer in the unit**, so the dashboard can't change it (it
+then shows "set in the server's environment"): a drop-in for
+`domovoi-core.service` **and** `domovoi-web.service`, with the same value
+in both, then `daemon-reload` and restart them:
 
 ```bash
-sudo mkdir -p /etc/systemd/system/domovoi-core.service.d
-printf '[Service]\nEnvironment=HF_HUB_OFFLINE=1\n' \
-  | sudo tee /etc/systemd/system/domovoi-core.service.d/offline.conf
+for u in domovoi-core domovoi-web; do
+  sudo mkdir -p /etc/systemd/system/$u.service.d
+  printf '[Service]\nEnvironment=INTERNET_ACCESS=never\n' \
+    | sudo tee /etc/systemd/system/$u.service.d/internet.conf
+done
 ```
 
-Download every Whisper model you'll use first
-([Before you disconnect](INTERNET.md#before-you-disconnect)): with this set
-the core can't fetch one.
+For the update unit's search-helper step to read the same answer, put
+`INTERNET_ACCESS=never` in `/etc/default/domovoi-update` too, or keep the
+answer in `domovoi/.env`, which all three read.
 
-**Internet:** Docker restarts the `searxng` container after every reboot by
-itself. If you'd rather the database unit (re)create it as well, add it in
-a drop-in, with the leading `-`:
+**An alternative for the search helper:** if you'd rather the database unit
+(re)create the `searxng` container as well, add it in a drop-in, with the
+leading `-`:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/domovoi-db.service.d
@@ -630,6 +641,8 @@ instead of bouncing core and web, and each run does this:
 7. `systemctl restart domovoi-db`: compose up plus Flyway.
 8. Start core and web. Both must answer `/v1/health` (core, :6370) and
    `/api/health` (web, :6369) within 120 s.
+   On a healthy plain restart (step 1), the search-helper step below runs
+   too.
 9. Every plugin that loaded before the update must still load: none that
    was enabled and not at `load_error` may be at `load_error` now. The core
    never lets a failing plugin take it down, so its health check stays
@@ -640,6 +653,15 @@ instead of bouncing core and web, and each run does this:
    plugin's load before it first answers `/v1/health`. A plugin that was
    already failing, or that you switched off, doesn't count, and neither
    does one that is new in the update.
+10. Keep the search helper (SearXNG) in step with the internet answer,
+   read the way the core reads it (`python -m domovoi.egress
+   --print-policy`, as the service user): `always` or `sometimes` →
+   `docker compose up -d --no-deps searxng` (the first time, that downloads
+   the pinned image); `never` → `docker stop domovoi-searxng` if it runs;
+   not answered → left as it is. This step can't fail the update: a
+   failure is recorded as a `warn` step with its output, and the result
+   stays `ok`. `DOMOVOI_MANAGE_SEARXNG=0` in
+   `/etc/default/domovoi-update` skips it.
 
 If any of 4-9 fails, it rolls back: `git reset --keep` to the previous SHA
 (never `--hard`), the venv re-synced and every package put back at its

@@ -61,18 +61,20 @@ drive. See the README's [Disk footprint](../README.md#disk-footprint).
 
 **Will the server have internet after setup?** Setup itself needs it:
 packages, Docker images and models all download. After that Domovoi works
-with or without it, and your voice never leaves the house either way. But
-the answer changes what you do in Step 3:
+with or without it, and your voice never leaves the house either way.
+Domovoi asks the question itself in Step 3, right after you claim admin,
+and the answer sets the defaults of the online extras:
 
-- *Yes, always:* turn on the online extras: the search helper behind web
-  answers, local news, podcast downloads, song recognition.
-- *Sometimes:* download everything it will need while it's online, then
-  turn on only the small extras.
-- *No:* download everything first, then switch off what can't work.
+- *Yes, always:* web answers (the search helper starts by itself), other
+  names for artists, podcast downloads, song recognition once it has a key.
+- *Sometimes:* the same, minus automatic podcast downloads.
+- *No, keep everything in the house:* the server contacts nothing outside
+  your network; online features are greyed.
 
 The part that's hard to undo is the downloading: the first time Domovoi
 needs something it can only fetch online is usually the day the line is
-down. The lists, with the exact settings, are in [INTERNET.md](INTERNET.md).
+down. What each answer switches, and what to download first, is in
+[INTERNET.md](INTERNET.md).
 
 Then inventory what you actually have, because it changes which path you
 take:
@@ -195,16 +197,20 @@ its password from `domovoi/.env` when it initialises its volume, and the
 core connects with the same value. If a `.env` already exists the command
 does nothing (prints "left untouched").
 
-Two things `dev.ps1` deliberately leaves out:
+One thing `dev.ps1` deliberately leaves out, and one it does only
+sometimes:
 
 - `docker compose run --rm flyway-test` — migrates the **test** database.
   You only need it to run `pytest`, so it's not part of a normal boot.
 - `docker compose up -d searxng` — the metasearch proxy behind web
   answers: the weather, scores, prices and current events ("Want me to
   check that online?"), "double-check that", and news feed discovery.
-  Bound to `127.0.0.1:6888`, so the LAN can't reach it. **On a server with
-  internet, start it**; Docker brings it back after reboots by itself
-  (`restart: unless-stopped`).
+  Bound to `127.0.0.1:6888`, so the LAN can't reach it. `dev.ps1` starts
+  it when the internet question is answered **Yes** or **Sometimes**, and
+  saving either answer in the dashboard starts it too; Docker brings it
+  back after reboots by itself (`restart: unless-stopped`). Want to answer
+  before the first start? `python -m domovoi.env_bootstrap --internet
+  always` (or `sometimes`, `never`) instead of the plain bootstrap line.
 
 Also note the core builds the `domovoi-mpd:latest` image lazily on first
 startup, so your first boot is slower than every subsequent one.
@@ -219,7 +225,9 @@ writes it to `~/.domovoi/setup-code.txt`.
 
 In the dashboard: **Settings → Configuration → Admin → "set up admin"**.
 Enter the code, choose a password. The code file is deleted the instant
-setup completes.
+setup completes. The dialog then asks **Will this Domovoi have internet?**
+— answer with your Step 0 decision, or **Decide later** (the Home page
+keeps a reminder until someone answers).
 
 Day-to-day use doesn't need a login — the password gates the risky
 surface: plugin installs, configuration, credentials. Locked out later?
@@ -245,19 +253,19 @@ Ollama model settings are hot and take effect on the next turn.
 
 ### Tell it about the internet
 
-Act on your Step 0 answer now, before you add music or build satellites:
+If you chose **Decide later**, answer now: **Settings → Internet**. The
+page also shows which settings follow the answer and which you set
+yourself. Then, before you add music or build satellites:
 
-- **Internet:** go through
-  [If your Domovoi will have internet, turn these on](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on).
-  Most items are one line in `domovoi/.env` or one setting in the
-  dashboard. Do the AcoustID key (item 6) before you add your media
-  library in Step 8: the library enricher looks at each track only once.
-  If your music was already in place at the first start, item 6 has the
-  one-line reset.
-- **Sometimes, or no:** work through
+- **Yes, always, or Sometimes:** do
+  [the items that stay yours](INTERNET.md#if-your-domovoi-will-have-internet):
+  your town for local news, an AcoustID **application** key for song
+  recognition (`ACOUSTID_API_KEY` in `domovoi/.env`, then restart), your
+  radio market. Tracks the server looked at before it had a key are tried
+  again by themselves, so the order no longer matters.
+- **No:** work through
   [Before you disconnect](INTERNET.md#before-you-disconnect) while the
-  line is still there, then
-  [switch off what can't work](INTERNET.md#then-switch-off-what-cant-work).
+  line is still there, then answer **No**.
 
 ---
 
@@ -500,12 +508,12 @@ Some fleet-level things worth doing once you have two or more rooms:
 
 Optional, in rough order of payoff:
 
-**If your Domovoi has internet, turn on the extras.** Start the search
-helper so web answers work, set your town for local news, turn on podcast
-downloads, add a free AcoustID key for badly tagged music, and set your
-radio market for "play 97.5 FM". The full list, with the exact settings
+**If your Domovoi has internet, finish the extras.** Answering **Yes**
+already started web answers, artist names and podcast downloads. What's
+left: your town for local news, a free AcoustID application key for badly
+tagged music, and your radio market for "play 97.5 FM". The exact settings
 and why each one helps:
-[If your Domovoi will have internet, turn these on](INTERNET.md#if-your-domovoi-will-have-internet-turn-these-on).
+[If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet).
 
 **Train a custom wake word.** The default is the built-in `hey_jarvis`.
 The documented path is to record clips through a satellite's own mic,

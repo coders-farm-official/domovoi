@@ -83,9 +83,13 @@ fails, FM commands answer with a friendly explainer instead of erroring.
 
 ## Configuration
 
-All settings live under the plugin's `RADIO_` prefix (dashboard →
-Settings → Radio, persisted to `~/.domovoi/plugins/radio.env`). The
-interesting ones:
+All settings live under the plugin's `RADIO_` prefix in the plugin's own
+file, `~/.domovoi/plugins/radio.env` (in the home of the user the core
+runs as). The dashboard has no editor for plugin settings yet: edit the
+file, then restart the core. A `RADIO_*` variable in the core process's
+own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
+**not** read — that file is the core's, and the core has no radio settings
+of its own. The interesting ones:
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -99,12 +103,40 @@ interesting ones:
 | `RADIO_SDR_BIND_HOST` | empty | address the FM listener binds; empty = the stream base's host, never `0.0.0.0` |
 | `RADIO_FINGERPRINTER_ENABLED` | `true` | fingerprint library tracks for offline matching |
 
+## Without the internet
+
+Radio follows the server's internet answer (`INTERNET_ACCESS`, Settings →
+Internet; see `docs/INTERNET.md` in the main repository), which it reads
+through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
+`>=1.4`).
+
+* **FM over an RTL-SDR keeps working** with no internet at all: "play 97.5
+  FM", the FM stations you imported earlier, and the local-fingerprint
+  half of song detection.
+* **While the internet is down** (or the box is set to stay off it), the
+  audio sampler samples only favorites whose stream is on your own network
+  (a LAN stream the server may fetch, which means one listed in the core's
+  `OUTBOUND_ALLOW_HOSTS`), and only against your own library's
+  fingerprints. Internet
+  stations are skipped without being marked as sampled, so they come due
+  again as soon as the internet is back. The ICY poller already waits for
+  the internet.
+* **When the answer is No** (`INTERNET_ACCESS=never`), nothing in the
+  plugin reaches the internet: the directory search, "resolve" for a
+  simulcast (and the startup backfill), the FCC import (and the boot
+  import), playing an internet station and its browser stream all refuse
+  with "internet access is turned off for this box (Settings → Internet)"
+  (HTTP 409 from the API). The Stations page greys those controls with
+  "needs internet" and opens on local FM. Saving, editing and forgetting
+  stations still work: nothing is fetched until the answer changes.
+
 ## Privacy & permissions (what the manifest warns about)
 
 * The sampler can send short audio clips of whatever a favorited
   station is playing to an online song-identification service (Shazam).
-  Disable with `RADIO_SAMPLER_ENABLED=false` — ICY polling and local
-  fingerprint matching keep working.
+  Disable with `RADIO_SAMPLER_ENABLED=false` in `radio.env` — ICY polling
+  and local fingerprint matching keep working. Nothing is sent while the
+  server is offline or answered No to the internet question.
 * The plugin queries external directories (radio-browser.info, the FCC)
   over the network and runs `ffmpeg` (and `rtl_fm` with SDR hardware
   enabled) on your machine.
