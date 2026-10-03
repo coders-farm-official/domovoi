@@ -145,11 +145,11 @@ const radioQueueItem = (st) => ({
  * the online scope is selected, because "where is that station I already
  * saved" is the question being answered.
  */
-const StationSearch = ({ onFavorite, onPlay, fire }) => {
+const StationSearch = ({ onFavorite, onPlay, fire, internetOff = false }) => {
   const [scope, setScope] = React.useState('online');  // 'online' | 'fm'
   // The station directory is on the internet: under INTERNET_ACCESS=never
-  // the online scope is greyed and the page falls back to local FM.
-  const { off: internetOff } = useInternetPolicy();
+  // (internetOff, read once by the page) the online scope is greyed and the
+  // page falls back to local FM.
   React.useEffect(() => {
     if (internetOff && scope === 'online') setScope('fm');
   }, [internetOff, scope]);
@@ -223,7 +223,8 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
       setOffset(newOffset);
       setSubmitted(true);
     } catch (e) {
-      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `search failed: ${e.message}`);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else fire(`search failed: ${e.message}`);
       setResults([]);
     } finally {
       setLoading(false);
@@ -374,7 +375,7 @@ const StationSearch = ({ onFavorite, onPlay, fire }) => {
           <tbody>
             {results.map(r => (
               <SearchResultRow key={(r.external_id || `id-${r.id}`) + '-' + offset}
-                               hit={r} scope={scope}
+                               hit={r} scope={scope} internetOff={internetOff}
                                onFavorite={onFavorite} onPlay={onPlay} fire={fire}/>
             ))}
           </tbody>
@@ -426,8 +427,7 @@ const FavoriteMatchRow = ({ s, onPlay, internetOff }) => (
   </button>
 );
 
-const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
-  const { off: internetOff } = useInternetPolicy();
+const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = false }) => {
   // Local favorited state so the star feels snappy; the realtime push
   // refreshes the canonical list.
   const [favorited, setFavorited] = React.useState(hit.favorited);
@@ -544,7 +544,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire }) => {
 };
 
 /* ---- Favorited stations list ----------------------------------- */
-const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh }) => {
+const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, onDelete, fire, refresh, internetOff = false }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading favorites…</div>;
   if (stations.length === 0)
@@ -554,7 +554,7 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {stations.map(s => (
-        <FavoriteRow key={s.id} s={s}
+        <FavoriteRow key={s.id} s={s} internetOff={internetOff}
                      active={selectedId === s.id}
                      onSelect={() => onSelect(s.id)}
                      onPlay={onPlay}
@@ -572,7 +572,7 @@ const FavoritesList = ({ stations, loading, page, selectedId, onSelect, onPlay, 
  * by design. A row here can be a favorite or a station played once out of
  * search; the star tells them apart and promotes the latter.
  */
-const RecentList = ({ stations, loading, onPlay, onFavorite, fire }) => {
+const RecentList = ({ stations, loading, onPlay, onFavorite, fire, internetOff = false }) => {
   if (loading && stations.length === 0)
     return <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>;
   if (stations.length === 0)
@@ -583,14 +583,13 @@ const RecentList = ({ stations, loading, onPlay, onFavorite, fire }) => {
     );
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay}
+      {stations.map(s => <RecentRow key={s.id} s={s} onPlay={onPlay} internetOff={internetOff}
                                     onFavorite={onFavorite} fire={fire}/>)}
     </div>
   );
 };
 
-const RecentRow = ({ s, onPlay, onFavorite, fire }) => {
-  const { off: internetOff } = useInternetPolicy();
+const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
   const blocked = radioInternetBlocked(s, internetOff);
   const [busy, setBusy] = React.useState(false);
   // Recent rows are already persisted, so favoriting is a PATCH either
@@ -685,8 +684,7 @@ const NowPlayingLine = ({ s }) => {
   );
 };
 
-const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire }) => {
-  const { off: internetOff } = useInternetPolicy();
+const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, internetOff = false }) => {
   const blocked = radioInternetBlocked(s, internetOff);
   const [editing, setEditing] = React.useState(false);
   const [intervalDraft, setIntervalDraft] = React.useState(s.sample_interval_sec);
@@ -832,8 +830,7 @@ const DetectionFeed = ({ stationId }) => {
 };
 
 /* ---- Stream URL editor (StationDetail's "stream" row) ---------- */
-const StreamUrlEditor = ({ s, fire }) => {
-  const { off: internetOff } = useInternetPolicy();
+const StreamUrlEditor = ({ s, fire, internetOff = false }) => {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(s.stream_url || '');
   const [resolving, setResolving] = React.useState(false);
@@ -929,7 +926,7 @@ const StreamUrlEditor = ({ s, fire }) => {
 };
 
 /* ---- Detail pane (overview + detection feed) ------------------- */
-const StationDetail = ({ s, fire }) => (
+const StationDetail = ({ s, fire, internetOff = false }) => (
   <Card>
     <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -965,7 +962,7 @@ const StationDetail = ({ s, fire }) => (
     <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8,
                   fontSize: 12, borderBottom: '1px solid var(--border-soft)' }}>
       <div className="label">stream</div>
-      <div><StreamUrlEditor s={s} fire={fire}/></div>
+      <div><StreamUrlEditor s={s} fire={fire} internetOff={internetOff}/></div>
       <div className="label">country</div>
       <div className="mono">{s.country_code || '—'}</div>
       <div className="label">language</div>
@@ -990,9 +987,8 @@ const StationDetail = ({ s, fire }) => (
 );
 
 /* ---- FCC import button (async job — POST then poll) ------------- */
-const FccImportButton = ({ fire }) => {
+const FccImportButton = ({ fire, internetOff = false }) => {
   // The FCC catalog is on the internet.
-  const { off: internetOff } = useInternetPolicy();
   const [running, setRunning] = React.useState(false);
 
   const poll = async (attempts) => {
@@ -1091,7 +1087,11 @@ const StationsPage = () => {
   // resolves row ids, and marks it created_by_play so the server's Recent
   // trim reclaims it if it never gets starred.
   const player = usePlayback();
-  const { off: internetOff } = useInternetPolicy();
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   // One play request in flight at a time. A tap that shows nothing for a
   // round trip gets tapped again, and every copy refused for want of a
   // credential waits on the SAME pair / sign-in prompt — so dismissing it
@@ -1164,11 +1164,12 @@ const StationsPage = () => {
         title="Stations"
         sub={`${favTotal != null ? favTotal : favorites.length} favorited`
              + ` · ${recent.length} recent · click any station to play it`}
-        actions={<FccImportButton fire={fire}/>}
+        actions={<FccImportButton fire={fire} internetOff={internetOff}/>}
       />
 
       {/* [1] Search */}
-      <StationSearch onFavorite={onFavorite} onPlay={playStation} fire={fire}/>
+      <StationSearch onFavorite={onFavorite} onPlay={playStation} fire={fire}
+                     internetOff={internetOff}/>
 
       {/* [2] Recent + favorites + detail */}
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16, alignItems: 'start' }}>
@@ -1183,7 +1184,7 @@ const StationsPage = () => {
               </span>
             </div>
             <RecentList stations={recent} loading={recentLoading}
-                        onPlay={playStation}
+                        onPlay={playStation} internetOff={internetOff}
                         onFavorite={() => { refresh(); refreshRecent(); }}
                         fire={fire}/>
           </Card>
@@ -1199,7 +1200,7 @@ const StationsPage = () => {
             </div>
             <FavoritesList stations={favorites} loading={loading} page={favPage}
                            selectedId={selectedId} onSelect={setSelectedId}
-                           onPlay={playStation}
+                           onPlay={playStation} internetOff={internetOff}
                            onDelete={onDelete} refresh={refresh} fire={fire}/>
             {(hasPrevFav || hasNextFav) && (
               <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8,
@@ -1218,7 +1219,7 @@ const StationsPage = () => {
         </div>
 
         {selected ? (
-          <StationDetail s={selected} fire={fire}/>
+          <StationDetail s={selected} fire={fire} internetOff={internetOff}/>
         ) : (
           <Card>
             <div style={{ padding: '64px 24px', textAlign: 'center' }}>

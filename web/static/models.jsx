@@ -473,7 +473,11 @@ const ModelsPanel = () => {
   const [fire, node] = useToast();
   // Installing a model pulls it from the Ollama registry: greyed while the
   // box is set to stay off the internet (Settings → Internet).
-  const { off: internetOff } = useInternetPolicy();
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
 
   const { data: hwData, loading: hwLoading, refresh: refreshHw } =
     useApiObject('/api/models/hardware');

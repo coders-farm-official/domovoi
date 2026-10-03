@@ -510,10 +510,10 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
  * checkout and updates with it — the core refuses a zip or GitHub upgrade
  * of one, which would move its folder out of the checkout — and a
  * dev-mode plugin just restarts. */
-const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
+const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
   const [ghUrl, setGhUrl] = React.useState('');
-  // GitHub downloads need the internet; a zip upgrade doesn't.
-  const { off: internetOff } = useInternetPolicy();
+  // GitHub downloads need the internet (internetOff, read by the page); a
+  // zip upgrade doesn't.
   if (p.status === 'uninstalled' || p.install_source === 'dev') return null;
   if (p.bundled) {
     return (
@@ -543,7 +543,7 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl }) => {
 };
 
 /* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl }) => {
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
   const [open, setOpen] = React.useState(false);
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
@@ -641,7 +641,8 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               ))}
             </div>
           )}
-          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}/>
+          <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}
+                                 internetOff={internetOff}/>
         </div>
       )}
     </div>
@@ -665,7 +666,11 @@ const PluginsPage = () => {
   const flow = useInstallFlow(fire, refresh);
   const [ghUrl, setGhUrl] = React.useState('');
   // Installing from GitHub downloads; a zip install stays available.
-  const { off: internetOff } = useInternetPolicy();
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   const [uninstalling, setUninstalling] = React.useState(null);
 
   // The core answers 200 with {enabled: false, status: 'load_error',
@@ -736,7 +741,8 @@ const PluginsPage = () => {
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
-                         onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}/>
+                         onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}
+                         internetOff={internetOff}/>
             ))}
           </div>
         )}

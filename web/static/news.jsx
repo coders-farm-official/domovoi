@@ -22,10 +22,9 @@
 const validityTone = (feed) => (feed.valid ? 'live' : 'idle');
 
 /* ---- A single topic row, expandable to its feeds ------------- */
-const TopicRow = ({ topic, onRemove, fire }) => {
+const TopicRow = ({ topic, onRemove, fire, internetOff = false }) => {
   // Adding or re-checking a feed fetches it: greyed while the box is set
-  // to stay off the internet (Settings → Internet).
-  const { off: internetOff } = useInternetPolicy();
+  // to stay off the internet (Settings → Internet; read by the page).
   const [open, setOpen] = React.useState(false);
   const [feeds, setFeeds] = React.useState(null);
   const [newUrl, setNewUrl] = React.useState('');
@@ -123,10 +122,9 @@ const TopicRow = ({ topic, onRemove, fire }) => {
 };
 
 /* ---- Topic manager (category chips + free-form add) ---------- */
-const TopicManager = ({ personId, topics, categories, onChanged, fire }) => {
+const TopicManager = ({ personId, topics, categories, onChanged, fire, internetOff = false }) => {
   // A free-form topic finds its feeds with a web search: greyed while the
   // box is set to stay off the internet. Categories use built-in feeds.
-  const { off: internetOff } = useInternetPolicy();
   const [freeform, setFreeform] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const activeCats = new Set(topics.filter(t => t.kind === 'category').map(t => t.topic));
@@ -193,7 +191,8 @@ const TopicManager = ({ personId, topics, categories, onChanged, fire }) => {
 
         {topics.length === 0
           ? <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>No topics yet. Pick a category above or add a free-form topic.</div>
-          : topics.map(t => <TopicRow key={t.id} topic={t} onRemove={removeTopic} fire={fire}/>)}
+          : topics.map(t => <TopicRow key={t.id} topic={t} onRemove={removeTopic} fire={fire}
+                                      internetOff={internetOff}/>)}
       </div>
     </Card>
   );
@@ -252,7 +251,11 @@ const PersonNews = ({ person, categories, fire }) => {
   const [polling, setPolling] = React.useState(false);
   // "poll now" fetches every feed: greyed while the box is set to stay off
   // the internet. Saved stories and the last briefing stay readable.
-  const { off: internetOff } = useInternetPolicy();
+  // The internet answer, read once for the page (the GET /api/config the
+  // dashboard's shell reads too) and handed down as a prop; one read per
+  // page, never one per row.
+  const internetCfg = useApiObject('/api/config', { quiet: true });
+  const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
 
   const pollNow = async () => {
     setPolling(true);
@@ -289,7 +292,8 @@ const PersonNews = ({ person, categories, fire }) => {
       </Card>
 
       <TopicManager personId={pid} topics={topics.items} categories={categories}
-                    onChanged={() => { topics.refresh(); items.refresh(); }} fire={fire}/>
+                    onChanged={() => { topics.refresh(); items.refresh(); }} fire={fire}
+                    internetOff={internetOff}/>
 
       <SavedFeed personId={pid} items={items.items} onChanged={items.refresh} fire={fire}/>
     </div>
