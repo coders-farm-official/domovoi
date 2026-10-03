@@ -245,6 +245,113 @@ def test_empty_query() -> None:
     assert _res({"any": "  "}).reason == "empty_query"
 
 
+# ─── Fragments of a credit, one-word sound-alikes, long requests ─────────
+# (2026-10-03 review; every name below checked with --check-names.)
+
+EXTRA = [
+    {"id": 40, "title": "Lantern Drift", "artist": "Ashgrove, Tallow & Ember", "album": None,
+     "file_path": "Ashgrove, Tallow & Ember/Lantern Drift.mp3"},
+    {"id": 41, "title": "Ember", "artist": "Wren Hollow", "album": None,
+     "file_path": "Wren Hollow/Ember.mp3"},
+    {"id": 42, "title": "Cinder Static", "artist": "Marrow Lane, The Quiet Engineers", "album": None,
+     "file_path": "Marrow Lane/Cinder Static.mp3"},
+    {"id": 43, "title": "Kettle Bloom", "artist": "Copper Wren feat. Velvet Moth", "album": None,
+     "file_path": "Copper Wren/Kettle Bloom.mp3"},
+    {"id": 44, "title": "Marlo", "artist": "Wren Hollow", "album": None,
+     "file_path": "Wren Hollow/Marlo.mp3"},
+    {"id": 45, "title": "Chimera", "artist": "Wren Hollow", "album": None,
+     "file_path": "Wren Hollow/Chimera.mp3"},
+]
+
+
+def _res_extra(query: dict, extra: list[dict] = ()):  # type: ignore[assignment]
+    index = build_index(TRACKS + EXTRA + list(extra))
+    return resolve(index, query, play_threshold=PLAY, ask_threshold=ASK)
+
+
+def test_a_credit_fragment_never_beats_a_real_name() -> None:
+    """ "Ashgrove, Tallow & Ember" splits at its commas into three
+    "artists" nobody is called on their own. A song called "Ember" is a
+    real name: an exact tie goes to it, not to the band."""
+    index = build_index(TRACKS + EXTRA)._impl
+    assert index.entity(index.find("artist", "ember")).fragment
+    assert not index.entity(index.find("artist", "techn9ne")).fragment     # beside a "Ft."
+    assert not index.entity(index.find("artist", "velvetmoth")).fragment   # beside a "feat."
+    assert not index.entity(index.find("artist", "pinkfloyd")).fragment    # a credit of its own
+    res = _res_extra({"any": "ember"})
+    assert res.decision == "play"
+    assert _top(res)[:2] == ("title", "Ember")
+
+
+def test_a_fragment_said_exactly_still_plays_when_nothing_else_is_called_that() -> None:
+    res = _res_extra({"any": "ashgrove"})
+    assert res.decision == "play"
+    assert _top(res) == ("artist", "Ashgrove", (40,))
+    # The owner's example: GENER8ION is only ever one of four in a credit.
+    assert _top(_res_extra({"any": "generation"}))[:2] == ("artist", "GENER8ION")
+
+
+def test_a_near_match_to_a_fragment_is_asked_about_never_played() -> None:
+    res = _res_extra({"any": "quiet engineer"})
+    assert res.decision == "ask"
+    assert _top(res)[:2] == ("artist", "The Quiet Engineers")
+    # The same performer with a credit of their own is a name: played.
+    own = [{"id": 46, "title": "Hollow Signal", "artist": "The Quiet Engineers", "album": None,
+            "file_path": "The Quiet Engineers/Hollow Signal.mp3"}]
+    res = _res_extra({"any": "quiet engineer"}, own)
+    assert res.decision == "play" and _top(res)[:2] == ("artist", "The Quiet Engineers")
+    # A guest beside a "feat." is a performer too.
+    res = _res_extra({"any": "velvet moths"})
+    assert res.decision == "play" and _top(res)[:2] == ("artist", "Velvet Moth")
+
+
+def test_one_word_that_only_sounds_like_a_name_is_asked_about() -> None:
+    """One short word whose spelling is off by more than a letter or so
+    ("marlowe" / "Marlo": ratio 0.83) but sounds the same is as often
+    another word: asked, not played. Spelled close ("chimeras" /
+    "Chimera": 0.93), it plays."""
+    res = _res_extra({"any": "marlowe"})
+    assert res.decision == "ask" and _top(res)[:2] == ("title", "Marlo")
+    res = _res_extra({"any": "chimeras"})
+    assert res.decision == "play" and _top(res)[:2] == ("title", "Chimera")
+    # Two words are not one word: "glas harbour" still plays Glass Harbor.
+    res = _res({"any": "glas harbour"})
+    assert res.decision == "play" and _top(res)[:2] == ("title", "Glass Harbor")
+
+
+def test_a_request_that_is_a_sentence_is_not_a_name() -> None:
+    res = _res({"any": " ".join(["paris dawn"] * 13)})
+    assert (res.decision, res.reason) == ("none", "too_long")
+    res = _res({"title": " ".join(["lantern"] * 20), "artist": " ".join(["suicide boys"] * 3)})
+    assert res.reason == "too_long"
+
+
+def test_a_long_run_of_numbers_resolves_quickly() -> None:
+    """The review's blow-up: "play X by Y" with ten years a side took 6.6 s
+    and 243 MB; sixteen a side ran out of memory."""
+    import time
+
+    index = _index()
+    years = " ".join(str(y) for y in range(2000, 2016))
+    t0 = time.perf_counter()
+    for query in ({"title": years, "artist": years}, {"any": " ".join(["2"] * 23)}):
+        resolve(index, query, play_threshold=PLAY, ask_threshold=ASK)
+    assert time.perf_counter() - t0 < 2.0
+
+
+def test_is_library_name_reads_the_index_in_memory() -> None:
+    lm.reset_for_tests()
+    assert lm.is_library_name("pink floyd") is False  # no index yet
+    lm._install(_index([_alias("lantern boys", "artist", key="sbtrkt")]), (0, 0, None), ())
+    try:
+        assert lm.is_library_name("Pink Floyd") is True
+        assert lm.is_library_name("velvet antlers") is True
+        assert lm.is_library_name("lantern boys") is False   # an alias, not a library name
+        assert lm.is_library_name("") is False
+    finally:
+        lm.reset_for_tests()
+
+
 # ─── Aliases ─────────────────────────────────────────────────────────────
 
 
@@ -352,14 +459,19 @@ _AckError.__name__ = "CommandError"
 
 class _RecordingMPD:
     def __init__(self, refuse: set[str] = frozenset(), *, die_on: str | None = None,
-                 refuse_seek: bool = False) -> None:
+                 refuse_seek: bool = False, queue: list[str] | None = None) -> None:
         self.refuse, self.die_on, self.refuse_seek = refuse, die_on, refuse_seek
         self.sent: list[str] = []
-        self.queue: list[str] = []
+        self.queue: list[str] = list(queue or [])
 
     async def clear(self) -> None:
         self.sent.append("clear")
         self.queue = []
+
+    async def delete(self, rng: str) -> None:
+        self.sent.append(f"delete {rng}")
+        start, _, end = rng.partition(":")
+        del self.queue[int(start):int(end)]
 
     async def add(self, uri: str) -> None:
         if uri == self.die_on:
@@ -370,7 +482,7 @@ class _RecordingMPD:
         self.queue.append(uri)
 
     async def play(self, pos: Any = None) -> None:
-        self.sent.append("play")
+        self.sent.append("play" if pos is None else f"play {pos}")
 
     async def seek(self, pos: Any, t: Any) -> None:
         if self.refuse_seek:
@@ -400,15 +512,30 @@ def _real(conn: _RecordingMPD) -> RealMPDClient:
 async def test_prepare_files_queues_exact_paths_paused_and_skips_refused_ones() -> None:
     conn = _RecordingMPD(refuse={"b.mp3"})
     queued = await _real(conn).prepare_files(["a.mp3", "b.mp3", "c.mp3"])
-    assert conn.sent == ["clear", "add a.mp3", "add c.mp3", "play", "pause 1"]
+    assert conn.sent == ["add a.mp3", "add c.mp3", "play 0", "pause 1"]
     assert [(e["file"], e["id"], e["pos"]) for e in queued] == [("a.mp3", 100, 0), ("c.mp3", 101, 1)]
 
 
-async def test_prepare_files_with_nothing_queued_touches_no_transport() -> None:
-    conn = _RecordingMPD(refuse={"a.mp3"})
-    assert await _real(conn).prepare_files(["a.mp3"]) == []
-    assert conn.sent == ["clear"]
+async def test_prepare_files_replaces_the_old_queue_only_once_something_is_in() -> None:
+    conn = _RecordingMPD(refuse={"b.mp3"}, queue=["old1.mp3", "old2.mp3"])
+    queued = await _real(conn).prepare_files(["a.mp3", "b.mp3"])
+    assert conn.sent == ["add a.mp3", "delete 0:2", "play 0", "pause 1"]
+    assert conn.queue == ["a.mp3"] and [e["file"] for e in queued] == ["a.mp3"]
+
+
+async def test_prepare_files_refused_everything_leaves_the_queue_as_it_was() -> None:
+    """2026-10-03 review: "play ghost lantern" for a row MPD does not know
+    cleared the queue first, so the song that was playing was lost and the
+    sweeper stopped the room. Nothing accepted → nothing touched."""
+    conn = _RecordingMPD(refuse={"a.mp3", "b.mp3"}, queue=["playing.mp3", "next.mp3"])
+    assert await _real(conn).prepare_files(["a.mp3", "b.mp3"]) == []
+    assert conn.sent == []
+    assert conn.queue == ["playing.mp3", "next.mp3"]
     assert await _real(_RecordingMPD()).prepare_files([]) == []
+    stub = MPDStubClient()
+    await stub.prepare_files(["A/x.mp3"])
+    assert await stub.prepare_files([]) == []
+    assert [e["file"] for e in await stub.queue_list()] == ["A/x.mp3"]
 
 
 async def test_prepare_files_lets_a_dead_connection_raise() -> None:
@@ -422,7 +549,38 @@ async def test_prepare_files_start_sec() -> None:
     assert conn.sent[-2:] == ["seek 0 12", "pause 1"]
     conn = _RecordingMPD(refuse_seek=True)
     await _real(conn).prepare_files(["a.mp3"], start_sec=12.7)
-    assert conn.sent[-2:] == ["play", "pause 1"]
+    assert conn.sent[-2:] == ["play 0", "pause 1"]
+
+
+def test_a_filename_hit_inside_a_video_id_is_no_hit() -> None:
+    """2026-10-03 review: today's filename search matched "kygo" inside
+    "[FQKdHGgKygo]" and played an unrelated song."""
+    from domovoi.clients.mpd import filename_hit_matches
+
+    path = "uploads/Night Ferry - Paper Comets [FQKdHGgKygo].mp3"
+    assert not filename_hit_matches(path, ("kygo",))
+    assert filename_hit_matches(path, ("paper comets",))
+    assert filename_hit_matches(path, ("NIGHT", "comets"))
+    assert filename_hit_matches("Kygo Lights/Song.mp3", ("kygo",))
+
+
+async def test_the_filename_search_skips_hits_inside_a_video_id() -> None:
+    class _Searching(_RecordingMPD):
+        async def search(self, *args):
+            return [{"file": "a/Song [FQKdHGgKygo].mp3"}, {"file": "b/Kygo Night.mp3"}]
+
+    conn = _Searching()
+    song = await _real(conn).prepare_filename("kygo")
+    assert song == {"file": "b/Kygo Night.mp3"}
+    assert conn.sent == ["clear", "add b/Kygo Night.mp3", "play", "pause 1"]
+
+    class _OnlyTheId(_RecordingMPD):
+        async def search(self, *args):
+            return [{"file": "a/Song [FQKdHGgKygo].mp3"}]
+
+    conn = _OnlyTheId(queue=["playing.mp3"])
+    assert await _real(conn).prepare_filename("kygo") is None
+    assert conn.sent == [] and conn.queue == ["playing.mp3"]
 
 
 async def test_the_stub_prepare_files_is_a_paused_queue() -> None:
@@ -750,6 +908,84 @@ async def test_the_index_follows_the_library_and_the_aliases(db_session, music_d
     lm.invalidate()
     res = await lm.resolve_request(db_session, {"any": "crystal door"})
     assert res.best.via == "alias"
+
+
+@requires_db
+async def test_a_track_renamed_in_place_by_a_reingest_is_heard_on_the_next_request(
+    db_session, music_dir, monkeypatch
+) -> None:
+    """2026-10-03 review: the provider pipeline's re-ingest
+    (LibraryAPI.ingest_track, same source id) rewrites title / artist in
+    place without moving added_at / enriched_at, so the fingerprint stayed
+    put and the old name kept playing. The ingest now tells the resolver."""
+    from domovoi.sdk.library import LibraryAPI
+
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": MPDStubClient()}
+    monkeypatch.setattr(lm, "REBUILD_DEBOUNCE_SEC", 60.0)  # the request rebuilds, not the timer
+    api = LibraryAPI()
+    path = music_dir / "Quartz Meridian" / "Prism Gate.mp3"
+    await api.ingest_track(
+        db_session, file_path=path, title="Prism Gate", artist="Quartz Meridian",
+        source="spoken-match-test", source_id="pg-1", added_via="manual",
+    )
+    res = await lm.resolve_request(db_session, {"any": "quartz meridian"})
+    assert (res.decision, res.best.ref.label) == ("play", "Quartz Meridian")
+
+    fp_before = (await lm._fingerprint(db_session))[0]
+    await api.ingest_track(
+        db_session, file_path=path, title="Prism Gate", artist="Cobalt Vesper",
+        source="spoken-match-test", source_id="pg-1", added_via="manual",
+    )
+    # The fingerprint really cannot see it…
+    assert (await lm._fingerprint(db_session))[0] == fp_before
+    # …and yet the very next request hears the new name, not the old one.
+    res = await lm.resolve_request(db_session, {"any": "cobalt vesper"})
+    assert (res.decision, res.best.ref.label) == ("play", "Cobalt Vesper")
+    assert (await lm.resolve_request(db_session, {"any": "quartz meridian"})).decision == "none"
+
+
+@requires_db
+async def test_a_household_name_that_takes_over_a_library_name_is_not_echoed(
+    db_session, music_dir
+) -> None:
+    """2026-10-03 review: someone taught "velvet antlers" (a band in the
+    library) to mean SBTRKT. "Playing Velvet Antlers" would hide that the
+    real Velvet Antlers is not what plays — the reply says the target."""
+    await _seed(db_session, music_dir)
+    for i, alias in enumerate(("velvet antlers", "lantern boys"), start=1):
+        await db_session.execute(text(
+            "INSERT INTO library_aliases (alias, alias_key, target_type, target_key, target_name, "
+            "source, created_by_kind) VALUES (:a, :k, 'artist', 'sbtrkt', 'SBTRKT', 'manual', 'admin')"
+        ), {"a": alias, "k": alias.replace(" ", "")})
+    await db_session.commit()
+    mpd = _ResolverOnlyMPD()
+    mpd_module._clients = {"kitchen": mpd}
+    ctx = await _ctx(db_session)
+    handler = MusicHandler()
+
+    r = await _say(handler, "play velvet antlers", ctx, db_session)
+    assert r.data["resolved"]["ref"]["label"] == "SBTRKT" and r.data["resolved"]["via"] == "alias"
+    assert r.text == "Playing Wildfire Lines by SBTRKT."
+    # A household name that is nobody else's is said back as it was said.
+    r = await _say(handler, "play lantern boys", ctx, db_session)
+    assert r.text == "Playing Wildfire Lines by Lantern Boys."
+
+
+@requires_db
+async def test_a_turned_down_entity_goes_on_to_todays_search(db_session, music_dir) -> None:
+    """``_play(..., avoid=...)``: what the did-you-mean dialog passes after
+    "no, I said <the same words>" — the resolver's answer is skipped when
+    it is one of them, and today's search answers instead."""
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": _NothingFoundMPD()}
+    ctx = await _ctx(db_session, online=False)
+    handler = MusicHandler()
+    res = await lm.resolve_request(db_session, {"any": "wildfire lines"})
+    assert res.decision == "play"
+    r = await handler._play({"any": "wildfire lines"}, ctx, db_session, avoid=(res.best.ref,))
+    assert r.text == "I couldn't find anything called wildfire lines."
+    assert r.music_action is None
 
 
 @requires_db

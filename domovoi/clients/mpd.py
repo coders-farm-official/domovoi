@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager, suppress
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Callable, Protocol
 from urllib.parse import urlsplit
 
 from domovoi import lan_address
@@ -201,6 +202,8 @@ class MPDStubClient:
             {"file": uri, "title": PurePosixPath(uri).stem}
             for uri in uris if uri
         ]
+        if not songs:  # like the real client: nothing queued, nothing touched
+            return []
         queued = self._assign_ids(songs)
         self._queue = list(queued)
         if queued:
@@ -352,6 +355,20 @@ def _is_not_playing(exc: BaseException) -> bool:
     return "[55@" in text or "not playing" in text.lower()
 
 
+# A video id in brackets, as a media provider's downloads are commonly named
+# ("Song Title [FQKdHGgKygo].mp3"): eleven URL-safe base64 characters.
+_VIDEO_ID_RE = re.compile(r"\[[A-Za-z0-9_-]{11}\]")
+
+
+def filename_hit_matches(path: str, substrings: tuple[str, ...]) -> bool:
+    """Does a filename-search hit really contain every searched word — in
+    the name a person reads, not inside a bracketed video id? MPD's
+    ``search file`` matches anywhere in the path, so "kygo" finds a song
+    whose name ends "[FQKdHGgKygo]"."""
+    name = _VIDEO_ID_RE.sub(" ", path or "").casefold()
+    return all((s or "").casefold() in name for s in substrings if s)
+
+
 def _is_ack(exc: BaseException) -> bool:
     """Did MPD answer this command with an ACK (it refused it) rather than
     the connection failing? python-mpd2's ``CommandError`` text starts with
@@ -382,7 +399,12 @@ class RealMPDClient:
                 pass
 
     async def _queue_first_search_hit(
-        self, c: Any, search_args: list[str], *, start: bool
+        self,
+        c: Any,
+        search_args: list[str],
+        *,
+        start: bool,
+        accept: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any] | None:
         """Run MPD `search`, queue the first hit, and either play or pause.
 
@@ -393,12 +415,17 @@ class RealMPDClient:
         `music_ready`. See the prepare_* docstrings — and
         `ensure_stream_serving`, because on a daemon that has not played
         since it started there is no silence stream to connect to yet.
+
+        `accept`, when given, skips hits it rejects (the filename search's
+        video-id check).
         """
         try:
             results = await c.search(*search_args)
         except Exception as e:
             log.warning("MPD search failed: %s", e)
             return None
+        if accept is not None:
+            results = [r for r in results or [] if accept(r)]
         if not results:
             return None
         first = results[0]
@@ -458,7 +485,10 @@ class RealMPDClient:
                     search_args.extend(["file", s])
             if not search_args:
                 return None
-            return await self._queue_first_search_hit(c, search_args, start=True)
+            return await self._queue_first_search_hit(
+                c, search_args, start=True,
+                accept=lambda song: filename_hit_matches(str(song.get("file") or ""), substrings),
+            )
 
     async def play_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
         """Clear queue, add a stream URL, play. Returns True on success.
@@ -544,7 +574,10 @@ class RealMPDClient:
                     search_args.extend(["file", s])
             if not search_args:
                 return None
-            return await self._queue_first_search_hit(c, search_args, start=False)
+            return await self._queue_first_search_hit(
+                c, search_args, start=False,
+                accept=lambda song: filename_hit_matches(str(song.get("file") or ""), substrings),
+            )
 
     async def prepare_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
         """Paused-queue sibling of `play_url`; see `prepare_search`."""
@@ -641,17 +674,22 @@ class RealMPDClient:
     async def prepare_files(
         self, uris: list[str], *, start_sec: float = 0.0
     ) -> list[dict[str, Any]]:
-        """Clear the queue, ``add`` each URI as it is (no search), leave MPD
-        paused on the first one. A URI MPD refuses with an ACK (not in its
-        database — a file added since its last update, or gone) is skipped;
-        any other failure is the connection and propagates. Returns the
-        queue as ``playlistinfo`` reports it, ``id`` / ``pos`` normalized
-        as in :meth:`queue_list`."""
+        """Replace the queue with these URIs as they are (no search) and
+        leave MPD paused on the first one. A URI MPD refuses with an ACK
+        (not in its database — a file added since its last update, or gone)
+        is skipped; any other failure is the connection and propagates.
+
+        The new songs are APPENDED first and the old queue removed only
+        once at least one of them was accepted: when MPD refuses every one,
+        the queue — and whatever was playing — is left exactly as it was.
+        Returns the queue as ``playlistinfo`` reports it, ``id`` / ``pos``
+        normalized as in :meth:`queue_list`; empty when nothing was
+        queued."""
         wanted = [u for u in uris if u]
         if not wanted:
             return []
         async with self._connect() as c:
-            await c.clear()
+            old_len = len(await c.playlistinfo() or [])
             added = 0
             first_added = False
             for i, uri in enumerate(wanted):
@@ -667,6 +705,8 @@ class RealMPDClient:
                     first_added = True
             if not added:
                 return []
+            if old_len:
+                await c.delete(f"0:{old_len}")
             started = False
             offset = int(start_sec) if start_sec and start_sec > 0 else 0
             if offset and first_added:
@@ -679,7 +719,7 @@ class RealMPDClient:
                         "starting the track from the top", offset, e,
                     )
             if not started:
-                await c.play()
+                await c.play(0)
             await c.pause(1)
             entries = await c.playlistinfo()
         out: list[dict[str, Any]] = []

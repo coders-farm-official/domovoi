@@ -41,7 +41,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from functools import lru_cache
-from itertools import product
+from typing import Iterator
 
 from anyascii import anyascii
 from metaphone import doublemetaphone
@@ -182,11 +182,46 @@ def _merge(left: str, sub: str, right: str, *, silent_e: bool = False) -> str:
 
 
 def _number_variants(digits: str) -> list[str]:
-    """A whole-number token: the cardinal first, then the paired reading."""
+    """A whole-number token: the cardinal first, then the paired reading,
+    then — for a number written with leading zeros ("0936", "007") — the
+    zeros said out loud ("zero"/"oh") before the rest, and the whole
+    thing digit by digit."""
     out = [int_to_words(int(digits))]
     paired = _paired_reading(digits)
     if paired:
         out.append(paired)
+    if len(digits) > 1 and digits[0] == "0":
+        for v in _leading_zero_readings(digits):
+            if v not in out:
+                out.append(v)
+    return out
+
+
+def _leading_zero_readings(digits: str) -> list[str]:
+    """How a number written with leading zeros is said: each zero as
+    "zero" or "oh", then the rest as a number (cardinal, then paired) or
+    digit by digit — "0936" → "zero nine thirty six", "oh nine three
+    six"; "007" → "zero zero seven", "oh oh seven". The cardinal alone
+    (the token's primary reading, which ``alias_key`` uses) drops them."""
+    rest = digits.lstrip("0")
+    zeros = len(digits) - len(rest)
+    readings: list[str] = []
+    if rest:
+        readings.append(int_to_words(int(rest)))
+        paired = _paired_reading(rest)
+        if paired:
+            readings.append(paired)
+        if len(rest) > 1:
+            readings.append(" ".join(_ONES[int(d)] for d in rest))
+    else:
+        readings.append("")
+    out: list[str] = []
+    for zero in ("zero", "oh"):
+        head = " ".join([zero] * zeros)
+        for r in readings:
+            form = f"{head} {r}".strip()
+            if form not in out:
+                out.append(form)
     return out
 
 
@@ -243,6 +278,11 @@ def _mixed_variants(tok: str) -> list[str]:
     return list(out)
 
 
+# Written abbreviations that are said as the whole word ("Pt. 2" is "part
+# two"). A reading only: the abbreviation stays the primary form.
+_SAID_IN_FULL = {"pt": "part"}
+
+
 def _token_variants(tok: str) -> list[str]:
     """Readings of one cleaned token, the primary (key-defining) one first."""
     if tok.isdigit():
@@ -252,7 +292,8 @@ def _token_variants(tok: str) -> list[str]:
         return variants
     if any(c.isdigit() for c in tok):
         return _mixed_variants(tok)
-    return [tok]
+    full = _SAID_IN_FULL.get(tok)
+    return [tok, full] if full else [tok]
 
 
 # ─── Public API ────────────────────────────────────────────────────────────
@@ -265,6 +306,55 @@ def compact(form: str) -> str:
 
 def _drop_leading_the(form: str) -> str:
     return form[4:] if form.startswith("the ") and len(form) > 4 else form
+
+
+def _with_departures(sizes: list[int], d: int) -> Iterator[tuple[int, ...]]:
+    """Every choice of one reading per token (``sizes[i]`` readings for
+    token i, reading 0 the primary) that departs from the primary at
+    exactly ``d`` tokens, in lexicographic order — lazily, so a name with
+    many multi-reading tokens never builds the whole product."""
+    k = len(sizes)
+    idx = [0] * k
+
+    def rec(i: int, left: int) -> Iterator[tuple[int, ...]]:
+        if left == 0:
+            yield tuple(idx)
+            return
+        if k - i < left:
+            return
+        if k - i - 1 >= left:  # token i keeps its primary reading
+            yield from rec(i + 1, left)
+        for v in range(1, sizes[i]):
+            idx[i] = v
+            yield from rec(i + 1, left - 1)
+        idx[i] = 0
+
+    yield from rec(0, d)
+
+
+def _readings(alts: list[list[str]]) -> Iterator[str]:
+    """The readings of a token list, fewest departures from the primary
+    reading first (the order of ``itertools.product`` sorted by the number
+    of departures), generated lazily: the cost is bounded by how many are
+    taken, not by the product of every token's readings (which grows
+    exponentially — "2 2 2 …" has two readings per word)."""
+    varying = [i for i, a in enumerate(alts) if len(a) > 1]
+    sizes = [len(alts[i]) for i in varying]
+    seen = 0
+    for d in range(len(varying) + 1):
+        for choice in _with_departures(sizes, d):
+            seen += 1
+            if seen > _MAX_READINGS_TRIED:
+                return
+            pick = [0] * len(alts)
+            for pos, v in zip(varying, choice):
+                pick[pos] = v
+            yield " ".join(" ".join(alts[t][i] for t, i in enumerate(pick)).split())
+
+
+#: Most token-reading combinations :func:`spoken_forms` looks at before it
+#: stops (it normally stops at :data:`MAX_FORMS` distinct forms long before).
+_MAX_READINGS_TRIED = 4096
 
 
 @lru_cache(maxsize=200_000)
@@ -281,11 +371,8 @@ def spoken_forms(text: str) -> tuple[str, ...]:
         return ()
     alts = [_token_variants(t) for t in tokens]
     # Fewest departures from the primary reading first.
-    combos = list(product(*[range(len(a)) for a in alts]))
-    combos.sort(key=lambda idx: sum(1 for i in idx if i))
     forms: dict[str, None] = {}
-    for idx in combos:
-        form = " ".join(" ".join(alts[t][i] for t, i in enumerate(idx)).split())
+    for form in _readings(alts):
         forms.setdefault(form, None)
         if len(forms) >= MAX_FORMS:
             break
@@ -357,8 +444,18 @@ def speakable(text: str | None) -> str:
     …", "Did you mean …?") when the household has no spoken alias for it:
     transliterated, ``$`` read as s and an in-word ``!`` as i, ``&``/``+``
     as "and", dotted initials spaced so they are spelled ("T.I." → "T I"),
-    bracketed and "feat." noise dropped. Case is kept."""
-    s = anyascii(unicodedata.normalize("NFKC", text or ""))
+    bracketed and "feat." noise dropped, pictographs and other symbols
+    (emoji, ™, ©) left out rather than read as their shortcodes (anyascii
+    writes 💿 as ":cd:"). Case is kept."""
+    # Symbols out before NFKC, which would already have spelled ™ "TM";
+    # a name that is nothing but symbols keeps them (read as anyascii says).
+    raw = text or ""
+    no_symbols = "".join(" " if unicodedata.category(ch) == "So" else ch for ch in raw)
+    return _speakable(no_symbols) or _speakable(raw) or raw.strip()
+
+
+def _speakable(text: str) -> str:
+    s = anyascii(unicodedata.normalize("NFKC", text))
     s = clean_title(s)
     s = _SPEAK_DOTTED_RE.sub(lambda m: " ".join(re.sub(r"[.\s]", "", m.group(1))), s)
     s = s.replace("$", "s")
@@ -367,8 +464,7 @@ def speakable(text: str | None) -> str:
     s = re.sub(r"\s+\+\s+", " and ", s)
     s = re.sub(r"(?<=\s)@(?=\s)", "at", s)
     s = re.sub(r"[_*~^|<>{}\[\]\"]+", " ", s)
-    s = " ".join(s.split())
-    return s or (text or "").strip()
+    return " ".join(s.split())
 
 
 # ─── Library names ─────────────────────────────────────────────────────────

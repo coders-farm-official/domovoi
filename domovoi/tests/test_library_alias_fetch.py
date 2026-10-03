@@ -51,6 +51,7 @@ from domovoi.clients.musicbrainz import (
     MbAlias,
     MbArtist,
     MusicBrainzRateLimited,
+    MusicBrainzRejected,
     MusicBrainzStubClient,
     MusicBrainzUnavailable,
     artist_search_query,
@@ -212,12 +213,27 @@ async def test_no_answer_at_all_means_unavailable(monkeypatch) -> None:
         await HttpMusicBrainzClient().search_artists("deadmau5")
 
 
-async def test_any_other_error_status_is_an_empty_answer(monkeypatch) -> None:
-    _fake_get(monkeypatch, [_Resp(500), _Resp(200)], [])
+@pytest.mark.parametrize(("answer", "error"), [
+    (_Resp(500), MusicBrainzUnavailable),
+    (_Resp(502), MusicBrainzUnavailable),
+    (_Resp(504), MusicBrainzUnavailable),
+    (_Resp(200), MusicBrainzUnavailable),               # a 200 whose body is not JSON (a proxy's page)
+    (_Resp(200, ["not", "an", "object"]), MusicBrainzUnavailable),
+    (_Resp(403), MusicBrainzRejected),
+    (_Resp(404), MusicBrainzRejected),
+    (_Resp(400), MusicBrainzRejected),
+])
+async def test_only_a_json_200_is_an_answer(monkeypatch, answer, error) -> None:
+    """2026-10-03 review: a 502 or an HTML 200 came back as [] — "no such
+    artist" — and was stored as a final no_match. A failure is a failure."""
+    _fake_get(monkeypatch, [answer], [])
     client = HttpMusicBrainzClient()
     client.MIN_INTERVAL_SEC = 0.0
+    with pytest.raises(error):
+        await client.search_artists("deadmau5")
+    # An empty JSON answer IS MusicBrainz saying it knows no such artist.
+    _fake_get(monkeypatch, [_Resp(200, {"artists": []})], [])
     assert await client.search_artists("deadmau5") == []
-    assert await client.search_artists("deadmau5") == []  # 200 without JSON
 
 
 async def test_the_recording_lookup_still_swallows_every_failure(monkeypatch) -> None:
@@ -707,6 +723,62 @@ async def test_an_unreachable_server_records_an_error_and_pauses(probe, enabled)
     assert client.calls == ["B.o.B"]  # paused
 
 
+async def test_a_refused_request_records_an_error_and_pauses(probe, enabled) -> None:
+    worker, client, store = _worker(
+        _RECORDED_ROWS, answers={"B.o.B": MusicBrainzRejected("HTTP 403")}
+    )
+    await worker.tick()
+    assert client.calls == ["B.o.B"]
+    assert store.lookups["bob"].status == "error"          # never no_match
+    assert alias_fetch_status()["state"] == "error"
+    assert alias_fetch_status()["last_error"] == "rejected"
+    await worker.tick()
+    assert client.calls == ["B.o.B"]  # paused
+
+
+async def test_one_artist_whose_result_cannot_be_saved_never_stalls_the_rest(probe, enabled) -> None:
+    """2026-10-03 review: a save error for one artist wrote no row, so the
+    same artist was searched every tick forever and nobody after it ever
+    was. Now its failure is an error row (backoff applies) and the batch
+    goes on."""
+    worker, client, store = _worker(_RECORDED_ROWS)
+    real_record = store.record_result
+
+    async def refuses_bob(**kw):
+        if kw["artist_key"] == "bob":
+            raise RuntimeError("the database refused that row")
+        return await real_record(**kw)
+
+    store.record_result = refuses_bob  # type: ignore[method-assign]
+    result = await worker.tick()
+    assert sorted(client.calls) == sorted(r[1] for r in _RECORDED_ROWS)   # everybody looked up
+    assert store.lookups["bob"].status == "error"
+    assert {k: v.status for k, v in store.lookups.items() if k != "bob"} == {
+        "deadmau5": "matched", "chvrches": "matched", "techn9ne": "matched",
+    }
+    assert result["looked_up"] == 4
+    await worker.tick()
+    assert len(client.calls) == len(_RECORDED_ROWS)        # bob waits out its backoff
+
+
+def test_a_name_the_database_would_refuse_is_never_kept() -> None:
+    """V019: alias_key at most 240 characters, and no NUL — a name of
+    digits reads as many words (40 digits → a 360-character key)."""
+    long_digits = _artist(
+        "Velvet Harbor",
+        MbAlias("99999999999999999999 99999999999999999999", "Artist name"),
+        MbAlias("Velvet\x00Harbour", "Artist name"),
+        MbAlias("Velvet\u202eHarbour", "Artist name"),
+        MbAlias("Velvet Harbour", "Artist name"),
+        type_="Group",
+    )
+    decisions = {d.name: d.reason for d in classify_aliases("Velvet Harbor", long_digits)}
+    assert decisions["99999999999999999999 99999999999999999999"] == "too_long"
+    assert decisions["Velvet\x00Harbour"] == "unprintable"
+    assert decisions["Velvet\u202eHarbour"] == "unprintable"
+    assert decisions["Velvet Harbour"] is None
+
+
 async def test_at_most_a_batch_per_tick_then_the_rest(probe, enabled) -> None:
     rows = [(f"Song {i}", f"Velvet Harbor {i}", None) for i in range(BATCH_SIZE + 5)]
     worker, client, _store = _worker(rows)
@@ -930,6 +1002,57 @@ async def test_errors_are_recorded_and_counted_up(probe, enabled, v019) -> None:
     client = _FakeClient()
     await LibraryAliasFetcher(client=client).tick()
     assert client.calls == []
+
+
+@requires_db
+@pytest.mark.parametrize("answer", ["502", "504", "403", "html200"])
+async def test_a_failing_musicbrainz_leaves_an_error_row_never_no_match(
+    probe, enabled, v019, monkeypatch, answer
+) -> None:
+    """The review's repro, end to end: the real HTTP client (requests
+    faked) and the real store on the lane. Each failure is an error row
+    the backoff retries — never a final "no such artist"."""
+    resp = _Resp(200, None) if answer == "html200" else _Resp(int(answer))
+    calls: list[dict] = []
+    _fake_get(monkeypatch, [resp], calls)
+    await _seed_tracks([("Paper Lantern", "Quillfeather Duo", None)])
+    client = HttpMusicBrainzClient()
+    client.MIN_INTERVAL_SEC = 0.0
+    worker = LibraryAliasFetcher(client=client)
+    await worker.tick()
+    assert len(calls) == 1
+    rows = await _fetch("SELECT artist_key, status, attempts, last_error FROM library_alias_lookups")
+    assert len(rows) == 1
+    key, status, attempts, last_error = rows[0]
+    assert (key, status, attempts) == ("quillfeatherduo", "error", 1)
+    assert last_error.startswith(("unavailable", "rejected"))
+    # Paused, then backed off: the next tick asks nothing.
+    laf._STATUS.paused_until = None
+    await worker.tick()
+    assert len(calls) == 1
+
+
+@requires_db
+async def test_a_save_error_is_an_error_row_on_the_real_store(probe, enabled, v019) -> None:
+    """record_result fails for one artist (the database refuses a row):
+    the real store gets an error row for it, the next artist is saved."""
+    await _seed_tracks([("Paper Lantern", "deadmau5", None), ("Night Bus", "CHVRCHES", None)])
+
+    class _Refuses(laf.DbAliasFetchStore):
+        async def record_result(self, **kw):
+            if kw["artist_key"] == "deadmau5":
+                from sqlalchemy.exc import IntegrityError
+
+                raise IntegrityError("INSERT …", {}, Exception("value too long"))
+            return await super().record_result(**kw)
+
+    worker = LibraryAliasFetcher(client=_FakeClient(), store=_Refuses())
+    await worker.tick()
+    lookups = {r[0]: r[1:] for r in await _fetch(
+        "SELECT artist_key, status, attempts, last_error FROM library_alias_lookups"
+    )}
+    assert lookups["deadmau5"] == ("error", 1, "IntegrityError")
+    assert lookups["chvrches"][0] == "matched"
 
 
 @requires_db

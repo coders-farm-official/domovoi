@@ -27,6 +27,18 @@ No constant, rule, alias, stop word or fixture may be derived from it. It
 prints totals only; ``--dump-decisions`` writes per-item results for an
 independent audit, and whoever works on the resolver does not open that file.
 
+Every group also says how it did on the requests production ROUTED to
+music ("of routed"): a transcript whose "play" Whisper misheard ("Place …",
+"PlayTech 9") never reaches the resolver, and that is the parser's loss,
+not the ranker's.
+
+``--mode production`` adds today's search (the cascade) where production
+runs it, and reports it two ways: with the did-you-mean dialog ON (a
+spoken turn: an ask is asked, and whatever the answer, that turn never
+goes on to today's search — only "none" does) and OFF (the dashboard's
+play box, or the setting off: an ask goes on to today's search like a
+"none").
+
 Usage:
     python scripts/eval_spoken_match.py --gate-dir <dir>          # the gate
     python scripts/eval_spoken_match.py --source say               # perfect text
@@ -165,7 +177,8 @@ class TodaysSearch:
     """A simulation of today's cascade on the library: MPD's
     case-insensitive substring tag search (title AND artist, or any of
     artist / album / title), first hit in path order, then the filename
-    search with every word ANDed."""
+    search with every word ANDed (outside a bracketed video id, as
+    ``RealMPDClient`` checks its filename hits)."""
 
     def __init__(self, tracks: list[dict]) -> None:
         self.order = sorted(tracks, key=lambda t: t.get("file_path") or "")
@@ -188,8 +201,13 @@ class TodaysSearch:
                 None,
             )
         if hit is None:
+            # The filename leg, as the real client checks its hits: every
+            # word in the file name, not inside a bracketed video id.
+            from domovoi.clients.mpd import filename_hit_matches
+
+            words = tuple(q.values())
             hit = next(
-                (t for t in self.order if all(v in cf(t.get("file_path")) for v in q.values())),
+                (t for t in self.order if filename_hit_matches(t.get("file_path") or "", words)),
                 None,
             )
         return int(hit["id"]) if hit else None
@@ -293,7 +311,35 @@ def run_gate(
     todays = TodaysSearch(library) if mode == "production" else None
 
     counts: dict[str, Counter] = defaultdict(Counter)
+    # production mode, dialog OFF: an ask goes on to today's search.
+    counts_off: dict[str, Counter] = defaultdict(Counter)
     latencies: list[float] = []
+
+    def judge(group: str, gt: set[int], res: Any, decision: str, query: dict) -> tuple[str, int | None]:
+        """(outcome, today's search's row) for one decision. Only a
+        "none" goes on to today's search (production mode)."""
+        best = res.best
+        fallback = None
+        if group == "absent":
+            outcome = {"play": "false_play", "ask": "ask", "none": "none"}[decision]
+            if todays is not None and decision == "none":
+                fallback = todays.play(query)
+                if fallback is not None:
+                    outcome = "false_play_fallback"
+            return outcome, fallback
+        if decision == "play":
+            return ("right" if _right(best, gt) else "wrong"), None
+        if decision == "ask":
+            if _right(best, gt):
+                return "ask_right", None
+            spoken = res.candidates[:2]
+            return ("ask_right_second" if any(_right(c, gt) for c in spoken[1:]) else "ask_wrong"), None
+        outcome = "miss"
+        if todays is not None:
+            fallback = todays.play(query)
+            if fallback is not None:
+                outcome = "right_fallback" if fallback in gt else "wrong_fallback"
+        return outcome, fallback
     dump = open(dump_decisions, "w", encoding="utf-8") if dump_decisions else None
     try:
         for it, voice, text in work:
@@ -304,10 +350,11 @@ def run_gate(
                 groups.append(ABSENT_SUBGROUPS.get(it.get("cat", ""), "absent: other"))
             query = parse_request(text)
             outcome: str
+            outcome_off: str
             res = None
             fallback = None
             if query is None:
-                outcome = "not_routed"
+                outcome = outcome_off = "not_routed"
             else:
                 q0 = time.perf_counter()
                 res = resolve(index, query, play_threshold=play_t, ask_threshold=ask_t)
@@ -315,34 +362,15 @@ def run_gate(
                 decision = res.decision
                 if decision == "ask" and not ask:
                     decision = "none"
-                best = res.best
-                if group == "absent":
-                    outcome = {"play": "false_play", "ask": "ask", "none": "none"}[decision]
-                    if todays is not None and decision in ("ask", "none"):
-                        fallback = todays.play(query)
-                        if fallback is not None:
-                            outcome = "false_play_fallback"
-                else:
-                    if decision == "play":
-                        outcome = "right" if _right(best, gt) else "wrong"
-                    elif decision == "ask":
-                        if _right(best, gt):
-                            outcome = "ask_right"
-                        else:
-                            spoken = res.candidates[:2]
-                            outcome = (
-                                "ask_right_second" if any(_right(c, gt) for c in spoken[1:])
-                                else "ask_wrong"
-                            )
-                    else:
-                        outcome = "miss"
-                    if todays is not None and outcome in ("ask_wrong", "ask_right_second", "miss"):
-                        fallback = todays.play(query)
-                        if fallback is not None:
-                            outcome = "right_fallback" if fallback in gt else "wrong_fallback"
+                outcome, fallback = judge(group, gt, res, decision, query)
+                outcome_off = outcome
+                if todays is not None and decision == "ask":
+                    outcome_off, _ = judge(group, gt, res, "none", query)
             for g in groups:
                 counts[g]["n"] += 1
                 counts[g][outcome] += 1
+                counts_off[g]["n"] += 1
+                counts_off[g][outcome_off] += 1
             if dump is not None:
                 dump.write(json.dumps({
                     "qid": it["qid"], "group": group, "cat": it.get("cat"), "voice": voice,
@@ -361,34 +389,46 @@ def run_gate(
         if dump is not None:
             dump.close()
 
-    groups_out: dict[str, dict[str, Any]] = {}
-    for g, c in counts.items():
-        n = c["n"]
-        if g.startswith("absent"):
-            groups_out[g] = {
-                "n": n,
-                "false_play": _pct(c["false_play"] + c["false_play_fallback"], n),
-                "false_play_resolver": _pct(c["false_play"], n),
-                "false_play_todays_search": _pct(c["false_play_fallback"], n),
-                "ask": _pct(c["ask"], n),
-                "nothing": _pct(c["none"], n),
-                "not_routed": _pct(c["not_routed"], n),
-            }
-        else:
-            groups_out[g] = {
-                "n": n,
-                "auto_play": _pct(c["right"] + c["right_fallback"], n),
-                "with_confirm": _pct(c["right"] + c["right_fallback"] + c["ask_right"], n),
-                "right_among_spoken": _pct(
-                    c["right"] + c["right_fallback"] + c["ask_right"] + c["ask_right_second"], n
-                ),
-                "wrong": _pct(c["wrong"] + c["wrong_fallback"], n),
-                "wrong_suggestion": _pct(c["ask_wrong"] + c["ask_right_second"], n),
-                "miss": _pct(c["miss"], n),
-                "not_routed": _pct(c["not_routed"], n),
-                "todays_search_right": _pct(c["right_fallback"], n),
-                "todays_search_wrong": _pct(c["wrong_fallback"], n),
-            }
+    def summarize(table: dict[str, Counter]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for g, c in table.items():
+            n = c["n"]
+            routed = n - c["not_routed"]
+            if g.startswith("absent"):
+                fp = c["false_play"] + c["false_play_fallback"]
+                out[g] = {
+                    "n": n,
+                    "routed": routed,
+                    "false_play": _pct(fp, n),
+                    "false_play_routed": _pct(fp, routed),
+                    "false_play_resolver": _pct(c["false_play"], n),
+                    "false_play_todays_search": _pct(c["false_play_fallback"], n),
+                    "ask": _pct(c["ask"], n),
+                    "nothing": _pct(c["none"], n),
+                    "not_routed": _pct(c["not_routed"], n),
+                }
+            else:
+                auto = c["right"] + c["right_fallback"]
+                confirm = auto + c["ask_right"]
+                out[g] = {
+                    "n": n,
+                    "routed": routed,
+                    "auto_play": _pct(auto, n),
+                    "auto_play_routed": _pct(auto, routed),
+                    "with_confirm": _pct(confirm, n),
+                    "with_confirm_routed": _pct(confirm, routed),
+                    "right_among_spoken": _pct(confirm + c["ask_right_second"], n),
+                    "wrong": _pct(c["wrong"] + c["wrong_fallback"], n),
+                    "wrong_suggestion": _pct(c["ask_wrong"] + c["ask_right_second"], n),
+                    "miss": _pct(c["miss"], n),
+                    "not_routed": _pct(c["not_routed"], n),
+                    "todays_search_right": _pct(c["right_fallback"], n),
+                    "todays_search_wrong": _pct(c["wrong_fallback"], n),
+                }
+        return out
+
+    groups_out = summarize(counts)
+    groups_off = summarize(counts_off) if todays is not None and ask else None
     lat = sorted(latencies)
     stats = index.stats()
     return {
@@ -415,11 +455,27 @@ def run_gate(
             "query_ms_max": round(lat[-1], 1) if lat else None,
         },
         "groups": groups_out,
+        # production mode with the dialog on: the same requests with the
+        # dialog OFF (the dashboard's play box) — an ask goes on to today's
+        # search. None otherwise.
+        "groups_dialog_off": groups_off,
     }
 
 
 def format_table(result: dict[str, Any]) -> str:
-    m, g = result["meta"], result["groups"]
+    m = result["meta"]
+    out = _format_groups(m, result["groups"], with_head=True)
+    off = result.get("groups_dialog_off")
+    if off:
+        out += (
+            "\n\nproduction, did-you-mean OFF (the dashboard's play box, or the "
+            "setting off): an ask goes on to today's search\n"
+        )
+        out += _format_groups(m, off, with_head=False)
+    return out
+
+
+def _format_groups(m: dict[str, Any], g: dict[str, Any], *, with_head: bool) -> str:
     head = (
         f"spoken-match gate{'' if m['is_gate'] else ' (NOT THE GATE: ' + '; '.join(m['problems']) + ')'}"
         f" — git {m['git']} — MANIFEST sha256 {m['manifest_sha256'][:16]}…\n"
@@ -431,10 +487,16 @@ def format_table(result: dict[str, Any]) -> str:
         f"{m['build_s']} s; query p50 {m['query_ms_p50']} ms, p95 {m['query_ms_p95']} ms, "
         f"max {m['query_ms_max']} ms\n"
     )
-    lines = [head]
+    lines = [head] if with_head else []
+    if with_head and m["mode"] == "production":
+        lines.append(
+            "production, did-you-mean ON (a spoken turn): an ask never goes on to "
+            "today's search; only a \"none\" does"
+        )
     lines.append(
         f"{'group':<20}{'n':>5}{'auto-play':>11}{'+confirm':>10}{'spoken':>8}"
         f"{'wrong':>8}{'wrong-sugg':>12}{'miss':>7}{'not-routed':>12}"
+        f"{'routed: auto':>14}{'+confirm':>10}"
     )
     for name in TARGET_GROUPS:
         r = g.get(name)
@@ -444,6 +506,7 @@ def format_table(result: dict[str, Any]) -> str:
             f"{name:<20}{r['n']:>5}{r['auto_play']:>10.1f}%{r['with_confirm']:>9.1f}%"
             f"{r['right_among_spoken']:>7.1f}%{r['wrong']:>7.1f}%{r['wrong_suggestion']:>11.1f}%"
             f"{r['miss']:>6.1f}%{r['not_routed']:>11.1f}%"
+            f"{r['auto_play_routed']:>13.1f}%{r['with_confirm_routed']:>9.1f}%"
         )
         if m["mode"] == "production":
             lines.append(
@@ -453,12 +516,13 @@ def format_table(result: dict[str, Any]) -> str:
     lines.append("")
     lines.append(
         f"{'group':<20}{'n':>5}{'false-play':>12}{'ask':>8}{'nothing':>10}{'not-routed':>12}"
+        f"{'routed: false-play':>20}"
     )
     for name in sorted(k for k in g if k.startswith("absent")):
         r = g[name]
         lines.append(
             f"{name:<20}{r['n']:>5}{r['false_play']:>11.1f}%{r['ask']:>7.1f}%"
-            f"{r['nothing']:>9.1f}%{r['not_routed']:>11.1f}%"
+            f"{r['nothing']:>9.1f}%{r['not_routed']:>11.1f}%{r['false_play_routed']:>19.1f}%"
         )
         if m["mode"] == "production" and r["false_play_todays_search"]:
             lines.append(f"{'  of which today':<20}{'':>5}{r['false_play_todays_search']:>11.1f}%")

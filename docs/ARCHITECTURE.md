@@ -441,10 +441,15 @@ MPD text search that was always there.
   letters folded with anyascii, `$` → s, `!` inside a word → i, `&`/`+` →
   "and", dotted initials joined, numbers as words both ways, a digit inside a
   word read as a letter, as its number word and as its sound — `n9ne` → nine,
-  `gener8ion` → generation). `alias_key` — the primary form, space-less, "the"
-  dropped — is the **frozen identity** of a name (`KEY_VERSION`): two aliases
-  with one key are the same alias. Number words are hand-written (no LGPL
-  dependency); Double Metaphone comes from the BSD `Metaphone` package.
+  `gener8ion` → generation; leading zeros also said, "0417" → "zero four
+  seventeen"; "Pt." also "part"). The readings are generated lazily, fewest
+  departures from the primary first, and stop at eight — a name of sixty
+  two-reading words costs what a short one does. `alias_key` — the primary
+  form, space-less, "the" dropped — is the **frozen identity** of a name
+  (`KEY_VERSION`): two aliases with one key are the same alias. Number words
+  are hand-written (no LGPL dependency); Double Metaphone comes from the BSD
+  `Metaphone` package. `speakable` leaves emoji and other symbols out of a
+  readback (anyascii would say "💿" as ":cd:").
 * **The index** (`spoken_index.py`, pure; `library_match.py` holds the one
   process-wide instance). Entities: an `artist` (every spelling merged by
   `alias_key`, all rows whose credit names it), a whole multi-artist `credit`,
@@ -462,25 +467,40 @@ MPD text search that was always there.
   album", "the song") narrows the kinds, and the unstripped request is scored
   too. Decision: ≥ `music_match_play_threshold` (0.90) plays; ≥
   `music_match_ask_threshold` (0.75) asks; else nothing. Exact ties rank
-  household alias > library name > MusicBrainz alias, then the bigger entity;
-  two entities of one type tied at the top (the same title by two artists)
-  are asked about. Single-function hooks for later phases: `_candidate_pool`
-  (narrowing), `_score` (a household-plays prior), `resolve`'s query (N-best).
+  household alias > library name > a credit FRAGMENT > MusicBrainz alias,
+  then the bigger entity; two entities of one type tied at the top (the same
+  title by two artists) are asked about. A fragment is a performer the
+  library only ever names as one part of a ","/"&" credit ("Fire" of
+  "Earth, Wind & Fire", "The Creator" of "Tyler, The Creator"): it plays on an
+  exact match only when no real name says the same, and a near match to it
+  is at most asked about. A one-word request plays on a near match only when
+  it is also spelled close (ratio ≥ 0.9 — "wallows" never plays "Walls"),
+  and a request of more than 24 words is no name at all. Single-function
+  hooks for later phases: `_candidate_pool` (narrowing — linear in library
+  size today: p95 ≈ 25 ms at 5k tracks, ≈ 100 ms at 20k), `_score` (a
+  household-plays prior), `resolve`'s query (N-best).
 * **Freshness**: every request reads a one-query fingerprint of
   `library_tracks` (count, max id, newest `added_at`/`enriched_at`) and
   `library_aliases` (count, max id, newest `updated_at`). Changed aliases are
   folded in on the spot (the next turn hears a new "also called"); a changed
   library is rebuilt in a worker thread in the background (2 s debounce) while
-  the old index answers — inline when the library is ≤ 1,000 tracks. Boot hook
-  `core.spoken_index` (after `core.library_index`) warms it. No V019 table →
-  library names only, one warning. Any error → "none" and today's search.
+  the old index answers — inline when the library is ≤ 1,000 tracks. A change
+  the fingerprint cannot see — the provider pipeline re-ingesting a track and
+  renaming its row in place (`LibraryAPI.ingest_track`) — calls
+  `library_match.invalidate(library=True)`. Boot hook `core.spoken_index`
+  (after `core.library_index`) warms it. No V019 table → library names only,
+  one warning. Any error → "none" and today's search.
 * **The hook** is `MusicHandler._play`, the funnel every "play X" goes through
   (fast paths, tool router, chat mode, the dashboard's play box): a sure match
   plays **by exact file path** (`MPDClient.prepare_files`; rows outside
   `music_dir` fall back to `prepare_tracks`); a middle-band match goes to the
   did-you-mean dialog when it is there; anything else runs the old cascade (MPD
   tag search → filename → podcast → streaming provider → "couldn't find")
-  unchanged. `music_match_enabled = False` is exactly the old path.
+  — whose filename leg no longer counts a hit inside a bracketed video id
+  (`[FQKdHGgKygo]` is no match for "kygo"). `music_match_enabled = False` is
+  the old path. `prepare_files` appends the new songs and drops the old
+  queue only once one was accepted, so a refused batch never loses what was
+  playing.
 * **Playing a match** (`MusicHandler.play_candidate`): an artist or credit
   queues ALL its tracks shuffled (≤ 500), an album its tracks in file order, a
   title or track the one song. A queue of two or more is what "next" and
@@ -489,13 +509,23 @@ MPD text search that was always there.
   `library_track_id`. The reply says a speakable name — the household's own
   words when the match was exact ("Playing Suicide Boys, shuffled."), else a
   household or MusicBrainz alias that sounds like the name, else the tag made
-  sayable (`speakable`: "P!nk" → "Pink", "T.I." → "T I").
+  sayable (`speakable`: "P!nk" → "Pink", "T.I." → "T I"). Never echoed: a
+  household name that is also something else's library name (the reply
+  says the target's own name, so a takeover can be heard).
 * **Did you mean** (`handlers/music_choice.py`, kind `core.music_choice`,
   parked through the confirmation mechanism for 60 s): "Did you mean X, or
-  Y?" accepts yes, "the first / second / other one", plain no ("OK."), "no,
-  play Z" and a bare name (`library_match.match_reply` — a parked title or
-  album is also named by its artist); anything else drops the question and
-  routes normally. The mechanism is generic and core-only: a handler lists
+  Y?" accepts yes (also "uh, yes", "mm-hmm", "either one"), "the first /
+  second / other one", plain no ("OK." — and the same words are not asked
+  about again in that conversation for 5 minutes: they go on to today's
+  search), "no, play Z" / "I meant Z", and a bare name
+  (`library_match.match_reply` — a parked title or album is also named by
+  its artist). After a "no", the same words never pick the candidate just
+  turned down ("no, I said subtract" goes to today's search, not to
+  SBTRKT). A bare reply that is neither a candidate nor a name the library
+  knows ("good night") is not about the question: it drops it and routes
+  normally, as does anything else. Only a whole "yes" ends the capture
+  early; a bare "no" waits for the correction that often follows it. The
+  mechanism is generic and core-only: a handler lists
   the confirmation kinds whose reply may be free text in `choice_kinds` and
   answers them in `handle_choice_reply`; `route()` checks a parked choice
   FIRST, then the yes/no pre-empt, then the fast paths (so "no, play X" is
@@ -510,18 +540,31 @@ MPD text search that was always there.
   someone else's needs an admin (household policy — device ids are
   self-asserted). Dashboard chips in the track drawer, REST under
   `/api/music/aliases`, and voice ("when I say X I mean Y", "forget that
-  name", "what else is X called", band 295). The web writes plain rows; the
-  core sees them through the fingerprint.
+  name", "what else is X called", band 295 — its "Do you mean …?" about a
+  target is a choice too, so "no, I mean Y" works). A phrase whose subject
+  is not in the library ("what else is the moon called", "when I say
+  goodnight I mean turn off the lights") is DECLINED: the fast path returns
+  None and `route()` goes on to the tool model and Q&A as if it had not
+  matched — the router's general "a fast path / a tool call may decline"
+  rule. The web writes plain rows; the core sees them through the
+  fingerprint. Open reads name the device that added a name only to a
+  caller on the device tier.
 * **MusicBrainz aliases** (`workers/library_alias_fetch.py`): OFF by default
   (`music_alias_fetch_enabled`, switchable without a restart), online only,
   through the shared 1 request/s MusicBrainz client. A hit must name the
   library's spelling; a strict filter drops legal names, non-English and
   non-Latin forms, and for people any alias sharing a word with their legal
   name or not sounding like the stage name; it never takes a key a library
-  name or a household alias holds.
+  name or a household alias holds. Only a 200 with a JSON body is a verdict:
+  a 5xx, an HTML 200 or a 4xx is an error row (retried after 2^attempts
+  hours, five times at most), never "no such artist"; one artist whose
+  result cannot be saved gets an error row and the batch goes on.
 * **The gate** (`scripts/eval_spoken_match.py`, test `spoken_gate`): the
   frozen held-out request set, parsed as production parses it, measures the
-  resolver — and is never used to tune it.
+  resolver — and is never used to tune it. It reports every group over all
+  transcripts and over the ones production routes to music (the ordinary
+  floor is on the latter: a misheard "play" is the parser's loss, Phase 4),
+  and in production mode with the dialog on and off.
 
 ---
 

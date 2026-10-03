@@ -68,7 +68,21 @@ PASS = ChoiceReply("pass")
 
 
 def NAME(name: str) -> ChoiceReply:  # noqa: N802 - reads like the others
+    """A bare name: played only when the library knows it."""
     return ChoiceReply("name", name=name)
+
+
+def NO_NAME(name: str, *, asked: bool = False) -> ChoiceReply:  # noqa: N802
+    """A name after a "no": never the candidate just turned down; ``asked``
+    ("no, PLAY x", "no, I SAID x") — a request, played even when nothing
+    in the library is called that; else a name that names nothing is a
+    "no"."""
+    return ChoiceReply("name", name=name, negated=True, explicit=asked, otherwise="decline")
+
+
+def YES_NAME(name: str, *, asked: bool = False) -> ChoiceReply:  # noqa: N802
+    """A name after a "yes": a parked candidate, a request, or the yes."""
+    return ChoiceReply("name", name=name, explicit=asked, otherwise="pick")
 
 
 @pytest.mark.parametrize("reply, expected", [
@@ -96,22 +110,38 @@ def NAME(name: str) -> ChoiceReply:  # noqa: N802 - reads like the others
     ("no, stop", DECLINE), ("no, set a timer for five minutes", DECLINE),
     ("no, what time is it", DECLINE),
     # "no, play X" and its kin: X is what to play
-    ("no, play the velvet kites", NAME("the velvet kites")),
-    ("no play velvet kites", NAME("velvet kites")),
-    ("nope, put on velvet kites", NAME("velvet kites")),
-    ("no, i said velvet kites", NAME("velvet kites")),
-    ("no, i meant play velvet kites", NAME("velvet kites")),
-    ("no, i want to hear velvet kites", NAME("velvet kites")),
-    ("no, can you play velvet kites", NAME("velvet kites")),
-    ("no, velvet kites", NAME("velvet kites")),
-    ("not that one, paper lantern parade", NAME("paper lantern parade")),
-    ("yes, play velvet kites", NAME("velvet kites")),
-    ("yeah the velvet kites", NAME("the velvet kites")),
+    ("no, play the velvet kites", NO_NAME("the velvet kites", asked=True)),
+    ("no play velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("nope, put on velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("no, i said velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("no, i meant play velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("no, i want to hear velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("no, can you play velvet kites", NO_NAME("velvet kites", asked=True)),
+    ("no, velvet kites", NO_NAME("velvet kites")),
+    ("no, give me a minute", NO_NAME("a minute")),         # "give me" asks for nothing
+    ("not that one, paper lantern parade", NO_NAME("paper lantern parade")),
+    ("no, keep playing", NO_NAME("keep playing")),          # a "no" unless it is a name
+    ("i meant velvet kites", ChoiceReply("name", name="velvet kites", negated=True, explicit=True)),
+    ("yes, play velvet kites", YES_NAME("velvet kites", asked=True)),
+    ("yeah the velvet kites", YES_NAME("the velvet kites")),
     # a bare name
     ("velvet kites", NAME("velvet kites")),
     ("um, velvet kites", NAME("velvet kites")),
     ("the velvet kites please", NAME("the velvet kites")),
-    ("no, play the velvet kites, thanks", NAME("the velvet kites")),
+    ("lock the front door", NAME("lock the front door")),   # played only if the library knows it
+    ("no, play the velvet kites, thanks", NO_NAME("the velvet kites", asked=True)),
+    # an interjection before the answer is no part of it
+    ("uh, yes", PICK0), ("oh, yes", PICK0), ("well, yes", PICK0), ("um, yeah", PICK0),
+    ("oh yeah", PICK0), ("ah, yes", PICK0), ("oh, no", DECLINE), ("um, no thanks", DECLINE),
+    # yes-words the router's own reader leaves out
+    ("mm-hmm", PICK0), ("uh-huh", PICK0), ("mhm", PICK0), ("absolutely", PICK0),
+    ("definitely", PICK0), ("of course", PICK0), ("go on", PICK0), ("yes sir", PICK0),
+    ("uh-uh", DECLINE),
+    # any of them will do
+    ("either one", PICK0), ("whichever", PICK0), ("i don't care", PICK0),
+    ("doesn't matter", PICK0), ("you pick", PICK0),
+    # "yes, play it …" is the yes
+    ("yes, play it loud", PICK0), ("yeah play that one please", PICK0),
     # not about the choice: routed as a turn of its own
     ("play velvet kites", PASS), ("put on paper lantern parade", PASS),
     ("stop", PASS), ("pause the music", PASS), ("never mind", PASS),
@@ -119,6 +149,7 @@ def NAME(name: str) -> ChoiceReply:  # noqa: N802 - reads like the others
     ("who sings this", PASS), ("tell me a joke", PASS),
     ("set a timer for five minutes", PASS),
     ("thank you", PASS), ("you", PASS), ("hmm", PASS), ("i don't know", PASS),
+    ("good night", PASS), ("whatever", PASS), ("shut up", PASS),
     ("i was thinking we could maybe listen to something a bit more upbeat tonight", PASS),
     ("", PASS),
 ])
@@ -145,7 +176,7 @@ def test_a_no_with_a_play_request_is_not_a_plain_no_to_the_router() -> None:
     from domovoi.router import _parse_yes_no
 
     assert _parse_yes_no("no, play the velvet kites") is False
-    assert parse_choice_reply("no, play the velvet kites", 2) == NAME("the velvet kites")
+    assert parse_choice_reply("no, play the velvet kites", 2) == NO_NAME("the velvet kites", asked=True)
 
 
 # ─── Asking ────────────────────────────────────────────────────────────────
@@ -415,14 +446,103 @@ async def test_a_bare_name_the_resolver_is_unsure_of_asks_again(db_session, fake
 
 
 @requires_db
-async def test_a_bare_name_nothing_matches_goes_on_to_todays_search(db_session, fake_resolver) -> None:
+async def test_a_bare_reply_the_library_knows_nothing_by_is_a_turn_of_its_own(
+    db_session, fake_resolver
+) -> None:
+    """2026-10-03 review: a reply that is neither a candidate nor a name
+    the library knows went on to today's search as "play <reply>" ("Good
+    night." played "Good Night Harbor"). It is routed as an ordinary turn."""
     sid = await _asked(db_session)
     resp = await _say(db_session, sid, "Quiet Ember.")
     assert fake_resolver.resolved[-1] == {"any": "quiet ember"}
     assert fake_resolver.played == []
-    assert resp.matched_path == "confirmation" and resp.matched_handler == "music"
-    assert not resp.expect_followup
+    assert resp.matched_path != "confirmation" and resp.music_action is None
     assert await _pending(db_session, sid) is None
+
+
+@requires_db
+@pytest.mark.parametrize("said", [
+    "Turn off the lights.", "Good night.", "Remind me to call mom at five.", "Whatever.",
+    "Lights off.", "Lock the front door.", "Shut up.", "Never mind, play the radio.",
+])
+async def test_a_reply_about_something_else_never_plays_music(db_session, fake_resolver, said) -> None:
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said)
+    assert fake_resolver.played == []
+    assert resp.matched_path != "confirmation"
+    assert resp.music_action is None
+    assert not resp.text.startswith("Playing")
+    assert await _pending(db_session, sid) is None
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["No, keep playing.", "No, that's not it.", "No, turn it off.", "Oh, no."])
+async def test_a_no_with_words_that_name_nothing_is_a_no(db_session, fake_resolver, said) -> None:
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said)
+    assert resp.text == "OK." and resp.matched_path == "confirmation"
+    assert fake_resolver.played == [] and resp.music_action is None
+
+
+@requires_db
+@pytest.mark.parametrize("said", [
+    "Uh, yes.", "Oh, yes.", "Mm-hmm.", "Uh-huh.", "Yes sir.", "Yes, play it loud.",
+    "Either one.", "I don't care.", "Of course.",
+])
+async def test_a_yes_said_any_way_plays_the_first_candidate(db_session, fake_resolver, said) -> None:
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said)
+    assert fake_resolver.played_labels == ["Glass Harbor"]
+    assert resp.matched_path == "confirmation" and resp.music_action == "start"
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["No, I said glass harber.", "No, glass harber.", "I said glass harber."])
+async def test_no_and_the_same_words_again_never_plays_the_turned_down_candidate(
+    db_session, fake_resolver, said
+) -> None:
+    """2026-10-03 review: "Play subtract." → "Did you mean SBTRKT?" →
+    "No, I said subtract." played SBTRKT — the same words named the
+    candidate just turned down. Now today's search answers them."""
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said)
+    assert fake_resolver.played == []                          # never Glass Harbor
+    assert resp.matched_path == "confirmation"
+    assert resp.text.startswith("Playing glass harber")      # today's search (the MPD stub)
+    assert not resp.text.startswith("Did you mean")
+
+
+@requires_db
+async def test_no_and_the_name_said_clearly_better_picks_it(db_session, fake_resolver) -> None:
+    """Naming an offered candidate clearly better than the request did
+    ("glass harbor" 0.95 against "glass harber" 0.8) picks it, "no" or not."""
+    sid = await _asked(db_session)
+    await _say(db_session, sid, "No, Glass Harbor.")
+    assert fake_resolver.played_labels == ["Glass Harbor"]
+
+
+@requires_db
+async def test_a_turned_down_question_is_not_asked_again(db_session, fake_resolver) -> None:
+    """2026-10-03 review: after "no", the same request asked the same
+    question again — and never reached today's search or a streaming
+    provider. For DECLINED_TTL_SEC the same words go straight on."""
+    from domovoi.handlers import music_choice
+
+    sid = await _asked(db_session)
+    assert (await _say(db_session, sid, "No.")).text == "OK."
+    again = await _say(db_session, sid, "Play glass harber.")
+    assert not again.text.startswith("Did you mean")
+    assert again.text.startswith("Playing glass harber")      # today's search
+    assert fake_resolver.played == []
+    assert await _pending(db_session, sid) is None
+    # Another conversation is asked as usual.
+    other = await _session(db_session)
+    assert (await _say(db_session, other, "Play glass harber.")).text.startswith("Did you mean")
+    # …and so is this one, once the "no" is DECLINED_TTL_SEC old.
+    music_choice._DECLINED[str(sid)] = [
+        (key, refs, 0.0) for key, refs, _until in music_choice._DECLINED[str(sid)]
+    ]
+    assert (await _say(db_session, sid, "Play glass harber.")).text.startswith("Did you mean")
 
 
 @requires_db

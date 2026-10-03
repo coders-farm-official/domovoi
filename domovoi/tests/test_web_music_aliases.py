@@ -197,7 +197,11 @@ async def lib(db_session, monkeypatch):
     await db_session.commit()
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
     monkeypatch.setattr(domovoi_client, "_snapshot", None)
+    from domovoi.db import library_aliases as repo
+
+    repo.reset_cache_for_tests()
     yield db_session
+    repo.reset_cache_for_tests()
     await db_session.rollback()
     await db_session.execute(text("DELETE FROM devices WHERE device_id LIKE 'test-alias-dev-%'"))
     await db_session.commit()
@@ -319,6 +323,90 @@ async def test_targets_must_be_in_the_library_and_names_must_be_usable(lib) -> N
     assert r.status_code == 422 and r.json()["detail"]["code"] == "nothing_to_say"
     r = await _post(DEV_A, _artist("y" * 121))
     assert r.status_code == 422 and r.json()["detail"]["code"] == "too_long"
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", [
+    " ".join(["7"] * 60)[:119],      # 119 characters, a 300-character key
+    "&" * 120,                       # "and" 120 times: 360
+    "9" * 120,                       # one number, read out: 1126
+])
+async def test_a_name_whose_spoken_key_is_too_long_is_a_422_not_a_500(lib, alias) -> None:
+    """2026-10-03 review: the 120-character cap held, but a digit-heavy
+    name says many more characters' worth of words; V019 refuses keys over
+    240 and the add answered 500."""
+    r = await _post(DEV_A, _artist(alias))
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "too_long"
+    assert (await lib.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_control_and_format_characters_are_dropped_from_a_name(lib) -> None:
+    """NUL (which the database refuses: a 500 before), ESC, a right-to-left
+    override, zero-width joiners: nothing anyone says or should see."""
+    r = await _post(DEV_A, _artist("gr\x00amps"))
+    assert r.status_code == 201, r.text
+    assert r.json()["alias"]["alias"] == "gramps"
+    r = await _post(DEV_A, _artist("\u202ewarm\u200bies\x1b"))
+    assert r.status_code == 201, r.text
+    assert r.json()["alias"]["alias"] == "warmies"
+    r = await _post(DEV_A, _artist("\x00\u202e"))
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "empty"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_open_read_names_no_device(lib) -> None:
+    """2026-10-03 review: the open reads said which registered device added
+    a name ("Kitchen tablet") to a caller with no credential, while the
+    device inventory itself is admin-only. Without a credential: "a device"."""
+    await _post(DEV_A, _artist("gramps"))
+    await _post(DEV_A, {"alias": "the warm one", "target_type": "track", "target_track_id": 1})
+    async with _client(headers={}) as c:
+        page = (await c.get("/api/music/aliases")).json()
+        drawer = (await c.get("/api/music/aliases/for-track/1")).json()
+    assert {i["added_by"] for i in page["items"]} == {"a device"}
+    assert drawer["track"]["aliases"][0]["added_by"] == "a device"
+    assert drawer["artists"][0]["aliases"][0]["added_by"] == "a device"
+    for creds in (DEV_B, ADMIN):
+        async with _client(creds) as c:
+            page = (await c.get("/api/music/aliases")).json()
+            drawer = (await c.get("/api/music/aliases/for-track/1")).json()
+        assert {i["added_by"] for i in page["items"]} == {"Kitchen tablet"}
+        assert drawer["track"]["aliases"][0]["added_by"] == "Kitchen tablet"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_status_reads_the_librarys_names_only_when_the_library_changed(lib, monkeypatch) -> None:
+    """2026-10-03 review: every open GET /status rebuilt the library's
+    names on the event loop (~45-120 ms at 5k tracks). The artist count is
+    kept until the library's cheap fingerprint moves."""
+    from domovoi.db import library_aliases as repo
+
+    scans: list[int] = []
+    real = repo.library_names
+
+    async def counting(session):
+        scans.append(1)
+        return await real(session)
+
+    monkeypatch.setattr(repo, "library_names", counting)
+    async with _client(headers={}) as c:
+        for _ in range(3):
+            assert (await c.get("/api/music/aliases/status")).json()["fetch"]["artists_total"] == 3
+    assert len(scans) == 1
+    await lib.execute(text(
+        "INSERT INTO library_tracks (id, file_path, title, artist) VALUES "
+        "(5, '/music/Wren Hollow/Signal.mp3', 'Signal', 'Wren Hollow')"
+    ))
+    await lib.commit()
+    async with _client(headers={}) as c:
+        assert (await c.get("/api/music/aliases/status")).json()["fetch"]["artists_total"] == 4
+    assert len(scans) == 2
 
 
 @requires_db

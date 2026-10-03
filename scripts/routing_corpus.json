@@ -8,6 +8,11 @@
     "               the QA fallthrough answers it",
     "  path       - optional expected matched_path ('fast' / 'llm'); omit",
     "               when either is acceptable",
+    "  declined_by - optional: a handler whose fast path MATCHES the utterance",
+    "               (and whose tool, if the tool model calls it) declines it",
+    "               when it runs (music_alias: nothing in the library is",
+    "               called that); the router then routes on as if no fast",
+    "               path had matched, and answers a declined tool call as Q&A",
     "  tags       - subset selector for --only; 'qa' cases are the",
     "               knowledge-question regressions, 'action' cases guard",
     "               against over-tightening the router",
@@ -451,6 +456,58 @@
       "handler": "music_alias",
       "tags": ["action", "music_alias"],
       "note": "2026-10-03 household aliases: a phrasing with no fast path reaches music_alias through the tool router"
+    },
+    {
+      "utterance": "what else is the moon called",
+      "handler": null,
+      "declined_by": "music_alias",
+      "tags": ["qa"],
+      "note": "2026-10-03 review: a question about the world in the shape of music_alias's names list; nothing in the library is called that, so the fast path declines and Q&A answers"
+    },
+    {
+      "utterance": "what other names does the north star have",
+      "handler": null,
+      "declined_by": "music_alias",
+      "tags": ["qa"],
+      "note": "2026-10-03 review: the list's second phrasing, about the world: declined at run time, Q&A answers"
+    },
+    {
+      "utterance": "what else is soccer called",
+      "handler": null,
+      "declined_by": "music_alias",
+      "tags": ["qa"],
+      "note": "2026-10-03 review: 15 of 16 such questions got 'I couldn't find X in your library' before the decline"
+    },
+    {
+      "utterance": "when I say goodnight I mean turn off the lights",
+      "handler": null,
+      "declined_by": "music_alias",
+      "tags": ["qa", "music_alias"],
+      "note": "2026-10-03 review: 'when I say X, I mean Y' about something that is not music: the target is nothing in the library, the fast path declines; the narrowed tool description keeps the tool model off it too"
+    },
+    {
+      "utterance": "what other names did napoleon go by",
+      "handler": null,
+      "tags": ["qa", "music_alias"],
+      "note": "2026-10-03 review: 'other names' offers music_alias; it is for names the household gave to music in its library, not a question about a person (the tool declines one anyway)"
+    },
+    {
+      "utterance": "what was mark twain also called",
+      "handler": null,
+      "tags": ["qa", "music_alias"],
+      "note": "2026-10-03 review: 'also called' offers music_alias; a question about a person is Q&A"
+    },
+    {
+      "utterance": "my email alias is kam at example dot com",
+      "handler": null,
+      "tags": ["qa", "music_alias"],
+      "note": "2026-10-03 review: 'alias' offers music_alias; an email alias is no name for music (an add with no target is declined)"
+    },
+    {
+      "utterance": "I want to hear the band also called the kindlers",
+      "handler": "music",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 review: a request to PLAY something by one of its names is music's, not a names list"
     }
   ]
 }

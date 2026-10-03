@@ -193,7 +193,10 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
                 f"{h.name} declares choice_kinds but does not override "
                 f"handle_choice_reply"
             )
-    assert {h.name for h in HANDLERS if h.choice_kinds} == {"music"}
+    assert {h.name: set(h.choice_kinds) for h in HANDLERS if h.choice_kinds} == {
+        "music": {"core.music_choice"},
+        "music_alias": {"core.alias_target"},
+    }
 
 
 def test_declared_confirmation_kinds_cover_known_flows() -> None:

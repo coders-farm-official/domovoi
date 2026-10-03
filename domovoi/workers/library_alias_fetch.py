@@ -67,6 +67,7 @@ from domovoi.clients.musicbrainz import (
     MbArtist,
     MusicBrainzClient,
     MusicBrainzRateLimited,
+    MusicBrainzRejected,
     MusicBrainzUnavailable,
     get_musicbrainz_client,
 )
@@ -101,8 +102,9 @@ MAX_ERROR_ATTEMPTS = 5
 MIN_KEY_LEN = 3
 #: Longest alias kept, in words.
 MAX_ALIAS_WORDS = 6
-#: V019's limit on ``library_aliases.alias``.
+#: V019's limits on ``library_aliases.alias`` and ``alias_key``.
 MAX_ALIAS_CHARS = 120
+MAX_ALIAS_KEY_CHARS = 240
 #: MusicBrainz artist types that are not one person.
 GROUP_TYPES = frozenset({"Group", "Orchestra", "Choir"})
 #: Alias types kept (plus untyped aliases and the sort name).
@@ -357,8 +359,11 @@ def _symbol_count(name: str) -> int:
 class AliasDecision:
     """One candidate name of a matched artist and what the filter made of
     it: ``reason`` None = kept; else legal_name | alias_type | locale |
-    script | too_short | too_long | redundant | legal_word | unlike_name |
-    library_name | duplicate (same key as a name kept before it)."""
+    script | unprintable (a control or format character: NUL, a
+    right-to-left override …) | too_short | too_long (more than 6 words,
+    120 characters, or a 240-character key) | redundant | legal_word |
+    unlike_name | library_name | duplicate (same key as a name kept before
+    it)."""
 
     name: str
     key: str
@@ -403,10 +408,16 @@ def classify_aliases(
             reason = "script"
         elif len(key) < MIN_KEY_LEN:
             reason = "too_short"
-        elif len(words) > MAX_ALIAS_WORDS or len(name) > MAX_ALIAS_CHARS:
+        elif (
+            len(words) > MAX_ALIAS_WORDS
+            or len(name) > MAX_ALIAS_CHARS
+            or len(key) > MAX_ALIAS_KEY_CHARS
+        ):
             reason = "too_long"
         elif same_name(name, library_name):
             reason = "redundant"
+        elif any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name):
+            reason = "unprintable"
         elif person and legal_words.intersection(words):
             reason = "legal_word"
         elif person and not sounds_like(name, library_name):
@@ -758,15 +769,20 @@ class LibraryAliasFetcher(Worker):
                 log.info("MusicBrainz asked us to slow down; pausing the alias fetch for %.0f s",
                          RATE_LIMIT_PAUSE_SEC)
                 break
-            except MusicBrainzUnavailable as e:
+            except (MusicBrainzUnavailable, MusicBrainzRejected) as e:
+                # A failure, never "no such artist": an error row (retried
+                # after 2^attempts hours, at most MAX_ERROR_ATTEMPTS times)
+                # and a pause, so an outage does not use up every artist.
+                code = "unavailable" if isinstance(e, MusicBrainzUnavailable) else "rejected"
                 await self._store.record_error(
-                    artist_key=artist_key, artist_name=artist_name, code="unavailable"
+                    artist_key=artist_key, artist_name=artist_name,
+                    code=f"{code}: {e}"[:64],
                 )
                 _STATUS.paused_until = time.time() + UNAVAILABLE_PAUSE_SEC
-                _STATUS.last_error = "unavailable"
+                _STATUS.last_error = code
                 stopped = "error"
-                log.info("MusicBrainz unreachable (%s); pausing the alias fetch for %.0f s",
-                         e, UNAVAILABLE_PAUSE_SEC)
+                log.info("MusicBrainz %s (%s); pausing the alias fetch for %.0f s",
+                         code, e, UNAVAILABLE_PAUSE_SEC)
                 break
             result["looked_up"] += 1
             verification = verify_artist(artist_name, hits)
@@ -775,13 +791,26 @@ class LibraryAliasFetcher(Worker):
             if verification.status == "matched" and verification.artist is not None:
                 kept, dropped = filter_aliases(artist_name, verification.artist, due.name_keys)
                 result["matched"] += 1
-            added = await self._store.record_result(
-                artist_key=artist_key,
-                artist_name=artist_name,
-                verification=verification,
-                kept=kept,
-                dropped=dropped,
-            )
+            try:
+                added = await self._store.record_result(
+                    artist_key=artist_key,
+                    artist_name=artist_name,
+                    verification=verification,
+                    kept=kept,
+                    dropped=dropped,
+                )
+            except Exception as e:  # noqa: BLE001 — one artist's data never stalls the rest
+                # Saving THIS artist's result failed (a name the database
+                # refuses): an error row, so the backoff applies to it and
+                # the batch goes on with the next artist. If even that
+                # write fails, the database is down: it propagates.
+                log.warning("MusicBrainz alias fetch: couldn't save %r: %s", artist_name, e)
+                await self._store.record_error(
+                    artist_key=artist_key, artist_name=artist_name, code=type(e).__name__[:64],
+                )
+                _STATUS.last_error = type(e).__name__[:64]
+                _STATUS.artists_due = max(0, (_STATUS.artists_due or 1) - 1)
+                continue
             result["aliases_added"] += added
             _STATUS.artists_due = max(0, (_STATUS.artists_due or 1) - 1)
             _STATUS.last_error = None

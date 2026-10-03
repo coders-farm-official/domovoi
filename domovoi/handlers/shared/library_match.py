@@ -635,11 +635,46 @@ async def speak_for(session: "AsyncSession", ref: EntityRef) -> str:
     return speakable(ref.label)
 
 
-def invalidate() -> None:
-    """Forget the cached fingerprint so the next request re-checks the
-    library and the aliases — called in-process right after a voice alias
-    add, so the very next "play subtract" sees it. Cheap; never blocks."""
+def invalidate(*, library: bool = False) -> None:
+    """Forget the cached alias fingerprint so the next request reloads the
+    aliases — called in-process right after a voice alias add, so the very
+    next "play subtract" sees it. Cheap; never blocks.
+
+    ``library=True`` forgets the library's fingerprint too, for a change
+    the fingerprint cannot see: a row renamed IN PLACE (the provider
+    download pipeline re-ingesting a track, ``LibraryAPI.ingest_track``,
+    rewrites title / artist / album without touching ``added_at`` or
+    ``enriched_at``, so neither the count, the newest id nor the newest
+    stamp moves). The next request rebuilds (inline for a small library);
+    a running index also gets a background rebuild after the usual
+    debounce, which reads the change once the writer has committed it."""
     _STATE.alias_fp = ("invalidated",)
+    if not library:
+        return
+    _STATE.library_fp = None
+    if _STATE.index is None:
+        return
+    try:
+        _schedule_rebuild()
+    except RuntimeError:  # no running loop (a sync caller): the next request rebuilds
+        pass
+
+
+def is_library_name(text: str | None) -> bool:
+    """Whether ``text`` is, said aloud, the name of something IN the
+    library (an artist, credit, title or album — not an alias), by the
+    index already in memory. False when there is no index yet."""
+    index = _STATE.index
+    if index is None or not text:
+        return False
+    try:
+        from domovoi.handlers.shared.spoken_names import compact, spoken_forms
+
+        exact = index._impl.exact
+        return any(compact(f) in exact for f in spoken_forms(text))
+    except Exception as e:  # noqa: BLE001 — a reply never fails on its wording
+        log.debug("is_library_name(%r) failed: %s", text, e)
+        return False
 
 
 def reset_for_tests() -> None:
@@ -706,6 +741,7 @@ __all__ = [
     "current_index",
     "index_status",
     "invalidate",
+    "is_library_name",
     "library_path_for_mpd_file",
     "match_reply",
     "mpd_file_for_library_path",

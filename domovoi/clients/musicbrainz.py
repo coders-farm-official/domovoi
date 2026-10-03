@@ -12,9 +12,11 @@ Two callers, one client:
   opt-in "also called" fetch (``domovoi/workers/library_alias_fetch.py``):
   the spoken names people use for an artist ("Tec 9" for Tech N9ne).
   Unlike the lookup it says WHY nothing came back — a rate limit
-  (:class:`MusicBrainzRateLimited`) or an unreachable server
-  (:class:`MusicBrainzUnavailable`) — so the fetch can back off instead of
-  recording "MusicBrainz has no such artist".
+  (:class:`MusicBrainzRateLimited`), an unreachable or failing server
+  (:class:`MusicBrainzUnavailable`: no answer, a 5xx, a 200 that is not
+  JSON) or a refused request (:class:`MusicBrainzRejected`: any other 4xx)
+  — so the fetch can back off instead of recording "MusicBrainz has no
+  such artist". Only a 200 with a JSON body is a verdict.
 
 Rate limiting: MusicBrainz's terms of use ask for ≤1 req/sec and a
 descriptive User-Agent. We honor both, process-wide: every request either
@@ -86,7 +88,14 @@ class MusicBrainzRateLimited(Exception):
 
 
 class MusicBrainzUnavailable(Exception):
-    """MusicBrainz could not be reached (network error, timeout)."""
+    """MusicBrainz could not be reached (network error, timeout) or did not
+    answer properly (a 5xx other than 503, a 200 whose body is not JSON) —
+    a temporary failure, never "no such artist"."""
+
+
+class MusicBrainzRejected(Exception):
+    """MusicBrainz refused the request (a 4xx other than 429): an error to
+    retry later with a backoff, never "no such artist"."""
 
 
 class MusicBrainzClient(Protocol):
@@ -266,9 +275,12 @@ class HttpMusicBrainzClient:
 
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
         """Artists whose name matches ``name`` (MusicBrainz ranks them; the
-        caller verifies). Raises :class:`MusicBrainzRateLimited` on HTTP
-        503/429 and :class:`MusicBrainzUnavailable` when the server cannot
-        be reached; any other non-200 answer is an empty list."""
+        caller verifies). Only a 200 with a JSON body answers — an empty
+        list then means MusicBrainz knows no such artist. Raises
+        :class:`MusicBrainzRateLimited` on HTTP 503/429,
+        :class:`MusicBrainzUnavailable` when the server cannot be reached,
+        answers another 5xx, or answers 200 without JSON (a proxy's HTML
+        page), and :class:`MusicBrainzRejected` on any other 4xx."""
         if not name.strip():
             return []
         status, data = await self._rate_limited_fetch(
@@ -282,9 +294,12 @@ class HttpMusicBrainzClient:
         )
         if status in (429, 503):
             raise MusicBrainzRateLimited(f"HTTP {status}")
+        if status >= 500:
+            raise MusicBrainzUnavailable(f"HTTP {status}")
         if status != 200:
-            log.debug("MusicBrainz artist search returned status %d", status)
-            return []
+            raise MusicBrainzRejected(f"HTTP {status}")
+        if not isinstance(data, Mapping):
+            raise MusicBrainzUnavailable("not JSON")
         return parse_artist_search(data)
 
     async def _paced(self, fn, *args):

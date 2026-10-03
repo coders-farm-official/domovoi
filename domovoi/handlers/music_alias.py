@@ -14,9 +14,19 @@ may remove a name someone else added) live in
 :mod:`domovoi.db.library_aliases`, shared with the dashboard's "also
 called" lists. A name taken by something else is a yes/no question
 (``core.alias_replace``); a target the resolver is only fairly sure of is
-one too (``core.alias_target``, "Do you mean …?"). After every write the
-resolver's fingerprint is dropped (:func:`library_match.invalidate`), so
-"play gramps" works on the very next turn.
+asked about too (``core.alias_target``, "Do you mean …?") — and that one
+takes a correction as well as a yes or no ("no, I mean the Hearth Cats"),
+so it is also a choice kind. After every write the resolver's fingerprint
+is dropped (:func:`library_match.invalidate`), so "play gramps" works on
+the very next turn.
+
+Only about the library. The list phrases have the shape of any question
+about names ("what else is the moon called"), and "when I say X, I mean Y"
+is said of other things than music: a turn whose subject is not a library
+artist, album or song (or a household name for one) is DECLINED — the
+fast path returns None and the router routes the turn on, to the tool
+model and the Q&A model, as if it had not matched. A tool call the LLM
+router makes about something outside the library is declined the same way.
 
 Fully local (``requires_network="no"``). Not exposed to chat mode.
 """
@@ -70,6 +80,10 @@ _LIST_NAMES_RE = re.compile(r"^what (?:other )?names (?:does|do) (?!an? )(.+?) (
 # never on the default offer, so the cached prompt prefix of an ordinary
 # turn is untouched (router.offered_tool_schemas).
 _OFFER_RE = re.compile(r"\b(?:when i say|also called|other names?|alias|nickname)\b")
+# A request to hear music is music's, whatever name it uses ("I want to hear
+# the band also called the kindlers"): the tool is withheld from it — unless
+# it is teaching a name ("when I say gramps, play Hearth Ensemble").
+_PLAY_REQUEST_RE = re.compile(r"\b(?:play|hear|listen to|put on)\b")
 
 # "this" targets: what is playing in the room.
 _NOW_SONG = frozenset({
@@ -119,14 +133,19 @@ class MusicAliasHandler(Handler):
     display = HandlerDisplay(label="Music names", tone="media")
     requires_network = "no"
     confirmation_kinds = (ALIAS_REPLACE_KIND, ALIAS_TARGET_KIND)
+    # "Do you mean …?" about a target takes "no, I mean <another>" too.
+    choice_kinds = (ALIAS_TARGET_KIND,)
     chat_exposed = False
     tool_schema = {
         "name": "music_alias",
         "description": (
-            "Teach, forget or list OTHER NAMES for an artist, album or song in "
-            "the music library, so a nickname plays the right thing: 'when I say "
-            "gramps I mean Hearth Ensemble', 'forget the name gramps', 'what else "
-            "is Hearth Ensemble called'. Not for playing music."
+            "The names THIS HOUSEHOLD has given to an artist, album or song in "
+            "ITS OWN MUSIC LIBRARY, so a nickname plays the right music: teach "
+            "one ('when I say gramps I mean Hearth Ensemble'), forget one "
+            "('forget the name gramps'), or list them ('what else is Hearth "
+            "Ensemble called'). Not for playing music, and not for what "
+            "anything or anyone in the world is called or nicknamed, or for "
+            "aliases of email addresses, people or devices."
         ),
         "parameters": {
             "type": "object",
@@ -159,7 +178,10 @@ class MusicAliasHandler(Handler):
         ]
 
     def offers_tool(self, transcript: str) -> bool:
-        return bool(_OFFER_RE.search(transcript or ""))
+        t = transcript or ""
+        if not _OFFER_RE.search(t):
+            return False
+        return "when i say" in t or not _PLAY_REQUEST_RE.search(t)
 
     def _reply(self, ctx: Context, text_: str, **kw: Any) -> Response:
         return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name, **kw)
@@ -167,24 +189,34 @@ class MusicAliasHandler(Handler):
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
         return self._reply(ctx, "Try 'when I say gramps, I mean Hearth Ensemble'.")
 
-    async def execute_from_tool(self, args: dict, ctx: Context, session: AsyncSession) -> Response:
+    async def execute_from_tool(self, args: dict, ctx: Context, session: AsyncSession) -> Response | None:
+        """The LLM router's call. Declined (None — the Q&A model answers
+        instead) when it is not about a name in the library: an add with
+        no target or with one the library has nothing like ("when I say
+        goodnight I mean turn off the lights"), a name to forget that the
+        household never taught, a list for something the library does not
+        hold."""
         action = (args.get("action") or "").strip().lower()
-        alias = args.get("alias") or ""
-        target = args.get("target") or ""
+        alias = str(args.get("alias") or "")
+        target = str(args.get("target") or "")
         if action == "add":
-            return await self._add(alias, target, ctx, session)
+            if not _clean_capture(target):
+                return None
+            return await self._add(alias, target, ctx, session, decline_unknown=True)
         if action == "forget":
             if not alias.strip():
                 return await self._forget_last(ctx, session)
+            if await repo.find_alias(session, _clean_capture(alias)) is None:
+                return None
             return await self._forget(alias, ctx, session)
         if action == "list":
             return await self._list(target or alias, ctx, session)
-        return await self.execute(Intent(transcript=""), ctx, session)
+        return None
 
     # ─── fast-path entries ─────────────────────────────────────────────
 
-    async def _add_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
-        return await self._add(m.group(1), m.group(2), ctx, session)
+    async def _add_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        return await self._add(m.group(1), m.group(2), ctx, session, decline_unknown=True)
 
     async def _forget_last_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         return await self._forget_last(ctx, session)
@@ -192,7 +224,7 @@ class MusicAliasHandler(Handler):
     async def _forget_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         return await self._forget(m.group(1), ctx, session)
 
-    async def _list_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
+    async def _list_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
         return await self._list(m.group(1), ctx, session)
 
     # ─── helpers ───────────────────────────────────────────────────────
@@ -346,7 +378,19 @@ class MusicAliasHandler(Handler):
 
     # ─── add ───────────────────────────────────────────────────────────
 
-    async def _add(self, raw_alias: str, raw_target: str, ctx: Context, session: AsyncSession) -> Response:
+    async def _add(
+        self,
+        raw_alias: str,
+        raw_target: str,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        decline_unknown: bool = False,
+    ) -> Response | None:
+        """Teach ``raw_alias`` for ``raw_target``. ``decline_unknown``: a
+        target the library has nothing like is not this handler's turn
+        ("when I say goodnight I mean turn off the lights") — None, and the
+        router routes it on; otherwise "I couldn't find …"."""
         alias = _clean_capture(raw_alias)
         said_target = _clean_capture(raw_target)
         if not alias or not alias_key(alias):
@@ -380,6 +424,8 @@ class MusicAliasHandler(Handler):
                 )
                 return self._reply(ctx, prompt, expect_followup=True,
                                    data={"alias": alias, "candidate": best.to_dict()})
+        if decline_unknown and res.decision == "none":
+            return None
         return self._reply(ctx, f"I couldn't find {said_target} in your library.")
 
     async def _commit_add(
@@ -473,7 +519,13 @@ class MusicAliasHandler(Handler):
 
     # ─── list ──────────────────────────────────────────────────────────
 
-    async def _list(self, raw_target: str, ctx: Context, session: AsyncSession) -> Response:
+    async def _list(self, raw_target: str, ctx: Context, session: AsyncSession) -> Response | None:
+        """The names a library entity is also called — or None (declined:
+        the router routes the turn on) when ``raw_target`` is neither a
+        household name nor something the resolver is SURE is in the
+        library. "What else is the moon called" is a question about the
+        moon, and a loose match ("Moon River") is not what was asked
+        about."""
         said = _clean_capture(raw_target)
         if not said:
             return self._reply(ctx, "Which artist, album or song?")
@@ -485,11 +537,11 @@ class MusicAliasHandler(Handler):
         else:
             res = await library_match.resolve_request(session, {"any": said})
             best = res.best
-            if res.decision not in ("play", "ask") or best is None:
-                return self._reply(ctx, f"I couldn't find {said} in your library.")
+            if res.decision != "play" or best is None:
+                return None
             maybe = await self._target_from_candidate(best, session)
             if maybe is None:
-                return self._reply(ctx, f"I couldn't find {said} in your library.")
+                return None
             target, ref, track_ids = maybe, best.ref, tuple(best.track_ids)
         rows = await repo.aliases_for_target(session, target, track_ids=track_ids)
         names: list[str] = []
@@ -505,6 +557,35 @@ class MusicAliasHandler(Handler):
                            data={"aliases": names, "target": target.to_dict()})
 
     # ─── parked questions ─────────────────────────────────────────────
+
+    async def handle_choice_reply(
+        self, kind: str, data: dict, transcript: str, ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        """The reply to "Do you mean <target>?" (``core.alias_target``),
+        whole: yes teaches the name for it; a plain no leaves it; "no, I
+        mean <another>" / "I meant <another>" teaches it for that one (and
+        may ask about it in turn); anything else is not about the question
+        — None, and the router routes it as a turn of its own."""
+        from domovoi.handlers.music_choice import parse_choice_reply
+
+        if kind != ALIAS_TARGET_KIND:
+            return None
+        alias = data.get("alias") if isinstance(data.get("alias"), str) else ""
+        if not alias:
+            return None
+        reply = parse_choice_reply(transcript, 1)
+        if reply.action == "pick":
+            return await self.handle_confirmation(kind, data, True, ctx, session)
+        if reply.action == "decline":
+            return self._reply(ctx, "OK, I'll leave it.")
+        if reply.action == "name":
+            # A correction or a request names the target outright; a bare
+            # name only when the library has something by it.
+            return await self._add(
+                alias, reply.name, ctx, session,
+                decline_unknown=not (reply.negated or reply.explicit),
+            )
+        return None
 
     async def handle_confirmation(
         self, kind: str, data: dict, affirmative: bool, ctx: Context, session: AsyncSession

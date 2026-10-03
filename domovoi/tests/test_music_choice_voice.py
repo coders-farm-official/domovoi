@@ -190,6 +190,8 @@ async def test_a_whole_yes_may_end_its_followup_early_a_correction_may_not(voice
     assert chat is False and pending["kind"] == "core.music_choice"
     ec = early_commit_for("Yes.", pending=pending)
     assert ec is not None and ec.tier == TIER_B and ec.plan.handler.name == "music"
+    # A bare "no" is the reply most often followed by the correction.
+    assert early_commit_for("No.", pending=pending) is None
     assert early_commit_for("No, play the Velvet Kites.", pending=pending) is None
     assert early_commit_for("Velvet Kites.", pending=pending) is None
 

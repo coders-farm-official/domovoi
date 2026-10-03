@@ -375,7 +375,13 @@ class MusicHandler(MusicChoiceMixin, Handler):
 
     # ─── Core actions ───────────────────────────────────────────────────
     async def _play(
-        self, query: dict, ctx: Context, session: AsyncSession, *, allow_choice: bool = True
+        self,
+        query: dict,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        allow_choice: bool = True,
+        avoid: tuple = (),
     ) -> Response:
         # The spoken-name resolver first (domovoi/handlers/shared/
         # library_match.py): the library matched by how names SOUND, so
@@ -384,10 +390,15 @@ class MusicHandler(MusicChoiceMixin, Handler):
         # did-you-mean dialog, when present); anything else — or the
         # resolver switched off — runs today's search below, unchanged.
         # Every "play X" funnels here: the fast paths, the tool router,
-        # chat mode and the dashboard's play box.
+        # chat mode and the dashboard's play box. ``avoid`` holds library
+        # entities (EntityRefs) the person has just turned down ("no, I
+        # said subtract" after "did you mean SBTRKT?"): a resolver answer
+        # that is one of them goes on to today's search instead.
         from domovoi.handlers.shared import library_match
 
         res = await library_match.resolve_request(session, query)
+        if avoid and res.best is not None and res.best.ref in avoid:
+            res = library_match.Resolution.none("declined", heard=res.heard)
         if res.decision == "play" and res.best is not None:
             return await self.play_candidate(res.best, ctx, session, heard=res.heard)
         if res.decision == "ask" and allow_choice:
@@ -521,13 +532,24 @@ class MusicHandler(MusicChoiceMixin, Handler):
         """(how to say the entity, how to say the artist the request
         named — "" when it named none). An exact match said in plain words
         is echoed in the household's own words, title-cased; anything else
-        uses ``candidate.speak``. A "<X> by <Y>" match echoes both."""
+        uses ``candidate.speak``. A "<X> by <Y>" match echoes both.
+
+        Never echoed: a household (or MusicBrainz) name that is ALSO the
+        name of something else in the library. Someone taught "ashen lark"
+        to mean another band; "Playing Ashen Lark" would hide that the
+        real Ashen Lark is not what plays, so the reply says the target's
+        own name ("Playing Quillfeather Duo")."""
+        from domovoi.handlers.shared import library_match
+        from domovoi.handlers.shared.spoken_names import speakable
+
         heard = " ".join((heard or "").split())
         echo = (
             candidate.score >= 1.0
             and candidate.via in ("exact", "alias", "musicbrainz", "by_split")
             and bool(cls._PLAIN_WORDS_RE.match(heard))
         )
+        if candidate.via in ("alias", "musicbrainz") and library_match.is_library_name(heard):
+            return speakable(candidate.ref.label), ""
 
         def title_case(words: str) -> str:
             return " ".join(w[:1].upper() + w[1:] for w in words.split())

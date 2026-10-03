@@ -175,6 +175,12 @@ class LibraryAPI:
                 )
             ).first()
         track = _row_to_track(row)
+        # The spoken-name resolver's index (this process) cannot see a row
+        # renamed in place — the update above leaves added_at / enriched_at
+        # alone, so its library fingerprint does not move. Tell it.
+        from domovoi.handlers.shared import library_match
+
+        library_match.invalidate(library=True)
 
         # 3 — soft playlist attach (NO FK — locked 5).
         if attach_to_playlist_id is not None:

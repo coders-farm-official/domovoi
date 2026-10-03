@@ -10,8 +10,11 @@ each name means ONE thing household-wide. The rules — uniqueness, the
 
 Tiers:
 
-* reads are OPEN, like ``GET /api/music/library`` — names of music, no
-  household speech;
+* reads are OPEN, like ``GET /api/music/library`` — names of music.
+  Who added a name is said as "admin", "voice in <room>", "MusicBrainz"
+  or the adding device's registered name — that last one only to a caller
+  on the device tier (the device inventory, ``GET /api/devices``, is
+  admin-only); anyone else reads "a device";
 * adding and removing take the household device tier (``require_device``:
   the device token or an admin Bearer). Inside it, an admin may remove or
   replace anything; a paired device only the names IT added (by the
@@ -33,7 +36,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from domovoi.admin_auth import check_admin_request, require_device
+from domovoi.admin_auth import check_admin_request, check_device_request, require_device
 from domovoi.db import library_aliases as repo
 from web.backend.api.files import caller_device_id
 from web.backend.db import session_scope
@@ -70,6 +73,16 @@ async def caller_actor(request: Request) -> repo.Actor:
     return repo.Actor(kind="device", device_id=caller_device_id(request))
 
 
+async def shows_device_names(request: Request, actor: repo.Actor) -> bool:
+    """Whether an OPEN read may name the devices that added names: only
+    for a caller on the device tier (a device token, an admin Bearer, the
+    dashboard cookie, the pre-setup grace). A wrong token pays the usual
+    device-token backoff here too."""
+    if actor.is_admin:
+        return True
+    return await check_device_request(request) in ("ok", "admin", "pre-setup", "cookie-only")
+
+
 @router.get("", response_model=LibraryAliasPage)
 async def list_aliases(
     request: Request,
@@ -83,6 +96,7 @@ async def list_aliases(
 ) -> LibraryAliasPage:
     """A page of names, household ones first, with the filtered total."""
     actor = await caller_actor(request)
+    show = await shows_device_names(request, actor)
     async with session_scope() as s:
         rows, total = await repo.list_aliases(
             s,
@@ -94,7 +108,10 @@ async def list_aliases(
             limit=limit,
             offset=offset,
         )
-    return LibraryAliasPage(items=[LibraryAlias(**repo.public_alias(r, actor)) for r in rows], total=total)
+    return LibraryAliasPage(
+        items=[LibraryAlias(**repo.public_alias(r, actor, show_device=show)) for r in rows],
+        total=total,
+    )
 
 
 @router.get("/status", response_model=AliasStatus)
@@ -128,8 +145,9 @@ async def aliases_for_track(track_id: int, request: Request) -> TrackAliases:
     performer (the whole credit first when it reads like one band), and
     the album."""
     actor = await caller_actor(request)
+    show = await shows_device_names(request, actor)
     async with session_scope() as s:
-        out = await repo.drawer_for_track(s, track_id, actor)
+        out = await repo.drawer_for_track(s, track_id, actor, show_device=show)
     if out is None:
         raise HTTPException(status_code=404, detail=f"track {track_id} not found")
     return TrackAliases(**out)

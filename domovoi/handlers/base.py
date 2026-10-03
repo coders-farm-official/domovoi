@@ -43,7 +43,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.models import Context, Intent, Response
 
-FastPathMethod = Callable[["Handler", re.Match[str], Context, AsyncSession], Awaitable[Response]]
+# A fast path answers the turn — or returns None to DECLINE it: the router
+# then routes the turn on (tool model, Q&A) as if the path had not matched.
+# For a pattern that cannot tell its own turns from others by their words
+# alone ("what else is X called" is a music-names question only when X is
+# in the library). plan_route() and early commit still see the match.
+FastPathMethod = Callable[
+    ["Handler", re.Match[str], Context, AsyncSession], Awaitable["Response | None"]
+]
 RequiresNetwork = Literal["no", "degraded", "yes"]
 
 
@@ -163,7 +170,10 @@ class Handler(ABC):
 
     async def execute_from_tool(
         self, args: dict[str, Any], ctx: Context, session: AsyncSession
-    ) -> Response:
+    ) -> Response | None:
+        """Run a tool call the LLM router made. Return None to DECLINE it
+        (the call was not about what this tool does after all): the router
+        then answers the turn with the Q&A model."""
         raise NotImplementedError(
             f"{self.name} does not implement execute_from_tool (LLM tool-call routing)"
         )

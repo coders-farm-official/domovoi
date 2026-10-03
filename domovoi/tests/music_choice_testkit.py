@@ -10,7 +10,8 @@ held-out spoken-match gate):
 * "velvet kites" (any spelling the fake folds to it) resolves to PLAY the
   artist The Velvet Kites;
 * "glass harber" resolves to ASK: the artist Glass Harbor, or the album
-  Moonlit Static by Glass Harbor;
+  Moonlit Static by Glass Harbor — and, said as a reply, names Glass
+  Harbor fairly (0.8; its exact name scores 0.95);
 * anything else resolves to "none" (today's search).
 
 ``MusicHandler._play`` gets the CONTRACT's hook (resolve → play / ask /
@@ -76,6 +77,11 @@ class FakeResolver:
     gone: set[str] = field(default_factory=set)          # labels no longer in the library
     asks: dict[str, Resolution] = field(default_factory=lambda: {"glassharber": ASK})
     plays: dict[str, EntityRef] = field(default_factory=lambda: {"velvetkites": KITES})
+    # A reply that names a parked candidate fairly, not exactly: folded
+    # text → (that candidate's label, score).
+    near: dict[str, tuple[str, float]] = field(
+        default_factory=lambda: {"glassharber": ("Glass Harbor", 0.8)}
+    )
     raise_on_play: BaseException | None = None
 
     async def resolve_request(self, session, query: Mapping[str, str], *, kinds=None) -> Resolution:
@@ -93,6 +99,11 @@ class FakeResolver:
         for i, ref in enumerate(refs):
             if fold(ref.label) == fold(text):
                 return i, 0.95
+        hit = self.near.get(fold(text))
+        if hit is not None:
+            for i, ref in enumerate(refs):
+                if ref.label == hit[0]:
+                    return i, hit[1]
         return None
 
     async def candidate_from_ref(self, session, ref: Any) -> Candidate | None:
@@ -159,8 +170,11 @@ def install(monkeypatch) -> FakeResolver:
 
 
 def clear_choice_parked() -> None:
+    from domovoi.handlers import music_choice
+
     confirmations.CHOICE_PARKED.clear()
     confirmations._CHOICE_PARKED_AT.clear()
+    music_choice.forget_declined()
 
 
 @pytest.fixture

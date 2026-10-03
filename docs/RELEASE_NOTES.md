@@ -4,6 +4,138 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-03 — "Play" finds a name by how it sounds, asks when it isn't sure, and learns other names
+
+### Upgrading
+
+1. **Pull the update** (Settings → Configuration → Version → Check for
+   updates → Pull the latest) and **press "Restart to apply changes"**.
+2. **It installs three new Python packages**: `rapidfuzz` (MIT), `anyascii`
+   (ISC) and `Metaphone` (BSD). Both the core and the dashboard load them at
+   start. The update re-syncs the venv by itself because `pyproject.toml` and
+   `requirements.lock` changed, and rolls back if the core does not come back
+   healthy. Nothing to do by hand on the Beelink. On a box that runs Domovoi
+   from a checkout by hand (a development machine), run
+   `pip install -e ".[dev,real-clients,voice-profile]"` once for the
+   interpreter that runs it, or the core and the dashboard stop at import.
+3. **Flyway V019** adds two empty tables, `library_aliases` (the "also
+   called" names) and `library_alias_lookups` (the MusicBrainz lookup's
+   progress). No existing data changes. The update's database backup and
+   rollback cover it as usual.
+4. **Optional:** switch on the MusicBrainz lookup ([below](#the-musicbrainz-lookup-is-off-until-you-switch-it-on)).
+
+### What changes for the people in the house
+
+* **"Play suicide boys" plays $uicideboy$.** A spoken request is matched
+  against the library by how names SOUND, before the old text search runs.
+  Stylized spellings are folded (`$` reads s, `P!nk` reads Pink, `GENER8ION`
+  reads generation, "3 Doors Down" and "Three Doors Down" are one name),
+  then spelling and sound are compared (rapidfuzz plus Double Metaphone).
+  When nothing in the library is close, the old search runs exactly as
+  before, so a streaming provider still gets what you don't own.
+* **"Play <artist>" plays all of that artist's songs, shuffled**, up to 500.
+  "Next" and "previous" stay with the artist. **The queue ends after its
+  last song**: it does not loop and is not reshuffled. An album plays in
+  file order, and a song plays on its own. Each play is now recorded with
+  the library song it played.
+* **"Did you mean …?"** When a request is close to a name but not close
+  enough to play it, Domovoi asks: "Did you mean Glass Harbor, or the album
+  Moonlit Static?" You can answer "yes" (or "uh, yes", "mm-hmm", "either
+  one"), "the second one", "no" (then the same request is not asked about
+  again for five minutes, and the old search answers it), "no, play …" or
+  just say the name. A reply about something else ("what time is it",
+  "good night") drops the question and is answered as a turn of its own,
+  and if nobody answers, the music that was playing comes back. The
+  dashboard's play box never asks. Settings → Configuration → Library →
+  "Ask 'did you mean…?'" switches it off: the middle cases then go to the
+  old search.
+* **"Also called": names your household gives to music.** A song, an
+  artist or an album can have **any number of names** (one name → one
+  thing; a band can be called "gramps", "the kindlers" and "hearth band" at
+  once). Each name means ONE thing in the house: giving a name that is
+  already taken asks "replace it?". Add them in the dashboard (Music → a
+  song → "also called" for the song, each of its artists and its album) or
+  by voice: "when I say gramps, I mean Hearth Ensemble", "what else is
+  Hearth Ensemble called", "forget that name". Any paired device or room
+  can add a name. Only an admin can remove or replace a name someone else
+  added: a device may remove the names it added, a voice the names that
+  speaker (or, for an unrecognized speaker, that room) added, and anyone
+  may remove a MusicBrainz name. A name may take over another library name
+  ("will now play X instead of Y"). A play through such a name then says the real target
+  ("Playing Quillfeather Duo"), so the takeover is heard. The dashboard
+  shows which device added a name only to paired devices and admins.
+* Questions about the world that sound like the names list ("what else is
+  the moon called") are answered as questions again. "When I say …, I mean
+  …" about anything that is not in the library is left to the assistant.
+* The old search's file-name step no longer matches inside a bracketed
+  video id in a file name ("kygo" used to find a song whose file name ends
+  "[FQKdHGgKygo]"). Playing a library song that the music player doesn't
+  know yet now leaves what was playing alone, instead of clearing the room's
+  queue.
+
+### The MusicBrainz lookup is off until you switch it on
+
+Settings → Configuration → Library → **"Look up other names on
+MusicBrainz"** (`music_alias_fetch_enabled`). It is **off by default**, and
+it applies without a restart. When it is on:
+
+* It sends **artist names from your library** to musicbrainz.org: your
+  tagged artists, and the "Artist" part of an untagged file named "Artist -
+  Title". A home recording named "Grandma Edith - Happy Birthday" would send
+  "Grandma Edith". It makes one request a second, through the same paced
+  client as every other MusicBrainz call, and only while the server is
+  online. The first run takes **about an hour and a half for ~2,000
+  artists**. After that it only asks about artists added later.
+* It keeps only spoken stage names that MusicBrainz lists ("Dead Mouse" for
+  deadmau5, "Tec 9" for Tech N9ne), and only for an artist whose MusicBrainz
+  name matches your library's spelling. Legal names, and a person's names
+  that share a word with a legal name, are filtered out and never stored.
+  Non-English and non-Latin names are dropped too. For a band, its other
+  names are kept, and these can include members' or family names ("The
+  Farriss Brothers" for INXS). A fetched name never takes a name your
+  library or your household already uses.
+* A fetched name shows muted in the song's "also called" list, and anyone
+  can remove it. It is never fetched again.
+* A MusicBrainz outage or refusal is retried later with a backoff. It is
+  never recorded as "no such artist".
+* Its status (no names) is on the Music → Stats card and in the core
+  snapshot (`music_alias_fetch`). Turning it off stops it before its next
+  request.
+
+### Measured
+
+On the frozen held-out set of 1,011 spoken requests, using the library as
+of 2026-10-02 and the resolver alone:
+
+* Stylized names: **60.8 %** played right without asking, **83.2 %** with a
+  "did you mean", and 0.3 % played wrong.
+* Ordinary names: **67.4 %** played right without asking (73.4 % of the
+  requests that reach music), 86.7 % with a "did you mean".
+* Requests for music that is **not in the library** play something else
+  1.5 % of the time. With the old search behind it: 3.1 % on a spoken turn,
+  and 3.8 % from the dashboard's play box, which never asks.
+* About 8 % of requests never reach music because Whisper mishears "play"
+  ("Place …", "Plate …", "PlayTech 9"). That fix is planned, not in this
+  release.
+* Lookups take 10 ms typically and 25 ms at the 95th percentile on a
+  library of 5,232 songs (a fast desktop; expect a little more on the
+  Beelink). Building the index at start takes under a second.
+
+### Chosen for you, and not done yet
+
+These are defaults set without asking you. Say if you want them otherwise:
+
+* Replies say a name the way it is spoken ("Playing Suicide Boys,
+  shuffled."), or the way the household's own name for it is spoken.
+* Nothing is learned automatically from what you play, and only one Whisper
+  hearing is used. There is no popularity ranking.
+* No candidate narrowing yet. Lookup time grows with the library: about
+  100 ms at the 95th percentile at 20,000 songs and 250 ms at 50,000. A
+  narrowing step is planned before libraries get that big.
+* "Find X in my library", "add this to my playlist" and download
+  de-duplication still use the old text search. The Android app has no
+  "also called" list yet.
+
 ## 2026-10-01 — Upgrading to this release, in order
 
 Everything since the 2026-09-30 release comes in this one update: the core

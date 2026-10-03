@@ -383,12 +383,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "music_alias_fetch_enabled", "Look up other names on MusicBrainz", "Library",
-        "Fetch the spoken names people use for your artists (e.g. 'Suicide "
-        "Boys' for $uicideboy$) from MusicBrainz. Sends artist names from "
-        "your library to musicbrainz.org, one request a second (about 40 "
-        "minutes the first time for a few thousand artists, then only new "
-        "artists), and only while the server is online. People's real names "
-        "are never added. Off by default. Applies immediately.",
+        "Fetch the spoken names people use for your artists (e.g. 'Dead "
+        "Mouse' for deadmau5) from MusicBrainz. Sends artist names from your "
+        "library to musicbrainz.org — including names read from 'Artist - "
+        "Title' file names of untagged files — one request a second (about "
+        "an hour and a half the first time for ~2,000 artists, then only new "
+        "artists), and only while the server is online. Legal names are "
+        "filtered out. Off by default. Applies immediately.",
         "bool", tier="hot",
     ),
     FieldSpec(

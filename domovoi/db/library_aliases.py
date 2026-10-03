@@ -40,7 +40,9 @@ process).
 
 from __future__ import annotations
 
+import asyncio
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -67,6 +69,9 @@ HOUSEHOLD_SOURCES: tuple[str, ...] = ("manual", "voice")
 
 #: Longest alias accepted (the V019 CHECK says the same).
 MAX_ALIAS_CHARS = 120
+#: Longest alias KEY (the V019 CHECK): a name of digits reads as many words
+#: ("999…" → "nine hundred ninety nine …"), so 120 characters can say more.
+MAX_ALIAS_KEY_CHARS = 240
 #: How many shadowed library names an add reports.
 MAX_SHADOWS = 5
 
@@ -201,21 +206,24 @@ def may_modify(row: AliasRow, actor: Actor) -> bool:
     return False
 
 
-def added_by(row: AliasRow) -> str:
-    """Who added a row, for the drawer — never another device's raw id."""
+def added_by(row: AliasRow, *, show_device: bool = True) -> str:
+    """Who added a row, for the drawer — never another device's raw id,
+    and the device's registered NAME only when ``show_device`` (a caller on
+    the device tier; the device inventory is admin-only)."""
     if row.source == "musicbrainz":
         return "MusicBrainz"
     if row.created_by_kind == "admin":
         return "admin"
     if row.created_by_kind == "device":
-        return row.device_name or "a device"
+        return (row.device_name if show_device else None) or "a device"
     if row.created_by_kind == "voice":
         return f"voice in {row.created_by_room}" if row.created_by_room else "voice"
     return "Domovoi"
 
 
-def public_alias(row: AliasRow, actor: Actor | None) -> dict[str, Any]:
-    """The ``LibraryAlias`` shape the REST API answers with."""
+def public_alias(row: AliasRow, actor: Actor | None, *, show_device: bool = True) -> dict[str, Any]:
+    """The ``LibraryAlias`` shape the REST API answers with (``show_device``:
+    see :func:`added_by`)."""
     return {
         "id": row.id,
         "alias": row.alias,
@@ -227,7 +235,7 @@ def public_alias(row: AliasRow, actor: Actor | None) -> dict[str, Any]:
         "target_track_id": row.target_track_id,
         "source": row.source,
         "created_by_kind": row.created_by_kind,
-        "added_by": added_by(row),
+        "added_by": added_by(row, show_device=show_device),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "suppressed": row.suppressed,
         "can_remove": bool(actor is not None and may_modify(row, actor)),
@@ -235,9 +243,14 @@ def public_alias(row: AliasRow, actor: Actor | None) -> dict[str, Any]:
 
 
 def normalize_alias(raw: str | None) -> str:
-    """An alias as stored: trimmed, inner whitespace collapsed, trailing
-    sentence punctuation dropped (a dictated "gramps." is "gramps")."""
+    """An alias as stored: trimmed, inner whitespace collapsed, control and
+    format characters dropped (NUL — which the database refuses —, ESC, a
+    right-to-left override, zero-width joiners: nothing a person says or
+    should see), trailing sentence punctuation dropped (a dictated
+    "gramps." is "gramps")."""
     s = " ".join((raw or "").split())
+    s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cc", "Cf"))
+    s = " ".join(s.split())
     return s.rstrip(".,!?;:").strip()
 
 
@@ -392,8 +405,18 @@ class LibraryNames:
         return out
 
 
+def _names_of(rows: Sequence[Any]) -> LibraryNames:
+    names = LibraryNames()
+    for title, artist, album, n in rows:
+        names.add_row(title, artist, album, int(n))
+    return names
+
+
 async def library_names(session: AsyncSession) -> LibraryNames:
-    """One grouped scan of the library → :class:`LibraryNames`."""
+    """One grouped scan of the library → :class:`LibraryNames`. The names
+    are worked out in a worker thread (tens of milliseconds for a few
+    thousand tracks), so an add or a status read never holds up the event
+    loop."""
     rows = (
         await session.execute(
             text(
@@ -402,10 +425,35 @@ async def library_names(session: AsyncSession) -> LibraryNames:
             )
         )
     ).all()
-    names = LibraryNames()
-    for title, artist, album, n in rows:
-        names.add_row(title, artist, album, int(n))
-    return names
+    return await asyncio.to_thread(_names_of, [tuple(r) for r in rows])
+
+
+_LIBRARY_FP_SQL = text(
+    "SELECT count(*), coalesce(max(id), 0), coalesce(min(id), 0), "
+    "max(greatest(added_at, coalesce(enriched_at, added_at))) FROM library_tracks"
+)
+# (library fingerprint, artists the MusicBrainz fetch would look up): the
+# open status read polls; the library rarely changes between two polls.
+_ARTISTS_TOTAL: tuple[tuple[Any, ...], int] | None = None
+
+
+async def lookup_artists_total(session: AsyncSession) -> int:
+    """How many artists the MusicBrainz fetch would look up (the status
+    card's "of N"), recomputed only when the library's cheap fingerprint
+    moves."""
+    global _ARTISTS_TOTAL
+    fp = tuple((await session.execute(_LIBRARY_FP_SQL)).one())
+    cached = _ARTISTS_TOTAL
+    if cached is not None and cached[0] == fp:
+        return cached[1]
+    total = len(lookup_candidates(await library_names(session)))
+    _ARTISTS_TOTAL = (fp, total)
+    return total
+
+
+def reset_cache_for_tests() -> None:
+    global _ARTISTS_TOTAL
+    _ARTISTS_TOTAL = None
 
 
 def lookup_candidates(names: LibraryNames) -> dict[str, str]:
@@ -709,6 +757,11 @@ def check_alias_text(alias: str, target: Target) -> tuple[str, str, AddOutcome |
         return normalized, key, AddOutcome(
             status="invalid", code="nothing_to_say", message="That name has nothing to say."
         )
+    if len(key) > MAX_ALIAS_KEY_CHARS:
+        return normalized, "", AddOutcome(
+            status="invalid", code="too_long",
+            message="That name is too long to say — try a shorter one.",
+        )
     if any(same_name(normalized, own) for own in _own_names(target) if own):
         return normalized, key, AddOutcome(
             status="invalid", code="already_its_name",
@@ -850,7 +903,9 @@ async def remove_alias(session: AsyncSession, alias_id: int, actor: Actor) -> Re
 # ─── The drawer: one track's names ─────────────────────────────────────────
 
 
-async def drawer_for_track(session: AsyncSession, track_id: int, actor: Actor | None) -> dict[str, Any] | None:
+async def drawer_for_track(
+    session: AsyncSession, track_id: int, actor: Actor | None, *, show_device: bool = True
+) -> dict[str, Any] | None:
     """Everything the track drawer's "also called" lists need, in one
     call: the song's names, each performer's (one row per credit part, plus
     the whole credit first when it reads like one band's name — "Earth,
@@ -871,7 +926,7 @@ async def drawer_for_track(session: AsyncSession, track_id: int, actor: Actor | 
     parts = [nm for kind, nm in names if kind == "artist"]
 
     def pub(rows: Iterable[AliasRow]) -> list[dict[str, Any]]:
-        return [public_alias(r, actor) for r in rows]
+        return [public_alias(r, actor, show_device=show_device) for r in rows]
 
     song = Target(type="track", name=shown_title, track_id=tid, artist_name=primary)
     out: dict[str, Any] = {
@@ -931,13 +986,12 @@ async def alias_counts(session: AsyncSession) -> dict[str, Any]:
             )
         )
     ).one()
-    names = await library_names(session)
     return {
         "household": int(a[0]),
         "musicbrainz": int(a[1]),
         "suppressed": int(a[2]),
         "fetch": {
-            "artists_total": len(lookup_candidates(names)),
+            "artists_total": await lookup_artists_total(session),
             "checked": int(lk[0]),
             "matched": int(lk[1]),
             "no_match": int(lk[2]),
@@ -982,6 +1036,7 @@ __all__ = [
     "AliasRow",
     "LibraryNames",
     "MAX_ALIAS_CHARS",
+    "MAX_ALIAS_KEY_CHARS",
     "ONLY_ADMIN_CHANGE",
     "ONLY_ADMIN_REMOVE",
     "RemoveOutcome",

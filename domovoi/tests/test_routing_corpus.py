@@ -80,6 +80,7 @@ def test_corpus_is_well_formed() -> None:
             f"{c['utterance']!r} expects unknown handler {c['handler']!r}"
         )
         assert c.get("path") in (None, "fast", "llm")
+        assert c.get("declined_by") is None or c["declined_by"] in HANDLER_BY_NAME
         assert c["tags"], f"{c['utterance']!r} has no tags"
     tags = {t for c in CORPUS for t in c["tags"]}
     assert {"qa", "calculator", "double_check", "action"} <= tags
@@ -94,6 +95,11 @@ def test_fast_path_expectations(case) -> None:
     must not be poached by ANOTHER handler's fast path; an explicit
     path='fast' case must actually hit its handler's fast path."""
     winner = _fast_path_winner(_normalize(case["utterance"]))
+    if case.get("declined_by"):
+        # Its pattern matches and the handler declines the turn when it
+        # runs (pinned in that handler's own tests): no fast path answers.
+        assert winner == case["declined_by"]
+        winner = None
     if case["handler"] is None:
         assert winner is None, f"fast path of {winner!r} poached a QA utterance"
     elif case.get("path") == "fast":

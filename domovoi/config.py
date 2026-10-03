@@ -863,12 +863,14 @@ class Settings(BaseSettings):
     # Ask "did you mean X?" in that middle band (owner decision 2026-10-02).
     # Off = the middle band falls through to today's search.
     music_choice_enabled: bool = True
-    # Fetch spoken aliases ("Suicide Boys", "Dead Mouse") for the library's
+    # Fetch spoken aliases ("Dead Mouse" for deadmau5) for the library's
     # artists from MusicBrainz — OPT-IN, OFF by default: it sends artist names
-    # from the library to musicbrainz.org (1 request/s, ~40 min for a few
-    # thousand artists the first time, a few requests per new artist after),
-    # and only while the server is online. People's real names are filtered
-    # out. See domovoi/workers/library_alias_fetch.py.
+    # from the library to musicbrainz.org — including names taken from
+    # "Artist - Title" file names of untagged files — at 1 request/s (about
+    # an hour and a half the first time for a library of ~2,000 artists, then
+    # one request per new artist), and only while the server is online.
+    # Legal names, and a person's names that share a word with one, are
+    # filtered out. See domovoi/workers/library_alias_fetch.py.
     music_alias_fetch_enabled: bool = False
     # The fetch worker's cadence (it looks up a small batch per tick).
     music_alias_fetch_interval_sec: float = 30.0

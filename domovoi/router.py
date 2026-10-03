@@ -267,11 +267,12 @@ async def run_fast_path(
     m: re.Match[str],
     ctx: Context,
     session: AsyncSession,
-) -> Response:
+) -> Response | None:
     """Dispatch one fast path the way route() does — the offline gate, and
     a room with no music player answered instead of raised — for a handler
     that hands a reply on to another command (a parked choice answered
-    "no, play X"). The caller stamps and records the turn."""
+    "no, play X"). The caller stamps and records the turn. None: the path
+    declined the turn (see ``FastPath``)."""
     if offline_blocked(handler, fp, ctx):
         intent = Intent(transcript=m.string, room_id=ctx.room_id, session_id=ctx.session_id)
         return await handler.fallback_offline(intent, ctx, session)
@@ -746,21 +747,28 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             response = await fp.method(handler, m, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
-        response.matched_handler = handler.name
-        response.matched_path = "fast"
-        response.session_id = session_id
-        response.online = ctx.online
-        await _persist_turn(
-            session=session,
-            session_id=session_id,
-            intent=intent,
-            ctx=ctx,
-            response=response,
-            matched_handler=handler.name,
-            matched_path="fast",
-            latency_ms=_elapsed_ms(),
-        )
-        return response
+        if response is not None:
+            response.matched_handler = handler.name
+            response.matched_path = "fast"
+            response.session_id = session_id
+            response.online = ctx.online
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=handler.name,
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+        # The fast path declined the turn — its pattern cannot tell its own
+        # turns from others ("what else is the moon called" has the shape
+        # of the music-names list but is a question about the world): the
+        # turn goes on to the tool model and the Q&A model as if no fast
+        # path had matched.
+        log.info("fast path %s declined %r; routing on", handler.name, transcript)
 
     # 2. LLM tool-call fallback (the stub client returns None) — except for
     # a plain question about the world or a request for a joke or a story,
@@ -799,21 +807,25 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                     )
                 except MPDNotProvisioned:
                     response = _no_speakers_yet(session_id, ctx)
-            response.matched_handler = handler.name
-            response.matched_path = path
-            response.session_id = session_id
-            response.online = ctx.online
-            await _persist_turn(
-                session=session,
-                session_id=session_id,
-                intent=intent,
-                ctx=ctx,
-                response=response,
-                matched_handler=handler.name,
-                matched_path=path,
-                latency_ms=_elapsed_ms(),
-            )
-            return response
+            if response is not None:
+                response.matched_handler = handler.name
+                response.matched_path = path
+                response.session_id = session_id
+                response.online = ctx.online
+                await _persist_turn(
+                    session=session,
+                    session_id=session_id,
+                    intent=intent,
+                    ctx=ctx,
+                    response=response,
+                    matched_handler=handler.name,
+                    matched_path=path,
+                    latency_ms=_elapsed_ms(),
+                )
+                return response
+            # The tool declined the call (it was not about what the tool
+            # does after all): the Q&A model answers it below.
+            log.info("tool %s declined %r; answering as Q&A", handler.name, intent.transcript)
 
     # 3. General Q&A (Ollama is local, so always available). Pass recent
     # turns from session context so multi-turn QA actually feels stateful —

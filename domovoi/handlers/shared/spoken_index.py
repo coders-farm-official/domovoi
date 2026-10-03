@@ -20,7 +20,16 @@ its constants fixed in advance and never moved to fit an evaluation set:
   is never played outright (its score stays just under the play bar);
 * "<title> by <artist>" weighs the title 0.6 and the artist 0.4, and the
   whole phrase is scored as well, so "stand by me" stays a title;
-* names of three letters or fewer match exactly only.
+* names of three letters or fewer match exactly only;
+* a performer known ONLY as one part of a comma / "&" credit ("Fire" of
+  "Earth, Wind & Fire", "The Creator" of "Tyler, The Creator") is a
+  *fragment*: it plays on an exact match only when no real library name
+  says the same (a song called "Fire" wins), and a near match to it is at
+  most asked about — a credit split at its commas is a guess, not a name
+  the library gives anyone;
+* a one-word request plays on a near match only when it is also spelled
+  close (one short word that sounds like a name is often another word),
+  and a request of more than :data:`MAX_QUERY_WORDS` words is no name.
 
 Entities are what a request can name: an ``artist`` (every spelling of
 the name merged by ``alias_key``), a whole multi-artist ``credit``, a
@@ -36,6 +45,7 @@ household-plays prior) and :func:`resolve`'s query (N-best transcripts).
 
 from __future__ import annotations
 
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -83,13 +93,24 @@ BY_SPLIT_MARGIN = 0.05
 COVERAGE_PARTIAL = 80
 #: Forms this short (space-less) are matched exactly only (TI, MIA, U2).
 SHORT_KEY = 3
+#: A one-word request is played on a near match only when it is also
+#: SPELLED this close (0-1): one short word that merely sounds like a name
+#: is a different word as often as not ("wallows" / "Walls"). Set on
+#: not-in-library requests outside the gate (the 2026-10-03 review's
+#: fresh set), never on the gate.
+ONE_WORD_SPELLING_MIN = 0.90
 #: Most entities offered by one "did you mean".
 MAX_ASK = 3
+#: A request longer than this many words is not a name (a sentence, a
+#: Whisper loop): answered "none" without scoring it.
+MAX_QUERY_WORDS = 24
 
 STOP_WORDS = frozenset({"the", "a", "an", "and", "of", "to", "by"})
 
-#: Where a matching form came from; higher wins an exact tie.
-ORIGIN_MB, ORIGIN_LIBRARY, ORIGIN_HOUSEHOLD = 0, 1, 2
+#: Where a matching form came from; higher wins an exact tie. A fragment
+#: is a performer the library only names as one part of a multi-artist
+#: credit (see the module docstring).
+ORIGIN_MB, ORIGIN_FRAGMENT, ORIGIN_LIBRARY, ORIGIN_HOUSEHOLD = 0, 1, 2, 3
 
 ARTIST_KINDS = frozenset({"artist", "credit"})
 TITLE_KINDS = frozenset({"title", "track"})
@@ -118,6 +139,11 @@ CARRIER_TITLES = frozenset({
     "tracks", "some",
 })
 
+# A credit that names several performers by a "feat." / "x" / "vs" (each
+# of them a performer in their own right) rather than by commas and "&"
+# (which may be one band's name: "Earth, Wind & Fire").
+_FEATURE_SEP_RE = re.compile(r"\s(?:feat\.?|ft\.?|featuring|x|vs\.?)\s", re.I)
+
 # Owner of a form: (entity index, origin, source label). The label is
 # "library", "alias", "musicbrainz" or "phrase".
 Owner = tuple[int, int, str]
@@ -145,6 +171,14 @@ class Entity:
     forms: tuple[tuple[str, str, str], ...] = ()
     #: title: its "<title> <artist>" phrase form, space-less ("" for none).
     phrase: str = ""
+    #: artist: named only as one part of a ","/"&" credit — never on its own,
+    #: never beside a "feat." / "x" / "vs" (see the module docstring).
+    fragment: bool = False
+
+    @property
+    def origin(self) -> int:
+        """The origin rank of the entity's own library forms."""
+        return ORIGIN_FRAGMENT if self.fragment else ORIGIN_LIBRARY
 
     def ref(self) -> EntityRef:
         return EntityRef(
@@ -267,7 +301,7 @@ class Index:
     def all_forms(self, i: int, *, phrase: bool) -> list[tuple[str, str, str, int, str]]:
         """Every form of entity ``i`` with its origin and source label."""
         e = self.entities[i]
-        out = [(f, c, p, ORIGIN_LIBRARY, "library") for f, c, p in e.forms]
+        out = [(f, c, p, e.origin, "library") for f, c, p in e.forms]
         out.extend(self.aliases.forms.get(i, ()))
         if phrase and e.phrase:
             out.append((e.phrase, e.phrase, "", ORIGIN_LIBRARY, "phrase"))
@@ -373,6 +407,10 @@ def build(tracks: Sequence[Mapping[str, Any]], aliases: Sequence[Mapping[str, An
     titles: dict[str, _Acc] = {}
     albums: dict[str, _Acc] = {}
     row_keys: dict[int, tuple[str, str, list[str], str, str]] = {}
+    # Performers the library names on their own (a single-performer
+    # credit) or beside a "feat." / "x" / "vs"; every other artist key is a
+    # fragment of a comma / "&" credit.
+    named: set[str] = set()
 
     for r in rows:
         tid = int(r["id"])
@@ -388,6 +426,8 @@ def build(tracks: Sequence[Mapping[str, Any]], aliases: Sequence[Mapping[str, An
             acc.spell[p] += 1
             acc.ids[tid] = None
             part_keys.append(k)
+        if len(parts) == 1 or _FEATURE_SEP_RE.search(f" {credit} "):
+            named.update(part_keys)
         ckey = ""
         if len(parts) > 1:
             ckey = alias_key(credit)
@@ -433,6 +473,7 @@ def build(tracks: Sequence[Mapping[str, Any]], aliases: Sequence[Mapping[str, An
             type="artist", key=key, label=acc.spell.most_common(1)[0][0],
             artist_label=None, track_ids=tuple(acc.ids), name_key=key,
             forms=_forms_of(acc.spell, cleaned=False),
+            fragment=key not in named,
         ))
     for key, acc in credits.items():
         add(Entity(
@@ -488,7 +529,7 @@ def build(tracks: Sequence[Mapping[str, Any]], aliases: Sequence[Mapping[str, An
     phrase_entries: list[tuple[str, str, str, Owner]] = []
     n_forms = 0
     for i, e in enumerate(ents):
-        owner: Owner = (i, ORIGIN_LIBRARY, "library")
+        owner: Owner = (i, e.origin, "library")
         for f, c, p in e.forms:
             exact.setdefault(c, {})[owner] = None
             per_type[e.type].append((f, c, p, owner))
@@ -690,15 +731,24 @@ def _score(
 ) -> Hit:
     """An entity's non-exact score from its best spelling and sound
     matches: 0.6 × spelling + 0.4 × sound, kept under the play bar
-    (``cap``) unless it accounts for every content word. THE hook for a
+    (``cap``) unless it accounts for every content word — and always for
+    a near match to a fragment's own name (a household name for it is the
+    household's word, and counts in full), and for a one-word request
+    spelled further off than :data:`ONE_WORD_SPELLING_MIN`. THE hook for a
     household-plays prior (Phase 4)."""
     fs = fuzzy[0] if fuzzy else 0.0
     ps = sound[0] if sound else 0.0
     s = W_FUZZY * fs + W_PHONETIC * ps
     src = fuzzy if fuzzy is not None else sound
     assert src is not None
-    if s > cap and words and not _covers(index, i, words, phrase=phrase):
-        s = cap
+    if s > cap:
+        best_origin = max(h[1] for h in (fuzzy, sound) if h is not None)
+        if (
+            (words and not _covers(index, i, words, phrase=phrase))
+            or (index.entities[i].fragment and best_origin <= ORIGIN_FRAGMENT)
+            or (len(words) == 1 and fs < ONE_WORD_SPELLING_MIN)
+        ):
+            s = cap
     return Hit(s, src[1], _via(src[2], fs, ps))
 
 
@@ -957,6 +1007,8 @@ def resolve(
     free = norm(query.get("any"))
     if not allowed:
         return Resolution.none("no_kinds", free or title or artist)
+    if len(f"{free} {title} {artist}".split()) > MAX_QUERY_WORDS:
+        return Resolution.none("too_long", " ".join((free or title or artist).split()[:MAX_QUERY_WORDS]))
     play, ask = float(play_threshold), float(ask_threshold)
     cap = play - 0.01
     if title and artist:

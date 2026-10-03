@@ -106,6 +106,11 @@ def test_the_tool_is_offered_only_on_its_words() -> None:
     for u in ("kindling is also called the kindlers", "give hearth ensemble the nickname gramps",
               "what other names does it have", "add an alias for this band", "when i say gramps play this"):
         assert h.offers_tool(u), u
+    # A request to hear music is music's, whatever name it uses (2026-10-03
+    # review: the tool model listed names instead of playing).
+    for u in ("i want to hear the band also called the kindlers", "play the one with the nickname gramps",
+              "put on that band with the other names"):
+        assert not h.offers_tool(u), u
     assert h.chat_exposed is False and h.requires_network == "no"
     assert set(h.tool_schema["parameters"]["properties"]["action"]["enum"]) == {"add", "forget", "list"}
 
@@ -212,8 +217,10 @@ async def test_many_names_one_at_a_time_then_list_them(voice) -> None:
     assert r.text == "Hearth Ensemble is also called gramps, the kindlers and hearth band."
     r = await voice("what else is ember choir called")
     assert r.text == "Ember Choir doesn't have any other names yet."
+    # Nothing in the library: a question about something else — declined,
+    # and answered as any question would be (2026-10-03 review).
     r = await voice("what else is nobody here called")
-    assert r.text == "I couldn't find nobody here in your library."
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
 
 
 @requires_db
@@ -262,8 +269,10 @@ async def test_a_fair_guess_at_the_target_is_asked_about(voice) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_an_unknown_target_and_its_own_name(voice) -> None:
+    # A target the library has nothing like: not a music name — declined
+    # ("when I say goodnight I mean turn off the lights").
     r = await voice("when i say gramps i mean nobody here")
-    assert r.text == "I couldn't find nobody here in your library."
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
     r = await voice("when i say hearth-ensemble i mean hearth ensemble")
     assert r.text == "That's already what Hearth Ensemble is called."
     assert (await voice.db.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
@@ -359,6 +368,106 @@ async def test_a_recognized_speaker_owns_their_names_in_any_room(voice) -> None:
     assert r.text.startswith("Only an admin")
     r = await voice("forget the name gramps", room="kitchen", person=7)
     assert r.text == "OK — gramps doesn't mean Hearth Ensemble anymore."
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", [
+    "What else is the moon called?",
+    "What other names does the north star have?",
+    "What else is soccer called?",
+    "What other names does God have?",
+    "What names do the planets go by?",
+])
+async def test_a_question_about_the_world_is_not_a_names_list(voice, question) -> None:
+    """2026-10-03 review: the list phrases have the shape of any question
+    about names; 15 of 16 such questions got "I couldn't find the moon in
+    your library". Nothing in the library is called that, so the fast path
+    declines and the question is answered as a question."""
+    r = await voice(question)
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
+    assert "in your library" not in r.text
+    assert voice.asked[-1]["any"]                      # the library WAS asked first
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_loose_match_is_not_listed_as_if_asked_about(voice) -> None:
+    """Only a SURE library match is listed: a middle-band one ("ember
+    quire" → Ember Choir, asked about when teaching a name) is declined."""
+    r = await voice("what else is ember quire called")
+    assert r.matched_path == "qa"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_when_i_say_something_that_is_not_music_is_declined(voice) -> None:
+    r = await voice("when I say goodnight I mean turn off the lights")
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
+    assert (await voice.db.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_tool_call_declines_what_is_not_a_library_name(voice) -> None:
+    h = HANDLER_BY_NAME["music_alias"]
+    sid = await SessionRepository(voice.db).get_or_create(None, "kitchen")
+    ctx = Context(room_id="kitchen", session_id=sid)
+    # "my email alias is kam at example dot com": no target at all.
+    assert await h.execute_from_tool({"action": "add", "alias": "kam"}, ctx, voice.db) is None
+    # "what other names did the moon go by": nothing in the library.
+    assert await h.execute_from_tool({"action": "list", "target": "the moon"}, ctx, voice.db) is None
+    # "when I say goodnight I mean turn off the lights": nothing in the library.
+    assert await h.execute_from_tool(
+        {"action": "add", "alias": "goodnight", "target": "turn off the lights"}, ctx, voice.db
+    ) is None
+    # "forget my email alias": no such household name.
+    assert await h.execute_from_tool({"action": "forget", "alias": "email alias"}, ctx, voice.db) is None
+    assert await h.execute_from_tool({"action": "rename"}, ctx, voice.db) is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_declined_tool_call_is_answered_as_a_question(voice, monkeypatch) -> None:
+    """Through the router: the tool model picks music_alias for a question
+    about the world, the tool declines, and the Q&A model answers."""
+    from domovoi.clients.ollama import OllamaStubClient
+
+    routed: list[str] = []
+
+    async def picks_music_alias(self, transcript, tool_schemas):
+        routed.append(transcript)
+        assert any(s["name"] == "music_alias" for s in tool_schemas)
+        return {"handler": "music_alias", "args": {"action": "list", "target": "napoleon"}}
+
+    monkeypatch.setattr(OllamaStubClient, "route", picks_music_alias)
+    r = await voice("what other names did napoleon go by")
+    assert routed == ["what other names did napoleon go by"]
+    assert voice.asked[-1] == {"any": "napoleon"}
+    assert r.matched_handler is None and r.matched_path == "qa"
+    assert r.text.startswith("(stub qa)")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_do_you_mean_takes_a_correction(voice) -> None:
+    """2026-10-03 review: "Do you mean Ember Choir?" took only yes or no —
+    "No, I mean Hearth Ensemble" hit the yes/no pre-empt's ``^no\b`` and
+    the correction was lost. It is a choice now: the whole reply counts."""
+    r = await voice("when i say the embers i mean ember quire")
+    assert r.text == "Do you mean Ember Choir?"
+    r = await voice("No, I mean Hearth Ensemble.")
+    assert r.matched_path == "confirmation"
+    assert r.text == "Got it — when you say the embers, I'll play Hearth Ensemble."
+    assert (await repo.find_alias(voice.db, "the embers")).target_key == "hearthensemble"
+    # A plain no still leaves it; a reply about something else is its own turn.
+    await voice("when i say embers two i mean ember quire")
+    assert (await voice("no")).text == "OK, I'll leave it."
+    assert await repo.find_alias(voice.db, "embers two") is None
+    await voice("when i say embers two i mean ember quire")
+    r = await voice("set a timer for 5 minutes")
+    assert r.matched_handler == "timer"
+    assert await repo.find_alias(voice.db, "embers two") is None
 
 
 @requires_db
