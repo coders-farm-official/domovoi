@@ -1,20 +1,30 @@
 """TTS engine router.
 
-The `edge → piper → system` fallback chain. Output
-is always a complete WAV file's bytes (int16 mono, native sample rate of the
-engine), so HTTP clients can stream it directly without re-encoding.
+A short fallback chain that starts at the preferred engine. Output is always
+a complete WAV file's bytes (int16 mono, native sample rate of the engine),
+so HTTP clients can stream it directly without re-encoding.
 
-- `edge`   — Microsoft Edge neural voices (online, very natural, ~24 kHz)
-- `piper`  — local neural (offline, auto-downloads voice, 22 kHz)
+- `edge`   — Microsoft Edge neural voices (online, very natural, ~24 kHz).
+  The reply text goes to Microsoft, so Edge is an informed opt-in: it is
+  used ONLY when it is the preferred engine for the call (``TTS_ENGINE=edge``
+  or a voice registered on the edge engine) and the internet answer allows
+  it. It is never a fallback rung, and under ``INTERNET_ACCESS=never`` it is
+  never used at all (see :func:`engine_order`).
+- `piper`  — local neural (offline, auto-downloads voice, 22 kHz). The
+  one-time voice download goes through the egress gate, so it is refused
+  under ``never`` and the chain carries on to `system`.
 - `system` — the OS's own synthesizer: pyttsx3/SAPI5 on Windows,
   `espeak-ng` (or `espeak`) on Linux/BSD, `say` on macOS. Robotic, but it
   is the floor of the chain — the thing that still talks when the network
   is down AND the Piper voice is missing or broken. Returns None when no
   system synthesizer is installed, which just ends the chain.
 
-Per-engine failure (network drop, missing voice, etc.) advances to the next.
-The chain starts at the configured preferred engine. Synchronous engine work
-runs in a threadpool to keep the event loop responsive.
+Per-engine failure (network drop, missing voice, etc.) advances to the next
+rung. :meth:`RealTTSClient.synthesize_detailed` says which rung actually
+produced the audio (:class:`SynthResult`), so a caller that stores audio
+(the per-voice clips in ``domovoi/canned_sounds.py``) can tag it with the
+voice it is really in. Synchronous engine work runs in a threadpool to keep
+the event loop responsive.
 """
 
 from __future__ import annotations
@@ -29,19 +39,79 @@ import tempfile
 import threading
 import wave
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from domovoi import egress
 from domovoi.config import settings
 from domovoi.speech_sanitize import sanitize_for_speech
 
 log = logging.getLogger(__name__)
+
+ENGINES: tuple[str, ...] = ("edge", "piper", "system")
+
+
+@dataclass(frozen=True)
+class SynthResult:
+    """What a synthesis produced, and which rung of the chain produced it.
+
+    ``engine`` is ``"edge"``, ``"piper"`` or ``"system"``, or ``""`` when
+    every rung failed and ``wav`` is the empty WAV callers get so they don't
+    crash. ``voice`` is the model_ref / Edge voice id the rung used, and
+    None for ``system`` (the OS voice has no id here) and for the empty
+    result."""
+
+    wav: bytes
+    engine: str
+    voice: str | None
+
+
+_edge_skip_logged = False
+
+
+def engine_order(preferred: str | None) -> list[str]:
+    """The rungs to try, in order, for a call that prefers ``preferred``.
+
+    Edge appears ONLY when it is the preferred engine and the internet
+    answer allows it: never as a fallback, so a broken Piper on an online
+    box can't quietly send reply text to Microsoft, and never under
+    ``INTERNET_ACCESS=never``. An unknown engine name is treated as Piper.
+
+    =====================  ===========================
+    preferred              order
+    =====================  ===========================
+    edge (allowed)         edge, piper, system
+    edge (under never)     piper, system
+    piper / unknown        piper, system
+    system                 system, piper
+    =====================  ===========================
+    """
+    global _edge_skip_logged
+    pref = (preferred or "").strip().lower()
+    if pref == "edge":
+        if egress.internet_allowed():
+            return ["edge", "piper", "system"]
+        if not _edge_skip_logged:
+            _edge_skip_logged = True
+            log.info(
+                "TTS: the Microsoft Edge voice is skipped (%s); speaking with "
+                "Piper instead", egress.TURNED_OFF_REASON,
+            )
+        return ["piper", "system"]
+    if pref == "system":
+        return ["system", "piper"]
+    return ["piper", "system"]
 
 
 class TTSClient(Protocol):
     async def synthesize(
         self, text: str, *, engine: str | None = None, voice: str | None = None
     ) -> bytes: ...
+
+    async def synthesize_detailed(
+        self, text: str, *, engine: str | None = None, voice: str | None = None
+    ) -> SynthResult: ...
 
 
 class TTSStubClient:
@@ -51,6 +121,11 @@ class TTSStubClient:
     async def synthesize(
         self, text: str, *, engine: str | None = None, voice: str | None = None
     ) -> bytes:
+        return (await self.synthesize_detailed(text, engine=engine, voice=voice)).wav
+
+    async def synthesize_detailed(
+        self, text: str, *, engine: str | None = None, voice: str | None = None
+    ) -> SynthResult:
         # Parity with the real client — the scrub is a no-op on the stub's
         # empty-WAV output, but keeps behavior identical if a future stub ever
         # echoes text back.
@@ -61,7 +136,15 @@ class TTSStubClient:
             wf.setsampwidth(2)
             wf.setframerate(16_000)
             wf.writeframes(b"")
-        return buf.getvalue()
+        # The stub "renders" on the first rung the real router would try, so
+        # what it reports follows the same Edge rules.
+        requested = (engine or "piper").strip().lower()
+        rung = engine_order(requested)[0]
+        return SynthResult(
+            wav=buf.getvalue(),
+            engine=rung,
+            voice=(voice if rung == requested else None) if rung != "system" else None,
+        )
 
 
 def _pcm_to_wav_bytes(pcm_bytes: bytes, sample_rate: int) -> bytes:
@@ -90,7 +173,13 @@ def _wav_is_silent(wav_bytes: bytes) -> bool:
 
 
 def _synth_edge_sync(text: str, voice: str, speed: float) -> bytes | None:
-    """Run edge-tts (async under the hood) from a sync context."""
+    """Run edge-tts (async under the hood) from a sync context.
+
+    Refuses under ``INTERNET_ACCESS=never`` before anything is imported or
+    sent (``egress.InternetTurnedOff``). :func:`engine_order` already keeps
+    Edge out of the chain there; this is the defence in depth for any other
+    caller."""
+    egress.require_internet("Microsoft Edge voice")
     try:
         import edge_tts
         import miniaudio
@@ -131,6 +220,26 @@ def _voices_dir() -> Path:
     return Path(settings.voice_models_dir)
 
 
+def _piper_local_path(model_ref: str) -> Path | None:
+    """The ``.onnx`` a Piper ``model_ref`` loads from WITHOUT a download —
+    an uploaded model's own path, or ``<name>.onnx`` + ``.onnx.json`` in the
+    voice-models dir — or None. Creates nothing."""
+    cand = Path(model_ref)
+    if cand.suffix == ".onnx" and cand.is_file():
+        return cand
+    voices_dir = _voices_dir()
+    onnx = voices_dir / f"{model_ref}.onnx"
+    if onnx.exists() and (voices_dir / f"{model_ref}.onnx.json").exists():
+        return onnx
+    return None
+
+
+def piper_voice_on_disk(model_ref: str) -> bool:
+    """Whether a Piper voice can speak without fetching anything: already
+    loaded, or its model files are on disk."""
+    return model_ref in _piper_voice_cache or _piper_local_path(model_ref) is not None
+
+
 def _piper_voice_path(model_ref: str) -> Path:
     """Resolve a Piper ``model_ref`` to its ``.onnx`` file.
 
@@ -141,23 +250,22 @@ def _piper_voice_path(model_ref: str) -> Path:
          the voice-models dir (uploaded-by-name, or a previously downloaded
          HF voice).
       3. A standard HF voice name (LANG-SPEAKER-QUALITY) — auto-download
-         into the voice-models dir, one time.
+         into the voice-models dir, one time. The download goes through the
+         egress gate: under ``INTERNET_ACCESS=never`` it raises
+         ``egress.InternetTurnedOff`` without a request, and the router
+         moves on to the next rung.
     """
     import requests
 
+    # (1) Direct path to an uploaded model, (2) already under the voices dir.
+    local = _piper_local_path(model_ref)
+    if local is not None:
+        return local
+
     voices_dir = _voices_dir()
-
-    # (1) Direct path to an uploaded model.
-    cand = Path(model_ref)
-    if cand.suffix == ".onnx" and cand.is_file():
-        return cand
-
     voices_dir.mkdir(parents=True, exist_ok=True)
     onnx = voices_dir / f"{model_ref}.onnx"
     jpath = voices_dir / f"{model_ref}.onnx.json"
-    # (2) Already present under the voices dir.
-    if onnx.exists() and jpath.exists():
-        return onnx
 
     # (3) HF auto-download.
     parts = model_ref.split("-")
@@ -172,6 +280,7 @@ def _piper_voice_path(model_ref: str) -> Path:
         f"https://huggingface.co/rhasspy/piper-voices/resolve/main/"
         f"{lang}/{lang_full}/{speaker}/{quality}/{model_ref}"
     )
+    egress.require_destination(base + ".onnx")
     log.info("downloading Piper voice %s (one-time)", model_ref)
     for suffix, path in ((".onnx", onnx), (".onnx.json", jpath)):
         r = requests.get(base + suffix, stream=True, timeout=60)
@@ -337,32 +446,46 @@ class RealTTSClient:
         self.speed = speed
 
     def _engine_order(self, preferred: str) -> list[str]:
-        all_engines = ("edge", "piper", "system")
-        return [preferred] + [e for e in all_engines if e != preferred]
+        return engine_order(preferred)
 
     async def synthesize(
         self, text: str, *, engine: str | None = None, voice: str | None = None
     ) -> bytes:
+        return (await self.synthesize_detailed(text, engine=engine, voice=voice)).wav
+
+    async def synthesize_detailed(
+        self, text: str, *, engine: str | None = None, voice: str | None = None
+    ) -> SynthResult:
+        """Like :meth:`synthesize`, but also says which rung of the chain
+        rendered the audio and in which voice (:class:`SynthResult`)."""
         # Strip emoji + Markdown so the engines never verbalize an asterisk or
         # narrate an emoji's Unicode name. Single choke point: every spoken
         # path in the core lands here (see domovoi/speech_sanitize).
         text = sanitize_for_speech(text or "")
-        return await asyncio.to_thread(self._synth_blocking, text, engine, voice)
+        return await asyncio.to_thread(self._synth_detailed_blocking, text, engine, voice)
 
     def _synth_blocking(
         self, text: str, engine: str | None = None, voice: str | None = None
     ) -> bytes:
+        return self._synth_detailed_blocking(text, engine, voice).wav
+
+    def _synth_detailed_blocking(
+        self, text: str, engine: str | None = None, voice: str | None = None
+    ) -> SynthResult:
         # Per-call overrides win, else the construct-time globals. The voice
         # override only applies to the preferred engine (the registry pairs a
         # voice with its engine); fallback engines use their own default voice.
-        preferred = engine or self.preferred_engine
+        preferred = (engine or self.preferred_engine or "").strip().lower()
         for eng in self._engine_order(preferred):
             v = voice if (voice and eng == preferred) else None
+            used: str | None = None
             try:
                 if eng == "edge":
-                    out = _synth_edge_sync(text, v or self.edge_voice, self.speed)
+                    used = v or self.edge_voice
+                    out = _synth_edge_sync(text, used, self.speed)
                 elif eng == "piper":
-                    out = _synth_piper_sync(text, v or self.piper_voice, self.speed)
+                    used = v or self.piper_voice
+                    out = _synth_piper_sync(text, used, self.speed)
                 elif eng == "system":
                     out = _synth_system_sync(text)
                 else:
@@ -371,12 +494,12 @@ class RealTTSClient:
                 # audio) so we fall through to the next engine rather than
                 # returning silence — the local-first safety net working.
                 if out and not _wav_is_silent(out):
-                    return out
+                    return SynthResult(wav=out, engine=eng, voice=used)
             except Exception as e:
                 log.warning("TTS engine %s failed: %s", eng, e)
         # If every engine fails, return an empty WAV so callers don't crash.
         log.error("all TTS engines failed for text len=%d", len(text))
-        return _pcm_to_wav_bytes(b"", 16_000)
+        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None)
 
 
 _client: TTSClient | None = None
