@@ -111,6 +111,114 @@ class LibraryStats(BaseModel):
     enriched_count: int
 
 
+# ─── Music: "also called" names (V019 library_aliases) ───────────────────
+
+
+class LibraryAlias(BaseModel):
+    """One other name for a library artist, album or song. ``can_remove``
+    is for THE CALLER (an admin anything; a device the names it added;
+    anyone a MusicBrainz name). ``added_by`` is "admin", the adding
+    device's name, "voice in <room>" or "MusicBrainz" — never another
+    device's raw id."""
+    id: int
+    alias: str
+    alias_key: str
+    target_type: Literal["artist", "album", "track"]
+    target_key: str | None = None
+    target_name: str
+    target_artist_key: str | None = None
+    target_track_id: int | None = None
+    source: Literal["manual", "voice", "musicbrainz"]
+    created_by_kind: Literal["admin", "device", "voice", "system"]
+    added_by: str
+    created_at: datetime | None = None
+    suppressed: bool = False
+    can_remove: bool = False
+
+
+class LibraryAliasPage(BaseModel):
+    items: list[LibraryAlias]
+    total: int
+
+
+class LibraryAliasCreate(BaseModel):
+    """``POST /api/music/aliases``. Name the target by ``target_name``
+    (artist / album — an album may add ``target_artist_name`` to pin it to
+    that artist's album) or ``target_track_id`` (a song). ``replace=true``
+    answers "yes" to the 409's "replace it?"."""
+    alias: str = Field(min_length=1, max_length=500)
+    target_type: Literal["artist", "album", "track"]
+    target_name: str | None = Field(default=None, max_length=500)
+    target_artist_name: str | None = Field(default=None, max_length=500)
+    target_track_id: int | None = None
+    replace: bool = False
+
+
+class LibraryAliasShadow(BaseModel):
+    type: Literal["artist", "title", "album"]
+    name: str
+
+
+class LibraryAliasAddResult(BaseModel):
+    """201 (``added`` / ``replaced``) or 200 (``exists``). ``shadows``
+    names the OTHER library names this alias now plays instead of."""
+    status: Literal["added", "exists", "replaced"]
+    alias: LibraryAlias
+    shadows: list[LibraryAliasShadow] = []
+
+
+class TrackAliasSong(BaseModel):
+    id: int
+    title: str
+    aliases: list[LibraryAlias]
+
+
+class TrackAliasArtist(BaseModel):
+    name: str
+    key: str
+    # True for the whole multi-artist credit ("Earth, Wind & Fire"), shown
+    # before its parts so a band can be named as one.
+    credit: bool = False
+    aliases: list[LibraryAlias]
+
+
+class TrackAliasAlbum(BaseModel):
+    name: str
+    key: str
+    artist_key: str | None = None
+    artist_name: str | None = None
+    aliases: list[LibraryAlias]
+
+
+class TrackAliases(BaseModel):
+    """The track drawer's "also called" lists in one call."""
+    track: TrackAliasSong
+    artists: list[TrackAliasArtist]
+    album: TrackAliasAlbum | None = None
+
+
+class AliasFetchStatus(BaseModel):
+    enabled: bool | None = None
+    state: str = "unknown"
+    artists_total: int = 0
+    checked: int = 0
+    matched: int = 0
+    no_match: int = 0
+    ambiguous: int = 0
+    errors: int = 0
+    aliases_added: int = 0
+    last_lookup_at: datetime | None = None
+    last_error: str | None = None
+
+
+class AliasStatus(BaseModel):
+    """``GET /api/music/aliases/status`` — the Stats tab's card."""
+    household: int
+    musicbrainz: int
+    suppressed: int
+    fetch: AliasFetchStatus
+
+
 class NowPlayingSong(BaseModel):
     file: str
     title: str | None = None

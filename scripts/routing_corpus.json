@@ -364,6 +364,93 @@
       "handler": "timer",
       "tags": ["action", "timer"],
       "note": "2026-09-30 review: a command inside talk about a timer; the statement gate sent it to QA with no tools"
+    },
+    {
+      "utterance": "when I say gramps, I mean Hearth Ensemble",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: teach a name by voice (band 295, before music's ^play)"
+    },
+    {
+      "utterance": "when I say the kindlers I mean Kindling",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: no comma, a target that starts with the alias's own words"
+    },
+    {
+      "utterance": "when I say lullaby I mean this song",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: the target is what is playing"
+    },
+    {
+      "utterance": "forget that name",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: undo the last name taught; memory's 'forget that X' no longer takes a bare 'forget that name'"
+    },
+    {
+      "utterance": "forget the name gramps",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: remove one name"
+    },
+    {
+      "utterance": "what else is Hearth Ensemble called",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: list a target's names"
+    },
+    {
+      "utterance": "what other names does Hearth Ensemble have",
+      "handler": "music_alias",
+      "path": "fast",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: list, second phrasing"
+    },
+    {
+      "utterance": "the band Kindling is also called the kindlers",
+      "handler": "music_alias",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: no fast path; the tool is offered only on 'also called' / 'alias' / 'nickname' / 'other names' / 'when i say'"
+    },
+    {
+      "utterance": "forget that i like jazz",
+      "handler": "memory",
+      "path": "fast",
+      "tags": ["action"],
+      "note": "2026-10-03: memory keeps 'forget that <body>' after music_alias took a bare 'forget that name'"
+    },
+    {
+      "utterance": "play gramps",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action"],
+      "note": "2026-10-03: an alias is PLAYED through music's ^play catch-all, never through music_alias"
+    },
+    {
+      "utterance": "what else is a baby goat called",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-10-03: an article-led subject is a question about the world; music_alias's 'what else is X called' leaves it to Q&A"
+    },
+    {
+      "utterance": "what is the nickname of chicago",
+      "handler": null,
+      "tags": ["qa"],
+      "note": "2026-10-03: the 'nickname' cue offers music_alias; qwen3:8b still answers it as Q&A (private CPU-only eval)"
+    },
+    {
+      "utterance": "give Hearth Ensemble the nickname gramps",
+      "handler": "music_alias",
+      "tags": ["action", "music_alias"],
+      "note": "2026-10-03 household aliases: a phrasing with no fast path reaches music_alias through the tool router"
     }
   ]
 }

@@ -41,7 +41,7 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news", "library", "reminder", "timer"}
+GATED = {"calculator", "double_check", "news", "library", "reminder", "timer", "music_alias"}
 
 
 def _normalize(utterance: str) -> str:
@@ -474,8 +474,9 @@ def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
 
 def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     """The gate withholds only on evidence — a command with a digit, a
-    verification word and a news word in it must see every tool."""
-    names = _offered("double check the latest news about the 3 timers i set")
+    verification word, a news word and a music-names cue ("other names",
+    music_alias's on-request tool) in it must see every tool."""
+    names = _offered("double check the latest news about the 3 timers i set and their other names")
     assert set(names) == {h.name for h in HANDLERS}
 
 

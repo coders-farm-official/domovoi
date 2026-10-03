@@ -17,6 +17,11 @@
  *   * GET /api/acquisitions                     — generic acquisition queue rows
  *                                                 + fulfiller availability (Jobs).
  *   * GET /api/music/now-playing                — per-room MPD state.
+ *   * GET /api/music/aliases/for-track/{id}     — the drawer's "also called" lists
+ *                                                 (song / artists / album);
+ *                                                 POST / DELETE /api/music/aliases
+ *                                                 add or remove one name.
+ *   * GET /api/music/aliases/status             — the Stats tab's names card.
  *   * /ws/state · `music.now_playing.changed`   — push refresh of NP strip.
  *   * /ws/state · `acquisitions.changed`        — push refresh of the Jobs tab.
  *   * /ws/state · `library.indexer.changed`     — refetch library page + stats
@@ -206,6 +211,212 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
   );
 };
 
+/* ---- "Also called" (track drawer) -------------------------- */
+/* Other names the household says for this song, each of its artists and
+ * its album (V019 library_aliases, GET /api/music/aliases/for-track/{id}).
+ * A thing can have ANY number of names (owner decision 2026-10-02), so
+ * each target is an editable LIST: chips, an x on the ones this caller
+ * may remove, and an "add a name…" field (Enter adds, Escape clears) —
+ * never a single text box. A name means ONE thing household-wide: adding
+ * one that already means something else asks "Replace it?" when this
+ * caller may replace it (POST again with replace: true), else says only
+ * an admin can. MusicBrainz names are muted. The lists are loaded once
+ * per track and then kept from each write's own answer. */
+const AlsoCalledTypeWord = { artist: 'artist', album: 'album', track: 'song' };
+
+/* The drawer's targets, in order: the song, each performer (a whole
+ * band-like credit first), the album. */
+const AlsoCalledTargets = (view) => {
+  if (!view || !view.track) return [];
+  const rows = [{
+    id: 'song', label: 'song', name: view.track.title || 'this song',
+    aliases: view.track.aliases || [],
+    target: { target_type: 'track', target_track_id: view.track.id },
+  }];
+  (view.artists || []).forEach((a) => rows.push({
+    id: `artist:${a.key}`, label: a.credit ? 'whole credit' : 'artist', name: a.name,
+    aliases: a.aliases || [],
+    target: { target_type: 'artist', target_name: a.name },
+  }));
+  if (view.album) {
+    const target = { target_type: 'album', target_name: view.album.name };
+    if (view.album.artist_name) target.target_artist_name = view.album.artist_name;
+    rows.push({ id: 'album', label: 'album', name: view.album.name, aliases: view.album.aliases || [], target });
+  }
+  return rows;
+};
+
+/* Put a saved alias on row `rowId` (and off every other row: a replaced
+ * name moves). */
+const AlsoCalledPut = (lists, rowId, alias) => {
+  const next = {};
+  Object.keys(lists).forEach((k) => { next[k] = (lists[k] || []).filter((a) => a.id !== alias.id); });
+  next[rowId] = (next[rowId] || []).concat([alias]);
+  return next;
+};
+
+const AlsoCalledDrop = (lists, aliasId) => {
+  const next = {};
+  Object.keys(lists).forEach((k) => { next[k] = (lists[k] || []).filter((a) => a.id !== aliasId); });
+  return next;
+};
+
+const AlsoCalledChip = ({ alias, onRemove }) => {
+  const mb = alias.source === 'musicbrainz';
+  return (
+    <span title={mb ? 'from MusicBrainz' : `added by ${alias.added_by}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, lineHeight: '18px',
+                   padding: alias.can_remove ? '2px 2px 2px 10px' : '2px 10px', borderRadius: 'var(--r-full)',
+                   border: '1px solid var(--border)',
+                   background: mb ? 'transparent' : 'var(--brand-soft)',
+                   color: mb ? 'var(--fg-muted)' : 'var(--brand-press)' }}>
+      {alias.alias}
+      {alias.can_remove && (
+        <button type="button" title={`remove '${alias.alias}'`} onClick={onRemove}
+                style={{ font: 'inherit', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                         width: 18, height: 18, padding: 0, border: 0, borderRadius: 'var(--r-full)',
+                         background: 'transparent', color: 'inherit', cursor: 'pointer' }}>
+          <Icon name="x" size={12}/>
+        </button>
+      )}
+    </span>
+  );
+};
+
+const AlsoCalledSection = ({ track, fire }) => {
+  const say = fire || (() => {});
+  const [view, setView] = React.useState(null);
+  const [lists, setLists] = React.useState({});
+  const [drafts, setDrafts] = React.useState({});
+  const [pending, setPending] = React.useState(null);   // { row, text, existing } — a replace question
+  React.useEffect(() => {
+    let live = true;
+    setView(null); setLists({}); setDrafts({}); setPending(null);
+    apiGet(`/api/music/aliases/for-track/${track.id}`, { quiet: true })
+      .then((d) => {
+        if (!live || !d || !d.track) return;
+        const seeded = {};
+        AlsoCalledTargets(d).forEach((r) => { seeded[r.id] = r.aliases; });
+        setView(d); setLists(seeded);
+      })
+      .catch(() => { /* an older server without the route: no section */ });
+    return () => { live = false; };
+  }, [track.id]);
+  if (!view) return null;
+  const rows = AlsoCalledTargets(view);
+  const setDraft = (rowId, value) => setDrafts((d) => Object.assign({}, d, { [rowId]: value }));
+  const failed = (verb, e) => {
+    if (typeof reportMutationFailure === 'function') reportMutationFailure(say, verb, e);
+    else say(`${verb} failed`);
+  };
+
+  const add = async (row, text, replace) => {
+    const alias = (text || '').trim();
+    if (!alias) return;
+    try {
+      const r = await apiPost('/api/music/aliases', Object.assign({}, row.target, { alias, replace: !!replace }));
+      if (!r || !r.alias) return;
+      setLists((cur) => AlsoCalledPut(cur, row.id, r.alias));
+      setDraft(row.id, '');
+      const shadow = (r.shadows || [])[0];
+      if (r.status === 'exists') say(`'${r.alias.alias}' already means ${row.name}`);
+      else if (shadow) say(`'${r.alias.alias}' will now play ${row.name} instead of ${shadow.name}.`);
+      else say(`'${r.alias.alias}' now also means ${row.name}`);
+    } catch (e) {
+      const d = e && e.detail && e.detail.detail;
+      if (e && e.status === 409 && d && d.code === 'alias_taken') {
+        if (d.can_replace) setPending({ row, text: alias, existing: d.existing || {} });
+        else say('Only an admin can change a name someone else added.');
+        return;
+      }
+      if (d && typeof d === 'object' && typeof d.message === 'string') { say(d.message); return; }
+      failed('add name', e);
+    }
+  };
+
+  const remove = async (row, alias) => {
+    try {
+      await apiDelete(`/api/music/aliases/${alias.id}`);
+      setLists((cur) => AlsoCalledDrop(cur, alias.id));
+      say(`removed '${alias.alias}'`);
+    } catch (e) {
+      if (e && e.status === 403 && !e.loginPrompted && !e.authCancelled) {
+        say('Only an admin can remove a name someone else added.');
+        return;
+      }
+      failed('remove name', e);
+    }
+  };
+
+  const ex = pending ? pending.existing : null;
+  return (
+    <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)', display: 'grid', gap: 10 }}>
+      <div className="label">also called</div>
+      {rows.map((row) => {
+        const draft = drafts[row.id] || '';
+        return (
+          <div key={row.id} style={{ display: 'grid', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', minWidth: 0 }}>
+              <span style={{ fontSize: 11, color: 'var(--fg-faint)', flexShrink: 0 }}>{row.label}</span>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {(lists[row.id] || []).map((a) => (
+                <AlsoCalledChip key={a.id} alias={a} onRemove={() => remove(row, a)}/>
+              ))}
+              <input name={`also-called-${row.id}`} value={draft} placeholder="add a name…" maxLength={120}
+                     aria-label={`another name for ${row.name}`}
+                     onChange={(e) => setDraft(row.id, e.target.value)}
+                     onKeyDown={(e) => {
+                       if (e.key === 'Enter') { e.preventDefault(); add(row, draft, false); }
+                       if (e.key === 'Escape') setDraft(row.id, '');
+                     }}
+                     style={{ font: 'inherit', fontSize: 12, height: 24, padding: '0 8px', minWidth: 110, flex: '1 1 110px',
+                              borderRadius: 'var(--r-full)', border: '1px dashed var(--border)',
+                              background: 'var(--card)', color: 'var(--fg)' }}/>
+            </div>
+          </div>
+        );
+      })}
+      {pending && (
+        <DeleteConfirmDialog title={`Replace '${pending.text}'?`} icon="repeat" confirmLabel="Replace"
+                             onCancel={() => setPending(null)}
+                             onConfirm={() => { const p = pending; setPending(null); add(p.row, p.text, true); }}>
+          <div>
+            {`'${ex.alias || pending.text}' already means ${ex.target_name || 'something else'}`
+              + ` (${AlsoCalledTypeWord[ex.target_type] || 'name'}). Replace it?`}
+          </div>
+          <div>{`It will mean ${pending.row.name} instead.`}</div>
+        </DeleteConfirmDialog>
+      )}
+    </div>
+  );
+};
+
+/* The Stats tab's card: how many names, and where the opt-in MusicBrainz
+ * lookup is (GET /api/music/aliases/status). */
+const AlsoCalledFetchLine = (f) => {
+  const n = (x) => Number(x || 0).toLocaleString('en-US');
+  if (!f || f.enabled === null || f.enabled === undefined) return 'MusicBrainz lookup: status unknown';
+  if (f.enabled === false || f.state === 'off') return 'MusicBrainz lookup: off — Settings → Configuration → Library';
+  if (f.state === 'offline') return 'MusicBrainz lookup: paused — offline';
+  if (f.state === 'rate_limited') return 'MusicBrainz lookup: paused — MusicBrainz asked to slow down';
+  if (f.state === 'error') return `MusicBrainz lookup: error${f.last_error ? ` — ${f.last_error}` : ''}`;
+  if (f.state === 'done' || (f.artists_total > 0 && f.checked >= f.artists_total)) return 'MusicBrainz lookup: done';
+  return `MusicBrainz lookup: checking — ${n(f.checked)} of ${n(f.artists_total)} artists`;
+};
+
+const AlsoCalledStat = () => {
+  const { data } = useApiObject('/api/music/aliases/status', { quiet: true });
+  if (!data) return null;
+  const household = data.household || 0;
+  const mb = data.musicbrainz || 0;
+  return (
+    <Stat label="also-called names" value={household + mb}
+          sub={`${household} household · ${mb} from MusicBrainz · ${AlsoCalledFetchLine(data.fetch)}`}/>
+  );
+};
+
 /* ---- Drawer (track detail) -------------------------------- */
 const TRACK_TAG_FIELDS = ['title', 'artist', 'album'];
 const _trackFieldStyle = {
@@ -227,7 +438,7 @@ const trackTagChanges = (form, track) => {
 /* The track drawer. The header's title / artist / album flip into an
  * edit form (F-024: a mistagged track could never be fixed from the
  * dashboard); `onEdit(track, changes)` PATCHes only the changed tags. */
-const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrowserPlay, onQueueTrack }) => {
+const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrowserPlay, onQueueTrack, fire }) => {
   const [alsoFile, setAlsoFile] = React.useState(false);
   const [room, setRoom] = React.useState(rooms[0] || null);
   const [editing, setEditing] = React.useState(false);
@@ -265,7 +476,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrows
       <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 420, maxWidth: '100%',
                       background: 'var(--card)', borderLeft: '1px solid var(--border)',
                       boxShadow: 'var(--shadow-md)', zIndex: 41,
-                      display: 'flex', flexDirection: 'column' }}>
+                      display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
         <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
           <div className="eyebrow">track · #{track.id}</div>
           <IconButton name="x" onClick={onClose}/>
@@ -316,6 +527,10 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrows
             <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', wordBreak: 'break-all' }}>{track.file_path}</div>
           </div>
         </div>
+
+        {/* Other names for the song, its artists and its album — an
+            editable list per target (V019; AlsoCalledSection above). */}
+        <AlsoCalledSection track={track} fire={fire}/>
 
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }}>
           <div className="label" style={{ marginBottom: 6 }}>play in room</div>
@@ -1295,6 +1510,7 @@ const StatsTab = ({ stats, loading }) => {
       <Stat label="enriched"         value={total ? `${enriched} / ${total}` : '—'} sub={total ? `${total - enriched} pending` : ''}/>
       <BucketStat label="added via" buckets={byVia}/>
       <BucketStat label="by source" buckets={bySource}/>
+      <AlsoCalledStat/>
     </div>
   );
 };
@@ -1743,7 +1959,7 @@ const MusicPage = () => {
 
       <Drawer track={selected} rooms={rooms} onClose={() => setSelected(null)}
               onDelete={onDelete} onEdit={onEditTrack} onPlayInRoom={onPlayInRoom}
-              onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
+              onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} fire={fire}/>
       <PlaylistDrawer playlist={openPlaylist} rooms={rooms}
                       onClose={() => setOpenPlaylist(null)}
                       onPlay={onPlayPlaylist} onShuffle={onShufflePlaylist}
