@@ -939,10 +939,17 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             # don't promise an offer the next "yes" can't honor.
         else:
             # Offline: we can't search and we won't guess. Say so plainly
-            # rather than emit a possibly-stale local answer.
+            # rather than emit a possibly-stale local answer. A box set to
+            # stay off the internet (INTERNET_ACCESS=never) says that
+            # instead of implying the line is down.
+            from domovoi import egress
+
             response = Response(
                 text=(
-                    "I'd need the internet to answer that, and we're "
+                    "I'd need the internet to answer that, and I'm set to "
+                    "stay off it."
+                    if egress.internet_turned_off()
+                    else "I'd need the internet to answer that, and we're "
                     "offline right now."
                 ),
                 session_id=session_id,

@@ -178,6 +178,10 @@ const PrepareMediaCard = ({ fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [creds, setCreds] = React.useState(null);
+  // Refreshing the caches downloads (PyPI, Docker Hub, Debian, GitHub):
+  // greyed while the box is set to stay off the internet. Prepare uses
+  // what is already cached and stays available.
+  const { off: internetOff } = useInternetPolicy();
 
   const showCredentials = async (job) => {
     try {
@@ -250,7 +254,8 @@ const PrepareMediaCard = ({ fire }) => {
       fire(bad.length ? `cache refresh: ${bad.map(([k, v]) => `${k}: ${v.message}`).join(' · ')}` : 'caches refreshed');
       refreshStatus();
     } catch (e) {
-      reportMutationFailure(fire, 'cache refresh', e);
+      if (isInternetOffError(e)) fire(INTERNET_OFF_MESSAGE);
+      else reportMutationFailure(fire, 'cache refresh', e);
     } finally {
       setBusy(false);
     }
@@ -312,7 +317,9 @@ const PrepareMediaCard = ({ fire }) => {
               ))}
             </select>
             <Button variant="primary" icon="hammer" disabled={busy} onClick={prepare}>Prepare</Button>
-            <Button icon="refresh-cw" disabled={busy} onClick={refreshCache}>Refresh caches</Button>
+            <Button icon="refresh-cw" disabled={busy || internetOff} onClick={refreshCache}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Refresh caches</Button>
+            {internetOff && <NeedsInternetNote compact/>}
           </div>
 
           {!drivesVisible && (

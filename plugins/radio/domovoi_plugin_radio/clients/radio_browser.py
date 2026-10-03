@@ -36,6 +36,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from domovoi.webkit import egress
+
 from domovoi_plugin_radio import USER_AGENT
 
 log = logging.getLogger(__name__)
@@ -142,8 +144,11 @@ class RealRadioBrowserClient:
         # against accidental wide-net hits.
         if not (name or country_code or tag or language):
             return []
-
-        import httpx
+        if egress.internet_turned_off():
+            # INTERNET_ACCESS=never: the directory is on the internet.
+            # The routes and the simulcast resolver refuse before getting
+            # here; this is the backstop, and it sends nothing.
+            return []
 
         url = f"{self._base_url}/json/stations/search"
         params: dict[str, Any] = {
@@ -168,7 +173,7 @@ class RealRadioBrowserClient:
             # Generous timeout — mirrors are sometimes slow on first
             # request as DNS rotates; longer than 10 s and the search
             # box feels broken.
-            async with httpx.AsyncClient(
+            async with egress.async_client(
                 timeout=10.0, headers={"User-Agent": USER_AGENT}
             ) as client:
                 response = await client.get(url, params=params)

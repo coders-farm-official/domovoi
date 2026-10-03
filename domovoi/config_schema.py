@@ -337,21 +337,6 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.3, max=0.95,
     ),
 
-    # ─── Radio ─────────────────────────────────────────────────────────
-    FieldSpec(
-        "radio_dedup_window_sec", "Re-download cooldown", "Radio",
-        "Don't auto-queue the same detected song again within this many "
-        "seconds — stops a song on heavy rotation from queueing repeatedly.",
-        "int", min=60, max=86400, unit="sec",
-    ),
-    FieldSpec(
-        "radio_default_sample_interval_sec", "Default sample interval", "Radio",
-        "For a newly favorited station, how often to sample its audio to "
-        "identify the current song. Only affects stations favorited AFTER "
-        "the change.",
-        "int", min=30, max=3600, unit="sec",
-    ),
-
     # ─── Library ───────────────────────────────────────────────────────
     FieldSpec(
         "library_enricher_acoustid_min_score", "AcoustID match floor", "Library",
@@ -510,12 +495,6 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Workers (restart to apply) ────────────────────────────────────
-    FieldSpec(
-        "radio_sampler_enabled", "Radio sampler worker", "Workers",
-        "Enable passive song detection on favorited stations. Off = no "
-        "now-playing detection. Takes effect after a restart.",
-        "bool", tier="restart",
-    ),
     FieldSpec(
         "memory_extractor_enabled", "Memory extractor worker", "Workers",
         "Enable the worker that mines conversations for long-term memories. "

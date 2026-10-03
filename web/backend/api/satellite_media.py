@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi import egress
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from domovoi.host_kind import host_kind
 from domovoi.satellite_media import builder, cache, fetchers, overlay
@@ -446,7 +447,12 @@ async def media_download(job_id: int) -> FileResponse:
 @router.post("/cache/refresh", dependencies=[Depends(require_admin_mutation)])
 async def media_cache_refresh() -> dict[str, Any]:
     """Synchronous-ish cache refresh (wheels are the slow part; the call
-    can take minutes on a cold cache — the card shows a spinner)."""
+    can take minutes on a cold cache — the card shows a spinner).
+
+    409 under ``INTERNET_ACCESS=never``: every bucket downloads. Preparing
+    a card (``/prepare``) stays allowed and uses what is cached."""
+    if egress.internet_turned_off():
+        raise egress.http_exception("satellite cache refresh")
     from domovoi.config import settings as core_settings
 
     repo_root = Path(core_settings.repo_dir)

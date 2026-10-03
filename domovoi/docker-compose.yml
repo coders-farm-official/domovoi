@@ -82,8 +82,19 @@ services:
   # that commonly claim 8888. JSON API is enabled via the mounted
   # settings.yml; the default web UI also works at
   # http://localhost:6888 if you want to inspect what it returns.
+  #
+  # Who starts it: it follows the internet answer (INTERNET_ACCESS,
+  # docs/INTERNET.md). Answering Yes or Sometimes in Settings → Internet
+  # starts it, No stops it; dev.sh / dev.ps1 and the Linux update unit do
+  # the same. By hand: `docker compose up -d searxng`.
+  #
+  # The image is pinned by digest (the multi-arch index of release
+  # 2026.5.6-a9909c497), so every box runs the same SearXNG and a first
+  # start pulls exactly this. To move it: `docker pull searxng/searxng:<tag>`,
+  # then `docker image ls --digests searxng/searxng` and replace both the
+  # tag and the digest here.
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.5.6-a9909c497@sha256:34d13094b1150bba739e16c95b7334040a524aadb557fbdbc41a42827aae5f8b
     container_name: domovoi-searxng
     ports:
       - "127.0.0.1:6888:8080"

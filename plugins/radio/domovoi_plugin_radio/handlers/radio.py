@@ -61,6 +61,7 @@ from domovoi.sdk import (
     Intent,
     PluginSDK,
     Response,
+    egress,
 )
 
 from domovoi_plugin_radio import SCHEMA
@@ -395,6 +396,16 @@ class RadioHandler(Handler):
             if not url_to_play:
                 return self._reply(
                     ctx, f"{station['name']} doesn't have a stream URL on file."
+                )
+            # A box set to stay off the internet never hands the music
+            # player an internet stream (the offline fast-path fallback
+            # covers most turns; this covers the tool path and the
+            # "which one?" follow-up too).
+            if egress.check_destination(str(url_to_play)) is not None:
+                return self._reply(
+                    ctx,
+                    f"{egress.spoken_offline_phrase()}, so I can't stream "
+                    f"{station['name']}. FM stations still work.",
                 )
 
         elif source == "fm":

@@ -381,7 +381,7 @@ const PullJob = ({ j, onCancel }) => {
 
 const _ROLE_TAG = { qa: 'Q&A', tool: 'tool', both: 'Q&A · tool', embedding: 'embedding', stt: 'STT', vision: 'vision' };
 
-const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
+const CatalogCard = ({ m, hw, installedNames, pulling, onInstall, internetOff }) => {
   const isInstalled = installedNames.has(m.name);
   const isPulling = pulling.has(m.name);
   return (
@@ -403,7 +403,8 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall }) => {
       <div style={{ marginTop: 2 }}>
         {isInstalled
           ? <Pill tone="ok">installed</Pill>
-          : <Button variant="primary" icon="download" disabled={isPulling}
+          : <Button variant="primary" icon="download" disabled={isPulling || internetOff}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                     onClick={() => onInstall(m.name)}>{isPulling ? 'installing…' : 'Install'}</Button>}
       </div>
     </div>
@@ -470,6 +471,9 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
  * the page header. */
 const ModelsPanel = () => {
   const [fire, node] = useToast();
+  // Installing a model pulls it from the Ollama registry: greyed while the
+  // box is set to stay off the internet (Settings → Internet).
+  const { off: internetOff } = useInternetPolicy();
 
   const { data: hwData, loading: hwLoading, refresh: refreshHw } =
     useApiObject('/api/models/hardware');
@@ -530,7 +534,7 @@ const ModelsPanel = () => {
       if (okMsg) fire(typeof okMsg === 'function' ? okMsg(r) : okMsg);
       return r;
     } catch (e) {
-      fire(`failed: ${e.message || e}`);
+      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
     }
   };
 
@@ -623,16 +627,19 @@ const ModelsPanel = () => {
                        flexWrap: 'wrap', borderBottom: '1px solid var(--border-soft)' }}>
           <input value={pullName} onChange={(e) => setPullName(e.target.value)}
                  placeholder="Pull by name (e.g. qwen2.5:7b)"
+                 disabled={internetOff} title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                  style={{ font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
                           border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
                           flex: 1, minWidth: 220 }}/>
-          <Button variant="primary" icon="download" type="submit">Install</Button>
+          <Button variant="primary" icon="download" type="submit" disabled={internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Install</Button>
+          {internetOff && <NeedsInternetNote compact/>}
         </form>
         <div style={{ padding: 14, display: 'grid',
                       gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 10 }}>
           {catOllama.map((m) => (
             <CatalogCard key={m.name} m={m} hw={hw} installedNames={installedNames}
-                         pulling={pulling} onInstall={install}/>
+                         pulling={pulling} onInstall={install} internetOff={internetOff}/>
           ))}
         </div>
       </Card>

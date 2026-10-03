@@ -19,6 +19,13 @@ enqueue an acquisition for novel songs — all via
 ``asyncio.Semaphore(RADIO_SAMPLE_CONCURRENCY)`` caps concurrent ffmpeg
 subprocesses; ``last_sampled_at`` is bumped on every attempt (including
 ffmpeg failures) so a dead stream URL doesn't get hammered every tick.
+
+Offline (``sdk.connectivity.online`` false — which includes a box set to
+stay off the internet, ``INTERNET_ACCESS=never``): only favorites whose
+stream is on this box or the house network (an FM/SDR stream, a LAN
+Icecast) are sampled, and only by tier 1. Internet stations are skipped
+without touching ``last_sampled_at``, so they come due again the moment
+the internet is back, and tier 2 (Shazam) is never asked.
 """
 
 from __future__ import annotations
@@ -27,10 +34,11 @@ import asyncio
 import logging
 import os
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK, Worker
+from domovoi.sdk import PluginSDK, Worker, egress
 
 from domovoi_plugin_radio.clients import fingerprint as fp
 from domovoi_plugin_radio.clients import shazam_stream
@@ -61,6 +69,10 @@ class RadioSampler(Worker):
         self._sem = asyncio.Semaphore(
             int(getattr(sdk.config, "sample_concurrency", 5))
         )
+        # Set per tick: whether the internet can be used this tick (the
+        # Shazam tier and internet streams). See the module docstring.
+        self._online = True
+        self._skip_logged = False
 
     @property
     def _config(self) -> Any:
@@ -78,11 +90,39 @@ class RadioSampler(Worker):
         due = await self._select_due_stations()
         if not due:
             return 0
+        self._online = self._internet_usable()
+        if not self._online:
+            local = [row for row in due if _stream_is_local(row.stream_url)]
+            skipped = len(due) - len(local)
+            if skipped:
+                self._log_offline_skip(skipped)
+            due = local
+            if not due:
+                return 0
+        else:
+            self._skip_logged = False
         await asyncio.gather(
             *(self._sample_one(row) for row in due),
             return_exceptions=True,
         )
         return len(due)
+
+    def _internet_usable(self) -> bool:
+        connectivity = getattr(self.sdk, "connectivity", None)
+        return bool(getattr(connectivity, "online", True))
+
+    def _log_offline_skip(self, skipped: int) -> None:
+        """One INFO line per offline stretch, not one per tick."""
+        if self._skip_logged:
+            return
+        self._skip_logged = True
+        policy = getattr(getattr(self.sdk, "connectivity", None), "policy", "")
+        why = "internet access is turned off" if policy == "never" else "offline"
+        log.info(
+            "radio sampler: %s — skipping %d internet station(s); "
+            "stations on this network are still sampled, locally only",
+            why, skipped,
+        )
 
     # ─── Per-station pipeline ──────────────────────────────────────────
 
@@ -172,7 +212,10 @@ class RadioSampler(Worker):
         except Exception as e:
             log.debug("fingerprint match failed (continuing online): %s", e)
 
-        # Tier 2: the online identification service.
+        # Tier 2: the online identification service — only while the
+        # internet can be used (see the module docstring).
+        if not self._online:
+            return None, None, None
         try:
             shazam = await self._shazam().identify_wav(wav_path)
             if shazam is not None:
@@ -258,3 +301,13 @@ class RadioSampler(Worker):
                 ),
                 {"id": station_id},
             )
+
+
+def _stream_is_local(stream_url: str) -> bool:
+    """Whether a station's stream is on this box or the house network (an
+    FM/SDR stream, a LAN Icecast): the only streams sampled offline."""
+    try:
+        host = urlsplit(stream_url).hostname or ""
+    except ValueError:
+        return False
+    return bool(host) and egress.is_local_host(host)

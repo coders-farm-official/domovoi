@@ -35,7 +35,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK
+from domovoi.sdk import PluginSDK, egress
 
 from domovoi_plugin_radio.clients.fcc_fm import FmStation, get_fcc_fm_client
 
@@ -62,7 +62,11 @@ class FccImportResult:
 
 async def import_state(sdk: PluginSDK, state_code: str | None = None) -> FccImportResult:
     """Import FCC FM stations for ``state_code`` (default: the
-    configured market state) into ``radio_stations``."""
+    configured market state) into ``radio_stations``.
+
+    Raises ``egress.InternetTurnedOff`` under ``INTERNET_ACCESS=never``
+    (the FCC is on the internet); nothing is written."""
+    egress.require_internet("FCC station import")
     state = (state_code or sdk.config.market_state or "").strip().upper()
     if not state or len(state) != 2:
         log.warning("fcc import: invalid or missing state %r", state)
@@ -163,7 +167,11 @@ def job_status(sdk: PluginSDK) -> dict[str, Any]:
 
 def start_import_job(sdk: PluginSDK, state_code: str | None = None) -> dict[str, Any]:
     """Kick off a background import unless one is already running.
-    Returns the job status immediately (``state: running`` on start)."""
+    Returns the job status immediately (``state: running`` on start).
+    Under ``INTERNET_ACCESS=never`` no job starts: ``started`` is False
+    and ``error`` says why (the routes answer 409 before this)."""
+    if egress.internet_turned_off():
+        return {"started": False, **job_status(sdk), "error": egress.TURNED_OFF_REASON}
     current = sdk.state.get(_JOB_STATE_KEY) or {}
     if current.get("state") == "running":
         return {"started": False, **job_status(sdk)}
@@ -191,5 +199,8 @@ async def boot_import(sdk: PluginSDK) -> None:
     runner via ``requires_online=True``). No-op unless
     ``RADIO_FCC_IMPORT_ON_BOOT`` is set."""
     if not sdk.config.fcc_import_on_boot:
+        return
+    if egress.internet_turned_off():
+        log.info("fcc import: boot import skipped — internet access is turned off")
         return
     await import_state(sdk)

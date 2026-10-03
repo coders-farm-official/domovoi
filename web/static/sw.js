@@ -3,8 +3,9 @@
  * Two jobs:
  *   1. App-shell offline: cache the static bundle (index.html, css, jsx, the
  *      data/component/player scripts) so the dashboard opens with no network.
- *      CDN deps (React/Babel/Lucide) are cached opportunistically as they're
- *      fetched (opaque responses) so a warm cache also boots offline.
+ *      React, Babel, Lucide and the other libraries are vendored under
+ *      /vendor/ and served by the box itself, so they are part of that
+ *      same-origin shell: the page loads nothing from a CDN.
  *   2. Audio offline: serve library-track audio from the `domovoi-audio-v1`
  *      cache the in-page OfflineCache manager fills (manual pins + auto-cache
  *      of recent/favorites). Audio requests are cache-first so a pinned track
@@ -182,7 +183,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cross-origin CDN deps: cache opportunistically (opaque is fine).
+  // Anything cross-origin (the shell itself never asks for one: its
+  // libraries are vendored): cache opportunistically (opaque is fine).
   event.respondWith(
     caches.match(req).then((hit) => hit || fetch(req).then((resp) => {
       const copy = resp.clone();

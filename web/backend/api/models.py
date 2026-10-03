@@ -49,7 +49,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import net_safety
+from domovoi import egress, net_safety
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.clients import ollama as ollama_client
 from web.backend.db import session_scope
@@ -291,8 +291,15 @@ async def start_pull(body: PullBody) -> dict[str, Any]:
     index).
 
     Admin tier, and a model reference that names its own registry host is
-    checked against the outbound-URL rules first."""
+    checked against the outbound-URL rules first.
+
+    409 under ``INTERNET_ACCESS=never`` before any job row is written and
+    before Ollama is asked: Ollama is local, but its pull goes to the
+    registry. A reference to a registry inside the house (a LAN host) is
+    the one pull that stays allowed."""
     model = body.model.strip()
+    if egress.internet_turned_off() and not _local_registry(model):
+        raise egress.http_exception("model download")
     await _check_registry_host(model)
     async with session_scope() as s:
         # Attach to an existing in-flight job for the same model.
@@ -380,6 +387,15 @@ def registry_host(model: str) -> str | None:
     if "." not in head and ":" not in head and head != "localhost":
         return None
     return head
+
+
+def _local_registry(model: str) -> bool:
+    """Whether ``model`` names a registry inside the house. The default
+    registry (no host in the reference) is registry.ollama.ai."""
+    host = registry_host(model)
+    if host is None:
+        return False
+    return egress.is_local_host(host.rsplit(":", 1)[0] if host.count(":") == 1 else host)
 
 
 async def _check_registry_host(model: str) -> None:

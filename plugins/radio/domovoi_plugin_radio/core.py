@@ -29,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK, device_endpoint
+from domovoi.sdk import PluginSDK, device_endpoint, egress
 
 from domovoi_plugin_radio import SCHEMA
 from domovoi_plugin_radio.clients.rtl_sdr import SdrTuner
@@ -222,7 +222,10 @@ def _build_core_router(sdk: PluginSDK) -> APIRouter:
     @router.post("/fcc-import")
     async def start_fcc_import(state: str | None = Query(default=None)):
         """Start the FCC FM bulk import as a BACKGROUND job (locked 19)
-        and return immediately; poll the GET for progress."""
+        and return immediately; poll the GET for progress. 409 under
+        ``INTERNET_ACCESS=never`` (the FCC is on the internet)."""
+        if egress.internet_turned_off():
+            raise egress.http_exception("FCC station import")
         return fcc_import.start_import_job(sdk, state)
 
     @router.get("/fcc-import")
@@ -232,6 +235,9 @@ def _build_core_router(sdk: PluginSDK) -> APIRouter:
     @router.post("/stations/{station_id}/resolve-simulcast")
     @device_endpoint
     async def resolve_simulcast(station_id: int):
+        # 409 under INTERNET_ACCESS=never: the directory is on the internet.
+        if egress.internet_turned_off():
+            raise egress.http_exception("radio station directory")
         result = await simulcast.resolve_simulcast_for_station(sdk, station_id)
         return result.to_dict()
 
