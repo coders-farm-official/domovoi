@@ -2728,6 +2728,7 @@ async def _admin_route_intent(transcript: str, room_id: str) -> Response:
         online=probe.online,
         bot_name=settings.bot_name,
         app=app,
+        answerable=False,
     )
     async with session_scope() as s:
         return await route(intent, ctx, s)
