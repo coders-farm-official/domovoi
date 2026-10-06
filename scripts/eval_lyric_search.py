@@ -501,6 +501,9 @@ POS_COLS = ("right_play", "wrong_play", "ask_right_first", "ask_right_listed", "
             "none", "not_routed", "error")
 NEG_COLS = ("false_play", "false_told", "lyric_ask", "name_play_right", "name_play", "mpd_play_right",
             "mpd_play", "name_ask", "none", "not_routed", "error")
+#: Shown even when zero: the outcomes the bars and the reader look for first.
+ALWAYS_POS = ("right_play", "wrong_play", "ask_right_first", "ask_wrong", "none", "not_routed")
+ALWAYS_NEG = ("false_play", "lyric_ask", "none", "not_routed")
 
 
 def bars(counts: dict) -> dict[str, Any]:
@@ -543,7 +546,9 @@ def format_report(result: dict[str, Any]) -> str:
     voices = [v for v in ("say", *TTS_VOICES, "all-tts") if any(v in counts.get(g, {}) for g in counts)]
     for title, groups, cols in (("POSITIVE (% of items)", (*POSITIVE, "P-ALL"), POS_COLS),
                                 ("NEGATIVE (% of items)", (*NEGATIVE, "N-ALL"), NEG_COLS)):
-        used = [c for c in cols if any(counts.get(g, {}).get(v, {}).get(c) for g in groups for v in voices)]
+        always = ALWAYS_POS if cols is POS_COLS else ALWAYS_NEG
+        used = [c for c in cols
+                if c in always or any(counts.get(g, {}).get(v, {}).get(c) for g in groups for v in voices)]
         out.append(title)
         out.append(f"{'group':<7}{'voice':<8}{'n':>5}" + "".join(f"{c[:16]:>17}" for c in used))
         for g in groups:
