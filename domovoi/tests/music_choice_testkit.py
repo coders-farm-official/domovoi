@@ -113,7 +113,11 @@ class FakeResolver:
             return None
         return Candidate(ref=ref, score=1.0, via="ref", speak=ref.label, track_ids=(1,))
 
-    async def play_candidate(self, handler, candidate: Candidate, ctx, session, *, heard: str = "") -> Response:
+    async def play_candidate(self, handler, candidate: Candidate, ctx, session, *, heard: str = "",
+                             lyrics_note: bool = False) -> Response:
+        # ``lyrics_note``: the real play_candidate's keyword for a song found by
+        # its words (lyric search's last resort) — accepted so a test that
+        # reaches that path gets this fake, not a TypeError.
         if self.raise_on_play is not None:
             raise self.raise_on_play
         self.played.append(candidate)

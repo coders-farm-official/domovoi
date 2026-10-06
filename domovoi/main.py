@@ -531,9 +531,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
-    #   memory_extractor → news_fetcher → wake_word_trainer →
+    #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   library_alias_fetch.
+    #   library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -559,6 +559,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(PlaybackStateSweeper(app), owner="core")
     WORKERS.add_worker(MediaPlaysPruner(), owner="core")
     WORKERS.add_worker(MemoryExtractor(), owner="core")
+    # Lyric search's line index (V021 track_lyric_lines; domovoi/workers/lyrics_index.py).
+    from domovoi.workers.lyrics_index import LyricsIndexer
+
+    WORKERS.add_worker(LyricsIndexer(), owner="core")
     WORKERS.add_worker(NewsFetcher(app=app), owner="core")
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
@@ -570,6 +574,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
     WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
+    # Lyrics (V021): the local scan reads .lrc files and the songs' own tags;
+    # the opt-in LRCLIB fetch is self-gated per tick on lyrics_lrclib_enabled,
+    # INTERNET_ACCESS and the probe, and saves Domovoi-marked .lrc files.
+    from domovoi.workers.lyrics_fetch import LyricsFetcher
+    from domovoi.workers.lyrics_scan import LyricsScanner
+
+    WORKERS.add_worker(LyricsScanner(), owner="core")
+    WORKERS.add_worker(LyricsFetcher(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
@@ -1235,6 +1247,7 @@ async def admin_snapshot() -> dict[str, Any]:
     Pi's WiFiWatcher; `resumable_music` is the per-room "stream the
     Pi was playing before the last non-music turn interrupted it."
     """
+    from domovoi.workers.lyrics_index import lyrics_index_status
     # active_dropins is keyed by room_id in both directions; emit one row
     # per call (the initiator side) so the web UI can list live drop-ins
     # and offer a Hang-up button.
@@ -1248,6 +1261,7 @@ async def admin_snapshot() -> dict[str, Any]:
         if isinstance(v, dict) and v.get("initiator")
     ]
     from domovoi.workers.library_alias_fetch import alias_fetch_status
+    from domovoi.lyrics.status import lyrics_status
 
     return {
         "active_rooms": list(app.state.active_sessions.keys()),
@@ -1259,6 +1273,8 @@ async def admin_snapshot() -> dict[str, Any]:
         "now_playing": NOW_PLAYING.snapshot(),
         "current_playlist": dict(app.state.current_playlist),
         "active_dropins": active_dropins,
+        # Lyric search's line index (status only, never a lyric).
+        "lyrics_index": lyrics_index_status(),
         # Per-room AEC capability (from the hello frame) so the web UI can
         # offer drop-in only between full-duplex (XVF3800) satellites.
         "satellite_full_duplex": dict(app.state.satellite_full_duplex),
@@ -1300,6 +1316,8 @@ async def admin_snapshot() -> dict[str, Any]:
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
+        # Lyrics: the local scan and the LRCLIB fetch (status only, never a lyric).
+        "lyrics": lyrics_status(),
     }
 
 

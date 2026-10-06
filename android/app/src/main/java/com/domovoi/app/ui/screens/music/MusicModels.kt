@@ -27,6 +27,9 @@ data class NowPlayingRoom(
     // supplied — rendered as a provider-agnostic "open externally" pill.
     val source: String? = null,
     @SerialName("source_url") val sourceUrl: String? = null,
+    // The library row the room's song resolves to; null for a stream or a
+    // file outside the library. The room card's lyric line reads it.
+    @SerialName("track_id") val trackId: Long? = null,
 )
 
 @Serializable

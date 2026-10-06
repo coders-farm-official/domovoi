@@ -13,7 +13,10 @@ place that compares a spoken name with a library name goes through here:
   ARE the same alias, which is what makes "subtract" mean one thing;
 * the MusicBrainz alias fetch accepts a MusicBrainz artist only when one of
   its names :func:`same_name` the library spelling, and keeps a fetched
-  alias for a person only when it :func:`sounds_like` the name.
+  alias for a person only when it :func:`sounds_like` the name;
+* lyric search (:mod:`domovoi.handlers.shared.lyric_search`) stores every
+  lyric line, and reads every spoken phrase, as :func:`lyric_words` (the
+  same folding and symbol rules, numbers as words, nothing dropped).
 
 The rules are general ones, written down before any evaluation set was
 read: fold accents and lookalike letters, read ``$`` as s and a ``!``
@@ -404,6 +407,26 @@ def phonetic_key(form: str) -> str:
     return "".join(doublemetaphone(w)[0] for w in form.split())
 
 
+#: Version of :func:`lyric_words`. The lyric index stores it per row
+#: (track_lyrics.lines_version): bumping it re-indexes every song.
+LYRIC_NORM_VERSION = 1
+
+
+def lyric_words(text: str | None) -> list[str]:
+    """The words of a lyric line or a spoken lyric phrase, for lyric search:
+    the same folding and symbol rules as every spoken name (fold, _clean —
+    accents folded, apostrophes dropped, & / + as "and", dotted initials
+    joined, ordinals as words), a whole number read as its cardinal words;
+    nothing else (no stop words dropped: lyrics are made of them)."""
+    out: list[str] = []
+    for tok in _clean(fold(text or "")).split():
+        if tok.isdigit():
+            out.extend(int_to_words(int(tok)).split())
+        else:
+            out.append(tok)
+    return out
+
+
 def compact_forms(text: str) -> frozenset[str]:
     """The :func:`compact` of every spoken form of ``text``."""
     return frozenset(compact(f) for f in spoken_forms(text))
@@ -545,6 +568,7 @@ def entity_names(
 
 __all__ = [
     "KEY_VERSION",
+    "LYRIC_NORM_VERSION",
     "MAX_FORMS",
     "SOUNDS_LIKE_MIN_RATIO",
     "alias_key",
@@ -555,6 +579,7 @@ __all__ = [
     "fold",
     "int_to_ordinal_words",
     "int_to_words",
+    "lyric_words",
     "phonetic_key",
     "same_name",
     "sounds_like",

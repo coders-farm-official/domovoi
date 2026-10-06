@@ -1625,6 +1625,26 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
     )
 
 
+async def now_playing_for_room(room_id: str) -> NowPlaying | None:
+    """One room's now-playing card — ``_now_playing_for`` on the room's
+    ``mpd_rooms`` row — or None when the room is not provisioned. The
+    lyrics route (web/backend/api/lyrics.py) reads the room's song and
+    elapsed time through here, so it agrees with ``/now-playing``."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT room_id, control_port, http_port "
+                    "FROM mpd_rooms WHERE room_id = :room"
+                ),
+                {"room": room_id},
+            )
+        ).first()
+    if row is None:
+        return None
+    return await _now_playing_for((row[0], int(row[1]), int(row[2])))
+
+
 def _lookup_source_stamp(
     room_id: str, song: NowPlayingSong
 ) -> tuple[str | None, str | None, str | None]:

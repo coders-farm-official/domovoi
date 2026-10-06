@@ -504,6 +504,90 @@ html.mp-docked { --player-h: 64px; }
   .np-eq-presets { flex-wrap: wrap; }
 }
 
+/* Lyrics (lyrics.jsx): the synced view in the Player tab (.lyr-panel), the
+   phone sheet and the desktop bar's floating panel (.lyr-float); a room
+   card's current line; the Jobs tab's card. The current line is the text
+   colour at 600, lines already sung are faint, lines to come muted, and a
+   gap is a note in the same colours; lyrics.jsx keeps the current line at
+   35% of the list's height. A view is --lyr-h tall (its `height` prop),
+   except in the Player tab on a phone, where it is 240px, and in the
+   floating panel, where it fills what the header leaves — and never more
+   than half the window's height (a phone on its side is wider than 760px
+   but only a few hundred pixels tall: the page must stay reachable). */
+.lyr-view { display: flex; flex-direction: column; height: min(var(--lyr-h, 240px), 50vh); min-height: 0; }
+.lyr-float .lyr-view { flex: 1 1 auto; height: auto; }
+.lyr-scroll {
+  position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 12px 24px; border-radius: var(--r-sm);
+}
+.lyr-line {
+  display: block; width: 100%; margin: 0; padding: 3px 8px; border: 0; border-radius: var(--r-sm);
+  background: transparent; font: inherit; font-size: 15px; line-height: 1.5; text-align: left;
+  color: var(--fg-muted); overflow-wrap: anywhere;
+  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.lyr-line.lyr-past { color: var(--fg-faint); }
+.lyr-line.lyr-now { color: var(--fg); font-weight: 600; }
+.lyr-gap-note { display: inline-flex; vertical-align: middle; color: var(--fg-muted); }
+button.lyr-line { cursor: pointer; }
+button.lyr-line:hover { background: var(--brand-soft); }
+.lyr-compact .lyr-line { font-size: 13px; padding: 2px 8px; }
+.lyr-plain {
+  padding: 0 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 15px; line-height: 1.6; color: var(--fg);
+}
+.lyr-compact .lyr-plain { font-size: 13px; }
+.lyr-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 24px 12px; font-size: 13px; color: var(--fg-muted); text-align: center;
+}
+.lyr-skel { display: flex; flex-direction: column; gap: 12px; padding: 8px; }
+.lyr-skel > span { display: block; height: 12px; border-radius: var(--r-sm); background: var(--sunken); }
+.lyr-skel > span:nth-child(1) { width: 72%; }
+.lyr-skel > span:nth-child(2) { width: 88%; }
+.lyr-skel > span:nth-child(3) { width: 56%; }
+.lyr-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px;
+  padding: 6px 16px; border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--fg-muted);
+}
+.lyr-source { font-size: 11px; color: var(--fg-muted); }
+.lyr-nudge { display: inline-flex; align-items: center; gap: 4px; }
+.lyr-nudge button, .lyr-follow {
+  font: inherit; font-size: 11px; color: var(--fg-muted); background: transparent; cursor: pointer;
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 1px 8px;
+}
+.lyr-nudge button:hover, .lyr-follow:hover { color: var(--fg); background: var(--brand-soft); }
+.lyr-nudge button:disabled { color: var(--fg-faint); background: transparent; cursor: default; }
+.lyr-follow { margin-left: auto; color: var(--fg); }
+/* The Player tab's and the phone sheet's section header: one toggle. */
+.lyr-sec-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; margin: 0; padding-right: 14px; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--fg); text-align: left;
+}
+.lyr-sec-toggle[aria-expanded="true"] { border-bottom: 1px solid var(--border-soft); }
+.lyr-panel { border-top: 1px solid var(--border-soft); }
+.lyr-panel .lyr-sec-toggle { padding: 10px 20px; }
+.lyr-panel .lyr-view { padding: 0 8px 8px; }
+.lyr-room-line {
+  margin-top: 3px; font-size: 12px; font-style: italic; color: var(--fg-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lyr-jobs {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft); font-size: 12px; color: var(--fg-muted);
+}
+.lyr-jobs-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--fg); }
+.lyr-jobs-line { padding-left: 20px; }
+@media (max-width: 760px) {
+  .lyr-panel .lyr-view { height: min(240px, 50vh); }
+  .lyr-panel .lyr-sec-toggle { min-height: 44px; padding: 0 16px; }
+  .lyr-nudge button, .lyr-follow { min-height: 32px; padding: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lyr-line { transition: none; }
+}
+
 /* Shared <Tabs/> strip (components.jsx): scrolls sideways when the tabs
    outgrow the card, with no scrollbar drawn under the underline. */
 .tabs-strip { scrollbar-width: none; }

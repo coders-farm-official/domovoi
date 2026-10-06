@@ -237,6 +237,16 @@ const ListeningAsSelector = () => {
 /* ── The full expanded now-playing panel ──────────────────────────────── */
 const NowPlayingPanel = () => {
   const p = usePlayback();
+  // The lyrics section (lyrics.jsx): open unless someone closed it in this
+  // browser.
+  const [lyrOpen, setLyrOpen] = React.useState(() => {
+    try { return localStorage.getItem('domovoi-lyrics-panel-open') !== '0'; } catch { return true; }
+  });
+  const toggleLyr = () => {
+    const next = !lyrOpen;
+    setLyrOpen(next);
+    try { localStorage.setItem('domovoi-lyrics-panel-open', next ? '1' : '0'); } catch {}
+  };
   if (!p.available) {
     return <Empty glyph="headphones" title="player unavailable"
                   sub="the playback provider isn't mounted — see INTEGRATION_music.md"/>;
@@ -249,6 +259,10 @@ const NowPlayingPanel = () => {
   const dur = p.durationSec || it.durationSec || 0;
   const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
   const remote = p.target.kind === 'room';
+  // A library song here or in the room being cast to (none for radio,
+  // podcasts, audiobooks). A lyrics.jsx that failed to load shows nothing.
+  const lyrId = typeof lyricsTrackIdFor === 'function' && typeof LyricsView === 'function'
+    ? lyricsTrackIdFor(p) : null;
   return (
     <div style={{ padding: 0 }}>
       <div className="np-head">
@@ -296,6 +310,20 @@ const NowPlayingPanel = () => {
           </div>
         </div>
       </div>
+
+      {/* lyrics — followed line by line when they are timed */}
+      {lyrId != null && (
+        <section className="lyr-panel" aria-label="lyrics">
+          <button type="button" className="lyr-sec-toggle" aria-expanded={lyrOpen} onClick={toggleLyr}>
+            <span>lyrics</span>
+            <Icon name={lyrOpen ? 'chevron-up' : 'chevron-down'} size={14}/>
+          </button>
+          {lyrOpen && (
+            <LyricsView trackId={lyrId} height={320}
+                        follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}/>
+          )}
+        </section>
+      )}
 
       {/* visualizer */}
       {!remote && (

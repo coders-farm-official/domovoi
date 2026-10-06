@@ -871,3 +871,123 @@ class ConfigUpdateRequest(BaseModel):
     # Settings → Internet: hand-set settings that should follow the
     # household's internet answer again (their .env line is commented out).
     follow_internet: list[str] = Field(default_factory=list, max_length=16)
+
+
+# ─── Music: lyrics (V021 track_lyrics; web/backend/api/lyrics.py) ────────
+#
+# Household tier only (require_device_read) — never on an open page, the
+# kiosk display, the realtime socket or a log. Lyrics are the household's
+# copy of copyrighted text for its own songs.
+
+
+class LyricLine(BaseModel):
+    """One timed line: ``t`` = milliseconds from the start of the song (the
+    file's ``[offset:]`` already applied), ``text`` "" = an instrumental gap."""
+    t: int
+    text: str
+
+
+class LyricsDoc(BaseModel):
+    """``GET /api/music/library/{track_id}/lyrics`` — what a player shows.
+
+    ``status``: ``synced`` (timed lines in ``lines``, the same words as plain
+    text in ``text``), ``plain`` (``text`` only), ``instrumental`` (LRCLIB
+    says the song has no words) or ``none``. ``checking`` is true while
+    Domovoi is still looking (the local scan has not read the file yet, or
+    LRCLIB is on and has not been asked about this song). ``source`` is
+    where the shown lyrics came from — ``sidecar`` (a .lrc beside the song),
+    ``embedded`` (the song file's own tags) or ``lrclib`` — and
+    ``source_label`` says so in words."""
+    track_id: int
+    status: Literal["synced", "plain", "instrumental", "none"]
+    checking: bool = False
+    source: str | None = None
+    source_label: str | None = None
+    lines: list[LyricLine] | None = None
+    text: str | None = None
+    updated_at: datetime | None = None
+
+
+class RoomLyrics(BaseModel):
+    """``GET /api/music/now-playing/{room_id}/lyrics`` — the room's song,
+    where it is, and its lyrics in one read. ``read_at`` is the server's
+    clock right after the MPD read (informational: a client anchors its own
+    interpolation on when IT received the answer). ``line_index`` is the
+    last timed line at ``elapsed_sec`` (-1 before the first), only for
+    ``synced`` lyrics. ``track_id`` / ``lyrics`` are null when nothing plays
+    or the song is not a library track."""
+    room_id: str
+    state: Literal["play", "pause", "stop"]
+    track_id: int | None = None
+    elapsed_sec: float | None = None
+    duration_sec: int | None = None
+    read_at: datetime
+    line_index: int | None = None
+    lyrics: LyricsDoc | None = None
+
+
+class LyricsSourceCounts(BaseModel):
+    sidecar: int = 0
+    embedded: int = 0
+    lrclib: int = 0
+
+
+class LyricsLrclibStatus(BaseModel):
+    """Counts from the database; ``enabled`` / ``state`` / ``due`` / the
+    timers / ``last_error`` from the core's snapshot (``lyrics.fetch``):
+    ``enabled: null, state: "unknown"`` until the core reports one."""
+    enabled: bool | None = None
+    state: str = "unknown"
+    asked: int = 0
+    found: int = 0
+    not_found: int = 0
+    instrumental: int = 0
+    skipped: int = 0
+    errors: int = 0
+    due: int | None = None
+    next_retry_at: datetime | None = None
+    rate_limited_until: str | None = None
+    paused_until: str | None = None
+    last_error: str | None = None
+
+
+class LyricsLrcFiles(BaseModel):
+    """The .lrc files Domovoi writes for LRCLIB's timed lyrics. ``enabled``
+    = LRCLIB on AND "Save lyrics as .lrc files" on (null until the core
+    reports); ``last_error`` = the most frequent failure code."""
+    enabled: bool | None = None
+    written: int = 0
+    exists: int = 0
+    edited: int = 0
+    deleted: int = 0
+    failed: int = 0
+    last_error: str | None = None
+
+
+class LyricsScanStatus(BaseModel):
+    state: str = "unknown"
+    unscanned: int = 0
+    last_pass_at: str | None = None
+
+
+class LyricsIndexStatus(BaseModel):
+    state: str = "unknown"
+    pending: int = 0
+    indexed: int = 0
+
+
+class LyricsStatus(BaseModel):
+    """``GET /api/music/lyrics/status`` — the Music page's Jobs card. Counts
+    and states only, never a lyric or a title."""
+    tracks: int
+    scanned: int
+    with_lyrics: int
+    synced: int
+    plain: int
+    instrumental: int
+    by_source: LyricsSourceCounts
+    lrclib: LyricsLrclibStatus
+    lrc_files: LyricsLrcFiles
+    scan: LyricsScanStatus
+    index: LyricsIndexStatus
+    search_enabled: bool | None = None

@@ -2149,6 +2149,116 @@
         }
       }
     },
+    "/api/music/library/{track_id}/lyrics": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Track Lyrics",
+        "description": "One song's lyrics, as a player shows them.",
+        "operationId": "track_lyrics_api_music_library__track_id__lyrics_get",
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LyricsDoc"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/now-playing/{room_id}/lyrics": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Room Lyrics",
+        "description": "What ``room_id`` is playing, how far in, and its lyrics \u2014 one read\nthat gives a client both the words and a fresh anchor to follow the\nroom by. ``404`` for a room that is not provisioned.",
+        "operationId": "room_lyrics_api_music_now_playing__room_id__lyrics_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomLyrics"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/lyrics/status": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Lyrics Status",
+        "description": "How far the house has got with its lyrics: how many songs have them\n(and timed), where they came from, the LRCLIB lookup, the .lrc files\nDomovoi saved, the local scan and the search index \u2014 counts and states,\nnever a lyric or a title.",
+        "operationId": "lyrics_status_api_music_lyrics_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LyricsStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/queue/{room_id}": {
       "get": {
         "tags": [
@@ -13837,6 +13947,416 @@
         ],
         "title": "LoginRequest"
       },
+      "LyricLine": {
+        "properties": {
+          "t": {
+            "type": "integer",
+            "title": "T"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "text"
+        ],
+        "title": "LyricLine",
+        "description": "One timed line: ``t`` = milliseconds from the start of the song (the\nfile's ``[offset:]`` already applied), ``text`` \"\" = an instrumental gap."
+      },
+      "LyricsDoc": {
+        "properties": {
+          "track_id": {
+            "type": "integer",
+            "title": "Track Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "synced",
+              "plain",
+              "instrumental",
+              "none"
+            ],
+            "title": "Status"
+          },
+          "checking": {
+            "type": "boolean",
+            "title": "Checking",
+            "default": false
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Label"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LyricLine"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "status"
+        ],
+        "title": "LyricsDoc",
+        "description": "``GET /api/music/library/{track_id}/lyrics`` \u2014 what a player shows.\n\n``status``: ``synced`` (timed lines in ``lines``, the same words as plain\ntext in ``text``), ``plain`` (``text`` only), ``instrumental`` (LRCLIB\nsays the song has no words) or ``none``. ``checking`` is true while\nDomovoi is still looking (the local scan has not read the file yet, or\nLRCLIB is on and has not been asked about this song). ``source`` is\nwhere the shown lyrics came from \u2014 ``sidecar`` (a .lrc beside the song),\n``embedded`` (the song file's own tags) or ``lrclib`` \u2014 and\n``source_label`` says so in words."
+      },
+      "LyricsIndexStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "unknown"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending",
+            "default": 0
+          },
+          "indexed": {
+            "type": "integer",
+            "title": "Indexed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "LyricsIndexStatus"
+      },
+      "LyricsLrcFiles": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "written": {
+            "type": "integer",
+            "title": "Written",
+            "default": 0
+          },
+          "exists": {
+            "type": "integer",
+            "title": "Exists",
+            "default": 0
+          },
+          "edited": {
+            "type": "integer",
+            "title": "Edited",
+            "default": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "title": "LyricsLrcFiles",
+        "description": "The .lrc files Domovoi writes for LRCLIB's timed lyrics. ``enabled``\n= LRCLIB on AND \"Save lyrics as .lrc files\" on (null until the core\nreports); ``last_error`` = the most frequent failure code."
+      },
+      "LyricsLrclibStatus": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "unknown"
+          },
+          "asked": {
+            "type": "integer",
+            "title": "Asked",
+            "default": 0
+          },
+          "found": {
+            "type": "integer",
+            "title": "Found",
+            "default": 0
+          },
+          "not_found": {
+            "type": "integer",
+            "title": "Not Found",
+            "default": 0
+          },
+          "instrumental": {
+            "type": "integer",
+            "title": "Instrumental",
+            "default": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped",
+            "default": 0
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors",
+            "default": 0
+          },
+          "due": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "rate_limited_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limited Until"
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Until"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "title": "LyricsLrclibStatus",
+        "description": "Counts from the database; ``enabled`` / ``state`` / ``due`` / the\ntimers / ``last_error`` from the core's snapshot (``lyrics.fetch``):\n``enabled: null, state: \"unknown\"`` until the core reports one."
+      },
+      "LyricsScanStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "unknown"
+          },
+          "unscanned": {
+            "type": "integer",
+            "title": "Unscanned",
+            "default": 0
+          },
+          "last_pass_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass At"
+          }
+        },
+        "type": "object",
+        "title": "LyricsScanStatus"
+      },
+      "LyricsSourceCounts": {
+        "properties": {
+          "sidecar": {
+            "type": "integer",
+            "title": "Sidecar",
+            "default": 0
+          },
+          "embedded": {
+            "type": "integer",
+            "title": "Embedded",
+            "default": 0
+          },
+          "lrclib": {
+            "type": "integer",
+            "title": "Lrclib",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "LyricsSourceCounts"
+      },
+      "LyricsStatus": {
+        "properties": {
+          "tracks": {
+            "type": "integer",
+            "title": "Tracks"
+          },
+          "scanned": {
+            "type": "integer",
+            "title": "Scanned"
+          },
+          "with_lyrics": {
+            "type": "integer",
+            "title": "With Lyrics"
+          },
+          "synced": {
+            "type": "integer",
+            "title": "Synced"
+          },
+          "plain": {
+            "type": "integer",
+            "title": "Plain"
+          },
+          "instrumental": {
+            "type": "integer",
+            "title": "Instrumental"
+          },
+          "by_source": {
+            "$ref": "#/components/schemas/LyricsSourceCounts"
+          },
+          "lrclib": {
+            "$ref": "#/components/schemas/LyricsLrclibStatus"
+          },
+          "lrc_files": {
+            "$ref": "#/components/schemas/LyricsLrcFiles"
+          },
+          "scan": {
+            "$ref": "#/components/schemas/LyricsScanStatus"
+          },
+          "index": {
+            "$ref": "#/components/schemas/LyricsIndexStatus"
+          },
+          "search_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tracks",
+          "scanned",
+          "with_lyrics",
+          "synced",
+          "plain",
+          "instrumental",
+          "by_source",
+          "lrclib",
+          "lrc_files",
+          "scan",
+          "index"
+        ],
+        "title": "LyricsStatus",
+        "description": "``GET /api/music/lyrics/status`` \u2014 the Music page's Jobs card. Counts\nand states only, never a lyric or a title."
+      },
       "Memory": {
         "properties": {
           "id": {
@@ -15521,6 +16041,90 @@
         "type": "object",
         "title": "RoomLabelRequest",
         "description": "Set (or clear, with null) a satellite's display room label."
+      },
+      "RoomLyrics": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "play",
+              "pause",
+              "stop"
+            ],
+            "title": "State"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "elapsed_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed Sec"
+          },
+          "duration_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Sec"
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Read At"
+          },
+          "line_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line Index"
+          },
+          "lyrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LyricsDoc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "state",
+          "read_at"
+        ],
+        "title": "RoomLyrics",
+        "description": "``GET /api/music/now-playing/{room_id}/lyrics`` \u2014 the room's song,\nwhere it is, and its lyrics in one read. ``read_at`` is the server's\nclock right after the MPD read (informational: a client anchors its own\ninterpolation on when IT received the answer). ``line_index`` is the\nlast timed line at ``elapsed_sec`` (-1 before the first), only for\n``synced`` lyrics. ``track_id`` / ``lyrics`` are null when nothing plays\nor the song is not a library track."
       },
       "RoomQueue": {
         "properties": {

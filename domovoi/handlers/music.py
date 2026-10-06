@@ -44,6 +44,82 @@ class _PlayerUnreachable(Exception):
     again in another way."""
 
 
+# A song asked for by words from its lyrics (lyric search, handlers/shared/
+# lyric_search.py): "play the song that goes …", "put on that track where
+# she sings …", and "what's the song that goes …" / "who sings the song
+# with the words …". These come FIRST in the fast paths: the lyric may hold
+# a " by " that _PLAY_ARTIST_RE would split, and "do i have the song that
+# goes …" must reach music before the library handler's "do i have" (band
+# 310). "a song that goes with rain" is a mood, not lyrics: "a" is
+# deliberately not one of the articles; and "goes" is never a song's words
+# when what follows is a mood or pairing ("the song that goes well with a
+# rainy day", "... goes with dinner") or, said whole, a place in a list
+# ("which song goes next on the playlist", "what song goes after this
+# one"). Only said whole: a line may START with such a word ("the song that
+# goes last night we ...", "... goes before the kettle sings ...").
+_LYRIC_SONG = r"(?:song|one|track|tune)"
+_LIST_PLACE = (
+    r"(?: (?:on|in|of) (?:the|my|this|that|our|your) "
+    r"(?:playlist|queue|list|album|record|mix|set|setlist|tape|cd|disc|side))"
+)
+_AFTER_THIS = r"(?: (?:after|before) (?:this|that|it)(?: one| song| track| tune)?)"
+_PLACE_END = r"(?: please| now)?[?.!]*$"
+_LYRIC_GOES = (
+    r"goes"
+    r"(?! (?:(?:well|best|good|great|nicely) )?with\b)"
+    r"(?! (?:next|first|last)(?:" + _LIST_PLACE + r"|" + _AFTER_THIS + r")*" + _PLACE_END + r")"
+    r"(?!" + _AFTER_THIS + _LIST_PLACE + r"?" + _PLACE_END + r")"
+)
+_LYRIC_INTRO = (
+    r"(?:"
+    r"(?:that|which) (?:" + _LYRIC_GOES + r"|says|sings|has the (?:lyrics?|words?|line))"
+    r"|(?:where|in which) (?:he|she|they|it|you|someone|somebody) (?:sings?|says?|" + _LYRIC_GOES + r")"
+    r"|with the (?:lyrics?|words?|line)"
+    r"|with (?:lyrics|words)"
+    r"|" + _LYRIC_GOES +
+    r")"
+    r"(?:,? (?:something |kind of |kinda )?like)?"
+)
+_LYRIC_TAIL = r"[,:]? ['\"\u201c\u2018]?(?P<lyrics>.+?)['\"\u201d\u2019]?"
+# "cue up": how Whisper often writes a spoken "queue up".
+_LYRIC_PLAY_VERB = (
+    r"(?:play|put on|queue up|cue up|i want to hear|i wanna hear|let me hear|let's hear)(?: me)? "
+)
+_LYRIC_PLAY_RE = re.compile(
+    r"^" + _LYRIC_PLAY_VERB + r"(?:the|that|this) " + _LYRIC_SONG + r" " + _LYRIC_INTRO + _LYRIC_TAIL + r"$"
+)
+# The same with the artist named: "play the song by the example band that
+# goes …", "put on the example band song with the words …". After the two
+# above, so a song's words are never read as an artist when they fit them.
+_LYRIC_PLAY_BY_RE = re.compile(
+    r"^" + _LYRIC_PLAY_VERB + r"(?:the|that) " + _LYRIC_SONG + r" by (?P<artist>.+?) "
+    + _LYRIC_INTRO + _LYRIC_TAIL + r"$"
+)
+_LYRIC_PLAY_ARTISTS_RE = re.compile(
+    r"^" + _LYRIC_PLAY_VERB + r"the (?P<artist>.+?) (?:song|track|tune) " + _LYRIC_INTRO + _LYRIC_TAIL + r"$"
+)
+_LYRIC_FIND_RE = re.compile(
+    r"^(?:"
+    r"(?:(?:what(?:'s| is| was)(?: the name of)?|which(?: is)?|name|find(?: me)?|look up|search for"
+    r"|who sings|who sang|do you know|do i have|i'm looking for|i am looking for)"
+    r" (?:the|that) " + _LYRIC_SONG + r" " + _LYRIC_INTRO + r")"
+    r"|(?:what|which) " + _LYRIC_SONG + r" (?:" + _LYRIC_GOES + r"|says|has the (?:lyrics?|words?|line))"
+    r"(?:,? (?:something |kind of |kinda )?like)?"
+    r")" + _LYRIC_TAIL + r"$"
+)
+
+# What a lyric request says when it plays nothing (contract [V10]). Never
+# the words themselves: Domovoi does not say, show or log a lyric back.
+_LYRIC_NONE_TEXT = {
+    "disabled": "Finding songs by their words is turned off.",
+    "no_lyrics": "I don't have the words to your songs yet.",
+    "too_short": "Tell me a few more of the words and I'll look.",
+    "too_common": "A lot of your songs have those words. Tell me a few more of them.",
+}
+_LYRIC_NOT_FOUND_TEXT = "I couldn't find a song in your library with those words."
+# The last resort's reading of {"any": X}: X without one of these in front.
+_LYRIC_CARRIERS = ("the song ", "song ", "the track ", "track ", "the one ")
+
 _PLAY_ARTIST_RE = re.compile(r"^play (.+?) (?:by|from) (.+)$")
 # Random / shuffle / "just play something." Anchored variants so a stray
 # "play a song" doesn't fall through to _PLAY_ANY_RE and hit an external
@@ -193,6 +269,59 @@ def _clean_capture(s: str) -> str:
     return s.strip().rstrip(".,!?")
 
 
+def _lyric_readings(query: dict, said: str | None = None) -> list[tuple[str, str | None]]:
+    """The last resort's readings of a "play …" request as a lyric
+    (contract [V21]), as (phrase, artist filter): ``{"any": X}`` → X
+    without one leading "the song " / "song " / "the track " / "track " /
+    "the one "; ``{"title": T, "artist": A}`` → the words as said (``said``,
+    else "T by A") unfiltered, then T by the artist A; a title alone → T.
+    An artist-only request has none."""
+    free = str(query.get("any") or "").strip()
+    title = str(query.get("title") or "").strip()
+    artist = str(query.get("artist") or "").strip()
+    if free:
+        low = free.lower()
+        for carrier in _LYRIC_CARRIERS:
+            if low.startswith(carrier) and free[len(carrier):].strip():
+                free = free[len(carrier):].strip()
+                break
+        return [(free, None)]
+    if title and artist:
+        whole = (said or "").strip() or f"{title} by {artist}"
+        return [(whole, None), (title, artist)]
+    if title:
+        return [(title, None)]
+    return []
+
+
+# Lyric search's decisions, best first: a reading that plays beats one that
+# asks, which beats one that finds nothing.
+_LYRIC_RANK = {"play": 2, "ask": 1, "none": 0}
+# Answers no other reading of the same words can change.
+_LYRIC_FINAL_REASONS = frozenset({"disabled", "no_lyrics", "too_short"})
+
+
+def _lyric_play_readings(phrase: str, artist: str | None = None) -> list[tuple[str, str | None]]:
+    """The readings of an explicit "play the song that goes …" (lyric
+    search's (words, artist filter) pairs, [Q34]), the earlier winning a
+    tie:
+
+    * the artist named in the request ("the song by X that goes …", "the X
+      song that goes …") → the words with that artist, then the words alone
+      (the "artist" may be another word — "the slow song that goes …");
+    * words that end in " by X" ("… that goes <words> by X") → the words as
+      said, then the words before " by " with the artist X (a lyric can hold
+      a " by " of its own: "stand by the river door");
+    * else the words as said."""
+    words = phrase.strip()
+    if artist and artist.strip():
+        return [(words, artist.strip()), (words, None)]
+    head, sep, tail = words.rpartition(" by ")
+    if sep and head.strip() and tail.strip():
+        return [(words, None), (head.strip(), tail.strip())]
+    return [(words, None)]
+
+
 def _format_song(song: dict) -> str:
     title = song.get("title") or song.get("file", "this track").split("/")[-1]
     artist = song.get("artist")
@@ -212,7 +341,7 @@ class MusicHandler(MusicChoiceMixin, Handler):
 
     tool_schema = {
         "name": "music",
-        "description": "Control local music playback: play, pause, stop, skip, volume, and what's-playing.",
+        "description": "Control local music playback: play (by title, artist, or words from the song's lyrics), pause, stop, skip, volume, and what's-playing.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -226,6 +355,13 @@ class MusicHandler(MusicChoiceMixin, Handler):
                 },
                 "title": {"type": "string", "description": "Song title or free-text query"},
                 "artist": {"type": "string"},
+                # The description is the one the tool-router A/B kept: the
+                # contract's longer wording sent qwen3:8b's "my email alias
+                # is …" to music_alias (scripts/eval_routing.py, 2026-10-05).
+                "lyrics": {
+                    "type": "string",
+                    "description": "Words remembered from the song's lyrics, instead of its name",
+                },
                 "volume": {
                     "type": "integer", "minimum": 1, "maximum": 10,
                     "description": "Volume level on a 1-10 knob (1≈50%, 10=max). Numbers above 10 clamp to 10.",
@@ -237,6 +373,13 @@ class MusicHandler(MusicChoiceMixin, Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
+            # Lyric search FIRST (see _LYRIC_PLAY_RE): a lyric may hold a
+            # " by " that _PLAY_ARTIST_RE would split. Open slots: never an
+            # early commit.
+            FastPath(_LYRIC_PLAY_RE, MusicHandler._lyrics_play_from_match),
+            FastPath(_LYRIC_FIND_RE, MusicHandler._lyrics_find_from_match),
+            FastPath(_LYRIC_PLAY_BY_RE, MusicHandler._lyrics_play_by_from_match),
+            FastPath(_LYRIC_PLAY_ARTISTS_RE, MusicHandler._lyrics_play_by_from_match),
             FastPath(_PLAY_ARTIST_RE, MusicHandler._play_artist_from_match),
             # Random/shuffle BEFORE _PLAY_ANY_RE so "play a song" hits the
             # local-library random pick rather than falling through to
@@ -274,6 +417,12 @@ class MusicHandler(MusicChoiceMixin, Handler):
         artist = args.get("artist")
         volume = args.get("volume")
         if action == "play":
+            # Words from the song's lyrics win over a title or an artist:
+            # the person described the song by its words ("the one about
+            # paper boats sailing down the hall").
+            lyrics = args.get("lyrics")
+            if isinstance(lyrics, str) and lyrics.strip():
+                return await self._play_lyrics(lyrics.strip(), ctx, session, mode="explicit")
             # The tool router fills whatever it could pull from the
             # utterance: a title, an artist, both, or (for "play
             # something") neither. Honor each combination — the earlier
@@ -330,11 +479,26 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
 
     # ─── Fast-path adapters ─────────────────────────────────────────────
+    async def _lyrics_play_from_match(self, m, ctx, session):
+        return await self._play_lyrics(_clean_capture(m.group("lyrics")), ctx, session, mode="explicit")
+
+    async def _lyrics_find_from_match(self, m, ctx, session):
+        return await self._play_lyrics(_clean_capture(m.group("lyrics")), ctx, session, mode="identify")
+
+    async def _lyrics_play_by_from_match(self, m, ctx, session):
+        return await self._play_lyrics(
+            _clean_capture(m.group("lyrics")), ctx, session, mode="explicit",
+            artist=_clean_capture(m.group("artist")),
+        )
+
     async def _play_artist_from_match(self, m, ctx, session):
+        # ``said``: the words after "play", whole — the last resort reads
+        # "play stand by the river door" as a lyric before the split.
         return await self._play(
             {"title": _clean_capture(m.group(1)), "artist": _clean_capture(m.group(2))},
             ctx,
             session,
+            said=_clean_capture(m.group(0)[len("play "):]),
         )
 
     async def _play_any_from_match(self, m, ctx, session):
@@ -382,6 +546,7 @@ class MusicHandler(MusicChoiceMixin, Handler):
         *,
         allow_choice: bool = True,
         avoid: tuple = (),
+        said: str | None = None,
     ) -> Response:
         # The spoken-name resolver first (domovoi/handlers/shared/
         # library_match.py): the library matched by how names SOUND, so
@@ -394,6 +559,12 @@ class MusicHandler(MusicChoiceMixin, Handler):
         # entities (EntityRefs) the person has just turned down ("no, I
         # said subtract" after "did you mean SBTRKT?"): a resolver answer
         # that is one of them goes on to today's search instead.
+        #
+        # When MPD's searches find nothing too, the words are tried as a
+        # LYRIC before the podcast / streaming cascade (people often say a
+        # line thinking it is the title): see _lyrics_last_resort. ``said``
+        # is the request as said ("x by y"), for the "play x by y" fast
+        # path; the query dict never gains a key (MPD searches every key).
         from domovoi.handlers.shared import library_match
 
         res = await library_match.resolve_request(session, query)
@@ -430,6 +601,15 @@ class MusicHandler(MusicChoiceMixin, Handler):
                     song = await mpd.prepare_filename(*substrings)
                 except Exception as e:
                     log.warning("MPD filename search failed: %s", e)
+        if not song:
+            # Nothing by that name, nor a file called that: the words may be
+            # a line of a song (lyric search's last resort). A play or a
+            # "did you mean …?" ends the turn; anything else goes on below.
+            lyric_reply = await self._lyrics_last_resort(
+                query, ctx, session, allow_choice=allow_choice, avoid=avoid, said=said,
+            )
+            if lyric_reply is not None:
+                return lyric_reply
         if not song:
             # Local library missed (tags + filename). Cascade for an
             # ambiguous "play …": subscribed podcast → streaming provider →
@@ -581,7 +761,13 @@ class MusicHandler(MusicChoiceMixin, Handler):
         return rows[0]
 
     async def play_candidate(
-        self, candidate: Any, ctx: Context, session: AsyncSession, *, heard: str = ""
+        self,
+        candidate: Any,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        heard: str = "",
+        lyrics_note: bool = False,
     ) -> Response:
         """Play a ``library_match.Candidate`` in the room, by exact file path.
 
@@ -596,7 +782,12 @@ class MusicHandler(MusicChoiceMixin, Handler):
         ``heard`` is the request as the resolver read it: on an exact match
         said in plain words the reply echoes them ("play suicide boys" →
         "Playing Suicide Boys, shuffled."), otherwise it says the name the
-        way the household spells it out loud (``Candidate.speak``)."""
+        way the household spells it out loud (``Candidate.speak``).
+
+        ``lyrics_note``: the song was found by words from its lyrics when the
+        request named nothing (lyric search's last resort), and the reply
+        says so — "Playing X by Y, the song with those words." — so a
+        person who meant a title they don't have hears why this plays."""
         from domovoi.handlers.shared import library_match
         from domovoi.handlers.shared.spoken_names import speakable
 
@@ -674,6 +865,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
                 library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
             )
             text_ = f"Playing {name} by {by}." if by else f"Playing {name}."
+            if lyrics_note:
+                text_ = text_[:-1] + ", the song with those words."
         resolved = candidate.to_dict()
         resolved["queued"] = n
         return Response(
@@ -684,6 +877,134 @@ class MusicHandler(MusicChoiceMixin, Handler):
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
         )
+
+    # ─── A song asked for by words from its lyrics ─────────────────────
+    async def _play_lyrics(
+        self,
+        phrase: str,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        mode: str,
+        artist: str | None = None,
+    ) -> Response:
+        """ "play the song that goes …" (``mode="explicit"``) and "what's the
+        song that goes …" (``"identify"``), from the fast paths and the tool
+        router's ``lyrics``: lyric search (``library_match.resolve_lyrics``),
+        then play it, ask "did you mean …?", name it, or say why not
+        (contract [V10]). The words are never said back.
+
+        An explicit request is read the ways :func:`_lyric_play_readings`
+        lists — the artist it named ("the song by X that goes …", "the X
+        song that goes …", "… that goes <words> by X") as the [Q34] filter —
+        and the best answer wins. When it finds nothing in the library and
+        the box is online with a streaming provider installed, the provider
+        is asked for "song that goes <words>", as "play <anything>" always
+        was before lyric search existed ([V10], amended 2026-10-06)."""
+        from domovoi.handlers.shared import library_match
+
+        readings = _lyric_play_readings(phrase, artist) if mode == "explicit" else [(phrase, None)]
+        res = None
+        for words, by in readings:
+            kw = {"artist": by} if by else {}
+            got = await library_match.resolve_lyrics(session, words, mode=mode, **kw)  # type: ignore[arg-type]
+            # The better decision wins; a tie goes to the earlier reading.
+            if res is None or _LYRIC_RANK.get(got.decision, 0) > _LYRIC_RANK.get(res.decision, 0):
+                res = got
+            if res.decision == "play" or res.reason in _LYRIC_FINAL_REASONS:
+                break
+        assert res is not None
+        if res.decision == "none" or res.best is None:
+            if mode == "explicit" and res.reason not in ("too_short", "too_common"):
+                streamed = await self._stream_lyric_request(phrase, artist, ctx, session)
+                if streamed is not None:
+                    return streamed
+            return self._reply(ctx, _LYRIC_NONE_TEXT.get(res.reason, _LYRIC_NOT_FOUND_TEXT))
+        if mode == "identify":
+            return await self.tell_lyric_match(res, phrase, ctx, session)
+        if res.decision == "play":
+            return await self.play_candidate(res.best, ctx, session, heard="")
+        ask = getattr(self, "ask_did_you_mean", None)
+        if ask is not None:
+            reply = await ask(res, {"lyrics": phrase}, ctx, session)
+            if reply is not None:
+                return reply
+        # Nobody can answer a question here (the dashboard's play box, a
+        # chat-mode tool call), or it was turned down a moment ago.
+        return self._reply(ctx, _LYRIC_NOT_FOUND_TEXT)
+
+    async def _lyrics_last_resort(
+        self,
+        query: dict,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        allow_choice: bool,
+        avoid: tuple,
+        said: str | None,
+    ) -> Response | None:
+        """ "play <words>" that named nothing — not the spoken-name resolver,
+        not MPD's tag or file-name search — tried as a lyric (contract
+        [V20]–[V25]). It plays only an EXACT phrase of six words or more
+        ("Playing X by Y, the song with those words."); a near one may ask
+        "did you mean …?"; anything else is None and the cascade goes on
+        (podcast, streaming provider, "I couldn't find …") exactly as
+        before. An artist-only request is never a lyric."""
+        from domovoi.config import settings
+
+        if not settings.lyrics_search_enabled:
+            return None
+        readings = _lyric_readings(query, said)
+        if not readings:
+            return None
+        from domovoi.handlers.shared import library_match
+
+        best = None
+        for phrase, artist in readings:
+            res = await library_match.resolve_lyrics(
+                session, phrase, mode="fallback", artist=artist, avoid=avoid,
+            )
+            # The better decision wins; a tie goes to the first reading.
+            if best is None or _LYRIC_RANK.get(res.decision, 0) > _LYRIC_RANK.get(best.decision, 0):
+                best = res
+            if best.decision == "play":
+                break
+        if best is None or best.best is None:
+            return None
+        if best.decision == "play":
+            return await self.play_candidate(best.best, ctx, session, heard="", lyrics_note=True)
+        if best.decision == "ask" and allow_choice:
+            ask = getattr(self, "ask_did_you_mean", None)
+            if ask is not None:
+                return await ask(best, query, ctx, session)
+        return None
+
+    async def _stream_lyric_request(
+        self, phrase: str, artist: str | None, ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        """An explicit lyric request the library has no song for, handed to
+        an installed streaming-search provider while the box is online —
+        what "play the song that goes …" did before lyric search existed
+        (it was a plain "play <anything>"). None when there is no provider,
+        the box is offline, or the provider has nothing: the caller then
+        says it found nothing. Never logs the words."""
+        if not ctx.online:
+            return None
+        provider = CAPABILITIES.resolve(STREAMING_SEARCH_PROVIDER)
+        if provider is None:
+            return None
+        query = f"song that goes {phrase}" + (f" by {artist}" if artist else "")
+        try:
+            response = await provider.stream(ctx.room_id, query=query)
+        except Exception as e:
+            log.warning("streaming provider %r failed for a lyric request (%s)",
+                        getattr(provider, "slug", "?"), type(e).__name__)
+            return None
+        if response is None:
+            return None
+        response.matched_handler = self.name
+        await self._stamp_stream_play(ctx, session, provider, query, response)
+        return response
 
     async def _play_random(self, ctx: Context, session: AsyncSession) -> Response:
         """Pick a random track from ``library_tracks`` and play via MPD.

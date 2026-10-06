@@ -25,7 +25,10 @@ Used by:
   voice "add this to my X playlist" path, which needs to resolve
   the now-playing local file to a library row before inserting).
 
-**2. The spoken-name resolver** (everything below the divider).
+**2. The spoken-name resolver** (everything below the divider), and its
+lyric twin :func:`resolve_lyrics` — a song found by words from its lyrics
+(:mod:`domovoi.handlers.shared.lyric_search`, V021's line index), in the
+same play / ask bands, answering with the same entities.
 
 A spoken request is matched against the library by how names SOUND
 (:mod:`domovoi.handlers.shared.spoken_names`), not by substring, before
@@ -499,6 +502,71 @@ async def resolve_request(
     return res
 
 
+# ─── Lyric search: a song found by words from its lyrics ──────────────────
+
+#: How a lyric request was made: "explicit" ("play the song that goes …"),
+#: "identify" ("what's the song that goes …"), "fallback" ("play <words>"
+#: that named nothing in the library — the words tried as a lyric).
+LyricMode = Literal["explicit", "identify", "fallback"]
+
+
+async def resolve_lyrics(
+    session: "AsyncSession", phrase: str, *, mode: LyricMode,
+    artist: str | None = None, avoid: Sequence[EntityRef] = (),
+    play_threshold: float | None = None, ask_threshold: float | None = None,
+) -> Resolution:
+    """Lyric search (lyrics-build contract [Q1]–[Q40];
+    :mod:`domovoi.handlers.shared.lyric_search`). Never raises: problems
+    answer decision "none" with a reason — "disabled"
+    (settings.lyrics_search_enabled off), "no_lyrics" (track_lyric_lines is
+    empty), "too_short", "too_common", "below_ask", "below_play",
+    "declined", "error". Thresholds default to the live settings; the
+    evaluation passes the Settings DEFAULTS.
+
+    ``artist`` keeps only songs credited to someone who sounds like it
+    ("<words> by <artist>"); ``avoid`` drops entities the person has just
+    turned down. A play's candidates are the song alone; an ask's are the
+    songs as good as the best (≤ 3), best first; ``via`` is "lyrics".
+    ``heard`` is the phrase as said — the "turned down" key, never logged:
+    the one log line says the mode, the word count, the decision, track ids
+    and a score (lyrics are the household's, and stay out of every log)."""
+    from domovoi.config import settings
+
+    t0 = time.perf_counter()
+    heard = " ".join((phrase or "").split())
+    words = len(heard.split())
+    if not settings.lyrics_search_enabled:
+        res = Resolution.none("disabled", heard=heard)
+    elif session is None:
+        res = Resolution.none("error", heard=heard)
+    else:
+        play = float(settings.music_match_play_threshold if play_threshold is None else play_threshold)
+        ask = float(settings.music_match_ask_threshold if ask_threshold is None else ask_threshold)
+        try:
+            from domovoi.handlers.shared import lyric_search
+
+            res, words = await lyric_search.search(
+                session, heard, mode=mode, play=play, ask=ask,
+                artist=artist, avoid=tuple(avoid),
+            )
+        except Exception as e:  # noqa: BLE001 — a lyric miss never fails the turn
+            # The exception's TYPE only: a database error's text carries the
+            # statement's parameters (the phrase).
+            log.warning("lyric match (%s) failed: %s", mode, type(e).__name__)
+            res = Resolution.none("error", heard=heard)
+    tail = ""
+    if res.best is not None:
+        from domovoi.handlers.shared.lyric_search import describe
+
+        tail = describe(res)
+    log.info(
+        "lyric match (%s, %d words) → %s%s (%s, %.0f ms)",
+        mode, words, res.decision, tail, res.reason,
+        (time.perf_counter() - t0) * 1000.0,
+    )
+    return res
+
+
 async def candidate_from_ref(
     session: "AsyncSession", ref: EntityRef | Mapping[str, Any]
 ) -> Candidate | None:
@@ -734,6 +802,7 @@ __all__ = [
     "EntityType",
     "INLINE_REBUILD_MAX_TRACKS",
     "LibraryIndex",
+    "LyricMode",
     "Resolution",
     "TrackRow",
     "build_index",
@@ -747,6 +816,7 @@ __all__ = [
     "mpd_file_for_library_path",
     "reset_for_tests",
     "resolve",
+    "resolve_lyrics",
     "resolve_request",
     "rows_by_id",
     "speak_for",

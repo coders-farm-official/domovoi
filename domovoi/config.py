@@ -124,9 +124,8 @@ PROFILE_DEFAULTS: tuple[ProfileDefault, ...] = (
     ProfileDefault("podcast_feed_poller_enabled", "Automatic podcast downloads", True, False, False, "restart"),
     ProfileDefault("library_enricher_enabled", "Song recognition (AcoustID / Shazam)", True, True, False, "restart", requires="enricher_provider"),
     ProfileDefault("seed_voice_catalog", "Extra voices at startup", False, False, False, "restart"),
-    # LRCLIB synced lyrics: not built yet. When the settings exist, add:
-    # ProfileDefault("lyrics_lrclib_enabled", "Synced lyrics (LRCLIB)", True, True, False, "live"),
-    # ProfileDefault("lyrics_write_lrc", "Save lyrics as .lrc files", True, True, False, "live"),
+    ProfileDefault("lyrics_lrclib_enabled", "Synced lyrics (LRCLIB)", True, True, False, "live"),
+    ProfileDefault("lyrics_write_lrc", "Save lyrics as .lrc files", True, True, False, "live"),
 )
 PROFILE_FIELD_NAMES: frozenset[str] = frozenset(pd.name for pd in PROFILE_DEFAULTS)
 PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFAULTS}
@@ -984,6 +983,13 @@ class Settings(BaseSettings):
     # Ask "did you mean X?" in that middle band (owner decision 2026-10-02).
     # Off = the middle band falls through to today's search.
     music_choice_enabled: bool = True
+    # Find a song by words from its lyrics: "play the song that goes …",
+    # "what's the song that goes …", and — when "play <name>" finds nothing by
+    # that name — the words as a lyric (handlers/shared/lyric_search.py). Uses
+    # the lyrics Domovoi has (V021). Applies immediately.
+    lyrics_search_enabled: bool = True
+    # The lyric-search line index's cadence (workers/lyrics_index.py).
+    lyrics_index_interval_sec: float = 10.0
     # Fetch spoken aliases ("Dead Mouse" for deadmau5) for the library's
     # artists from MusicBrainz — OPT-IN, OFF by default: it sends artist names
     # from the library to musicbrainz.org — including names taken from
@@ -995,6 +1001,23 @@ class Settings(BaseSettings):
     music_alias_fetch_enabled: bool = False
     # The fetch worker's cadence (it looks up a small batch per tick).
     music_alias_fetch_interval_sec: float = 30.0
+    # ─── Lyrics (V021; domovoi/lyrics/, workers/lyrics_scan.py, lyrics_fetch.py) ──
+    # Lyrics come from a .lrc next to the song (same name, any case), then from
+    # the song's own tags — read from the files every few minutes; nothing
+    # leaves the house for them. LRCLIB (lrclib.net) adds timed lyrics for
+    # songs that have none of their own: OPT-IN, off while the internet
+    # question is unanswered; otherwise its default follows the answer
+    # (PROFILE_DEFAULTS: on for always and sometimes, off for never), and a
+    # hand-set value wins. It sends a song's title, artist, album and length,
+    # about one request a second, only while the server is online.
+    lyrics_lrclib_enabled: bool = False
+    # Save LRCLIB's timed lyrics as a .lrc next to the song when it has none
+    # (never touches a .lrc somebody else made). Only while LRCLIB is on.
+    lyrics_write_lrc: bool = True
+    # The local scan's cadence (it re-reads only files that changed).
+    lyrics_scan_interval_sec: float = 300.0
+    # The LRCLIB worker's cadence (a small batch per tick, ~1 request/s).
+    lyrics_fetch_interval_sec: float = 5.0
 
     # ─── Session context ───────────────────────────────────────────────
     session_recent_turns_cap: int = 20

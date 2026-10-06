@@ -311,7 +311,8 @@ exactly one process and one loop that mutate them.
 Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
-and document lock sweeper.
+document lock sweeper, the MusicBrainz alias fetch, and the three lyrics
+workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics").
 
 ---
 
@@ -566,6 +567,95 @@ MPD text search that was always there.
   transcripts and over the ones production routes to music (the ordinary
   floor is on the latter: a misheard "play" is the parser's loss, Phase 4),
   and in production mode with the dialog on and off.
+
+### Lyrics (`domovoi/lyrics/`, `workers/lyrics_*.py`, `handlers/shared/lyric_search.py`)
+
+Lyrics are shown in the players (line by line when they are timed) and are
+a way to ask for a song ("play the song that goes …"). They are the
+household's: served on the household tier only, never logged, never on an
+open page, the realtime socket or the core snapshot (counts and states
+only).
+
+* **Storage (V021).** `track_lyrics` holds one row per library track, with
+  three sources in the owner's order: the owner's own `.lrc` beside the song
+  (same base name, any case, names compared in Unicode NFC; an unambiguous
+  "Artist - Title.lrc" too, which a `.lrc` of Domovoi's own never hides),
+  the lyrics inside the file (ID3 SYLT/USLT, Vorbis LYRICS/UNSYNCEDLYRICS/
+  SYNCEDLYRICS, MP4 `©lyr`, WM/Lyrics, APE — the first TIMED one, else the
+  first with words; LRC-formatted text counts as timed, and a SYLT frame
+  synced by syllable is joined into lines), then LRCLIB. A `.lrc` that is
+  not LRC is read as plain lyrics, its ID tags left out.
+  What is SHOWN is derived, never written: the owner's `.lrc` whatever it
+  holds, else timed beats plain, and within a kind the file's tags beat
+  LRCLIB (generated columns + the view `track_lyrics_shown`). Timed lyrics
+  are `[[ms, "line"], …]` with the file's `[offset:]` applied.
+  `track_lyric_lines` is lyric search's index. Each of the three workers
+  writes only its own columns, so they never undo each other.
+* **`lyrics_scan`** (always on, local disk only, every 5 minutes): lists each
+  folder once per tick, re-reads a song only when its own or its `.lrc`'s
+  size or change stamp changed (the mtime; on POSIX the later of mtime and
+  ctime, so a chmod that makes a file readable is seen), in batches of 100
+  inside `sidecar.SIDECAR_LOCK`, at most 120 s a tick. A file it cannot
+  read gives no verdict (a song read before keeps what was stored; it is
+  tried again next tick). It never writes a file.
+* **`lyrics_fetch`** (LRCLIB, opt-in): its default follows the internet
+  answer (`PROFILE_DEFAULTS`: on for always and sometimes, off for never,
+  off while unanswered; a hand-set value wins), and it re-checks that, the
+  answer itself, the connectivity probe and shutdown before every request
+  (`egress` choke point, `clients/lrclib.py`: ~1 request/s, the Domovoi
+  User-Agent, 2 MiB cap, no retries; an answer too big for the row is
+  recorded as `save:too_large` before anything is sent to the database). It
+  asks `/api/get` by title, artist,
+  album and length, then `/api/search` accepted only within −2…+3 s and on
+  matching names. Only an ANSWER stamps a row (a rate limit, an outage or
+  the internet turned off leave it as it was); "not found" is asked again
+  after 28 days, doubling to 112. Songs played in the last 30 days go first.
+* **The `.lrc` writer** (`lyrics/sidecar.py`, run by `lyrics_fetch`):
+  LRCLIB's TIMED lyrics are also saved as `<stem>.lrc` beside a song that
+  has none — and never for a song whose lyrics come from the household's
+  own `.lrc`, an "Artist - Title" one included (`lyrics_write_lrc`, only
+  while LRCLIB is on), marked `[re:Domovoi]` and recorded by its sha256. A
+  song renamed since (a plugin re-filing a download) gets a new file under
+  its new name. A file is Domovoi's own only
+  when the name AND the hash match what it wrote: every other `.lrc` is the
+  household's, read as source 1 and never written; Domovoi's own file that
+  the household edits or deletes is left alone for good. New files go
+  through an exclusive temp file and a hard link (never clobbering); a
+  refresh re-checks ownership right before `os.replace`. Nothing is ever
+  deleted or renamed. The library indexer ignores `.lrc`.
+* **`lyrics_index`** (always on, every 10 s) keeps `track_lyric_lines`
+  current: every distinct shown line and every pair of consecutive lines,
+  normalized by `spoken_names.lyric_words`, with how often it is sung.
+* **Lyric search** (`library_match.resolve_lyrics` → `lyric_search.py`):
+  candidate lines through the trigram GIN index (`<%`; for a phrase of up
+  to five words a strict look at 0.55 first, the wide one at 0.45 only when
+  the strict one finds fewer than the 80 lines the scorer reads — provably
+  the same answer, much faster for short phrases of common words), then a
+  word
+  alignment that tolerates a word left out, added, swapped or misheard,
+  weighted to the chorus (a line sung once counts 0.97). The same play
+  (0.90) and ask (0.75) bands as names, the same did-you-mean dialog. Three
+  modes: **explicit** ("play the song that goes …", the first fast paths of
+  music, also with the artist named — "the song by X that goes …", "the X
+  song that goes …", "… by X" — read with and without that artist as a
+  filter; and the tool router's `lyrics` argument; a song the library lacks
+  goes to an installed streaming provider while online, as any "play …"
+  did before), **identify** ("what's the
+  song that goes …": names it and offers to play it), and **fallback** — the
+  last resort of `MusicHandler._play`, after the spoken-name resolver and
+  MPD's tag and file-name searches found nothing and before the podcast /
+  streaming cascade: it plays only an EXACT phrase of six words or more and
+  otherwise at most asks. `lyrics_search_enabled` switches all three off.
+* **The web** (`web/backend/api/lyrics.py`): `GET
+  /api/music/library/{id}/lyrics`, `/api/music/now-playing/{room}/lyrics`
+  (the room's MPD position with the lyrics, for room playback) and
+  `/api/music/lyrics/status` (the Jobs card), all `require_device_read`
+  and `no-store`; the `lyrics.changed` channel carries counts only. Players
+  follow local playback on their own clock and a room on MPD's elapsed time
+  re-anchored by the 2 s poll, with a per-room timing nudge.
+* **The gate** (`scripts/eval_lyric_search.py`): a held-out request set
+  built from the household's library and LRCLIB, kept outside the repo
+  (it holds real lyrics), measured once and never used to tune anything.
 
 ---
 

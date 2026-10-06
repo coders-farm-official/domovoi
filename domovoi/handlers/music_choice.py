@@ -60,6 +60,13 @@ It never asks where nobody can answer: the dashboard's play box
 (``Context.answerable`` False), a chat-mode tool call (no session), or
 with the "Ask 'did you mean…?'" setting (``music_choice_enabled``) off —
 then the request goes on to today's search.
+
+Lyric search (a song asked for by words from its lyrics) parks the same
+question: "play the song that goes …" asks "did you mean X?" when unsure,
+and "what's the song that goes …" answers "That's X." / "It might be X."
+with an offer to play it (:meth:`MusicChoiceMixin.tell_lyric_match`). The
+words themselves are never said back, and never logged: a lyric request's
+log lines say how many words it had (``<lyrics: N words>``).
 """
 
 from __future__ import annotations
@@ -433,6 +440,21 @@ def forget_declined() -> None:
     _DECLINED.clear()
 
 
+def _is_lyric_request(res: Resolution, query: Mapping[str, Any]) -> bool:
+    """A question about words from a song's lyrics (lyric search), not a
+    name: asked with ``{"lyrics": …}``, or answered by lyric matches."""
+    return "lyrics" in query or any(c.via == "lyrics" for c in res.candidates)
+
+
+def _heard_for_log(res: Resolution, query: Mapping[str, Any]) -> str:
+    """How a log line names what was asked about: the words as heard for a
+    name, but for lyric words only how many there were — Domovoi never
+    logs a lyric (lyrics-build contract [Q51])."""
+    if _is_lyric_request(res, query):
+        return f"<lyrics: {len(str(res.heard or '').split())} words>"
+    return repr(res.heard)
+
+
 class MusicChoiceMixin:
     """MusicHandler's "did you mean …?" (``class MusicHandler(MusicChoiceMixin,
     Handler)``). Relies on MusicHandler for ``name``, ``_play`` and
@@ -460,7 +482,7 @@ class MusicChoiceMixin:
         if was_declined(ctx.session_id, res.heard, candidates):
             # Asked a moment ago and told "no": don't ask the same thing
             # again — today's search (and a streaming provider) gets it.
-            log.info("music: not asking about %r again (turned down)", res.heard)
+            log.info("music: not asking about %s again (turned down)", _heard_for_log(res, query))
             return None
         phrases = [await self._choice_phrase(c, session) for c in candidates[:SPOKEN_CHOICES]]
         if len(phrases) == 1:
@@ -483,8 +505,68 @@ class MusicChoiceMixin:
             log.warning("music: couldn't park the did-you-mean question: %s", e)
             return None
         log.info(
-            "music: asked %r for %r (%s)", prompt, res.heard,
+            "music: asked %r for %s (%s)", prompt, _heard_for_log(res, query),
             ", ".join(f"{c.ref.type}:{c.ref.label}@{c.score:.2f}" for c in candidates),
+        )
+        return Response(
+            text=prompt,
+            session_id=ctx.session_id,
+            matched_handler=self.name,  # type: ignore[attr-defined]
+            expect_followup=True,
+            data={"choice": [c.to_dict() for c in candidates]},
+        )
+
+    async def tell_lyric_match(
+        self,
+        res: Resolution,
+        phrase: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The answer to "what's the song that goes …?" (lyric search,
+        ``res`` a play- or ask-level :class:`Resolution`): "That's X." or
+        "It might be X." / "It might be X, or Y." — and, where someone can
+        answer and the "did you mean" setting is on, an offer to play it,
+        parked as the SAME ``core.music_choice`` question
+        :meth:`ask_did_you_mean` parks (the play-level song alone, or the
+        songs as good as the best; ``query = {"lyrics": phrase}``), so
+        "yes", "the second one", "no" or a name are answered by
+        :meth:`handle_choice_reply` like any "did you mean …?". The words
+        are never said back."""
+        if res.decision == "play":
+            candidates = list(res.candidates[:1])
+        else:
+            candidates = list(res.candidates[:MAX_CHOICES])
+        if not candidates:
+            return self._choice_text(ctx, "I couldn't find a song in your library with those words.")
+        phrases = [await self._choice_phrase(c, session) for c in candidates[:SPOKEN_CHOICES]]
+        if res.decision == "play":
+            sentence = f"That's {phrases[0]}."
+        elif len(phrases) == 1:
+            sentence = f"It might be {phrases[0]}."
+        else:
+            sentence = f"It might be {phrases[0]}, or {phrases[1]}."
+        if not (settings.music_choice_enabled and ctx.session_id is not None and ctx.answerable):
+            return self._choice_text(ctx, sentence)
+        prompt = sentence + (" Want me to play it?" if len(candidates) == 1 else " Want me to play one?")
+        payload = {
+            "candidates": [c.to_dict() for c in candidates],
+            "query": {"lyrics": phrase},
+            "heard": phrase,
+            "room_id": ctx.room_id,
+            "expires_at": time.time() + CHOICE_TTL_SEC,
+        }
+        try:
+            await request_confirmation(
+                session, ctx.session_id, kind=MUSIC_CHOICE_KIND,
+                handler=self.name, data=payload, prompt=prompt,  # type: ignore[attr-defined]
+            )
+        except Exception as e:  # noqa: BLE001 — the answer alone is still an answer
+            log.warning("music: couldn't park the offer to play a lyric match: %s", type(e).__name__)
+            return self._choice_text(ctx, sentence)
+        log.info(
+            "music: told a lyric match for %s (%s)", _heard_for_log(res, {"lyrics": phrase}),
+            ", ".join(f"{c.ref.type}:{c.track_ids[0] if c.track_ids else c.ref.key}@{c.score:.2f}" for c in candidates),
         )
         return Response(
             text=prompt,

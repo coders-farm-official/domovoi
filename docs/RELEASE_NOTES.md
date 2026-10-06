@@ -4,6 +4,78 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-06 — Lyrics: see the words, and find a song by them
+
+### Upgrading
+
+1. **Pull the update and restart** as usual. No new Python packages.
+   **Flyway V021** adds the lyrics tables (`track_lyrics`,
+   `track_lyric_lines` and the view `track_lyrics_shown`); the update's
+   backup and rollback cover it. The **Android app** has a new build
+   (lyrics in its players): install it to see them on the phone.
+2. **Lyrics you already have are read on their own.** Within a few minutes
+   of the restart Domovoi starts reading a `.lrc` file next to a song (same
+   name as the song, any case) and the lyrics inside your song files (MP3,
+   FLAC, Ogg, M4A, WMA tags). Nothing leaves the house for these. The first
+   pass over a big library takes a while (two minutes of work every five
+   minutes); after that only files that changed are read again. The Music
+   page's **Jobs** tab shows how far it got.
+3. **LRCLIB follows your internet answer — on a box answered "Yes,
+   always" (the Beelink) or "Sometimes" it starts at once.** For songs with
+   no timed lyrics of their own it asks lrclib.net, sending each such
+   song's **title, artist, album and length** (nothing else), about one
+   request a second, only while the server is online. The first pass for
+   about 5,000 songs takes several hours — about a night — and longer
+   whenever LRCLIB asks it to slow down; songs it didn't have are asked
+   about again after four weeks or more. Under **No** it is off, and the
+   Jobs tab says this Domovoi stays off the internet; with the question
+   unanswered it is off too. To keep it off whatever the answer: Settings
+   → Configuration → Library → **Synced lyrics from LRCLIB** (or
+   `LYRICS_LRCLIB_ENABLED=false`); switching it off stops it before its next
+   request.
+4. **Domovoi may write `.lrc` files into your music folders.** With
+   **Save lyrics as .lrc files** on (it is, whenever LRCLIB is on), timed
+   lyrics from LRCLIB are also saved as a `.lrc` next to a song that has
+   none, so other players can show them too. Such a file says
+   `[re:Domovoi]` at the top. Only a song with no `.lrc` at all gets one: a
+   `.lrc` you made — named like the song, or "Artist - Title.lrc" — always
+   wins, is what the players show, and is never written over, changed or
+   deleted; Domovoi updates only the files it wrote, and one you edit or
+   delete stays yours (it is never written again). Plain lyrics without
+   timing stay in the database only. The core needs write permission in the
+   music folders for this (on the Beelink it runs as their owner); a folder
+   it can't write shows on the Jobs tab as songs whose `.lrc` "couldn't be
+   saved", with the reason. Switch it off in the same place if you'd rather
+   Domovoi never wrote there.
+
+### What changes
+
+* **The players show the lyrics of what's playing**, line by line with the
+  current line highlighted when the lyrics have timing, as plain text
+  otherwise: the Music page's **Player** tab, the phone's player sheet
+  (closed by default), the desktop player bar's lyrics button, and a
+  room's card (its current line). It follows a room too, from what the
+  room's speaker reports; if a room's speaker runs behind, nudge the
+  timing (**−¼ s / +¼ s**, remembered per room). In your own browser or
+  phone, tapping a line jumps there. The Android app's Player tab, player
+  sheet and room cards do the same.
+* **Ask for a song by its words**: "play the song that goes …", "put on
+  the one with the words …", "play the song by <artist> that goes …", and
+  "what's the song that goes …" (Domovoi names it and offers to play it).
+  When it isn't sure it asks "Did you mean …?" the way it does for names;
+  a song you don't have still goes to your streaming plugin, if you have
+  one, as before. "What song goes well with a rainy day" and the like are
+  not taken for words of a song. And when "play <something>" finds
+  nothing by that name, the words are tried as a lyric last — that plays
+  only on an exact line of six words or more, and otherwise at most asks.
+  Domovoi never says or shows the words back. Settings → Configuration →
+  Library → **Find songs by their words** switches all of this off.
+* **Lyrics are the household's.** They are served on the household tier
+  only (a paired phone or browser, an admin), like the rest of the
+  household's own data — never on the kiosk display or another open page,
+  never in the logs; the live updates and the server status carry counts
+  only.
+
 ## 2026-10-03 — Tell Domovoi whether it has the internet
 
 ### Upgrading

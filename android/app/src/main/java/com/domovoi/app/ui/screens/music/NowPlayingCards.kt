@@ -164,6 +164,9 @@ private fun NPCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // The line the room is singing, for a library track with timed
+            // lyrics (nothing otherwise, nor outside the household tier).
+            RoomLyricLine(np, tick)
             Spacer(Modifier.height(10.dp))
             ProgressBar(progress)
             Spacer(Modifier.height(4.dp))

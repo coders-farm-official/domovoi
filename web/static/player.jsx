@@ -390,6 +390,10 @@ const PlaybackContext = React.createContext({
   eqBands: EQ_BANDS.map(() => 0), eqEnabled: false,
   playbackRate: 1,
   target: { kind: 'browser' },
+  // The cast room's last now-playing reading, while casting (lyrics.jsx
+  // follows a room by it): {room_id, track_id, state, elapsed_sec,
+  // duration_sec, readAt}; null when the target is this browser.
+  remoteNp: null,
   sleepRemainingSec: null,
   recent: [],
   listenerPersonId: null, setListenerPersonId: _noop,
@@ -479,6 +483,10 @@ const PlaybackProvider = ({ children }) => {
   const sleepEndOfTrackRef = React.useRef(false);
   const remotePollRef = React.useRef(null);
   const remoteNpRef = React.useRef(null);       // the cast room's last now-playing row
+  // The same reading for whoever renders (lyrics.jsx follows a room by it):
+  // the room's song id, state, elapsed and length, and when it was read
+  // (performance.now(), so a view can carry the position forward).
+  const [remoteNp, setRemoteNp] = React.useState(null);
   const heldRef = React.useRef(null);           // { uid, sec }: where this browser stopped to cast
   const lastPosSaveRef = React.useRef(0);      // throttle spoken-audio position saves
   const sleepEndOfChapterRef = React.useRef(false);
@@ -775,6 +783,7 @@ const PlaybackProvider = ({ children }) => {
       () => { if (onLeft) onLeft(room, true); },
       (e) => { console.warn(`pausing ${room} failed`, e); if (onLeft) onLeft(room, false); });
     remoteNpRef.current = null;
+    setRemoteNp(null);
     moveTarget({ kind: 'browser' });
     return room;
   }, []);
@@ -1167,6 +1176,7 @@ const PlaybackProvider = ({ children }) => {
       if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
       if (liveEl && queue[at]) heldRef.current = { uid: queue[at].uid, sec: startSec };
       remoteNpRef.current = null;
+      setRemoteNp(null);
       setIndex(at);
       moveTarget(nextTarget);
       setStatus(paused ? 'paused' : 'playing');
@@ -1198,6 +1208,7 @@ const PlaybackProvider = ({ children }) => {
     const held = heldRef.current;
     const sec = follow.known ? follow.sec : (held && item && held.uid === item.uid ? held.sec : 0);
     remoteNpRef.current = null;
+    setRemoteNp(null);
     moveTarget({ kind: 'browser' });
     const playing = !!(item && wasPlaying && leftPaused);
     if (item) {
@@ -1233,6 +1244,7 @@ const PlaybackProvider = ({ children }) => {
   React.useEffect(() => {
     if (target.kind !== 'room') {
       if (remotePollRef.current) { clearInterval(remotePollRef.current); remotePollRef.current = null; }
+      setRemoteNp(null);
       return;
     }
     // A reading that lands after the target moved on (back here, or to
@@ -1248,6 +1260,15 @@ const PlaybackProvider = ({ children }) => {
           setStatus(np.state === 'play' ? 'playing' : np.state === 'pause' ? 'paused' : 'stopped');
           setPositionSec(np.elapsed_sec || 0);
           setDurationSec(np.song?.duration_sec || 0);
+          setRemoteNp({
+            room_id: np.room_id, track_id: np.track_id ?? null, state: np.state,
+            elapsed_sec: Number(np.elapsed_sec) || 0,
+            duration_sec: (np.song && np.song.duration_sec) || null,
+            // performance.now() — Date.now() only where there is none (the
+            // node harnesses): lyrics.jsx reads the same clock back.
+            readAt: typeof performance !== 'undefined' && performance && performance.now
+              ? performance.now() : Date.now(),
+          });
         }
       } catch {}
     };
@@ -1284,7 +1305,7 @@ const PlaybackProvider = ({ children }) => {
     queue, index, current, status,
     positionSec, durationSec, buffered,
     volume, muted, eqBands, eqEnabled, playbackRate,
-    target, sleepRemainingSec, recent,
+    target, remoteNp, sleepRemainingSec, recent,
     playItems, enqueue, playNext, removeAt, moveItem, clearQueue, jumpTo,
     toggle, play, pause, stop, next, prev, seek, seekBy,
     setVolume, toggleMute,
@@ -1336,8 +1357,20 @@ const MiniPlayer = () => {
   const p = usePlayback();
   const [showQueue, setShowQueue] = React.useState(false);
   const [showCast, setShowCast] = React.useState(false);
+  const [showLyrics, setShowLyrics] = React.useState(false);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const hasItem = !!(p.available && p.current);
+  // The library song whose lyrics the bar offers (lyrics.jsx, loaded after
+  // this file); none for radio, podcasts, audiobooks and plugin streams. A
+  // lyrics.jsx that failed to load must not take the player down with it.
+  const lyrId = hasItem && typeof lyricsTrackIdFor === 'function' ? lyricsTrackIdFor(p) : null;
+  // Read the song's lyrics as it starts — one quiet read, shared with every
+  // lyrics surface (useLyrics): the float and the sheet open on them at
+  // once, and a viewer the server refuses loses the button as the song
+  // starts, not when it is pressed. (Which function runs is fixed for the
+  // life of the page, so the hooks inside always run in the same order.)
+  (typeof useLyrics === 'function' ? useLyrics : () => null)(lyrId);
+  React.useEffect(() => { if (lyrId == null) setShowLyrics(false); }, [lyrId]);
 
   // The sheet is a history entry of its own, so the phone's back gesture
   // closes it instead of leaving the page it was opened over. Closing it
@@ -1351,6 +1384,7 @@ const MiniPlayer = () => {
   const openSheet = () => {
     setShowQueue(false);
     setShowCast(false);
+    setShowLyrics(false);
     openHashRef.current = window.location.hash;
     try { window.history.pushState({ domovoiPlayerSheet: true }, ''); } catch {}
     setSheetOpen(true);
@@ -1419,13 +1453,15 @@ const MiniPlayer = () => {
     return () => root.classList.remove('mp-docked');
   }, [hasItem]);
   // The other way round: a desktop window narrowed to a phone's width
-  // hides the buttons that toggle the floating queue and cast target (and
-  // the 380px queue is wider than the screen), so close them.
-  const panelOpen = showQueue || showCast;
+  // hides the buttons that toggle the floating queue, cast target and
+  // lyrics (and the 380px queue is wider than the screen), so close them.
+  const panelOpen = showQueue || showCast || showLyrics;
   React.useEffect(() => {
     if (!panelOpen || typeof window.matchMedia !== 'function') return undefined;
     const mq = window.matchMedia(_MP_PHONE);
-    return _mpOnMediaChange(mq, () => { if (mq.matches) { setShowQueue(false); setShowCast(false); } });
+    return _mpOnMediaChange(mq, () => {
+      if (mq.matches) { setShowQueue(false); setShowCast(false); setShowLyrics(false); }
+    });
   }, [panelOpen]);
 
   if (!hasItem) return null;
@@ -1439,6 +1475,11 @@ const MiniPlayer = () => {
     <>
       {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}/>}
       {showCast && <CastMenu p={p} onClose={() => setShowCast(false)}/>}
+      {showLyrics && lyrId != null && typeof LyricsFloat === 'function' && (
+        <LyricsFloat trackId={lyrId}
+                     follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}
+                     onClose={() => setShowLyrics(false)}/>
+      )}
       {sheetOpen && <PlayerSheet p={p} onClose={() => closeSheet()}/>}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
@@ -1499,8 +1540,15 @@ const MiniPlayer = () => {
                        style={{ width: 70 }}/>
               </div>
             )}
-            <IconButton name="list-music" onClick={() => setShowQueue((s) => !s)} title="queue"/>
-            <IconButton name={remote ? 'cast' : 'monitor-speaker'} onClick={() => setShowCast((s) => !s)}
+            {/* lyrics: one floating panel at a time with the queue and the cast target */}
+            {lyrId != null && (
+              <IconButton name="mic-vocal" title="lyrics" aria-label="lyrics" aria-pressed={showLyrics}
+                          onClick={() => { setShowQueue(false); setShowCast(false); setShowLyrics((s) => !s); }}
+                          style={showLyrics ? { color: 'var(--brand)' } : undefined}/>
+            )}
+            <IconButton name="list-music" onClick={() => { setShowLyrics(false); setShowQueue((s) => !s); }} title="queue"/>
+            <IconButton name={remote ? 'cast' : 'monitor-speaker'}
+                        onClick={() => { setShowLyrics(false); setShowCast((s) => !s); }}
                         title="cast target"
                         style={remote ? { color: 'var(--brand)' } : undefined}/>
             <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
@@ -1531,6 +1579,18 @@ const PlayerSheet = ({ p, onClose }) => {
     const b = closeRef.current;
     if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
   }, []);
+  // The lyrics section (lyrics.jsx): closed until someone opens it, and
+  // remembered in this browser either way.
+  const [lyrOpen, setLyrOpen] = React.useState(() => {
+    try { return localStorage.getItem('domovoi-lyrics-sheet-open') === '1'; } catch { return false; }
+  });
+  const toggleLyr = () => {
+    const next = !lyrOpen;
+    setLyrOpen(next);
+    try { localStorage.setItem('domovoi-lyrics-sheet-open', next ? '1' : '0'); } catch {}
+  };
+  const lyrId = typeof lyricsTrackIdFor === 'function' && typeof LyricsView === 'function'
+    ? lyricsTrackIdFor(p) : null;
   const it = p.current;
   const dur = p.durationSec || it.durationSec || 0;
   const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
@@ -1594,6 +1654,19 @@ const PlayerSheet = ({ p, onClose }) => {
             <Icon name="moon" size={12}/>
             sleep · {p.sleepRemainingSec < 0 ? 'at the end' : fmtDur(p.sleepRemainingSec)}
           </div>
+        )}
+        {lyrId != null && (
+          <section className="mp-sheet-sec" aria-label="lyrics">
+            <button type="button" className="mp-sheet-sec-head lyr-sec-toggle" aria-expanded={lyrOpen}
+                    onClick={toggleLyr}>
+              <span>lyrics</span>
+              <Icon name={lyrOpen ? 'chevron-up' : 'chevron-down'} size={16}/>
+            </button>
+            {lyrOpen && (
+              <LyricsView trackId={lyrId} height={240} compact
+                          follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}/>
+            )}
+          </section>
         )}
         <section className="mp-sheet-sec" aria-label="play on">
           <div className="mp-sheet-sec-head">play on</div>

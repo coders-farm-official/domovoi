@@ -2,6 +2,7 @@ package com.domovoi.app.player
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -38,6 +39,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
 import androidx.core.net.toUri
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -54,6 +56,12 @@ data class RemoteNowPlaying(
     val artist: String?,
     val elapsedSec: Double,
     val durationSec: Double?,
+    /** The library track the room plays (now-playing's `track_id`); null
+     *  for a stream or a file that is not in the library. */
+    val trackId: Long? = null,
+    /** [SystemClock.elapsedRealtime] when this reading came in: lyrics
+     *  follow the room from it ([LyricsMath.roomPositionMs]). */
+    val readAtMs: Long = 0L,
 )
 
 /**
@@ -701,6 +709,8 @@ class PlayerController(
             artist = song?.get("artist")?.jsonPrimitive?.contentOrNull,
             elapsedSec = row["elapsed_sec"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
             durationSec = song?.get("duration_sec")?.jsonPrimitive?.doubleOrNull,
+            trackId = row["track_id"]?.jsonPrimitive?.longOrNull,
+            readAtMs = SystemClock.elapsedRealtime(),
         )
     }
 
