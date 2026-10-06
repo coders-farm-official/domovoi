@@ -417,6 +417,28 @@ def test_command_recordings_are_security_tier_reads(label, path) -> None:
         assert weaker not in calls, f"{label} GET {path} must not drop to {weaker.__name__}"
 
 
+# Lyrics (V021, owner decision 2026-10-03): the household's own copy of
+# copyrighted text for its songs, readable by the household tier only and
+# never by an open page — unlike the library, now-playing and cover reads
+# beside them, which stay open and carry no lyrics (lyrics contract [A1]).
+LYRICS_READS: list[tuple[str, str]] = [
+    ("web", "/api/music/library/{track_id}/lyrics"),
+    ("web", "/api/music/now-playing/{room_id}/lyrics"),
+    ("web", "/api/music/lyrics/status"),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), LYRICS_READS, ids=[f"{a} GET {p}" for a, p in LYRICS_READS]
+)
+def test_lyrics_reads_take_the_household_tier(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_device_read in calls, (
+        f"{label} GET {path} serves lyrics — it must depend on require_device_read "
+        f"(the household tier), never answer an open page"
+    )
+
+
 @pytest.mark.parametrize(
     ("label", "path"), sorted(SPEECH_ADJACENT_LEFT_OPEN),
     ids=[f"{a} GET {p}" for a, p in sorted(SPEECH_ADJACENT_LEFT_OPEN)],
