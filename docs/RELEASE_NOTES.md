@@ -27,10 +27,10 @@ a way that would otherwise get reported as a bug.
    request a second, only while the server is online. The first pass for
    about 5,000 songs takes several hours — about a night — and longer
    whenever LRCLIB asks it to slow down; songs it didn't have are asked
-   about again after four weeks or more. Under **No**, or with the question
-   unanswered, it is off (the Jobs tab then says this Domovoi stays off the
-   internet). To keep it off whatever the answer: Settings → Configuration
-   → Library → **Synced lyrics from LRCLIB** (or
+   about again after four weeks or more. Under **No** it is off, and the
+   Jobs tab says this Domovoi stays off the internet; with the question
+   unanswered it is off too. To keep it off whatever the answer: Settings
+   → Configuration → Library → **Synced lyrics from LRCLIB** (or
    `LYRICS_LRCLIB_ENABLED=false`); switching it off stops it before its next
    request.
 4. **Domovoi may write `.lrc` files into your music folders.** With
