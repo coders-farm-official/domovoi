@@ -148,6 +148,52 @@ def test_version_state_reports_restart_capability(monkeypatch):
     assert "sudoers" in state["restart_hint"]
 
 
+# ─── what the panel shows in place of the button ─────────────────────────
+
+
+def test_the_manual_command_is_the_restart_this_host_does(monkeypatch):
+    """Shown, never run: the same restart the button would have asked
+    systemd for, in the shape of the sudoers grant's mode."""
+    monkeypatch.setattr(self_restart, "_WINDOWS", False)
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0, calls))
+    assert self_restart.manual_command("restart") == "sudo systemctl restart domovoi-core domovoi-web"
+    assert self_restart.manual_command("update") == "sudo systemctl start domovoi-update.service"
+    monkeypatch.setattr(self_restart, "restart_mode", lambda: "update")
+    assert self_restart.manual_command() == "sudo systemctl start domovoi-update.service"
+    assert calls == []
+
+
+def test_no_manual_command_on_a_host_without_systemd(monkeypatch):
+    """A Windows or development box: there is no systemctl to name, so the
+    panel must not print one (it used to show the Linux command there)."""
+    monkeypatch.setattr(self_restart, "_WINDOWS", False)
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which({"sudo": "/usr/bin/sudo"}))
+    assert self_restart.manual_command("restart") is None
+    monkeypatch.setattr(self_restart, "_WINDOWS", True)
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    assert self_restart.manual_command("restart") is None
+    assert self_restart.manual_command("update") is None
+
+
+def test_version_state_carries_the_manual_command(monkeypatch):
+    monkeypatch.setattr(self_restart, "_WINDOWS", False)
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(returncode=1))
+    monkeypatch.setattr(self_restart, "restart_mode", lambda: "update")
+
+    state = asyncio.run(git_version.version_state())
+    assert state["restart_capable"] is False
+    assert state["restart_mode"] == "update"
+    assert state["restart_command"] == "sudo systemctl start domovoi-update.service"
+
+    monkeypatch.setattr(self_restart, "_WINDOWS", True)
+    self_restart._cap_cache = None
+    state = asyncio.run(git_version.version_state())
+    assert state["restart_command"] is None
+
+
 # ─── the two ways a restart silently doesn't happen ───────────────────────
 
 

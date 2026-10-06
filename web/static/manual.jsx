@@ -67,7 +67,7 @@ const UM_HOWTO = {
     diag: ['Stale data? Hard-refresh (Ctrl+Shift+R).',
            'Actions failing? The dashboard must reach the Domovoi server on :6370 — confirm it is running.'] },
   domovoi: {
-    act: ['Restart it on the Domovoi host to apply restart-tier config changes.',
+    act: ['Restart it under Configuration → Version (Restart Domovoi, admin) to apply restart-tier config changes or a hand edit of domovoi/.env.',
           'Check health at /v1/health and connectivity at /v1/connectivity.',
           'Update under Configuration → Version: check, pull, then restart to apply.'],
     diag: ['Nothing responds? Confirm the process is up and Postgres is reachable.',

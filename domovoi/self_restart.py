@@ -12,7 +12,10 @@ Which command depends on the host (docs/LINUX_HOST.md):
 * With ``domovoi-update.service`` installed, the restart starts that unit.
   It runs ``scripts/linux/apply-update.sh`` as root: back up the database,
   sync dependencies, rebuild the MPD image, migrate, start core and web,
-  health-check them, and roll back if they don't come up. Grant::
+  health-check them, and roll back if they don't come up. With nothing new
+  since the commit it last applied (the panel's "Restart Domovoi" when
+  nothing is waiting) it skips all of that: it stops and starts core and
+  web and health-checks them. Grant::
 
     domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service
 
@@ -116,6 +119,20 @@ def _action(mode: str) -> list[str]:
 
 def _units(mode: str) -> list[str]:
     return [UPDATE_UNIT] if mode == "update" else list(UNITS)
+
+
+def manual_command(mode: str | None = None) -> str | None:
+    """The command that does this host's restart by hand, for the version
+    panel to show when :func:`capable` says the host can't do it unattended.
+
+    None on a host without systemd (Windows, a development box): the
+    services there run however they were started, and no one command
+    restarts them. Never run here; it is text for a person."""
+    if _WINDOWS or _systemctl() is None:
+        return None
+    if (mode or restart_mode()) == "update":
+        return f"sudo systemctl start {UPDATE_UNIT}"
+    return "sudo systemctl restart domovoi-core domovoi-web"
 
 
 def capable(mode: str | None = None) -> tuple[bool, str | None]:

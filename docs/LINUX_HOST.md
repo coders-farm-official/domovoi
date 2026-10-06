@@ -89,10 +89,13 @@ and it's the same amount of work the second time you do it.
 ### 2b. Restart-from-the-dashboard needs one sudoers line
 
 The version panel's **Restart to apply changes** button bounces both
-services so pulled code actually loads. The service user can't do that
-unaided, so grant exactly that one command — the same single-command
-pattern the satellite uses for its own self-restart
-([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1).
+services so pulled code actually loads, and **Restart Domovoi** (an admin's,
+whenever nothing is waiting to load) bounces them so a hand edit of
+`domovoi/.env` or a restart-tier setting takes effect. The service user
+can't do that unaided, so grant exactly that one command — the same
+single-command pattern the satellite uses for its own self-restart
+([`PROVISIONING.md`](../satellite/PROVISIONING.md) §8.1). Without the grant
+the panel shows the command to run instead.
 
 > **Prefer the update unit.** A bare bounce loads new code but does not
 > install new dependencies, run new migrations or rebuild the MPD image.
@@ -614,13 +617,18 @@ A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
 that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
 On a box that already runs the three units, one command installs it: see
 [One-time upgrade for existing installs](#one-time-upgrade-for-existing-installs).
-Once it's installed, the panel's **Restart to apply changes** starts it
-instead of bouncing core and web, and each run does this:
+Once it's installed, the panel's **Restart to apply changes** and
+**Restart Domovoi** both start it instead of bouncing core and web, and each
+run does this:
 
 1. Work out what changed since the last SHA it applied and saw healthy.
-   If nothing did, it's a plain restart: stop web and core, restart
-   `domovoi-db` (a cheap no-op Flyway run), start core and web, and
-   health-check them. The button stays fast.
+   If nothing did, it's a plain restart, which is what **Restart Domovoi**
+   is when nothing is waiting: stop web and core, start them, and
+   health-check them, usually in a few seconds. No backup, no dependency
+   sync, no MPD rebuild, and `domovoi-db` is left alone, unless Postgres
+   doesn't answer or its Flyway history is missing a migration the checkout
+   ships: then `domovoi-db` is restarted first (compose up plus Flyway),
+   as every plain restart did before 2026-10-05.
 2. Refuse, touching nothing, if tracked files have uncommitted changes. A
    rollback could not restore that tree. Untracked files are fine. Stop,
    touching nothing, if the dependencies changed but the service user
@@ -647,7 +655,8 @@ instead of bouncing core and web, and each run does this:
 8. Start core and web. Both must answer `/v1/health` (core, :6370) and
    `/api/health` (web, :6369) within 120 s.
    On a healthy plain restart (step 1), the search-helper step below runs
-   too.
+   too; a plain restart that fails its health check is recorded as
+   `failed` and changes nothing else (there is nothing to roll back).
 9. Every plugin that loaded before the update must still load: none that
    was enabled and not at `load_error` may be at `load_error` now. The core
    never lets a failing plugin take it down, so its health check stays
