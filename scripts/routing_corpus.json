@@ -601,6 +601,20 @@
       "path": "fast",
       "tags": ["action", "lyrics"],
       "note": "2026-10-06 lyric review: '<artist> song that goes ...' (invented words and name)"
+    },
+    {
+      "utterance": "play the song that goes last night we left the porch light on",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: a line may start with 'last'; only 'goes last' said whole is a place in a list (invented words)"
+    },
+    {
+      "utterance": "what's the song that goes before the kettle sings we rise",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: a line may start with 'before'; only 'goes before this one' said whole is a place in a list (invented words)"
     }
   ]
 }

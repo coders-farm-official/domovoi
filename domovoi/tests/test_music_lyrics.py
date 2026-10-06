@@ -93,6 +93,19 @@ MATCHES = [
     ("cue up the song that goes the lantern hums beside the river door", "play",
      "the lantern hums beside the river door"),
     ("cue up the one with the words copper kettles sing at dawn", "play", "copper kettles sing at dawn"),
+    # a line may START with a word that, said whole, is a place in a list
+    # (invented lines): only "goes next" / "goes after this one" said whole
+    # is refused
+    ("play the song that goes last night we left the porch light on", "play",
+     "last night we left the porch light on"),
+    ("what's the song that goes before the kettle sings we rise", "find",
+     "before the kettle sings we rise"),
+    ("play the one that goes after all the lanterns fade", "play", "after all the lanterns fade"),
+    ("what song goes first light on the frozen river", "find", "first light on the frozen river"),
+    ("put on the track that goes next to the harbor wall we wait", "play",
+     "next to the harbor wall we wait"),
+    ("play the song that goes before that day we sailed the paper boats", "play",
+     "before that day we sailed the paper boats"),
 ]
 
 NOT_LYRICS = [
@@ -108,6 +121,9 @@ NOT_LYRICS = [
     "which track goes first on the playlist", "what song goes after this one",
     "play the track that goes nicely with candles", "which one goes last",
     "play the one by glass harbor that sounds like rain",
+    "which song goes next please", "what song goes before this one in the queue",
+    "which song goes next after this one", "what song goes last on the album?",
+    "what's the song that goes first on my playlist",
 ]
 
 # 2026-10-06 review: the artist named with the words (invented names).

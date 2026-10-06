@@ -52,13 +52,23 @@ class _PlayerUnreachable(Exception):
 # goes …" must reach music before the library handler's "do i have" (band
 # 310). "a song that goes with rain" is a mood, not lyrics: "a" is
 # deliberately not one of the articles; and "goes" is never a song's words
-# when what follows is a mood or a place in a list ("the song that goes
-# well with a rainy day", "which song goes next on the playlist").
+# when what follows is a mood or pairing ("the song that goes well with a
+# rainy day", "... goes with dinner") or, said whole, a place in a list
+# ("which song goes next on the playlist", "what song goes after this
+# one"). Only said whole: a line may START with such a word ("the song that
+# goes last night we ...", "... goes before the kettle sings ...").
 _LYRIC_SONG = r"(?:song|one|track|tune)"
+_LIST_PLACE = (
+    r"(?: (?:on|in|of) (?:the|my|this|that|our|your) "
+    r"(?:playlist|queue|list|album|record|mix|set|setlist|tape|cd|disc|side))"
+)
+_AFTER_THIS = r"(?: (?:after|before) (?:this|that|it)(?: one| song| track| tune)?)"
+_PLACE_END = r"(?: please| now)?[?.!]*$"
 _LYRIC_GOES = (
     r"goes"
     r"(?! (?:(?:well|best|good|great|nicely) )?with\b)"
-    r"(?! (?:next|first|last|after|before)\b)"
+    r"(?! (?:next|first|last)(?:" + _LIST_PLACE + r"|" + _AFTER_THIS + r")*" + _PLACE_END + r")"
+    r"(?!" + _AFTER_THIS + _LIST_PLACE + r"?" + _PLACE_END + r")"
 )
 _LYRIC_INTRO = (
     r"(?:"
