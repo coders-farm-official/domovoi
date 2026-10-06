@@ -25,24 +25,28 @@ a way that would otherwise get reported as a bug.
    no timed lyrics of their own it asks lrclib.net, sending each such
    song's **title, artist, album and length** (nothing else), about one
    request a second, only while the server is online. The first pass for
-   about 5,000 songs takes a couple of hours, longer whenever LRCLIB asks it
-   to slow down; songs it didn't have are asked about again after four
-   weeks or more. Under **No**, or with the question unanswered, it is off.
-   To keep it off whatever the answer: Settings → Configuration → Library →
-   **Synced lyrics from LRCLIB** (or `LYRICS_LRCLIB_ENABLED=false`); switching
-   it off stops it before its next request.
+   about 5,000 songs takes several hours — about a night — and longer
+   whenever LRCLIB asks it to slow down; songs it didn't have are asked
+   about again after four weeks or more. Under **No**, or with the question
+   unanswered, it is off (the Jobs tab then says this Domovoi stays off the
+   internet). To keep it off whatever the answer: Settings → Configuration
+   → Library → **Synced lyrics from LRCLIB** (or
+   `LYRICS_LRCLIB_ENABLED=false`); switching it off stops it before its next
+   request.
 4. **Domovoi may write `.lrc` files into your music folders.** With
    **Save lyrics as .lrc files** on (it is, whenever LRCLIB is on), timed
    lyrics from LRCLIB are also saved as a `.lrc` next to a song that has
    none, so other players can show them too. Such a file says
-   `[re:Domovoi]` at the top. Domovoi never writes over, changes or
-   deletes a `.lrc` you made; it updates only the files it wrote, and one
-   you edit or delete stays yours (it is never written again). Plain
-   lyrics without timing stay in the database only. The core needs write
-   permission in the music folders for this (on the Beelink it runs as
-   their owner); a folder it can't write shows as "couldn't be saved" on
-   the Jobs tab. Switch it off in the same place if you'd rather Domovoi
-   never wrote there.
+   `[re:Domovoi]` at the top. Only a song with no `.lrc` at all gets one: a
+   `.lrc` you made — named like the song, or "Artist - Title.lrc" — always
+   wins, is what the players show, and is never written over, changed or
+   deleted; Domovoi updates only the files it wrote, and one you edit or
+   delete stays yours (it is never written again). Plain lyrics without
+   timing stay in the database only. The core needs write permission in the
+   music folders for this (on the Beelink it runs as their owner); a folder
+   it can't write shows on the Jobs tab as songs whose `.lrc` "couldn't be
+   saved", with the reason. Switch it off in the same place if you'd rather
+   Domovoi never wrote there.
 
 ### What changes
 
@@ -56,9 +60,12 @@ a way that would otherwise get reported as a bug.
   phone, tapping a line jumps there. The Android app's Player tab, player
   sheet and room cards do the same.
 * **Ask for a song by its words**: "play the song that goes …", "put on
-  the one with the words …", and "what's the song that goes …" (Domovoi
-  names it and offers to play it). When it isn't sure it asks "Did you
-  mean …?" the way it does for names. And when "play <something>" finds
+  the one with the words …", "play the song by <artist> that goes …", and
+  "what's the song that goes …" (Domovoi names it and offers to play it).
+  When it isn't sure it asks "Did you mean …?" the way it does for names;
+  a song you don't have still goes to your streaming plugin, if you have
+  one, as before. "What song goes well with a rainy day" and the like are
+  not taken for words of a song. And when "play <something>" finds
   nothing by that name, the words are tried as a lyric last — that plays
   only on an exact line of six words or more, and otherwise at most asks.
   Domovoi never says or shows the words back. Settings → Configuration →
