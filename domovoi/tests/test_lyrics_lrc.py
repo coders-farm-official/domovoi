@@ -21,6 +21,7 @@ from domovoi.lyrics.lrc import (
     format_lrc,
     looks_like_lrc,
     parse_lrc,
+    parse_lrc_untimed,
     parse_lyrics_text,
     parse_plain,
 )
@@ -298,7 +299,7 @@ def test_random_bytes_never_raise() -> None:
         data = bytes(rng.choice(alphabet) for _ in range(n))
         text = decode_lrc_bytes(data)
         assert isinstance(text, str)
-        for fn in (parse_lrc, parse_plain, parse_lyrics_text):
+        for fn in (parse_lrc, parse_plain, parse_lyrics_text, parse_lrc_untimed):
             _check_shape(fn(text))
         assert looks_like_lrc(text) in (True, False)
     for junk in (b"", bytes(range(256)), b"\xff\xfe\x00", b"\xfe\xff\xd8\x00"):
@@ -324,4 +325,37 @@ def test_odd_inputs_never_raise() -> None:
         p = parse_lrc(text)  # type: ignore[arg-type]
         _check_shape(p)
         _check_shape(parse_plain(text))  # type: ignore[arg-type]
+        _check_shape(parse_lrc_untimed(text))  # type: ignore[arg-type]
     assert decode_lrc_bytes(None) == ""  # type: ignore[arg-type]
+
+
+# ─── A .lrc that does not look like LRC (2026-10-06 review, [P9]/[P10]) ───
+
+
+def test_an_untimed_lrc_never_shows_its_id_tags() -> None:
+    src = f"[ti:Lantern Song]\n[ar:The Example Band]\n[offset:+250]\n{L1}\n\n{L4}\n"
+    assert not looks_like_lrc(src)
+    p = parse_lrc_untimed(src)
+    assert p.synced is None and p.offset_ms == 0
+    assert p.plain == f"{L1}\n\n{L4}"
+    assert dict(p.tags) == {"ti": "Lantern Song", "ar": "The Example Band", "offset": "+250"}
+    # plain text reading keeps them (lyrics inside a tag are read that way)
+    assert parse_plain(src).plain.startswith("[ti:Lantern Song]")
+
+
+def test_a_lrc_with_one_or_two_times_shows_no_stray_time_tags() -> None:
+    src = f"[00:01.00]{L1}\n{L2}\n[00:09.50][00:30.00]{L3}\n{L4}\n[00:40.00]\n"
+    assert not looks_like_lrc(src)                    # 2 timed of 5: read as plain
+    p = parse_lrc_untimed(src)
+    assert p.synced is None
+    assert p.plain == f"{L1}\n{L2}\n{L3}\n{L4}"           # each line once, in file order
+    assert "[00:" not in p.plain
+
+
+def test_untimed_lrc_reading_keeps_the_plain_rules() -> None:
+    # [P13]-[P15]: word tags out, whitespace collapsed, one stanza break;
+    # section labels and invalid times are words like any others
+    src = f"\n\n[Chorus]\n<00:01.00>{L1}\t \n\n\n[00:75.00]{L4}\n\n"
+    assert parse_lrc_untimed(src).plain == f"[Chorus]\n{L1}\n\n[00:75.00]{L4}"
+    assert parse_lrc_untimed("[ti:only a title]\n").plain is None
+    assert parse_lrc_untimed("").plain is None

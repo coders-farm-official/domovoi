@@ -17,11 +17,16 @@ read as their lyrics and never written. An edited file turns the row to
 **Never clobbering.** A new file is written to a temporary name created
 exclusively (``O_CREAT | O_EXCL``), flushed and synced, then hard-linked to
 its real name — the link fails if anything appeared there meanwhile — and
-the temporary name is always removed. Where hard links are not supported,
-the real name itself is created exclusively. Any existing path at the
-target (a file, a directory, a symlink, a broken symlink) means "exists":
-nothing is written and no symlink is ever followed. Refreshing Domovoi's
-own file re-checks its bytes right before ``os.replace``.
+the temporary name is always removed. The temporary name is
+``.<stem>.lrc.domovoi-<hex>.tmp``, or ``.domovoi-<hex>.lrc.tmp`` when that
+would be too long a name (a long song name whose ``.lrc`` still fits).
+Where hard links are not supported, the real name itself is created
+exclusively. Any existing path at the target (a file, a directory, a
+symlink, a broken symlink) means "exists": nothing is written and no
+symlink is ever followed. Refreshing Domovoi's own file re-checks its
+bytes right before ``os.replace``. A song whose file was renamed since
+Domovoi wrote its ``.lrc`` gets a new one under the new name (the old one
+is left where it is).
 
 :data:`SIDECAR_LOCK` is held by the writer from creating a file until its
 hash is committed, and by the local scan for a whole batch, so the scan
@@ -41,13 +46,13 @@ import logging
 import os
 import secrets
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
 from domovoi.lyrics import LoopLocalLock
 from domovoi.lyrics.lrc import MAX_LRC_BYTES
-from domovoi.lyrics.sources import read_sidecar_bytes, sidecar_candidates
+from domovoi.lyrics.sources import name_key, read_sidecar_bytes, sidecar_candidates
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +104,10 @@ class WriteOutcome:
     sha256: str | None = None
     error: str | None = None
     stop: bool = False
+    #: The song's file was renamed since Domovoi wrote its ``.lrc`` (a plugin
+    #: re-filing a download keeps the row and changes its name): that file
+    #: was left where it is, and this was a new write for the new name.
+    renamed: bool = False
 
     @property
     def wrote(self) -> bool:
@@ -181,8 +190,50 @@ def _unlink_quietly(path: Path) -> None:
         log.debug("lyrics .lrc: could not remove a temporary file (%s)", type(e).__name__)
 
 
-def _temp_path(directory: Path, stem: str) -> Path:
-    return directory / f".{stem}.lrc.domovoi-{secrets.token_hex(4)}.tmp"
+#: The longest file name the scan's own file systems take: 255 bytes (ext4
+#: and most POSIX ones, in UTF-8) or 255 characters (NTFS).
+MAX_NAME = 255
+
+
+def _temp_path(directory: Path, stem: str, *, short: bool = False) -> tuple[Path, bool]:
+    """A temporary name in the song's folder ([W6], amended 2026-10-06),
+    and whether it is the short form: one that says whose it is,
+    ``.<stem>.lrc.domovoi-<hex>.tmp`` — or, when that would be longer than
+    a file name may be (it is 18 characters longer than the ``.lrc`` it
+    becomes), or ``short``, ``.domovoi-<hex>.lrc.tmp``. Neither is a
+    ``.lrc`` to the scan or audio to the library indexer."""
+    token = secrets.token_hex(4)
+    name = f".{stem}.lrc.domovoi-{token}.tmp"
+    if short or len(name) > MAX_NAME or len(name.encode("utf-8", "surrogateescape")) > MAX_NAME:
+        return directory / f".domovoi-{token}.lrc.tmp", True
+    return directory / name, False
+
+
+def _name_trouble(e: OSError) -> bool:
+    """An error that may be the temporary name's length, not the folder:
+    too long, an invalid name, or (Windows without long paths) a path past
+    MAX_PATH, which Windows reports as "path not found"."""
+    return _error_code(e) == "name" or (sys.platform == "win32" and isinstance(e, FileNotFoundError))
+
+
+def _write_temp(directory: Path, stem: str, content: bytes) -> Path:
+    """Write ``content`` to a fresh temporary file in ``directory``
+    (exclusively created, synced) and return its path. A name taken by
+    somebody else's file is tried once more with another random part; a
+    name too long for the file system, with the short form. Raises the
+    last ``OSError``."""
+    tmp, short = _temp_path(directory, stem)
+    try:
+        _write_new_file(tmp, content)
+        return tmp
+    except FileExistsError:
+        retry, _ = _temp_path(directory, stem, short=short)
+    except OSError as e:
+        if short or not _name_trouble(e):
+            raise
+        retry, _ = _temp_path(directory, stem, short=True)
+    _write_new_file(retry, content)
+    return retry
 
 
 def _own_bytes(path: Path, music_root: Path) -> bytes | None:
@@ -231,6 +282,15 @@ def write_sidecar(
     # Domovoi's own again: such lyrics stay in the database only.
     too_big = not fits_on_disk(content)
 
+    if lrc_state == "written" and lrc_name and song_renamed(lrc_name, audio):
+        # The song's file has another name since Domovoi wrote its .lrc (a
+        # plugin re-filing a download keeps the row, not the name): that
+        # .lrc is left where it is ([W11]) — it is no longer this song's —
+        # and this is a new write for the new name, under [W4] as any is.
+        return replace(_new_file(directory, audio, name, target, candidates, content, new_sha,
+                                 too_big=too_big, music_root=music_root, link=link),
+                       renamed=True)
+
     if lrc_state == "written" and lrc_name:
         own = directory / lrc_name
         if not os.path.lexists(own):                           # [O3]
@@ -253,6 +313,23 @@ def write_sidecar(
         return _refresh(own, content, new_sha, music_root=music_root,
                         lrc_name=lrc_name, lrc_sha256=lrc_sha256)
 
+    return _new_file(directory, audio, name, target, candidates, content, new_sha,
+                     too_big=too_big, music_root=music_root, link=link)
+
+
+def song_renamed(lrc_name: str, audio_path: str | os.PathLike[str]) -> bool:
+    """Whether the ``.lrc`` Domovoi wrote for a song (``lrc_name``) is no
+    longer named after the song's file — the file was renamed since. Names
+    compare as the sidecar rule compares them (NFC, any case)."""
+    return name_key(lrc_name) != name_key(target_name(audio_path))
+
+
+def _new_file(
+    directory: Path, audio: Path, name: str, target: Path, candidates: list[str],
+    content: bytes, new_sha: str, *, too_big: bool, music_root: Path,
+    link: Callable[[Path, Path], None],
+) -> WriteOutcome:
+    """[W4]: a new ``.lrc``, only where the song has none at all."""
     if candidates or os.path.lexists(target):                  # [W4], [W10]
         return WriteOutcome("exists", name=candidates[0] if candidates else name)
     if too_big:
@@ -274,16 +351,8 @@ def _create(
     name = target.name
     # _write_new_file removes what it created when it fails, and nothing
     # else: a path that was already there is never touched.
-    tmp = _temp_path(directory, stem)
     try:
-        _write_new_file(tmp, content)
-    except FileExistsError:
-        # Somebody's file with the same random name: once more, another name.
-        tmp = _temp_path(directory, stem)
-        try:
-            _write_new_file(tmp, content)
-        except OSError as e:
-            return _failed(e, name)
+        tmp = _write_temp(directory, stem, content)
     except OSError as e:
         return _failed(e, name)
     try:
@@ -324,9 +393,8 @@ def _refresh(
     """[W7]: replace Domovoi's own file, re-checking it is still Domovoi's
     immediately before. A failure leaves the old file and the row as they
     were (the row stays ``written``: the file is still Domovoi's)."""
-    tmp = _temp_path(own.parent, Path(lrc_name).stem)
     try:
-        _write_new_file(tmp, content)
+        tmp = _write_temp(own.parent, Path(lrc_name).stem, content)
     except OSError as e:
         return WriteOutcome(None, name=lrc_name, error=_error_code(e), stop=e.errno == errno.ENOSPC)
     try:
@@ -353,10 +421,12 @@ def fits_on_disk(content: bytes) -> bool:
 
 __all__ = [
     "ERROR_CODES",
+    "MAX_NAME",
     "SIDECAR_LOCK",
     "WriteOutcome",
     "fits_on_disk",
     "sha256_hex",
+    "song_renamed",
     "target_name",
     "write_sidecar",
 ]

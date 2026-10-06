@@ -395,3 +395,102 @@ def test_lyrics_too_big_to_read_back_are_never_written(music) -> None:
 def test_never_raises_on_an_unlistable_folder(music, tmp_path) -> None:
     audio = tmp_path / "Music" / "no such folder" / "x.mp3"
     assert _write(audio, music).state is None      # the audio file is not there either
+
+
+# ─── The 2026-10-06 review ───────────────────────────────────────────────
+
+
+def test_a_long_names_temporary_file_takes_the_short_form() -> None:
+    directory = Path("/music/x")
+    long_stem = "x" * 238                               # its .lrc (242) fits, the long temp would not
+    tmp, short = sidecar._temp_path(directory, long_stem)
+    assert short and tmp.name.startswith(".domovoi-") and tmp.name.endswith(".lrc.tmp")
+    assert len(tmp.name) < 30
+    wide = "ぬ" * 80                                     # 240 bytes in UTF-8: ext4 counts bytes
+    assert sidecar._temp_path(directory, wide)[1] is True
+    tmp, short = sidecar._temp_path(directory, "Lantern Song")
+    assert not short and tmp.name.startswith(".Lantern Song.lrc.domovoi-") and tmp.name.endswith(".tmp")
+
+
+def test_a_name_the_file_system_refuses_gets_the_short_temporary_name(music, monkeypatch) -> None:
+    """The long temporary name refused (ENAMETOOLONG, or Windows' 206) though
+    the target itself fits: the short one is used, and the .lrc written."""
+    audio = _song(music)
+    real = sidecar._write_new_file
+    tried: list[str] = []
+
+    def picky(path, content):
+        tried.append(Path(path).name)
+        if Path(path).name.startswith(".Lantern Song"):
+            e = OSError(errno.ENAMETOOLONG, "File name too long")
+            e.winerror = 206
+            raise e
+        return real(path, content)
+
+    monkeypatch.setattr(sidecar, "_write_new_file", picky)
+    out = _write(audio, music)
+    assert out.state == "written" and out.name == "Lantern Song.lrc"
+    assert tried[0].startswith(".Lantern Song.lrc.domovoi-") and tried[1].startswith(".domovoi-")
+    assert (audio.parent / "Lantern Song.lrc").read_bytes() == _content()
+    assert _leftovers(audio.parent) == []
+    # a refresh of Domovoi's own file takes the same way
+    out2 = _write(audio, music, _content(L2), state="written", name=out.name, sha=out.sha256)
+    assert out2.state == "written" and _leftovers(audio.parent) == []
+
+
+def test_a_real_long_name_is_written(music) -> None:
+    """On the real file system: a 238-character name, whose .lrc (242) is
+    legal but whose long temporary name (260) is not."""
+    root = music.resolve()
+    if sys.platform == "win32":
+        root = Path("\\\\?\\" + str(root))            # past MAX_PATH, as the reviewer's run
+    folder = root / "The Example Band"
+    audio = folder / f"{'x' * 238}.mp3"
+    try:
+        audio.write_bytes(b"not really audio")
+    except OSError as e:
+        pytest.skip(f"this file system takes no 242-character name ({type(e).__name__})")
+    out = write_sidecar(audio, _content(), music_root=root, lrc_state=None, lrc_name=None, lrc_sha256=None)
+    assert out.state == "written", out
+    assert (folder / f"{'x' * 238}.lrc").read_bytes() == _content()
+    assert _leftovers(folder) == []
+
+
+def test_a_renamed_song_gets_a_new_lrc_and_the_old_one_stays(music) -> None:
+    """A plugin re-filed the song under a new name (same library row): the
+    .lrc Domovoi wrote under the old name is left as it is ([W11]), and the
+    new name gets one of its own."""
+    old_audio = _song(music, "Lantern Song.flac")
+    first = _write(old_audio, music)
+    old_bytes = (music / "The Example Band" / "Lantern Song.lrc").read_bytes()
+    old_audio.unlink()
+    new_audio = _song(music, "Lantern Song (2026 remaster).flac")
+    out = _write(new_audio, music, _content(L2), state="written", name=first.name, sha=first.sha256)
+    assert (out.state, out.name, out.renamed) == ("written", "Lantern Song (2026 remaster).lrc", True)
+    assert (music / "The Example Band" / "Lantern Song.lrc").read_bytes() == old_bytes
+    assert (music / "The Example Band" / out.name).read_bytes() == _content(L2)
+    # the new name already has the household's .lrc: nothing written, and
+    # the outcome says it replaces "written"
+    theirs = music / "The Example Band" / "Glass Harbor.lrc"
+    theirs.write_bytes(b"[00:01.00]theirs\n")
+    other = _song(music, "Glass Harbor.flac")
+    out = _write(other, music, _content(L2), state="written", name="Lantern Song.lrc", sha=first.sha256)
+    assert (out.state, out.renamed) == ("exists", True)
+    assert theirs.read_bytes() == b"[00:01.00]theirs\n"
+    assert sidecar.song_renamed("Lantern Song.lrc", Path("x") / "LANTERN SONG.mp3") is False
+
+
+def test_a_decomposed_lrc_name_is_the_songs_lrc(music) -> None:
+    """A Mac-copied .lrc (NFD) beside an NFC-named song: the household's
+    file — nothing written beside it, nothing that would hide it."""
+    import unicodedata
+
+    audio = _song(music, unicodedata.normalize("NFC", "Café Lantern.flac"))
+    theirs = audio.parent / unicodedata.normalize("NFD", "Café Lantern.lrc")
+    theirs.write_bytes(b"[00:01.00]theirs\n")
+    names_before = sorted(os.listdir(audio.parent))
+    if len(names_before) != 2:
+        pytest.skip("this file system folds the two Unicode forms into one name")
+    out = _write(audio, music)
+    assert out.state == "exists"
+    assert sorted(os.listdir(audio.parent)) == names_before

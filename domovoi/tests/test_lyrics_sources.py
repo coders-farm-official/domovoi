@@ -22,12 +22,17 @@ from domovoi.lyrics import sources
 from domovoi.lyrics.lrc import MAX_LRC_BYTES
 from domovoi.lyrics.sources import (
     DirRow,
+    artist_title_matches,
     artist_title_sidecars,
+    best_candidate,
+    can_read,
+    change_stamp_ns,
     parse_sidecar,
     read_embedded,
     read_sidecar_bytes,
     sidecar_candidates,
     stat_file,
+    sylt_lines,
 )
 from domovoi.tests.test_library_cover_art import bare_flac, bare_m4a, bare_ogg, silent_mp3
 
@@ -162,7 +167,9 @@ def test_a_symlinked_sidecar_is_read_only_when_it_points_inside_music_dir(tmp_pa
     broken = music / "Velvet Kites.lrc"
     _symlink_or_skip(broken, music / "gone.lrc")
     assert read_sidecar_bytes(broken, root).error == "missing"
-    assert stat_file(broken) is not None          # the link itself is there
+    # A symlink to nothing is no sidecar (it would be "seen" and then never
+    # read, so read again on every tick: the 2026-10-06 review).
+    assert stat_file(broken) is None
 
 
 def test_the_symlink_rule_where_symlinks_cannot_be_made(tmp_path, monkeypatch) -> None:
@@ -380,3 +387,202 @@ def test_nothing_here_logs_lyric_text(tmp_path, caplog) -> None:
         read_sidecar_bytes(tmp_path / "a.lrc", tmp_path)
     for word in ("lantern", "kettle", "paper boats"):
         assert word not in caplog.text
+
+
+# ═══ The 2026-10-06 review ══════════════════════════════════════════════
+# (sources / files / data review: names in two Unicode forms, a symlink to
+# nothing, a .lrc that is not LRC, SYLT synced by syllable, a FLAC with
+# both plain and timed lyrics, a file the core could not read yet)
+
+
+def test_an_untimed_sidecar_shows_no_tags_and_no_stray_times() -> None:
+    tagged = f"[ti:Lantern Song]\n[ar:The Example Band]\n{L1}\n{L3}\n".encode()
+    p = parse_sidecar(tagged)
+    assert (p.synced, p.plain) == (None, f"{L1}\n{L3}")
+    partly = f"[00:01.00]{L1}\n{L2}\n{L3}\n{L1}\n".encode()     # 1 timed line of 4: not LRC
+    p = parse_sidecar(partly)
+    assert p.synced is None and p.plain == f"{L1}\n{L2}\n{L3}\n{L1}"
+    # A real LRC file is read as before, and lyrics in a TAG that are not
+    # LRC keep their every line (only a .lrc file's tags are not words).
+    assert parse_sidecar(LRC.encode()).synced[0] == (1000, L1)
+    assert sources.parse_lyrics_text(tagged.decode()).plain.startswith("[ti:Lantern Song]")
+
+
+def test_names_compare_in_one_unicode_form() -> None:
+    import unicodedata
+
+    nfc = lambda s: unicodedata.normalize("NFC", s)   # noqa: E731
+    nfd = lambda s: unicodedata.normalize("NFD", s)   # noqa: E731
+    audio = nfc("Café Lantern.mp3")
+    assert nfc("Café Lantern.lrc") != nfd("Café Lantern.lrc")
+    # a Mac-copied .lrc (decomposed) beside a composed audio name: its sidecar
+    assert sidecar_candidates(audio, [audio, nfd("Café Lantern.lrc")]) == [nfd("Café Lantern.lrc")]
+    assert sidecar_candidates(nfd("Café Lantern.mp3"), [nfc("CAFÉ LANTERN.lrc")]) == [nfc("CAFÉ LANTERN.lrc")]
+    # ...so a .lrc that is another audio file's sidecar in the other form is
+    # never an "Artist - Title" file for a third song
+    names = ["01.mp3", nfd("Café - Lantern.mp3"), nfc("Café - Lantern.lrc")]
+    assert artist_title_matches(names, [_row(1, "01.mp3", "Café", "Lantern")]) == {}
+
+
+def test_an_artist_title_match_is_found_beside_a_same_stem_file_too() -> None:
+    names = ["01 Lantern Song.mp3", "01 Lantern Song.lrc", "The Example Band - Lantern Song.lrc"]
+    rows = [_row(1, "01 Lantern Song.mp3", "The Example Band", "Lantern Song")]
+    # the scan decides between the two (Domovoi's own same-stem file never
+    # hides the household's "Artist - Title" one) ...
+    assert artist_title_matches(names, rows) == {1: "The Example Band - Lantern Song.lrc"}
+    # ... and the contract's reading, with no Domovoi file involved, stands
+    assert artist_title_sidecars(names, rows) == {}
+
+
+def test_a_symlink_to_nothing_or_a_loop_is_no_sidecar(tmp_path, monkeypatch) -> None:
+    """Simulated, so it runs where symlinks can't be made: stat follows the
+    link and finds nothing (or a loop)."""
+    import errno
+
+    gone = tmp_path / "Lantern Song.lrc"
+    loop = tmp_path / "Glass Harbor.lrc"
+    denied = tmp_path / "Velvet Kites.lrc"
+    for p in (gone, loop, denied):
+        p.write_bytes(LRC.encode())
+    real_stat = os.stat
+
+    def stat(path, *a, **k):
+        if Path(path) == gone:
+            raise FileNotFoundError(errno.ENOENT, "no such file")
+        if Path(path) == loop:
+            raise OSError(errno.ELOOP, "too many levels of symbolic links")
+        if Path(path) == denied:
+            raise PermissionError(errno.EACCES, "denied")
+        return real_stat(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", stat)
+    assert stat_file(gone) is None and stat_file(loop) is None
+    assert stat_file(denied) is not None                 # looked at; its read says why not
+
+
+def test_a_symlink_loop_reads_as_not_a_file(tmp_path, monkeypatch) -> None:
+    import errno
+    import stat as stat_mod
+
+    p = tmp_path / "Lantern Song.lrc"
+    p.write_bytes(b"stand-in")
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **k):
+        st = real_lstat(path, *a, **k)
+        if Path(path) == p:
+            return os.stat_result((stat_mod.S_IFLNK | 0o777,) + tuple(st)[1:])
+        return st
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    for raised in (RuntimeError("Symlink loop"), OSError(errno.ELOOP, "loop")):
+        def resolve(self, strict=False, _e=raised):
+            raise _e
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+        assert read_sidecar_bytes(p, tmp_path).error == "not_file"
+
+
+def test_the_change_stamp_is_the_later_of_mtime_and_ctime_on_posix() -> None:
+    from types import SimpleNamespace
+
+    chmodded = SimpleNamespace(st_mtime_ns=1_000, st_ctime_ns=9_000, st_size=5)
+    restored = SimpleNamespace(st_mtime_ns=9_000, st_ctime_ns=1_000, st_size=5)
+    assert change_stamp_ns(chmodded, posix=True) == 9_000     # a chmod moved only the ctime
+    assert change_stamp_ns(restored, posix=True) == 9_000
+    assert change_stamp_ns(chmodded, posix=False) == 1_000    # Windows: ctime is the birth time
+
+
+def test_can_read(tmp_path) -> None:
+    p = tmp_path / "Lantern Song.mp3"
+    p.write_bytes(silent_mp3())
+    assert can_read(p) is True
+    assert can_read(tmp_path / "gone.mp3") is False
+
+
+# ─── SYLT synced by syllable or word (ID3v2.4's way) ──────────────────────
+
+# The two invented lines L1, L2 in syllables: a space in front of a new
+# word, a newline in front of the first syllable of a line.
+SYLLABLES = [
+    ("the", 12400), (" lan", 12700), ("tern", 12900), (" hums", 13300), (" be", 13800),
+    ("side", 14000), (" the", 14300), (" ri", 14500), ("ver", 14700), (" door", 15000),
+    ("\nand", 16850), (" ev", 17100), ("ery", 17300), (" cop", 17600), ("per", 17800),
+    (" ket", 18100), ("tle", 18300), (" sings", 18600), (" at", 19000), (" dawn", 19300),
+]
+
+
+def _pairs(frame_text):
+    return [(ts, body) for body, ts in frame_text]
+
+
+def test_sylt_syllables_are_joined_into_lines() -> None:
+    from domovoi.lyrics.lrc import from_entries
+
+    got = from_entries(sylt_lines(_pairs(SYLLABLES)))
+    assert got.synced == ((12400, L1), (16850, L2))
+    assert got.plain == f"{L1}\n{L2}"
+    # the newline at the END of a line's last piece (some taggers) reads the same
+    tail_style = [("the lantern hums", 1000), (" beside the river door\n", 1500),
+                  ("and every copper", 3000), (" kettle sings at dawn\n", 3500)]
+    assert from_entries(sylt_lines(_pairs(tail_style))).synced == ((1000, L1), (3000, L2))
+
+
+def test_sylt_of_whole_lines_is_read_one_entry_a_line() -> None:
+    whole = [(L1, 1000), ("\n", 1500), (L2, 2000)]       # a newline alone: a blank line
+    assert sylt_lines(_pairs(whole)) == _pairs(whole)
+    no_newlines = [(L1, 1000), (L2, 2000), (L3, 3000)]
+    assert sylt_lines(_pairs(no_newlines)) == _pairs(no_newlines)
+
+
+@needs_mutagen
+def test_a_syllable_synced_sylt_frame_reads_as_lines(tmp_path) -> None:
+    from mutagen.id3 import SYLT, USLT
+
+    from domovoi.handlers.shared.lyric_search import build_lines
+
+    p = _mp3(tmp_path / "a.mp3",
+             USLT(encoding=3, lang="eng", desc="", text=L3),
+             SYLT(encoding=3, lang="eng", format=2, type=1, desc="", text=SYLLABLES))
+    got = read_embedded(p, track_id=1)
+    assert got.detail == "SYLT"
+    assert got.lyrics.synced == ((12400, L1), (16850, L2))
+    # lyric search indexes the two lines, not twenty syllables
+    assert [r.text for r in build_lines(got.lyrics.plain) if r.span == 1] == [L1, L2]
+
+
+# ─── Timed beats plain inside a file too ([E3] amended, [M1]) ─────────────
+
+
+@needs_mutagen
+def test_a_flac_with_plain_and_timed_lyrics_shows_the_timed(tmp_path) -> None:
+    both = _flac(tmp_path / "a.flac", {"LYRICS": [f"{L1}\n{L2}\n{L3}"], "SYNCEDLYRICS": [LRC]})
+    got = read_embedded(both)
+    assert got.detail == "SYNCEDLYRICS (LRC)"
+    assert got.lyrics.synced == ((1000, L1), (2500, L2), (4000, L3))
+    # with no timed lyrics anywhere the order of [E3] decides, as before
+    plain = _flac(tmp_path / "b.flac", {"SYNCEDLYRICS": [L2], "LYRICS": [L1]})
+    assert read_embedded(plain).detail == "LYRICS"
+
+
+@needs_mutagen
+def test_an_lrc_uslt_beats_a_plain_english_one(tmp_path) -> None:
+    from mutagen.id3 import USLT
+
+    p = _mp3(tmp_path / "a.mp3",
+             USLT(encoding=3, lang="eng", desc="plain", text=f"{L1}\n{L2}"),
+             USLT(encoding=3, lang="und", desc="timed", text=LRC))
+    got = read_embedded(p)
+    assert got.detail == "USLT (LRC)" and got.lyrics.synced is not None
+
+
+def test_best_candidate() -> None:
+    from domovoi.lyrics.lrc import parse_lrc, parse_plain
+    from domovoi.lyrics.sources import EmbeddedLyrics
+
+    plain_a = EmbeddedLyrics("LYRICS", parse_plain(L1))
+    plain_b = EmbeddedLyrics("UNSYNCEDLYRICS", parse_plain(L2))
+    timed = EmbeddedLyrics("SYNCEDLYRICS (LRC)", parse_lrc(LRC))
+    assert best_candidate([None, plain_a, plain_b, timed]) is timed
+    assert best_candidate([plain_a, plain_b]) is plain_a
+    assert best_candidate([None]) is None and best_candidate([]) is None

@@ -487,6 +487,16 @@ class LyricsFetcher(Worker):
                     return "paused"
                 continue
             refusals = 0
+            if not store.answer_fits(answer):
+                # [R28], decided before the row is sent: a CHECK refusing it
+                # would put the lyrics' first characters in the database
+                # server's own log.
+                await self._store.save_failure(track.id, store.TOO_LARGE, md5)
+                counts["asked"] += 1
+                counts["errors"] += 1
+                F.last_error = store.TOO_LARGE
+                log.warning("lyrics fetch: track %d's lyrics are too big to keep", track.id)
+                continue
             try:
                 await self._store.save_answer(track.id, answer, md5)
             except Exception as e:  # noqa: BLE001 — one row's data never stalls the rest [R28]
@@ -542,6 +552,18 @@ class LyricsFetcher(Worker):
                 return None
             if row.lrc_state in ("edited", "deleted"):
                 return None
+            if row.local_source == "sidecar":
+                # The household's own .lrc is this song's lyrics ([M1]) —
+                # an "Artist - Title" one too, which the writer cannot tell
+                # by its name: no .lrc of Domovoi's goes beside it. One of
+                # Domovoi's already there stays as it is ([W11]), not
+                # refreshed while theirs is in use.
+                if row.lrc_state not in (None, "failed"):
+                    return None
+                outcome = sidecar.WriteOutcome("exists", name=row.lrc_name)
+                await self._store.record_lrc(track_id, outcome)
+                counts["lrc_exists"] += 1
+                return outcome
             content = format_lrc(
                 row.synced, title=row.title or "", artist=row.artist or "", album=row.album,
                 duration_sec=row.duration_sec, version=domovoi_version(),

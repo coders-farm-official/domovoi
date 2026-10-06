@@ -28,8 +28,10 @@ from domovoi.lyrics import SCAN_VERSION, sidecar, store
 from domovoi.lyrics import status as lyrics_state
 from domovoi.lyrics.lrc import format_lrc
 from domovoi.lyrics.sidecar import sha256_hex
+from domovoi.lyrics.sources import SidecarBytes, change_stamp_ns
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.test_library_cover_art import silent_mp3
+from domovoi.workers import lyrics_scan
 from domovoi.workers.lyrics_scan import LyricsScanError, LyricsScanner
 
 needs_mutagen = pytest.mark.skipif(
@@ -78,7 +80,14 @@ class FakeScanStore:
                                             None, None, False, None, None, None)
 
     async def rows(self):
-        return sorted(self.by_id.values(), key=lambda r: (not r.never_scanned, r.id))
+        # As the real query: the row's lrc_* columns as they are now.
+        out = []
+        for r in self.by_id.values():
+            st = self.states.get(r.id)
+            out.append(dataclasses.replace(
+                r, lrc_state=st.state if st else None, lrc_name=st.name if st else None,
+                lrc_sha256=st.sha256 if st else None))
+        return sorted(out, key=lambda r: (not r.never_scanned, r.id))
 
     async def lrc_states(self, ids):
         return {i: self.states[i] for i in ids if i in self.states}
@@ -148,7 +157,7 @@ def test_first_sight_reads_the_sidecar_then_the_tags(music, caplog) -> None:
     assert wa.lyrics.synced == ((1000, L1), (2000, L2))            # the sidecar beats the tags
     assert (wb.source, wb.detail, wb.lyrics.plain, wb.sidecar_name) == ("embedded", "USLT", f"{L2}\n{L3}", None)
     assert (wc.source, wc.lyrics) == (None, None)
-    assert wa.file_size == a.stat().st_size and wa.file_mtime_ns == a.stat().st_mtime_ns
+    assert wa.file_size == a.stat().st_size and wa.file_mtime_ns == change_stamp_ns(a.stat())
     S = lyrics_state.SCAN
     assert (S.state, S.tracks, S.unscanned, S.read_last_pass) == ("done", 3, 0, 3)
     assert S.last_pass_at is not None and S.last_error is None
@@ -361,6 +370,162 @@ def test_the_batch_holds_the_sidecar_lock(music) -> None:
     run(LyricsScanner(store=s).tick())
     assert held == [True, True]
     assert not sidecar.SIDECAR_LOCK.locked()
+
+
+# ─── The 2026-10-06 review ───────────────────────────────────────────────
+
+
+HOUSEHOLD_AT = f"[00:01.00]{L2}\n[00:02.00]{L1}\n".encode()
+
+
+@needs_mutagen
+def test_domovois_own_lrc_never_hides_the_households_artist_title_file(music) -> None:
+    """Domovoi wrote "01 Lantern Song.lrc" (LRCLIB's lyrics); the household
+    later added "The Example Band - Lantern Song.lrc". Theirs is the song's
+    lyrics; Domovoi's stays on disk, untouched."""
+    s = FakeScanStore()
+    audio = tagged_mp3(music / "Band" / "01 Lantern Song.mp3", lyrics=L3)
+    own = domovoi_lrc()
+    (music / "Band" / "01 Lantern Song.lrc").write_bytes(own)
+    s.add(1, audio)
+    s.states[1] = store.LrcState("written", "01 Lantern Song.lrc", sha256_hex(own))
+    scanner = LyricsScanner(store=s)
+    run(scanner.tick())
+    assert (s.local[1].source, s.local[1].sidecar_name) == ("embedded", "01 Lantern Song.lrc")
+    theirs = music / "Band" / "The Example Band - Lantern Song.lrc"
+    theirs.write_bytes(HOUSEHOLD_AT)
+    assert run(scanner.tick())["read"] == 1
+    w = s.local[1]
+    assert (w.source, w.detail, w.sidecar_name) == (
+        "sidecar", "The Example Band - Lantern Song.lrc", "The Example Band - Lantern Song.lrc")
+    assert w.lyrics.synced == ((1000, L2), (2000, L1)) and w.lrc_transition is None
+    assert (music / "Band" / "01 Lantern Song.lrc").read_bytes() == own
+    # steady: nothing changed, nothing read again
+    calls = s.write_calls
+    assert run(scanner.tick())["read"] == 0 and s.write_calls == calls
+    # the household edits Domovoi's file: it is theirs now, and a same-stem
+    # file of the household's wins over an "Artist - Title" one again
+    (music / "Band" / "01 Lantern Song.lrc").write_bytes(own + f"[00:09.00]{L3}\n".encode())
+    assert run(scanner.tick())["read"] == 1
+    w = s.local[1]
+    assert w.lrc_transition == "edited"
+    assert (w.source, w.sidecar_name) == ("sidecar", "01 Lantern Song.lrc")
+    assert run(scanner.tick())["read"] == 0
+
+
+def _unreadable(monkeypatch, *paths: Path) -> None:
+    """Reads of these files fail as a file the core may not open does."""
+    real = lyrics_scan.read_sidecar_bytes
+    blocked = {str(p) for p in paths}
+
+    def read(path, music_root):
+        if str(path) in blocked:
+            return SidecarBytes(None, "unreadable")
+        return real(path, music_root)
+
+    monkeypatch.setattr(lyrics_scan, "read_sidecar_bytes", read)
+
+
+@needs_mutagen
+def test_an_unreadable_households_lrc_is_read_once_it_can_be(music, monkeypatch) -> None:
+    """A .lrc copied in as another user's (0600): no verdict while it can't
+    be read — the next tick tries again — and read as soon as it can,
+    though a chmod moves neither its mtime nor its size."""
+    s = FakeScanStore()
+    audio = tagged_mp3(music / "Lantern Song.mp3", lyrics=L3)
+    lrc = music / "Lantern Song.lrc"
+    lrc.write_bytes(OWNER_LRC)
+    s.add(1, audio)
+    with monkeypatch.context() as m:
+        _unreadable(m, lrc)
+        counts = run(LyricsScanner(store=s).tick())
+        assert counts["unreadable"] == 1
+        w = s.local[1]                       # never read before: written, the .lrc's stat left out
+        assert (w.source, w.sidecar_name, w.sidecar_mtime_ns, w.sidecar_size) == (
+            "embedded", "Lantern Song.lrc", None, None)
+        calls = s.write_calls
+        counts = run(LyricsScanner(store=s).tick())        # still unreadable: nothing written
+        assert counts["unreadable"] == 1 and s.write_calls == calls
+    counts = run(LyricsScanner(store=s).tick())            # readable now
+    assert counts["read"] == 1
+    assert (s.local[1].source, s.local[1].lyrics.synced) == ("sidecar", ((1000, L1), (2000, L2)))
+    assert run(LyricsScanner(store=s).tick())["read"] == 0
+
+
+def test_a_song_read_before_keeps_its_lyrics_while_its_lrc_cannot_be_read(music, monkeypatch) -> None:
+    s = FakeScanStore()
+    audio = tagged_mp3(music / "Lantern Song.mp3")
+    lrc = music / "Lantern Song.lrc"
+    lrc.write_bytes(OWNER_LRC)
+    s.add(1, audio)
+    run(LyricsScanner(store=s).tick())
+    assert s.local[1].source == "sidecar"
+    lrc.write_bytes(OWNER_LRC + f"[00:03.00]{L3}\n".encode())     # changed, and now unreadable
+    calls = s.write_calls
+    with monkeypatch.context() as m:
+        _unreadable(m, lrc)
+        assert run(LyricsScanner(store=s).tick())["unreadable"] == 1
+    assert s.write_calls == calls and s.local[1].lyrics.synced == ((1000, L1), (2000, L2))
+    assert run(LyricsScanner(store=s).tick())["read"] == 1
+    assert s.local[1].lyrics.synced[-1] == (3000, L3)
+
+
+@needs_mutagen
+def test_an_unreadable_audio_file_is_read_once_it_can_be(music, monkeypatch) -> None:
+    s = FakeScanStore()
+    audio = tagged_mp3(music / "Lantern Song.mp3", lyrics=L3)
+    s.add(1, audio)
+    with monkeypatch.context() as m:
+        m.setattr(lyrics_scan, "can_read", lambda path: False)
+        assert run(LyricsScanner(store=s).tick())["unreadable"] == 1
+        w = s.local[1]
+        assert (w.source, w.file_mtime_ns, w.file_size) == (None, None, None)
+        calls = s.write_calls
+        run(LyricsScanner(store=s).tick())
+        assert s.write_calls == calls                      # no verdict, nothing written
+    assert run(LyricsScanner(store=s).tick())["read"] == 1
+    assert (s.local[1].source, s.local[1].lyrics.plain) == ("embedded", L3)
+    assert run(LyricsScanner(store=s).tick())["read"] == 0
+
+
+def test_a_symlink_to_nothing_is_not_read_again_every_tick(music, monkeypatch) -> None:
+    """A dangling "<stem>.lrc" link (simulated: the name is listed, stat
+    finds nothing behind it) is no sidecar, so the song is read once."""
+    import errno
+
+    s = FakeScanStore()
+    s.add(1, tagged_mp3(music / "Lantern Song.mp3"))
+    link = music / "Lantern Song.lrc"
+    link.write_bytes(b"stand-in for a link to nothing")
+    real_stat = os.stat
+
+    def stat(path, *a, **k):
+        if Path(path) == link:
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+        return real_stat(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", stat)
+    scanner = LyricsScanner(store=s)
+    reads = [run(scanner.tick())["read"] for _ in range(3)]
+    assert reads == [1, 0, 0] and s.write_calls == 1
+    assert (s.local[1].source, s.local[1].sidecar_name) == (None, None)
+
+
+def test_a_renamed_song_does_not_mark_domovois_file_deleted(music) -> None:
+    """A plugin re-filed the download under a new name (same row): the
+    .lrc Domovoi wrote under the old name is not this song's any more —
+    not "deleted" (which would stop Domovoi writing one for the new name)."""
+    s = FakeScanStore()
+    s.add(1, tagged_mp3(music / "Band" / "Lantern Song (2026 remaster).mp3"))
+    s.states[1] = store.LrcState("written", "Lantern Song.lrc", sha256_hex(domovoi_lrc()))
+    run(LyricsScanner(store=s).tick())
+    assert s.local[1].lrc_transition is None and s.states[1].state == "written"
+    # the same name: deleted, as before
+    t = FakeScanStore()
+    t.add(1, tagged_mp3(music / "Other" / "Lantern Song.mp3"))
+    t.states[1] = store.LrcState("written", "Lantern Song.lrc", sha256_hex(domovoi_lrc()))
+    run(LyricsScanner(store=t).tick())
+    assert t.local[1].lrc_transition == "deleted"
 
 
 # ═══ The real upserts (requires_db) ═════════════════════════════════════

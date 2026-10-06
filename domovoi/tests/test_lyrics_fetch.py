@@ -32,6 +32,7 @@ from domovoi.clients.lrclib import (
 from domovoi.config import settings
 from domovoi.lyrics import sidecar, store
 from domovoi.lyrics import status as lyrics_state
+from domovoi.lyrics.lrc import format_lrc
 from domovoi.lyrics.status import lyrics_status
 from domovoi.tests.conftest import requires_db
 from domovoi.workers import lyrics_fetch as lf
@@ -510,6 +511,96 @@ def test_saving_off_writes_no_lrc(lrclib_on, probe, tmp_path, monkeypatch) -> No
     assert "lrc_due" not in s.calls and s.lrc == []
 
 
+# ─── The 2026-10-06 review ───────────────────────────────────────────────
+
+
+def test_no_lrc_beside_the_households_own_whatever_its_name(lrclib_on, probe, tmp_path, monkeypatch) -> None:
+    """The song's lyrics come from the household's .lrc — here one named
+    "Artist - Title", which the writer cannot see by its name: no .lrc of
+    Domovoi's is written ("exists"), and one of Domovoi's already there is
+    left exactly as it is, not refreshed."""
+    music = tmp_path / "Music"
+    music.mkdir()
+    monkeypatch.setattr(settings, "music_dir", str(music))
+    audio = music / "01 Lantern Song.flac"
+    audio.write_bytes(b"audio")
+    theirs = music / "The Example Band - Lantern Song.lrc"
+    theirs.write_bytes(b"[00:01.00]their words\n")
+    fresh = store.LrcRow(1, str(audio), "Lantern Song", "The Example Band", None, 205, False,
+                         ((12400, L1),), None, None, None, local_source="sidecar")
+    s = FakeStore(lrc_due=[1], rows={1: fresh})
+    counts = run(LyricsFetcher(client=FakeClient(), store=s).tick())
+    assert s.lrc == [(1, "exists", None)] and counts["lrc_exists"] == 1 and "lrc_written" not in counts
+    assert sorted(p.name for p in music.iterdir()) == ["01 Lantern Song.flac", theirs.name]
+    # Domovoi's own file from before theirs arrived: kept, not refreshed, no record
+    own = music / "01 Lantern Song.lrc"
+    own.write_bytes(b"[re:Domovoi]\n[00:01.00]old\n")
+    written = store.LrcRow(1, str(audio), "Lantern Song", "The Example Band", None, 205, False,
+                           ((12400, L1),), "written", own.name, sidecar.sha256_hex(own.read_bytes()),
+                           local_source="sidecar")
+    s = FakeStore(lrc_due=[1], rows={1: written})
+    run(LyricsFetcher(client=FakeClient(), store=s).tick())
+    assert s.lrc == [] and own.read_bytes() == b"[re:Domovoi]\n[00:01.00]old\n"
+
+
+def test_an_answer_too_big_to_keep_is_never_sent_to_the_database(lrclib_on, probe, caplog) -> None:
+    huge = (L1 + "\n") * 8000                                    # > 256 KiB
+    s = FakeStore([due(1), due(2, "Glass Harbor")])
+
+    def answers(**kw):
+        return rec(id=1, plain=huge, synced=None) if kw["track"] == "Lantern Song" else rec(id=2)
+
+    with caplog.at_level(logging.DEBUG):
+        counts = run(LyricsFetcher(client=FakeClient(get=answers, search=[]), store=s).tick())
+    assert s.failures == [(1, store.TOO_LARGE)] and s.saved == [(2, "found")]
+    assert counts["errors"] == 1 and counts["found"] == 1
+    assert s.calls.count("save_answer") == 1                    # only track 2's
+    assert not any(w in caplog.text for w in WORDS)
+
+
+def test_record_lrclib_never_sends_an_oversize_row() -> None:
+    """DB-free: record_lrclib writes the failure, never an UPDATE carrying
+    the lyrics (a CHECK refusing it would log them on the database server)."""
+
+    class Result:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    class Session:
+        def __init__(self):
+            self.sent: list[tuple[str, dict]] = []
+
+        async def execute(self, statement, params=None):
+            self.sent.append((str(statement), dict(params or {})))
+            return Result(("found", 0, "md5", None))
+
+    session = Session()
+    huge = LrclibAnswer("found", "get", rec(id=9), (L1 + "\n") * 8000, None)
+    run(store.record_lrclib(session, 7, huge, query_md5="md5"))
+    sent_text = [p for _, p in session.sent]
+    assert not any("plain" in p and p.get("plain") for p in sent_text)
+    assert any(p.get("error") == store.TOO_LARGE for p in sent_text)
+    assert not any(L1 in str(p) for p in sent_text)
+    assert store.answer_fits(huge) is False
+    assert store.answer_fits(FOUND_TIMED) and store.answer_fits(NOT_FOUND)
+    too_many = LrclibAnswer("found", "get", rec(id=9), L1, tuple((i, L1) for i in range(4001)))
+    assert store.answer_fits(too_many) is False
+
+
+def test_under_no_the_status_says_internet_off_not_settings(lrclib_on, probe, monkeypatch) -> None:
+    """INTERNET_ACCESS=never turns the LRCLIB setting off (and greys it out):
+    the Jobs card must say why — "stays off the internet" — not point at a
+    switch that cannot be switched on ("off")."""
+    monkeypatch.setattr(settings, "lyrics_lrclib_enabled", False)
+    with egress.override_policy("never"):
+        assert lyrics_status()["fetch"]["state"] == "internet_off"
+        assert lyrics_state.gate_state() == "off"                # the worker's own order is kept
+    assert lyrics_status()["fetch"]["state"] == "off"
+
+
 # ═══ The real SQL (requires_db) ══════════════════════════════════════════
 
 
@@ -884,3 +975,69 @@ async def test_an_owners_lrc_is_recorded_as_exists_and_left_alone(v021, lrclib_o
     assert await _rows("SELECT lrc_state FROM track_lyrics") == [("exists",)]
     assert theirs.read_bytes() == b"[00:01.00]their own words\n"
     assert sorted(p.name for p in music.iterdir()) == ["Lantern Song.mp3", "lantern song.LRC"]
+
+
+@requires_db
+async def test_the_lrc_catch_up_skips_songs_with_the_households_lrc(v021) -> None:
+    from domovoi.db.session import session_scope
+
+    ours, theirs = await _seed("Lantern Song"), await _seed("Glass Harbor")
+    await _scanned(ours)
+    await _scanned(theirs, source="sidecar", plain=L1)
+    for tid, title in ((ours, "Lantern Song"), (theirs, "Glass Harbor")):
+        await _record(tid, FOUND_TIMED, store.query_md5(title, "The Example Band", "Glass Harbor", 205))
+    async with session_scope() as s:
+        assert await store.lrc_due(s, limit=10) == [ours]
+        row = await store.lrc_row(s, theirs)
+    assert row.local_source == "sidecar"
+
+
+@requires_db
+async def test_a_households_artist_title_lrc_keeps_its_place_end_to_end(
+    v021, lrclib_on, probe, tmp_path, monkeypatch,
+) -> None:
+    """The review's repro, end to end with the real scan and fetch (a fake
+    LRCLIB, invented words): LRCLIB's timed lyrics came while "Save lyrics
+    as .lrc files" was off; then the household added "The Example Band -
+    Lantern Song.lrc"; then saving was switched on. Domovoi writes no
+    "01 Lantern Song.lrc" beside theirs, and theirs stays the song's lyrics."""
+    from domovoi.workers.lyrics_scan import LyricsScanner
+
+    music = tmp_path / "Music"
+    band = music / "Band"
+    band.mkdir(parents=True)
+    monkeypatch.setattr(settings, "music_dir", str(music))
+    audio = band / "01 Lantern Song.mp3"
+    audio.write_bytes(b"z" * 4096)                        # no tags to read
+    tid = await _seed(file_path=str(audio))
+    monkeypatch.setattr(settings, "lyrics_write_lrc", False)
+    await LyricsScanner().tick()
+    await LyricsFetcher(client=FakeClient(get=rec(id=4242))).tick()
+    shown = "SELECT s.source, l.lrc_state FROM track_lyrics_shown s JOIN track_lyrics l USING (track_id) WHERE track_id = :id"
+    assert await _rows(shown, id=tid) == [("lrclib", None)]
+    theirs = band / "The Example Band - Lantern Song.lrc"
+    theirs.write_bytes(f"[00:01.00]{L3}\n[00:02.00]{L1}\n".encode())
+    await LyricsScanner().tick()
+    assert await _rows(shown, id=tid) == [("sidecar", None)]
+    monkeypatch.setattr(settings, "lyrics_write_lrc", True)
+    with egress.override_policy("never"):                 # the catch-up only: no request can leave
+        await LyricsFetcher(client=FakeClient()).tick()
+    await LyricsScanner().tick()
+    assert sorted(p.name for p in band.iterdir()) == ["01 Lantern Song.mp3", theirs.name]
+    assert await _rows(shown, id=tid) == [("sidecar", None)]
+    # and a Domovoi file that was there BEFORE theirs never hides it either
+    own = format_lrc([(1000, L2)], title="Lantern Song", artist="The Example Band", album=None,
+                     duration_sec=205, version="1.0.0").encode()
+    (band / "01 Lantern Song.lrc").write_bytes(own)
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        await s.execute(text("UPDATE track_lyrics SET lrc_state = 'written', lrc_name = '01 Lantern Song.lrc', "
+                             "lrc_sha256 = :sha WHERE track_id = :id"), {"sha": sidecar.sha256_hex(own), "id": tid})
+    theirs.write_bytes(f"[00:01.00]{L3}\n[00:02.00]{L1}\n[00:03.00]{L2}\n".encode())   # read again
+    assert (await LyricsScanner().tick())["read"] == 1
+    assert await _rows(
+        "SELECT s.source, s.sidecar_name, l.lrc_state FROM track_lyrics_shown s "
+        "JOIN track_lyrics l USING (track_id) WHERE track_id = :id", id=tid,
+    ) == [("sidecar", theirs.name, "written")]
+    assert (band / "01 Lantern Song.lrc").read_bytes() == own

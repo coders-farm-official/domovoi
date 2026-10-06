@@ -257,6 +257,35 @@ def parse_plain(text: str) -> ParsedLyrics:
         return EMPTY
 
 
+def _parse_lrc_untimed(text: str) -> ParsedLyrics:
+    lines = _scan(text)
+    tags: dict[str, str] = {}
+    for ln in lines:
+        if ln.id_tag is not None:
+            key, value = ln.id_tag
+            if key not in tags and len(tags) < MAX_TAGS:
+                tags[key] = value
+    # A timed line's text is already what follows its time tags.
+    texts = [ln.text for ln in lines if ln.id_tag is None]
+    return ParsedLyrics(None, _plain_from(texts), MappingProxyType(tags), 0)
+
+
+def parse_lrc_untimed(text: str) -> ParsedLyrics:
+    """A ``.lrc`` file that does not look like LRC ([P16]: too few timed
+    lines), read as plain lyrics the way [P9] reads a file with no timed
+    text: its ID tags (``[ti:…]``, ``[ar:…]``, ``[offset:…]``) are never
+    lyric lines ([P10]), and a line's leading time tags are dropped, so a
+    stray ``[00:12.40]`` never shows as words. ``synced`` is None; every
+    other rule is :func:`parse_plain`'s. Never raises.
+
+    For ``.lrc`` files only: lyrics inside an audio file's tags that are
+    not LRC go through :func:`parse_plain`, untouched."""
+    try:
+        return _parse_lrc_untimed(text)
+    except Exception:  # noqa: BLE001
+        return EMPTY
+
+
 def clean_line(text: str) -> str:
     """One timed line's text as :func:`parse_lrc` leaves it: newlines and
     tabs as spaces, other control characters and word tags out, whitespace
@@ -370,6 +399,7 @@ __all__ = [
     "from_entries",
     "looks_like_lrc",
     "parse_lrc",
+    "parse_lrc_untimed",
     "parse_lyrics_text",
     "parse_plain",
 ]

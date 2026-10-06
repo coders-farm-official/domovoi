@@ -77,6 +77,27 @@ def fits(parsed: ParsedLyrics) -> bool:
     return len(parsed.plain.encode("utf-8")) <= MAX_PLAIN_BYTES
 
 
+#: The ``lrclib_error`` of an answer too big to keep ([R28], checked before
+#: the row is sent: see :func:`answer_fits`).
+TOO_LARGE = "save:too_large"
+
+
+def answer_fits(answer: Any) -> bool:
+    """Whether an LRCLIB answer's lyrics fit ``track_lyrics_size_chk``
+    (anything but ``found`` carries none). Checked BEFORE the row goes to
+    the database: a CHECK that refuses a row makes PostgreSQL write the
+    row's first characters — the lyrics — into its own server log."""
+    if getattr(answer, "status", None) != "found":
+        return True
+    plain = getattr(answer, "plain", None)
+    if not isinstance(plain, str):
+        return True                     # record_lrclib refuses it as malformed
+    synced = getattr(answer, "synced", None)
+    if synced is not None and len(synced) > MAX_ENTRIES:
+        return False
+    return len(plain.encode("utf-8")) <= MAX_PLAIN_BYTES
+
+
 def synced_json(synced: Sequence[tuple[int, str]] | None) -> str | None:
     """Timed lyrics as stored: a JSON array of ``[ms, "text"]`` pairs."""
     if synced is None:
@@ -186,7 +207,13 @@ async def record_lrclib(
     ``answer`` is a :class:`~domovoi.workers.lyrics_fetch.LrclibAnswer`
     (status found | instrumental | not_found | skipped). Reads the row's
     current LRCLIB columns (locking it) to decide keep / clear and the
-    attempt count. The caller commits."""
+    attempt count. The caller commits.
+
+    Lyrics too big for the row ([R28]) are never sent: the row records
+    :data:`TOO_LARGE` instead (:func:`record_failure`)."""
+    if not answer_fits(answer):
+        await record_failure(session, track_id, code=TOO_LARGE, query_md5=query_md5, now=now)
+        return
     at = _now(now)
     prev_status, prev_attempts, prev_md5, _prev_error = await _previous(session, track_id)
     status = answer.status
@@ -325,7 +352,10 @@ async def next_timer(session: "AsyncSession") -> datetime | None:
 
 @dataclass(frozen=True)
 class ScanRow:
-    """A library track and what the scan last recorded about it."""
+    """A library track and what the scan last recorded about it. The
+    ``lrc_*`` columns are as they were when the rows were read — outside
+    SIDECAR_LOCK, so only for deciding which ``.lrc`` to look at; the scan
+    reads them again inside the lock before it concludes anything ([O4])."""
 
     id: int
     file_path: str
@@ -340,16 +370,26 @@ class ScanRow:
     sidecar_name: str | None
     sidecar_mtime_ns: int | None
     sidecar_size: int | None
+    lrc_state: str | None = None
+    lrc_name: str | None = None
+    lrc_sha256: str | None = None
 
     @property
     def never_scanned(self) -> bool:
         return not self.has_row or not self.checked
 
+    @property
+    def read_before(self) -> bool:
+        """The scan has read this song's files under the current rules and
+        found them there: what it stored stands until it can read again."""
+        return not self.never_scanned and not self.file_missing and self.scan_version >= SCAN_VERSION
+
 
 _SCAN_ROWS_SQL = text(
     "SELECT t.id, t.file_path, t.title, t.artist, l.track_id IS NOT NULL, "
     "l.local_checked_at IS NOT NULL, l.scan_version, l.file_mtime_ns, l.file_size, "
-    "l.file_missing, l.sidecar_name, l.sidecar_mtime_ns, l.sidecar_size "
+    "l.file_missing, l.sidecar_name, l.sidecar_mtime_ns, l.sidecar_size, "
+    "l.lrc_state, l.lrc_name, l.lrc_sha256 "
     "FROM library_tracks t LEFT JOIN track_lyrics l ON l.track_id = t.id "
     "ORDER BY (l.track_id IS NULL) DESC, (l.local_checked_at IS NULL) DESC, t.id"
 )
@@ -364,6 +404,7 @@ async def scan_rows(session: "AsyncSession") -> list[ScanRow]:
             checked=bool(r[5]), scan_version=int(r[6] or 0), file_mtime_ns=r[7],
             file_size=r[8], file_missing=bool(r[9]), sidecar_name=r[10],
             sidecar_mtime_ns=r[11], sidecar_size=r[12],
+            lrc_state=r[13], lrc_name=r[14], lrc_sha256=r[15],
         ))
     return out
 
@@ -390,11 +431,12 @@ async def lrc_states(session: "AsyncSession", track_ids: Sequence[int]) -> dict[
 
 @dataclass(frozen=True)
 class LocalWrite:
-    """One row as the scan read it ([K6])."""
+    """One row as the scan read it ([K6]). A stat left None (a file that
+    could not be read) makes the next tick read the row again."""
 
     track_id: int
-    file_mtime_ns: int
-    file_size: int
+    file_mtime_ns: int | None
+    file_size: int | None
     source: str | None              # sidecar | embedded | None
     detail: str | None
     lyrics: ParsedLyrics | None
@@ -479,19 +521,23 @@ class LrcRow:
     lrc_state: str | None
     lrc_name: str | None
     lrc_sha256: str | None
+    #: sidecar = the household's own .lrc is this song's lyrics (same name,
+    #: or "Artist - Title"): Domovoi writes none beside it.
+    local_source: str | None = None
 
     def __repr__(self) -> str:  # never the lyrics ([C3])
         return (
             f"LrcRow(track_id={self.track_id}, file_missing={self.file_missing}, "
             f"synced={'None' if self.synced is None else f'{len(self.synced)} lines'}, "
-            f"lrc_state={self.lrc_state!r}, lrc_name={self.lrc_name!r})"
+            f"lrc_state={self.lrc_state!r}, lrc_name={self.lrc_name!r}, "
+            f"local_source={self.local_source!r})"
         )
 
 
 async def lrc_row(session: "AsyncSession", track_id: int) -> LrcRow | None:
     r = (await session.execute(text(
         "SELECT t.id, t.file_path, t.title, t.artist, t.album, t.duration_sec, "
-        "l.file_missing, l.lrclib_synced, l.lrc_state, l.lrc_name, l.lrc_sha256 "
+        "l.file_missing, l.lrclib_synced, l.lrc_state, l.lrc_name, l.lrc_sha256, l.local_source "
         "FROM track_lyrics l JOIN library_tracks t ON t.id = l.track_id WHERE l.track_id = :id"
     ), {"id": int(track_id)})).first()
     if r is None:
@@ -499,16 +545,19 @@ async def lrc_row(session: "AsyncSession", track_id: int) -> LrcRow | None:
     return LrcRow(
         track_id=int(r[0]), file_path=r[1], title=r[2], artist=r[3], album=r[4],
         duration_sec=r[5], file_missing=bool(r[6]), synced=synced_from_json(r[7]),
-        lrc_state=r[8], lrc_name=r[9], lrc_sha256=r[10],
+        lrc_state=r[8], lrc_name=r[9], lrc_sha256=r[10], local_source=r[11],
     )
 
 
 async def lrc_due(session: "AsyncSession", *, limit: int) -> list[int]:
     """[W14]: timed LRCLIB lyrics never written (saving was off when they
-    came), and failed writes not tried in the last 24 h."""
+    came), and failed writes not tried in the last 24 h — never for a song
+    whose lyrics come from the household's own ``.lrc`` (an "Artist -
+    Title" one included, which the writer cannot see by its name)."""
     res = await session.execute(text(
         "SELECT l.track_id FROM track_lyrics l "
         "WHERE l.lrclib_synced IS NOT NULL AND NOT l.file_missing "
+        "AND l.local_source IS DISTINCT FROM 'sidecar' "
         "AND (l.lrc_state IS NULL OR (l.lrc_state = 'failed' AND "
         "(l.lrc_attempted_at IS NULL OR l.lrc_attempted_at <= now() - interval '24 hours'))) "
         "ORDER BY l.track_id LIMIT :limit"
@@ -523,6 +572,11 @@ async def record_lrc(session: "AsyncSession", track_id: int, outcome: Any) -> No
     state = outcome.state
     params: dict[str, Any] = {"id": int(track_id), "name": outcome.name,
                               "sha": outcome.sha256, "error": outcome.error}
+    # A song whose file was renamed since Domovoi wrote its .lrc (a plugin
+    # re-filing a download): that file is left where it is ([W11]) and no
+    # longer the song's, so this attempt's outcome replaces "written".
+    renamed = bool(getattr(outcome, "renamed", False))
+    kept = "('edited', 'deleted')" if renamed else "('edited', 'deleted', 'written')"
     if state == "written":
         sql = (
             "UPDATE track_lyrics SET lrc_state = 'written', lrc_name = :name, lrc_sha256 = :sha, "
@@ -530,15 +584,17 @@ async def record_lrc(session: "AsyncSession", track_id: int, outcome: Any) -> No
         )
     elif state == "exists":
         sql = (
-            "UPDATE track_lyrics SET lrc_state = CASE WHEN lrc_state IN ('edited', 'deleted', 'written') "
-            "THEN lrc_state ELSE 'exists' END, lrc_attempted_at = now(), lrc_error = NULL, "
-            "updated_at = now() WHERE track_id = :id"
+            f"UPDATE track_lyrics SET lrc_state = CASE WHEN lrc_state IN {kept} "
+            "THEN lrc_state ELSE 'exists' END, "
+            + ("lrc_name = NULL, lrc_sha256 = NULL, " if renamed else "")
+            + "lrc_attempted_at = now(), lrc_error = NULL, updated_at = now() WHERE track_id = :id"
         )
     elif state == "failed":
         sql = (
-            "UPDATE track_lyrics SET lrc_state = CASE WHEN lrc_state IN ('edited', 'deleted', 'written') "
-            "THEN lrc_state ELSE 'failed' END, lrc_name = COALESCE(lrc_name, :name), "
-            "lrc_attempted_at = now(), lrc_error = :error, updated_at = now() WHERE track_id = :id"
+            f"UPDATE track_lyrics SET lrc_state = CASE WHEN lrc_state IN {kept} "
+            "THEN lrc_state ELSE 'failed' END, "
+            + ("lrc_name = :name, lrc_sha256 = NULL, " if renamed else "lrc_name = COALESCE(lrc_name, :name), ")
+            + "lrc_attempted_at = now(), lrc_error = :error, updated_at = now() WHERE track_id = :id"
         )
     elif state in ("edited", "deleted"):
         params["state"] = state
@@ -565,6 +621,8 @@ __all__ = [
     "MAX_PLAIN_BYTES",
     "QUERY_MD5_SQL",
     "ScanRow",
+    "TOO_LARGE",
+    "answer_fits",
     "due_tracks",
     "ensure_rows",
     "error_backoff",

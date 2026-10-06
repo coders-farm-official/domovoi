@@ -108,6 +108,15 @@ def gate_state() -> str | None:
 
 
 def _fetch_state(now: float) -> str:
+    # Under "No" the setting itself follows the answer to off and is greyed
+    # out ("needs internet"): what the household should hear is why — this
+    # Domovoi stays off the internet — not "switched off in Settings", where
+    # it could not switch it back on. (Only the report: the worker's gate
+    # keeps its own order, the .lrc catch-up runs under internet_off.)
+    from domovoi import egress
+
+    if egress.internet_turned_off():
+        return "internet_off"
     gate = gate_state()
     if gate == "shutting_down":
         return FETCH.state

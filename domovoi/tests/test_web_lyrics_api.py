@@ -566,6 +566,24 @@ async def test_status_before_the_core_reports(claimed, fake_db, snapshot) -> Non
 
 
 @pytest.mark.asyncio
+async def test_under_no_the_jobs_card_hears_internet_off(claimed, fake_db, snapshot, monkeypatch) -> None:
+    """2026-10-06 review: INTERNET_ACCESS=never turns the LRCLIB setting off
+    (greyed "needs internet"); the core's own status must then say
+    internet_off — the card's "this Domovoi stays off the internet" — not
+    "off", which sends the household to a switch it cannot turn on."""
+    from domovoi import egress
+    from domovoi.config import settings
+    from domovoi.lyrics import status as lyrics_state
+
+    monkeypatch.setattr(settings, "lyrics_lrclib_enabled", False)
+    lyrics_state.reset_for_tests()
+    with egress.override_policy("never"):
+        core = {"lyrics": lyrics_state.lyrics_status()}
+    body = await _status(fake_db, snapshot, core, tracks=12, scanned=12)
+    assert (body["lrclib"]["enabled"], body["lrclib"]["state"]) == (False, "internet_off")
+
+
+@pytest.mark.asyncio
 async def test_status_merges_the_core_snapshot(claimed, fake_db, snapshot) -> None:
     retry = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
     snap = {
