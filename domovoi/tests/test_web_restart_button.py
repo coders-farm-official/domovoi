@@ -50,8 +50,11 @@ one to a dead socket) until the scenario lets it back on a fresh start:
   the unit's 15-minute wait; a second confirm declined sends nothing and
   re-reads the panel, and one that stood while the server changed is
   measured against the server after it. A rolled-back last run, a unit
-  without a readable result, a staged plugin upgrade and a host without the
-  unit stay the quick restart.
+  without a readable result, a staged plugin upgrade, a checkout the core
+  can't read and a host without the unit stay the quick restart; untracked
+  files (a "-dirty" checkout) change neither answer. "Restart to apply
+  changes" keeps its own confirm, and a restart whose answer is cut off is
+  told and waited for as what runs.
 
 The scripted unit runs its plain restart or its full update by the same
 comparison (``applied`` against the checkout) and records which, so every
@@ -155,7 +158,11 @@ window.__srv = Object.assign({
   run: 'run-1', last: null, newRunStatus: 'ok', newRunError: null, plugins: [], clockStep: 2000,
 }, __SRV);
 if (window.__srv.applied === undefined) window.__srv.applied = window.__srv.running;
-const __full = (sha) => (sha && __FULLS[sha]) || sha;
+// A commit as the update unit names it: HEAD's, whatever the tree holds.
+// The core's "-dirty" (git status --porcelain, untracked files too) is
+// about the working tree, not the commit.
+const __commit = (sha) => String(sha || '').replace(/-dirty$/, '');
+const __full = (sha) => (sha && __FULLS[__commit(sha)]) || __commit(sha) || sha;
 window.__fetches = [];
 const __answer = (status, body) => {
   const text = body == null ? '' : JSON.stringify(body);
@@ -189,7 +196,7 @@ const __comeBack = () => {
   if (s.mode === 'update') {
     const from = s.applied;
     s.run = 'run-2';
-    s.last = { status: s.newRunStatus, mode: from === s.checkout ? 'restart' : 'update',
+    s.last = { status: s.newRunStatus, mode: __commit(from) === __commit(s.checkout) ? 'restart' : 'update',
                started_at: s.run, finished_at: '2026-10-05T23:59:00Z', from_sha: __full(from),
                to_sha: __full(s.checkout), prev_source: 'applied', error: s.newRunError };
     if (s.newRunStatus === 'ok') s.applied = s.checkout;
@@ -248,6 +255,14 @@ fetch = async (url, opts) => {
   const who = bearer ? (srv.sessions.has(bearer) ? 'bearer' : 'invalid')
     : (srv.cookie && srv.sessions.has(srv.cookie) ? 'cookie' : 'none');
   window.__fetches.push({ method, path, who, phase: srv.phase, started: srv.started });
+  // cutAnswer: the server takes the restart and is gone before its answer
+  // arrives (the bounce cut it off): the request fails the way a browser
+  // fails one to a socket that closed, and the server is down.
+  if (srv.cutAnswer && srv.phase === 'up' && method === 'POST' && bare === '/api/config/version/restart'
+      && who === 'bearer') {
+    srv.restarted = true; srv.phase = 'down';
+    throw new TypeError('Failed to fetch');
+  }
   if (srv.phase === 'linger' && method === 'GET' && bare === '/api/config/version') {
     srv.lingerPolls -= 1;
     const answer = __route(method, path, { who, bearer }, o.body);
@@ -623,6 +638,59 @@ SCENARIOS["flow_plugin_staged_without_a_unit_result"] = scenario(flow(PLUGIN_STA
                                                                  srv={"mode": "update", "last": None})
 # No update unit: a restart is the same bounce whatever is on disk.
 SCENARIOS["flow_pulled_since_without_the_unit"] = scenario(flow(PULL_LANDS))
+# Untracked files make the core's checkout_sha "-dirty" (git status
+# --porcelain counts them). The unit compares HEAD's commit and refuses only
+# for TRACKED changes, so the tree's state decides nothing: on its own it is
+# the quick restart, and code loaded by hand on such a tree the full update.
+DIRTY = f"{SHA}-dirty"
+SCENARIOS["flow_dirty_checkout"] = scenario(flow(), srv={"mode": "update", "running": DIRTY, "checkout": DIRTY})
+SCENARIOS["flow_loaded_outside_the_unit_dirty"] = scenario(flow(), srv={**LOADED_BY_HAND, "running": DIRTY,
+                                                                        "checkout": DIRTY})
+# A core that can't read its checkout (git failing there answers "unknown"):
+# nothing to compare the unit's commit with, so no full update is promised.
+SCENARIOS["flow_checkout_unreadable"] = scenario(flow(), srv={"mode": "update", "running": "unknown",
+                                                              "checkout": "unknown"})
+
+# ─── around it: the apply press, and an answer that never arrives ───────
+
+# "Restart to apply changes" with the update unit keeps the pulled-code
+# confirm: the full-update wording belongs to a plain press alone.
+SCENARIOS["apply_update_unit"] = scenario(r"""
+await A.login(__PW);
+await start();
+const out = { before: view() };
+const flow = press({ type: 'button', text: 'Restart to apply changes' }); await step();
+await pumpUntil(() => !!note());
+out.away = Object.assign(view(), { restarts: restarts() });
+letBack();
+out.result = await flow; await step(); await step();
+out.after = view();
+out.confirms = w.__confirms;
+out.unitRan = w.__srv.last.mode;
+return out;
+""".replace("__PW", json.dumps(PASSWORD)), srv={"mode": "update", "checkout": PULLED})
+# (b), and the server is gone before the restart's own answer arrives.
+SCENARIOS["flow_loaded_outside_the_unit_cut"] = scenario(flow(), srv={**LOADED_BY_HAND, "cutAnswer": True})
+# The panel's copy predates the update unit; the fresh read at the press
+# finds it and its full update; the answer is cut off; the update is rolled
+# back. Only the unit's wait knows to read its result.
+SCENARIOS["cut_unit_installed_since_the_panel_read"] = scenario(r"""
+await A.login(__PW);
+await start();
+w.__staleCore = { sha: '5b7aa8a', running_sha: '5b7aa8a', checkout_sha: '5b7aa8a', restart_required: false,
+                  code_restart_required: false, restart_capable: true, restart_mode: 'restart',
+                  started_at: 1791247053.25, last_update: null };
+await step();
+press({ type: 'button', text: 'press' }); await step();
+await pumpUntil(() => w.__srv.phase === 'down');
+letBack();
+await pumpUntil(() => w.__result !== null);
+await step();
+return { result: w.__result, toasts: toasts(), confirms: w.__confirms, restarts: restarts() };
+""".replace("__PW", json.dumps(PASSWORD)), srv={
+    **LOADED_BY_HAND, "cutAnswer": True, "newRunStatus": "rolled_back",
+    "newRunError": f"update to {SHA} failed at health and was rolled back to {OLD}: not healthy after 120s"},
+    component=DIRECT)
 
 
 @pytest.fixture(scope="module")
@@ -1049,7 +1117,7 @@ def test_a_full_update_gets_the_units_fifteen_minutes(driven) -> None:
 
 QUICK_FLOWS = ["flow_update_unit", "flow_after_a_rollback", "flow_unit_without_a_result",
                "flow_plugin_staged_since_the_panel_read", "flow_plugin_staged_without_a_unit_result",
-               "flow_pulled_since_without_the_unit"]
+               "flow_pulled_since_without_the_unit", "flow_dirty_checkout", "flow_checkout_unreadable"]
 
 
 @pytest.mark.parametrize("name", QUICK_FLOWS)
@@ -1061,7 +1129,9 @@ def test_otherwise_it_stays_the_quick_restart(driven, name) -> None:
     (to_sha); a staged plugin upgrade sets restart_required but is no
     pulled code, with the unit's result to compare with or without one; a
     unit without a readable result gives nothing to compare; without the
-    unit the bounce is the bounce."""
+    unit the bounce is the bounce. Untracked files ("-dirty") leave HEAD the
+    unit's commit; a checkout the core can't read ("unknown") gives nothing
+    to compare either."""
     o = driven[name]
     assert o["confirms"] == driven["flow"]["confirms"], o["confirms"]
     away = o["away"]
@@ -1072,3 +1142,65 @@ def test_otherwise_it_stays_the_quick_restart(driven, name) -> None:
     assert "restarting…" in away["toasts"] and "updating…" not in away["toasts"], away["toasts"]
     assert o["result"] is True
     assert o["unitRan"] == (None if name == "flow_pulled_since_without_the_unit" else "restart")
+
+
+def test_untracked_files_leave_a_hand_restart_the_full_update(driven) -> None:
+    """(b) on a tree with untracked files: the core says "5b7aa8a-dirty",
+    the unit still compares commits, and its next run is still the full
+    update. The suffix must not hide that."""
+    o = driven["flow_loaded_outside_the_unit_dirty"]
+    (text,) = o["confirms"]
+    question, _, body = text.partition("\n\n")
+    assert question == "Restart Domovoi now, as a full update?"
+    assert body.startswith(f"The checkout ({SHA}) isn’t the commit the update unit last applied ({OLD}), "), body
+    assert "Updating… [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert o["away"]["note"] is not None and o["away"]["note"].startswith(
+        "Updating — backing up, applying and restarting the Domovoi services."), o["away"]["note"]
+    assert o["result"] is True and o["unitRan"] == "update"
+
+
+# ─── around it: the apply press, and an answer that never arrives ───────
+
+
+def test_restart_to_apply_changes_keeps_its_own_confirm(driven) -> None:
+    """The pulled-code restart on an update-unit host is asked as it always
+    was, once: the full-update question is the plain press's alone."""
+    o = driven["apply_update_unit"]
+    assert APPLY in o["before"]["buttons"] and RESTART not in o["before"]["buttons"], o["before"]["buttons"]
+    assert o["confirms"] == [f"Apply the pulled code?\n\n{UPDATE_TEXT}"], o["confirms"]
+    away = o["away"]
+    assert away["restarts"] == ["bearer"]
+    assert "Updating… [disabled]" in away["buttons"], away["buttons"]
+    assert away["note"] is not None and away["note"].startswith("Updating — backing up"), away["note"]
+    assert "updating…" in away["toasts"], away["toasts"]
+    assert o["result"] is True and o["unitRan"] == "update"
+    assert f"restarted — now running {PULLED}" in o["after"]["toasts"], o["after"]["toasts"]
+
+
+def test_a_full_update_whose_answer_is_cut_off_is_told_as_one(driven) -> None:
+    """The server takes the restart and is gone before its answer arrives:
+    that is the restart working, and it is told as what runs, the update."""
+    o = driven["flow_loaded_outside_the_unit_cut"]
+    away = o["away"]
+    assert away["restarts"] == ["bearer"]
+    assert "Updating… [disabled]" in away["buttons"], away["buttons"]
+    assert away["note"] is not None and away["note"].startswith("Updating — backing up"), away["note"]
+    assert "updating…" in away["toasts"] and "restarting…" not in away["toasts"], away["toasts"]
+    assert o["result"] is True and o["unitRan"] == "update"
+    assert f"restarted — now running {SHA}" in o["after"]["toasts"], o["after"]["toasts"]
+
+
+def test_a_cut_off_answer_is_waited_for_as_the_read_at_the_press_says(driven) -> None:
+    """The panel's copy predates the update unit and the restart's answer is
+    cut off, so only the fresh read at the press says what runs: the unit's
+    full update, waited for as the unit's, so its rolled-back run is
+    reported rather than taken for a restart done."""
+    o = driven["cut_unit_installed_since_the_panel_read"]
+    assert [c.partition("\n\n")[0] for c in o["confirms"]] == [QUICK_CONFIRM_FIRST_LINE,
+                                                              "Run the full update instead?"]
+    assert o["restarts"] == ["bearer"]
+    assert o["result"] is False
+    assert f"update to {SHA} failed at health and was rolled back to {OLD}: not healthy after 120s" in o["toasts"], \
+        o["toasts"]
+    assert not any(t.startswith("restarted") for t in o["toasts"]), o["toasts"]
+    assert "updating…" in o["toasts"] and "restarting…" not in o["toasts"], o["toasts"]
