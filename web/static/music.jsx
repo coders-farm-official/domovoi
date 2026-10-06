@@ -180,6 +180,8 @@ const NPCard = ({ np, tick, onPlayRandom, onPause, onResume, onSkip, onStop, onF
           ) : (
             <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>nothing playing in {np.room_id}</div>
           )}
+          {/* The room's current timed line (lyrics.jsx), household tier only. */}
+          {(playing || paused) && typeof LyricsRoomLine === 'function' && <LyricsRoomLine np={np} tick={tick}/>}
         </div>
       </div>
       {(playing || paused) ? (
@@ -801,6 +803,8 @@ const JobsTab = ({ jobs, availability, loading, rooms, onCancel, fire, refresh }
     <>
       <AddMusicBar rooms={rooms} fire={fire} onQueued={refresh}
                    canFulfillQuery={availability?.can_fulfill_query}/>
+      {/* How far the house has got with its lyrics (lyrics.jsx). */}
+      {typeof LyricsJobsCard === 'function' && <LyricsJobsCard/>}
       {jobs.length === 0 ? (
         <Empty glyph="headphones" title="no acquisition jobs"
                sub='say "add … to my library" in any room, or use the add-music bar above'/>

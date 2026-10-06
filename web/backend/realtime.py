@@ -40,6 +40,11 @@ Channels emitted (core; enabled plugins add their own via manifest
   lands. Unmasked and whole, like ``timers``: this socket admits exactly
   the tier that reads the whole ledger over HTTP (rule F1,
   ``web.backend.api.satellites._READS_FIRE_LEDGER``)
+* ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
+  ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
+  the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
+  only tells the Jobs card and a player that is still "looking for
+  lyrics…" to read again
 
 Snapshot diffs are coarse: we emit the full new value rather than a
 field-level patch. The frontend rerenders on receipt; payloads are
@@ -80,6 +85,7 @@ from web.backend import satellite_adoption, timer_fires
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     fetch_admin_snapshot,
+    get_cached_snapshot,
     service_auth_headers,
     set_cached_snapshot,
 )
@@ -561,6 +567,62 @@ async def _snapshot_library_index() -> dict[str, Any]:
     return {"count": int(row[0]), "latest_added": _isoformat(row[1])}
 
 
+async def _snapshot_lyrics() -> dict[str, Any]:
+    """A cheap digest of the lyrics tables (V021) for the ``lyrics`` channel:
+    how many songs have a row, have lyrics, have timed lyrics, were asked
+    about on LRCLIB, got a Domovoi .lrc, still wait for the search index,
+    the newest ``updated_at`` — plus the three lyrics workers' states from
+    the core snapshot. It moves when something a lyrics view or the Jobs
+    card shows has moved (the core workers bump ``updated_at`` on every
+    change they make), so ``lyrics.changed`` is the "read again" nudge.
+
+    Counts only, never a title and never a lyric: the words are read over
+    HTTP on the household tier (web/backend/api/lyrics.py), and nothing
+    lyric-shaped is pushed down this socket (lyrics contract [C8]). ``{}``
+    on a database without V021."""
+    from web.backend.api import lyrics as lyrics_api
+
+    async with session_scope() as s:
+        if not await lyrics_api.tables_present(s):
+            return {}
+        row = (
+            await s.execute(
+                text(
+                    f"""
+                    SELECT count(*),
+                           count(*) FILTER (WHERE eff_source IS NOT NULL),
+                           count(*) FILTER (WHERE has_synced),
+                           count(*) FILTER (WHERE lrclib_status IS NOT NULL),
+                           count(*) FILTER (WHERE lrc_state = 'written'),
+                           count(*) FILTER (WHERE {lyrics_api.INDEX_PENDING_SQL}),
+                           max(updated_at)
+                    FROM track_lyrics
+                    """
+                ),
+                {"version": lyrics_api.lyric_norm_version()},
+            )
+        ).one()
+    snapshot = get_cached_snapshot() or {}
+    lyrics = snapshot.get("lyrics") if isinstance(snapshot.get("lyrics"), dict) else {}
+
+    def state(part: Any) -> str | None:
+        value = part.get("state") if isinstance(part, dict) else None
+        return str(value)[:40] if isinstance(value, str) else None
+
+    return {
+        "count": int(row[0]),
+        "with_lyrics": int(row[1]),
+        "synced": int(row[2]),
+        "asked": int(row[3]),
+        "lrc_written": int(row[4]),
+        "index_pending": int(row[5]),
+        "max_updated": _isoformat(row[6]),
+        "fetch_state": state(lyrics.get("fetch")),
+        "scan_state": state(lyrics.get("scan")),
+        "index_state": state(snapshot.get("lyrics_index")),
+    }
+
+
 async def _snapshot_wake_words() -> list[dict[str, Any]]:
     """The full custom wake-word registry, default first then
     alphabetical — the same shape ``GET /api/wake-words`` returns.
@@ -867,6 +929,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     "music.now_playing": _snapshot_now_playing,
     "playlists":         _snapshot_playlists,
     "library.indexer":   _snapshot_library_index,
+    "lyrics": _snapshot_lyrics,
     "wake_words":        _snapshot_wake_words,
     "podcasts":          _snapshot_podcasts,
     "podcast_positions": _snapshot_podcast_positions,
