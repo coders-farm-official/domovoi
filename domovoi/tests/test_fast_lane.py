@@ -731,7 +731,7 @@ def turn(monkeypatch):
         return Response(text="Paused.", matched_handler="music", matched_path="fast",
                         online=True)
 
-    async def _identify(pcm):
+    async def _identify(pcm, **_kw):
         return None
 
     async def _merge(s, row_id, patch):  # pragma: no cover

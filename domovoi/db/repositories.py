@@ -962,9 +962,9 @@ class MemoriesRepository:
 
 class VoiceProfilesRepository:
     """All speaker embeddings live here. A person can have several rows
-    (re-enrollment, different mics / rooms / colds). Match against MAX
-    similarity rather than an averaged centroid so a single stable
-    sample isn't dragged off-axis by a noisy one.
+    (enrollment, plus at most one learned sample per room). The
+    identifier scores a person against the centroid of their rows —
+    see ``voice_identifier._person_scores``.
     """
 
     EMBEDDING_MODEL_TAG = "resemblyzer-v1"
@@ -1003,9 +1003,9 @@ class VoiceProfilesRepository:
 
     async def all_for_model(
         self, model: str
-    ) -> list[tuple[int, int, bytes]]:
-        """Return ``(profile_id, person_id, embedding_bytes)`` for every
-        profile matching ``model``.
+    ) -> list[tuple[int, int, bytes, str | None]]:
+        """Return ``(profile_id, person_id, embedding_bytes, room_id)``
+        for every profile matching ``model``.
 
         Pulls every row on every match call. At household scale (a few
         dozen samples max) this is microseconds; if it ever becomes hot
@@ -1014,14 +1014,16 @@ class VoiceProfilesRepository:
         result = await self.s.execute(
             text(
                 """
-                SELECT id, person_id, embedding
+                SELECT id, person_id, embedding, room_id
                 FROM voice_profiles
                 WHERE model = :model
                 """
             ),
             {"model": model},
         )
-        return [(int(r[0]), int(r[1]), bytes(r[2])) for r in result.all()]
+        return [
+            (int(r[0]), int(r[1]), bytes(r[2]), r[3]) for r in result.all()
+        ]
 
 
 class VoiceDenylistRepository:

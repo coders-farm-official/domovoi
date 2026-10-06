@@ -160,8 +160,10 @@ prose:
    against a corpus of real commands for a shorter prefix that is a
    different command (`domovoi/tests/test_early_commit.py`).
 3. **Voice identification** (best-effort, pre-router): the utterance is
-   embedded and matched against enrolled voice profiles, yielding
-   `person_id` + `presence_tier` in the turn's `Context`.
+   embedded and scored against each enrolled person's voice (the centroid
+   of their samples), yielding `person_id` + `presence_tier` in the turn's
+   `Context`. Two people too close to tell apart name nobody, and only
+   confident matches ever save a sample (`domovoi/voice_identifier.py`).
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context

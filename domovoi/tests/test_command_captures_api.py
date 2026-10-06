@@ -251,7 +251,7 @@ def fake_turn(monkeypatch):
         async def synthesize(self, text, *, engine=None, voice=None):
             return _wav(b"\x01\x02" * 200)
 
-    async def _identify(pcm):
+    async def _identify(pcm, **_kw):
         return None
 
     async def _route(intent, ctx, session):

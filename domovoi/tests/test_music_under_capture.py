@@ -164,7 +164,7 @@ def room(monkeypatch):
         reply = r.reply
         return reply() if callable(reply) else reply
 
-    async def _identify(pcm, embedding=None):
+    async def _identify(pcm, embedding=None, **_kw):
         return None
 
     async def _any_voice(name):

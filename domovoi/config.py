@@ -1009,27 +1009,33 @@ class Settings(BaseSettings):
     # the same person on a cold or distant mic. Tunable per-household.
     voice_profile_match_threshold: float = 0.75
 
+    # How far ahead of the next-closest person the best one must score
+    # when both clear the threshold. Inside this gap the voice is
+    # "ambiguous" and nobody is named — two similar voices (same-sex
+    # adults on a far-field mic, single short enrollment clips) otherwise
+    # get a coin flip that can land on the wrong person every time.
+    voice_profile_match_margin: float = 0.05
+
     # Minimum utterance length (in seconds of int16 PCM @ 16 kHz) before
     # we even attempt embedding. Resemblyzer needs ~1 s of voiced audio
     # to produce a stable vector; sub-second clips are mostly noise and
     # produce embeddings that match nobody, polluting the audit trail.
     voice_profile_min_utterance_sec: float = 1.0
 
-    # ─── Drift handling ─────────────────────────────────
-    # Embeddings shift over time — colds, mic distance, room acoustics,
-    # age. A profile enrolled at high similarity might gradually hover
-    # near the match threshold under shifting conditions, producing
-    # inconsistent identification. When the matcher sees N consecutive
-    # confident-but-near-threshold matches for the same person, we
-    # append a fresh sample so the next round has a closer reference
-    # vector to match against. Both knobs tuned conservatively — the
-    # cost of a stale extra sample is one row of BYTEA; the cost of
-    # missing a drift event is just delaying the re-enroll.
+    # ─── Learning a voice room by room ─────────────────────────────
+    # Each satellite's mic and room colour a voice differently, and a
+    # person enrolls in just one room. A *confident* match — at least
+    # `near_threshold_margin` above the threshold, with nobody else even
+    # reaching it — counts towards learning that person's voice in the
+    # room it came from; after `reenroll_after` of them in a row there,
+    # the clip is saved as their sample for that room (one per room).
     #
-    # `near_threshold_margin` defines the band above the match threshold
-    # that counts as "near": [match_threshold, match_threshold + margin].
-    # `reenroll_after` is how many consecutive near-threshold matches
-    # before we append a sample.
+    # Matches inside the near band [threshold, threshold + margin] are
+    # NEVER saved. They used to be (as "drift re-enrollment"), which is
+    # exactly the band where the wrong person wins: one borderline
+    # mix-up saved one voice into another person's profile and made the
+    # mix-up permanent. The setting names are kept so existing .env
+    # overrides still apply.
     voice_profile_drift_near_threshold_margin: float = 0.05
     voice_profile_drift_reenroll_after: int = 3
 
