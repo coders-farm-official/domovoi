@@ -27,11 +27,14 @@ one to a dead socket) until the scenario lets it back on a fresh start:
 * the press is the dashboard's one restart (restartDomovoiServer): the card
   says "Restarting…" and shows the underway note while the server is away,
   then "restarted — now running <sha>" — with the update unit too, where it
-  is that unit's quick plain restart, never "Updating…";
+  is that unit's quick plain restart, never "Updating…"; the check and the
+  pull are greyed meanwhile;
 * the wait ends on a NEW server: not on the old one still answering after
   the press, and not on a panel copy read before a restart done some other
   way (both looked "restarted" at once: a plain restart never sets
-  restart_required, so its clearing proves nothing);
+  restart_required, so its clearing proves nothing). A moved boot time is
+  enough on its own (a host back before any poll found it gone); from a
+  core that can't say when it started, having been seen away is;
 * a view-only press signs in and the restart is replayed once, with the
   Bearer;
 * a plain restart the update unit records as failed reports the unit's
@@ -126,7 +129,8 @@ const __comeBack = () => {
   const s = window.__srv;
   const from = s.running;
   s.running = s.checkout;
-  s.started = __RESTARTED_AT;
+  // noStart: a core that can't say when it started (its boot capture never ran).
+  s.started = s.noStart ? null : __RESTARTED_AT;
   if (s.mode === 'update') {
     s.run = 'run-2';
     s.last = { status: s.newRunStatus, mode: from === s.checkout ? 'restart' : 'update',
@@ -159,7 +163,7 @@ const __route = (method, path, c, body) => {
                              : ['domovoi-core.service', 'domovoi-web.service'] });
   }
   if (method === 'POST' && bare === '/api/config/version/check') {
-    return __answer(200, { upstream: true, behind: 0, ahead: 0, upstream_sha: null, error: null });
+    return __answer(200, { upstream: true, behind: srv.behind || 0, ahead: 0, upstream_sha: null, error: null });
   }
   if (method !== 'GET') return __answer(404, { detail: 'not found' });
   if (bare === '/api/auth/status') return __answer(200, { setup_complete: true, authenticated: admin });
@@ -185,8 +189,13 @@ fetch = async (url, opts) => {
   window.__fetches.push({ method, path, who, phase: srv.phase, started: srv.started });
   if (srv.phase === 'linger' && method === 'GET' && bare === '/api/config/version') {
     srv.lingerPolls -= 1;
-    if (srv.lingerPolls <= 0) srv.phase = 'down';
-    return __route(method, path, { who, bearer }, o.body);
+    const answer = __route(method, path, { who, bearer }, o.body);
+    // skipDown: a fast host, back on a fresh start before any poll found
+    // the old server gone.
+    if (srv.lingerPolls <= 0) {
+      if (srv.skipDown) { srv.phase = 'up'; __comeBack(); } else srv.phase = 'down';
+    }
+    return answer;
   }
   if (srv.phase === 'down') {
     if (method === 'GET' && bare === '/api/config/version' && srv.restarted) {
@@ -347,6 +356,31 @@ SCENARIOS["flow_old_server_lingers"] = scenario(FLOW, srv={"lingerPolls": 2})
 SCENARIOS["flow_update_unit_failed"] = scenario(FLOW, srv={
     "mode": "update", "newRunStatus": "failed",
     "newRunError": "health failed (exit 1): not healthy after 120s: core down, web up"})
+
+# A core that can't say when it started (no started_at, before the press or
+# after it): the old process answering after the press must not end the
+# wait; having been seen away, the server answering again does.
+SCENARIOS["flow_no_started_at"] = scenario(FLOW, srv={"started": None, "noStart": True, "lingerPolls": 2})
+# A fast host: the new server answers before any poll found the old one
+# gone. Its boot time moved, and that alone ends the wait.
+SCENARIOS["flow_back_between_polls"] = scenario(FLOW, srv={"lingerPolls": 1, "skipDown": True})
+# Behind the upstream, "Pull the latest" is the update action; a restart
+# under way greys it, as it greys the check.
+SCENARIOS["flow_pull_mode"] = scenario(r"""
+await A.login(__PW);
+await start();
+await press({ type: 'button', text: 'Check for updates' }); await step();
+await pumpUntil(() => pageButtons().some((b) => b.startsWith('Pull the latest')));
+const out = { before: view() };
+const flow = press(plainButton); await step();
+await pumpUntil(() => !!note());
+out.away = view();
+letBack();
+out.result = await flow; await step(); await step();
+out.after = view();
+out.restarts = restarts();
+return out;
+""".replace("__PW", json.dumps(PASSWORD)), srv={"behind": 2})
 
 # A view-only tab: the press asks for the password, the restart is replayed.
 SCENARIOS["flow_view_only"] = scenario(r"""
@@ -562,6 +596,42 @@ def test_the_old_server_still_answering_is_not_the_restart_done(driven) -> None:
     assert o["reads"][last + 1].startswith("down:"), o["reads"]
     assert o["result"] is True
     assert o["after"]["toasts"].count(RESTARTED) == 1
+
+
+def test_a_server_that_cannot_say_when_it_started_is_back_once_it_was_away(driven) -> None:
+    """No started_at to compare (a core whose boot capture never ran): the
+    old process still answering after the press is not the restart done.
+    The wait ends once the server has been seen away and answers again."""
+    o = driven["flow_no_started_at"]
+    reads = o["reads"]
+    assert reads.count("linger:null") == 2, reads
+    last = max(i for i, r in enumerate(reads) if r.startswith("linger:"))
+    assert reads[last + 1].startswith("down:"), reads
+    assert reads[-1] == "up:null", reads
+    assert o["result"] is True
+    assert o["after"]["toasts"].count(RESTARTED) == 1
+
+
+def test_a_restart_quicker_than_the_poll_is_still_seen(driven) -> None:
+    """A fast host is back on a fresh start before any poll found the old
+    server gone: no read ever failed, and its boot time moving is the proof
+    the wait needs."""
+    o = driven["flow_back_between_polls"]
+    assert not any(r.startswith("down:") for r in o["reads"]), o["reads"]
+    assert f"linger:{STARTED}" in o["reads"], o["reads"]
+    assert o["reads"][-1] == f"up:{RESTARTED_AT}", o["reads"]
+    assert o["result"] is True
+    assert o["after"]["toasts"].count(RESTARTED) == 1
+
+
+def test_a_restart_under_way_greys_the_pull(driven) -> None:
+    o = driven["flow_pull_mode"]
+    assert "Pull the latest" in o["before"]["buttons"], o["before"]["buttons"]
+    assert RESTART in o["before"]["buttons"], o["before"]["buttons"]
+    assert "Pull the latest [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert "Restarting… [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert o["result"] is True
+    assert o["restarts"] == ["bearer"]
 
 
 def test_a_restart_some_other_way_since_the_panel_read_is_not_this_one(driven) -> None:
