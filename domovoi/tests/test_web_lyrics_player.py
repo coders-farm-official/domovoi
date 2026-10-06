@@ -390,6 +390,7 @@ SCENARIOS: dict[str, dict] = {
         "                 at((e) => e.text === 'no acquisition jobs')],"
         " head: h.findAll((e) => e.type === 'span' && h.inside(e, cls('lyr-jobs-head'))).map((e) => e.text),"
         " lines: h.findAll(cls('lyr-jobs-line')).map((e) => e.text),"
+        " titles: h.findAll(cls('lyr-jobs-line')).map((e) => e.props.title),"
         " refresh: W().__intervals.filter((t) => t.live).map((t) => t.ms),"
         " asked: h.hookCalls };",
         component="JobsTab", files=MUSIC, playback=False,
@@ -431,6 +432,11 @@ SCENARIOS: dict[str, dict] = {
         " lrc_off: w({ lrc_files: Object.assign({}, base.lrc_files, { enabled: false }) }).length,"
         " lrc_plain: w({ lrc_files: { enabled: true, written: 1, exists: 0, failed: 0, last_error: null } })[3],"
         " lrc_one: w({ lrc_files: { enabled: true, written: 5, exists: 1, failed: 2, last_error: null } })[3],"
+        " lrc_why: ['outside_music_dir', 'io', 'name', 'something_new'].map((c) =>"
+        "   w({ lrc_files: { enabled: true, written: 1, exists: 0, failed: 1, last_error: c } })[3]),"
+        " lr_why: ['unavailable:network', 'unavailable:http_503', 'unavailable:shape', 'rejected:400',"
+        "   'save:IntegrityError', 'save:too_large', 'rate_limited', 'OperationalError'].map((c) =>"
+        "   lr({ state: 'paused', last_error: c })[2]),"
         " pending: w({ index: { state: 'running', pending: 1234, indexed: 1 } }),"
         " search_off: w({ search_enabled: false }).slice(-1)[0], search_unknown: w({ search_enabled: null }).length,"
         " one_song: w({ tracks: 1, with_lyrics: 1, synced: 0 })[0], nothing: f(null),"
@@ -612,8 +618,11 @@ def test_the_jobs_card_sits_between_the_add_bar_and_the_table(driven) -> None:
     assert d["lines"] == [
         "in your files: 10 .lrc · 400 in the songs' tags",
         "LRCLIB: asking — 812 songs to go · 2,700 found · 250 not found",
-        ".lrc files: 2,300 saved · 40 songs already had one · 3 couldn't be saved (permission)",
+        ".lrc files: 2,300 saved · 40 songs already had one · 3 couldn't be saved "
+        "(no permission to write in the music folder)",
     ]
+    # the worker's own code stays on the line, for whoever helps with the box
+    assert d["titles"] == [None, None, "permission"]
     assert 10000 in d["refresh"]
     assert "/api/music/lyrics/status" in d["asked"]
 
@@ -631,16 +640,34 @@ def test_every_jobs_line(driven) -> None:
         "lyrics · 3,100 of 5,232 songs · 2,500 timed",
         "in your files: 10 .lrc · 400 in the songs' tags",
         "LRCLIB: asking — 812 songs to go · 2,700 found · 250 not found",
-        ".lrc files: 2,300 saved · 40 songs already had one · 3 couldn't be saved (permission)",
+        ".lrc files: 2,300 saved · 40 songs already had one · 3 couldn't be saved "
+        "(no permission to write in the music folder)",
     ]
     assert d["reading"] == ["lyrics · 3,100 of 5,232 songs · 2,500 timed", "reading your files — 5,200 of 5,232"]
     assert d["off"] == "LRCLIB: off — Settings → Configuration → Library"
     assert d["internet_off"] == "LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)"
     assert d["offline"] == "LRCLIB: paused — offline"
     assert d["rate_limited"] == "LRCLIB: paused — LRCLIB asked to slow down"
-    assert d["paused"] == "LRCLIB: paused — unavailable:timeout"
+    # the 2026-10-06 review: the workers' codes, said in words
+    assert d["paused"] == "LRCLIB: paused — LRCLIB didn't answer; trying again in a few minutes"
     assert d["paused_bare"] == "LRCLIB: paused — it did not answer"
-    assert d["error"] == "LRCLIB: paused — OperationalError"
+    assert d["error"] == "LRCLIB: paused — something went wrong on this server"
+    assert d["lr_why"] == [
+        "LRCLIB: paused — LRCLIB didn't answer; trying again in a few minutes",
+        "LRCLIB: paused — LRCLIB is having trouble; trying again in a few minutes",
+        "LRCLIB: paused — LRCLIB is having trouble; trying again in a few minutes",
+        "LRCLIB: paused — LRCLIB turned some songs down",
+        "LRCLIB: paused — something went wrong on this server",
+        "LRCLIB: paused — some lyrics were too long to keep",
+        "LRCLIB: paused — LRCLIB asked to slow down",
+        "LRCLIB: paused — something went wrong on this server",
+    ]
+    assert d["lrc_why"] == [
+        ".lrc files: 1 saved · 1 couldn't be saved (the song is outside the music folder)",
+        ".lrc files: 1 saved · 1 couldn't be saved (a disk error)",
+        ".lrc files: 1 saved · 1 couldn't be saved (a file name it can't use)",
+        ".lrc files: 1 saved · 1 couldn't be saved (something went wrong)",
+    ]
     assert d["idle"] == "LRCLIB: done — 2,700 found · 250 not found"
     assert d["done_again"] == "LRCLIB: done — 2,700 found · 250 not found · asks again from Nov 2"
     assert d["unknown"] == "LRCLIB: status unknown"

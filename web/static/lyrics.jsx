@@ -273,10 +273,12 @@ const _lyrReducedMotion = () => {
 // state changed — the one that stopped being current and the one that is.
 const _lyrRowSame = (a, b) => a.text === b.text && a.state === b.state && a.t === b.t && a.seek === b.seek;
 
+// A gap (an instrumental break) is a muted music note — the design system's
+// icon, not a Unicode glyph (.claude/skills/domovoi-design: no glyphs as icons).
 const LyricsLine = React.memo(function LyricsLine({ text, state, t, seek }) {
   const cls = `lyr-line lyr-${state}${text ? '' : ' lyr-gap'}`;
   const current = state === 'now' ? 'true' : undefined;
-  const words = text || <span aria-hidden="true">{'♪'}</span>;
+  const words = text || <span className="lyr-gap-note" aria-hidden="true"><Icon name="music" size={13}/></span>;
   if (seek) {
     return (
       <button type="button" className={cls} aria-current={current}
@@ -496,9 +498,32 @@ const _lyrDay = (iso) => {
   catch { return String(iso).slice(0, 10); }
 };
 
-/* The card's lines from GET /api/music/lyrics/status — pure, so every line
- * is pinned by a test. */
-const lyricsJobsLines = (s) => {
+/* What the workers' short codes mean, said for the household (the review of
+ * 2026-10-06: "unavailable:network" is no sentence). The code itself stays
+ * on the line as its title, for whoever helps with the box. */
+const _lyrLrclibWhy = (code) => {
+  const c = String(code || '');
+  if (!c) return 'it did not answer';
+  if (c === 'unavailable:network' || c === 'unavailable:timeout') {
+    return "LRCLIB didn't answer; trying again in a few minutes";
+  }
+  if (c.startsWith('unavailable:')) return 'LRCLIB is having trouble; trying again in a few minutes';
+  if (c === 'rate_limited') return 'LRCLIB asked to slow down';
+  if (c.startsWith('rejected:')) return 'LRCLIB turned some songs down';
+  if (c === 'save:too_large') return 'some lyrics were too long to keep';
+  return 'something went wrong on this server';   // save:<error>, an error's name
+};
+const _lyrLrcWhy = (code) => ({
+  permission: 'no permission to write in the music folder',
+  outside_music_dir: 'the song is outside the music folder',
+  io: 'a disk error',
+  name: "a file name it can't use",
+}[String(code || '')] || 'something went wrong');
+
+/* The card's lines from GET /api/music/lyrics/status, each {text, title}
+ * (title: the worker's own code behind the words, or null) — pure, so
+ * every line is pinned by a test. */
+const _lyrJobsRows = (s) => {
   if (!s) return [];
   const bySource = s.by_source || {};
   const scan = s.scan || {};
@@ -507,44 +532,47 @@ const lyricsJobsLines = (s) => {
   const index = s.index || {};
   const tracks = Number(s.tracks) || 0;
   const out = [];
-  out.push(`lyrics · ${_lyrNum(s.with_lyrics)} of ${_lyrNum(tracks)} ${_lyrSongs(tracks)} · ${_lyrNum(s.synced)} timed`);
+  const add = (text, title) => out.push({ text, title: title || null });
+  add(`lyrics · ${_lyrNum(s.with_lyrics)} of ${_lyrNum(tracks)} ${_lyrSongs(tracks)} · ${_lyrNum(s.synced)} timed`);
   const unscanned = Number(scan.unscanned) || 0;
-  out.push(unscanned > 0
+  add(unscanned > 0
     ? `reading your files — ${_lyrNum(Math.max(0, tracks - unscanned))} of ${_lyrNum(tracks)}`
     : `in your files: ${_lyrNum(bySource.sidecar || 0)} .lrc · ${_lyrNum(bySource.embedded || 0)} in the songs' tags`);
   const counts = `${_lyrNum(lr.found || 0)} found · ${_lyrNum(lr.not_found || 0)} not found`;
   switch (lr.state) {
     case 'off':
-      out.push('LRCLIB: off — Settings → Configuration → Library'); break;
+      add('LRCLIB: off — Settings → Configuration → Library'); break;
     case 'internet_off':
-      out.push('LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)'); break;
+      add('LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)'); break;
     case 'offline':
-      out.push('LRCLIB: paused — offline'); break;
+      add('LRCLIB: paused — offline'); break;
     case 'rate_limited':
-      out.push('LRCLIB: paused — LRCLIB asked to slow down'); break;
+      add('LRCLIB: paused — LRCLIB asked to slow down'); break;
     case 'paused':
     case 'error':
-      out.push(`LRCLIB: paused — ${lr.last_error || 'it did not answer'}`); break;
+      add(`LRCLIB: paused — ${_lyrLrclibWhy(lr.last_error)}`, lr.last_error); break;
     case 'running':
-      out.push(`LRCLIB: asking — ${_lyrNum(lr.due)} ${_lyrSongs(lr.due)} to go · ${counts}`); break;
+      add(`LRCLIB: asking — ${_lyrNum(lr.due)} ${_lyrSongs(lr.due)} to go · ${counts}`); break;
     case 'idle':
     case 'done': {
       const again = lr.next_retry_at ? _lyrDay(lr.next_retry_at) : null;
-      out.push(`LRCLIB: done — ${counts}${again ? ` · asks again from ${again}` : ''}`); break;
+      add(`LRCLIB: done — ${counts}${again ? ` · asks again from ${again}` : ''}`); break;
     }
     default:
-      out.push('LRCLIB: status unknown');
+      add('LRCLIB: status unknown');
   }
   if (lrc.enabled) {
     let line = `.lrc files: ${_lyrNum(lrc.written || 0)} saved`;
     if (lrc.exists > 0) line += ` · ${_lyrNum(lrc.exists)} ${_lyrSongs(lrc.exists)} already had one`;
-    if (lrc.failed > 0) line += ` · ${_lyrNum(lrc.failed)} couldn't be saved${lrc.last_error ? ` (${lrc.last_error})` : ''}`;
-    out.push(line);
+    const failed = lrc.failed > 0;
+    if (failed) line += ` · ${_lyrNum(lrc.failed)} couldn't be saved${lrc.last_error ? ` (${_lyrLrcWhy(lrc.last_error)})` : ''}`;
+    add(line, failed ? lrc.last_error : null);
   }
-  if (index.pending > 0) out.push(`making lyrics searchable — ${_lyrNum(index.pending)} to go`);
-  if (s.search_enabled === false) out.push('finding songs by their words: off — Settings → Configuration → Library');
+  if (index.pending > 0) add(`making lyrics searchable — ${_lyrNum(index.pending)} to go`);
+  if (s.search_enabled === false) add('finding songs by their words: off — Settings → Configuration → Library');
   return out;
 };
+const lyricsJobsLines = (s) => _lyrJobsRows(s).map((r) => r.text);
 
 /* How far the house has got with its lyrics. Nothing at all for a viewer
  * outside the household tier, or while the library is empty. */
@@ -560,11 +588,13 @@ const LyricsJobsCard = () => {
   }, [refresh, refused]);
   if (refused) return null;
   if (!data || !(Number(data.tracks) > 0)) return null;
-  const lines = lyricsJobsLines(data);
+  const rows = _lyrJobsRows(data);
   return (
     <div className="lyr-jobs">
-      <div className="lyr-jobs-head"><Icon name="mic-vocal" size={14}/><span>{lines[0]}</span></div>
-      {lines.slice(1).map((l, i) => <div key={i} className="lyr-jobs-line">{l}</div>)}
+      <div className="lyr-jobs-head"><Icon name="mic-vocal" size={14}/><span>{rows[0].text}</span></div>
+      {rows.slice(1).map((r, i) => (
+        <div key={i} className="lyr-jobs-line" title={r.title || undefined}>{r.text}</div>
+      ))}
     </div>
   );
 };

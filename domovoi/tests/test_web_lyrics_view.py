@@ -213,7 +213,8 @@ SCENARIOS: dict[str, dict] = {
         "await start(); await h.click((e) => cls('lyr-line')(e) && e.text === " + json.dumps(L2) + ");"
         "const gap = h.find(cls('lyr-gap'));"
         "return { acts: W().__acts, gapType: gap.type, gapLabel: gap.props['aria-label'],"
-        " gapNote: h.findAll((e) => e.type === 'span' && h.inside(e, cls('lyr-gap'))).map((e) => [e.text, e.props['aria-hidden']]) };",
+        " gapNote: h.findAll((e) => e.type === 'span' && h.inside(e, cls('lyr-gap'))).map((e) => [e.text, e.props['aria-hidden']]),"
+        " gapIcon: h.findAll((e) => e.type === 'Icon' && h.inside(e, cls('lyr-gap'))).map((e) => e.props.name) };",
         p={"positionSec": 13.0},
     ),
     "no_seek_for_a_live_item": _scenario(
@@ -450,7 +451,8 @@ def test_a_line_seeks_this_browsers_playback(driven) -> None:
     d = driven["seek_in_this_browser"]
     assert d["acts"] == [["seek", 16.85]]
     assert d["gapType"] == "button" and d["gapLabel"] == "instrumental break"
-    assert d["gapNote"] == [["♪", "true"]]
+    # a muted music note, the design system's icon (no Unicode glyph as an icon)
+    assert d["gapNote"] == [["", "true"]] and d["gapIcon"] == ["music"]
 
 
 def test_a_live_item_is_not_seekable(driven) -> None:
