@@ -268,9 +268,11 @@ async def check_version(request: Request):
     dependencies=[Depends(require_admin_security)],
 )
 async def restart_version(request: Request):
-    """Bounce the Domovoi services so pulled code actually loads (or, where
-    domovoi-update.service is installed, start it: sync, migrate, restart,
-    roll back on failure).
+    """Bounce the Domovoi services so pulled code actually loads, or just
+    restart them (Settings → Version's "Restart Domovoi"); where
+    domovoi-update.service is installed, start it instead: sync, migrate,
+    restart, roll back on failure, and with nothing new to apply only the
+    restart and its health check.
 
     Admin-gated at both hops. The response comes back before the restart
     fires, so a client that then sees the connection drop should treat that

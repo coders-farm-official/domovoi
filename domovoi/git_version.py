@@ -200,6 +200,10 @@ async def version_state() -> dict:
         "uptime_sec": uptime_sec(),
         "restart_capable": can_restart,
         "restart_hint": restart_hint,
+        # What to run by hand when restart_capable is false: the panel shows
+        # it in place of the button. None on a host without systemd, where
+        # there is no one command to give.
+        "restart_command": self_restart.manual_command(mode),
         # "update" when the restart starts domovoi-update.service (sync,
         # migrate, health-check, roll back); "restart" when it only bounces
         # core and web, as every host did before that unit existed.

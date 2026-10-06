@@ -73,6 +73,10 @@ SCENARIOS = {
     "card_update_unit": _card({"restart_capable": True, "restart_mode": "update"}, RADIO_WAITING),
     "card_incapable": _card({"restart_capable": False, "restart_mode": "restart",
                              "restart_hint": "no passwordless sudoers grant"}, RADIO_WAITING),
+    # Windows or a development box: the core's restart_command is null.
+    "card_no_systemd": _card({"restart_capable": False, "restart_mode": "restart",
+                              "restart_hint": "systemctl not found — not a systemd host",
+                              "restart_command": None}, RADIO_WAITING),
     "card_nothing_waiting": _card({"restart_capable": True}, []),
     "row_waiting": _row(True),
     "row_not_waiting": _row(False),
@@ -136,6 +140,17 @@ def test_a_host_that_cannot_restart_itself_gets_the_command(rendered) -> None:
     texts = _texts(rendered["card_incapable"])
     assert any("no passwordless sudoers grant" in t for t in texts), texts
     assert any(t == "sudo systemctl restart domovoi-core domovoi-web" for t in texts), texts
+    assert not any(t == "Restart to finish the upgrade" for t in texts), texts
+
+
+def test_a_host_without_systemd_is_given_no_systemctl_line(rendered) -> None:
+    """The card shares the Version card's RestartByHandHint: with no
+    systemd there is no command to give, and it used to print the Linux
+    one anyway."""
+    texts = _texts(rendered["card_no_systemd"])
+    assert ("systemctl not found — not a systemd host. "
+            "Restart the Domovoi services the way they were started.") in texts, texts
+    assert not any("sudo systemctl" in t for t in texts), texts
     assert not any(t == "Restart to finish the upgrade" for t in texts), texts
 
 

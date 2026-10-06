@@ -5871,7 +5871,7 @@
           "config"
         ],
         "summary": "Restart Version",
-        "description": "Bounce the Domovoi services so pulled code actually loads (or, where\ndomovoi-update.service is installed, start it: sync, migrate, restart,\nroll back on failure).\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
+        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 Version's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
         "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {

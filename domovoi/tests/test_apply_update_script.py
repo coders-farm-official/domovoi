@@ -89,7 +89,7 @@ def _script_sql(name: str) -> str:
     return m.group(1)
 
 
-SQL_NAMES = ("LEDGER_SQL", "PLUGINS_SQL", "REENABLE_SQL")
+SQL_NAMES = ("LEDGER_SQL", "PLUGINS_SQL", "REENABLE_SQL", "APPLIED_SQL")
 
 
 @requires_bash
@@ -192,6 +192,36 @@ async def test_plugins_sql_cuts_a_long_error():
     )
     (line,) = [r for r in rows if r.startswith("zzupd_long|")]
     assert line == "zzupd_long|t|load_error|" + "x" * 200
+
+
+def _history_row(rank: int, version: str | None, typ: str, success: bool) -> str:
+    ver = "NULL" if version is None else f"'{version}'"
+    return (
+        "INSERT INTO flyway_schema_history (installed_rank, version, description, type, "
+        "script, checksum, installed_by, execution_time, success) VALUES "
+        f"({rank}, {ver}, 'zzupd', '{typ}', 'zzupd.sql', 0, 'harness', 1, {str(success).upper()})"
+    )
+
+
+@requires_db
+async def test_applied_sql_counts_only_migrations_that_applied():
+    """A plain restart leaves domovoi-db alone when APPLIED_SQL is at least
+    the number of migration files in the checkout. Rows that are not an
+    applied versioned migration must not count, or a pending migration
+    hides behind them and the core boots on a database that lacks it."""
+    query = _script_sql("APPLIED_SQL")
+    (before,) = await _in_rolled_back_tx([], query)
+    noise = [
+        _history_row(900001, "1", "BASELINE", True),     # a baseline, not a migration
+        _history_row(900002, None, "SCHEMA", True),      # Flyway creating the schema
+        _history_row(900003, "999", "SQL", False),       # failed, never applied
+        _history_row(900004, None, "SQL", True),         # a repeatable migration
+    ]
+    (with_noise,) = await _in_rolled_back_tx(noise, query)
+    assert with_noise == before
+    (with_one,) = await _in_rolled_back_tx(
+        noise + [_history_row(900005, "998", "SQL", True)], query)
+    assert with_one == before + 1
 
 
 @requires_db

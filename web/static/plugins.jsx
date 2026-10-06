@@ -492,13 +492,7 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
             {underway && <div style={{ marginTop: 8 }}><RestartUnderwayNote updating={updateUnit}/></div>}
           </div>
         ) : (
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-            {(version && version.restart_hint) || 'This host can’t restart itself.'} Run by hand:
-            <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
-              {updateUnit ? 'sudo systemctl start domovoi-update.service'
-                          : 'sudo systemctl restart domovoi-core domovoi-web'}
-            </div>
-          </div>
+          <RestartByHandHint version={version}/>
         )}
       </div>
     </Card>

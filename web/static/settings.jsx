@@ -416,11 +416,21 @@ const VoicesPanel = () => {
  *
  * Above the editor sits a Version section: the web build, the server's
  * git SHA (with a "-dirty" suffix when its working tree has uncommitted
- * changes), and an update check. The panel offers exactly ONE action at a
- * time, in the order an operator needs them: "Restart to apply changes"
- * when code is on disk but not loaded, else "Pull the latest" when behind,
- * else "Check for updates". The restart is replaced by the manual command
- * on a host without the sudoers grant (see restart_capable).
+ * changes), and an update check. The panel offers exactly ONE update action
+ * at a time, in the order an operator needs them: "Restart to apply
+ * changes" when code is on disk but not loaded, else "Pull the latest" when
+ * behind, else "Check for updates". The restart is replaced by the manual
+ * command on a host without the sudoers grant (see restart_capable).
+ *
+ * Whenever no restart is waiting, an admin also gets "Restart Domovoi": the
+ * same restart with nothing to load, for a setting changed by hand in
+ * domovoi/.env, a restart-tier setting, or a server that needs a kick. Never
+ * beside "Restart to apply changes" (that one restarts too), and on a host
+ * that can't restart itself it is the manual command instead. With the
+ * update unit it is that unit's quick plain restart, unless the unit would
+ * run its full update (code pulled since the panel read the version, or
+ * loaded outside the unit): then the press says so before anything happens
+ * and the card says "Updating…" (restartDomovoiServer, components.jsx).
  *
  * On a Linux host with domovoi-update.service (restart_mode "update") the
  * restart also backs up, syncs dependencies, migrates and rolls back on
@@ -541,10 +551,22 @@ const VersionSection = () => {
   const [fire, node] = useToast();
   const [checking, setChecking] = React.useState(false);
   const [pulling, setPulling] = React.useState(false);
-  const [restarting, setRestarting] = React.useState(false);
+  // The restart under way: 'apply' (Restart to apply changes) or 'plain'
+  // (Restart Domovoi); null when there is none.
+  const [restarting, setRestarting] = React.useState(null);
+  // What it runs, as restartDomovoiServer tells it, in RestartUnderwayNote's
+  // props ({ updating, plain }): what the operator said yes to (onStart),
+  // then what the server took (onUnderway). A "Restart Domovoi" the update
+  // unit runs as its full update is an update. Kept until the restart is
+  // over, so the button's word holds while the card reads the version again.
+  const [runs, setRuns] = React.useState(null);
   // The server took the restart and is away on purpose (onUnderway → onSettled).
   const [underway, setUnderway] = React.useState(false);
   const [status, setStatus] = React.useState(null);   // result of /version/check
+  // An admin: signed in in this tab, or view-only after a reload, whose
+  // press asks for the password once (data.js replays the restart). A
+  // household member without the admin password never sees the restart.
+  const admin = useAdminSignedIn();
 
   const check = async () => {
     setChecking(true); setStatus(null);
@@ -593,13 +615,15 @@ const VersionSection = () => {
 
   // The restart itself (confirm, bounce, wait for the server to come back)
   // is restartDomovoiServer in components.jsx, shared with the Plugins
-  // page's "restart to finish the upgrade".
-  const restart = () => restartDomovoiServer({
-    core, fire,
-    onStart: () => setRestarting(true),
-    onUnderway: () => setUnderway(true),
+  // page's "restart to finish the upgrade". `plain`: Restart Domovoi, with
+  // nothing waiting to load (which the update unit may still run as its
+  // full update; restartDomovoiServer asks, and onUnderway says).
+  const restart = (plain) => restartDomovoiServer({
+    core, fire, plain,
+    onStart: (how) => { setRestarting(plain ? 'plain' : 'apply'); setRuns(how || null); },
+    onUnderway: (how) => { if (how) setRuns(how); setUnderway(true); },
     onSettled: () => { setUnderway(false); setStatus(null); return refreshCore(); },
-  }).finally(() => { setUnderway(false); setRestarting(false); });
+  }).finally(() => { setUnderway(false); setRestarting(null); setRuns(null); });
 
   const webVer = cfg && cfg.web_version;
   // `sha` is the RUNNING code (captured at the core's boot), not whatever is
@@ -614,7 +638,6 @@ const VersionSection = () => {
   const codePending = pending.code;
   const behind = status && status.upstream ? status.behind : null;
   const restartCapable = !!(core && core.restart_capable);
-  const restartHint = core && core.restart_hint;
   const updateUnit = !!(core && core.restart_mode === 'update');
   const lastUpdate = core && core.last_update;
   const lastPill = lastUpdate && (UPDATE_RESULT_PILL[lastUpdate.status]
@@ -629,6 +652,11 @@ const VersionSection = () => {
   // honest when we have no reason to think anything is pending.
   const mode = restartPending ? 'restart'
     : ((behind || 0) > 0 ? (upstreamIsBad ? 'held' : 'pull') : 'check');
+  // Restart Domovoi: an admin's, whenever no restart is waiting (that one
+  // is the primary action, and it restarts too). On a host that can't
+  // restart itself, the command to run instead.
+  const plainRestart = admin && !!core && mode !== 'restart';
+  const plainRunning = restarting === 'plain';
 
   return (
     <Card title="Version"
@@ -698,18 +726,18 @@ const VersionSection = () => {
       )}
       <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {mode === 'restart' && restartCapable && (
-          <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
-            {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to apply changes'}
+          <Button variant="primary" icon="refresh-cw" onClick={() => restart(false)} disabled={!!restarting}>
+            {restarting ? (updateUnit && !plainRunning ? 'Updating…' : 'Restarting…') : 'Restart to apply changes'}
           </Button>
         )}
         {mode === 'pull' && (
-          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || internetOff}
+          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || internetOff || !!restarting}
                   title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
             {pulling ? 'Pulling…' : 'Pull the latest'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && (
-          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || internetOff}
+          <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || internetOff || !!restarting}
                   title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
             {checking ? 'Checking…' : 'Check for updates'}
           </Button>
@@ -722,11 +750,23 @@ const VersionSection = () => {
               : 'up to date'}
           </span>
         )}
+        {plainRestart && restartCapable && (
+          // Its own end of the row: a restart, not a step of the update.
+          <span className="version-restart" style={{ marginLeft: 'auto' }}>
+            <Button variant="secondary" icon="rotate-cw" onClick={() => restart(true)} disabled={!!restarting || pulling}
+                    title="Restart the Domovoi services, so changes to domovoi/.env take effect">
+              {plainRunning ? (runs && runs.updating ? 'Updating…' : 'Restarting…') : 'Restart Domovoi'}
+            </Button>
+          </span>
+        )}
       </div>
       {underway && (
         <div style={{ padding: '0 16px 14px' }}>
-          <RestartUnderwayNote updating={updateUnit}/>
+          <RestartUnderwayNote updating={!!(runs && runs.updating)} plain={!!(runs && runs.plain)}/>
         </div>
+      )}
+      {plainRestart && !restartCapable && (
+        <RestartByHandHint version={core} style={{ padding: '0 16px 14px' }}/>
       )}
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
@@ -741,13 +781,7 @@ const VersionSection = () => {
         </div>
       )}
       {mode === 'restart' && !restartCapable && (
-        <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
-          {restartHint || 'This host can’t restart itself.'} Run by hand:
-          <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>
-            {updateUnit ? 'sudo systemctl start domovoi-update.service'
-                        : 'sudo systemctl restart domovoi-core domovoi-web'}
-          </div>
-        </div>
+        <RestartByHandHint version={core} style={{ padding: '0 16px 14px' }}/>
       )}
       {node}
     </Card>

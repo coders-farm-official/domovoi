@@ -14,6 +14,11 @@
 #     domovoi_test twin;
 #   * `systemctl restart domovoi-db.service` is Flyway: it raises the count
 #     to the number of migration files in the checkout and never lowers it;
+#     it also brings Postgres back while pg-down says it is down (every
+#     `docker exec` into it fails meanwhile);
+#   * the count is of applied migrations; extra-rows-<db> adds rows that
+#     only `count(*)` sees (a baseline row), never the applied-migration
+#     query (APPLIED_SQL);
 #   * the main database also has a registry-<db> file, the plugins table as
 #     "slug|t|status|last_error" lines;
 #   * `systemctl start domovoi-core.service` is the core's boot: every
@@ -118,6 +123,8 @@ if [ "${1-}" = restart ] && [ "${2-}" = domovoi-db.service ]; then
     echo "flyway: migration failed" >&2; exit 1
   fi
   if [ "$files" -gt "$cur" ]; then echo "$files" >"$SHIM_STATE/db-domovoi"; fi
+  # compose up -d postgres
+  rm -f "$SHIM_STATE/pg-down"
 fi
 if [ "${1-}" = start ] && [[ " $* " == *" domovoi-core.service "* ]]; then
   # The core's boot, the loader's way: each plugin's migration catch-up
@@ -166,6 +173,9 @@ SH
 echo "docker $*" >>"$SHIM_STATE/calls.log"
 case "${1-}" in
   exec)
+    if [ -f "$SHIM_STATE/pg-down" ]; then
+      echo "Error response from daemon: container domovoi-postgres is not running" >&2; exit 1
+    fi
     shift
     while [ "${1-}" = -i ]; do shift; done
     shift   # the container
@@ -255,6 +265,9 @@ registry() { printf '%s/registry-%s' "$SHIM_STATE" "$1"; }
 exists() { [ -f "$(dbfile "$1")" ] || { echo "psql: database $1 does not exist" >&2; exit 2; }; }
 case "$sql" in
   "SELECT count(*) FROM flyway_schema_history")
+    exists "$db"
+    echo $(( $(cat "$(dbfile "$db")") + $(cat "$SHIM_STATE/extra-rows-$db" 2>/dev/null || echo 0) )) ;;
+  "SELECT count(*) FROM flyway_schema_history WHERE success AND type = 'SQL' AND version IS NOT NULL")
     exists "$db"; cat "$(dbfile "$db")" ;;
   *query_to_xml*schema_history*)
     exists "$db"; cat "$(ledgers "$db")" 2>/dev/null ;;
@@ -469,6 +482,8 @@ step_took_under() {
     | head -n 1 | sed 's/.*"duration_sec": //')
   [ -n "$d" ] && [ "${d%.*}" -lt "$2" ] || { echo "      $1 took [$d], expected under ${2}s"; return 1; }
 }
+# The result's steps by name, in order, on one line.
+step_names() { grep -o '{"name": "[a-z-]*"' "$RESULT" | sed 's/^{"name": "//; s/"$//' | tr '\n' ' ' | sed 's/ $//'; }
 
 valid_json() {
   [ -n "${HARNESS_PYTHON:-}" ] || return 0
@@ -520,13 +535,19 @@ case_noop_restart() {
   check "mode restart" eq "$(field mode)" '"restart"'
   check "prev from applied_sha" eq "$(field prev_source)" '"applied"'
   check "stops web then core" called "systemctl stop domovoi-web.service domovoi-core.service"
-  check "cheap flyway run" called "systemctl restart domovoi-db.service"
   check "starts core and web" called "systemctl start domovoi-core.service domovoi-web.service"
   check "health-checks core" called "curl http://127.0.0.1:6370/v1/health"
   check "health-checks web" called "curl http://127.0.0.1:6369/api/health"
   check "no backup on a plain restart" not_called "pg_dump"
   check "no pip on a plain restart" not_called "pip "
   check "no docker build on a plain restart" not_called "docker build"
+  # The dashboard's "Restart Domovoi" with nothing waiting: Postgres answers
+  # with the checkout's one migration applied, so no Flyway run either.
+  check "asks Flyway's history what is applied" called "WHERE success AND type = 'SQL' AND version IS NOT NULL"
+  check "no migrations on a plain restart" not_called "systemctl restart domovoi-db.service"
+  check "nothing but the restart's own steps" eq "$(step_names)" "stop-services start-services health searxng"
+  check "migration count recorded" eq "$(field migrations_before)" 1
+  check "and left as it was" eq "$(field migrations_after)" 1
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
   end_case
 }
@@ -538,7 +559,64 @@ case_noop_without_any_history() {
   check "status ok" eq "$(field status)" '"ok"'
   check "mode restart" eq "$(field mode)" '"restart"'
   check "prev falls back to HEAD" eq "$(field prev_source)" '"head"'
+  check "no migrations: the database has them all" not_called "systemctl restart domovoi-db.service"
   check "a healthy restart records the baseline" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+# The checkout ships a migration the database never got (domovoi-db last
+# ran before it was there): the plain restart still runs Flyway, as every
+# plain restart did before it learned to leave the database alone.
+case_noop_restart_migrates_a_database_behind_the_checkout() {
+  new_case noop_restart_migrates_a_database_behind_the_checkout
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo 0 >"$STATE/db-domovoi"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "still a plain restart" eq "$(field mode)" '"restart"'
+  check "runs Flyway through domovoi-db" called "systemctl restart domovoi-db.service"
+  check "with core and web stopped" before "systemctl stop" "systemctl restart domovoi-db.service"
+  check "before they start" before "systemctl restart domovoi-db.service" "systemctl start domovoi-core.service"
+  check "the step says why" grep -qF \
+    '"name": "migrate", "status": "ok", "duration_sec": ' "$RESULT"
+  check "in words" grep -qF '"detail": "0 of the 1 migrations in the checkout applied"' "$RESULT"
+  check "migrations before" eq "$(field migrations_before)" 0
+  check "and after" eq "$(field migrations_after)" 1
+  check "still no backup" not_called "pg_dump"
+  check "still no pip" not_called "pip "
+  end_case
+}
+
+# Postgres isn't answering (its container stopped): restarting domovoi-db
+# brings it back, as the plain restart always did.
+case_noop_restart_brings_postgres_back() {
+  new_case noop_restart_brings_postgres_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/pg-down"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "restarts domovoi-db" called "systemctl restart domovoi-db.service"
+  check "the step says why" grep -qF '"detail": "Postgres did not answer with its Flyway history"' "$RESULT"
+  check "Postgres is back" test ! -f "$STATE/pg-down"
+  check "count unknown before" eq "$(field migrations_before)" null
+  check "known after" eq "$(field migrations_after)" 1
+  end_case
+}
+
+# A baseline row in Flyway's history is a row, not a migration: count(*)
+# matches the checkout's one file, but nothing was applied.
+case_noop_restart_a_baseline_row_is_not_a_migration() {
+  new_case noop_restart_a_baseline_row_is_not_a_migration
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo 0 >"$STATE/db-domovoi"
+  echo 1 >"$STATE/extra-rows-domovoi"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "runs Flyway" called "systemctl restart domovoi-db.service"
+  check "the step says why" grep -qF '"detail": "0 of the 1 migrations in the checkout applied"' "$RESULT"
   end_case
 }
 
@@ -1267,7 +1345,7 @@ case_a_hung_stop_is_killed_and_the_restart_goes_on() {
   check "leaves the web alone" not_called "systemctl kill --signal=SIGKILL domovoi-web.service"
   check "says so in the detail" grep -qF \
     'domovoi-core.service (still stopping after 1s: SIGKILLed by this script)' "$RESULT"
-  check "then migrates and starts" again_after "systemctl kill" "systemctl start domovoi-core.service domovoi-web.service"
+  check "then starts" again_after "systemctl kill" "systemctl start domovoi-core.service domovoi-web.service"
   check "the stop step is bounded" step_took_under stop-services 5
   end_case
 }
@@ -1510,6 +1588,9 @@ case_unanswered_dependency_update_reads_the_answer_once() {
 
 case_noop_restart
 case_noop_without_any_history
+case_noop_restart_migrates_a_database_behind_the_checkout
+case_noop_restart_brings_postgres_back
+case_noop_restart_a_baseline_row_is_not_a_migration
 case_deps_changed_as_root
 case_mpd_changed
 case_mpd_conf_only

@@ -638,21 +638,100 @@ const pendingRestart = (v) => {
 // "radio 1.1.0 → 1.2.0"
 const pluginUpgradeLabel = (p) => `${p.slug} ${p.from_version} → ${p.to_version}`;
 
+/* The commit the update unit's next run compares the checkout with: the
+ * one it last applied and saw healthy (apply-update.sh keeps it as
+ * applied_sha), as the unit's last result (last_update) tells it. An `ok`
+ * run, a plain restart's or a full update's, applied its to_sha; any other
+ * left that record where it found it, at its from_sha (a rolled-back
+ * update writes it back; a failed, refused or aborted one never touches
+ * it). Null without a result, or from one that can't say. */
+const unitAppliedSha = (last) => {
+  if (!last || typeof last !== 'object') return null;
+  const sha = last.status === 'ok' ? last.to_sha : last.from_sha;
+  return typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha) ? sha : null;
+};
+
+/* Why a restart pressed now would be the update unit's FULL update and not
+ * its plain restart, as a clause for the confirm; null when it would not
+ * be, or the GET /api/config/version answer `v` can't say.
+ *
+ * With domovoi-update.service (restart_mode "update") every restart runs
+ * apply-update.sh, which compares the checkout's HEAD with the commit it
+ * last applied (unitAppliedSha). The same commit: its plain restart (stop,
+ * start, health check; seconds). Anything else: the full update (a backup
+ * first, about 70 s on the Beelink, dependencies and migrations if they
+ * changed, health and plugin checks, a rollback on failure). "Restart
+ * Domovoi" means the first and meets the second when
+ *   - pulled code is waiting to load (code_restart_required), which the
+ *     page may learn only at the press: pulled after the panel read the
+ *     version;
+ *   - code was loaded outside the unit (pulled, then the core restarted by
+ *     hand): nothing is waiting, but the unit last applied another commit.
+ * A staged plugin upgrade sets restart_required too, but leaves the
+ * checkout the unit's commit: its plain restart loads it. Without the unit
+ * a restart is the same bounce either way. */
+const restartRunsFullUpdate = (v) => {
+  if (!v || v.restart_mode !== 'update') return null;
+  const checkout = String(v.checkout_sha || '').replace(/-dirty$/, '');
+  const pulled = pendingRestart(v).code
+    ? `Pulled code is waiting to load (running ${v.running_sha || v.sha}, checked out ${checkout})`
+    : null;
+  const applied = unitAppliedSha(v.last_update);
+  // The unit's record decides, as it does in the script; what the core
+  // happens to run doesn't.
+  if (applied && /^[0-9a-f]{4,64}$/.test(checkout)) {
+    if (applied.startsWith(checkout)) return null;
+    return pulled || `The checkout (${checkout}) isn’t the commit the update unit last applied (${applied.slice(0, 7)})`;
+  }
+  // No readable record (last_update null): nothing to compare with, so a
+  // restart with nothing waiting is taken for the plain one. Pulled code
+  // waiting is a full update all the same: what the unit starts from (its
+  // record, or the commit the pull recorded, git_version.pull) is the
+  // running commit, not the checkout.
+  return pulled;
+};
+
 /* Bounce domovoi-core + domovoi-web — or, with domovoi-update.service
  * installed, start it — and wait until the server is back with nothing
- * left to restart. Settings → Version ("Restart to apply changes") and the
- * Plugins page ("restart to finish the upgrade") both press this one, so
- * the two can't drift into different restarts.
+ * left to restart. Settings → Version ("Restart to apply changes", and
+ * "Restart Domovoi" whenever nothing is waiting) and the Plugins page
+ * ("restart to finish the upgrade") all press this one, so they can't
+ * drift into different restarts.
  *
  *   core      the last GET /api/config/version answer (restart_mode,
- *             last_update)
+ *             last_update, started_at). The wait measures against a fresh
+ *             read taken at the press: the panel's copy can predate a
+ *             restart done some other way, and the first answer after the
+ *             press would then look like this restart already done.
  *   question  the confirm's first line; the default is the pulled-code one
- *   onStart   the operator said yes and the restart is being asked for
+ *   plain     a restart with nothing waiting to load (Settings → Version's
+ *             "Restart Domovoi", after editing domovoi/.env by hand, say):
+ *             the confirm says what a restart interrupts rather than what
+ *             applying code does, and with the update unit its plain
+ *             restart (no backup, no migrations) is what runs. Unless the
+ *             unit would run its full update instead (restartRunsFullUpdate):
+ *             then the press is asked as that before anything happens — in
+ *             the one confirm when the panel's copy already shows it, in a
+ *             second one when only the fresh read at the press does (code
+ *             pulled, or loaded by hand, after the panel read the
+ *             version) — and it is told and waited for as the update it is
+ *   onStart   the operator said yes and the restart is being asked for.
+ *             Its argument is what they said yes to, as RestartUnderwayNote's
+ *             props: { updating, plain }, `updating` for the update unit's
+ *             update and `plain` for a restart with nothing to load
  *   onUnderway the server took it (or went away answering): from here
- *             until onSettled it is restarting, and the caller says so
- *   onSettled the wait is over, whichever way — re-read what you show
+ *             until onSettled it is restarting, and the caller says so.
+ *             Its argument is what runs, in the same props (a second
+ *             confirm, or a server changed since, can make it differ)
+ *   onSettled the wait is over, whichever way — re-read what you show (a
+ *             full update declined at the second confirm ends here too:
+ *             the panel's copy was out of date)
  *
- * Resolves true once the server reports restart_required cleared.
+ * Resolves true once the server is back on a fresh start (its started_at
+ * moved; with the update unit, a finished run newer than the press) with
+ * restart_required clear. restart_required alone is no proof: a plain
+ * restart never set it, and the old server still answers for a moment
+ * after the press.
  *
  * A view-only tab (reloaded, so it holds the cookie and no admin sign-in)
  * is refused the restart and data.js pops the login modal; the modal comes
@@ -661,22 +740,82 @@ const pluginUpgradeLabel = (p) => `${p.slug} ${p.from_version} → ${p.to_versio
  * the server going away mid-answer is the restart working, every poll
  * while it is away is quiet, and no read refused while it is coming back
  * opens a prompt (ServerRestart, data.js). */
-const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, onUnderway = () => {},
-                                      onSettled = () => {} }) => {
+const restartDomovoiServer = async ({ core, fire, question, plain = false, onStart = () => {},
+                                      onUnderway = () => {}, onSettled = () => {} }) => {
   const updating = !!(core && core.restart_mode === 'update');
-  if (!window.confirm(updating
-    ? `${question || 'Apply the pulled code?'}\n\n` +
-      'This backs up the database, updates dependencies and migrations if ' +
-      'they changed, and restarts domovoi-core and domovoi-web. If they ' +
-      'don’t come back healthy it rolls everything back. Voice is ' +
-      'unavailable meanwhile, usually for under a minute, longer when ' +
-      'dependencies change.'
+  const updateText =
+    'This backs up the database, updates dependencies and migrations if ' +
+    'they changed, and restarts domovoi-core and domovoi-web. If they ' +
+    'don’t come back healthy it rolls everything back. Voice is ' +
+    'unavailable meanwhile, usually for under a minute, longer when ' +
+    'dependencies change.';
+  // A plain press the update unit would run as its full update, asked as
+  // that. `again`: the operator has already said yes to a quick restart.
+  const fullUpdateText = (why, again) =>
+    `${again ? 'Run the full update instead?' : 'Restart Domovoi now, as a full update?'}\n\n` +
+    `${why}, so this restart runs the update unit’s full update, not ` +
+    `${again ? 'the quick restart you said yes to' : 'a quick restart'}. ${updateText}`;
+  const fullBy = (v) => (plain ? restartRunsFullUpdate(v) : null);
+  // How the card tells a restart (onStart's and onUnderway's argument): a
+  // plain one as such, anything else through the update unit as its update.
+  const told = (fullUpdate, mode) => ({
+    updating: mode === 'update' && (!plain || !!fullUpdate),
+    plain: plain && !fullUpdate,
+  });
+  // What the confirm asks, from the panel's copy.
+  const asked = fullBy(core);
+  if (!window.confirm(asked
+    ? fullUpdateText(asked, false)
+    : plain
+    ? `${question || 'Restart Domovoi now?'}\n\n` +
+      'domovoi-core and domovoi-web restart, so changes to domovoi/.env ' +
+      'take effect. Voice and this dashboard are back in a few seconds, and ' +
+      'satellites reconnect on their own. Music playing in a room may stop; ' +
+      'ask for it again if it does.'
+    : updating
+    ? `${question || 'Apply the pulled code?'}\n\n${updateText}`
     : `${question || 'Restart the Domovoi services to load the pulled code?'}\n\n` +
       'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
       'a few seconds and connected satellites reconnect on their own.'
   )) return false;
-  const kind = updating ? 'update' : 'restart';
-  const previousRun = core && core.last_update ? core.last_update.started_at : null;
+  onStart(told(asked, updating ? 'update' : 'restart'));
+  // The server as it is now, not as the panel last read it (see `core`).
+  const readNow = async (fallback) => {
+    try {
+      const now = await apiGet('/api/config/version', { quiet: true });
+      if (now && typeof now === 'object') return now;
+    } catch { /* the copy in hand will have to do */ }
+    return fallback;
+  };
+  let before = await readNow(core);
+  let full = fullBy(before);
+  if (full && !asked) {
+    // Asked as a quick restart, and the server as it is now says the unit
+    // would run its full update (a pull landed after the panel read the
+    // version, say): ask again, as that, before anything happens.
+    if (!window.confirm(fullUpdateText(full, true))) {
+      // Nothing was asked for, and the panel's copy is out of date.
+      try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
+      return false;
+    }
+    // A question can stand a while: measure against the server after it.
+    before = await readNow(before);
+    full = fullBy(before);
+  }
+  const kind = before && before.restart_mode === 'update' ? 'update' : 'restart';
+  // What runs.
+  const how = told(full, kind);
+  const plainRun = how.plain;
+  const previousRun = before && before.last_update ? before.last_update.started_at : null;
+  const previousStart = before && before.started_at != null ? before.started_at : null;
+  // The server has been seen away since the press: a poll went unanswered,
+  // or the restart's own answer was cut off.
+  let wentAway = false;
+  // A new process since the press: its boot time moved — or, from a server
+  // that can't say when it started, it has been away.
+  const startedAgain = (v) => (previousStart != null && v.started_at != null
+    ? v.started_at !== previousStart : wentAway);
+  const what = plainRun ? 'restart' : 'update';
 
   // From the moment the server takes the restart until the wait is over:
   // reads that are refused while it comes back open no prompt, and a login
@@ -687,7 +826,7 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
   const underway = () => {
     try { endWindow = ServerRestart.begin(); } catch { /* data.js without it */ }
     try { if (typeof Auth !== 'undefined' && Auth.modalOpen) Auth.closeModal(); } catch {}
-    try { onUnderway(); } catch {}
+    try { onUnderway(how); } catch {}
   };
   // Waits for the caller's re-read (onSettled may return a promise), so
   // the button does not offer the restart again for a moment on the
@@ -709,6 +848,11 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
   // records a result for THIS run: a refused or rolled-back update never
   // clears restart_required the way a successful one does, or it clears it
   // by going BACK, which must not read as "restarted onto the new code".
+  //
+  // Without it, the server is back when a NEW core answers (startedAgain)
+  // with nothing left to restart. The old one keeps answering for a moment
+  // after the press (the bounce fires a second after the answer), and with
+  // nothing waiting it has nothing left to restart either.
   const waitForServer = async (mode) => {
     const deadline = Date.now() + (mode === 'update' ? 15 * 60000 : 90000);
     while (Date.now() < deadline) {
@@ -721,29 +865,31 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
           await settled();
           // The script's error already says what happened ("update to … failed
           // at health and was rolled back to …").
-          fire(run.error || `update ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
+          fire(run.error || `${what} ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
           return false;
         }
-        if (v && !v.restart_required && (mode !== 'update' || newRun)) {
+        if (v && !v.restart_required && (mode === 'update' ? newRun : startedAgain(v))) {
           await settled();
           fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
           return true;
         }
-      } catch (e) { /* still down, or not all the way up — keep waiting */ }
+      } catch (e) {
+        // still down, or not all the way up — keep waiting
+        wentAway = true;
+      }
     }
     fire(mode === 'update'
-      ? 'the update is taking longer than expected — check journalctl -u domovoi-update'
+      ? `the ${what} is taking longer than expected — check journalctl -u domovoi-update`
       : 'restart is taking longer than expected — check the service by hand');
     await settled();
     return false;
   };
 
-  onStart();
   try {
     const res = await apiPost('/api/config/version/restart', {});
     if (res && res.ok) {
       underway();
-      fire(kind === 'update' ? 'updating…' : 'restarting…');
+      fire(how.updating ? 'updating…' : 'restarting…');
       return await waitForServer(res.mode || kind);
     }
     fire(`restart failed: ${(res && res.error) || 'unknown'}`);
@@ -763,8 +909,9 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
     } else if (e && e.status) {
       reportMutationFailure(fire, 'restart', e);
     } else {
+      wentAway = true;
       underway();
-      fire(kind === 'update' ? 'updating…' : 'restarting…');
+      fire(how.updating ? 'updating…' : 'restarting…');
       return await waitForServer(kind);
     }
     return false;
@@ -776,13 +923,43 @@ const restartDomovoiServer = async ({ core, fire, question, onStart = () => {}, 
  * away on purpose, and the card says so instead of leaving a spinning
  * button and a two-second toast to explain a dashboard that stopped
  * answering. */
-const RestartUnderwayNote = ({ updating }) => (
+const RestartUnderwayNote = ({ updating, plain = false }) => (
   <div className="restart-underway" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-    {updating
+    {plain
+      ? 'Restarting — the dashboard can’t reach the Domovoi server for a few seconds; this shows the version it’s running when it answers.'
+      : updating
       ? 'Updating — backing up, applying and restarting the Domovoi services. The dashboard can’t reach the server meanwhile (usually under a minute); this shows the new version when it answers.'
       : 'Restarting — the dashboard can’t reach the Domovoi server for a few seconds; this shows the new version when it answers.'}
   </div>
 );
+
+/* What to run instead when the host can't restart itself
+ * (restart_capable false). The core names the command (restart_command):
+ * null on a host without systemd — a Windows or development box — where
+ * there is no one command to give. From a core older than that field, the
+ * command for its restart_mode, which is what this always said. */
+const restartByHandCommand = (v) => {
+  if (v && Object.prototype.hasOwnProperty.call(v, 'restart_command')) return v.restart_command || null;
+  return v && v.restart_mode === 'update'
+    ? 'sudo systemctl start domovoi-update.service'
+    : 'sudo systemctl restart domovoi-core domovoi-web';
+};
+
+/* The line a restart button gives way to on such a host (Settings →
+ * Version, the Plugins page's restart card): why, and what to run. */
+const RestartByHandHint = ({ version, style }) => {
+  const cmd = restartByHandCommand(version);
+  // The core's reason is a clause ("systemctl not found — not a systemd host").
+  const why = String((version && version.restart_hint) || 'This host can’t restart itself')
+    .replace(/[.\s]*$/, '.');
+  return (
+    <div className="mono restart-by-hand" style={{ fontSize: 11, color: 'var(--fg-faint)', ...(style || {}) }}>
+      {why}
+      {cmd ? ' Run by hand:' : ' Restart the Domovoi services the way they were started.'}
+      {cmd && <div style={{ userSelect: 'all', color: 'var(--fg-muted)', marginTop: 4 }}>{cmd}</div>}
+    </div>
+  );
+};
 
 /* ---- Tabs (page-level helper) ------------------------------ */
 // Keeps the active tab visible in a strip that has scrolled sideways.
