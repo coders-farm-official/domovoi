@@ -13,9 +13,13 @@
 # the pre-pull SHA the core records at pull time (git_version.pull()), then
 # to ORIG_HEAD when that is an ancestor of HEAD, then to HEAD itself.
 #
-# Nothing new since the previous SHA: a plain restart. Stop web and core,
-# restart domovoi-db (compose up, a cheap no-op Flyway run), start core and
-# web, health-check them.
+# Nothing new since the previous SHA: a plain restart, which is what the
+# dashboard's "Restart Domovoi" is when nothing is waiting to load. Stop web
+# and core, start them, health-check them. No backup, no dependency sync, no
+# MPD rebuild, and the database is left alone: domovoi-db (compose up plus
+# Flyway) is restarted only when Postgres doesn't answer, or when the
+# checkout ships a migration its Flyway history doesn't hold as applied
+# (plain_db_reason).
 #
 # Something new: a real update.
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
@@ -165,6 +169,8 @@ POLICY_AT_START=""
 APPLIED_OK=0
 MIGRATIONS_BEFORE=""
 MIGRATIONS_AFTER=""
+# Why a plain restart restarts domovoi-db ("" when it leaves it alone).
+DB_REASON=""
 LEDGERS_BEFORE=""
 LEDGERS_AFTER=""
 PLUGINS_BEFORE=""
@@ -621,6 +627,53 @@ migration_count() {
   printf '%s' "$n"
 }
 
+# The versioned SQL migrations Flyway's history holds as applied: what a
+# plain restart compares the checkout's migration files with. A baseline or
+# schema-creation row is not one of ours, a failed one never applied, and a
+# repeatable one has no version.
+APPLIED_SQL="SELECT count(*) FROM flyway_schema_history WHERE success AND type = 'SQL' AND version IS NOT NULL"
+
+applied_count() {
+  local n
+  n=$(pg_exec psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$APPLIED_SQL" 2>/dev/null | tr -d '[:space:]') || return 1
+  [[ $n =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+
+# How many versioned migrations the checkout ships: the files domovoi-db's
+# Flyway reads (compose mounts domovoi/db/migrations), named the way Flyway
+# names a versioned migration. Only names are read.
+migration_files() {
+  local f n=0
+  for f in "$REPO_DIR"/domovoi/db/migrations/V*__*.sql; do
+    [ -e "$f" ] && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
+# Why a plain restart has to restart domovoi-db, printed; nothing when it
+# can leave the database alone. Postgres answering with every migration the
+# checkout ships applied is the one case it skips. A database that is down,
+# unreadable or behind gets what every plain restart did before
+# 2026-10-05: the restart that brings Postgres up and runs Flyway.
+plain_db_reason() {
+  local applied files
+  if ! applied=$(applied_count); then
+    printf 'Postgres did not answer with its Flyway history'
+    return 0
+  fi
+  files=$(migration_files)
+  if [ "$applied" -lt "$files" ]; then
+    printf '%s of the %s migrations in the checkout applied' "$applied" "$files"
+  fi
+}
+
+# The plain restart's domovoi-db step, with the reason it ran as its detail.
+plain_restart_db() {
+  restart_db || return
+  STEP_DETAIL=$DB_REASON
+}
+
 # Plugins keep their own migration ledgers, one per plugin schema
 # (plugin_<slug>.schema_history, a row per applied file), and the core
 # applies pending plugin migrations when it boots, so starting the new code
@@ -1020,12 +1073,25 @@ plain_restart() {
   MODE=restart
   write_result running
   log "nothing new since ${PREV_SHA:0:12} ($PREV_SOURCE): plain restart"
+  MIGRATIONS_BEFORE=$(migration_count || true)
+  DB_REASON=$(plain_db_reason)
   SERVICES_STOPPED=1
   run_step stop-services stop_services || failed=stop-services
-  run_step migrate restart_db || failed=${failed:-migrate}
+  if [ -n "$DB_REASON" ]; then
+    log "restarting domovoi-db: $DB_REASON"
+    run_step migrate plain_restart_db || failed=${failed:-migrate}
+  else
+    log "Postgres answers with every migration in the checkout applied: domovoi-db left alone"
+  fi
   run_step start-services start_services || failed=${failed:-start-services}
   SERVICES_STOPPED=0
   run_step health wait_healthy || failed=${failed:-health}
+  # Only Flyway writes its history, so it moved only if domovoi-db ran.
+  if [ -n "$DB_REASON" ]; then
+    MIGRATIONS_AFTER=$(migration_count || true)
+  else
+    MIGRATIONS_AFTER=$MIGRATIONS_BEFORE
+  fi
   if [ -z "$failed" ]; then
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
     APPLIED_OK=1
