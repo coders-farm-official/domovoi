@@ -1,9 +1,11 @@
 package com.domovoi.app.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.domovoi.app.player.LyricsNudge
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +42,9 @@ class Prefs(private val context: Context) {
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
     private val kSharedScreens = stringPreferencesKey("shared_screens")
+    private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
+    private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
+    private val kLyricsRoomNudge = stringPreferencesKey("lyrics_room_nudge")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -73,6 +78,21 @@ class Prefs(private val context: Context) {
     private val _sharedScreens = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val sharedScreens: StateFlow<Map<String, Boolean>> = _sharedScreens
 
+    /** Whether the player tab's "lyrics" section is open (open until closed;
+     *  the web's localStorage `domovoi-lyrics-panel-open`). */
+    private val _lyricsPanelOpen = MutableStateFlow(true)
+    val lyricsPanelOpen: StateFlow<Boolean> = _lyricsPanelOpen
+
+    /** Whether the player sheet's "lyrics" section is open (closed until
+     *  opened; the web's `domovoi-lyrics-sheet-open`). */
+    private val _lyricsSheetOpen = MutableStateFlow(false)
+    val lyricsSheetOpen: StateFlow<Boolean> = _lyricsSheetOpen
+
+    /** Each room's lyrics timing nudge, room → ms (positive = lyrics later,
+     *  ±10 000; [LyricsNudge]); the web keeps one per room in localStorage. */
+    private val _lyricsRoomNudge = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val lyricsRoomNudge: StateFlow<Map<String, Long>> = _lyricsRoomNudge
+
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
         private set
@@ -100,7 +120,10 @@ class Prefs(private val context: Context) {
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
-            deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
+            _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
+            _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
+            _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
+            deviceId =p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
         }
@@ -217,5 +240,25 @@ class Prefs(private val context: Context) {
                 if (id == null) it.remove(kListener) else it[kListener] = id
             }
         }
+    }
+
+    // ── Lyrics ─────────────────────────────────────────────────────────
+
+    fun setLyricsPanelOpen(open: Boolean) {
+        _lyricsPanelOpen.value = open
+        scope.launch { context.dataStore.edit { it[kLyricsPanelOpen] = open } }
+    }
+
+    fun setLyricsSheetOpen(open: Boolean) {
+        _lyricsSheetOpen.value = open
+        scope.launch { context.dataStore.edit { it[kLyricsSheetOpen] = open } }
+    }
+
+    /** Set [room]'s lyrics nudge (clamped to ±10 000 ms; zero forgets it). */
+    fun setLyricsRoomNudge(room: String, ms: Long) {
+        val next = LyricsNudge.with(_lyricsRoomNudge.value, room, ms)
+        if (next == _lyricsRoomNudge.value) return
+        _lyricsRoomNudge.value = next
+        scope.launch { context.dataStore.edit { it[kLyricsRoomNudge] = LyricsNudge.encode(next) } }
     }
 }
