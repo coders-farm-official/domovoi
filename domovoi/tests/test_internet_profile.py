@@ -37,7 +37,12 @@ EXPECTED = {
     "podcast_feed_poller_enabled": {"always": True, "sometimes": False, "never": False},
     "library_enricher_enabled": {"always": True, "sometimes": True, "never": False},
     "seed_voice_catalog": {"always": False, "sometimes": False, "never": False},
+    # Lyrics (V021, owner decision 2026-10-03): LRCLIB follows the answer.
+    "lyrics_lrclib_enabled": {"always": True, "sometimes": True, "never": False},
+    "lyrics_write_lrc": {"always": True, "sometimes": True, "never": False},
 }
+# Read per tick / per call: these apply the moment the answer changes.
+LIVE = {"music_alias_fetch_enabled", "lyrics_lrclib_enabled", "lyrics_write_lrc"}
 
 
 @pytest.fixture(autouse=True)
@@ -75,8 +80,8 @@ def test_the_table_is_the_owners_table() -> None:
     assert "news_auto_fetch" not in PROFILE_FIELD_NAMES
     assert "tts_engine" not in PROFILE_FIELD_NAMES
     applies = {pd.name: pd.applies for pd in PROFILE_DEFAULTS}
-    assert applies["music_alias_fetch_enabled"] == "live"
-    assert all(v == "restart" for k, v in applies.items() if k != "music_alias_fetch_enabled")
+    assert all(applies[k] == "live" for k in LIVE)
+    assert all(v == "restart" for k, v in applies.items() if k not in LIVE)
     # every row names a real Settings field
     assert PROFILE_FIELD_NAMES <= set(Settings.model_fields)
 
@@ -100,6 +105,16 @@ def test_unset_keeps_every_field_default() -> None:
     assert s.news_enabled is True and s.seed_voice_catalog is True
     assert s.library_enricher_enabled is True
     assert s.music_alias_fetch_enabled is False and s.podcast_feed_poller_enabled is False
+    # LRCLIB stays off while the question is unanswered; saving .lrc files
+    # is on, and does something only once LRCLIB is.
+    assert s.lyrics_lrclib_enabled is False and s.lyrics_write_lrc is True
+
+
+def test_the_answer_texts_name_what_lyrics_send() -> None:
+    always = next(c for c in internet_profile.CHOICES if c["value"] == "always")
+    assert "synced lyrics" in always["detail"]
+    assert "a song's title" in internet_profile.PRIVACY_NOTE
+    assert "never leave this box" in internet_profile.PRIVACY_NOTE
 
 
 def test_an_unknown_answer_is_unset() -> None:
@@ -233,8 +248,10 @@ def _save_answer(env, answer: str) -> None:
 def test_apply_answer_sets_live_followers_and_lists_restart_ones(live) -> None:
     _save_answer(live, "always")
     result = internet_profile.apply_answer("", "always")
-    assert result.applied == ["music_alias_fetch_enabled"]
+    # lyrics_write_lrc is already on (its own default), so only these move
+    assert result.applied == ["music_alias_fetch_enabled", "lyrics_lrclib_enabled"]
     assert settings.music_alias_fetch_enabled is True
+    assert settings.lyrics_lrclib_enabled is True and settings.lyrics_write_lrc is True
     # restart-tier: live value untouched, listed when the next boot differs
     assert settings.podcast_feed_poller_enabled is False
     assert sorted(result.restart_required) == ["podcast_feed_poller_enabled", "seed_voice_catalog"]
@@ -247,6 +264,10 @@ def test_apply_answer_lists_internet_access_across_the_never_boundary(live, monk
     assert "internet_access" in result.restart_required
     assert result.notes["internet_access"] == internet_profile.HF_RESTART_NOTE
     assert settings.music_alias_fetch_enabled is False
+    # both lyrics switches are off at once under never (LRCLIB already was:
+    # this box booted unanswered)
+    assert settings.lyrics_lrclib_enabled is False and settings.lyrics_write_lrc is False
+    assert "lyrics_write_lrc" in result.applied
     assert set(result.restart_required) >= {"news_enabled", "library_enricher_enabled", "seed_voice_catalog"}
 
     # and back: a process that booted under never has HF_HUB_OFFLINE=1 from

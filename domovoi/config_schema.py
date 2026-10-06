@@ -410,6 +410,27 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", tier="hot", needs_internet=True,
     ),
     FieldSpec(
+        "lyrics_lrclib_enabled", "Synced lyrics from LRCLIB", "Library",
+        "Look up lyrics, with their timing, on LRCLIB (lrclib.net) for songs "
+        "that have no timed lyrics of their own, so the players can follow "
+        "along line by line. Sends each such song's title, artist, album and "
+        "length — about one request a second (roughly two hours the first time "
+        "for 5,000 songs), and asks again after a few weeks about songs it "
+        "didn't have — only while the server is online. Lyrics in .lrc files "
+        "and in the songs' own tags are used either way. Follows the internet "
+        "answer unless you set it. Applies immediately.",
+        "bool", tier="hot", needs_internet=True,
+    ),
+    FieldSpec(
+        "lyrics_write_lrc", "Save lyrics as .lrc files", "Library",
+        "Save LRCLIB's timed lyrics as a .lrc file next to the song (same "
+        "name), so other players can show them too — only when the song has no "
+        ".lrc yet. Domovoi never changes or deletes a .lrc you made; it updates "
+        "only the ones it wrote, and leaves alone one you edit or delete. Only "
+        "while 'Synced lyrics from LRCLIB' is on. Applies immediately.",
+        "bool", tier="hot", needs_internet=True,
+    ),
+    FieldSpec(
         "music_match_play_threshold", "Play-without-asking score", "Library",
         "How sure (0-1) a sound match must be to play without asking. "
         "Lower = fewer questions and more wrong songs. Measured at 0.90; "
