@@ -570,6 +570,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
     WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
+    # Lyrics (V021): the local scan reads .lrc files and the songs' own tags;
+    # the opt-in LRCLIB fetch is self-gated per tick on lyrics_lrclib_enabled,
+    # INTERNET_ACCESS and the probe, and saves Domovoi-marked .lrc files.
+    from domovoi.workers.lyrics_fetch import LyricsFetcher
+    from domovoi.workers.lyrics_scan import LyricsScanner
+
+    WORKERS.add_worker(LyricsScanner(), owner="core")
+    WORKERS.add_worker(LyricsFetcher(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
@@ -1248,6 +1256,7 @@ async def admin_snapshot() -> dict[str, Any]:
         if isinstance(v, dict) and v.get("initiator")
     ]
     from domovoi.workers.library_alias_fetch import alias_fetch_status
+    from domovoi.lyrics.status import lyrics_status
 
     return {
         "active_rooms": list(app.state.active_sessions.keys()),
@@ -1300,6 +1309,8 @@ async def admin_snapshot() -> dict[str, Any]:
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
+        # Lyrics: the local scan and the LRCLIB fetch (status only, never a lyric).
+        "lyrics": lyrics_status(),
     }
 
 

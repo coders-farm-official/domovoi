@@ -88,10 +88,9 @@ which and can hand a setting back to the answer
 | Find artists by the names people say (MusicBrainz) | `MUSIC_ALIAS_FETCH_ENABLED` | off | on | on | off | at once |
 | Automatic podcast downloads | `PODCAST_FEED_POLLER_ENABLED` | off | **on** | off | off | after a restart |
 | Song recognition (AcoustID / Shazam) | `LIBRARY_ENRICHER_ENABLED` | on (does nothing without a key) | on **if** there is an AcoustID key or the Shazam add-on, else off | same as Yes | off | after a restart |
+| Synced lyrics (LRCLIB) | `LYRICS_LRCLIB_ENABLED` | off | on | on | off | at once |
+| Save lyrics as .lrc files | `LYRICS_WRITE_LRC` | on (does something only while LRCLIB is on) | on | on | off | at once |
 | Extra voices at startup | `SEED_VOICE_CATALOG` | on | off | off | off | after a restart |
-
-Synced lyrics (LRCLIB) will join this table when that feature ships: on for
-Yes and Sometimes, off for No.
 
 **What the answer switches by itself** (no setting of its own):
 
@@ -125,8 +124,9 @@ the second table applies the moment you save.
 ## If your Domovoi will have internet
 
 Answer **Yes, always**. That already starts the search helper, turns on
-artist names from MusicBrainz and podcast downloads, and turns song
-recognition on as soon as it has a key. What stays yours to do:
+artist names from MusicBrainz, synced lyrics from LRCLIB and podcast
+downloads, and turns song recognition on as soon as it has a key. What
+stays yours to do:
 
 1. **Set your town for local news:** Settings → Configuration → News →
    *Local news location* (`NEWS_LOCATION`). Applies at once.
@@ -367,6 +367,8 @@ your router, it would tell Domovoi the internet is up when it isn't.
 - Podcast search, and new episodes.
 - Song recognition: the library enricher and the radio plugin's Shazam
   step.
+- Synced lyrics from LRCLIB. Lyrics in `.lrc` files and in the songs' own
+  tags still show, and so do the ones LRCLIB sent before.
 - Microsoft Edge voices: Piper speaks instead.
 - Downloading models, voices and wake-word training data; installing
   plugins from GitHub (a plugin zip whose Python packages are already
@@ -386,14 +388,16 @@ answer is Sometimes, Sometimes is real:
   see [What goes out](#what-goes-out));
 - artist names from MusicBrainz follow at once, so the artist-names sweep
   starts sending your artists' names;
+- synced lyrics from LRCLIB follow at once too, so songs' titles, artists,
+  albums and lengths start going to lrclib.net;
 - the restart boots the news worker.
 
-Switching back to **No** stops the search helper and the artist names at
-once; the second restart turns the news worker off again and sets
-`HF_HUB_OFFLINE` back. To keep that window quiet, set
-`MUSIC_ALIAS_FETCH_ENABLED=false` (Settings → Configuration) before you
-switch; it then stays off whatever the answer says until you press
-**follow the answer again**.
+Switching back to **No** stops the search helper, the artist names and the
+lyrics lookups at once; the second restart turns the news worker off again
+and sets `HF_HUB_OFFLINE` back. To keep that window quiet, set
+`MUSIC_ALIAS_FETCH_ENABLED=false` and `LYRICS_LRCLIB_ENABLED=false`
+(Settings → Configuration) before you switch; they then stay off whatever
+the answer says until you press **follow the answer again**.
 
 ---
 
@@ -493,6 +497,8 @@ allowed, they send short text:
   searching;
 - your library's artist names, to musicbrainz.org (the artist-names
   extra);
+- a song's title, artist, album and length, to lrclib.net (synced
+  lyrics), for songs with no timed lyrics of their own;
 - the addresses of news feeds and of the podcasts you subscribe to, and a
   show's name when you subscribe by voice or search Discover (Apple's
   iTunes search); the server downloads each show's artwork once, so your

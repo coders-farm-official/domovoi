@@ -69,7 +69,8 @@ CHOICES: list[dict[str, str]] = [
         "detail": (
             "Turns on the extras that use the internet: web answers (weather, "
             "scores, news), finding artists by the names people actually say, "
-            "podcast downloads. They pause by themselves if the internet drops."
+            "synced lyrics, podcast downloads. They pause by themselves if the "
+            "internet drops."
         ),
     },
     {
@@ -96,7 +97,7 @@ CHOICES: list[dict[str, str]] = [
 PRIVACY_NOTE = (
     "Your voice and recordings never leave this box, whatever you answer. "
     "With the internet on, some extras send short text out, such as a web "
-    "search you asked for or an artist's name."
+    "search you asked for, an artist's name or a song's title."
 )
 
 # Strong refs to the fire-and-forget probe re-checks (a bare create_task
