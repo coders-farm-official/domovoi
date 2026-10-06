@@ -508,6 +508,53 @@
       "handler": "music",
       "tags": ["action", "music_alias"],
       "note": "2026-10-03 review: a request to PLAY something by one of its names is music's, not a names list"
+    },
+    {
+      "utterance": "play the song that goes the lantern hums beside the river door",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: a song asked for by words from its lyrics (invented words); music's lyric fast paths come first"
+    },
+    {
+      "utterance": "Can you play the song that goes, “the lantern hums beside the river door.”",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: filler, a comma and curly quotes around the words (invented words)"
+    },
+    {
+      "utterance": "what's the song that goes the lantern hums beside the river door",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: naming a song by its words is music's, not a question for Q&A (invented words)"
+    },
+    {
+      "utterance": "who sings the song that goes copper kettles sing at dawn",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: 'who sings the song that goes ...' names it from the library (invented words)"
+    },
+    {
+      "utterance": "what song goes we carried paper boats along the hall",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: the short 'what song goes ...' form (invented words)"
+    },
+    {
+      "utterance": "could you put on that song, you know, the one about paper boats sailing down the hall",
+      "handler": "music",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-05 lyric search: no fast path; the tool model routes it to music (its 'lyrics' field)"
+    },
+    {
+      "utterance": "what does the phrase river door mean",
+      "handler": null,
+      "tags": ["qa", "lyrics"],
+      "note": "2026-10-05 lyric search: a question about words is no request for a song: the music tool's 'lyrics' field must not bait it"
     }
   ]
 }

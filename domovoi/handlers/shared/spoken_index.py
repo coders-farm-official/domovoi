@@ -284,6 +284,21 @@ class Index:
                     return j
         return None
 
+    def title_entity_for_track(self, track_id: int) -> int | None:
+        """The base ``title`` entity a library row belongs to (its key is
+        ``"<alias_key(clean_title(title))>|<primary artist key>"``, as
+        :func:`build` makes it), or None for a row the index does not hold
+        or whose title has nothing sayable. Lyric search answers with it,
+        so copies of one song on two albums are one candidate, said with
+        the household's own name for it."""
+        row = self.rows.get(int(track_id))
+        if row is None or not row.title:
+            return None
+        tkey = alias_key(clean_title(row.title))
+        if not tkey:
+            return None
+        return self.by_ref.get(("title", f"{tkey}|{row.primary_key}"))
+
     def exact_owners(self, comp: str, *, phrase: bool) -> Iterable[Owner]:
         yield from self.exact.get(comp, ())
         yield from self.aliases.exact.get(comp, ())
