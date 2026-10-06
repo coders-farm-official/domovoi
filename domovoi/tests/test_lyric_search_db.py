@@ -471,3 +471,85 @@ async def test_retrieval_goes_through_the_trigram_index(db_session, lyric_librar
     await db_session.rollback()
     assert rows and rows[0].text == CHORUS_1 and rows[0].ws == pytest.approx(1.0)
     assert len(rows) <= ls.CANDIDATE_ROWS
+
+
+# ─── Two looks, one answer ([Q24]; the 2026-10-06 review's latency fix) ───
+
+# An invented vocabulary: lines of these words share trigrams the way lines
+# of common words do, which is what makes the wide look slow.
+_VOCAB = (
+    "the a and of in on my your we i you is to at by for with it "
+    "lantern river door copper kettle paper boats hall dawn orchard fence "
+    "marmalade heron harbor attic light mailbox secret moon teapot"
+).split()
+
+
+def _synthetic_library(n_songs: int = 150, seed: int = 20261006) -> list[tuple]:
+    import random
+
+    rng = random.Random(seed)
+    out = []
+    for i in range(n_songs):
+        lines = [" ".join(rng.choice(_VOCAB) for _ in range(rng.randint(5, 9))) for _ in range(10)]
+        chorus = lines[:2]
+        lyrics = "\n".join(lines[2:6] + chorus + lines[6:] + chorus + chorus)
+        out.append((2000 + i, f"Synthetic {i:03d}", f"Band {i % 23:02d}", "Atlas",
+                    f"Band {i % 23:02d}/Synthetic {i:03d}.mp3", lyrics, "lrclib"))
+    return out
+
+
+async def test_the_strict_first_look_gives_the_wide_looks_answer(db_session, lyric_settings, monkeypatch) -> None:
+    """``fetch_rows`` (a strict look first, the wide one only when that finds
+    fewer than SCORED_ROWS lines) against the single wide look of [Q10], on
+    an invented library of lines that share their words: every decision,
+    every candidate and every score the same — and the strict look alone
+    served a good share of the phrases (else this proves nothing)."""
+    import random
+
+    library = _synthetic_library()
+    await seed_library(db_session, lyric_settings, library=library)
+    out = await lyrics_index.catch_up(budget_sec=120.0)
+    assert out["pending"] == 0 and out["indexed"] == len(library)
+    rng = random.Random(7)
+    texts = [lyrics for *_x, lyrics, _s in library]
+    phrases: list[str] = []
+    for k in range(90):
+        words = rng.choice(rng.choice(texts).split("\n")).split()
+        n = rng.randint(4, min(6, len(words)))      # mostly short: the strict look's own
+        start = rng.randint(0, len(words) - n)
+        phrase = words[start:start + n]
+        if k % 3 == 1 and len(phrase) > 4:
+            del phrase[rng.randrange(len(phrase))]                 # a word left out
+        elif k % 3 == 2:
+            phrase = [rng.choice(_VOCAB) for _ in range(rng.randint(4, 6))]   # any words
+        phrases.append(" ".join(phrase))
+
+    looks: list[float] = []
+    real_fetch_at = ls._fetch_at
+
+    async def counting(session, query, threshold):
+        looks.append(threshold)
+        return await real_fetch_at(session, query, threshold)
+
+    monkeypatch.setattr(ls, "_fetch_at", counting)
+
+    def key(res):
+        return (res.decision, res.reason,
+                [(c.ref.type, c.ref.key, round(c.score, 12), c.track_ids) for c in res.candidates])
+
+    # (The mode only changes the deciding, which sees the same lines.)
+    strict_only = 0
+    for phrase in phrases:
+        looks.clear()
+        two, _n = await ls.search(db_session, phrase, mode="explicit", play=0.90, ask=0.75)
+        await db_session.commit()
+        strict_only += looks == [ls.STRICT_TRGM_THRESHOLD]
+        monkeypatch.setattr(ls, "fetch_rows", ls.fetch_rows_wide)
+        one, _n = await ls.search(db_session, phrase, mode="explicit", play=0.90, ask=0.75)
+        await db_session.commit()
+        monkeypatch.setattr(ls, "fetch_rows", _two_looks)
+        assert key(two) == key(one), len(phrase.split())
+    assert strict_only >= 10, strict_only        # else the strict look was never tried alone
+
+
+_two_looks = ls.fetch_rows

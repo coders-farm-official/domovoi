@@ -71,6 +71,21 @@ def test_leading_filler_and_one_trailing_carrier_are_dropped() -> None:
     assert lyric_query("the river door is like a kettle").text == "the river door is like a kettle"
 
 
+def test_trailing_politeness_is_dropped_however_much_there_is() -> None:
+    """2026-10-06 review: "… please" cost a sure play (one word the line
+    lacks is 1/n of the score); politeness is no word of the song."""
+    seven = "the lantern hums beside the river door"
+    for tail in ("please", "thanks", "thank you", "for me", "now", "for me please",
+                 "please thank you", "in my library please", "please in my library"):
+        assert lyric_query(f"{seven} {tail}").text == seven, tail
+    # only at the end, and never the whole phrase
+    assert lyric_query("please let the river door be open").text == "please let the river door be open"
+    assert lyric_query("please").text == "please"
+    assert lyric_query("thank you").text == "thank you"
+    # one carrier, as before, whatever politeness comes around it
+    assert lyric_query(f"{seven} in my music in my library please").text == f"{seven} in my music"
+
+
 def test_long_phrases_are_cut_and_chars_count_letters() -> None:
     q = lyric_query(" ".join(["kettle"] * 40))
     assert len(q) == MAX_WORDS

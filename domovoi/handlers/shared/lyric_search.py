@@ -66,6 +66,16 @@ log = logging.getLogger(__name__)
 
 #: Candidate retrieval: pg_trgm's word-similarity threshold for ``<%``.
 TRGM_THRESHOLD = 0.45
+#: A first, stricter look for a short phrase (not a constant of the search:
+#: the answer is provably the same, see :func:`fetch_rows`). A short phrase
+#: of common words is where the wide look is slowest — thousands of lines
+#: share its trigrams — and where the strict look most often finds enough
+#: alone; a longer phrase goes straight to the wide look, which is cheap
+#: for it. Measured 2026-10-06 on 5,000 invented songs of common words
+#: (scratch measure_q55_variants.py): 4-word phrases p95 503 → 256 ms,
+#: 5-word 439 → 298 ms; from 6 words on the strict look rarely served alone.
+STRICT_TRGM_THRESHOLD = 0.55
+STRICT_MAX_WORDS = 5
 #: Rows fetched / rows aligned (plus every row holding the phrase whole).
 CANDIDATE_ROWS = 300
 SCORED_ROWS = 80
@@ -169,6 +179,16 @@ _TRAILING_CARRIERS: tuple[tuple[str, ...], ...] = (
     ("in", "my", "music"),
     ("in", "my", "collection"),
 )
+# "play the song that goes … please": politeness at the end of a request is
+# not a word of the song (the 2026-10-06 review: a polite tail turned sure
+# plays into questions — one word the line lacks costs 1/n of the score).
+_TRAILING_POLITENESS: tuple[tuple[str, ...], ...] = (
+    ("thank", "you"),
+    ("for", "me"),
+    ("please",),
+    ("thanks",),
+    ("now",),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,18 +210,33 @@ class LyricQuery:
         return len(self.words)
 
 
+def _strip_tail(words: list[str], tails: Sequence[tuple[str, ...]]) -> tuple[list[str], bool]:
+    for tail in tails:
+        if len(words) > len(tail) and tuple(words[-len(tail):]) == tail:
+            return words[: -len(tail)], True
+    return words, False
+
+
 def lyric_query(phrase: str | None) -> LyricQuery:
     """``phrase`` as :func:`lyric_words`, leading filler ("uh", "um",
-    "like" …) dropped, one trailing carrier ("in my library" …) dropped,
-    cut to :data:`MAX_WORDS` words."""
+    "like" …) dropped, then from its end the politeness that is not a
+    word of the song ("please", "thanks", "thank you", "for me", "now",
+    as many as there are) and one carrier ("in my library" …), cut to
+    :data:`MAX_WORDS` words."""
     words = lyric_words(phrase)
     start = 0
     while start < len(words) and words[start] in _LEADING_FILLER:
         start += 1
     words = words[start:]
-    for carrier in _TRAILING_CARRIERS:
-        if len(words) >= len(carrier) and tuple(words[-len(carrier):]) == carrier:
-            words = words[: -len(carrier)]
+    carried = False
+    while True:
+        words, polite = _strip_tail(words, _TRAILING_POLITENESS)
+        if polite:
+            continue
+        if carried:
+            break
+        words, carried = _strip_tail(words, _TRAILING_CARRIERS)
+        if not carried:
             break
     return LyricQuery(tuple(words[:MAX_WORDS]))
 
@@ -486,10 +521,8 @@ async def lyrics_tables_present(session: "AsyncSession") -> bool:
     return present
 
 
-async def fetch_rows(session: "AsyncSession", query: LyricQuery) -> list[RowHit]:
-    """Candidate lines for ``query`` ([Q10]), in the caller's transaction:
-    the trigram threshold is set for this transaction only."""
-    await session.execute(_THRESHOLD_SQL, {"threshold": f"{TRGM_THRESHOLD:.2f}"})
+async def _fetch_at(session: "AsyncSession", query: LyricQuery, threshold: float) -> list[RowHit]:
+    await session.execute(_THRESHOLD_SQL, {"threshold": f"{threshold:.2f}"})
     res = await session.execute(_ROWS_SQL, {"q": query.text, "limit": CANDIDATE_ROWS})
     return [
         RowHit(
@@ -498,6 +531,33 @@ async def fetch_rows(session: "AsyncSession", query: LyricQuery) -> list[RowHit]
         )
         for r in res
     ]
+
+
+async def fetch_rows(session: "AsyncSession", query: LyricQuery) -> list[RowHit]:
+    """Candidate lines for ``query`` ([Q10]), in the caller's transaction:
+    the trigram threshold is set for this transaction only.
+
+    Two looks, one answer ([Q24]). For a phrase of at most
+    :data:`STRICT_MAX_WORDS` words the first is at
+    :data:`STRICT_TRGM_THRESHOLD`; when it alone finds :data:`SCORED_ROWS`
+    lines or more, it is used, because :func:`score_rows` would score
+    exactly the same lines from the wide look at :data:`TRGM_THRESHOLD`:
+    the wide look orders the same way, so every line it adds ranks after
+    all of the first look's (it adds only lines of lower word similarity),
+    and only a line holding the whole phrase is scored past the first
+    :data:`SCORED_ROWS` — whose word similarity is 1, so the first look
+    has it. Otherwise the wide look runs, as it always did."""
+    if len(query) <= STRICT_MAX_WORDS:
+        strict = await _fetch_at(session, query, STRICT_TRGM_THRESHOLD)
+        if len(strict) >= SCORED_ROWS:
+            return strict
+    return await _fetch_at(session, query, TRGM_THRESHOLD)
+
+
+async def fetch_rows_wide(session: "AsyncSession", query: LyricQuery) -> list[RowHit]:
+    """The single wide look of [Q10] (the reference :func:`fetch_rows` is
+    held to by a test, and the measurement's baseline)."""
+    return await _fetch_at(session, query, TRGM_THRESHOLD)
 
 
 # ─── From lines to library entities ───────────────────────────────────────
@@ -684,6 +744,8 @@ __all__ = [
     "RowHit",
     "RowScore",
     "SCORED_ROWS",
+    "STRICT_MAX_WORDS",
+    "STRICT_TRGM_THRESHOLD",
     "TRGM_THRESHOLD",
     "VERSE_FACTOR",
     "align",
@@ -691,6 +753,7 @@ __all__ = [
     "decide",
     "describe",
     "fetch_rows",
+    "fetch_rows_wide",
     "line_key",
     "lyric_query",
     "lyrics_tables_present",

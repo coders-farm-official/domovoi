@@ -34,9 +34,13 @@ from domovoi.handlers import HANDLER_BY_NAME
 from domovoi.handlers import music_choice
 from domovoi.handlers.music import (
     _LYRIC_FIND_RE,
+    _LYRIC_PLAY_ARTISTS_RE,
+    _LYRIC_PLAY_BY_RE,
     _LYRIC_PLAY_RE,
+    _PLAY_ARTIST_RE,
     MusicHandler,
     _clean_capture,
+    _lyric_play_readings,
     _lyric_readings,
 )
 from domovoi.handlers.music_choice import MUSIC_CHOICE_KIND
@@ -51,6 +55,7 @@ from domovoi.tests.test_lyric_search_db import (  # noqa: F401 - fixtures
     HERON,
     LIBRARY,
     SAILED,
+    SHARED,
     SIX_WORDS,
     VERSE_1,
     lyric_library,
@@ -84,6 +89,10 @@ MATCHES = [
     ("what's the name of the song that goes the river door is open", "find", "the river door is open"),
     ("do i have the song with the words copper kettle at dawn", "find", "copper kettle at dawn"),
     ("which song has the line paper boats are sailing", "find", "paper boats are sailing"),
+    # 2026-10-06 review: Whisper writes a spoken "queue up" as "cue up"
+    ("cue up the song that goes the lantern hums beside the river door", "play",
+     "the lantern hums beside the river door"),
+    ("cue up the one with the words copper kettles sing at dawn", "play", "copper kettles sing at dawn"),
 ]
 
 NOT_LYRICS = [
@@ -91,6 +100,29 @@ NOT_LYRICS = [
     "play the one by glass harbor", "play something that goes well with dinner",
     "play the one with the guitar solo", "play the velvet kites", "what's playing",
     "play the latest episode of the daily",
+    # 2026-10-06 review: a mood, a recommendation or a place in a list is
+    # no song's words (invented requests)
+    "what song goes well with a rainy day", "which song goes next on the playlist",
+    "what song goes best with pancakes", "play the one that goes well with dinner",
+    "play the song that goes with a rainy afternoon", "what song goes good with a road trip",
+    "which track goes first on the playlist", "what song goes after this one",
+    "play the track that goes nicely with candles", "which one goes last",
+    "play the one by glass harbor that sounds like rain",
+]
+
+# 2026-10-06 review: the artist named with the words (invented names).
+ARTIST_FORMS = [
+    ("play the song by glass harbor that goes the lantern hums beside the river door",
+     "glass harbor", "the lantern hums beside the river door"),
+    ("put on the track by the velvet kites with the words copper kettles sing at dawn",
+     "the velvet kites", "copper kettles sing at dawn"),
+    ("play that one by the example band where she sings paper boats along the hall",
+     "the example band", "paper boats along the hall"),
+    ("play the glass harbor song that goes the lantern hums beside the river door",
+     "glass harbor", "the lantern hums beside the river door"),
+    # "the <artist> song": the article is the request's, not the name's
+    ("cue up the velvet kites track with the words we carried paper boats",
+     "velvet kites", "we carried paper boats"),
 ]
 
 
@@ -113,13 +145,44 @@ def test_the_lyric_fast_paths_take_these(said: str, path: str, words: str) -> No
 def test_and_leave_these_alone(said: str) -> None:
     hit = _hit(said)
     assert hit is None or hit[1].method not in (
-        MusicHandler._lyrics_play_from_match, MusicHandler._lyrics_find_from_match)
+        MusicHandler._lyrics_play_from_match, MusicHandler._lyrics_find_from_match,
+        MusicHandler._lyrics_play_by_from_match)
+
+
+@pytest.mark.parametrize(("said", "artist", "words"), ARTIST_FORMS, ids=[a[0] for a in ARTIST_FORMS])
+def test_the_artist_can_be_named_with_the_words(said: str, artist: str, words: str) -> None:
+    hit = _hit(said)
+    assert hit is not None, said
+    handler, fp, m = hit
+    assert handler.name == "music" and fp.method is MusicHandler._lyrics_play_by_from_match
+    assert (_clean_capture(m.group("artist")), _clean_capture(m.group("lyrics"))) == (artist, words)
 
 
 def test_they_come_first_with_an_open_slot() -> None:
-    first, second = _music().fast_paths[:2]
+    paths = _music().fast_paths
+    first, second = paths[:2]
     assert (first.pattern, second.pattern) == (_LYRIC_PLAY_RE, _LYRIC_FIND_RE)
     assert first.early_commit is None and second.early_commit is None
+    # the artist forms: after those two, before "play X by Y" splits them
+    patterns = [p.pattern for p in paths]
+    assert patterns.index(_LYRIC_PLAY_BY_RE) == 2 and patterns.index(_LYRIC_PLAY_ARTISTS_RE) == 3
+    assert patterns.index(_PLAY_ARTIST_RE) == 4
+    assert all(p.early_commit is None for p in paths[2:4])
+
+
+def test_an_explicit_request_is_read_with_and_without_the_artist() -> None:
+    # the artist named in the request: with it first, then without it
+    assert _lyric_play_readings("we carried paper boats", "glass harbor") == [
+        ("we carried paper boats", "glass harbor"), ("we carried paper boats", None)]
+    # words ending in " by X": as said first (a lyric has its own "by"s), then
+    # the words before it by the artist X
+    assert _lyric_play_readings("the lantern hums beside the river door by glass harbor") == [
+        ("the lantern hums beside the river door by glass harbor", None),
+        ("the lantern hums beside the river door", "glass harbor")]
+    assert _lyric_play_readings("stand by the river door") == [
+        ("stand by the river door", None), ("stand", "the river door")]
+    assert _lyric_play_readings("copper kettles sing at dawn") == [("copper kettles sing at dawn", None)]
+    assert _lyric_play_readings("by the river") == [("by the river", None)]
 
 
 # ─── [V4]: the tool schema ────────────────────────────────────────────────
@@ -261,6 +324,109 @@ async def test_what_it_says_when_it_finds_nothing(faked, mode, reason, said) -> 
     assert resp.music_action is None and resp.expect_followup is False
     assert faked["asked"] == [(PHRASE, mode, {})]
     assert faked["played"] == [] and faked["parks"].calls == []
+
+
+class _Provider:
+    """A streaming-search provider (the yt-dlp plugin's seam), recording
+    what it was asked for."""
+
+    slug = "fake-stream"
+
+    def __init__(self, result="stream") -> None:
+        self.asked: list[tuple] = []
+        self.result = result
+
+    async def stream(self, room_id, candidate=None, *, query=None):
+        self.asked.append((room_id, query))
+        if self.result == "boom":
+            raise RuntimeError(f"provider broke on {query}")
+        if self.result is None:
+            return None
+        return Response(text="Streaming it.", music_action="start")
+
+    async def search(self, query, *, limit=5):
+        return []
+
+    def likely_same(self, a, b):
+        return False
+
+
+@pytest.fixture
+def provider():
+    from domovoi.capabilities import CAPABILITIES, STREAMING_SEARCH_PROVIDER
+
+    p = _Provider()
+    CAPABILITIES.register(STREAMING_SEARCH_PROVIDER, p, slug=p.slug)
+    yield p
+    CAPABILITIES.unregister(STREAMING_SEARCH_PROVIDER, slug=p.slug)
+
+
+@pytest.mark.parametrize("reason", ["below_ask", "below_play", "no_lyrics", "disabled", "declined", "error"])
+async def test_a_song_the_library_lacks_goes_to_the_streaming_provider(faked, provider, reason, caplog) -> None:
+    """2026-10-06 review ([V10] amended): before lyric search, "play the song
+    that goes …" was a plain "play <anything>", and a household with a
+    streaming provider got the song streamed. It still does, online."""
+    caplog.set_level(logging.DEBUG, logger="domovoi")
+    faked["res"] = Resolution.none(reason, heard=PHRASE)
+    resp = await _music()._play_lyrics(PHRASE, _ctx(), None, mode="explicit")
+    assert resp.text == "Streaming it." and resp.matched_handler == "music"
+    assert provider.asked == [(ROOM, f"song that goes {PHRASE}")]
+    assert PHRASE not in caplog.text
+
+
+async def test_the_provider_hears_the_artist_named_and_only_when_it_can_help(faked, provider, caplog) -> None:
+    faked["res"] = Resolution.none("below_ask", heard=PHRASE)
+    await _music()._play_lyrics(PHRASE, _ctx(), None, mode="explicit", artist="glass harbor")
+    assert provider.asked[-1] == (ROOM, f"song that goes {PHRASE} by glass harbor")
+    n = len(provider.asked)
+    # more words would help, it's offline, it's a question, or the library has it: no provider
+    for reason in ("too_short", "too_common"):
+        faked["res"] = Resolution.none(reason, heard=PHRASE)
+        resp = await _music()._play_lyrics(PHRASE, _ctx(), None, mode="explicit")
+        assert resp.text == dict(NONE_TEXTS)[reason]
+    faked["res"] = Resolution.none("below_ask", heard=PHRASE)
+    resp = await _music()._play_lyrics(PHRASE, _ctx(online=False), None, mode="explicit")
+    assert resp.text == "I couldn't find a song in your library with those words."
+    resp = await _music()._play_lyrics(PHRASE, _ctx(), None, mode="identify")
+    assert resp.text == "I couldn't find a song in your library with those words."
+    assert len(provider.asked) == n
+    # a provider with nothing, or one that breaks: the lyric not-found line
+    caplog.set_level(logging.DEBUG, logger="domovoi")
+    for result in (None, "boom"):
+        provider.result = result
+        resp = await _music()._play_lyrics(PHRASE, _ctx(), None, mode="explicit")
+        assert resp.text == "I couldn't find a song in your library with those words."
+    assert PHRASE not in caplog.text
+
+
+async def test_explicit_requests_try_each_reading_and_keep_the_best(monkeypatch, faked) -> None:
+    asked: list[tuple] = []
+    answers: dict = {}
+
+    async def resolve_lyrics(session, phrase, *, mode, **kw):
+        asked.append((phrase, kw.get("artist")))
+        return answers.get((phrase, kw.get("artist")), Resolution.none("below_ask", heard=phrase))
+
+    monkeypatch.setattr(library_match, "resolve_lyrics", resolve_lyrics)
+    by = f"{PHRASE} by glass harbor"
+    answers[(PHRASE, "glass harbor")] = Resolution("play", (_cand(LANTERN, 1.0),), heard=PHRASE, reason="lyrics")
+    resp = await _music()._play_lyrics(by, _ctx(), None, mode="explicit")
+    assert resp.text == "Playing Lantern Song."
+    assert asked == [(by, None), (PHRASE, "glass harbor")]
+    # the artist named before the words: with it first; a play stops there
+    asked.clear()
+    resp = await _music()._play_lyrics(PHRASE, _ctx(), None, mode="explicit", artist="glass harbor")
+    assert resp.text == "Playing Lantern Song." and asked == [(PHRASE, "glass harbor")]
+    # a tie keeps the earlier reading's answer; "too short" ends the look
+    asked.clear()
+    answers.clear()
+    answers[("tiny words by me", None)] = Resolution.none("too_short", heard="tiny words by me")
+    resp = await _music()._play_lyrics("tiny words by me", _ctx(online=False), None, mode="explicit")
+    assert resp.text == "Tell me a few more of the words and I'll look." and len(asked) == 1
+    # identify reads the words as said, once
+    asked.clear()
+    await _music()._play_lyrics(by, _ctx(), None, mode="identify")
+    assert asked == [(by, None)]
 
 
 async def test_explicit_play_plays_it_without_echoing_the_words(faked) -> None:
@@ -527,6 +693,34 @@ async def test_play_the_song_that_goes_plays_and_a_near_phrase_asks(db_session, 
     assert resp.music_action == "start" and len(player.files_calls) == 2
     _no_lyrics_in_logs(caplog, said=VERSE_1)
     _no_lyrics_in_logs(caplog, said=near)
+
+
+@requires_db
+async def test_artist_forms_and_a_polite_tail_play_the_song(db_session, lyric_library, player, caplog) -> None:
+    """2026-10-06 review: "… by <artist>" and "the song by <artist> that
+    goes …" used to fail in perfect text, and "… please" turned a sure play
+    into a question."""
+    caplog.set_level(logging.DEBUG, logger="domovoi")
+    sid = await _session(db_session)
+    for said in (
+        f"play the song by glass harbor that goes {SIX_WORDS}",
+        f"play the glass harbor song that goes {SIX_WORDS}",
+        f"play the song that goes {SIX_WORDS} by glass harbor",
+        f"play the song that goes {SIX_WORDS} please",
+        f"cue up the one with the words {SIX_WORDS} for me please",
+    ):
+        resp = await _say(db_session, sid, said)
+        assert resp.text == "Playing Copper Morning by Glass Harbor.", said
+        assert resp.music_action == "start"
+    assert player.files_calls == [[_path_of(3)]] * 5
+    # the artist filter keeps the one by that artist: "the mailbox keeps a
+    # secret for the moon" is in two songs; by glass harbor it is one
+    resp = await _say(db_session, sid, f"play the song by glass harbor that goes {SHARED}")
+    assert resp.text == "Playing Copper Morning by Glass Harbor."
+    # a word that is not an artist ("the slow song"): read without it too
+    resp = await _say(db_session, sid, f"play the slow song that goes {CHORUS_1}")
+    assert resp.text == "Playing Lantern Song by The Example Band."
+    _no_lyrics_in_logs(caplog, said=SIX_WORDS)
 
 
 @requires_db

@@ -555,6 +555,52 @@
       "handler": null,
       "tags": ["qa", "lyrics"],
       "note": "2026-10-05 lyric search: a question about words is no request for a song: the music tool's 'lyrics' field must not bait it"
+    },
+    {
+      "utterance": "what song goes well with a rainy day",
+      "handler": "music",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: a recommendation, not a song's words: no lyric fast path ('goes well with'); the tool model takes it to music, as before lyric search"
+    },
+    {
+      "utterance": "which song goes next on the playlist",
+      "handler": "playlist",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: a place in a list, not a song's words: no lyric fast path ('goes next')"
+    },
+    {
+      "utterance": "what song goes best with pancakes",
+      "handler": null,
+      "tags": ["qa", "lyrics"],
+      "note": "2026-10-06 lyric review: a question, not a song's words: no lyric fast path ('goes best with'); Q&A answers"
+    },
+    {
+      "utterance": "play the one that goes well with dinner",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: a mood: music's plain 'play ...' takes it, not lyric search"
+    },
+    {
+      "utterance": "cue up the song that goes the lantern hums beside the river door",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: Whisper writes a spoken 'queue up' as 'cue up' (invented words)"
+    },
+    {
+      "utterance": "play the song by glass harbor that goes the lantern hums beside the river door",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: the artist named before the words (invented words and name)"
+    },
+    {
+      "utterance": "play the glass harbor song that goes the lantern hums beside the river door",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "lyrics"],
+      "note": "2026-10-06 lyric review: '<artist> song that goes ...' (invented words and name)"
     }
   ]
 }
