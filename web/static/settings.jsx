@@ -426,7 +426,11 @@ const VoicesPanel = () => {
  * same restart with nothing to load, for a setting changed by hand in
  * domovoi/.env, a restart-tier setting, or a server that needs a kick. Never
  * beside "Restart to apply changes" (that one restarts too), and on a host
- * that can't restart itself it is the manual command instead.
+ * that can't restart itself it is the manual command instead. With the
+ * update unit it is that unit's quick plain restart, unless the unit would
+ * run its full update (code pulled since the panel read the version, or
+ * loaded outside the unit): then the press says so before anything happens
+ * and the card says "Updating…" (restartDomovoiServer, components.jsx).
  *
  * On a Linux host with domovoi-update.service (restart_mode "update") the
  * restart also backs up, syncs dependencies, migrates and rolls back on
@@ -550,6 +554,12 @@ const VersionSection = () => {
   // The restart under way: 'apply' (Restart to apply changes) or 'plain'
   // (Restart Domovoi); null when there is none.
   const [restarting, setRestarting] = React.useState(null);
+  // What it runs, as restartDomovoiServer tells it, in RestartUnderwayNote's
+  // props ({ updating, plain }): what the operator said yes to (onStart),
+  // then what the server took (onUnderway). A "Restart Domovoi" the update
+  // unit runs as its full update is an update. Kept until the restart is
+  // over, so the button's word holds while the card reads the version again.
+  const [runs, setRuns] = React.useState(null);
   // The server took the restart and is away on purpose (onUnderway → onSettled).
   const [underway, setUnderway] = React.useState(false);
   const [status, setStatus] = React.useState(null);   // result of /version/check
@@ -606,13 +616,14 @@ const VersionSection = () => {
   // The restart itself (confirm, bounce, wait for the server to come back)
   // is restartDomovoiServer in components.jsx, shared with the Plugins
   // page's "restart to finish the upgrade". `plain`: Restart Domovoi, with
-  // nothing waiting to load.
+  // nothing waiting to load (which the update unit may still run as its
+  // full update; restartDomovoiServer asks, and onUnderway says).
   const restart = (plain) => restartDomovoiServer({
     core, fire, plain,
-    onStart: () => setRestarting(plain ? 'plain' : 'apply'),
-    onUnderway: () => setUnderway(true),
+    onStart: (how) => { setRestarting(plain ? 'plain' : 'apply'); setRuns(how || null); },
+    onUnderway: (how) => { if (how) setRuns(how); setUnderway(true); },
     onSettled: () => { setUnderway(false); setStatus(null); return refreshCore(); },
-  }).finally(() => { setUnderway(false); setRestarting(null); });
+  }).finally(() => { setUnderway(false); setRestarting(null); setRuns(null); });
 
   const webVer = cfg && cfg.web_version;
   // `sha` is the RUNNING code (captured at the core's boot), not whatever is
@@ -744,14 +755,14 @@ const VersionSection = () => {
           <span className="version-restart" style={{ marginLeft: 'auto' }}>
             <Button variant="secondary" icon="rotate-cw" onClick={() => restart(true)} disabled={!!restarting || pulling}
                     title="Restart the Domovoi services, so changes to domovoi/.env take effect">
-              {plainRunning ? 'Restarting…' : 'Restart Domovoi'}
+              {plainRunning ? (runs && runs.updating ? 'Updating…' : 'Restarting…') : 'Restart Domovoi'}
             </Button>
           </span>
         )}
       </div>
       {underway && (
         <div style={{ padding: '0 16px 14px' }}>
-          <RestartUnderwayNote updating={updateUnit} plain={plainRunning}/>
+          <RestartUnderwayNote updating={!!(runs && runs.updating)} plain={!!(runs && runs.plain)}/>
         </div>
       )}
       {plainRestart && !restartCapable && (

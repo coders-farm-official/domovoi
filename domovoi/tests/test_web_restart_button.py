@@ -38,7 +38,24 @@ one to a dead socket) until the scenario lets it back on a fresh start:
 * a view-only press signs in and the restart is replayed once, with the
   Bearer;
 * a plain restart the update unit records as failed reports the unit's
-  error.
+  error;
+* a press the update unit would run as its FULL update is asked and told
+  as that. apply-update.sh compares the checkout with the commit it last
+  applied, so two presses meet the full update: code pulled after the panel
+  read the version (only the fresh read at the press shows it, so a second
+  confirm asks), and code loaded outside the unit (pulled, then the core
+  restarted by hand: when the panel's copy shows it, the one confirm says
+  so). Either gets the update's words, "Updating…" (from the yes to the
+  update until the card has read the version again), the update note and
+  the unit's 15-minute wait; a second confirm declined sends nothing and
+  re-reads the panel, and one that stood while the server changed is
+  measured against the server after it. A rolled-back last run, a unit
+  without a readable result, a staged plugin upgrade and a host without the
+  unit stay the quick restart.
+
+The scripted unit runs its plain restart or its full update by the same
+comparison (``applied`` against the checkout) and records which, so every
+flow also says what the "server" did.
 
 No DB, never ``requires_db``; needs ``node`` and fails without it.
 """
@@ -59,9 +76,20 @@ FILES = ["web/static/auth.js", "web/static/data.js", "web/static/components.jsx"
 
 SHA = "5b7aa8a"
 PULLED = "6c4de76"
+# The commit the update unit applied before SHA (the Beelink's last update
+# was 5196cc9 -> 5b7aa8a).
+OLD = "5196cc9"
+# last_update names commits in full (the core nulls anything else).
+FULL = {
+    SHA: "5b7aa8a995b0f9edfeccba25a078121d3fdd4e55",
+    PULLED: "6c4de763406fcc73e85ff792fc69d2e6052cc554",
+    OLD: "5196cc994de0592b69bbc1170ef475e28d976843",
+}
 PASSWORD = "right-password"
 STARTED = 1791247053.25
 RESTARTED_AT = 1791250000.5
+# The core restarted by hand, after the panel read the version.
+HAND_RESTARTED_AT = 1791249000.75
 LINUX_RESTART = "sudo systemctl restart domovoi-core domovoi-web"
 LINUX_UPDATE = "sudo systemctl start domovoi-update.service"
 
@@ -72,8 +100,18 @@ const __st = setTimeout;
 // The restart's poll waits 2 s between reads in a browser; here it waits a
 // couple of milliseconds. Every other timer keeps its length and does not
 // keep node alive once the scenarios are done.
+//
+// clockStep: how far each poll's wait moves the page's clock. By default
+// the 2 s it takes in a browser, so a wait reaches its deadline after as
+// many polls as it would there (a quick restart's 90 s after 45, the update
+// unit's 15 minutes after 450), a few milliseconds here: a press that goes
+// wrong ends instead of holding node for the real 15 minutes.
+const __realNow = Date.now.bind(Date);
+let __skew = 0;
+Date.now = () => __realNow() + __skew;
 setTimeout = (fn, ms, ...a) => {
   const poll = Number(ms) === 2000;
+  if (poll && window.__srv && window.__srv.clockStep) __skew += window.__srv.clockStep;
   const t = __st(fn, poll ? 2 : ms, ...a);
   if (!poll && t && t.unref) t.unref();
   return t;
@@ -90,21 +128,34 @@ WebSocket = function () { this.l = {}; };
 WebSocket.prototype.addEventListener = function () {};
 WebSocket.prototype.send = function () {};
 
-// Every confirm() the page asks, and what the operator answers.
+// Every confirm() the page asks, and what the operator answers: the
+// __confirmAnswers queue in order, then __confirmAnswer. __whileAsking(n)
+// is what happens on the server while the n-th question stands.
 window.__confirms = [];
 window.__confirmAnswer = true;
-window.confirm = (msg) => { window.__confirms.push(String(msg)); return window.__confirmAnswer; };
+window.__confirmAnswers = [];
+window.__whileAsking = null;
+window.confirm = (msg) => {
+  window.__confirms.push(String(msg));
+  if (window.__whileAsking) window.__whileAsking(window.__confirms.length);
+  return window.__confirmAnswers.length ? window.__confirmAnswers.shift() : window.__confirmAnswer;
+};
 
 // phase: 'up' answers; 'linger' is the OLD server still answering after it
 // accepted the restart (lingerPolls version reads); 'down' rejects every
 // request at the socket, as a browser does for a server that is not there.
 // A restart moves up -> linger|down on the request AFTER it answered; the
 // poll walks it back once a scenario lets it (downPolls), on a fresh start.
+// applied: the commit the update unit last applied (apply-update.sh's
+// applied_sha), the running one unless a scenario says otherwise. plugins:
+// upgrades staged for the next restart.
 window.__srv = Object.assign({
   sessions: new Set(__SESSIONS), cookie: __COOKIE, n: 0, device: 'house-token',
   phase: 'up', goDown: false, restarted: false, lingerPolls: 0, downPolls: 10 ** 9,
-  run: 'run-1', last: null, newRunStatus: 'ok', newRunError: null,
+  run: 'run-1', last: null, newRunStatus: 'ok', newRunError: null, plugins: [], clockStep: 2000,
 }, __SRV);
+if (window.__srv.applied === undefined) window.__srv.applied = window.__srv.running;
+const __full = (sha) => (sha && __FULLS[sha]) || sha;
 window.__fetches = [];
 const __answer = (status, body) => {
   const text = body == null ? '' : JSON.stringify(body);
@@ -116,26 +167,32 @@ const __version = () => {
   const s = window.__srv;
   const pending = s.running !== s.checkout;
   const v = { sha: s.running, running_sha: s.running, checkout_sha: s.checkout,
-              restart_required: pending, code_restart_required: pending, plugins_pending_restart: [],
+              restart_required: pending || s.plugins.length > 0, code_restart_required: pending,
+              plugins_pending_restart: s.plugins,
               restart_capable: s.capable, restart_mode: s.mode, restart_hint: s.hint,
               started_at: s.started, uptime_sec: 7200,
               last_update: s.mode === 'update' ? s.last : null, bad_sha: null };
   if (s.command !== undefined) v.restart_command = s.command;
   return v;
 };
-// Back on a fresh start: a new boot time, the checkout loaded, and with the
-// update unit the result of the run the restart started.
+// Back on a fresh start: a new boot time, the checkout and the staged
+// plugin upgrades loaded, and with the update unit the result of the run
+// the restart started. That run is apply-update.sh's choice: from the
+// commit it last applied to the checkout, its plain restart ("restart")
+// when those are one commit and its full update ("update") when not.
 const __comeBack = () => {
   const s = window.__srv;
-  const from = s.running;
   s.running = s.checkout;
+  s.plugins = [];
   // noStart: a core that can't say when it started (its boot capture never ran).
   s.started = s.noStart ? null : __RESTARTED_AT;
   if (s.mode === 'update') {
+    const from = s.applied;
     s.run = 'run-2';
     s.last = { status: s.newRunStatus, mode: from === s.checkout ? 'restart' : 'update',
-               started_at: s.run, finished_at: '2026-10-05T23:59:00Z', from_sha: from, to_sha: s.checkout,
-               error: s.newRunError };
+               started_at: s.run, finished_at: '2026-10-05T23:59:00Z', from_sha: __full(from),
+               to_sha: __full(s.checkout), prev_source: 'applied', error: s.newRunError };
+    if (s.newRunStatus === 'ok') s.applied = s.checkout;
   }
 };
 const __route = (method, path, c, body) => {
@@ -174,6 +231,9 @@ const __route = (method, path, c, body) => {
   if (bare === '/api/config/version') return __answer(200, __version());
   return __answer(404, { detail: 'not found' });
 };
+// __onVersionRead(): called as each version read is SENT (a scenario that
+// traces what the card shows at those moments).
+window.__onVersionRead = null;
 fetch = async (url, opts) => {
   const o = opts || {};
   const method = String(o.method || 'GET').toUpperCase();
@@ -181,6 +241,7 @@ fetch = async (url, opts) => {
   const bare = path.split('?')[0];
   const hd = o.headers || {};
   const srv = window.__srv;
+  if (method === 'GET' && bare === '/api/config/version' && window.__onVersionRead) window.__onVersionRead();
   if (srv.goDown) { srv.goDown = false; srv.phase = srv.lingerPolls > 0 ? 'linger' : 'down'; }
   const auth = String(hd.Authorization || '');
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -260,19 +321,21 @@ def scenario(script: str, *, srv: dict | None = None, cookie: str | None = "old-
              component: str = VERSION) -> dict:
     """``srv`` overrides the server: running/checkout SHAs, started_at,
     restart_mode, restart_capable, restart_hint, restart_command (absent
-    unless given), lingerPolls, the update unit's results."""
+    unless given), lingerPolls, the update unit's results and the commit it
+    last applied (``applied``), staged plugin upgrades, clockStep."""
     base = {"running": SHA, "checkout": SHA, "started": STARTED, "mode": "restart",
             "capable": True, "hint": None}
     if (srv or {}).get("mode") == "update":
+        # The unit's last run applied SHA, the running commit.
         base["last"] = {"status": "ok", "mode": "update", "started_at": "run-1",
-                        "finished_at": "2026-10-05T20:22:52Z", "from_sha": "aaaaaaa", "to_sha": SHA,
-                        "error": None}
+                        "finished_at": "2026-10-05T20:22:52Z", "from_sha": FULL[OLD], "to_sha": FULL[SHA],
+                        "prev_source": "applied", "error": None}
     base.update(srv or {})
     sessions = [cookie] if cookie else []
     head = (f"const __LS = {json.dumps({'domovoi-device-token': 'house-token'})};"
             f" const __SESSIONS = {json.dumps(sessions)}; const __COOKIE = {json.dumps(cookie)};"
             f" const __PASSWORD = {json.dumps(PASSWORD)}; const __SRV = {json.dumps(base)};"
-            f" const __RESTARTED_AT = {json.dumps(RESTARTED_AT)};\n")
+            f" const __RESTARTED_AT = {json.dumps(RESTARTED_AT)}; const __FULLS = {json.dumps(FULL)};\n")
     return {"files": FILES, "component": component, "props": {}, "setup": head + PRELUDE,
             "script": HELPERS + script}
 
@@ -328,10 +391,13 @@ return Object.assign(view(), { result, confirms: w.__confirms, restarts: restart
 
 # ─── the restart itself ──────────────────────────────────────────────────
 
+# __MEANWHILE: what happens on the server between the panel's read and the
+# press. `unitRan`: what the scripted update unit ran (see __comeBack).
 FLOW = r"""
 await A.login(__PW);
 await start();
 const out = { before: view() };
+__MEANWHILE
 const flow = press(plainButton); await step();
 await pumpUntil(() => !!note());
 out.away = Object.assign(view(), { restarts: restarts(), phase: w.__srv.phase });
@@ -341,29 +407,35 @@ out.after = view();
 out.confirms = w.__confirms;
 out.restarts = restarts();
 out.reads = versionReads().map((f) => `${f.phase}:${f.started}`);
+out.unitRan = w.__srv.mode === 'update' && w.__srv.restarted ? w.__srv.last.mode : null;
 return out;
 """.replace("__PW", json.dumps(PASSWORD))
 
-SCENARIOS["flow"] = scenario(FLOW)
+
+def flow(meanwhile: str = "") -> str:
+    return FLOW.replace("__MEANWHILE", meanwhile)
+
+
+SCENARIOS["flow"] = scenario(flow())
 # The update unit: its plain restart (nothing new since the last commit it
 # applied) is what runs, and the wait ends on that run's result.
-SCENARIOS["flow_update_unit"] = scenario(FLOW, srv={"mode": "update"})
+SCENARIOS["flow_update_unit"] = scenario(flow(), srv={"mode": "update"})
 # The old server answers two more reads after taking the restart (the bounce
 # fires a second after the answer).
-SCENARIOS["flow_old_server_lingers"] = scenario(FLOW, srv={"lingerPolls": 2})
+SCENARIOS["flow_old_server_lingers"] = scenario(flow(), srv={"lingerPolls": 2})
 
 # The update unit's plain restart that failed its health check.
-SCENARIOS["flow_update_unit_failed"] = scenario(FLOW, srv={
+SCENARIOS["flow_update_unit_failed"] = scenario(flow(), srv={
     "mode": "update", "newRunStatus": "failed",
     "newRunError": "health failed (exit 1): not healthy after 120s: core down, web up"})
 
 # A core that can't say when it started (no started_at, before the press or
 # after it): the old process answering after the press must not end the
 # wait; having been seen away, the server answering again does.
-SCENARIOS["flow_no_started_at"] = scenario(FLOW, srv={"started": None, "noStart": True, "lingerPolls": 2})
+SCENARIOS["flow_no_started_at"] = scenario(flow(), srv={"started": None, "noStart": True, "lingerPolls": 2})
 # A fast host: the new server answers before any poll found the old one
 # gone. Its boot time moved, and that alone ends the wait.
-SCENARIOS["flow_back_between_polls"] = scenario(FLOW, srv={"lingerPolls": 1, "skipDown": True})
+SCENARIOS["flow_back_between_polls"] = scenario(flow(), srv={"lingerPolls": 1, "skipDown": True})
 # Behind the upstream, "Pull the latest" is the update action; a restart
 # under way greys it, as it greys the check.
 SCENARIOS["flow_pull_mode"] = scenario(r"""
@@ -418,6 +490,139 @@ await step();
 return { during, result: w.__result, toasts: toasts(), restarts: restarts(),
          reads: versionReads().map((f) => `${f.phase}:${f.started}`) };
 """.replace("__PW", json.dumps(PASSWORD)), srv={"started": 1791240000.75, "lingerPolls": 1}, component=DIRECT)
+
+# ─── a press the update unit runs as its full update ────────────────────
+
+# (a) A pull lands after the panel read the version (another tab, the API):
+# the panel still offers the quick restart, and only the fresh read at the
+# press shows the pulled code waiting, which the unit applies as its full
+# update.
+PULL_LANDS = f"w.__srv.checkout = {json.dumps(PULLED)};"
+SCENARIOS["flow_pulled_since_the_panel_read"] = scenario(flow(PULL_LANDS), srv={"mode": "update"})
+# The same with a unit whose last result can't be read: nothing to compare
+# with, but pulled code waiting is a full update all the same.
+SCENARIOS["flow_pulled_since_without_a_unit_result"] = scenario(flow(PULL_LANDS),
+                                                                srv={"mode": "update", "last": None})
+# While the second question stands, the pulled code is applied some other
+# way (the unit started by hand): a new run, a new process on the new code.
+# The old process then answers the first poll after the press.
+SCENARIOS["unit_ran_while_the_question_stood"] = scenario(flow(PULL_LANDS + r"""
+w.__whileAsking = (n) => {
+  if (n !== 2) return;
+  const s = w.__srv;
+  s.running = s.applied = s.checkout; s.started = __HAND; s.run = 'run-1b';
+  s.last = { status: 'ok', mode: 'update', started_at: 'run-1b', finished_at: '2026-10-05T23:30:00Z',
+             from_sha: __FROM, to_sha: __TO, prev_source: 'applied', error: null };
+};""".replace("__HAND", json.dumps(HAND_RESTARTED_AT)).replace("__FROM", json.dumps(FULL[SHA]))
+    .replace("__TO", json.dumps(FULL[PULLED]))), srv={"mode": "update", "lingerPolls": 1})
+# ...and the operator says no to the full update.
+SCENARIOS["pulled_since_declined"] = scenario(r"""
+await A.login(__PW);
+await start();
+const before = view();
+__PULL_LANDS
+w.__confirmAnswers = [true, false];
+const result = await press(plainButton); await step(); await step();
+return Object.assign(view(), { before, result, confirms: w.__confirms, restarts: restarts(),
+                               reads: versionReads().length });
+""".replace("__PW", json.dumps(PASSWORD)).replace("__PULL_LANDS", PULL_LANDS), srv={"mode": "update"})
+# (b) Code loaded outside the unit: pulled, then the core restarted by hand.
+# Nothing is waiting, but the unit last applied 5196cc9, so its next run is
+# the full update. The panel's copy shows it: the one confirm says so.
+LOADED_BY_HAND = {"mode": "update", "applied": OLD, "last": {
+    "status": "ok", "mode": "restart", "started_at": "run-1", "finished_at": "2026-10-05T20:22:52Z",
+    "from_sha": FULL[OLD], "to_sha": FULL[OLD], "prev_source": "applied", "error": None}}
+SCENARIOS["flow_loaded_outside_the_unit"] = scenario(flow(), srv=LOADED_BY_HAND)
+# (b) after the panel read the version: pulled and restarted by hand since
+# (a new boot time; nothing waiting). Only the fresh read at the press
+# shows that the unit last applied another commit.
+SCENARIOS["flow_restarted_by_hand_since_the_panel_read"] = scenario(flow(
+    f"w.__srv.checkout = w.__srv.running = {json.dumps(PULLED)};"
+    f" w.__srv.started = {json.dumps(HAND_RESTARTED_AT)};"), srv={"mode": "update"})
+# The panel read the version before the update unit was installed (its copy
+# says restart_mode "restart"); the unit, there at the press, runs its full
+# update, and the press tells it as one.
+SCENARIOS["unit_installed_since_the_panel_read"] = scenario(r"""
+await A.login(__PW);
+await start();
+w.__staleCore = { sha: '5b7aa8a', running_sha: '5b7aa8a', checkout_sha: '5b7aa8a', restart_required: false,
+                  code_restart_required: false, restart_capable: true, restart_mode: 'restart',
+                  started_at: 1791247053.25, last_update: null };
+await step();
+press({ type: 'button', text: 'press' }); await step();
+await pumpUntil(() => w.__srv.phase === 'down');
+letBack();
+await pumpUntil(() => w.__result !== null);
+await step();
+return { result: w.__result, toasts: toasts(), confirms: w.__confirms, restarts: restarts(),
+         unitRan: w.__srv.last.mode };
+""".replace("__PW", json.dumps(PASSWORD)), srv=LOADED_BY_HAND, component=DIRECT)
+# What the restart button says each time the card reads the version, from
+# the press to the card's own read once the server is back: a word that
+# changed back mid-restart would show here. The trace re-renders only
+# outside a render (a read an effect sends comes from inside one).
+LABELS = r"""
+await A.login(__PW);
+await start();
+__MEANWHILE
+const labels = [];
+let flushing = false;
+const rerender = h.rerender.bind(h);
+h.rerender = () => { flushing = true; try { return rerender(); } finally { flushing = false; } };
+// The Restart Domovoi button whatever it says: the one in its own end of the row.
+const ownButton = (e) => e.type === 'button' && h.inside(e, (a) => w.__cls(a).includes('version-restart'));
+w.__onVersionRead = () => {
+  if (flushing) return;
+  h.rerender();
+  const b = h.find(ownButton);
+  labels.push(b ? b.text.trim() + (b.props.disabled ? ' [disabled]' : '') : null);
+};
+const flow = press(plainButton); await step();
+await pumpUntil(() => !!note());
+letBack();
+const result = await flow;
+w.__onVersionRead = null;
+await step(); await step();
+return { result, labels, buttons: pageButtons() };
+""".replace("__PW", json.dumps(PASSWORD))
+SCENARIOS["labels_loaded_outside_the_unit"] = scenario(LABELS.replace("__MEANWHILE", ""), srv=LOADED_BY_HAND)
+SCENARIOS["labels_pulled_since_the_panel_read"] = scenario(LABELS.replace("__MEANWHILE", PULL_LANDS),
+                                                           srv={"mode": "update"})
+SCENARIOS["labels_quick_restart"] = scenario(LABELS.replace("__MEANWHILE", ""), srv={"mode": "update"})
+# A full update outlasts a quick restart's 90 s: the wait is the unit's 15
+# minutes, and when even that runs out the card says the update is slow.
+# Each poll moves the page's clock a minute.
+SCENARIOS["full_update_never_back"] = scenario(r"""
+await A.login(__PW);
+await start();
+const flow = press(plainButton); await step();
+await pumpUntil(() => !!note());
+const away = view();
+const result = await flow; await step(); await step();
+return { away, result, after: view(), confirms: w.__confirms,
+         awayReads: versionReads().filter((f) => f.phase === 'down').length };
+""".replace("__PW", json.dumps(PASSWORD)), srv={**LOADED_BY_HAND, "clockStep": 60000})
+
+# ─── ...and the quick restart it stays otherwise ────────────────────────
+
+# The last update was rolled back: the checkout went back to the commit it
+# came from, which is the unit's record again (to_sha names the bad one).
+SCENARIOS["flow_after_a_rollback"] = scenario(flow(), srv={"mode": "update", "last": {
+    "status": "rolled_back", "mode": "update", "started_at": "run-1", "finished_at": "2026-10-05T20:22:52Z",
+    "from_sha": FULL[SHA], "to_sha": FULL[PULLED], "bad_sha": FULL[PULLED], "prev_source": "applied",
+    "error": f"update to {PULLED} failed at health and was rolled back to {SHA}: not healthy after 120s"}})
+# A unit whose last result can't be read: nothing to compare the checkout with.
+SCENARIOS["flow_unit_without_a_result"] = scenario(flow(), srv={"mode": "update", "last": None})
+# A plugin upgrade staged after the panel read the version sets
+# restart_required, but the checkout is still the unit's own commit: its
+# plain restart, which loads the plugin. With no readable result to compare
+# with, it is no pulled code either.
+PLUGIN_STAGED = "w.__srv.plugins = [{ slug: 'radio', from_version: '1.1.0', to_version: '1.2.0', where: ['core'] }];"
+SCENARIOS["flow_plugin_staged_since_the_panel_read"] = scenario(flow(PLUGIN_STAGED), srv={"mode": "update"})
+SCENARIOS["flow_plugin_staged_without_a_unit_result"] = scenario(flow(PLUGIN_STAGED),
+                                                                 srv={"mode": "update", "last": None})
+# No update unit: a restart is the same bounce whatever is on disk.
+SCENARIOS["flow_pulled_since_without_the_unit"] = scenario(flow(PULL_LANDS))
 
 
 @pytest.fixture(scope="module")
@@ -670,3 +875,200 @@ def test_a_view_only_press_signs_in_and_replays_once(driven) -> None:
     assert RESTARTED in o["after"]["toasts"]
     assert o["after"]["restarts"] == ["cookie", "bearer"]
     assert o["after"]["bearer"] is True
+
+
+# ─── a press the update unit runs as its full update ────────────────────
+
+QUICK_CONFIRM_FIRST_LINE = "Restart Domovoi now?"
+UPDATE_TEXT = ("This backs up the database, updates dependencies and migrations if they changed, and "
+               "restarts domovoi-core and domovoi-web. If they don’t come back healthy it rolls "
+               "everything back. Voice is unavailable meanwhile, usually for under a minute, longer "
+               "when dependencies change.")
+FULL_UPDATE_FLOWS = ["flow_pulled_since_the_panel_read", "flow_pulled_since_without_a_unit_result",
+                     "flow_loaded_outside_the_unit", "flow_restarted_by_hand_since_the_panel_read"]
+
+
+@pytest.mark.parametrize("name", ["flow_pulled_since_the_panel_read",
+                                  "flow_pulled_since_without_a_unit_result"])
+def test_a_pull_after_the_panel_read_is_asked_again_as_the_update(driven, name) -> None:
+    """(a) The panel's copy offered the quick restart, and its confirm said
+    so. The fresh read at the press shows the pulled code waiting, which
+    the update unit applies as its full update: before anything is sent, a
+    second confirm asks for that. Also from a unit whose last result can't
+    be read."""
+    o = driven[name]
+    assert RESTART in o["before"]["buttons"], o["before"]["buttons"]
+    quick, update = o["confirms"]
+    assert quick == driven["flow"]["confirms"][0]
+    question, _, body = update.partition("\n\n")
+    assert question == "Run the full update instead?"
+    assert body == (f"Pulled code is waiting to load (running {SHA}, checked out {PULLED}), so this "
+                    "restart runs the update unit’s full update, not the quick restart you said yes "
+                    f"to. {UPDATE_TEXT}")
+    assert o["restarts"] == ["bearer"]
+    assert o["unitRan"] == "update"
+
+
+def test_code_loaded_outside_the_unit_is_asked_as_the_update_at_once(driven) -> None:
+    """(b) Pulled, then the core restarted by hand: nothing is waiting, but
+    the unit last applied another commit, so its next run is the full
+    update. The panel's copy already shows it: the one confirm asks for the
+    full update, and no second one follows."""
+    o = driven["flow_loaded_outside_the_unit"]
+    (text,) = o["confirms"]
+    question, _, body = text.partition("\n\n")
+    assert question == "Restart Domovoi now, as a full update?"
+    assert body == (f"The checkout ({SHA}) isn’t the commit the update unit last applied ({OLD}), so "
+                    f"this restart runs the update unit’s full update, not a quick restart. {UPDATE_TEXT}")
+    assert o["restarts"] == ["bearer"]
+    assert o["unitRan"] == "update"
+
+
+def test_a_hand_restart_after_the_panel_read_is_asked_again_as_the_update(driven) -> None:
+    """(b), arriving after the panel read the version: only the fresh read
+    at the press shows that the checkout isn't the unit's commit."""
+    o = driven["flow_restarted_by_hand_since_the_panel_read"]
+    quick, update = o["confirms"]
+    assert quick.startswith(QUICK_CONFIRM_FIRST_LINE + "\n\n")
+    question, _, body = update.partition("\n\n")
+    assert question == "Run the full update instead?"
+    assert body.startswith(f"The checkout ({PULLED}) isn’t the commit the update unit last applied ({SHA}), "
+                           "so this restart runs the update unit’s full update, not the quick restart "
+                           "you said yes to. "), body
+    assert o["unitRan"] == "update"
+    # Measured against the server after the hand restart, not the panel's copy.
+    assert f"up:{HAND_RESTARTED_AT}" in o["reads"], o["reads"]
+
+
+@pytest.mark.parametrize("name", FULL_UPDATE_FLOWS)
+def test_a_full_update_is_told_as_one(driven, name) -> None:
+    """"Updating…", the update note and toast while the server is away (the
+    Version card reads them from onUnderway's argument), then the version
+    it came back on."""
+    o = driven[name]
+    away = o["away"]
+    assert "Updating… [disabled]" in away["buttons"], away["buttons"]
+    assert not any(b.startswith("Restarting") for b in away["buttons"]), away["buttons"]
+    assert away["note"] is not None and away["note"].startswith(
+        "Updating — backing up, applying and restarting the Domovoi services."), away["note"]
+    assert "updating…" in away["toasts"] and "restarting…" not in away["toasts"], away["toasts"]
+    assert o["result"] is True
+    after = o["after"]
+    running = SHA if name == "flow_loaded_outside_the_unit" else PULLED
+    assert f"restarted — now running {running}" in after["toasts"], after["toasts"]
+    assert RESTART in after["buttons"] and after["note"] is None
+
+
+def test_a_question_that_stood_a_while_measures_the_server_after_it(driven) -> None:
+    """The pulled code was applied some other way while the second question
+    stood. The press reads the server again after the yes: the unit has
+    nothing new to apply now, so the press is told as the quick restart it
+    has become, and the old process still answering with that other run's
+    result is not taken for this restart done."""
+    o = driven["unit_ran_while_the_question_stood"]
+    assert len(o["confirms"]) == 2
+    assert "Restarting… [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert o["away"]["note"] is not None and o["away"]["note"].startswith("Restarting —"), o["away"]["note"]
+    assert o["result"] is True
+    assert o["after"]["toasts"].count(f"restarted — now running {PULLED}") == 1, o["after"]["toasts"]
+    reads = o["reads"]
+    assert f"linger:{HAND_RESTARTED_AT}" in reads, reads
+    last = max(i for i, r in enumerate(reads) if r.startswith("linger:"))
+    assert reads[last + 1].startswith("down:"), reads
+    assert reads[-1] == f"up:{RESTARTED_AT}", reads
+    assert o["unitRan"] == "restart"
+
+
+UPDATING = "Updating… [disabled]"
+RESTARTING = "Restarting… [disabled]"
+
+
+def test_a_press_asked_as_the_update_says_so_from_the_yes(driven) -> None:
+    """The operator said yes to the full update: the button says
+    "Updating…" from then on (onStart's argument), through every read, to
+    the card's own read once the server is back (it used to fall back to
+    "Restarting…" there for a moment, once the note had gone)."""
+    o = driven["labels_loaded_outside_the_unit"]
+    assert o["result"] is True
+    assert len(o["labels"]) >= 3 and set(o["labels"]) == {UPDATING}, o["labels"]
+    assert RESTART in o["buttons"]
+
+
+def test_a_quick_restart_turned_update_never_goes_back(driven) -> None:
+    """Asked as a quick restart, then as the update: "Restarting…" until
+    the server takes the update, "Updating…" from then to the end."""
+    labels = driven["labels_pulled_since_the_panel_read"]["labels"]
+    assert labels[0] == RESTARTING, labels
+    first = labels.index(UPDATING)
+    assert set(labels[:first]) == {RESTARTING} and set(labels[first:]) == {UPDATING}, labels
+    assert driven["labels_pulled_since_the_panel_read"]["result"] is True
+
+
+def test_a_quick_restart_says_restarting_throughout(driven) -> None:
+    o = driven["labels_quick_restart"]
+    assert o["result"] is True
+    assert len(o["labels"]) >= 3 and set(o["labels"]) == {RESTARTING}, o["labels"]
+
+
+def test_a_full_update_declined_sends_nothing(driven) -> None:
+    """No at the second confirm: no restart is asked for, and the panel
+    reads the version again, so it offers what is really waiting."""
+    o = driven["pulled_since_declined"]
+    assert o["result"] is False
+    assert len(o["confirms"]) == 2
+    assert o["restarts"] == []
+    assert APPLY in o["buttons"] and RESTART not in o["buttons"], o["buttons"]
+    assert o["note"] is None and o["toasts"] == [], o
+
+
+def test_the_press_tells_what_the_server_runs_not_what_the_panel_read(driven) -> None:
+    """The panel read the version before the update unit was installed; at
+    the press the unit is there and runs its full update. Asked again as
+    that, and told as that."""
+    o = driven["unit_installed_since_the_panel_read"]
+    assert [c.partition("\n\n")[0] for c in o["confirms"]] == [QUICK_CONFIRM_FIRST_LINE,
+                                                              "Run the full update instead?"]
+    assert "updating…" in o["toasts"] and "restarting…" not in o["toasts"], o["toasts"]
+    assert o["result"] is True and o["unitRan"] == "update"
+
+
+def test_a_full_update_gets_the_units_fifteen_minutes(driven) -> None:
+    """A quick restart gives up after 90 s, two polls a minute apart here;
+    the full update's wait goes on for 15 minutes, then says the UPDATE is
+    slow and where to look."""
+    o = driven["full_update_never_back"]
+    assert "Updating… [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert o["result"] is False
+    assert ("the update is taking longer than expected — check journalctl -u domovoi-update"
+            in o["after"]["toasts"]), o["after"]["toasts"]
+    # 15 polls, plus the card's own re-read once the wait is over.
+    assert 15 <= o["awayReads"] <= 17, o["awayReads"]
+
+
+# ─── ...and the quick restart it stays otherwise ────────────────────────
+
+QUICK_FLOWS = ["flow_update_unit", "flow_after_a_rollback", "flow_unit_without_a_result",
+               "flow_plugin_staged_since_the_panel_read", "flow_plugin_staged_without_a_unit_result",
+               "flow_pulled_since_without_the_unit"]
+
+
+@pytest.mark.parametrize("name", QUICK_FLOWS)
+def test_otherwise_it_stays_the_quick_restart(driven, name) -> None:
+    """Nothing new for the update unit to apply, or no unit at all: asked,
+    told and reported as the quick restart (these pass on the old static
+    too: they pin what must not change). After a rollback the unit's commit
+    is the one it went back to (from_sha), not the one it rolled back
+    (to_sha); a staged plugin upgrade sets restart_required but is no
+    pulled code, with the unit's result to compare with or without one; a
+    unit without a readable result gives nothing to compare; without the
+    unit the bounce is the bounce."""
+    o = driven[name]
+    assert o["confirms"] == driven["flow"]["confirms"], o["confirms"]
+    away = o["away"]
+    assert "Restarting… [disabled]" in away["buttons"], away["buttons"]
+    assert not any("Updating" in b for b in away["buttons"]), away["buttons"]
+    assert away["note"] is not None and away["note"].startswith("Restarting —"), away["note"]
+    assert "backing up" not in away["note"]
+    assert "restarting…" in away["toasts"] and "updating…" not in away["toasts"], away["toasts"]
+    assert o["result"] is True
+    assert o["unitRan"] == (None if name == "flow_pulled_since_without_the_unit" else "restart")

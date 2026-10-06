@@ -629,6 +629,13 @@ run does this:
    doesn't answer or its Flyway history is missing a migration the checkout
    ships: then `domovoi-db` is restarted first (compose up plus Flyway),
    as every plain restart did before 2026-10-05.
+   If something did, it's the full update below, whichever button started
+   it: code pulled since the panel last read the version, or code loaded
+   outside the unit (pulled, then `domovoi-core` restarted by hand, so the
+   checkout isn't the SHA the unit last applied). **Restart Domovoi** says
+   so before anything happens: its confirm asks for the full update (a
+   second confirm, when only the read taken at the press shows it), and
+   the card says **Updating…** and waits up to 15 minutes, not seconds.
 2. Refuse, touching nothing, if tracked files have uncommitted changes. A
    rollback could not restore that tree. Untracked files are fine. Stop,
    touching nothing, if the dependencies changed but the service user
