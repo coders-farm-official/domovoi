@@ -297,13 +297,16 @@ private fun PlayerHead(current: PlayItem?, roomTarget: PlayTarget.Room?, rooms: 
     }
 }
 
-/** The tab's "lyrics" section: open until closed (Prefs `lyrics_panel_open`). */
+/** The tab's "lyrics" section: open until closed (Prefs `lyrics_panel_open`),
+ *  [PLAYER_LYRICS_HEIGHT] tall — at most half the window ([windowLyricsHeight]):
+ *  on a phone on its side the panel must not fill the screen, where every
+ *  drag would scroll the lyrics and never the tab. */
 @Composable
 private fun PlayerLyrics(trackId: Long, follow: LyricsFollow) {
     val app = LocalApp.current
     val open by app.prefs.lyricsPanelOpen.collectAsState()
     LyricsSection(
-        trackId, follow, PLAYER_LYRICS_HEIGHT, open,
+        trackId, follow, windowLyricsHeight(PLAYER_LYRICS_HEIGHT), open,
         onOpenChange = app.prefs::setLyricsPanelOpen,
         divider = true,
     )

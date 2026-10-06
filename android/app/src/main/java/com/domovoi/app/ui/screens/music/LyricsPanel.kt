@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,9 +44,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -79,7 +83,9 @@ import kotlin.math.roundToLong
  * The lyrics view of the players (lyrics-build CONTRACT [D5]–[D8]; the web's
  * web/static/lyrics.jsx is its twin): timed lyrics follow what plays line by
  * line, plain lyrics are a scrollable text, and the other states say what
- * there is. Used by the player tab, the player sheet and the room cards.
+ * there is. Used by the player tab, the player sheet and the room cards. A
+ * panel is never more than half the window's height ([capLyricsHeight]), and
+ * its loops wait for frames, so they stop with the screen ([nextFrame]).
  *
  * Each surface reads the position ITSELF, inside its own state, so a 500 ms
  * position tick or a 2 s room poll never recomposes the screen around it:
@@ -105,14 +111,45 @@ sealed interface LyricsFollow {
 
 internal val PLAYER_LYRICS_HEIGHT = 280.dp
 internal val SHEET_LYRICS_HEIGHT = 220.dp
+/** The least a panel shrinks to in a short window: a few lines. */
+internal val MIN_LYRICS_HEIGHT = 120.dp
 
 private const val FRAME_MS = 100L
 private const val FOLLOW_PAUSE_MS = 4_000L
 private const val CHANGED_MIN_GAP_MS = 15_000L
 private const val TICK_WAIT_MS = 700L
 private const val LYRICS_CHANGED = "lyrics.changed"
-private const val GAP_MARK = "♪"
+/** What a gap (an instrumental break) is called to a screen reader; it
+ *  shows as the music-note icon. */
+internal const val GAP_DESCRIPTION = "instrumental break"
 private val FOOTER_ROW = 30.dp
+
+/**
+ * A lyrics panel's height in a window [available] tall: [nominal], but
+ * never more than half the window (and never under [MIN_LYRICS_HEIGHT]) —
+ * a phone on its side is a few hundred dp tall, and the player tab or the
+ * player sheet around the panel must stay reachable (the 2026-10-06
+ * review). An unknown height (0) leaves [nominal].
+ */
+internal fun capLyricsHeight(nominal: Dp, available: Dp): Dp {
+    if (available <= 0.dp) return nominal
+    return minOf(nominal, maxOf(available * 0.5f, MIN_LYRICS_HEIGHT))
+}
+
+/** [capLyricsHeight] for the window this composes in. */
+@Composable
+internal fun windowLyricsHeight(nominal: Dp): Dp =
+    capLyricsHeight(nominal, LocalConfiguration.current.screenHeightDp.dp)
+
+/**
+ * Wait for the next frame. A stopped activity (in the background, the
+ * screen off) pauses Compose's frame clock, so a loop that waits here stops
+ * with it and comes back with the screen (the 2026-10-06 review: the
+ * position loops and the "still looking" re-check ran on in the background).
+ */
+private suspend fun nextFrame() {
+    withFrameMillis { }
+}
 
 /** Where a room was when a reading of it came in; its lyrics run on from here. */
 internal data class LyricsAnchor(
@@ -192,6 +229,7 @@ private suspend fun LyricsLoad.fill(app: AppContainer, viaRoom: String?) {
         }
         val since = SystemClock.elapsedRealtime() - askedAt
         if (since < CHANGED_MIN_GAP_MS) delay(CHANGED_MIN_GAP_MS - since)
+        nextFrame()                     // only while the panel is on a screen in use
         // A failed re-ask keeps "looking"; the next one comes round anyway.
         val next = repo.forTrack(trackId, refresh = true)
         if (next !is LyricsResult.Failed) result = next
@@ -287,6 +325,7 @@ private suspend fun followLocal(player: PlayerController, out: LyricsPosition, s
         publish(now)
         while (playing) {
             delay(FRAME_MS)
+            nextFrame()
             publish(SystemClock.elapsedRealtime())
         }
     }
@@ -311,6 +350,7 @@ private suspend fun followRoom(app: AppContainer, roomId: String, load: LyricsLo
             publish(SystemClock.elapsedRealtime())
             while (anchor.playing) {
                 delay(FRAME_MS)
+                nextFrame()
                 publish(SystemClock.elapsedRealtime())
             }
         }
@@ -465,11 +505,14 @@ private fun TimedLyrics(
     val footer = if (roomId != null) FOOTER_ROW * 2 else FOOTER_ROW
     val listHeight = (height - footer).coerceAtLeast(FOOTER_ROW)
     Column(modifier.fillMaxWidth().height(height)) {
-        Box(Modifier.fillMaxWidth().height(listHeight)) {
+        // The list's padding (the line being sung sits a third of the way
+        // down) comes from the height it really got, not the one asked for.
+        BoxWithConstraints(Modifier.fillMaxWidth().height(listHeight)) {
+            val shown = if (maxHeight > 0.dp && maxHeight < listHeight) maxHeight else listHeight
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = listHeight * 0.3f, bottom = listHeight * 0.6f),
+                contentPadding = PaddingValues(top = shown * 0.3f, bottom = shown * 0.6f),
             ) {
                 items(count = lines.size, key = { it }, contentType = { "lyric-line" }) { i ->
                     val state by remember(active, i) { derivedStateOf { lineState(i, active.value) } }
@@ -501,16 +544,24 @@ private fun LyricRow(line: LyricLine, state: LineState, onSeek: (() -> Unit)?) {
         state == LineState.Past -> Domovoi.colors.fgSubtle
         else -> Domovoi.colors.fgMuted
     }
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(6.dp))
+        .then(if (onSeek != null) Modifier.clickable(onClickLabel = "play from here", onClick = onSeek) else Modifier)
+        .padding(horizontal = 6.dp, vertical = 5.dp)
+    if (gap) {
+        // An instrumental break: the design system's music note, muted.
+        Box(rowModifier) {
+            Icon(Icons.Filled.MusicNote, GAP_DESCRIPTION, tint = color, modifier = Modifier.size(18.dp))
+        }
+        return
+    }
     Text(
-        if (gap) GAP_MARK else line.text,
+        line.text,
         style = MaterialTheme.typography.bodyLarge,
         color = color,
         fontWeight = if (state == LineState.Active) FontWeight.SemiBold else FontWeight.Normal,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .then(if (onSeek != null) Modifier.clickable(onClickLabel = "play from here", onClick = onSeek) else Modifier)
-            .padding(horizontal = 6.dp, vertical = 5.dp),
+        modifier = rowModifier,
     )
 }
 
@@ -660,9 +711,14 @@ internal fun RoomLyricLine(np: NowPlayingRoom, tick: Int) {
     val nudges by app.prefs.lyricsRoomNudge.collectAsState()
     val elapsed = (np.elapsedSec ?: 0.0) + (if (playing) tick else 0)
     val ms = LyricsMath.roomPositionMs(elapsed, 0L, 0L, false, np.song?.durationSec, nudges[np.roomId] ?: 0L)
-    val line = lines.getOrNull(LyricsMath.activeIndex(lines, ms))
+    val text = lines.getOrNull(LyricsMath.activeIndex(lines, ms))?.text?.takeIf { it.isNotBlank() }
+    if (text == null) {
+        // Before the first line, or a break: the music note, a line's height.
+        Icon(Icons.Filled.MusicNote, GAP_DESCRIPTION, tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+        return
+    }
     Text(
-        line?.text?.takeIf { it.isNotBlank() } ?: GAP_MARK,
+        text,
         style = MaterialTheme.typography.bodySmall,
         color = Domovoi.colors.fgSubtle,
         fontStyle = FontStyle.Italic,

@@ -9,6 +9,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.unit.dp
 import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.data.Prefs
@@ -31,6 +32,7 @@ import com.domovoi.app.testing.appWith
 import com.domovoi.app.testing.button
 import com.domovoi.app.testing.buttons
 import com.domovoi.app.testing.composeTest
+import com.domovoi.app.testing.descriptions
 import com.domovoi.app.testing.setField
 import com.domovoi.app.testing.testPlayer
 import com.domovoi.app.testing.textButton
@@ -484,6 +486,7 @@ class LyricsPanelTest {
 
     // ── the room cards ──────────────────────────────────────────────────
 
+    /** The cards' texts, and their icons' descriptions as "[description]". */
     private fun cardTexts(rig: Rig, vararg rooms: NowPlayingRoom, tick: Int = 0): List<String> {
         val tree = NodeTree()
         var texts = emptyList<String>()
@@ -498,7 +501,7 @@ class LyricsPanelTest {
                 }
                 // A playing room's "live" pill pulses for as long as it shows.
                 settle(untilQuiet = false, frames = 20)
-                texts = tree.texts()
+                texts = tree.texts() + tree.descriptions().map { "[$it]" }
             }
         }
         return texts
@@ -514,8 +517,11 @@ class LyricsPanelTest {
         kotlinx.coroutines.runBlocking { rig.prime(12, docJson(12)) }
         // 12.0 s plus the card's 1 s tick: the first line.
         assertTrue(cardTexts(rig, kitchen(12, 12.0), tick = 1).contains("the lantern hums beside the river door"))
-        // Paused: the tick does not count.
-        assertTrue(cardTexts(rig, kitchen(12, 12.0, state = "pause"), tick = 5).contains("♪"))
+        // Paused: the tick does not count. Before the first line: the music
+        // note (the design system's icon, no Unicode glyph), described.
+        val before = cardTexts(rig, kitchen(12, 12.0, state = "pause"), tick = 5)
+        assertTrue(before.toString(), before.contains("[$GAP_DESCRIPTION]"))
+        assertFalse(before.any { "♪" in it })
         assertTrue(cardTexts(rig, kitchen(12, 17.0)).contains("and every copper kettle sings at dawn"))
         // The room's nudge (lyrics later) applies on the card too.
         rig.nudges.value = mapOf("kitchen" to 1_000L)
@@ -529,13 +535,23 @@ class LyricsPanelTest {
         }
         val plain = cardTexts(rig, kitchen(21, 12.0))
         assertFalse(plain.contains("the river door is open tonight"))
-        assertFalse(plain.contains("♪"))
+        assertFalse(plain.contains("[$GAP_DESCRIPTION]"))
         // A stream: no track, no lyrics read at all.
         val requests = server.requestCount
         val stream = cardTexts(rig, kitchen(null, 12.0))
         assertTrue(stream.contains("Lantern Song"))
-        assertFalse(stream.contains("♪"))
+        assertFalse(stream.contains("[$GAP_DESCRIPTION]"))
         assertEquals(requests, server.requestCount)
+    }
+
+    // ── the height a panel takes (the 2026-10-06 review) ───────────────
+
+    @Test fun aPanelIsNeverMoreThanHalfTheWindow() {
+        assertEquals(PLAYER_LYRICS_HEIGHT, capLyricsHeight(PLAYER_LYRICS_HEIGHT, 800.dp))   // a phone upright
+        assertEquals(205.5.dp, capLyricsHeight(PLAYER_LYRICS_HEIGHT, 411.dp))               // on its side
+        assertEquals(MIN_LYRICS_HEIGHT, capLyricsHeight(PLAYER_LYRICS_HEIGHT, 150.dp))      // a few lines at least
+        assertEquals(100.dp, capLyricsHeight(100.dp, 150.dp))                                // never grows
+        assertEquals(SHEET_LYRICS_HEIGHT, capLyricsHeight(SHEET_LYRICS_HEIGHT, 0.dp))        // height unknown
     }
 
     @Test fun nowPlayingCarriesTheRoomsLibraryTrack() {

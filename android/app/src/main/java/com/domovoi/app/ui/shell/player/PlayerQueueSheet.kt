@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -47,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.player.CoverArt
@@ -60,6 +63,7 @@ import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.screens.music.LyricsFollow
 import com.domovoi.app.ui.screens.music.LyricsSection
 import com.domovoi.app.ui.screens.music.SHEET_LYRICS_HEIGHT
+import com.domovoi.app.ui.screens.music.capLyricsHeight
 import com.domovoi.app.ui.screens.music.lyricsTrackIdOf
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -95,96 +99,78 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Domovoi.colors.card,
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-        ) {
-            // ── Now playing header ────────────────────────────────────────
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!isRemote && current?.coverPath != null) {
-                    CoverImage(CoverArt.model(current.coverPath, app.api::absolute), 56.dp)
-                    Spacer(Modifier.width(14.dp))
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        (if (isRemote) remote?.title else current?.title) ?: "nothing playing",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Domovoi.colors.fg,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    val artist = if (isRemote) remote?.artist else current?.artist
-                    if (artist != null) {
-                        Text(
-                            artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Domovoi.colors.fgMuted,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                if (isRemote) {
-                    Pill(
-                        "casting to ${(target as PlayTarget.Room).roomId}",
-                        Tone.Brand,
-                        live = remote?.state == "play",
-                    )
-                }
-            }
-
-            // ── Seek ──────────────────────────────────────────────────────
-            SheetSeek(current, isRemote)
-
-            // ── Transport ─────────────────────────────────────────────────
-            val effPlaying = if (isRemote) remote?.state == "play" else playing
-            SheetTransport(playing = effPlaying, onDismiss = onDismiss)
-
-            // ── Lyrics (a library track, here or in the room) ─────────────
-            val room = target as? PlayTarget.Room
-            val lyricsTrackId = if (room != null) {
-                remote?.takeIf { it.roomId == room.roomId }?.trackId
-            } else {
-                lyricsTrackIdOf(current)
-            }
-            if (lyricsTrackId != null) {
-                SheetLyrics(lyricsTrackId, room?.let { LyricsFollow.Room(it.roomId) } ?: LyricsFollow.Local)
-            }
-
-            // ── Queue ─────────────────────────────────────────────────────
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        // One list for everything, so it all scrolls: a phone on its side
+        // has a few hundred dp, and the lyrics must never push the queue out
+        // of reach (the 2026-10-06 review). The lyrics panel's height comes
+        // from the sheet's own (at most half of it).
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val lyricsHeight = capLyricsHeight(SHEET_LYRICS_HEIGHT, maxHeight)
+            LazyColumn(
+                Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 16.dp),
             ) {
-                SectionLabel("queue · ${queue.size}")
-                Spacer(Modifier.weight(1f))
-                if (!isRemote && queue.isNotEmpty()) {
-                    TextButton(onClick = { app.player.clearQueue(); onDismiss() }) {
-                        Icon(
-                            Icons.Filled.DeleteSweep, contentDescription = null,
-                            tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("clear", color = Domovoi.colors.fgMuted)
+                // ── Now playing header ────────────────────────────────────
+                item(key = "sheet-head") { SheetHead(current, isRemote, target, remote?.title, remote?.artist, remote?.state) }
+
+                // ── Seek ──────────────────────────────────────────────────
+                item(key = "sheet-seek") { SheetSeek(current, isRemote) }
+
+                // ── Transport ─────────────────────────────────────────────
+                val effPlaying = if (isRemote) remote?.state == "play" else playing
+                item(key = "sheet-transport") { SheetTransport(playing = effPlaying, onDismiss = onDismiss) }
+
+                // ── Lyrics (a library track, here or in the room) ─────────
+                val room = target as? PlayTarget.Room
+                val lyricsTrackId = if (room != null) {
+                    remote?.takeIf { it.roomId == room.roomId }?.trackId
+                } else {
+                    lyricsTrackIdOf(current)
+                }
+                if (lyricsTrackId != null) {
+                    val follow = room?.let { LyricsFollow.Room(it.roomId) } ?: LyricsFollow.Local
+                    item(key = "sheet-lyrics") { SheetLyrics(lyricsTrackId, follow, lyricsHeight) }
+                }
+
+                // ── Queue ─────────────────────────────────────────────────
+                item(key = "sheet-queue-head") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SectionLabel("queue · ${queue.size}")
+                        Spacer(Modifier.weight(1f))
+                        if (!isRemote && queue.isNotEmpty()) {
+                            TextButton(onClick = { app.player.clearQueue(); onDismiss() }) {
+                                Icon(
+                                    Icons.Filled.DeleteSweep, contentDescription = null,
+                                    tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("clear", color = Domovoi.colors.fgMuted)
+                            }
+                        }
                     }
                 }
-            }
 
-            if (isRemote) {
-                Text(
-                    "casting — the queue lives on the room's speaker; transport controls act on the room",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Domovoi.colors.fgSubtle,
-                    modifier = Modifier.padding(vertical = 16.dp),
-                )
-            } else if (queue.isEmpty()) {
-                Text(
-                    "queue is empty — play something from the library",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Domovoi.colors.fgSubtle,
-                    modifier = Modifier.padding(vertical = 16.dp),
-                )
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f, fill = false).padding(bottom = 16.dp),
-                ) {
+                if (isRemote) {
+                    item(key = "sheet-queue-casting") {
+                        Text(
+                            "casting — the queue lives on the room's speaker; transport controls act on the room",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgSubtle,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
+                    }
+                } else if (queue.isEmpty()) {
+                    item(key = "sheet-queue-empty") {
+                        Text(
+                            "queue is empty — play something from the library",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgSubtle,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
+                    }
+                } else {
                     itemsIndexed(queue, key = { i, it -> "${it.uid}-$i" }) { i, item ->
                         QueueRow(
                             position = i,
@@ -203,6 +189,50 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+/** The sheet's now-playing header: the cover (this phone's playback), the
+ *  title and artist (the room's while casting), the casting pill. */
+@Composable
+private fun SheetHead(
+    current: PlayItem?,
+    isRemote: Boolean,
+    target: PlayTarget,
+    remoteTitle: String?,
+    remoteArtist: String?,
+    remoteState: String?,
+) {
+    val app = LocalApp.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (!isRemote && current?.coverPath != null) {
+            CoverImage(CoverArt.model(current.coverPath, app.api::absolute), 56.dp)
+            Spacer(Modifier.width(14.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                (if (isRemote) remoteTitle else current?.title) ?: "nothing playing",
+                style = MaterialTheme.typography.titleMedium,
+                color = Domovoi.colors.fg,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            val artist = if (isRemote) remoteArtist else current?.artist
+            if (artist != null) {
+                Text(
+                    artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (isRemote) {
+            Pill(
+                "casting to ${(target as PlayTarget.Room).roomId}",
+                Tone.Brand,
+                live = remoteState == "play",
+            )
         }
     }
 }
@@ -248,13 +278,14 @@ internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
 }
 
 /** The sheet's "lyrics" section: closed until opened (Prefs
- *  `lyrics_sheet_open`), then [SHEET_LYRICS_HEIGHT] of lyrics. */
+ *  `lyrics_sheet_open`), then [height] of lyrics — [SHEET_LYRICS_HEIGHT],
+ *  or less in a short window ([capLyricsHeight]). */
 @Composable
-private fun SheetLyrics(trackId: Long, follow: LyricsFollow) {
+private fun SheetLyrics(trackId: Long, follow: LyricsFollow, height: Dp) {
     val app = LocalApp.current
     val open by app.prefs.lyricsSheetOpen.collectAsState()
     LyricsSection(
-        trackId, follow, SHEET_LYRICS_HEIGHT, open,
+        trackId, follow, height, open,
         onOpenChange = app.prefs::setLyricsSheetOpen,
         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
     )
