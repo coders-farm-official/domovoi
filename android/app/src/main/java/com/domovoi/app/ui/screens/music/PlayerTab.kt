@@ -85,8 +85,9 @@ import kotlin.math.abs
  * for seconds, then ran it out of memory (the 2026-09-30 freeze and crash).
  * Now only rows on screen exist.
  *
- * Position ticks (every 500 ms while playing) are read by the seek row and by
- * the current-chapter state alone, so they no longer rebuild the whole tab.
+ * Position ticks (every 500 ms while playing) are read by the seek row, the
+ * current-chapter state and the lyrics panel alone, so they no longer
+ * rebuild the whole tab.
  */
 
 /** What the player tab's item list is built from; see [rememberPlayerTabModel]. */
@@ -100,15 +101,24 @@ internal class PlayerTabModel(
      *  reading it, so only the chapter rows recompose when it moves on. */
     val currentChapter: State<Int>,
     val hasLibraryItems: Boolean,
+    /** The library track whose lyrics the tab shows: the phone's current
+     *  library item, or the track the room plays while casting. Null for
+     *  radio, podcasts, audiobooks, songs on the phone and streams. */
+    val lyricsTrackId: Long? = null,
 ) {
     val current: PlayItem? get() = queue.getOrNull(index)
     val isRemote: Boolean get() = roomTarget != null
+
+    /** Whose clock the lyrics follow. */
+    val lyricsFollow: LyricsFollow get() = roomTarget?.let { LyricsFollow.Room(it.roomId) } ?: LyricsFollow.Local
 }
 
 /**
  * Collects the player state the tab's item LIST depends on (queue, index,
  * target), so the caller recomposes only when those change. The playback
- * position is collected but its value is read only inside [derivedStateOf].
+ * position is collected but its value is read only inside [derivedStateOf];
+ * so is the room's 2 s reading, of which only the track id counts here (the
+ * lyrics panel reads the rest itself).
  */
 @Composable
 internal fun rememberPlayerTabModel(): PlayerTabModel {
@@ -117,6 +127,7 @@ internal fun rememberPlayerTabModel(): PlayerTabModel {
     val index by app.player.index.collectAsState()
     val target by app.player.target.collectAsState()
     val position = app.player.positionSec.collectAsState()
+    val remote = app.player.remote.collectAsState()
 
     val roomTarget = target as? PlayTarget.Room
     val chapters = if (roomTarget != null) emptyList() else queue.getOrNull(index)?.chapters.orEmpty()
@@ -124,10 +135,17 @@ internal fun rememberPlayerTabModel(): PlayerTabModel {
         derivedStateOf { currentChapterIndex(chapters, position.value) }
     }
     val hasLibrary = remember(queue) { queue.any { it.kind == PlayKind.Library } }
-    return remember(queue, index, roomTarget, chapters, currentChapter, hasLibrary) {
-        PlayerTabModel(queue, index, roomTarget, chapters, currentChapter, hasLibrary)
+    val roomTrackId = remember(remote, roomTarget) {
+        derivedStateOf { remote.value?.takeIf { it.roomId == roomTarget?.roomId }?.trackId }
+    }
+    val lyricsTrackId = if (roomTarget != null) roomTrackId.value else lyricsTrackIdOf(queue.getOrNull(index))
+    return remember(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId) {
+        PlayerTabModel(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId)
     }
 }
+
+/** A queue item's lyrics track: library tracks only ([D10]). */
+internal fun lyricsTrackIdOf(item: PlayItem?): Long? = item?.takeIf { it.kind == PlayKind.Library }?.id
 
 /** The chapter playing at [positionSec]: the last one whose start has
  *  passed, and the first one before any has. */
@@ -158,6 +176,12 @@ internal fun LazyListScope.playerTab(
     }
 
     item(key = "player-head") { PlayerHead(model.current, model.roomTarget, rooms) }
+
+    // Lyrics: a library track, on this phone or in the room being cast to.
+    model.lyricsTrackId?.let { trackId ->
+        val follow = model.lyricsFollow
+        item(key = "player-lyrics") { PlayerLyrics(trackId, follow) }
+    }
 
     // Chapters (podcasts / audiobooks)
     val chapters = model.chapters
@@ -273,7 +297,20 @@ private fun PlayerHead(current: PlayItem?, roomTarget: PlayTarget.Room?, rooms: 
     }
 }
 
-/** The only part of the tab that follows the 500 ms position tick. */
+/** The tab's "lyrics" section: open until closed (Prefs `lyrics_panel_open`). */
+@Composable
+private fun PlayerLyrics(trackId: Long, follow: LyricsFollow) {
+    val app = LocalApp.current
+    val open by app.prefs.lyricsPanelOpen.collectAsState()
+    LyricsSection(
+        trackId, follow, PLAYER_LYRICS_HEIGHT, open,
+        onOpenChange = app.prefs::setLyricsPanelOpen,
+        divider = true,
+    )
+}
+
+/** The only part of the tab that follows the 500 ms position tick
+ *  (besides the lyrics panel, which follows it inside itself). */
 @Composable
 private fun SeekRow(current: PlayItem?, isRemote: Boolean) {
     val app = LocalApp.current

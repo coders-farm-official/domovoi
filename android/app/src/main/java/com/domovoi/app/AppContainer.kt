@@ -6,6 +6,7 @@ import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.StateBus
+import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,9 @@ class AppContainer(context: Context) {
     val api = ApiClient(prefs)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
+
+    /** Lyrics for what plays, household tier only (player/Lyrics.kt). */
+    val lyrics = LyricsRepository(api)
 
     /** Timer and reminder alerts: live notifications plus the local alarm
      *  mirror (alerts/TimerAlerts.kt). Started by DomovoiApplication. */

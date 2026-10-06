@@ -57,6 +57,10 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.screens.music.LyricsFollow
+import com.domovoi.app.ui.screens.music.LyricsSection
+import com.domovoi.app.ui.screens.music.SHEET_LYRICS_HEIGHT
+import com.domovoi.app.ui.screens.music.lyricsTrackIdOf
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
@@ -132,6 +136,17 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
             // ── Transport ─────────────────────────────────────────────────
             val effPlaying = if (isRemote) remote?.state == "play" else playing
             SheetTransport(playing = effPlaying, onDismiss = onDismiss)
+
+            // ── Lyrics (a library track, here or in the room) ─────────────
+            val room = target as? PlayTarget.Room
+            val lyricsTrackId = if (room != null) {
+                remote?.takeIf { it.roomId == room.roomId }?.trackId
+            } else {
+                lyricsTrackIdOf(current)
+            }
+            if (lyricsTrackId != null) {
+                SheetLyrics(lyricsTrackId, room?.let { LyricsFollow.Room(it.roomId) } ?: LyricsFollow.Local)
+            }
 
             // ── Queue ─────────────────────────────────────────────────────
             Row(
@@ -232,8 +247,22 @@ internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
     }
 }
 
+/** The sheet's "lyrics" section: closed until opened (Prefs
+ *  `lyrics_sheet_open`), then [SHEET_LYRICS_HEIGHT] of lyrics. */
+@Composable
+private fun SheetLyrics(trackId: Long, follow: LyricsFollow) {
+    val app = LocalApp.current
+    val open by app.prefs.lyricsSheetOpen.collectAsState()
+    LyricsSection(
+        trackId, follow, SHEET_LYRICS_HEIGHT, open,
+        onOpenChange = app.prefs::setLyricsSheetOpen,
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+    )
+}
+
 /** The seek bar and times: the only part of the sheet that follows the
- *  500 ms position tick, so the tick does not rebuild the queue list. */
+ *  500 ms position tick (besides the lyrics, inside their own panel), so
+ *  the tick does not rebuild the queue list. */
 @Composable
 private fun SheetSeek(current: PlayItem?, isRemote: Boolean) {
     val app = LocalApp.current

@@ -42,7 +42,7 @@ internal fun NodeTree.button(label: String): HeadlessButton {
 /** The modifier elements a LayoutNode was given. A node that was never
  *  attached keeps its modifier pending (Compose UI 1.7) instead of applying
  *  it, so that is read first. */
-private fun elementsOf(node: Any): List<Modifier.Element> {
+internal fun elementsOf(node: Any): List<Modifier.Element> {
     val pending = runCatching {
         node.javaClass.getDeclaredField("pendingModifier").apply { isAccessible = true }.get(node) as Modifier?
     }.getOrNull()
