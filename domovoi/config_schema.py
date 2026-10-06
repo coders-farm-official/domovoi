@@ -399,6 +399,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", tier="hot",
     ),
     FieldSpec(
+        "lyrics_search_enabled", "Find songs by their words", "Library",
+        "Play or name a song from words in its lyrics: 'play the song that "
+        "goes …', 'what's the song that goes …', and — when 'play …' finds "
+        "nothing by that name — the words as a lyric. Uses the lyrics Domovoi "
+        "has for your songs (.lrc files, the songs' own tags, LRCLIB). Off = "
+        "those requests say it's turned off, and 'play …' never looks in "
+        "lyrics. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
         "music_alias_fetch_enabled", "Look up other names on MusicBrainz", "Library",
         "Fetch the spoken names people use for your artists (e.g. 'Dead "
         "Mouse' for deadmau5) from MusicBrainz. Sends artist names from your "

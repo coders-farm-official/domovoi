@@ -559,6 +559,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(PlaybackStateSweeper(app), owner="core")
     WORKERS.add_worker(MediaPlaysPruner(), owner="core")
     WORKERS.add_worker(MemoryExtractor(), owner="core")
+    # Lyric search's line index (V021 track_lyric_lines; domovoi/workers/lyrics_index.py).
+    from domovoi.workers.lyrics_index import LyricsIndexer
+
+    WORKERS.add_worker(LyricsIndexer(), owner="core")
     WORKERS.add_worker(NewsFetcher(app=app), owner="core")
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
@@ -1243,6 +1247,7 @@ async def admin_snapshot() -> dict[str, Any]:
     Pi's WiFiWatcher; `resumable_music` is the per-room "stream the
     Pi was playing before the last non-music turn interrupted it."
     """
+    from domovoi.workers.lyrics_index import lyrics_index_status
     # active_dropins is keyed by room_id in both directions; emit one row
     # per call (the initiator side) so the web UI can list live drop-ins
     # and offer a Hang-up button.
@@ -1268,6 +1273,8 @@ async def admin_snapshot() -> dict[str, Any]:
         "now_playing": NOW_PLAYING.snapshot(),
         "current_playlist": dict(app.state.current_playlist),
         "active_dropins": active_dropins,
+        # Lyric search's line index (status only, never a lyric).
+        "lyrics_index": lyrics_index_status(),
         # Per-room AEC capability (from the hello frame) so the web UI can
         # offer drop-in only between full-duplex (XVF3800) satellites.
         "satellite_full_duplex": dict(app.state.satellite_full_duplex),

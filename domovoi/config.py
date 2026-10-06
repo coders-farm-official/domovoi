@@ -983,6 +983,13 @@ class Settings(BaseSettings):
     # Ask "did you mean X?" in that middle band (owner decision 2026-10-02).
     # Off = the middle band falls through to today's search.
     music_choice_enabled: bool = True
+    # Find a song by words from its lyrics: "play the song that goes …",
+    # "what's the song that goes …", and — when "play <name>" finds nothing by
+    # that name — the words as a lyric (handlers/shared/lyric_search.py). Uses
+    # the lyrics Domovoi has (V021). Applies immediately.
+    lyrics_search_enabled: bool = True
+    # The lyric-search line index's cadence (workers/lyrics_index.py).
+    lyrics_index_interval_sec: float = 10.0
     # Fetch spoken aliases ("Dead Mouse" for deadmau5) for the library's
     # artists from MusicBrainz — OPT-IN, OFF by default: it sends artist names
     # from the library to musicbrainz.org — including names taken from
