@@ -77,7 +77,7 @@ async def voice(monkeypatch, db_session):
         async def synthesize(self, text, engine=None, voice=None):
             return _wav(r.tts_seconds)
 
-    async def _identify(pcm, embedding=None):
+    async def _identify(pcm, embedding=None, **_kw):
         return None
 
     async def _any_voice(name):

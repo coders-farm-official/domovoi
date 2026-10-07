@@ -104,7 +104,7 @@ class _DelayedTTS:
 
 
 def _delayed_identify(delay: float):
-    async def identify(pcm: bytes):
+    async def identify(pcm: bytes, **_kw):
         await asyncio.sleep(delay)
         return None  # nobody recognised: person_id None, as a stranger's turn
     return identify

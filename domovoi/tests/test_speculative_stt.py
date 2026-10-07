@@ -734,7 +734,7 @@ def test_the_transcript_is_not_held_for_the_embedding(pipeline, voice_id, monkey
 
 
 def test_embedding_alone_touches_nothing(monkeypatch) -> None:
-    """embed_voice is the pure part: no database, no drift counter. And
+    """embed_voice is the pure part: no database, no learning counter. And
     identify() handed an embedding doesn't embed again."""
     from domovoi import voice_identifier
 
@@ -742,10 +742,10 @@ def test_embedding_alone_touches_nothing(monkeypatch) -> None:
         raise AssertionError("the database was touched")
 
     monkeypatch.setattr(voice_identifier, "session_scope", _no_db)
-    hits = dict(voice_identifier._NEAR_THRESHOLD_HITS)
+    hits = dict(voice_identifier._CONFIDENT_HITS)
     emb = asyncio.run(voice_identifier.embed_voice(LOUD * 40))
     assert emb is not None and emb.shape == (voice_identifier.EMBEDDING_DIM,)
-    assert voice_identifier._NEAR_THRESHOLD_HITS == hits
+    assert voice_identifier._CONFIDENT_HITS == hits
 
     def _no_embedder():
         raise AssertionError("embedded twice")

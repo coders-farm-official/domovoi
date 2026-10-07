@@ -455,7 +455,7 @@ def _streamed_turn(monkeypatch, deltas, *, rest: str = "", gate: asyncio.Event |
         return Response(text="", matched_path="qa", online=True,
                         qa_stream=StreamedQA(answer=spoken, finish=finish))
 
-    async def _identify(pcm, embedding=None):
+    async def _identify(pcm, embedding=None, **_kw):
         return None
 
     monkeypatch.setattr(streaming, "get_whisper_client", lambda: _Whisper())

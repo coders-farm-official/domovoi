@@ -3483,16 +3483,18 @@ class StreamSession:
             # any failure leaves person_id=None / presence_tier="high"
             # rather than blocking the response cycle. A speculative
             # transcript brings the embedding of its copy, computed right
-            # after its decode; the matching (and its last_seen and drift
-            # bookkeeping) runs here, once per turn, either way.
+            # after its decode; the matching (and its last_seen and
+            # per-room learning) runs here, once per turn, either way.
             from domovoi.voice_identifier import identify
             stage_t0 = time.perf_counter()
             try:
                 await self._copy_embedding(heard)
                 if heard.embedded:
-                    ident = await identify(pcm_bytes, embedding=heard.embedding)
+                    ident = await identify(
+                        pcm_bytes, embedding=heard.embedding, room_id=self.room_id,
+                    )
                 else:
-                    ident = await identify(pcm_bytes)
+                    ident = await identify(pcm_bytes, room_id=self.room_id)
             except Exception as e:
                 log.warning("voice identification failed: %s", e)
                 ident = None
@@ -3906,6 +3908,9 @@ class StreamSession:
             # cluster, or someone else's introduction could re-enroll
             # them without consent.
             and not ident.denylisted
+            # A voice too close to two known people to name is still
+            # someone known, not the newcomer being introduced.
+            and not ident.ambiguous
         ):
             await buffer_unknown_voice_turn(
                 s,

@@ -334,11 +334,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.5, max=0.95,
     ),
     FieldSpec(
-        "voice_profile_drift_reenroll_after", "Drift re-enroll after",
+        "voice_profile_match_margin", "Match margin", "Voice profiles",
+        "When a voice is close to two people, how far ahead of the other "
+        "the best one must be before the bot names anyone. Closer than "
+        "this and it says it isn't sure instead of guessing. Raise it if "
+        "two people keep getting mixed up.",
+        "float", min=0.0, max=0.3,
+    ),
+    FieldSpec(
+        "voice_profile_drift_reenroll_after", "Learn a room after",
         "Voice profiles",
-        "After this many borderline matches in a row for the same person, a "
-        "fresh voice sample is auto-saved so recognition keeps up as their "
-        "voice changes (cold, aging). Higher = more conservative.",
+        "After this many confident recognitions in a row in a room where "
+        "someone has no voice sample yet, that clip is saved as their "
+        "sample for the room (one per room). Borderline or close-call "
+        "recognitions are never saved. Higher = more conservative.",
         "int", min=1, max=10,
     ),
     FieldSpec(
