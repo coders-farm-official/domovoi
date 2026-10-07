@@ -31,7 +31,7 @@ sequenceDiagram
     Op->>W: open dashboard → GET /api/auth/status
     W-->>Op: {setup_complete:false} → setup screen
     Op->>W: POST /api/auth/setup {setup_code, password}
-    Note over W: same per-source backoff as login —<br/>a wrong code is never free; 409 once<br/>setup is already done
+    Note over W: same per-source backoff as login —<br/>a wrong code is never free. 409 once<br/>setup is already done
     W->>FS: constant-time compare against the file
     W->>PG: INSERT admin_auth (argon2id password hash)
     W->>PG: mint first session (label "setup")
@@ -59,9 +59,9 @@ sequenceDiagram
     W->>PG: verify argon2id hash
     W->>PG: INSERT admin_sessions — 256-bit token,<br/>only its sha256 stored, expires in 30 days
     W-->>U: token (the only time it exists in the clear)<br/>+ SameSite=Strict cookie "domovoi_admin"
-    Note over U: the cookie lets plain GET page loads render<br/>authenticated state; it NEVER authorizes a<br/>mutation — CSRF: a cross-site POST carries<br/>nothing that authorizes it
+    Note over U: the cookie lets plain GET page loads render<br/>authenticated state, but it NEVER authorizes a<br/>mutation — CSRF: a cross-site POST carries<br/>nothing that authorizes it
     U->>W: subsequent requests: Authorization: Bearer <token>
-    W->>PG: sha256 lookup; sliding expiry refreshed on use
+    W->>PG: sha256 lookup, sliding expiry refreshed on use
 ```
 
 Sessions are listable and revocable (`GET /api/auth/sessions`,

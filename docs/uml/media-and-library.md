@@ -148,12 +148,12 @@ sequenceDiagram
 
     Pi->>S: "play <song>" (utterance frames)
     S->>M: route() → fast path (band 300, greedy ^play)
-    Note over M: local library match first; a local miss<br/>cascades to a streaming-search-provider<br/>capability if one is installed
+    Note over M: local library match first — a local miss<br/>cascades to a streaming-search-provider<br/>capability if one is installed
     M->>MPD: queue track, leave PAUSED against the<br/>always-on silence stream
     M->>NP: stamp(room, source, {stream_url, title})
     M-->>S: Response {music_action:"start",<br/>music_stream_url}
     S-->>Pi: response_start + TTS ("Playing …") + response_end
-    S->>MPD: probe the stream (HTTP 200?); if not serving,<br/>pause 0 + pause 1 opens it, probe again (≤ 3 s)
+    S->>MPD: probe the stream (HTTP 200?) — if not serving,<br/>pause 0 + pause 1 opens it, probe again (≤ 3 s)
     S-->>Pi: music_start {stream_url}
     Note over S: arms the music_ready fallback timer<br/>(music_prepare_fallback_sec)
     Pi->>Pi: spawn mpg123, prime buffer against<br/>MPD's silence stream

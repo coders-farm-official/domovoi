@@ -46,7 +46,7 @@ sequenceDiagram
         WS->>STT: transcribe(pcm) — after any decode in flight
         STT-->>WS: transcript
     end
-    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC; from an older Pi (no<br/>ack_before_capture), end the turn if the<br/>transcript is only the greeting
+    Note over WS: if greeting_played, strip a wake greeting<br/>that bled past the AEC. From an older Pi (no<br/>ack_before_capture), end the turn if the<br/>transcript is only the greeting
     WS-->>Pi: transcript {text}
 
     WS->>VID: identify(pcm) — match only, when the held copy's embedding is used
@@ -71,7 +71,7 @@ sequenceDiagram
     end
     Note over WS: a sentence rendered by a fallback engine<br/>at a different rate is resampled to the<br/>announced rate
     WS-->>Pi: response_end {interrupted:false,<br/>expect_followup, pi_action?}
-    Note over Pi: plays audio; if expect_followup,<br/>captures the reply without a fresh wake word
+    Note over Pi: plays audio, and if expect_followup,<br/>captures the reply without a fresh wake word
 ```
 
 ## Barge-in and error handling
