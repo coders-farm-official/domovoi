@@ -23,7 +23,7 @@ sequenceDiagram
     participant S as Core (StreamSession)
 
     Pi->>S: (WS connect /v1/stream/kitchen)
-    Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives;<br/>no hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
+    Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives.<br/>No hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
     Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?, speech_pause?,<br/>capture_control?, announce_after_session_end?}
     Note over S: pairing check (V002): claim the room on first token<br/>(trust-on-first-use), else require a matching token.<br/>Mismatch / missing-on-a-paired-room → error + close.
     Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container, then registers the session
@@ -301,7 +301,7 @@ sequenceDiagram
     end
     Note over S: near-silent frames are gated (relay noise gate)<br/>and don't reset the silence-timeout watchdog.<br/>Relayed audio is NEVER persisted.
     A->>S: utterance_start … "hang up" … utterance_end
-    Note over S: a mid-call wake command is captured for STT<br/>instead of relayed; DropInHandler ends the call
+    Note over S: a mid-call wake command is captured for STT<br/>instead of relayed, and DropInHandler ends the call
     S-->>A: dropin_end {reason}
     S-->>B: dropin_end {reason}
 ```

@@ -90,7 +90,7 @@ sequenceDiagram
     Note over ST: web-entry import hygiene (AST tripwire:<br/>webkit + stdlib + declared deps only)
     ST->>PG: slug collision / orphan-schema check
     Note over ST: pip dry-run in a throwaway subprocess<br/>(--require-hashes --only-binary=:all: —<br/>no build backend runs before the trust screen)
-    Note over ST: sha256-hash the staged tree; 128-bit staged_id
+    Note over ST: sha256-hash the staged tree,<br/>mint a random 128-bit staged_id
     API-->>U: {staged_id, preview}
     Note over U: preview shows publisher, permissions +<br/>warnings, requirements (direct + transitive),<br/>handlers/bands, migration count,<br/>and the trust statement
 
