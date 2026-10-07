@@ -28,6 +28,7 @@ import wave
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
@@ -205,12 +206,16 @@ class FakeRoom:
 
 
 class Ledger(MemoryFireLedger):
-    """The in-memory ledger with a canned pop and a scripted flag table."""
+    """The in-memory ledger with a canned pop and a scripted flag table.
 
-    def __init__(self, own_only=()) -> None:
+    ``wall`` is the test's clock, the one the seeded fires are stamped on
+    (BASE, 2026-09-30); pruning measures a fire's age on it too."""
+
+    def __init__(self, own_only=(), wall=lambda: BASE) -> None:
         super().__init__()
         self.due: list[tuple] = []
         self.own = set(own_only)
+        self.wall = wall
 
     async def _pop_expired(self):
         rows, self.due = self.due, []
@@ -218,6 +223,13 @@ class Ledger(MemoryFireLedger):
 
     async def own_only_rooms(self) -> set[str]:
         return set(self.own)
+
+    async def prune(self, days: int) -> int:
+        # On the real clock every seeded fire was older than the retention
+        # window as soon as BASE was (2026-10-07), and the first tick's
+        # prune deleted the fires the restart tests were about to resume.
+        with patch.object(td, "utcnow", self.wall):
+            return await super().prune(days)
 
     def row(self, fire_id: int, room: str) -> dict:
         return self._rows[fire_id][room]
@@ -237,7 +249,7 @@ async def _yield(n: int = 20) -> None:
 class House:
     def __init__(self, *rooms: str, own_only=(), accepting=True) -> None:
         self.clock = FakeClock()
-        self.ledger = Ledger(own_only)
+        self.ledger = Ledger(own_only, wall=self.clock.wall)
         self.sessions: dict[str, FakeRoom] = {r: FakeRoom(r, self.clock) for r in rooms}
         self.app = SimpleNamespace(state=SimpleNamespace(active_sessions=self.sessions))
         self.bus = EventBus()
