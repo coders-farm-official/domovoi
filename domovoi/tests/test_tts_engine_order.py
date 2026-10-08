@@ -256,9 +256,7 @@ def fake_piper(monkeypatch, tmp_path):
 
 
 def test_the_piper_download_is_refused_under_never_and_system_speaks(monkeypatch, fake_piper, tmp_path):
-    import requests
-
-    monkeypatch.setattr(requests, "get", _must_not_run("requests.get (the Piper download)"))
+    monkeypatch.setattr(tts_mod, "_piper_http_client", _must_not_run("the Piper download client"))
     monkeypatch.setattr(tts_mod, "_synth_edge_sync", _must_not_run("the edge engine"))
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda text: WAV)
     client = _client("piper", piper_voice="en_US-ryan-high")
@@ -271,36 +269,45 @@ def test_the_piper_download_is_refused_under_never_and_system_speaks(monkeypatch
 
 
 def test_the_piper_download_still_runs_when_allowed(monkeypatch, fake_piper, tmp_path):
-    import requests
+    import hashlib
+    import ipaddress
 
+    import httpx
+
+    from domovoi import net_safety
+
+    model, config = b"model-bytes", b"{}"
+    blob = hashlib.sha1(b"blob %d\0" % len(config) + config).hexdigest()
+    monkeypatch.setitem(
+        tts_mod.PIPER_PINS, "en_US-ryan-high",
+        (hashlib.sha256(model).hexdigest(), len(model), blob, len(config)),
+    )
     fetched: list[str] = []
 
-    class _Resp:
-        def raise_for_status(self):
-            return None
+    def handler(request):
+        fetched.append(str(request.url))
+        body = config if request.url.path.endswith(".onnx.json") else model
+        return httpx.Response(200, content=body)
 
-        def iter_content(self, _n):
-            yield b"model-bytes"
-
-    def get(url, **_kw):
-        fetched.append(url)
-        return _Resp()
-
-    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(net_safety, "resolve_host", lambda h: [ipaddress.ip_address("93.184.216.34")])
+    monkeypatch.setattr(
+        tts_mod, "_piper_http_client",
+        lambda: egress.sync_client(transport=httpx.MockTransport(handler)),
+    )
     monkeypatch.setattr(tts_mod, "_synth_system_sync", _must_not_run("the system engine"))
     with egress.override_policy("always"):
         result = _client("piper", piper_voice="en_US-ryan-high")._synth_detailed_blocking("hi")
     assert result.engine == "piper" and result.voice == "en_US-ryan-high"
-    assert [u.rsplit("/", 1)[-1] for u in fetched] == [
+    assert sorted(u.rsplit("/", 1)[-1] for u in fetched) == [
         "en_US-ryan-high.onnx", "en_US-ryan-high.onnx.json",
     ]
-    assert all(u.startswith("https://huggingface.co/rhasspy/piper-voices/") for u in fetched)
+    assert all(
+        f"/rhasspy/piper-voices/resolve/{tts_mod.PIPER_PINNED_REVISION}/" in u for u in fetched
+    )
 
 
 def test_a_voice_already_on_disk_loads_under_never(monkeypatch, fake_piper, tmp_path):
-    import requests
-
-    monkeypatch.setattr(requests, "get", _must_not_run("requests.get"))
+    monkeypatch.setattr(tts_mod, "_piper_http_client", _must_not_run("the Piper download client"))
     vdir = tmp_path / "voices"
     vdir.mkdir()
     (vdir / "en_US-ryan-high.onnx").write_bytes(b"m")
