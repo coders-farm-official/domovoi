@@ -270,6 +270,129 @@ def test_the_proxy_404s_for_a_station_that_is_not_there(proxy_client) -> None:
     assert resp.status_code == 404
 
 
+# ─── What the relay will SERVE (A2-02) ───────────────────────────────────
+#
+# The relay answers on the dashboard's own origin, so an upstream that
+# says ``text/html`` must never come back as a page: only audio is
+# relayed, always as a download-if-navigated, never sniffed.
+
+
+@pytest.fixture
+def relay_client(monkeypatch):
+    """Router over one public station row, with httpx answering from a
+    mock upstream whose Content-Type the test sets."""
+    from domovoi_plugin_radio import web as radio_web
+
+    monkeypatch.setattr(
+        net_safety,
+        "resolve_host",
+        lambda host: (
+            [ipaddress.ip_address(PUBLIC_V4)]
+            if host.lower().endswith("example")
+            else []
+        ),
+    )
+
+    upstream: dict[str, Any] = {"content_type": None, "body": b"ID3" + b"\x00" * 64}
+    opened: list[str] = []
+
+    import httpx
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        opened.append(str(request.url))
+        headers = {}
+        if upstream["content_type"] is not None:
+            headers["content-type"] = upstream["content_type"]
+        return httpx.Response(200, headers=headers, content=upstream["body"])
+
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(answer)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    class _Ctx(_NoDBContext):
+        @asynccontextmanager
+        async def db_session_scope(self):
+            self.opened = True
+            yield _OneRowSession(
+                ("Evil FM", "online", "http://evil.example/s")
+            )
+
+    ctx = _Ctx()
+    radio_web.register_web(ctx)
+    app = FastAPI()
+    for router in ctx.routers:
+        app.include_router(router, prefix="/api/plugins/radio")
+    with TestClient(app) as client:
+        client.upstream = upstream
+        client.opened = opened
+        yield client
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "text/html",
+        "text/html; charset=utf-8",
+        "TEXT/HTML",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "application/javascript",
+        "text/javascript",
+        "text/plain",
+        "text/xml",
+        "application/xml",
+        "application/json",
+        "application/pdf",
+        "video/mp4",
+        "audio/",
+        "audio/<script>",
+    ],
+)
+def test_the_relay_refuses_anything_that_is_not_audio(relay_client, declared) -> None:
+    """An attacker-controlled station that answers with a page (or a
+    script, or an SVG) gets a 502, never its bytes under its type."""
+    relay_client.upstream["content_type"] = declared
+    relay_client.upstream["body"] = b"<script>document.title='xss'</script>"
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 502, resp.text
+    assert "not an audio stream" in resp.json()["detail"]
+    assert not resp.headers["content-type"].startswith("text/html")
+    assert b"<script>" not in resp.content
+    assert relay_client.opened, "the upstream was never asked (test is vacuous)"
+
+
+@pytest.mark.parametrize(
+    ("declared", "served"),
+    [
+        ("audio/mpeg", "audio/mpeg"),
+        ("audio/aacp", "audio/aacp"),
+        ("audio/aac; charset=binary", "audio/aac"),
+        ("Audio/OGG", "audio/ogg"),
+        ("application/ogg", "application/ogg"),
+        ("application/octet-stream", "audio/mpeg"),
+        (None, "audio/mpeg"),
+    ],
+)
+def test_the_relay_serves_audio_inert_on_the_dashboard_origin(
+    relay_client, declared, served
+) -> None:
+    """Real streams keep playing (a media element ignores the download
+    and sandbox headers), but navigating to the relay can never render
+    it as a page."""
+    relay_client.upstream["content_type"] = declared
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == served
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["content-disposition"] == "attachment"
+    assert resp.headers["content-security-policy"] == "sandbox"
+    assert resp.content == relay_client.upstream["body"]
+
+
 # ─── The ICY poller's own fetch ──────────────────────────────────────────
 
 
