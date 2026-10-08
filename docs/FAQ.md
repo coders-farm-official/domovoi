@@ -146,7 +146,7 @@ Bottom line: treat a plugin like any software you install on a home server — o
 
 ## Can I use it with Home Assistant?
 
-They coexist happily — Domovoi doesn't replace Home Assistant (it doesn't do lights, locks, or thermostats out of the box), and Home Assistant doesn't do what Domovoi does (local voice, music, intercom, per-room audio). The practical bridge is Domovoi's HTTP API on port 6370: Home Assistant automations can, for instance, POST to the announce endpoint to speak a message in any room ("the wash is done") through your satellites. See [Home Assistant](HOME_ASSISTANT.md) for recipes and [API Reference](API_REFERENCE.md) for the endpoints. Deeper integration (device control by voice) is natural plugin territory.
+There is no integration. Domovoi doesn't control lights, locks or thermostats, and Home Assistant has no Domovoi add-on. The two run side by side on one network without conflict, and a Home Assistant automation can POST to Domovoi's announce endpoint to speak a message in any room ("the wash is done"). See [Home Assistant](HOME_ASSISTANT.md) for the recipe and [API Reference](API_REFERENCE.md) for the endpoint.
 
 ## Does it support multiple people?
 
